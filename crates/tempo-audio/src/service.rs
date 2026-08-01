@@ -4139,6 +4139,22 @@ impl RadioLoop {
         // `mut`: a tier/period change below replaces the clock, and everything after
         // it must use the NEW numbering — see the rebuild.
         let mut slot = self.clock.slot_index(now);
+        // ⚠ THIS GUARD IS HELD ACROSS BLOCKING CAT I/O for the rest of the tick —
+        // set_freq, set_split, several ptt() paths and finish_boundary all run
+        // under it, each up to the CAT deadline (700/2500 ms). The tune path
+        // below drops it first and says why ("the hang convoy"); the TX, unkey
+        // and self-heal paths never got the same treatment, so a wedged rig
+        // still makes this the app's longest lock hold. What that can no longer
+        // do is hang the WINDOW: every Tauri command that takes this mutex now
+        // runs off the UI thread (`#[tauri::command(async)]`, guarded by
+        // src-tauri's `no_engine_locking_command_runs_on_the_ui_thread`), so a
+        // stall costs a late readout, not a dead message pump. That guarantee is
+        // NOT free and it is what caps this hold: those commands wait on a tokio
+        // WORKER thread, so a hold long enough to have several of them queued at
+        // once eats the worker pool. The CAT deadline (2500 ms) is what keeps
+        // that bounded — do not add an unbounded wait under this guard. Hoisting the CAT
+        // calls out of the guard here is the real repair and it reorders the
+        // transmit path — maintainer sign-off first (CLAUDE.md TX-sequencing rule).
         let mut eng = engine_lock(engine);
         // Split-Operation teardown catch-all: the moment NO over is pending,
         // restore a Fake-It-shifted VFO and drop an audio Rig-split. ONE drain
@@ -4293,8 +4309,13 @@ impl RadioLoop {
         }
 
         // Inbound WSJT-X control (HaltTx / FreeText / Reply) from a logger / JTAlert.
+        // BOUNDED per tick: this whole block runs with the engine lock held and a
+        // HaltTx spends a blocking CAT round trip (up to 2500 ms on slow serial),
+        // so the old unbounded drain let one stuck consumer own the engine mutex —
+        // and every Tauri command queued behind it — for as long as it kept
+        // sending. The overflow is not dropped, just deferred one 20 ms tick.
         if let Some(server) = sinks.wsjtx {
-            while let Ok(Some(inb)) = server.poll() {
+            for inb in server.drain(tempo_net::server::INBOUND_PER_TICK) {
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
                         eng.halt_tx();

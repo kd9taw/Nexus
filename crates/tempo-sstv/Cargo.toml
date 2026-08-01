@@ -19,6 +19,10 @@ pedantic = { level = "warn", priority = -1 }
 unwrap_used = "warn"
 panic = "warn"
 expect_used = "warn"
+# Spelled out rather than inherited: this crate keeps its own lint set (upstream
+# MIT code held to the stricter bar), and Cargo allows only one `[lints]` table.
+# Same class guard as `[workspace.lints.clippy]` in the root manifest — see it.
+significant_drop_in_scrutinee = "warn"
 
 [dependencies]
 thiserror = "2"

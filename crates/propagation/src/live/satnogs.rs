@@ -394,7 +394,10 @@ mod tests {
             r#"[{"norad_cat_id":1,"description":"x","alive":true,"mode":"FM",
                  "downlink_mode":"USB","downlink_low":435000000}]"#,
         )[0];
-        assert!(!mixed.is_fm(), "the downlink leg decides what the rig hears");
+        assert!(
+            !mixed.is_fm(),
+            "the downlink leg decides what the rig hears"
+        );
 
         // An uncharacterised transmitter (mode null) is not claimed as FM.
         assert!(!x[2].is_fm());

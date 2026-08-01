@@ -19844,7 +19844,8 @@ mod tests {
         // pick stayed on the Yaesu. Under the FM class it is decided at tier 1,
         // by the operator's own rule, independent of every band list below it.
         assert_eq!(
-            e.settings.route_radio("2m", crate::settings::RouteMode::Ssb),
+            e.settings
+                .route_radio("2m", crate::settings::RouteMode::Ssb),
             None,
             "precondition: the SSB class reaches no other rig here — the field report"
         );

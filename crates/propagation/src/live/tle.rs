@@ -148,7 +148,7 @@ pub fn fetch_tles() -> Result<Vec<Tle>, TleFetchError> {
 
 /// A conditional mirror-fetch outcome: the published set changed (new elements
 /// + the ETag to send next time), or the server said 304 (bump the freshness
-/// stamp, keep what you have).
+///   stamp, keep what you have).
 pub enum TleMirrorFetch {
     NotModified,
     Fresh {
@@ -317,7 +317,7 @@ pub fn validate_tles(
     }
     // Freshness: median epoch age ≤ 7 d AND at least half the birds < 3 d.
     // Median-shaped, never max — see the doc comment (AO-10).
-    let mut ages: Vec<f64> = deduped.iter().map(|t| age(t)).collect();
+    let mut ages: Vec<f64> = deduped.iter().map(age).collect();
     ages.sort_by(|a, b| a.total_cmp(b));
     let median = ages[ages.len() / 2];
     if median > 7.0 {
@@ -608,7 +608,7 @@ BROKEN BIRD\r\n\
         const H: i64 = 3600;
         let now = 1_785_542_400;
         // (age, last_try, ct_last_try, fails, blocked_until, manual) → expected
-        let table: [(
+        type Case = (
             Option<i64>,
             i64,
             i64,
@@ -616,7 +616,8 @@ BROKEN BIRD\r\n\
             i64,
             bool,
             Option<TleFetchTarget>,
-        ); 12] = [
+        );
+        let table: [Case; 12] = [
             // Fresh cache (< 6 h TTL): nothing to do.
             (Some(3 * H), 0, 0, 0, 0, false, None),
             // No cache at all: the mirror, immediately.

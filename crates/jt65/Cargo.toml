@@ -7,5 +7,8 @@ license.workspace = true
 authors.workspace = true
 description = "Safe Rust wrapper over libtempo's native JT65 codec (WSJT-X JT65A/B/C, decode + TX encode)"
 
+[lints]
+workspace = true
+
 [dependencies]
 tempo-fast-sys = { path = "../tempo-fast-sys" }

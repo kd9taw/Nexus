@@ -279,7 +279,10 @@ impl FlexDax {
                     };
                     // Mandatory stream-id filter — the 0x03E3 class is also plain remote audio.
                     // Accept nothing until our stream id is known (never mis-inject foreign audio).
-                    match (*stream_id.lock().unwrap(), pkt.stream_id) {
+                    // Read the id into a local FIRST: a guard built in a match scrutinee lives
+                    // through every arm, and this thread locks `ring` further down.
+                    let want_id = *stream_id.lock().unwrap();
+                    match (want_id, pkt.stream_id) {
                         (Some(want), Some(got)) if want == got => {}
                         _ => continue,
                     }

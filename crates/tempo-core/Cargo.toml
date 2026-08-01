@@ -7,6 +7,9 @@ license.workspace = true
 authors.workspace = true
 description = "Nexus transceiver core — slot timing, virtual-air channel, TX/RX engine over the FT1 modem"
 
+[lints]
+workspace = true
+
 [dependencies]
 tempo-fast = { path = "../tempo-fast" }
 modes = { path = "../modes" }

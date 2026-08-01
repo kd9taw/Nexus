@@ -7,6 +7,9 @@ license.workspace = true
 authors.workspace = true
 description = "Nexus mode + signal-source abstractions: a pluggable Mode trait (FT8/FT4/FT1) and a user-selectable SignalSource (native engine vs WSJT-X over UDP)"
 
+[lints]
+workspace = true
+
 [dependencies]
 tempo-fast = { path = "../tempo-fast" }
 ft8 = { path = "../ft8" }

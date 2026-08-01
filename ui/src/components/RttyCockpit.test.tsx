@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
-import { RttyCockpit, confidenceRuns } from './RttyCockpit'
+import { RttyCockpit, confidenceRuns, RTTY_MAX_RUNS } from './RttyCockpit'
 import * as api from '../api'
 import * as toast from '../toast'
 import type { AppSnapshot, RttyState } from '../types'
@@ -238,5 +238,82 @@ describe('confidenceRuns', () => {
 
   it('treats missing confidence as solid — decoded text is never hidden', () => {
     expect(confidenceRuns('AB', [])).toEqual([{ text: 'AB', opacity: 1 }])
+  })
+})
+
+// The RTTY field-hang class: the transcript ring holds RTTY_TEXT_CAP (4000)
+// characters, and confidence is a CONTINUOUS per-character slicer margin, so
+// degraded copy crosses the fade thresholds constantly. Grouping strictly by
+// equal level therefore produced ~1000–1900 spans on marginal copy (one span
+// per character in the worst case) — re-rendered whole twice a second, because
+// the ring drains from the FRONT and shifts every span's text. Clean copy
+// collapsed to one span, which is why this never showed on the bench: the cost
+// is gated on band conditions, exactly matching an intermittent field report.
+describe('confidenceRuns bounds the transcript (the RTTY hang class)', () => {
+  /** A full ring, worst case: every character flips the confidence bucket. */
+  const adversarial = (n: number) => ({
+    text: 'A'.repeat(n),
+    conf: Array.from({ length: n }, (_, i) => (i % 2 === 0 ? 95 : 5)),
+  })
+
+  it('caps the run count on a full adversarial ring', () => {
+    const { text, conf } = adversarial(4000)
+    expect(confidenceRuns(text, conf).length).toBeLessThanOrEqual(RTTY_MAX_RUNS)
+  })
+
+  it('caps the rendered spans, not just the runs', async () => {
+    const { text, conf } = adversarial(4000)
+    getRttyState.mockResolvedValue({ ...IDLE, armed: true, text, charConf: conf })
+    const { container } = render(<RttyCockpit snap={snap} />)
+    await waitFor(() =>
+      expect(container.querySelectorAll('.cw-decode-text span').length).toBeGreaterThan(0),
+    )
+    expect(container.querySelectorAll('.cw-decode-text span').length).toBeLessThanOrEqual(
+      RTTY_MAX_RUNS,
+    )
+  })
+
+  it('keeps every decoded character — the cap coarsens the fade, never the text', () => {
+    const { text, conf } = adversarial(4000)
+    expect(
+      confidenceRuns(text, conf)
+        .map((r) => r.text)
+        .join(''),
+    ).toBe(text)
+  })
+
+  it('still fades a genuinely weak stretch inside a full ring', () => {
+    // 4000 chars: the last quarter copied badly. The cap must not flatten a
+    // real quality change into one solid block.
+    const n = 4000
+    const conf = Array.from({ length: n }, (_, i) => (i < n * 0.75 ? 95 : 10))
+    const runs = confidenceRuns('A'.repeat(n), conf)
+    expect(runs.length).toBeGreaterThan(1)
+    expect(runs[0].opacity).toBe(1)
+    expect(runs[runs.length - 1].opacity).toBeLessThan(1)
+  })
+
+  // THE SHORT-BURST CASE, which is the normal RTTY error shape: a few characters
+  // of a callsign or an exchange element get mangled, not a whole quarter of the
+  // transcript. Scoring the fade over blocks UNCONDITIONALLY averaged a burst
+  // this short back above the threshold and rendered it fully solid — the
+  // operator was shown certainty the decoder never reported. Verified failing
+  // first: against the always-block version EVERY burst below rendered the whole
+  // 4000-char ring as one fully-solid span (block = 20, so 10 zero-confidence
+  // characters split 5/5 across a boundary still averaged to exactly 75 — the
+  // solid threshold). Ten characters is over a second of copy at 45.45 baud.
+  it('fades a SHORT bad burst inside an otherwise-clean full ring', () => {
+    const n = 4000
+    for (const burst of [1, 4, 7, 10]) {
+      const conf = Array.from({ length: n }, () => 100)
+      // Straddling a 20-char block boundary is the alignment that hid it best.
+      const start = 1015
+      for (let i = start; i < start + burst; i++) conf[i] = 0
+      const runs = confidenceRuns('A'.repeat(n), conf)
+      expect(runs.length).toBeLessThanOrEqual(RTTY_MAX_RUNS)
+      const faded = runs.filter((r) => r.opacity < 1)
+      expect(faded.map((r) => r.text.length).reduce((a, b) => a + b, 0)).toBe(burst)
+      expect(Math.min(...runs.map((r) => r.opacity))).toBe(0.3)
+    }
   })
 })

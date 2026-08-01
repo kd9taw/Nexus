@@ -135,7 +135,30 @@ impl WsjtxServer {
             Err(e) => Err(e),
         }
     }
+
+    /// Drain up to `max` inbound control datagrams, stopping early when the
+    /// socket runs dry or a datagram fails to parse (same stop condition
+    /// [`WsjtxServer::poll`] signals with `Ok(None)`).
+    ///
+    /// The cap is the point. The caller — the radio loop — processes each
+    /// inbound datagram while holding the engine lock, and a HaltTx costs a
+    /// blocking CAT round trip (up to 2500 ms on slow serial). An unbounded
+    /// `while let Ok(Some(_)) = poll()` therefore let ONE misbehaving consumer
+    /// (a logger stuck in a HaltTx retry loop) hold the engine mutex for as long
+    /// as it kept sending, which starves every Tauri command behind it. Bounding
+    /// the batch bounds the tick. Nothing is dropped here: the remainder stays
+    /// in the socket buffer for the next tick, milliseconds later.
+    pub fn drain(&self, max: usize) -> impl Iterator<Item = Inbound> + '_ {
+        (0..max).map_while(|_| self.poll().ok().flatten())
+    }
 }
+
+/// Inbound control datagrams one radio-loop tick will process. At the loop's
+/// 20 ms cadence this is ~3200/s — orders of magnitude past any real consumer
+/// (WSJT-X companions send a handful per QSO), so it never throttles honest
+/// traffic; it only stops a flood from owning the engine lock. See
+/// [`WsjtxServer::drain`].
+pub const INBOUND_PER_TICK: usize = 64;
 
 #[cfg(test)]
 mod tests {
@@ -187,6 +210,56 @@ mod tests {
     fn poll_returns_none_when_idle() {
         let server = WsjtxServer::new(loopback(0), loopback(2237)).unwrap();
         assert_eq!(server.poll().unwrap(), None);
+    }
+
+    /// A correctly-framed HaltTx, as a logger sends it.
+    fn halt_tx_datagram() -> Vec<u8> {
+        let mut w = QdsWriter::new();
+        w.put_u32(wsjtx::MAGIC)
+            .put_u32(wsjtx::SCHEMA)
+            .put_u32(wsjtx::msg_type::HALT_TX)
+            .put_utf8(Some("JTAlert"))
+            .put_bool(true);
+        w.into_bytes()
+    }
+
+    /// One radio-loop tick must never process an unbounded batch: every inbound
+    /// datagram is handled with the engine lock held, and HaltTx costs a
+    /// blocking CAT round trip, so an unbounded drain hands a stuck consumer the
+    /// engine mutex for as long as it keeps sending. Verified failing first:
+    /// against the old `while let Ok(Some(_)) = poll()` this drained all 200
+    /// ("one tick drained 200 inbound datagrams under the engine lock").
+    #[test]
+    fn drain_bounds_one_tick_and_leaves_the_rest_queued() {
+        let server = WsjtxServer::new(loopback(0), loopback(0)).unwrap();
+        let addr = server.local_addr().unwrap();
+        let sender = UdpSocket::bind(loopback(0)).unwrap();
+        let dg = halt_tx_datagram();
+        let sent = INBOUND_PER_TICK * 3;
+        for _ in 0..sent {
+            sender.send_to(&dg, addr).unwrap();
+        }
+        // Let the kernel queue them (a UDP send to loopback is not synchronous).
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let first = server.drain(INBOUND_PER_TICK).count();
+        assert_eq!(first, INBOUND_PER_TICK, "one tick must stop at the cap");
+        // Nothing was thrown away — the next tick picks the backlog up.
+        let second = server.drain(INBOUND_PER_TICK).count();
+        assert_eq!(second, INBOUND_PER_TICK, "the remainder stays queued");
+    }
+
+    #[test]
+    fn drain_stops_early_on_an_idle_socket() {
+        let server = WsjtxServer::new(loopback(0), loopback(0)).unwrap();
+        let addr = server.local_addr().unwrap();
+        UdpSocket::bind(loopback(0))
+            .unwrap()
+            .send_to(&halt_tx_datagram(), addr)
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // One waiting datagram, a cap of 64: the drain returns after the one.
+        assert_eq!(server.drain(INBOUND_PER_TICK).count(), 1);
     }
 
     #[test]
