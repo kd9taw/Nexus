@@ -623,7 +623,10 @@ BROKEN BIRD\r\n\
             "the raw count ratchet does refuse it — that is the bug"
         );
         let ratchet = tle_ratchet_count(Some("mirror"), 367, TleFetchTarget::Celestrak);
-        assert_eq!(ratchet, 0, "a mirror cache says nothing about a group fetch");
+        assert_eq!(
+            ratchet, 0,
+            "a mirror cache says nothing about a group fetch"
+        );
         assert_eq!(
             validate_tles(&group, ratchet, LIVE_NOW).unwrap().len(),
             group.len()
