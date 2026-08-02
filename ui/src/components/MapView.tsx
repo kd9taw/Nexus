@@ -47,6 +47,7 @@ import {
   SAT_CHASE_EVENT,
 } from '../features/satChase'
 import { decollideLabels } from '../features/mapLabels'
+import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { gridToLatLon, haversineKm, bearingDeg, magneticDeg, type LatLon } from '../grid'
 import { heatBoost, sectorPulse } from '../features/pulse'
@@ -1389,15 +1390,15 @@ export function MapView({
           ctx.setLineDash([])
         }
         // Mini satellite icon: body + solar panels, tilted 45° so it reads as
-        // a bird, not a box. Scales slightly up for chased birds.
+        // a bird, not a box. Scales slightly up for chased birds. The shape is
+        // features/satIcon — the sky dome renders the same glyph in SVG, and a
+        // second hand-tuned copy would drift on the first tweak.
         const sc = isChased ? 1.25 : 1
         ctx.save()
         ctx.translate(p[0], p[1])
-        ctx.rotate(Math.PI / 4)
+        ctx.rotate((SAT_ICON_TILT_DEG * Math.PI) / 180)
         ctx.fillStyle = color
-        ctx.fillRect(-2.4 * sc, -2.4 * sc, 4.8 * sc, 4.8 * sc) // body
-        ctx.fillRect(-8 * sc, -1.4 * sc, 4.4 * sc, 2.8 * sc) // left panel
-        ctx.fillRect(3.6 * sc, -1.4 * sc, 4.4 * sc, 2.8 * sc) // right panel
+        for (const r of SAT_ICON_RECTS) ctx.fillRect(r.x * sc, r.y * sc, r.w * sc, r.h * sc)
         ctx.restore()
         // Hover ring, plus a persistent ring around the embedded detail's focus
         // bird so the one being inspected is findable at a glance.

@@ -54,6 +54,7 @@ import {
   seedSatFavorites,
   type SatSeedRecord,
 } from '../features/satSeed'
+import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
@@ -260,6 +261,187 @@ function triPath(x: number, y: number, r: number, up: boolean): string {
 
 const deg = (v: number) => `${Math.round(v)}°`
 
+/* ---- The bird's persistent az/el tag ------------------------------------- *
+ * A MANUAL az/el rotator is turned by hand off these two numbers. Hover-only
+ * meant holding a mouse on a moving dot for the length of a pass while the
+ * other hand is on the mast, so both numbers ride on the marker itself and stay
+ * there for the whole pass. (The <title> stays for assistive tech, and the
+ * readout list below the dome stays as the DOM text equivalent.)
+ *
+ * Geometry lives here rather than in CSS because the plate is sized to the text
+ * it holds: the mono glyph box is 0.6 em, and the font size is emitted as an
+ * attribute right beside this arithmetic so the two cannot drift apart. Ink —
+ * fill, family, weight — stays in styles.css. */
+const TAG_FS = 10
+const TAG_LINE = 11.5
+const TAG_PAD = 3.5
+/** Offset from the bird, clear of the glyph's tilted panel tip (~5.7 u). */
+const TAG_GAP = 9
+/** Keeps the plate off the very edge of the viewBox. */
+const TAG_MARGIN = 2
+
+/** Plate size for the widest line, in viewBox units. */
+function tagSize(lines: string[]): [number, number] {
+  const cols = Math.max(...lines.map((l) => l.length))
+  return [cols * TAG_FS * 0.6 + TAG_PAD * 2, lines.length * TAG_LINE + TAG_PAD * 2]
+}
+
+/** Where the tag sits relative to the bird.
+ *
+ * It rides on the bird's right and flips left when the right would push it past
+ * the horizon's box — the eastern rim, i.e. exactly where a pass ends — or when
+ * the rotator ghost is sitting there, because burying the ghost would hide the
+ * gap that IS the tracking error. The horizon box, not the viewBox, is the
+ * bound on BOTH axes: outside it live the compass letters and the ring labels,
+ * and the plate is far narrower than the dome, so one side always fits. Low on
+ * the northern or southern horizon the tag hangs off the bird rather than
+ * losing its second line — an az/el rotator needs the elevation as much as the
+ * azimuth. Inside the box the plate is opaque, so where it crosses the pass
+ * track the numbers still win: the track is context, these are what the mast is
+ * turned by, and they change every second. */
+function tagPlace(
+  bird: [number, number],
+  ghost: [number, number] | null,
+  w: number,
+  h: number,
+): [number, number] {
+  const rimLo = DOME_C - DOME_R
+  const rimHi = DOME_C + DOME_R
+  const right = bird[0] + TAG_GAP
+  const left = bird[0] - TAG_GAP - w
+  const flip = right + w > rimHi || (left >= rimLo && ghost != null && ghost[0] >= bird[0])
+  const x = flip ? left : right
+  return [
+    Math.min(DOME_C * 2 - TAG_MARGIN - w, Math.max(TAG_MARGIN, x)),
+    Math.min(rimHi - h, Math.max(rimLo, bird[1] - h / 2)),
+  ]
+}
+
+/* ---- The rise and set marks' bearings ------------------------------------ *
+ * The same operator and the same problem as the bird's tag above. A manual
+ * rotator is PRE-POINTED at the rise bearing before a pass and swung to the set
+ * bearing to hold the end of one, and both numbers lived in a <title>. The set
+ * mark is drawn hollow — an SVG path with no fill answers the pointer on its
+ * 1.4 u outline and nowhere else — so "hard to mouse over" was literally true of
+ * that one mark and not of its filled twin.
+ *
+ * Both plates print an AZIMUTH and no elevation. These two marks sit ON the
+ * horizon by construction, so "el 0°" would restate the geometry rather than
+ * report a reading, and inventing a number where there is none is the mistake
+ * the az-only ghost below exists to avoid.
+ *
+ * Each plate also names WHICH mark it belongs to, in words and by the ▲/▼ the
+ * readout under the dome already uses for these two. The pair is read to decide
+ * which way to turn a mast: two bare bearings sitting near each other would be
+ * ambiguous, and that is worse than the hover they replace. */
+
+/** Clearance between a horizon mark and the near face of its plate. */
+const RIM_GAP = 8
+/** How much further out a plate sits on each successive ring of candidates. */
+const RIM_STEP = 6
+/** Directions to try, in degrees off the mark's inward radius, in preference
+ * order: straight in first, then fanning to either side. Past ±90 the plate
+ * would lean back out over the rim, where the compass letters live. */
+const RIM_FAN = [0, 30, -30, 60, -60, 90, -90]
+/** How many rings of candidates before giving up and taking the least-bad. */
+const RIM_RINGS = 3
+
+/** An axis-aligned box in viewBox units: x, y, w, h. */
+type Box = [number, number, number, number]
+
+/** Area two boxes share; 0 when they are clear of each other. */
+function overlapArea(a: Box, b: Box): number {
+  const w = Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])
+  const h = Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1])
+  return w > 0 && h > 0 ? w * h : 0
+}
+
+/** A square obstacle centred on a mark. */
+const boxAt = (p: [number, number], r: number): Box => [p[0] - r, p[1] - r, 2 * r, 2 * r]
+
+/** Where a horizon mark's plate sits.
+ *
+ * It hangs INSIDE the dome — outside the rim there are only 24 u of margin and
+ * the compass letters have them, so a plate out there would cover a letter and
+ * then run off the viewBox. The gap is measured from the plate's near FACE (its
+ * own reach along the offset direction), because a plate merely centred on an
+ * offset point buries its own mark wherever the box is widest along that
+ * offset — east and west, for the straight-in case.
+ *
+ * `taken` is everything already on the dome that has to stay readable: both
+ * marks, the bird, its live tag, the rotator ghost. Candidates are tried in
+ * preference order and the first CLEAR one wins, so a plate stays as close to
+ * its own mark as the traffic allows.
+ *
+ * The fan is why the candidates are a fan and not a ladder straight inward. On
+ * a low grazing pass the two marks sit within a few tens of degrees of each
+ * other, so their inward radii are near enough parallel that stepping both
+ * deeper marches them inward TOGETHER and they never separate — which is
+ * exactly the pass where the operator most needs to tell the rise bearing from
+ * the set one. Fanning sideways separates them on the first ring.
+ *
+ * Crossing the pass track is fine and deliberate: the plate is opaque, and at
+ * the rim the track is at its thinnest and faintest anyway. */
+function rimTagPlace(azDeg: number, w: number, h: number, taken: Box[]): Box {
+  const rad = (azDeg * Math.PI) / 180
+  const [ux, uy] = [-Math.sin(rad), Math.cos(rad)] // rim point → dome centre
+  const [px, py] = skyPt(azDeg, 0)
+  const lo = DOME_C - DOME_R
+  const hi = DOME_C + DOME_R
+  let best: Box = [px, py, w, h]
+  let bestCost = Infinity
+  for (let ring = 0; ring < RIM_RINGS; ring++) {
+    for (const fan of RIM_FAN) {
+      const f = (fan * Math.PI) / 180
+      const dx = ux * Math.cos(f) - uy * Math.sin(f)
+      const dy = ux * Math.sin(f) + uy * Math.cos(f)
+      const d = RIM_GAP + (Math.abs(dx) * w + Math.abs(dy) * h) / 2 + ring * (h + RIM_STEP)
+      const box: Box = [
+        Math.min(hi - w, Math.max(lo, px + dx * d - w / 2)),
+        Math.min(hi - h, Math.max(lo, py + dy * d - h / 2)),
+        w,
+        h,
+      ]
+      const cost = taken.reduce((sum, t) => sum + overlapArea(box, t), 0)
+      if (cost === 0) return box
+      if (cost < bestCost) {
+        bestCost = cost
+        best = box
+      }
+    }
+  }
+  return best
+}
+
+/** One horizon mark's plate — shared by both so the rise and set bearings can
+ * never drift into two different-looking readings of the same kind of number.
+ * Pointer-transparent: it must never take the hover off the mark it labels. */
+function RimTag({ box, lines, testid }: { box: Box; lines: string[]; testid: string }) {
+  return (
+    <g className="sat-dome-rimtag" data-testid={testid} pointerEvents="none">
+      <rect
+        className="sat-dome-tag-plate"
+        x={box[0].toFixed(1)}
+        y={box[1].toFixed(1)}
+        width={box[2].toFixed(1)}
+        height={box[3].toFixed(1)}
+        rx={2.5}
+      />
+      {lines.map((line, i) => (
+        <text
+          key={line}
+          className="sat-dome-rimtag-line"
+          x={(box[0] + TAG_PAD).toFixed(1)}
+          y={(box[1] + TAG_PAD + TAG_FS * 0.8 + i * TAG_LINE).toFixed(1)}
+          fontSize={TAG_FS}
+        >
+          {line}
+        </text>
+      ))}
+    </g>
+  )
+}
+
 function SkyDome({
   name,
   pass,
@@ -311,6 +493,31 @@ function SkyDome({
   const losPt = skyPt(pass.losAzDeg, 0)
   const errDeg =
     bird && cmdAz != null && cmdEl != null ? pointingError(bird, { az: cmdAz, el: cmdEl }) : null
+
+  // The az/el tag that rides on the bird. Both numbers, because a manual az/EL
+  // rotator needs both; placement rules in tagPlace.
+  const tagLines = bird ? [`az ${deg(bird.az)}`, `el ${deg(bird.el)}`] : null
+  const tagWH = tagLines ? tagSize(tagLines) : null
+  const tagXY = birdPt && tagWH ? tagPlace(birdPt, ghostPt, tagWH[0], tagWH[1]) : null
+
+  // The rise and set bearings, on their marks. Placed AFTER the bird's tag and
+  // handed it as an obstacle: at AOS the bird sits on the rise mark and the two
+  // readouts want the same patch of dome, so the second-by-second number holds
+  // its place and the fixed reference bearing yields. The identity line carries
+  // the ▲/▼ rather than being sized by it — the shape glyphs come from a
+  // fallback face whose advance width is not the mono cell tagSize() assumes,
+  // and putting them on the shorter line keeps that guess off the plate width.
+  const aosLines = ['▲ AOS', `${deg(pass.aosAzDeg)} ${wind8(pass.aosAzDeg)}`]
+  const losLines = ['▼ LOS', `${deg(pass.losAzDeg)} ${wind8(pass.losAzDeg)}`]
+  const aosWH = tagSize(aosLines)
+  const losWH = tagSize(losLines)
+  const taken: Box[] = [boxAt(aosPt, 6), boxAt(losPt, 6)]
+  if (birdPt) taken.push(boxAt(birdPt, 8))
+  if (tagXY && tagWH) taken.push([tagXY[0], tagXY[1], tagWH[0], tagWH[1]])
+  if (ghostPt) taken.push(boxAt(ghostPt, 8))
+  if (ghostRim) taken.push(boxAt(ghostRim, 6))
+  const aosBox = rimTagPlace(pass.aosAzDeg, aosWH[0], aosWH[1], taken)
+  const losBox = rimTagPlace(pass.losAzDeg, losWH[0], losWH[1], [...taken, aosBox])
 
   // Track drawn segment-by-segment so stroke weight + opacity can ramp with
   // elevation: the high, workable part of the pass reads first at a glance.
@@ -386,9 +593,19 @@ function SkyDome({
         <path d={triPath(aosPt[0], aosPt[1], 5, true)} className="sat-dome-aos">
           <title>AOS — rises at {deg(pass.aosAzDeg)} ({wind8(pass.aosAzDeg)}) {hhmm(pass.aosUnix)}</title>
         </path>
-        <path d={triPath(losPt[0], losPt[1], 5, false)} className="sat-dome-los">
+        {/* Hollow on purpose — shape, not colour, tells rise from set. But an
+            SVG path with no fill hit-tests its 1.4 u outline and nothing else,
+            which is what made THIS mark, alone of the two, hard to mouse over.
+            `all` hit-tests the whole triangle, so the title below is reachable
+            without threading a mouse onto a hairline. */}
+        <path d={triPath(losPt[0], losPt[1], 5, false)} className="sat-dome-los" pointerEvents="all">
           <title>LOS — sets at {deg(pass.losAzDeg)} ({wind8(pass.losAzDeg)}) {hhmm(pass.losUnix)}</title>
         </path>
+        {/* The rise and set bearings, ON the marks. Drawn after the track so the
+            opaque plate wins where it crosses it, and before the ghost and the
+            bird so the live marks stay on top of a reference readout. */}
+        <RimTag testid="sat-aos-tag" box={aosBox} lines={aosLines} />
+        <RimTag testid="sat-los-tag" box={losBox} lines={losLines} />
         {/* THE ROTATOR GHOST. A second marker at what the antenna was told, not
             where it is: the gap to the bird IS the tracking error, and drawing
             it is what stops a legitimate deadband from looking like a fault. */}
@@ -423,7 +640,40 @@ function SkyDome({
                 opacity={(0.32 * breath).toFixed(2)}
               />
             )}
-            <circle cx={birdPt[0]} cy={birdPt[1]} r={5} />
+            {/* The spacecraft itself, drawn from the shape the world map draws
+                (features/satIcon — one glyph, two renderers): the object the
+                operator picks out on the map is the object on the dome. */}
+            <g
+              className="sat-dome-bird-icon"
+              transform={`translate(${birdPt[0].toFixed(1)},${birdPt[1].toFixed(1)}) rotate(${SAT_ICON_TILT_DEG})`}
+            >
+              {SAT_ICON_RECTS.map((r, i) => (
+                <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} />
+              ))}
+            </g>
+            {tagLines && tagWH && tagXY && (
+              <g className="sat-dome-tag" data-testid="sat-bird-tag">
+                <rect
+                  className="sat-dome-tag-plate"
+                  x={tagXY[0].toFixed(1)}
+                  y={tagXY[1].toFixed(1)}
+                  width={tagWH[0].toFixed(1)}
+                  height={tagWH[1].toFixed(1)}
+                  rx={2.5}
+                />
+                {tagLines.map((line, i) => (
+                  <text
+                    key={line}
+                    className="sat-dome-tag-line"
+                    x={(tagXY[0] + TAG_PAD).toFixed(1)}
+                    y={(tagXY[1] + TAG_PAD + TAG_FS * 0.8 + i * TAG_LINE).toFixed(1)}
+                    fontSize={TAG_FS}
+                  >
+                    {line}
+                  </text>
+                ))}
+              </g>
+            )}
           </g>
         )}
       </svg>

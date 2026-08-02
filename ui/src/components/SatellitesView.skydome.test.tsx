@@ -22,6 +22,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
+import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import type { SatDetail, SatPass, SatTrackStatus } from '../types'
 
 const api = vi.hoisted(() => ({
@@ -197,6 +198,348 @@ describe('the sky dome', () => {
     const text = (await sky()).textContent ?? ''
     expect(text).not.toMatch(/Range/)
     expect(text).not.toMatch(/km/)
+  })
+})
+
+describe("the bird's persistent az/el tag", () => {
+  // An operator turning a MANUAL az/el rotator by hand reads these two numbers
+  // off the dome and turns the mast to match. A hover tooltip means holding the
+  // mouse on a moving dot for the length of a pass, so az AND el ride ON the
+  // bird for the whole pass. The <title> stays for assistive tech; it is no
+  // longer the only place the numbers exist.
+
+  /** The tag plate's box in viewBox units. */
+  function tagBox(tag: Element) {
+    const plate = tag.querySelector('.sat-dome-tag-plate')
+    expect(plate).toBeTruthy()
+    const n = (a: string) => Number(plate!.getAttribute(a))
+    return { x: n('x'), y: n('y'), w: n('width'), h: n('height') }
+  }
+
+  /** Where the bird glyph sits, read off its own transform. */
+  function birdAt(bird: Element): [number, number] {
+    const icon = bird.querySelector('.sat-dome-bird-icon')
+    expect(icon).toBeTruthy()
+    const m = /translate\(([-\d.]+),\s*([-\d.]+)\)/.exec(icon!.getAttribute('transform') ?? '')
+    expect(m).toBeTruthy()
+    return [Number(m![1]), Number(m![2])]
+  }
+
+  it('prints az and el ON the bird, with no hover and no mouse at all', async () => {
+    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(status()))
+    render(<SatellitesView focusSat="RS-44" />)
+    const bird = await screen.findByTestId('sat-bird')
+    const tag = bird.querySelector('[data-testid="sat-bird-tag"]')
+    expect(tag).toBeTruthy()
+    // Rendered graphics text, NOT a <title>: a tooltip is exactly what fails an
+    // operator whose hands are on the mast.
+    const lines = [...tag!.querySelectorAll('text')].map((t) => t.textContent ?? '')
+    expect(lines.join(' ')).toMatch(/az 143°/)
+    expect(lines.join(' ')).toMatch(/el 47°/)
+    expect(tag!.querySelector('title')).toBeNull()
+    // …and the hover equivalent survives alongside it.
+    expect(bird.querySelector('title')?.textContent).toMatch(/az 143° el 47°/)
+  })
+
+  it('keeps both numbers inside the horizon box at every rim bearing', async () => {
+    // The tag must survive the whole pass, and a pass ENDS on the rim. A tag
+    // that runs off the east edge is unreadable at exactly the moment the
+    // operator is swinging the mast to catch LOS. The bound is the HORIZON box
+    // (centre 124 ± radius 100), not the viewBox: the margin outside it carries
+    // the compass letters, which the opaque plate would otherwise cover.
+    const LO = 24 // DOME_C - DOME_R
+    const HI = 224 // DOME_C + DOME_R
+    for (const az of [0, 90, 180, 270]) {
+      api.getSatTrackStatus.mockImplementation(() =>
+        Promise.resolve(status({ azDeg: null, elDeg: null, satAzDeg: az, satElDeg: 2 })),
+      )
+      render(<SatellitesView focusSat="RS-44" />)
+      const bird = await screen.findByTestId('sat-bird')
+      const box = tagBox(bird.querySelector('[data-testid="sat-bird-tag"]')!)
+      expect(box.x, `az ${az} left edge`).toBeGreaterThanOrEqual(LO)
+      expect(box.y, `az ${az} top edge`).toBeGreaterThanOrEqual(LO)
+      expect(box.x + box.w, `az ${az} right edge`).toBeLessThanOrEqual(HI)
+      expect(box.y + box.h, `az ${az} bottom edge`).toBeLessThanOrEqual(HI)
+      cleanup()
+    }
+  })
+
+  it('takes the side the rotator ghost is not on', async () => {
+    // Near the rim the tag has one choice; in open sky it has two, and the one
+    // it must not take is the one burying the ghost — the gap between bird and
+    // ghost IS the tracking error the operator is judging.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ azDeg: 120, elDeg: 47, satAzDeg: 143, satElDeg: 47 })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const bird = await screen.findByTestId('sat-bird')
+    const [bx] = birdAt(bird)
+    const box = tagBox(bird.querySelector('[data-testid="sat-bird-tag"]')!)
+    // az 120 is WEST of az 143 on a north-up dome, so the ghost is drawn to the
+    // bird's right; the tag goes left.
+    expect(box.x + box.w).toBeLessThanOrEqual(bx)
+  })
+
+  it("rides on the bird's right when that side is free", async () => {
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ azDeg: 160, elDeg: 47, satAzDeg: 143, satElDeg: 47 })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const bird = await screen.findByTestId('sat-bird')
+    const [bx] = birdAt(bird)
+    expect(tagBox(bird.querySelector('[data-testid="sat-bird-tag"]')!).x).toBeGreaterThanOrEqual(bx)
+  })
+
+  it('draws the bird as the same spacecraft glyph the world map draws', async () => {
+    // One shape definition, two renderers (canvas on the map, SVG here). A
+    // second hand-tuned copy drifts on the first tweak and the operator learns
+    // two marks for one object.
+    render(<SatellitesView focusSat="RS-44" />)
+    const bird = await screen.findByTestId('sat-bird')
+    const icon = bird.querySelector('.sat-dome-bird-icon')
+    expect(icon).toBeTruthy()
+    expect(icon!.querySelectorAll('rect').length).toBe(SAT_ICON_RECTS.length)
+    expect(icon!.getAttribute('transform')).toMatch(new RegExp(`rotate\\(${SAT_ICON_TILT_DEG}\\)`))
+  })
+})
+
+describe('the rise and set marks carry their bearings', () => {
+  // The same operator and the same problem as the bird's tag. A MANUAL rotator
+  // is pre-pointed at the rise bearing before a pass and swung to the set
+  // bearing to hold the end of one, and both numbers lived in a <title>. The
+  // set mark is drawn hollow, and an SVG path with no fill answers the pointer
+  // on its 1.4 u outline and nowhere else — so "hard to mouse over" was
+  // literally true of that one mark and not of its filled twin.
+  //
+  // Both marks sit ON the horizon by construction, so these plates print an
+  // AZIMUTH and no elevation: "el 0°" would be a restatement of the geometry,
+  // not a reading. And each plate says WHICH mark it belongs to, because the
+  // pair is read to decide which way to turn a mast — two bare bearings near
+  // each other would be worse than the hover they replace.
+
+  const RAD = Math.PI / 180
+  /** The dome point for a bearing on the horizon (DOME_C 124, DOME_R 100). */
+  const rimPt = (az: number): [number, number] => [
+    124 + 100 * Math.sin(az * RAD),
+    124 - 100 * Math.cos(az * RAD),
+  ]
+  type Rect = { x: number; y: number; w: number; h: number }
+  /** A square around a mark, generous enough to catch a plate grazing it. */
+  const around = ([x, y]: [number, number], r: number): Rect => ({ x: x - r, y: y - r, w: 2 * r, h: 2 * r })
+  const overlaps = (a: Rect, b: Rect) =>
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+  /** A tag's plate box in viewBox units. */
+  function plate(tag: Element): Rect {
+    const r = tag.querySelector('.sat-dome-tag-plate')
+    expect(r).toBeTruthy()
+    const n = (a: string) => Number(r!.getAttribute(a))
+    return { x: n('x'), y: n('y'), w: n('width'), h: n('height') }
+  }
+  const lines = (tag: Element) => [...tag.querySelectorAll('text')].map((t) => t.textContent ?? '').join(' ')
+
+  /** Both tags, once the detail load has settled. */
+  async function tags() {
+    const aos = await screen.findByTestId('sat-aos-tag')
+    const los = await screen.findByTestId('sat-los-tag')
+    return { aos, los }
+  }
+
+  /** The fixture pass with the two horizon bearings overridden. */
+  const passAt = (aosAz: number, losAz: number) =>
+    detail({
+      pass: {
+        name: 'RS-44',
+        aosUnix: AOS,
+        losUnix: LOS,
+        maxElDeg: 62,
+        aosAzDeg: aosAz,
+        losAzDeg: losAz,
+        status: 'alive',
+      },
+    })
+
+  it('prints both bearings on the dome with no hover and no mouse at all', async () => {
+    render(<SatellitesView focusSat="RS-44" />)
+    const { aos, los } = await tags()
+    // Rendered graphics text, NOT a <title>. This is the whole point: a tooltip
+    // is unreachable for an operator with both hands on the mast.
+    expect(lines(aos)).toMatch(/100° E/)
+    expect(lines(los)).toMatch(/260° W/)
+    expect(aos.querySelector('title')).toBeNull()
+    expect(los.querySelector('title')).toBeNull()
+  })
+
+  it('says which mark each bearing belongs to', async () => {
+    // Two bare bearings sitting near each other are worse than the hover they
+    // replace — the operator is reading them to decide which way to turn.
+    render(<SatellitesView focusSat="RS-44" />)
+    const { aos, los } = await tags()
+    expect(lines(aos)).toMatch(/AOS/)
+    expect(lines(aos)).not.toMatch(/LOS/)
+    expect(lines(los)).toMatch(/LOS/)
+    expect(lines(los)).not.toMatch(/AOS/)
+    // …and by the same ▲/▼ the readout under the dome already uses for these
+    // two, so the plate maps to its mark by shape as well as by word.
+    expect(lines(aos)).toMatch(/▲/)
+    expect(lines(los)).toMatch(/▼/)
+  })
+
+  it('prints an azimuth and never an elevation — both marks ARE the horizon', async () => {
+    render(<SatellitesView focusSat="RS-44" />)
+    const { aos, los } = await tags()
+    expect(lines(aos)).not.toMatch(/el /)
+    expect(lines(los)).not.toMatch(/el /)
+  })
+
+  it('keeps the hover text, in addition — it was never the replacement', async () => {
+    // Queried off the marks themselves: these <title>s hang inside a <path>,
+    // which is not the `svg > title` shape findByTitle looks for.
+    const { container } = render(<SatellitesView focusSat="RS-44" />)
+    await tags()
+    expect(container.querySelector('.sat-dome-aos > title')?.textContent).toMatch(
+      /AOS — rises at 100° \(E\) \d\d:\d\d/,
+    )
+    expect(container.querySelector('.sat-dome-los > title')?.textContent).toMatch(
+      /LOS — sets at 260° \(W\) \d\d:\d\d/,
+    )
+  })
+
+  it('makes the see-through set mark hoverable over its whole body', async () => {
+    // The root of "it's hard to mouse over": `fill:none` means the default
+    // `visiblePainted` hit-tests the 1.4 u outline only. The filled rise mark
+    // never had the problem, which is why only one of the two was hard to hit.
+    const { container } = render(<SatellitesView focusSat="RS-44" />)
+    await tags()
+    const los = container.querySelector('.sat-dome-los')
+    expect(los?.getAttribute('pointer-events')).toBe('all')
+  })
+
+  it('never lets a plate take the pointer off the mark it labels', async () => {
+    const { container } = render(<SatellitesView focusSat="RS-44" />)
+    const { aos, los } = await tags()
+    expect(aos.getAttribute('pointer-events')).toBe('none')
+    expect(los.getAttribute('pointer-events')).toBe('none')
+    expect(container.querySelector('.sat-dome-los')).toBeTruthy()
+  })
+
+  it('renders before AOS too — the rise bearing is what you pre-point BY', async () => {
+    api.getSatDetail.mockImplementation(() =>
+      Promise.resolve(
+        detail({
+          pass: {
+            name: 'RS-44',
+            aosUnix: NOW + 1800,
+            losUnix: NOW + 2400,
+            maxElDeg: 62,
+            aosAzDeg: 100,
+            losAzDeg: 260,
+            status: 'alive',
+          },
+          passTrack: samples(NOW + 1800, NOW + 2400),
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const { aos, los } = await tags()
+    expect(screen.queryByTestId('sat-bird')).toBeNull()
+    expect(lines(aos)).toMatch(/100°/)
+    expect(lines(los)).toMatch(/260°/)
+  })
+
+  it('keeps both plates inside the horizon box at every rim bearing', async () => {
+    // The marks sit ON the rim, so a plate placed outward runs into the compass
+    // letters and off the viewBox — the 24 u margin outside the horizon is
+    // theirs. The bound is the horizon box, exactly as for the bird's tag.
+    const LO = 24 // DOME_C - DOME_R
+    const HI = 224 // DOME_C + DOME_R
+    for (const az of [0, 45, 90, 135, 180, 225, 270, 315]) {
+      api.getSatDetail.mockImplementation(() => Promise.resolve(passAt(az, (az + 180) % 360)))
+      render(<SatellitesView focusSat="RS-44" />)
+      const { aos, los } = await tags()
+      for (const [what, box] of [
+        [`aos az ${az}`, plate(aos)],
+        [`los az ${(az + 180) % 360}`, plate(los)],
+      ] as [string, Rect][]) {
+        expect(box.x, `${what} left`).toBeGreaterThanOrEqual(LO)
+        expect(box.y, `${what} top`).toBeGreaterThanOrEqual(LO)
+        expect(box.x + box.w, `${what} right`).toBeLessThanOrEqual(HI)
+        expect(box.y + box.h, `${what} bottom`).toBeLessThanOrEqual(HI)
+      }
+      cleanup()
+    }
+  })
+
+  it('never buries either mark under a plate', async () => {
+    // A readout that covers the thing it is reading out is a net loss: the
+    // operator loses the bearing's position on the dome to gain its number.
+    for (const [a, l] of [
+      [100, 260],
+      [0, 180],
+      [90, 270],
+      [100, 118], // a low grazing pass: both marks in the same corner
+      [10, 350], // …and one straddling north
+    ]) {
+      api.getSatDetail.mockImplementation(() => Promise.resolve(passAt(a, l)))
+      render(<SatellitesView focusSat="RS-44" />)
+      const { aos, los } = await tags()
+      for (const mark of [around(rimPt(a), 5), around(rimPt(l), 5)]) {
+        expect(overlaps(plate(aos), mark), `aos plate over a mark (${a}/${l})`).toBe(false)
+        expect(overlaps(plate(los), mark), `los plate over a mark (${a}/${l})`).toBe(false)
+      }
+      cleanup()
+    }
+  })
+
+  it('keeps the two plates apart when the two marks are close together', async () => {
+    // A low grazing pass rises and sets within a few tens of degrees of each
+    // other. Two overlapping plates there would leave one bearing half-hidden
+    // and the pair ambiguous — the exact failure the words are there to stop.
+    for (const [a, l] of [
+      [100, 118],
+      [100, 100],
+      [355, 5],
+      [200, 215],
+    ]) {
+      api.getSatDetail.mockImplementation(() => Promise.resolve(passAt(a, l)))
+      render(<SatellitesView focusSat="RS-44" />)
+      const { aos, los } = await tags()
+      expect(overlaps(plate(aos), plate(los)), `plates collide at ${a}/${l}`).toBe(false)
+      cleanup()
+    }
+  })
+
+  it("yields to the bird's live tag — the moving number holds its place", async () => {
+    // At AOS the bird IS on the rise mark, so the two readouts want the same
+    // patch of dome. The second-by-second number is the one being read right
+    // then; the fixed reference bearing steps out of its way, not the reverse.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ azDeg: null, elDeg: null, satAzDeg: 100, satElDeg: 1 })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const bird = await screen.findByTestId('sat-bird')
+    const birdTag = bird.querySelector('[data-testid="sat-bird-tag"]')
+    expect(birdTag).toBeTruthy()
+    const { aos, los } = await tags()
+    expect(overlaps(plate(aos), plate(birdTag!)), 'aos plate over the bird tag').toBe(false)
+    expect(overlaps(plate(los), plate(birdTag!)), 'los plate over the bird tag').toBe(false)
+    // …and not over the bird itself either.
+    expect(overlaps(plate(aos), around(rimPt(100), 8)), 'aos plate over the bird').toBe(false)
+  })
+
+  it('never buries the rotator ghost — the gap to it IS the tracking error', async () => {
+    // Same rule the bird's tag follows. A plate parked on the commanded
+    // position hides the one thing the ghost exists to show.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ azDeg: 100, elDeg: 3, satAzDeg: 104, satElDeg: 6 })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const ghost = await screen.findByTestId('sat-ghost')
+    const ring = ghost.querySelector('.sat-dome-ghost-ring')!
+    const at: [number, number] = [Number(ring.getAttribute('cx')), Number(ring.getAttribute('cy'))]
+    const { aos, los } = await tags()
+    expect(overlaps(plate(aos), around(at, 7)), 'aos plate over the ghost').toBe(false)
+    expect(overlaps(plate(los), around(at, 7)), 'los plate over the ghost').toBe(false)
   })
 })
 
