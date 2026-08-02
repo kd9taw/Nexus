@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react'
 import type { SatView } from '../../types'
 import { getSatellites } from '../../api'
 import { satBirdHealth, satExcludedHealth } from '../../features/satHealth'
+import { elementsMostlyPastLine, elementsPastLineLabel } from '../../features/elementBands'
 import {
   filterSatsToChased,
   isSatChased,
@@ -129,11 +130,27 @@ export function SatPassesPane() {
           {favOnly ? '★' : 'All'}
         </button>
       </div>
-      {sats.tleAgeDays > 14 && (
+      {/* Same 14 d line, same set-wide median, as the Satellites chip — this
+          pane polls get_satellites itself, so it has to agree with it.
+          Failing that, the shape the median cannot see: most of the catalog
+          past the line while the typical bird is current. This pane is where
+          the operator PLANS, so a set that has quietly gone off belongs here —
+          but only a genuinely degraded one. The catalog permanently holds a
+          slow-cadence tail back, and a planning pane that always carries a
+          warning is a pane nobody reads (the majority test lives in
+          elementBands.ts, shared with the Now-Bar lane). */}
+      {sats.tleAgeDays > 14 ? (
         <p className="sat-stale" title="Orbital elements decay; pass times drift as they age">
           stale elements ({Math.round(sats.tleAgeDays)} d) — times are approximate
         </p>
-      )}
+      ) : elementsMostlyPastLine(sats) ? (
+        <p
+          className="sat-stale"
+          title="The typical bird in your catalog is still current, so the times below are good for it — but most of the set is past the 14-day line, or held back past 30 days. Refresh elements from the Satellites section."
+        >
+          {elementsPastLineLabel(sats)} — most times are approximate
+        </p>
+      ) : null}
       {rows.length === 0 ? (
         <p className="sat-fav-empty">No passes for your ★ birds in the next 24 h.</p>
       ) : (

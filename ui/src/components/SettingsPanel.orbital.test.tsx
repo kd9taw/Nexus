@@ -86,6 +86,8 @@ function tleStatus(over: Partial<TleStatus> = {}): TleStatus {
   return {
     count: 97,
     usableCount: 97,
+    agingCount: 0,
+    heldBackCount: 0,
     fetchedAt: NOW - 3600,
     source: 'mirror',
     importedCount: 0,
@@ -139,6 +141,41 @@ describe('the Last refresh line', () => {
     expect(line.textContent).not.toMatch(/HTTP|404/i)
     // …but the raw error survives for debugging, as the line's tooltip.
     expect(line.getAttribute('title')).toBe('TLE mirror fetch failed: HTTP 404')
+  })
+})
+
+// The CHANGELOG claims the held-back birds are "counted and reported in their
+// own right … the Settings line names the number". The number rode only the
+// two mirrorUnreachable branches of the composer, and that line renders at all
+// only while `lastError` is set — so on a landed refresh (the state after the
+// mirror goes live) nothing named it. The count belongs to the fieldset's own
+// status line, which is always there.
+describe('the element counts in the fieldset status line', () => {
+  it('names the held-back birds with no error in sight', async () => {
+    api.get('getTleStatus').mockImplementation(() =>
+      Promise.resolve(tleStatus({ count: 367, usableCount: 337, heldBackCount: 30 })),
+    )
+    renderPanel()
+    await openRadio()
+    expect(await screen.findByText(/367 birds · 30 sit out past 30 d/)).toBeTruthy()
+  })
+
+  it('a drifting set reads differently from a few slow-cadence birds', async () => {
+    api.get('getTleStatus').mockImplementation(() =>
+      Promise.resolve(
+        tleStatus({ count: 140, usableCount: 100, agingCount: 49, heldBackCount: 40 }),
+      ),
+    )
+    renderPanel()
+    await openRadio()
+    expect(await screen.findByText(/140 birds · 49 past 14 d · 40 sit out past 30 d/)).toBeTruthy()
+  })
+
+  it('a clean catalog states the count and nothing more', async () => {
+    renderPanel()
+    await openRadio()
+    const line = await screen.findByText(/97 birds/)
+    expect(line.textContent).not.toMatch(/sit out|past 14 d/)
   })
 })
 

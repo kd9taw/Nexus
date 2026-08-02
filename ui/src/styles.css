@@ -15007,6 +15007,14 @@ select.settings-input {
   border: 1px solid var(--band-marginal);
   font-family: var(--font-mono);
 }
+/* The section's refresh when nothing is wrong: the same chip species, in the
+   neutral border/dim-text voice the header's other furniture uses. It must
+   never read as a warning — the amber chip beside it is the one that means
+   something, and a second alarm-coloured control would make both meaningless. */
+.sat-chip.quiet {
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
 /* The stale chip is a BUTTON now (it IS the manual refresh) — strip the UA
    button chrome so it stays the same chip species as its span siblings. */
 button.sat-chip {

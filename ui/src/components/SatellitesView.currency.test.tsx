@@ -15,7 +15,7 @@
 //    the arm). 13 d arms without ceremony; 15 d asks first and arms ONLY on
 //    "Arm anyway". The click is still the only consent that arms anything.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
 import type { SatDetail, SatPass, SatTrackStatus, SatView } from '../types'
 import type { TleStatus } from '../api'
@@ -46,6 +46,8 @@ function freshStatus(): TleStatus {
   return {
     count: 97,
     usableCount: 97,
+    agingCount: 0,
+    heldBackCount: 0,
     fetchedAt: NOW,
     source: 'mirror',
     importedCount: 0,
@@ -56,6 +58,9 @@ function freshStatus(): TleStatus {
 
 const satView = (tleAgeDays: number): SatView => ({
   tleAgeDays,
+  usableCount: 97,
+  agingCount: 0,
+  heldBackCount: 0,
   tleFetchedAt: NOW - 3600,
   tleSource: 'mirror',
   birds: [],
@@ -192,6 +197,73 @@ describe('the stale chip is the refresh button', () => {
   })
 })
 
+describe('the section always has a way to refresh elements', () => {
+  // The amber chip WAS the section's manual refresh. Under median semantics
+  // it correctly disappears in normal operation — which took the only
+  // in-section refresh with it (what was left: the per-bird arm-confirm, the
+  // armed rail past 14 d, and Settings ▸ Radio ▸ Orbital elements). A control
+  // that exists only while something is wrong is not a control.
+  it('a current catalog keeps a quiet refresh control, and no warning chip', async () => {
+    const { container } = render(<SatellitesView />)
+    const btn = await screen.findByRole('button', { name: /refresh elements/i })
+    // Quiet: it must not borrow the amber warning chip's look or its claim.
+    expect(container.querySelector('.sat-chip.stale')).toBeNull()
+    expect(btn.textContent).not.toMatch(/stale/i)
+    fireEvent.click(btn)
+    await waitFor(() => expect(api.fetchTlesNow).toHaveBeenCalledTimes(1))
+  })
+
+  // The other end of the same rule: with nothing cached (a first launch, or a
+  // shack that has never had the network) fetching elements is the only thing
+  // there is to do here, so the control must be reachable then above all.
+  it('no elements at all still offers the fetch', async () => {
+    api.getSatellites.mockImplementation(() => Promise.resolve(null))
+    render(<SatellitesView />)
+    fireEvent.click(await screen.findByRole('button', { name: /refresh elements/i }))
+    await waitFor(() => expect(api.fetchTlesNow).toHaveBeenCalledTimes(1))
+  })
+
+  it('a stale catalog refreshes from the amber chip — one control, never two', async () => {
+    api.getSatellites.mockImplementation(() => Promise.resolve(satView(20.2)))
+    const { container } = render(<SatellitesView />)
+    await waitFor(() => expect(container.querySelector('.sat-chip.stale')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /refresh elements/i })).toBeNull()
+  })
+})
+
+// FINDING: `heldBackCount` reached exactly one surface (the Settings line),
+// so "30 of 367 held back" and "51 of 100 held back" rendered identically
+// where the operator actually is. The excluded birds are listed individually
+// only when STARRED or matched by the search box, so by default they appear
+// nowhere at all.
+describe('the held-back birds are visible on the Satellites screen', () => {
+  const bands = (over: Partial<SatView>): SatView => ({ ...satView(0.2), ...over })
+
+  it('names the sitting-out birds and their share, by default', async () => {
+    api.getSatellites.mockImplementation(() =>
+      Promise.resolve(bands({ usableCount: 337, agingCount: 0, heldBackCount: 30 })),
+    )
+    render(<SatellitesView />)
+    const note = await screen.findByTestId('sat-element-bands')
+    expect(note.textContent).toBe('367 birds · 30 sit out past 30 d')
+  })
+
+  it('a drifting set does NOT read like a few slow-cadence birds', async () => {
+    api.getSatellites.mockImplementation(() =>
+      Promise.resolve(bands({ usableCount: 100, agingCount: 49, heldBackCount: 40 })),
+    )
+    render(<SatellitesView />)
+    const note = await screen.findByTestId('sat-element-bands')
+    expect(note.textContent).toBe('140 birds · 49 past 14 d · 40 sit out past 30 d')
+  })
+
+  it('a clean catalog says nothing — a zero is not news', async () => {
+    render(<SatellitesView />)
+    await waitFor(() => expect(api.getSatellites).toHaveBeenCalled())
+    expect(screen.queryByTestId('sat-element-bands')).toBeNull()
+  })
+})
+
 describe('the Elements gate row', () => {
   it('is the fifth rail row, ready (●) on a fresh frozen set', async () => {
     api.getSatTrackStatus.mockImplementation(() =>
@@ -238,8 +310,11 @@ describe('the 14 d arm confirm', () => {
     fireEvent.click((await workButtons())[0])
     // The confirm appears — naming the age — and NOTHING has armed yet.
     const armAnyway = await screen.findByRole('button', { name: /arm anyway/i })
-    expect(screen.getByRole('button', { name: /refresh/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /cancel/i })).toBeTruthy()
+    // Scoped to the confirm: the header carries its own refresh control now,
+    // so an unscoped /refresh/i names two different buttons.
+    const confirm = within(screen.getByRole('dialog'))
+    expect(confirm.getByRole('button', { name: /refresh/i })).toBeTruthy()
+    expect(confirm.getByRole('button', { name: /cancel/i })).toBeTruthy()
     expect(api.startSatTrack).not.toHaveBeenCalled()
     fireEvent.click(armAnyway)
     await waitFor(() => expect(api.startSatTrack).toHaveBeenCalledWith('RS-44', NOW + 720))

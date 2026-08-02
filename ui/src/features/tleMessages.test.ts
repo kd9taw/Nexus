@@ -10,6 +10,8 @@ function status(over: Partial<TleStatus>): TleStatus {
   return {
     count: 97,
     usableCount: 97,
+    agingCount: 0,
+    heldBackCount: 0,
     fetchedAt: NOW,
     source: 'mirror',
     importedCount: 0,
@@ -55,6 +57,82 @@ describe('tleRefreshMessage', () => {
     )
     expect(m.text).not.toMatch(/HTTP|404/i)
     expect(m.raw).toBe('TLE mirror fetch failed: HTTP 404')
+  })
+
+  // THE FIELD REPORT (KD9TAW, 2026-08-01): the shipped catalog is current —
+  // median 0.2 d, 337 birds usable — while a slow-cadence tail (AO-7 and the
+  // SatNOGS birds re-observed every few weeks) puts 30 birds past the 30 d
+  // ceiling. That must reach the CALM branch, and the excluded birds must be
+  // accounted for rather than smuggled into the age.
+  it('the shipped catalog: current, with a tail sitting out — calm, and the tail is named', () => {
+    const m = tleRefreshMessage(
+      status({
+        count: 367,
+        usableCount: 337,
+        heldBackCount: 30,
+        elementAgeDays: 0.2,
+        lastError: 'TLE mirror fetch failed: HTTP 404',
+        lastErrorKind: 'mirrorUnreachable',
+      }),
+    )
+    expect(m.kind).toBe('info')
+    expect(m.text).toBe(
+      "The element mirror isn't reachable (it goes live with the next release); your elements are 0.2 d old — current. 30 birds are past 30 days and sit out until fresh elements arrive.",
+    )
+    // The old readout reported the oldest usable bird (26 d) as the operator's
+    // element age: an error headline, and nothing to act on.
+    expect(m.text).not.toMatch(/stale|import a fresh/i)
+  })
+
+  // THE CLAIM THE CHANGELOG MAKES — "counted and reported in their own
+  // right" — has to hold on every branch, not only the two the pre-launch
+  // mirror happens to take. `lastErrorKind: 'celestrakBlocked'` and a LANDED
+  // refresh (the state the day the mirror goes live) named nothing.
+  it('every branch accounts for the birds sitting out', () => {
+    const held = { count: 367, usableCount: 337, heldBackCount: 30 }
+    const sitOut = /30 birds are past 30 days and sit out until fresh elements arrive\./
+    expect(tleRefreshMessage(status(held)).text).toMatch(sitOut)
+    expect(tleRefreshMessage(status({ ...held, source: 'celestrak' })).text).toMatch(sitOut)
+    expect(
+      tleRefreshMessage(
+        status({ ...held, blockedUntil: NOW + 20 * 3600, lastError: 'x', lastErrorKind: 'celestrakBlocked' }),
+      ).text,
+    ).toMatch(sitOut)
+    expect(
+      tleRefreshMessage(status({ ...held, lastError: 'x', lastErrorKind: 'failed' })).text,
+    ).toMatch(sitOut)
+  })
+
+  // The 14–30 d band is the shape the median cannot show: the typical bird is
+  // current AND half the catalog is drifting, both true at once.
+  it('the drifting band is named beside the age, not folded into it', () => {
+    const m = tleRefreshMessage(
+      status({
+        count: 140,
+        usableCount: 100,
+        agingCount: 49,
+        heldBackCount: 40,
+        elementAgeDays: 0.2,
+        lastError: 'TLE mirror fetch failed: HTTP 404',
+        lastErrorKind: 'mirrorUnreachable',
+      }),
+    )
+    expect(m.text).toBe(
+      "The element mirror isn't reachable (it goes live with the next release); your elements are 0.2 d old — current. 49 birds are past the 14-day line and drifting. 40 birds are past 30 days and sit out until fresh elements arrive.",
+    )
+  })
+
+  it('one bird sitting out reads as one bird', () => {
+    const m = tleRefreshMessage(
+      status({
+        agingCount: 1,
+        heldBackCount: 1,
+        lastError: 'TLE mirror fetch failed: HTTP 404',
+        lastErrorKind: 'mirrorUnreachable',
+      }),
+    )
+    expect(m.text).toContain('1 bird is past the 14-day line and drifting.')
+    expect(m.text).toContain('1 bird is past 30 days and sits out until fresh elements arrive.')
   })
 
   it('mirror down with STALE elements: a real failure, with the age and the way out', () => {
