@@ -123,12 +123,28 @@ try {
   // Settings panel OPENS. Settings-open is the exact class of the public
   // crash-on-Settings incident; a regression here kills the session and
   // fails loudly instead of reaching users.
-  await exec(`localStorage.setItem('nexus.features.wizardSeen', '1'); location.reload()`)
-  await waitFor(
-    'the main UI (mode nav)',
-    `return document.readyState === 'complete' && !!document.querySelector('.mode-nav')`,
+  // ⚠️ THE RELOAD RACE. The wizard is an OVERLAY rendered beside the shell, not
+  // instead of it, so `.mode-nav` is ALREADY in the pre-reload document. Waiting on
+  // it (or on `readyState`, which is 'complete' for the doomed page until the
+  // navigation actually starts) is satisfied INSTANTLY by the old DOM — and the next
+  // step then queries a document that is mid-teardown and gets null. That is a flaky
+  // failure with no bug behind it, and it cost a red main on 2026-08-02.
+  //
+  // So: stamp a marker on `window` (dies with the document, unlike localStorage),
+  // then wait for it to be GONE — which proves the NEW document — and wait for the
+  // BUTTON THIS STEP IS ABOUT TO CLICK rather than a proxy element that also exists
+  // on the old page. A wait must assert the next step's own precondition.
+  await exec(
+    `window.__nexusPreReload = true; localStorage.setItem('nexus.features.wizardSeen', '1'); location.reload()`,
   )
-  console.log('PASS 3a: main UI mounted (.mode-nav present)')
+  await waitFor(
+    'the reloaded main UI, with the Settings button live',
+    `return !window.__nexusPreReload
+       && document.readyState === 'complete'
+       && !!document.querySelector('.mode-nav')
+       && !!document.querySelector('button[aria-label="Settings"]')`,
+  )
+  console.log('PASS 3a: main UI mounted (.mode-nav + Settings button present)')
   await exec(`document.querySelector('button[aria-label="Settings"]').click()`)
   await waitFor(
     'the Settings panel',
