@@ -100,6 +100,12 @@ pub struct QrzLookup {
     pub itu_zone: Option<u32>,
     /// Profile photo URL (QRZ `<image>`). Subscriber-only + operator-supplied, so routinely `None`.
     pub image: Option<String>,
+    /// The station's EXACT position, when QRZ reports a real one — the input QRZ's own
+    /// distance/bearing figures are computed from. `None` unless `<geoloc>` says the
+    /// coordinates were surveyed (`user`) or geocoded from the address (`geocode`);
+    /// see [`parse_callsign`] for why the other provenances are refused.
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
 }
 
 /// Percent-encode a query value (RFC 3986 unreserved set). Same encoder as the
@@ -158,6 +164,21 @@ pub fn parse_session(xml: &str) -> QrzSession {
 
 /// Parse the `<Callsign>` data block. `None` if there is no callsign record
 /// (e.g. a login-only or error response).
+///
+/// `lat`/`lon` are gated on QRZ's `<geoloc>` provenance tag, because QRZ returns
+/// coordinates for every record regardless of how little it actually knows:
+///
+/// | `geoloc` | meaning | kept? |
+/// |---|---|---|
+/// | `user` | the operator placed their own pin | yes — exact |
+/// | `geocode` | geocoded from the postal address | yes — street-accurate |
+/// | `grid` | back-derived from the locator | no — identical to our own grid center |
+/// | `dxcc` | the DXCC entity's centroid | **no — hundreds of km worse than the grid** |
+/// | absent | unknown provenance | no |
+///
+/// Taking the coordinates ungated would make a bearing WORSE than the grid square
+/// it replaced whenever QRZ fell back to `dxcc`, so absence is reported as absence
+/// and the caller falls back to the locator.
 pub fn parse_callsign(xml: &str) -> Option<QrzLookup> {
     let call = tag(xml, "call")?;
     let name = tag(xml, "name_fmt").or_else(|| match (tag(xml, "fname"), tag(xml, "name")) {
@@ -166,7 +187,24 @@ pub fn parse_callsign(xml: &str) -> Option<QrzLookup> {
         (None, Some(l)) => Some(l),
         (None, None) => None,
     });
+    // Both coordinates or neither — a half-parsed position is not a position.
+    let precise = tag(xml, "geoloc")
+        .is_some_and(|g| matches!(g.trim().to_ascii_lowercase().as_str(), "user" | "geocode"));
+    let (lat, lon) = match (
+        precise.then(|| tag(xml, "lat")).flatten(),
+        precise.then(|| tag(xml, "lon")).flatten(),
+    ) {
+        (Some(la), Some(lo)) => match (la.trim().parse::<f64>(), lo.trim().parse::<f64>()) {
+            (Ok(la), Ok(lo)) if (-90.0..=90.0).contains(&la) && (-180.0..=180.0).contains(&lo) => {
+                (Some(la), Some(lo))
+            }
+            _ => (None, None),
+        },
+        _ => (None, None),
+    };
     Some(QrzLookup {
+        lat,
+        lon,
         call,
         name,
         nickname: tag(xml, "nickname"),
@@ -587,10 +625,14 @@ mod tests {
     const NOT_FOUND: &str = "<QRZDatabase version=\"1.34\"><Session><Key>abc</Key>\
 <Error>Not found: g1srdd</Error></Session></QRZDatabase>";
 
+    // A real subscriber record carries <lat>/<lon>/<geoloc> alongside the grid — the
+    // fixture omitted them until 2026-08-01, which is why nothing caught the caller
+    // card re-deriving a position QRZ had already told us exactly.
     const LOOKUP_FULL: &str = "<?xml version=\"1.0\" ?>\n\
 <QRZDatabase version=\"1.34\" xmlns=\"http://xmldata.qrz.com\">\n\
 <Callsign><call>AA7BQ</call><fname>Fred</fname><name>Lloyd</name><addr2>Scottsdale</addr2>\
 <state>AZ</state><country>United States</country><grid>DM43bp</grid><dxcc>291</dxcc>\
+<lat>33.634000</lat><lon>-111.887000</lon><geoloc>user</geoloc>\
 <cqzone>3</cqzone><ituzone>6</ituzone><image>https://cdn-xml.qrz.com/q/aa7bq/aa7bq.jpg</image></Callsign>\n\
 <Session><Key>abc</Key><Count>13</Count></Session>\n</QRZDatabase>";
 
@@ -645,6 +687,56 @@ mod tests {
             r.image.as_deref(),
             Some("https://cdn-xml.qrz.com/q/aa7bq/aa7bq.jpg")
         );
+        // The exact position QRZ computes ITS OWN distance/bearing from.
+        assert_eq!(r.lat, Some(33.634));
+        assert_eq!(r.lon, Some(-111.887));
+    }
+
+    /// The `<geoloc>` gate: QRZ hands back coordinates for every record, but only
+    /// `user`/`geocode` are a real position. `dxcc` is the entity centroid — using it
+    /// would put a bearing HUNDREDS of km further off than the grid square it replaced,
+    /// so a weak provenance must report absence and let the locator win.
+    #[test]
+    fn coordinates_are_kept_only_when_geoloc_vouches_for_them() {
+        let rec = |geoloc: &str| {
+            format!(
+                "<Callsign><call>W1ABC</call><grid>FN31pr</grid>\
+<lat>41.714700</lat><lon>-72.727200</lon>{geoloc}</Callsign>"
+            )
+        };
+        for good in ["<geoloc>user</geoloc>", "<geoloc>geocode</geoloc>"] {
+            let r = parse_callsign(&rec(good)).unwrap();
+            assert_eq!(r.lat, Some(41.7147), "{good} is a real position");
+            assert_eq!(r.lon, Some(-72.7272), "{good} is a real position");
+        }
+        for weak in [
+            "<geoloc>grid</geoloc>", // back-derived — no better than our own math
+            "<geoloc>dxcc</geoloc>", // entity centroid — far WORSE than the grid
+            "",                      // no provenance at all
+        ] {
+            let r = parse_callsign(&rec(weak)).unwrap();
+            assert!(r.lat.is_none() && r.lon.is_none(), "refused: {weak:?}");
+            assert_eq!(
+                r.grid.as_deref(),
+                Some("FN31pr"),
+                "the locator still stands"
+            );
+        }
+    }
+
+    #[test]
+    fn a_half_or_out_of_range_position_is_no_position() {
+        // One coordinate only, and an out-of-range pair — both must collapse to None
+        // rather than reaching the UI as a plausible-looking point.
+        for xml in [
+            "<Callsign><call>W1ABC</call><lat>41.7</lat><geoloc>user</geoloc></Callsign>",
+            "<Callsign><call>W1ABC</call><lon>-72.7</lon><geoloc>user</geoloc></Callsign>",
+            "<Callsign><call>W1ABC</call><lat>91.0</lat><lon>-72.7</lon><geoloc>user</geoloc></Callsign>",
+            "<Callsign><call>W1ABC</call><lat>41.7</lat><lon>x</lon><geoloc>user</geoloc></Callsign>",
+        ] {
+            let r = parse_callsign(xml).unwrap();
+            assert!(r.lat.is_none() && r.lon.is_none(), "refused: {xml}");
+        }
     }
 
     #[test]

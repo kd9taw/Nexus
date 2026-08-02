@@ -275,6 +275,43 @@ mod tests {
         }
     }
 
+    /// ABSOLUTE headings, not a round-trip. The round-trip above is self-referential:
+    /// it pins `bearing_deg` against `destination_point`, so both could share a sign
+    /// error and still agree. These numbers come from outside the module — cardinal
+    /// pairs whose bearing is forced by geometry, plus two real paths — so a reciprocal
+    /// or swapped-argument change cannot pass.
+    ///
+    /// The direction convention this fixes: the FIRST argument is where you are, the
+    /// SECOND is what you are pointing at. All seven production call sites pass
+    /// `(me, them)`; nothing else was pinning that.
+    #[test]
+    fn bearing_matches_known_headings() {
+        let eq = (0.0, 0.0);
+        // Due east/north/west/south from the equator+prime-meridian origin.
+        for &(to, want) in &[
+            ((0.0, 10.0), 90.0),
+            ((10.0, 0.0), 0.0),
+            ((0.0, -10.0), 270.0),
+            ((-10.0, 0.0), 180.0),
+        ] {
+            let got = bearing_deg(eq, to);
+            let d = ((got - want + 540.0).rem_euclid(360.0)) - 180.0;
+            assert!(
+                d.abs() < 1e-6,
+                "bearing_deg({eq:?}, {to:?}) = {got}, want {want}"
+            );
+        }
+        // Real paths from the reference QTH. EN52 → JN58 (Munich) leaves the US
+        // north-EAST on the great circle, NOT due east as a flat map suggests;
+        // EN52 → QF56 (Sydney) leaves to the WEST.
+        let en52 = maidenhead_to_latlon("EN52").unwrap();
+        for &(grid, want) in &[("JN58", 46.0), ("QF56", 260.2), ("FN31", 89.4)] {
+            let got = bearing_deg(en52, maidenhead_to_latlon(grid).unwrap());
+            let d = ((got - want + 540.0).rem_euclid(360.0)) - 180.0;
+            assert!(d.abs() < 1.5, "EN52 -> {grid} = {got}°, want ~{want}°");
+        }
+    }
+
     #[test]
     fn octants() {
         assert_eq!(compass_octant(0.0), "N");

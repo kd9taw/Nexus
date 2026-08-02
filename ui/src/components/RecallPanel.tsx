@@ -1,7 +1,7 @@
 import type { LoggedQso } from '../types'
 import type { CallHistory } from '../features/callHistory'
 import { openQrzPage } from '../api'
-import { distanceLabel, bearingLabel } from '../grid'
+import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '../grid'
 
 interface Props {
   call: string
@@ -10,6 +10,11 @@ interface Props {
   name?: string | null
   qth?: string | null
   grid?: string | null
+  /** The station's exact callbook coordinates, when the lookup vouched for a real
+   *  position. Preferred over `grid` for the distance/bearing line — a locator is a
+   *  box, and its center is not where the station is. Absent ⇒ fall back to `grid`. */
+  lat?: number | null
+  lon?: number | null
   country?: string | null
   /** Callbook profile photo URL (QRZ/HamQTH). When present, replaces the initials avatar. */
   image?: string | null
@@ -63,7 +68,7 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, grid, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot }: Props) {
+export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot }: Props) {
   const c = call.trim()
   if (c.length < 3) return null
   const cu = c.toUpperCase()
@@ -71,10 +76,24 @@ export function RecallPanel({ call, band, name, qth, grid, country, image, myGri
   const place = [qth?.trim(), grid?.trim() ? `(${grid.trim()})` : ''].filter(Boolean).join(' ')
   const ctry = country?.trim()
   const where = [place, ctry].filter(Boolean).join(' · ')
-  // Distance + true bearing from the operator's QTH — needs their grid AND a resolved peer grid.
-  const geo = myGrid
-    ? [distanceLabel(myGrid, grid ?? null), bearingLabel(myGrid, grid ?? null)].filter(Boolean).join(' · ')
-    : ''
+  // Distance + true bearing from the operator's QTH, computed from the BEST position each
+  // side has: the callbook's exact coordinates when the lookup returned real ones (the very
+  // input QRZ derives ITS figures from), else the center of a reported grid square.
+  const me = myGrid ? gridToLatLon(myGrid) : null
+  const them = stationLatLon(lat != null && lon != null ? { lat, lon } : null, grid)
+  const geo = me && them ? `${distanceLabelAt(me, them)} · ${bearingLabelAt(me, them)}` : ''
+  // Name whichever side is still a SQUARE rather than a point. A 4-character locator is
+  // ±1° of longitude — a degree or so on a DX path, but up to ~29° on a station ~125 miles
+  // away, and the reason a grid-derived heading disagrees with QRZ's. Saying so is what
+  // keeps that error visible instead of silently wrong.
+  const coarse = (g: string | null | undefined) => Boolean(g?.trim()) && g!.trim().length < 6
+  const approx = [
+    coarse(myGrid) ? `your ${myGrid!.trim().toUpperCase()} square (set a 6-character grid in Settings to sharpen it)` : '',
+    !them || (lat != null && lon != null) || !coarse(grid) ? '' : `their ${grid!.trim().toUpperCase()} square`,
+  ].filter(Boolean)
+  const geoTitle =
+    'Great-circle distance · true bearing from your QTH' +
+    (approx.length ? ` — approximate: computed from the center of ${approx.join(' and ')}` : '')
   const confirmed = hist.confirmedCount > 0
   const needed = newEntity ? 'New DXCC!' : newBandSlot ? 'New band-slot' : newModeSlot ? 'New mode-slot' : null
   const prior = [...hist.qsos].sort((a, b) => b.whenUnix - a.whenUnix)
@@ -145,7 +164,7 @@ export function RecallPanel({ call, band, name, qth, grid, country, image, myGri
             {where || <span className="recall-where-empty">Tab or press QRZ for name / QTH</span>}
           </div>
           {geo && (
-            <div className="recall-geo mono" title="Great-circle distance · true bearing from your QTH">
+            <div className="recall-geo mono" title={geoTitle}>
               {geo}
             </div>
           )}

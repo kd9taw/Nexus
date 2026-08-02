@@ -105,6 +105,12 @@ pub struct HamQthLookup {
     pub itu_zone: Option<u32>,
     /// Profile photo URL (HamQTH `<picture>`). Operator-supplied, so routinely `None`.
     pub image: Option<String>,
+    /// The station's position from HamQTH's `<latitude>`/`<longitude>` — the profile
+    /// address, so at worst locator-grade and usually better. HamQTH carries no
+    /// provenance tag (contrast QRZ's `<geoloc>`), so there is nothing to gate on;
+    /// a missing or unparseable pair reports absence.
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
 }
 
 /// Percent-encode a query value (RFC 3986 unreserved set). Same encoder as the
@@ -167,6 +173,16 @@ pub fn parse_callsign(xml: &str) -> Option<HamQthLookup> {
     let name = tag(xml, "adr_name")
         .or_else(|| tag(xml, "nick"))
         .or_else(|| tag(xml, "name"));
+    // Both coordinates or neither — a half-parsed position is not a position.
+    let (lat, lon) = match (tag(xml, "latitude"), tag(xml, "longitude")) {
+        (Some(la), Some(lo)) => match (la.trim().parse::<f64>(), lo.trim().parse::<f64>()) {
+            (Ok(la), Ok(lo)) if (-90.0..=90.0).contains(&la) && (-180.0..=180.0).contains(&lo) => {
+                (Some(la), Some(lo))
+            }
+            _ => (None, None),
+        },
+        _ => (None, None),
+    };
     Some(HamQthLookup {
         call,
         name,
@@ -182,6 +198,8 @@ pub fn parse_callsign(xml: &str) -> Option<HamQthLookup> {
         cq_zone: tag(xml, "cq").and_then(|d| d.parse().ok()),
         itu_zone: tag(xml, "itu").and_then(|d| d.parse().ok()),
         image: tag(xml, "picture"),
+        lat,
+        lon,
     })
 }
 
@@ -279,6 +297,7 @@ mod tests {
 <adr_name>ARRL Headquarters Operators Club</adr_name><adr_city>Newington</adr_city>\
 <adr_country>United States</adr_country><adr_adif>291</adr_adif>\
 <us_state>CT</us_state><us_county>Hartford</us_county>\
+<latitude>41.714700</latitude><longitude>-72.727200</longitude>\
 <picture>https://www.hamqth.com/userfiles/w/w1/w1aw/_profile/w1aw.jpg</picture></search>\n</HamQTH>";
 
     // A DX station with no postal name and no us_state — name falls back to <nick>.
@@ -356,6 +375,8 @@ mod tests {
             r.image.as_deref(),
             Some("https://www.hamqth.com/userfiles/w/w1/w1aw/_profile/w1aw.jpg")
         );
+        assert_eq!(r.lat, Some(41.7147));
+        assert_eq!(r.lon, Some(-72.7272));
     }
 
     #[test]
@@ -368,6 +389,23 @@ mod tests {
         assert_eq!(r.dxcc, Some(503));
         assert_eq!(r.cq_zone, Some(15));
         assert_eq!(r.itu_zone, Some(28));
+        // No <latitude>/<longitude> in this record — absence stays absent, and the
+        // <grid> is what the caller falls back to.
+        assert!(r.lat.is_none() && r.lon.is_none());
+        assert_eq!(r.grid.as_deref(), Some("JO70gg"));
+    }
+
+    #[test]
+    fn a_half_or_out_of_range_position_is_no_position() {
+        for xml in [
+            "<search><callsign>w1aw</callsign><latitude>41.7</latitude></search>",
+            "<search><callsign>w1aw</callsign><longitude>-72.7</longitude></search>",
+            "<search><callsign>w1aw</callsign><latitude>91.0</latitude><longitude>-72.7</longitude></search>",
+            "<search><callsign>w1aw</callsign><latitude>41.7</latitude><longitude>x</longitude></search>",
+        ] {
+            let r = parse_callsign(xml).unwrap();
+            assert!(r.lat.is_none() && r.lon.is_none(), "refused: {xml}");
+        }
     }
 
     #[test]

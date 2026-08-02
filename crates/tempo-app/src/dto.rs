@@ -1493,6 +1493,15 @@ pub struct QrzLookupDto {
     pub itu_zone: Option<u32>,
     /// Profile photo URL (QRZ `<image>` / HamQTH `<picture>`) — routinely `None`.
     pub image: Option<String>,
+    /// The station's EXACT position when the callbook reported a trustworthy one, so
+    /// the caller card can show the same distance/bearing QRZ itself does instead of
+    /// re-deriving them from the center of a grid square. Always both or neither.
+    /// `None` is the normal case (free QRZ account, `<geoloc>` provenance too weak) and
+    /// means "fall back to the locator" — never "0, 0".
+    #[serde(default)]
+    pub lat: Option<f64>,
+    #[serde(default)]
+    pub lon: Option<f64>,
 }
 
 impl From<tempo_core::qrz::QrzLookup> for QrzLookupDto {
@@ -1509,6 +1518,8 @@ impl From<tempo_core::qrz::QrzLookup> for QrzLookupDto {
             cq_zone: r.cq_zone,
             itu_zone: r.itu_zone,
             image: r.image,
+            lat: r.lat,
+            lon: r.lon,
         }
     }
 }
@@ -1531,6 +1542,8 @@ impl From<tempo_core::hamqth::HamQthLookup> for QrzLookupDto {
             cq_zone: r.cq_zone,
             itu_zone: r.itu_zone,
             image: r.image,
+            lat: r.lat,
+            lon: r.lon,
         }
     }
 }

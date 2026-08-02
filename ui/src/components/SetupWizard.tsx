@@ -340,7 +340,7 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
               >
                 {gridState === 'bad'
                   ? 'Not a Maidenhead locator — 4 or 6 characters, like EN52 or EN52xa.'
-                  : 'Maidenhead locator (qrz.com shows yours). 4 characters is plenty.'}
+                  : 'Maidenhead locator (qrz.com shows yours). Give all 6 — 4 characters pins you to the middle of a ~100-mile square, and every distance and bearing is measured from there.'}
               </span>
             </label>
           </div>

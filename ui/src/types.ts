@@ -1618,6 +1618,12 @@ export interface QrzLookup {
   ituZone: number | null
   /** Profile photo URL (QRZ image / HamQTH picture) — routinely null. */
   image: string | null
+  /** The station's EXACT position when the callbook vouched for one — what QRZ
+   *  computes its own distance/bearing from, so the caller card can stop deriving
+   *  them from the center of a grid square. Always both or neither; absent (the
+   *  normal case) means "fall back to the locator", never "0, 0". */
+  lat?: number | null
+  lon?: number | null
 }
 
 /** Result of a QRZ Logbook push (one-QSO upload). `result` is the outcome tag;

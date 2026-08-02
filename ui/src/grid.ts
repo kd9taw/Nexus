@@ -60,14 +60,35 @@ export function haversineKm(a: LatLon, b: LatLon): number {
   return 2 * R * Math.asin(Math.sqrt(h))
 }
 
+/**
+ * The best position we have for a station: the exact coordinates a callbook
+ * reported, else the center of its reported grid square, else nothing.
+ *
+ * A locator is a BOX, not a point, and the box is big: a 4-character square spans
+ * 2° of longitude by 1° of latitude, so its center can be ~100 km from the real
+ * station. That is a degree or so of bearing on a DX path but up to ~30° on a
+ * station 150 miles away — which is why a grid-derived heading disagrees with
+ * QRZ's, and why exact coordinates win whenever a callbook actually has them.
+ */
+export function stationLatLon(
+  coords: LatLon | null | undefined,
+  grid: string | null | undefined,
+): LatLon | null {
+  if (coords && Number.isFinite(coords.lat) && Number.isFinite(coords.lon)) return coords
+  return grid ? gridToLatLon(grid) : null
+}
+
+/** Distance between two RESOLVED points, in statute miles (the unit QRZ shows). */
+export function distanceLabelAt(a: LatLon, b: LatLon): string {
+  return `${Math.round(haversineKm(a, b) * 0.621371)} mi`
+}
+
 export function distanceLabel(myGrid: string, peerGrid: string | null): string | null {
   if (!peerGrid) return null
   const me = gridToLatLon(myGrid)
   const them = gridToLatLon(peerGrid)
   if (!me || !them) return null
-  const km = haversineKm(me, them)
-  const mi = km * 0.621371
-  return `${Math.round(mi)} mi`
+  return distanceLabelAt(me, them)
 }
 
 /** Initial great-circle bearing (degrees, 0–359) from `a` to `b`. */
@@ -82,13 +103,18 @@ export function bearingDeg(a: LatLon, b: LatLon): number {
   return Math.round((deg + 360) % 360)
 }
 
+/** Initial true bearing between two RESOLVED points, e.g. "312°". */
+export function bearingLabelAt(a: LatLon, b: LatLon): string {
+  return `${bearingDeg(a, b)}°`
+}
+
 /** Short bearing label from my grid to a peer grid, e.g. "312°", or null. */
 export function bearingLabel(myGrid: string, peerGrid: string | null): string | null {
   if (!peerGrid) return null
   const me = gridToLatLon(myGrid)
   const them = gridToLatLon(peerGrid)
   if (!me || !them) return null
-  return `${bearingDeg(me, them)}°`
+  return bearingLabelAt(me, them)
 }
 
 /** The magnetic heading for a true bearing given the QTH declination (° east-
