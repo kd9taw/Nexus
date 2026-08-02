@@ -3308,19 +3308,38 @@ struct SatBird {
     /// unconditionally for that reason — a skipped key would make "not asked"
     /// and "asked, answered no" the same wire value.
     amateur: bool,
+    /// What an operator WORKS this bird with, from the mirror's catalog: any
+    /// of `linear` / `fm` / `digital` / `beacon`, and often several at once.
+    /// `status` says whether the bird is there and `amateur` says whether
+    /// anything is transmitting; neither says whether the operator owns a
+    /// radio that can work it, which is why the one-time favorites seed used
+    /// to bury every SSB transponder under the low cubesats that out-fly them.
+    ///
+    /// Skipped when absent, following `status` and NOT `amateur`: here the
+    /// absence IS the honest answer ("this payload never classified the bird"
+    /// — an old mirror, the bundled seed snapshot, the Celestrak leg, or a
+    /// downgrade round-trip through the on-disk cache) and a missing key says
+    /// exactly that. An empty array is the OTHER answer — classified, with
+    /// nothing left to work — and the two must stay distinguishable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    classes: Option<Vec<String>>,
 }
 
-/// The two catalog marks a bird's row carries: SatNOGS's status verbatim and
-/// whether the mirror's amateur catalog still lists a live amateur
-/// transmitter for it. `(None, false)` when there is no entry to ask — see
-/// [`SatBird::amateur`] for why the pairing, not the `false`, is the contract.
+/// The catalog marks a bird's row carries: SatNOGS's status verbatim, whether
+/// the mirror's amateur catalog still lists a live amateur transmitter for it,
+/// and what it is worked with. `(None, false, None)` when there is no entry to
+/// ask — see [`SatBird::amateur`] for why the pairing, not the `false`, is the
+/// contract, and [`SatBird::classes`] for why absence there is a real answer.
+///
+/// ONE lookup for all three on purpose: a mark fetched separately is how the
+/// three come to disagree about the same bird.
 fn catalog_marks(
     catalog: &std::collections::HashMap<u32, propagation::live::tle::SatCatalogEntry>,
     norad: Option<u32>,
-) -> (Option<String>, bool) {
+) -> (Option<String>, bool, Option<Vec<String>>) {
     match norad.and_then(|n| catalog.get(&n)) {
-        Some(c) => (Some(c.status.clone()), c.amateur),
-        None => (None, false),
+        Some(c) => (Some(c.status.clone()), c.amateur, c.classes.clone()),
+        None => (None, false, None),
     }
 }
 
@@ -3566,7 +3585,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                 // TLE parse per bird (the batch fn), ~ms for the whole flock.
                 let track = sat::track(t, now, 600, 1_500, 60);
                 let norad = sat::norad_id(&t.line1);
-                let (status, amateur) = catalog_marks(&catalog, norad);
+                let (status, amateur, classes) = catalog_marks(&catalog, norad);
                 if let Some(n) = norad {
                     drawn.insert(n);
                 }
@@ -3580,6 +3599,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                     track,
                     status: status.clone(),
                     amateur,
+                    classes,
                 });
                 if need_passes {
                     if let Some(obs) = observer {
@@ -14444,6 +14464,7 @@ mod tests {
             status: status.into(),
             amateur: true,
             decayed: false,
+            classes: Some(vec!["fm".into()]),
             src: Some("celestrak-amateur".into()),
         }
     }
@@ -14967,43 +14988,68 @@ mod tests {
         assert!(serde_json::to_value(&unknown[0]).unwrap().get("amateur").is_none());
     }
 
-    /// The two CATALOG marks a bird's row carries. `status` alone could not
+    /// The CATALOG marks a bird's row carries. `status` alone could not
     /// answer "is there anything to work here": a bird can be perfectly alive
     /// in orbit with every amateur transmitter dead, which is exactly the
     /// case a pass elevation can never show. The pairing is the contract —
     /// `amateur` is only a claim when a `status` rides beside it, so an
-    /// unknown bird must come back `(None, false)` and never a bare `false`
-    /// the UI could read as "the catalog says it is silent".
+    /// unknown bird must come back `(None, false, None)` and never a bare
+    /// `false` the UI could read as "the catalog says it is silent".
+    ///
+    /// `classes` rides the same lookup and follows the OPPOSITE serialization
+    /// rule, deliberately: its absence is a real and useful answer ("nobody
+    /// classified this bird"), so a skipped key says it exactly, while an
+    /// empty array stays available to mean "classified, nothing to work".
     #[test]
     fn the_amateur_mark_rides_beside_the_status_and_is_never_claimed_unasked() {
         let mut cat = std::collections::HashMap::new();
         cat.insert(43_017, catalog_entry(43_017, "alive"));
         let mut quiet = catalog_entry(27_607, "alive");
         quiet.amateur = false; // in orbit, nothing left transmitting
+        quiet.classes = Some(Vec::new()); // …and so: classified, and empty
         cat.insert(27_607, quiet);
         cat.insert(40_967, catalog_entry(40_967, "re-entered"));
+        // A bird from a payload that predates the classification — the
+        // bundled seed snapshot, the Celestrak leg, or a downgrade round-trip
+        // through our own on-disk cache.
+        let mut old = catalog_entry(24_278, "alive");
+        old.classes = None;
+        cat.insert(24_278, old);
 
         assert_eq!(
             catalog_marks(&cat, Some(43_017)),
-            (Some("alive".to_string()), true)
+            (
+                Some("alive".to_string()),
+                true,
+                Some(vec!["fm".to_string()])
+            )
         );
         assert_eq!(
             catalog_marks(&cat, Some(27_607)),
-            (Some("alive".to_string()), false),
+            (Some("alive".to_string()), false, Some(Vec::new())),
             "an alive bird with no live amateur transmitter must say so"
         );
         assert_eq!(
             catalog_marks(&cat, Some(40_967)),
-            (Some("re-entered".to_string()), true)
+            (
+                Some("re-entered".to_string()),
+                true,
+                Some(vec!["fm".to_string()])
+            )
+        );
+        assert_eq!(
+            catalog_marks(&cat, Some(24_278)),
+            (Some("alive".to_string()), true, None),
+            "a known bird an old payload never classified: status yes, class unknown"
         );
         // Never asked: no catalog entry, and no NORAD to ask with.
-        assert_eq!(catalog_marks(&cat, Some(99_999)), (None, false));
-        assert_eq!(catalog_marks(&cat, None), (None, false));
+        assert_eq!(catalog_marks(&cat, Some(99_999)), (None, false, None));
+        assert_eq!(catalog_marks(&cat, None), (None, false, None));
 
         // And the field reaches the UI camelCase, always present — the UI's
         // "was the catalog asked?" test is the STATUS, never the absence of
         // this key.
-        let json = serde_json::to_value(SatBird {
+        let row = |classes| SatBird {
             name: "SO-50".into(),
             norad: Some(27_607),
             lat: 0.0,
@@ -15013,9 +15059,24 @@ mod tests {
             track: Vec::new(),
             status: Some("alive".into()),
             amateur: false,
-        })
-        .unwrap();
+            classes,
+        };
+        let json = serde_json::to_value(row(Some(vec!["fm".into(), "beacon".into()]))).unwrap();
         assert_eq!(json.get("amateur").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(json["classes"], serde_json::json!(["fm", "beacon"]));
+        // Classified with nothing to work, and never classified at all, are
+        // two different wire values — the UI has to be able to tell them apart.
+        assert_eq!(
+            serde_json::to_value(row(Some(Vec::new()))).unwrap()["classes"],
+            serde_json::json!([])
+        );
+        assert!(
+            serde_json::to_value(row(None))
+                .unwrap()
+                .get("classes")
+                .is_none(),
+            "unclassified sends no key — an empty array would be a claim"
+        );
     }
 
     /// A panic anywhere in a refresh flight must RELEASE the single-flight

@@ -109,12 +109,27 @@
 //               count, catalogCount, medianEpochAgeDays, sources, elements,
 //               catalog}. `elements` keys match crates/propagation sat::Tle
 //               serde; `catalog` is the status-bearing bird list (norad, name,
-//               SatNOGS status, amateur, decayed, element source) and is
-//               ADDITIVE — every shipped client deserializes only `generated`
-//               and `elements` and ignores the rest. `attribution` travels
-//               INSIDE the payload (the same rule the repo's other BY-SA
-//               source follows) so the licence survives the file being copied
-//               out of the release asset.
+//               SatNOGS status, amateur, decayed, `classes`, element source).
+//               THE CLIENT CONTRACT is `MirrorManifest` in crates/propagation
+//               live::tle: it deserializes `generated`, `elements` AND
+//               `catalog` — the catalog has been consumed since it landed, and
+//               is re-serialized into the client's own on-disk cache. What
+//               keeps a new field ADDITIVE is not that clients ignore the
+//               catalog, it is that every catalog field but norad/name/status
+//               defaults and unknown keys are ignored: `schema`, `count`,
+//               `catalogCount`, `medianEpochAgeDays`, `sources` and `source`
+//               are publisher bookkeeping no client reads, and an older build
+//               parses this manifest whole — it just cannot see the new field.
+//               `classes` is what an operator WORKS the bird with, derived
+//               from its live transmitters — any of linear / fm / digital /
+//               beacon, in that order, and possibly several at once (see
+//               `classifyTransmitter`). It stays on `schema: 2` for exactly
+//               that reason, and the round trip runs BOTH ways: a build that
+//               predates the field rewrites its cache without it, so absence
+//               must read as "not classified" forever, never as a guess.
+//               `attribution` travels INSIDE the payload (the same rule the
+//               repo's other BY-SA source follows) so the licence survives the
+//               file being copied out of the release asset.
 //   tles.txt  — the union as raw 3LE text (the operator import path).
 //
 // LICENCE: the population, names and statuses are derived from the SatNOGS DB
@@ -178,6 +193,91 @@ const AMATEUR_BANDS_MHZ = [
   [10450, 10500],
   [24000, 24050],
 ]
+
+/// WHAT AN OPERATOR WORKS A BIRD WITH — the four classes, in the order every
+/// payload emits them (fixed so the published bytes are stable, and rarest-
+/// workable first so a consumer that wants one label can take the first).
+///
+///   linear   an SSB/CW transponder: a passband you tune inside of
+///   fm       an FM voice repeater: one channel up, one down, PTT and talk
+///   digital  a packet/data channel pair: AFSK 1k2, GMSK 9k6, store-and-forward
+///   beacon   a downlink and nothing else — receivable, not workable
+///
+/// A SET PER BIRD, not one label. Measured 2026-08-02 (UTC) over the live
+/// API: 60 of the 372 active amateur birds carry more than one class, and
+/// QO-100 carries three at once — linear, digital and beacon. Publishing a
+/// single "primary" would throw away "this FM bird also has a linear
+/// transponder" irrecoverably, and a consumer that wants one label can always
+/// derive it from the set while the reverse is impossible.
+const SAT_CLASSES = ['linear', 'fm', 'digital', 'beacon']
+
+/// Voice modes that mean an FM repeater, both SatNOGS spellings plus the two
+/// other sources' — the same vocabulary as tempo_core::doppler::FM_MODE_TOKENS,
+/// narrowed to VOICE (a packet bird is FM to the radio but digital to the
+/// operator, and this table answers the operator's question, not the rig's).
+const FM_VOICE_MODES = new Set(['FM', 'FMN', 'NFM', 'DSTAR'])
+/// …and the modes that mean a linear/SSB path carrying voice or CW.
+const LINEAR_VOICE_MODES = new Set(['USB', 'LSB', 'SSB', 'CW'])
+
+/// Classify ONE transmitter record by what an operator would work it with, or
+/// `null` when the record says nothing usable.
+///
+/// `type` IS THE LOAD-BEARING FIELD, not `mode`. It is 100% populated and a
+/// clean three-value enum, and it is the only field that answers "can I put a
+/// signal INTO this". THE CENSUS BEHIND THAT — measured 2026-08-02 (UTC) over
+/// the live API, and re-measurable because the API moves: of 2904 alive
+/// records, 0 of the 2788 `Transmitter` records carry an uplink, against 85 of
+/// 86 `Transceiver` and 25 of 30 `Transponder`. (The six exceptions are
+/// receive-only legs filed under a two-way type — five of them QO-100's own
+/// beacon segments — so the rule reads the right way round: `Transmitter`
+/// means no uplink, without exception.) `mode` cannot carry the class on its
+/// own — 1100 alive records are `Transmitter | FM`, which are FM-MODULATED
+/// TELEMETRY BEACONS, and a mode-first rule would publish all 1100 of them as
+/// "FM voice".
+///
+/// THE DOCUMENTED DECISION — a `Transponder` is LINEAR even when its own mode
+/// says FM. Upstream is genuinely ambiguous here and no rule makes it clean,
+/// so this one is written down with its counter-examples rather than assumed.
+/// Of the 30 alive `Transponder` records, 9 say `FM`, and 8 of those 9
+/// describe an SSB or digimode segment of a LINEAR transponder: QO-100
+/// (43700) files its "SSB Only Transpoder" and "digimodes" segments as FM,
+/// and 98533 files "Mode H/U - Linear Transponder" and "Mode V/U - Linear
+/// Transponder" as FM. Reading `mode` there would file the two widest linear
+/// transponders in the sky as FM voice repeaters. The cost of the rule is the
+/// ninth record — 98533's genuine "Mode V/U - FM Transponder" — which reads
+/// linear; that bird carries two real linear transponders anyway, so its own
+/// classification is unchanged.
+///
+/// `mode` IS trusted on a transponder for one narrower question: whether the
+/// leg carries DATA. All five alive `Transponder` records with a data mode
+/// really do (QO-100's BPSK400 beacons, 49402's AFSK "Onboard SDR", NORSAT-2's
+/// VDES GMSK) — 0 wrong, against 8 of 9 wrong on the FM axis.
+export function classifyTransmitter(t) {
+  const mode = String(t?.mode ?? '').trim().toUpperCase()
+  switch (t?.type) {
+    // Downlink only. Nothing to work, whatever it is modulated with.
+    case 'Transmitter':
+      return 'beacon'
+    // A channel pair: an uplink and a downlink on fixed frequencies.
+    case 'Transceiver':
+      if (FM_VOICE_MODES.has(mode)) return 'fm'
+      if (LINEAR_VOICE_MODES.has(mode)) return 'linear'
+      // The residual is `digital`, deliberately: a channel pair that is not
+      // voice is one worked through a modem, and SatNOGS' data vocabulary is
+      // ~50 open-ended names long — a new one must degrade to "digital",
+      // never silently become "FM voice".
+      return 'digital'
+    // A passband that repeats whatever is put through it.
+    case 'Transponder':
+      return FM_VOICE_MODES.has(mode) || LINEAR_VOICE_MODES.has(mode) || mode === ''
+        ? 'linear'
+        : 'digital'
+    // An upstream type this table has never seen. Unclassifiable is reported
+    // as unclassifiable — the one thing that must not happen is a guess.
+    default:
+      return null
+  }
+}
 
 /// How long a re-entered bird keeps its catalog row. Long enough that an
 /// operator who comes back to the shack after a season finds the row that says
@@ -401,15 +501,42 @@ function listable(status, decayed, updated, now) {
 export function deriveAmateurCatalog(satellites, transmitters, now) {
   const bySatId = new Map()
   const byNorad = new Map()
+  /// Upstream `type` values [`classifyTransmitter`] has never seen, counted by
+  /// value so the run can NAME them. Dropping a leg from the classification is
+  /// invisible everywhere else — the bird keeps its row and its status, its
+  /// `classes` just quietly do not include that leg — and a new upstream type
+  /// arriving on a whole population is exactly how "nothing to work here"
+  /// would start shipping as the truth. So it is counted here and said out
+  /// loud by [`assemble`], never capped silently.
+  const unclassified = new Map()
   for (const t of transmitters) {
     const claim = {
       service: t?.service === 'Amateur',
       band: inAmateurBand(Number(t?.downlink_low)),
       live: t?.alive === true,
+      /// What this leg is worked with — see [`classifyTransmitter`]. Derived
+      /// here, inside the join that already exists, so every listed bird is
+      /// classified by construction: a bird is only listed because it has at
+      /// least one claim, and every claim carries this.
+      class: classifyTransmitter(t),
     }
     if (!claim.service && !claim.band) continue
-    if (typeof t.sat_id === 'string' && t.sat_id) push(bySatId, t.sat_id, claim)
-    if (Number.isInteger(t.norad_cat_id)) push(byNorad, t.norad_cat_id, claim)
+    let joined = false
+    if (typeof t.sat_id === 'string' && t.sat_id) {
+      push(bySatId, t.sat_id, claim)
+      joined = true
+    }
+    if (Number.isInteger(t.norad_cat_id)) {
+      push(byNorad, t.norad_cat_id, claim)
+      joined = true
+    }
+    // Live AND joined only: a dead leg contributes no class either way, and a
+    // record that reaches no bird was never in a classification to be dropped
+    // from — counting either would cry wolf.
+    if (joined && claim.live && claim.class === null) {
+      const kind = t?.type === undefined || t?.type === null ? '(no type)' : String(t.type)
+      unclassified.set(kind, (unclassified.get(kind) ?? 0) + 1)
+    }
   }
   const birds = []
   let alive = 0
@@ -438,6 +565,14 @@ export function deriveAmateurCatalog(satellites, transmitters, now) {
       amateur: live.length > 0,
       /// …and the orbit is alive: the element-bearing tier.
       active: status === 'alive' && live.length > 0,
+      /// The classes the bird's LIVE amateur transmitters add up to, in
+      /// [`SAT_CLASSES`] order — the same "live claims only" rule `amateur`
+      /// and `active` use, for the same reason: a dead transmitter is not a
+      /// way to work a bird. EMPTY is a real answer (a bird whose every
+      /// transmitter has gone silent), and it is a DIFFERENT answer from the
+      /// field being absent, which only ever means "this payload predates the
+      /// classification".
+      classes: SAT_CLASSES.filter((c) => live.some((x) => x.class === c)),
       serviceAmateur: live.some((c) => c.service),
       bandAmateur: live.some((c) => c.band),
     })
@@ -462,6 +597,9 @@ export function deriveAmateurCatalog(satellites, transmitters, now) {
       active: deduped.filter((b) => b.active).length,
       serviceOnly: deduped.filter((b) => b.serviceAmateur).length,
       bandOnly: deduped.filter((b) => b.bandAmateur).length,
+      /// `[upstream type, live amateur records dropped from the
+      /// classification]`, commonest first. Empty on a healthy run.
+      unclassified: [...unclassified.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
     },
   }
 }
@@ -516,6 +654,19 @@ export function assemble({
     `amateur population ${stats.listed} listed, ${stats.active} active of ${stats.alive} alive ` +
       `(service clause ${stats.serviceOnly}, band clause ${stats.bandOnly})`,
   )
+  if (stats.unclassified.length) {
+    // NOT a gate: an unseen type is upstream news, not a broken run, and the
+    // catalog is still right about everything else. But it is never silent —
+    // name what was dropped, name why, and name the fix.
+    const total = stats.unclassified.reduce((n, [, c]) => n + c, 0)
+    say(
+      `UNCLASSIFIED: ${total} live amateur transmitter record(s) carry an upstream type ` +
+        `classifyTransmitter has never seen ` +
+        `(${stats.unclassified.map(([k, c]) => `${k} ×${c}`).join(', ')}) — those legs add no ` +
+        `class, so their birds publish a class set that omits them. Nothing is guessed and no ` +
+        `row is dropped; teach classifyTransmitter the new type.`,
+    )
+  }
   if (stats.listed < limits.minCatalog || stats.listed > limits.maxCatalog) {
     fail(
       `amateur population ${stats.listed} outside [${limits.minCatalog}, ${limits.maxCatalog}] — the join broke`,
@@ -598,6 +749,7 @@ export function assemble({
         status: b.status,
         amateur: b.amateur,
         decayed: b.decayed,
+        classes: b.classes,
       })
       continue
     }
@@ -617,6 +769,7 @@ export function assemble({
       status: b.status,
       amateur: b.amateur,
       decayed: b.decayed,
+      classes: b.classes,
       src: best.source,
     })
   }
