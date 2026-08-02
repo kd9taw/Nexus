@@ -109,6 +109,63 @@ describe('LogEntry standard variant — State + Country', () => {
   })
 })
 
+describe('LogEntry standard variant — the accidental-log guard', () => {
+  // The operator logged several contacts by mistake reaching for the callbook lookup
+  // (2026-08-02). Two mechanisms fed it: the lookup button sat in the SAME `.le-row` as Log,
+  // and that row WRAPS (the log pane goes as narrow as 24em) — so Log's position on screen
+  // moves with the pane width, and a mid-QSO glance lands on whatever is there. Committing
+  // the contact now happens from its own row directly above the callsign card, away from
+  // the field cluster the operator touches while working the station.
+  function renderStd() {
+    render(
+      <LogEntry
+        snap={snap}
+        mode="SSB"
+        defaultRst="59"
+        onSpot={() => {}}
+        fieldDay={null}
+        fdMode={undefined}
+      />,
+    )
+    // Three characters is what makes the callsign card (RecallPanel) render at all.
+    fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w1aw' } })
+  }
+  const logBtn = () => screen.getByRole('button', { name: 'Log' })
+  const lookupBtn = () => screen.getByRole('button', { name: 'Lookup' })
+
+  it('names the callbook button "Lookup" — it answers from HamQTH too, not only QRZ', () => {
+    renderStd()
+    expect(screen.queryByRole('button', { name: 'QRZ' })).toBeNull()
+    expect(lookupBtn()).toBeTruthy()
+  })
+
+  it('commits from its own row: Log + Spot adjacent, above the callsign card', () => {
+    renderStd()
+    const log = logBtn()
+    const spot = screen.getByRole('button', { name: /spot/i })
+    // Kept side by side — the operator spots more because Spot sits beside Log.
+    expect(log.parentElement).toBe(spot.parentElement)
+    expect(log.nextElementSibling).toBe(spot)
+    // Out of the row that holds the call field and the lookup button.
+    expect(log.parentElement).not.toBe(lookupBtn().parentElement)
+    // And above the callsign card, in the same scroll flow (no new scroll owner).
+    const card = document.querySelector('.recall-card')
+    expect(card).toBeTruthy()
+    expect(log.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('gives Lookup none of the primary Log button styling', () => {
+    renderStd()
+    const log = logBtn()
+    const lookup = lookupBtn()
+    expect(log.classList.contains('le-log-btn')).toBe(true) // the accent-filled commit pill
+    expect(lookup.classList.contains('le-log-btn')).toBe(false)
+    // No shared class at all: the two cannot drift back into the same look.
+    const shared = [...lookup.classList].filter((c) => log.classList.contains(c))
+    expect(shared).toEqual([])
+  })
+})
+
 describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC time)', () => {
   // snap.radio is the LIVE (HF) rig: 20m / 14.2 MHz. mode="SSB" is the cockpit's live mode.
   function renderStd() {

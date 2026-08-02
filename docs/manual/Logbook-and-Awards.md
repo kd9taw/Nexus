@@ -100,7 +100,7 @@ You must install TQSL from the ARRL separately. Nexus does not bundle TQSL or ma
 
 ## QRZ Integration
 
-**Callbook autofill:** on every log-entry form, blurring the callsign field silently triggers a QRZ lookup. If the lookup returns data, it fills name, QTH, grid, state, and country into blank fields only — it never overwrites something you have typed. An explicit **QRZ** button triggers a non-silent lookup with a toast on failure.
+**Callbook autofill:** on every log-entry form, blurring the callsign field silently triggers a QRZ lookup. If the lookup returns data, it fills name, QTH, grid, state, and country into blank fields only — it never overwrites something you have typed. An explicit **Lookup** button beside the callsign triggers a non-silent lookup with a toast on failure (it asks QRZ first, then falls through to HamQTH).
 
 QRZ lookup uses a session-key flow: Nexus logs in once and reuses the key for subsequent lookups without re-authenticating. Grid and state are subscriber-only on QRZ's free XML tier and will be `None` for non-subscribers; the UI toasts this limitation.
 

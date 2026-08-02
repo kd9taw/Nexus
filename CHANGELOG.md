@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: the log strip no longer invites an accidental log entry
+
+On the Phone and CW log panel, the callbook button sat in the same row as Log — and that row
+wraps to fit whatever width the log column has, so Log did not stay in one place. Reaching for
+a lookup mid-QSO could commit the contact instead, and several contacts got logged that way.
+
+Log and Spot now have a row of their own, directly above the caller card and immediately under
+the line that spells out what will be written ("logs to the shared logbook as SSB · 20m ·
+14.200 MHz"). Read it, then commit — and Spot stays right beside Log, where it has always been.
+Nothing else about logging changed: the same fields, the same Enter behaviour (Enter on a fresh
+call still pulls the callbook first, then logs), the same Clear button beside the callsign.
+
+The callbook button is also now labelled **Lookup** rather than QRZ, and is styled as the quiet
+utility it is instead of a second action button. Lookup is the honest name: it asks QRZ first
+and falls through to HamQTH, so it has never been QRZ-only, and it works with a free HamQTH
+account and no QRZ subscription at all.
+
 ### Fixed: the caller card's distance and bearing now agree with QRZ
 
 Work a station on Phone or CW and the card that appears when the call resolves reported a

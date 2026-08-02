@@ -766,14 +766,17 @@ export function LogEntry({
           autoComplete="off"
           spellCheck={false}
         />
+        {/* "Lookup", not "QRZ": the command tries QRZ first and falls through to HamQTH, so the
+            old label named only half of what the button does. It is also styled as a quiet
+            utility (.le-lookup) and is now the only action in this row — see .le-actions below. */}
         <button
           type="button"
-          className="le-qrz"
+          className="le-qrz le-lookup"
           onClick={() => void lookup(false)}
           disabled={qrzBusy || !logCall.trim()}
-          title="Look up name + QTH (and grid/state on a QRZ subscription)"
+          title="Look up name + QTH in the callbook — QRZ first, then HamQTH (grid/state need a QRZ subscription)"
         >
-          {qrzBusy ? '…' : 'QRZ'}
+          {qrzBusy ? '…' : 'Lookup'}
         </button>
         <label className="le-rst-field" title="Signal report you SENT them">
           <span className="le-rst-cap">Sent</span>
@@ -806,26 +809,6 @@ export function LogEntry({
           placeholder="Name"
           autoComplete="off"
         />
-        <button
-          type="button"
-          className="le-log-btn"
-          onClick={logIt}
-          disabled={!logCall.trim() || overrideBlocked}
-          title={overrideBlocked ? 'Enter a valid frequency for the override, or close it' : undefined}
-        >
-          Log
-        </button>
-        {onSpot && (
-          <button
-            type="button"
-            className="le-spot-btn"
-            onClick={() => onSpot(logCall.trim().toUpperCase())}
-            disabled={!logCall.trim()}
-            title="Spot this call to the DX cluster (pre-fills the call + your frequency)"
-          >
-            📢 Spot
-          </button>
-        )}
         <button type="button" className="le-qrz" onClick={reset} title="Clear the log fields">
           Clear
         </button>
@@ -1050,6 +1033,36 @@ export function LogEntry({
           </>
         )}
       </span>
+
+      {/* The commit row. Log used to sit in the top field row beside the callbook button — and
+          that row WRAPS (the log pane narrows to 24em), so Log's position on screen moved with
+          the pane width and a mid-QSO glance reaching for the lookup could commit a contact
+          instead (operator: several logged by accident, 2026-08-02). Here it is a deliberate
+          reach, directly under the line that states what will be written, and Spot stays beside
+          it — that adjacency is why spotting happens at all. Plain in-flow row: the pane body is
+          the scroller, this adds no sticky/fixed positioning and no second scroll owner. */}
+      <div className="le-row le-actions">
+        <button
+          type="button"
+          className="le-log-btn"
+          onClick={logIt}
+          disabled={!logCall.trim() || overrideBlocked}
+          title={overrideBlocked ? 'Enter a valid frequency for the override, or close it' : undefined}
+        >
+          Log
+        </button>
+        {onSpot && (
+          <button
+            type="button"
+            className="le-spot-btn"
+            onClick={() => onSpot(logCall.trim().toUpperCase())}
+            disabled={!logCall.trim()}
+            title="Spot this call to the DX cluster (pre-fills the call + your frequency)"
+          >
+            📢 Spot
+          </button>
+        )}
+      </div>
 
       <RecallPanel
         call={logCall}
