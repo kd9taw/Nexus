@@ -115,6 +115,43 @@ Unchanged: the per-satellite rules. A satellite past 30 days is still refused by
 age when you arm it, arming a satellite with elements past 14 days still asks first, the
 Birds list still explains every excluded bird individually, and a fresh bird still arms
 cleanly no matter how old anything else in the catalog is.
+### Changed: the sky dome carries azimuth and elevation on the satellite
+
+Working a pass with a manual rotator means reading the azimuth and elevation off the
+screen and turning the mast to match. Both numbers lived in a tooltip, so following the
+pass meant holding the mouse on a moving dot to see where to point next.
+
+Azimuth and elevation now ride on the satellite and stay there for the whole pass. They
+sit on a plate that holds them legible over the pass track, and they move to the other
+side of the satellite near the edge of the dome or when the antenna marker is on that
+side — so they never run off the dome, and never cover the gap between where the antenna
+is pointed and where the satellite is.
+
+The satellite is drawn as a spacecraft — body and solar panels — rather than a plain dot,
+and matches the mark the world map already uses for the same bird. The text readout under
+the dome and the hover tooltip are unchanged.
+
+### Changed: the rise and set marks on the sky dome carry their bearings
+
+The two triangles on the rim of the dome are where a pass starts and ends, and they are
+what you pre-point a manual rotator by. Their bearings lived in a tooltip. The set mark is
+drawn as an outline rather than a solid triangle, and an outline answers the mouse only on
+the line itself — so on that one, catching the tooltip meant landing the pointer on a
+hairline.
+
+Both marks now print their bearing on the dome: the rise or set bearing with its compass
+point, on a plate beside the triangle it belongs to. Each plate names which mark it is, in
+words and with the same up and down arrows the readout under the dome uses, so a pass that
+rises and sets close together never leaves two bare numbers you have to tell apart.
+
+The plates are azimuth only. Both marks sit on the horizon, so an elevation there would be
+restating the picture rather than reporting anything.
+
+A plate sits inside the dome next to its triangle and steps aside when that spot is taken —
+it never covers either triangle, the satellite, the satellite's own readout, or the antenna
+marker, and it stays inside the horizon at every bearing. The whole body of the set mark is
+now hoverable, so its tooltip, which also carries the time, is reachable without threading
+the mouse onto a line.
 
 ## [0.25.0] — 2026-08-01
 

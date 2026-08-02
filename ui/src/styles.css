@@ -15141,9 +15141,41 @@ button.sat-chip:disabled {
 .sat-dome-bird-halo {
   fill: var(--band-open);
 }
-.sat-dome-bird > circle:last-of-type {
-  stroke: var(--bg);
-  stroke-width: 1;
+/* The bird is the spacecraft glyph the world map draws (features/satIcon is the
+   one shape definition — canvas there, SVG here), so the mark the operator
+   picks out on the map is the mark on the dome. It replaced a bare dot, which
+   also retired the `> circle:last-of-type` outline rule that used to sit here:
+   with the dot gone that selector would have silently landed on the live-pulse
+   halo and outlined it instead. */
+.sat-dome-bird-icon rect {
+  fill: var(--band-open);
+}
+/* THE PERSISTENT AZ/EL TAG. A manual az/el rotator is turned by hand off these
+   two numbers, so they ride on the bird for the whole pass instead of living in
+   a hover tooltip. The plate is opaque enough to keep them legible where the
+   bird crosses the pass track, a ring label or the rotator ghost. */
+.sat-dome-tag-plate {
+  fill: var(--bg);
+  fill-opacity: 0.85;
+  stroke: var(--border);
+  stroke-width: 0.5;
+}
+.sat-dome-tag-line {
+  fill: var(--band-open);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+/* THE RISE AND SET BEARINGS, on the two horizon marks — the numbers a manual
+   rotator is pre-pointed by, so they share the bird's plate rather than living
+   in a tooltip. The ink is neutral where the bird's tag is --band-open: on one
+   instrument the moving number and the two fixed reference numbers must not
+   read as the same kind of thing. Full --text, not the --text-dim the marks
+   themselves use, because a bearing being read off the screen while turning a
+   mast has to win over the reference mark it annotates. */
+.sat-dome-rimtag-line {
+  fill: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 600;
 }
 /* Rotator ghost: what the antenna was TOLD. Hollow ring, never the same mark
    as the bird — the gap between the two is the tracking error. */
