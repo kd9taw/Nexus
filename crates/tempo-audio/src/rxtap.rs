@@ -28,7 +28,7 @@
 //! deadline can elapse on it. Reintroducing this bug would require adding a handle that has no
 //! reason to be there.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::monitor::SpscRing;
@@ -44,17 +44,18 @@ pub struct RxSource {
     pub epoch: u64,
 }
 
-/// The RX tap: what the capture callback tees into, plus the small pieces of display state the
-/// spectrum consumer needs.
+/// The RX tap: what the capture callback tees into.
 ///
 /// Every mutex here is held only long enough to clone an `Arc` or move a small value, so the
 /// realtime callback and the radio loop can never wait measurably on the consumer.
+///
+/// (The RX LEVEL does not live here: it is measured by the consumer from the very samples it
+/// drains and published on `tempo_app::engine::MeterFeed` — see `rxdsp.rs`. An earlier
+/// `rx_level` cell here was never wired to a producer, which left readers believing a
+/// stall-proof meter existed when it did not.)
 #[derive(Default)]
 pub struct RxTap {
     card: Mutex<Option<RxSource>>,
-    /// Smoothed RX input RMS (f32 bits), stored by the capture callback. Read by the consumer
-    /// so the level meter survives the move off the radio loop.
-    rx_level: AtomicU32,
     epoch_seq: AtomicU64,
 }
 
@@ -89,14 +90,6 @@ impl RxTap {
     /// The source to drain right now, if any.
     pub fn current(&self) -> Option<RxSource> {
         self.card.lock().ok().and_then(|g| g.clone())
-    }
-
-    /// Store the smoothed RX RMS (capture callback side).
-    pub fn set_rx_level(&self, level: f32) {
-        self.rx_level.store(level.to_bits(), Ordering::Relaxed);
-    }
-    pub fn rx_level(&self) -> f32 {
-        f32::from_bits(self.rx_level.load(Ordering::Relaxed))
     }
 }
 
@@ -142,12 +135,5 @@ mod tests {
         tap.publish_card(Arc::new(SpscRing::new(64)), 48_000);
         tap.clear_card();
         assert!(tap.current().is_none());
-    }
-
-    #[test]
-    fn rx_level_round_trips() {
-        let tap = RxTap::new();
-        tap.set_rx_level(0.42);
-        assert!((tap.rx_level() - 0.42).abs() < 1e-6);
     }
 }

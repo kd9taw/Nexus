@@ -104,6 +104,77 @@ impl SpectrumFeed {
     }
 }
 
+/// [`SpectrumFeed`]'s little sibling: the live METER bus (RX audio level + CAT S-meter),
+/// lock-free on both sides.
+///
+/// WHY IT EXISTS (operator report 2026-07-30: "even the S meter … feels accurate, but slow").
+/// The meters used to reach the UI only through the 300 ms snapshot poll, and the RX level was
+/// copied onto the engine BY THE RADIO LOOP — the one thread that blocks on CAT (700 ms, up to
+/// 2500 ms on slow serial), so every CAT stall froze the needle too. Same disease, same cure as
+/// the waterfall row: publish on a seam the engine mutex never touches, read it with a
+/// featherweight command (`get_meters`) the UI polls fast.
+///
+/// Writers: the rx-dsp thread stores the RX audio level each 20 ms tick (it drains the same
+/// capture tee the row is made from — CAT-stall-immune by the rxdsp capture-list argument);
+/// the S-meter is stored by EVERY site that observes/clears the engine's snapshot mirror —
+/// the radio loop's polls/clears AND the Flex native meter stream (`flexspectrum::route_meters`,
+/// withdrawn on its teardown) — so the two mirrors can never disagree. Reader: `get_meters`,
+/// no engine mutex, atomics only.
+#[derive(Clone, Default)]
+pub struct MeterFeed {
+    inner: Arc<MeterCells>,
+}
+
+/// The cells behind [`MeterFeed`]. `rx_level` is f32 bits; `smeter_cdb` encodes
+/// `Option<i32>` dB-rel-S9 with [`MeterCells::SMETER_NONE`] as "no reading" — absence stays
+/// absent (a rig with no CAT S-meter must read "—", never a stale or fabricated level).
+struct MeterCells {
+    rx_level: std::sync::atomic::AtomicU32,
+    smeter_db: std::sync::atomic::AtomicI32,
+}
+
+impl MeterCells {
+    /// "No S-meter reading" sentinel — outside any real STRENGTH value (real ones are
+    /// small dB numbers around S9).
+    const SMETER_NONE: i32 = i32::MIN;
+}
+
+impl Default for MeterCells {
+    fn default() -> Self {
+        Self {
+            rx_level: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            smeter_db: std::sync::atomic::AtomicI32::new(Self::SMETER_NONE),
+        }
+    }
+}
+
+impl MeterFeed {
+    /// Store the ballistics-shaped RX input level (0..1 RMS) — the rx-dsp thread, every tick.
+    pub fn set_rx_level(&self, level: f32) {
+        use std::sync::atomic::Ordering;
+        self.inner
+            .rx_level
+            .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    }
+    pub fn rx_level(&self) -> f32 {
+        use std::sync::atomic::Ordering;
+        f32::from_bits(self.inner.rx_level.load(Ordering::Relaxed))
+    }
+    /// Store the CAT S-meter (dB rel S9), `None` = no reading (unsupported rig / dead link).
+    /// Called by the radio loop at every place it observes or clears the engine's mirror.
+    pub fn set_smeter_db(&self, db: Option<i32>) {
+        use std::sync::atomic::Ordering;
+        self.inner
+            .smeter_db
+            .store(db.unwrap_or(MeterCells::SMETER_NONE), Ordering::Relaxed);
+    }
+    pub fn smeter_db(&self) -> Option<i32> {
+        use std::sync::atomic::Ordering;
+        let v = self.inner.smeter_db.load(Ordering::Relaxed);
+        (v != MeterCells::SMETER_NONE).then_some(v)
+    }
+}
+
 use crate::dto::{
     AppSnapshot, DecodeRow, FieldDayQso, FieldDayStatus, OpMode, QsoStatus, QsyStatus,
     RadioSummary, SourceKind, Spectrum, Tier,
@@ -476,7 +547,7 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
 
 /// Default waterfall resolution (display bins). 512 over the 0–4000 Hz span ≈ 7.8 Hz/bin — ~3×
 /// finer than the old 120-bin/22.5 Hz bank, over a wider band. The row is resampled from a
-/// Hann-windowed 4096-point FFT (see `tempo_core::spectrum`).
+/// Hann-windowed 2048-point FFT (see `tempo_core::spectrum`).
 pub const SPECTRUM_BINS: usize = 512;
 
 /// The engine's current operating mode (holds the active sequencer).
@@ -1009,7 +1080,7 @@ pub struct Engine {
     /// over `spectrum_cache` while fresh (< 1 s); a stalled native source falls back to audio.
     /// Fed by `set_spectrum_rf`; `None` until a native scope worker is running.
     /// A longer rolling RX-audio ring (several seconds) — the batch per-channel decode
-    /// behind the wideband CW skimmer (the 4096-sample waterfall window is too short).
+    /// behind the wideband CW skimmer (the 2048-sample waterfall window is too short).
     cw_audio: Vec<f32>,
     /// A 15 s rolling RX-audio ring for the AI CW decoder (the DeepCW model's window).
     /// Fed only while `settings.ai_cw_enabled` — empty (zero cost) otherwise.
@@ -7043,7 +7114,7 @@ impl Engine {
         // stream (tempo-audio: rxtap.rs / rxdsp.rs). These mode taps DELIBERATELY stay on the
         // loop: moving them would need an engine handle on that thread, and a contended lock
         // would start DROPPING CW/RTTY audio during exactly the stall this fixed.
-        // Feed the longer CW-decode ring (the 4096-sample waterfall window is far too
+        // Feed the longer CW-decode ring (the 2048-sample waterfall window is far too
         // short for Morse — CW_WINDOW holds several seconds so a callsign fits).
         self.cw_audio.extend_from_slice(samples);
         if self.cw_audio.len() > CW_WINDOW {
@@ -11137,7 +11208,7 @@ impl Engine {
         // `power_spectrum` reads only the LAST FFT_N samples, so convert just that
         // tail rather than the whole retained frame — which at a 1800 s period would
         // be 21.6 M samples rebuilt on every UI tick.
-        const TAIL: usize = 4096; // FFT_N in tempo_core::spectrum
+        const TAIL: usize = 2048; // FFT_N in tempo_core::spectrum (halved 2026-08-01 with it)
         let tail: Vec<f32> = match self.last_rx.as_deref() {
             Some(q) => q[q.len().saturating_sub(TAIL)..]
                 .iter()

@@ -714,6 +714,20 @@ pub struct Spectrum {
     pub source: String,
 }
 
+/// The live meters (`get_meters`), read lock-free off `engine::MeterFeed` — the meter widgets
+/// poll this fast (~100 ms) instead of riding the 300 ms snapshot, and it can never be frozen
+/// by a CAT stall because no engine mutex is involved.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeterReadout {
+    /// RX input level (0..1 RMS, instrument ballistics applied) — the UI renders it as a
+    /// WSJT-X-style dB level. 0.0 when no capture is open.
+    pub rx_level: f32,
+    /// CAT S-meter (dB relative to S9). `None` = the rig reports no STRENGTH (the meter shows
+    /// "—" — absence stays absent, never a stale or invented level).
+    pub smeter_db: Option<i32>,
+}
+
 /// The operating mode of the live engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

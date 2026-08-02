@@ -75,7 +75,8 @@ import { allTxtLocation, revealAllTxt } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
-import { LevelMeter, rxLevelDb } from './LevelMeter'
+import { rxLevelDb } from './LevelMeter'
+import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup } from './SettingsGroup'
@@ -3827,9 +3828,11 @@ export function SettingsPanel({
               <div className="settings-field">
                 <span className="settings-label">
                   RX Level{' '}
-                  <span className="settings-value">{Math.round(rxLevelDb(radio ? radio.rxLevel : 0))} dB</span>
+                  {/* Live 100 ms poll (lock-free backend) — setting a gain against a needle
+                      that answered 0.5–0.8 s late made level-setting guesswork. */}
+                  <span className="settings-value"><LiveRxLevelDb /></span>
                 </span>
-                <LevelMeter value={radio ? radio.rxLevel : 0} label="RX audio level" variant="full" />
+                <LiveLevelMeter label="RX audio level" variant="full" />
                 <span className="settings-hint">
                   A dB scale like WSJT-X — aim for around 30 dB. Anything from ~15–60 dB
                   decodes fine; red means too hot (back off RX Gain or the rig's audio).

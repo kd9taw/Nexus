@@ -30,8 +30,14 @@ pub fn tone_power(samples: &[f32], sr: f32, f: f32) -> f32 {
     goertzel(samples, sr, f)
 }
 
-/// FFT size for the waterfall spectrum — matches the engine's rolling audio window.
-const FFT_N: usize = 4096;
+/// FFT size for the waterfall spectrum — matches the display path's rolling audio window
+/// (`tempo-audio::rxdsp::WINDOW`; the engine's Companion fallback tail follows it too).
+///
+/// 2048 @ 12 kHz = 171 ms. Halved from 4096 (2026-08-01) for display liveliness: the window is
+/// the display's only temporal smoothing, and 341 ms of Hann-weighted history made every signal
+/// edge fade in instead of appear. Raw bins are 5.86 Hz — still finer than the 512-bin display
+/// (7.81 Hz over 0–4000 Hz), so nothing visible is lost; the FFT is ~half the work.
+const FFT_N: usize = 2048;
 
 /// Hann window coefficient for sample `i` of an `FFT_N`-length frame (reduces spectral leakage so a
 /// carrier reads as a clean peak, not a smear across neighbouring bins).
@@ -40,7 +46,7 @@ fn hann(i: usize) -> f32 {
 }
 
 std::thread_local! {
-    /// Reused FFT input buffer (16 KB) so the per-tick spectrum computes with no allocation, and
+    /// Reused FFT input buffer (8 KB) so the per-tick spectrum computes with no allocation, and
     /// works lock-free from both the radio-loop thread and the IPC fallback thread.
     static FFT_SCRATCH: std::cell::RefCell<[f32; FFT_N]> = const { std::cell::RefCell::new([0.0; FFT_N]) };
 }
@@ -75,7 +81,7 @@ pub fn power_spectrum(samples: &[f32], sr: f32, f_lo: f32, f_hi: f32, bins: usiz
         }
         // In-place real FFT → FFT_N/2 complex bins; bin k is centred at k·sr/FFT_N Hz. rfft packs
         // Nyquist into bin 0's imaginary part, so bin 0 (DC + Nyquist) is skipped entirely.
-        let spec = microfft::real::rfft_4096(&mut buf);
+        let spec = microfft::real::rfft_2048(&mut buf);
         let hz_per_bin = sr / FFT_N as f32;
         let k_max = (FFT_N / 2 - 1) as isize;
         let span = f_hi - f_lo;

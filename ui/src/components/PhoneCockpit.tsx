@@ -14,7 +14,7 @@ import { Splitter } from './Splitter'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
-import { LevelMeter } from './LevelMeter'
+import { LiveLevelMeter, useSmeterDb } from './LiveMeters'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -149,6 +149,10 @@ const FLEX_SPANS = [
 ] as const
 
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, panels }: Props) {
+  // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
+  // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
+  // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
+  const smeterDb = useSmeterDb()
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
   // never lies at a guessed 100% — but never fight an in-flight drag.
@@ -895,7 +899,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         </button>
         <label className="ph-rxmeter" title="RX audio level">
           <span>RX</span>
-          <LevelMeter value={snap.radio.rxLevel} label="RX audio level" variant="compact" />
+          <LiveLevelMeter label="RX audio level" variant="compact" />
         </label>
       </CockpitHeader>
 
@@ -962,7 +966,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <PhoneScope
             transmitting={snap.radio.transmitting}
             theme={theme}
-            smeterDb={snap.radio.smeterDb}
+            smeterDb={smeterDb}
             viewLoHz={nativeRf ? rfSpan.lo : span.lo}
             viewHiHz={nativeRf ? rfSpan.hi : span.hi}
             sideband={commandedMode}

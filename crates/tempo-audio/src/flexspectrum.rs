@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
 use tempo_app::dto::Spectrum;
-use tempo_app::engine::{engine_lock, Engine};
+use tempo_app::engine::{engine_lock, Engine, MeterFeed};
 use tempo_net::flexcat::{parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, MeterDef};
 use tempo_net::flexvita::{
     convert_meter_raw, dbm_to_watts, parse_fft, parse_meter_values, parse_vita, FftReassembler,
@@ -141,8 +141,14 @@ fn engine_flex_controls(engine: &Arc<Mutex<Engine>>) -> (f64, Option<i32>) {
 /// (S-meter / SWR / ALC / forward power) into the engine. Matches by source+name (ids are
 /// per-session), converts by unit. NOTE: the dBm→S9 and dBFS→ALC mappings are calibrated against the
 /// SmartSDR docs, verified on hardware pending.
+///
+/// TWO-MIRROR RULE: the S-meter lands on the lock-free meter BUS (`meters_out` — what the
+/// cockpit's `get_meters` poll displays) AND the engine snapshot copy, bus first, same as every
+/// service.rs observe/clear site. Writing only the engine here left a Flex's native S-meter
+/// refreshing a mirror nobody displays.
 fn route_meters(
     engine: &Arc<Mutex<Engine>>,
+    meters_out: &MeterFeed,
     meters: &Arc<Mutex<HashMap<u16, MeterDef>>>,
     pairs: &[(u16, i16)],
     dial_hz: u64,
@@ -167,6 +173,9 @@ fn route_meters(
     if smeter.is_none() && swr.is_none() && alc.is_none() && po_w.is_none() {
         return;
     }
+    if let Some(db) = smeter {
+        meters_out.set_smeter_db(Some(db));
+    }
     {
         let mut e = engine_lock(engine);
         if let Some(db) = smeter {
@@ -178,13 +187,26 @@ fn route_meters(
     }
 }
 
+/// Withdraw this worker's S-meter contribution from BOTH mirrors (bus + engine) — the teardown
+/// half of the two-mirror rule. Called from `Drop` AFTER the threads are joined, so no in-flight
+/// `route_meters` can race a dead reading back in. If the rig also answers Hamlib STRENGTH, the
+/// radio loop re-populates both within its next cadence; otherwise "—" is the honest state
+/// (never the departed stream's last needle).
+fn withdraw_meters(engine: &Arc<Mutex<Engine>>, meters_out: &MeterFeed) {
+    meters_out.set_smeter_db(None);
+    engine_lock(engine).clear_rig_smeter();
+}
+
 // ---- orchestrator ----
 
 /// A running Flex panadapter feed. Keep it alive while the Flex radio is the active scope
-/// source; dropping it stops both threads and removes the pan.
+/// source; dropping it stops both threads, removes the pan, and withdraws its meter readings
+/// from both S-meter mirrors (see [`withdraw_meters`]).
 pub struct FlexSpectrum {
     stop: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
+    engine: Arc<Mutex<Engine>>,
+    meters_out: MeterFeed,
 }
 
 impl FlexSpectrum {
@@ -193,6 +215,7 @@ impl FlexSpectrum {
     pub fn start(
         engine: Arc<Mutex<Engine>>,
         feed: tempo_app::engine::SpectrumFeed,
+        meters_out: MeterFeed,
         ip: String,
         dial_hz: u64,
     ) -> std::io::Result<FlexSpectrum> {
@@ -300,6 +323,8 @@ impl FlexSpectrum {
             let center = center.clone();
             let span_hz = span_hz.clone();
             let meters = meters.clone();
+            let engine = engine.clone();
+            let meters_out = meters_out.clone();
             handles.push(std::thread::spawn(move || {
                 let mut asm = FftReassembler::new();
                 let mut dg = vec![0u8; 16 * 1024];
@@ -345,6 +370,7 @@ impl FlexSpectrum {
                         Some(METER_PACKET_CLASS) => {
                             route_meters(
                                 &engine,
+                                &meters_out,
                                 &meters,
                                 &parse_meter_values(pkt.payload, pkt.has_trailer),
                                 (*center.lock().unwrap() * 1_000_000.0) as u64,
@@ -356,7 +382,12 @@ impl FlexSpectrum {
             }));
         }
 
-        Ok(FlexSpectrum { stop, handles })
+        Ok(FlexSpectrum {
+            stop,
+            handles,
+            engine,
+            meters_out,
+        })
     }
 }
 
@@ -366,6 +397,9 @@ impl Drop for FlexSpectrum {
         for h in self.handles.drain(..) {
             let _ = h.join();
         }
+        // Joined first, then withdrawn: no meter thread survives to write a stale reading
+        // back onto either mirror after this clear.
+        withdraw_meters(&self.engine, &self.meters_out);
     }
 }
 
@@ -438,5 +472,63 @@ mod tests {
         assert_eq!(row[0], 0.0);
         assert!((row[1] - 0.5).abs() < 0.01);
         assert_eq!(row[2], 1.0);
+    }
+
+    /// One SLC/LEVEL registry entry + one value pair, as the VITA meter stream delivers them.
+    fn slc_level_batch() -> (Arc<Mutex<HashMap<u16, MeterDef>>>, Vec<(u16, i16)>) {
+        let meters = Arc::new(Mutex::new(HashMap::new()));
+        meters.lock().unwrap().insert(
+            7,
+            MeterDef {
+                index: 7,
+                source: "SLC".into(),
+                name: "LEVEL".into(),
+                unit: "dBm".into(),
+            },
+        );
+        // −53 dBm, ÷128-scaled on the wire; on 20 m (S9 = −73 dBm) that is S9+20.
+        (meters, vec![(7, -53i16 * 128)])
+    }
+
+    #[test]
+    fn a_native_meter_batch_reaches_both_smeter_mirrors() {
+        // THE TWO-MIRROR RULE. The cockpit S-meter reads the lock-free meter BUS
+        // (`get_meters` → MeterFeed); the snapshot carries the ENGINE copy. A site that
+        // writes one and not the other splits the truth: a Flex with the native meter
+        // stream active refreshed the mirror nobody displays while the cockpit read a
+        // dead bus ("—" forever if Hamlib STRENGTH is also unsupported).
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let bus = MeterFeed::default();
+        let (meters, pairs) = slc_level_batch();
+        route_meters(&engine, &bus, &meters, &pairs, 14_074_000);
+        assert_eq!(
+            bus.smeter_db(),
+            Some(20),
+            "the meter bus is what the cockpit S-meter displays"
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.smeter_db,
+            Some(20),
+            "the engine mirror carries the same reading"
+        );
+    }
+
+    #[test]
+    fn teardown_withdraws_the_smeter_from_both_mirrors() {
+        // The teardown half of the two-mirror rule: when the native meter stream goes away
+        // (pan toggled off / radio switched), its last needle must not stay frozen on either
+        // mirror — "—" until a live source writes again.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let bus = MeterFeed::default();
+        let (meters, pairs) = slc_level_batch();
+        route_meters(&engine, &bus, &meters, &pairs, 14_074_000);
+        assert_eq!(bus.smeter_db(), Some(20), "precondition: a live reading");
+        withdraw_meters(&engine, &bus);
+        assert_eq!(bus.smeter_db(), None, "bus cleared on teardown");
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.smeter_db,
+            None,
+            "engine mirror cleared on teardown"
+        );
     }
 }

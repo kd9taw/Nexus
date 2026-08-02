@@ -4124,7 +4124,10 @@ select optgroup {
 .level-fill {
   height: 100%;
   border-radius: 999px;
-  transition: width 120ms linear, background-color 120ms linear;
+  /* Color may ease (cosmetic zone change); WIDTH may not — the width IS the measurement, and a
+     width transition re-smeared every real sample by 120 ms on top of the meter's own
+     ballistics (display-liveliness change, 2026-08-01). */
+  transition: background-color 120ms linear;
 }
 .level-meter.low .level-fill {
   background: var(--text-faint);
@@ -7463,7 +7466,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   height: 100%;
   width: 0%;
   background: var(--ok, #2fbf71);
-  transition: width 80ms linear, background 120ms linear;
+  /* Color may ease (zone change); WIDTH may not — the bar is a measurement, and easing it
+     smeared every real S-meter sample by 80 ms (display-liveliness change, 2026-08-01). */
+  transition: background 120ms linear;
 }
 /* Positioning host for the canvas + the drag passband box (click-to-tune). Takes over the
    flex-fill role so the canvas keeps its exact old geometry. */

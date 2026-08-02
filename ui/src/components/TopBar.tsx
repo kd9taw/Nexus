@@ -5,7 +5,7 @@ import type { Theme } from '../useTheme'
 import { ThemeSwitcher } from './ThemeSwitcher'
 import { FrequencyControl } from './FrequencyControl'
 import { StatusLane } from './StatusLane'
-import { LevelMeter, rxLevelDb } from './LevelMeter'
+import { LiveLevelMeter } from './LiveMeters'
 import { RadioSwitcher } from './RadioSwitcher'
 import { appVersion } from '../api'
 
@@ -263,9 +263,11 @@ export function TopBar({
           {radio.transmitting ? 'TX' : 'RX'}
         </span>
 
-        <div className="rx-level" title={`RX audio level ${Math.round(rxLevelDb(radio.rxLevel))} dB (aim ~30, like WSJT-X)`}>
+        {/* Live-polled meter (100 ms, lock-free backend) — the meter's own title carries the
+            live dB readout, so the wrapper title stays static. */}
+        <div className="rx-level" title="RX audio level (aim ~30 dB, like WSJT-X)">
           <span className="rx-level-label">RX</span>
-          <LevelMeter value={radio.rxLevel} label="RX audio level" variant="compact" />
+          <LiveLevelMeter label="RX audio level" variant="compact" />
         </div>
 
         {radio.qsoRecording && (
