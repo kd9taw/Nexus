@@ -178,6 +178,80 @@ describe('SSTV: the band view re-arms its own floor', () => {
   })
 })
 
+describe('Satellites schedule: a fit-content strip + ONE scroll owner (the discovery-band split)', () => {
+  // The 2026-08 schedule rethink splits .sats-sched into a control strip that never
+  // scrolls (the h2 + the "Other birds overhead" disclosure chip — the chip is the
+  // discoverability mechanism, so it must be permanently visible) and one inner
+  // scroller owning ALL of column 1's overflow. Same scroll-owner count as before,
+  // one level deeper. These are cascade-computed winners, not presence checks — a
+  // later or more specific rule winning silently is this sheet's documented
+  // historical failure mode.
+  it('.sats-sched is the flex shell, not the scroller', () => {
+    expect(winner('.sats-sched', 'display')).toBe('flex')
+    expect(winner('.sats-sched', 'flex-direction')).toBe('column')
+    expect(
+      winner('.sats-sched', 'overflow-y') ?? winner('.sats-sched', 'overflow'),
+      'the shell must clip, never scroll — the inner scroller owns overflow',
+    ).toBe('hidden')
+    expect(winner('.sats-sched', 'min-height')).toBe('0')
+  })
+  it('.sats-sched-strip is fit=content; .sats-sched-scroll is THE scroll owner', () => {
+    expect(winner('.sats-sched-strip', 'flex')).toBe('0 0 auto')
+    expect(winner('.sats-sched-scroll', 'flex')).toBe('1 1 auto')
+    expect(winner('.sats-sched-scroll', 'overflow-y')).toBe('auto')
+    expect(winner('.sats-sched-scroll', 'min-height')).toBe('0')
+  })
+  it('the discovery band is bounded by ROW COUNT, never a pixel height', () => {
+    // A max-height on any of these would be a second nested scroller inside the
+    // schedule scroller — the exact .sats-favmgr ul violation this design refused.
+    for (const sel of ['.sats-sched-scroll', '.sats-sched tbody.more', '.sats-sched table']) {
+      expect(winner(sel, 'max-height'), `${sel} must not carry a max-height`).toBeNull()
+    }
+  })
+  it('sm/xs: the page scroller owns the column, but the TABLE keeps its horizontal escape', () => {
+    for (const vp of ['sm', 'xs']) {
+      for (const sel of [`[data-viewport='${vp}'] .sats-sched`, `[data-viewport='${vp}'] .sats-side`]) {
+        expect(
+          winner(sel, 'overflow'),
+          `${sel}: .sats-view is the page scroller at ${vp} — a bounded inner scroller here ` +
+            'is the one-scroll-owner violation the overhaul killed',
+        ).toBe('visible')
+      }
+      // The 11-column nowrap table's min-content (~700–800 px) exceeds these
+      // widths while .sats-view keeps overflow-x hidden, so the table's OWN
+      // container must own overflow-x — or Status/Needed/⏰/▶ Work are
+      // right-clipped with NO path to them (including the sats pop-out at its
+      // 420 px minimum, which stamps data-viewport=xs). This is the contract's
+      // .dxm precedent: wide content scrolls inside its own container; the
+      // page body never scrolls sideways. Vertically the box stays
+      // content-sized, so the page scroller still owns the column.
+      const scrollSel = `[data-viewport='${vp}'] .sats-sched-scroll`
+      expect(
+        winner(scrollSel, 'overflow-x'),
+        `${scrollSel} must declare overflow-x:auto — the schedule table's only horizontal ` +
+          "escape under .sats-view's overflow-x:hidden",
+      ).toBe('auto')
+      expect(
+        winner(scrollSel, 'overflow'),
+        `${scrollSel}: an \`overflow\` shorthand here re-releases BOTH axes and kills the ` +
+          'horizontal escape (the exact round-1 regression) — declare overflow-x only',
+      ).toBeNull()
+    }
+  })
+  it('.sats-sched is PINNED to the grower row (Next-up may be absent now)', () => {
+    // The gate-ladder reorder means "Next up" can be missing while the
+    // schedule renders; auto-placement would then land the schedule in the
+    // `auto` row — an unbounded table under .sats-view's overflow:hidden.
+    expect(winner('.sats-best', 'grid-row')).toBe('2')
+    expect(winner('.sats-sched', 'grid-row')).toBe('3')
+  })
+  it('the sticky detail heading (the ✕ home) has an opaque background', () => {
+    expect(winner('.sats-detail h2', 'position')).toBe('sticky')
+    const bg = winner('.sats-detail h2', 'background')
+    expect(bg, 'sticky surfaces need an opaque background (contract rule)').toContain('var(--bg')
+  })
+})
+
 // ── The log form wraps DOWN, never overflows RIGHT ────────────────────────────────────
 // Inside the pane grid the log column can be as narrow as 24em; without wrap the .le-row
 // min-content (sum of intrinsic input widths) overflowed the pane sideways and half the

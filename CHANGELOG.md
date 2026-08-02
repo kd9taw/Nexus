@@ -220,6 +220,45 @@ FO-82 (NORAD 40320) declares its transponder downlink as LSB. Picking it sets th
 USB and the uplink is then derived from that, so both ends come out on the wrong sideband.
 It is one bird, and the fix belongs with the wider transponder-tuning work rather than
 here.
+### Added: other birds, without leaving your schedule
+
+The Satellites schedule shows your ★ favorites, and the Birds list names every bird — but
+nothing connected the two. Finding a workable pass on a bird you had not starred meant a
+trip to an alphabetical name list that carries no pass information at all.
+
+The schedule now carries a second, collapsed band under your favorites: "Other birds
+overhead · N workable · 24 h". The count is live. Expand it and you get one row per bird —
+its best pass in the next 24 hours, ranked by how workable it is — with the same star and
+▶ Work controls your own rows have. Star a row and the bird moves up into your schedule,
+gaining the needed-grid chips, the pass alarm and the 48-hour view. Collapsed, the band
+adds nothing to the screen: your schedule is exactly what it was. Twelve rows show by
+default, with "show all N" for the rest; placeholder rideshare objects that share a name
+with their siblings are left to the Birds list, where starring one cannot star six.
+
+With no favorites starred at all, the section no longer replaces the whole planning column
+with one sentence — the schedule renders with the band open, so the answer is on screen
+from the first visit.
+
+Birds' mode class shows as a pill beside the name ([FM voice], [Linear SSB/CW], [Digital],
+[Beacon]) on schedule and discovery rows, wherever the catalog can say — no class, no
+pill, never a guess.
+
+### Added: a way back out of a bird's detail
+
+Opening a bird pinned its detail to the side column for the rest of the session — no
+close, no Escape, and the Birds list starts more than a full screen below it. The detail
+heading is now sticky with a ✕, Escape closes it too, and the tracking badge in the header
+opens the tracked bird again with one click. Closing a detail never touches the track, the
+rotor or the dial.
+
+### Fixed: a pass already in progress reported a wrong rise time
+
+The Satellites view's 24-hour pass scan started at "now", so a bird already above the
+horizon was reported as rising at the moment you looked, with its peak elevation
+understated to what remained — and the cached scan repeated that answer for up to ten
+minutes. The scan now looks back six hours, the same way the schedule always has: a pass
+in progress keeps its real rise time and its full peak. This also corrects the map view's
+pass pane and the first-run favorites seeding, which read the same scan.
 
 ## [0.25.0] — 2026-08-01
 

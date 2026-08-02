@@ -72,8 +72,10 @@ export const SAT_SEED_CAP = 10
 
 /** A pass below this peak elevation is a grazer, not an opportunity: too low
  * and too brief to work, and counting them would rank a bird that never
- * really clears the operator's horizon above one that does. */
-const WORKABLE_EL_DEG = 10
+ * really clears the operator's horizon above one that does. Exported for the
+ * discovery band (satDiscovery.ts) — ONE workability threshold in the app,
+ * not two. */
+export const WORKABLE_EL_DEG = 10
 
 export interface SatSeedRecord {
   /** Unix seconds. */

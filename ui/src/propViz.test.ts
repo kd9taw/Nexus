@@ -201,7 +201,10 @@ describe('satTooltip', () => {
   })
   const sats = (over: Partial<SatView> = {}): SatView => ({
     tleAgeDays: 1,
-    tleFetchedAt: NOW - 3600,
+    usableCount: 300,
+  agingCount: 0,
+  heldBackCount: 0,
+  tleFetchedAt: NOW - 3600,
     tleSource: 'mirror',
     birds: [],
     passes: [],

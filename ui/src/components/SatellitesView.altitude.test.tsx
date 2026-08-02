@@ -65,6 +65,9 @@ const bird = (name: string, norad: number, altKm: number): Bird => ({
 /** RS-44 high on its ellipse, SO-50 a low circular LEO — the contrast the number exists for. */
 const view = (over: Partial<SatView> = {}): SatView => ({
   tleAgeDays: 1,
+  usableCount: 300,
+  agingCount: 0,
+  heldBackCount: 0,
   tleFetchedAt: NOW - 3600,
   tleSource: 'mirror',
   birds: [bird('RS-44', 44909, 1234.4), bird('SO-50', 27607, 629.6)],
