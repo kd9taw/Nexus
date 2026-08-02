@@ -6,6 +6,7 @@ import type { SatPass, SatView } from '../types'
 import {
   DISCOVERY_ROW_CAP,
   modePillWord,
+  passAdmission,
   rollPassesToBirds,
 } from './satDiscovery'
 
@@ -187,5 +188,38 @@ describe('modePillWord — kindWord’s law for the class field', () => {
     expect(modePillWord(undefined)).toBeNull()
     expect(modePillWord('')).toBeNull()
     expect(modePillWord('transponder')).toBeNull()
+  })
+})
+
+describe('passAdmission — the ONE shared rule (band + Next/Best strip)', () => {
+  it('favourite-ness is NOT admission: a ★ bird is admitted, each surface applies its own ★ policy', () => {
+    // The band excludes ★ on top of admission; the strip keeps them. If ★
+    // ever leaks INTO the shared rule, the strip loses the favourites the
+    // ruling says it must show.
+    const v = view([bird('RS-44', 44909)], [pass('RS-44', 44909, 70)])
+    expect(passAdmission(v, NOW).admits(v.passes[0])).toBe(true)
+  })
+
+  it('refuses exactly what the band refuses: dead, placeholder, duplicate names, grazers, expired', () => {
+    const v = view(
+      [
+        bird('DEAD-1', 99001, { status: 'dead' }),
+        bird('OBJECT D', 99005),
+        bird('TWIN', 99006),
+        bird('TWIN', 99007),
+        bird('OK-1', 99010),
+      ],
+      [
+        pass('DEAD-1', 99001, 80),
+        pass('OBJECT D', 99005, 80),
+        pass('TWIN', 99006, 80),
+        pass('TWIN', 99007, 80),
+        pass('OK-1', 99010, 5), // a grazer, below WORKABLE_EL_DEG
+        { ...pass('OK-1', 99010, 80), aosUnix: NOW - 1200, losUnix: NOW - 600 }, // expired
+        pass('OK-1', 99010, 40),
+      ],
+    )
+    const { admits } = passAdmission(v, NOW)
+    expect(v.passes.filter(admits)).toEqual([v.passes[6]])
   })
 })

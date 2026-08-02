@@ -26,10 +26,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
 import { pushToast } from '../toast'
-import type { SatDetail, SatPass, SatTrackStatus } from '../types'
+import type { SatDetail, SatPass, SatTrackStatus, SatView } from '../types'
 
 const api = vi.hoisted(() => ({
-  getSatellites: vi.fn(() => Promise.resolve(null)),
+  getSatellites: vi.fn((): Promise<SatView | null> => Promise.resolve(null)),
   getSatSchedule: vi.fn((): Promise<SatPass[]> => Promise.resolve([])),
   getSatPassNeeds: vi.fn((): Promise<SatPass[]> => Promise.resolve([])),
   getSatDetail: vi.fn(),
@@ -166,10 +166,33 @@ const mkSettings = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
+/** The element snapshot the Next/Best strip reads (2026-08 ruling: the strip
+ * is ALL-bird from `view.passes`, no longer an echo of the ★ schedule) — the
+ * strip rows are the tests' always-on work affordances, so the snapshot must
+ * exist like it does in the app. */
+const mkView = (): SatView => ({
+  tleAgeDays: 1,
+  usableCount: 300,
+  agingCount: 0,
+  heldBackCount: 0,
+  tleFetchedAt: NOW,
+  tleSource: 'mirror',
+  birds: [
+    { name: 'RS-44', norad: 44909, lat: 0, lon: 0, altKm: 500, footprintKm: 2000, track: [], status: 'alive', amateur: true },
+    { name: 'AO-91', norad: 43017, lat: 0, lon: 0, altKm: 500, footprintKm: 2000, track: [], status: 'alive', amateur: true },
+  ],
+  passes: [
+    passRow({ norad: 44909 }),
+    passRow({ name: 'AO-91', norad: 43017, aosUnix: NOW + 900, losUnix: NOW + 1700 }),
+  ],
+  excluded: [],
+})
+
 beforeEach(() => {
   localStorage.clear()
   localStorage.setItem('nexus.sats.chasing', JSON.stringify(['RS-44']))
-  api.getSatellites.mockClear()
+  api.getSatellites.mockReset()
+  api.getSatellites.mockImplementation(() => Promise.resolve(mkView()))
   api.getSatSchedule.mockReset()
   api.getSatSchedule.mockImplementation(() => Promise.resolve([passRow()]))
   api.getSatPassNeeds.mockReset()

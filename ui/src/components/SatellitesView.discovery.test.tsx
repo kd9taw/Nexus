@@ -309,10 +309,19 @@ describe('unstarring the LAST favourite', () => {
         favRows(container).filter((r) => /RS-44/.test(r.textContent ?? '')).length,
         'a stale schedule row survived the unstar into the painted frame',
       ).toBe(0)
+      // The strip is ALL-bird since the Next/Best ruling — RS-44 may keep a
+      // row as a plain candidate. What must NOT survive the unstar into the
+      // painted frame is the ★ decoration: the mark, and the stale schedule
+      // row's earn chips (both are ★-gated against the CURRENT chase set).
+      const strip = container.querySelector('.sats-best')
       expect(
-        container.querySelector('.sats-best'),
-        'Next-up rendered from stale schedule state after the last unstar',
-      ).toBeNull()
+        strip?.querySelector('.sat-fav-mark'),
+        'a ★ mark rendered from stale favourite state after the last unstar',
+      ).toBeFalsy()
+      expect(
+        strip?.querySelector('.need-chip'),
+        'stale schedule earn painted on the all-bird strip after the last unstar',
+      ).toBeFalsy()
       expect(
         container.querySelector('.sats-sched tbody.fav .sats-inline-empty')?.textContent,
       ).toMatch(/No ★ birds yet/)

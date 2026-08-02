@@ -2,6 +2,8 @@
 // worth a look, computed entirely from the `get_satellites` snapshot the
 // section already polls at 60 s. Zero new IPC, zero per-bird fetches — the
 // all-bird pass array was sitting in `view.passes`, unread by this section.
+// Also home of `passAdmission`, the ONE admission rule this band shares with
+// the Next/Best strip (2026-08 ruling) — never duplicated per surface.
 //
 // Two deliberate refusals, labelled here because both will read as gaps:
 //  - NO `earn` on discovery rows. `earn` is stamped only by
@@ -131,24 +133,31 @@ export function birdWorth(b: DiscoveryBird): number {
 }
 
 /**
- * One row per non-★ bird with at least one workable pass still open in the
- * snapshot's window, worth-sorted (class tier, then worth, soonest AOS and
- * name breaking ties — deterministic across runs). Pure: the caller passes
- * its own ★ test so this module owns no storage.
+ * The section's ONE pass-admission rule, shared by the discovery band and the
+ * Next/Best strip above the schedule (the strip must never invent a second
+ * one — a bird this refuses cannot be allowed to surface anywhere the section
+ * suggests birds). What it refuses: expired passes, sub-workable peaks (the
+ * seed's WORKABLE_EL_DEG floor, imported so the app has ONE workability
+ * threshold, not two), placeholder catalog names, names carried by multiple
+ * NORADs (every action on these surfaces — star, open, work — is name-keyed
+ * and would collide), birds the catalog POSITIVELY calls dead/re-entered/
+ * not-yet-launched, and birds it positively says have nothing left to
+ * transmit — a SUGGESTION must clear a higher bar than a choice. An ABSENT
+ * status/amateur answer is not an exclusion: dropping every bird a thin
+ * catalog cannot vouch for would blind these surfaces exactly when the
+ * catalog is the thing that failed.
  *
- * Admission: a pass below WORKABLE_EL_DEG never counts and never leads — the
- * seed's own floor, imported so the app has ONE workability threshold, not
- * two. Birds the catalog positively calls dead/re-entered/not-yet-launched,
- * or positively says have nothing left to transmit, are out — a SUGGESTION
- * must clear a higher bar than a choice. An ABSENT status/amateur answer is
- * not an exclusion: dropping every bird a thin catalog cannot vouch for
- * would blind the band exactly when the catalog is the thing that failed.
+ * Favourite-ness is deliberately NOT part of admission: the band filters ★
+ * out (those rows live in the schedule above), the strip keeps them — each
+ * surface applies its own ★ policy on top of the one shared rule.
  */
-export function rollPassesToBirds(
+export function passAdmission(
   view: SatView,
   nowSecs: number,
-  isFav: (name: string, norad?: number | null) => boolean,
-): DiscoveryBird[] {
+): {
+  admits: (p: SatPass) => boolean
+  metaFor: (p: SatPass) => SatView['birds'][number] | undefined
+} {
   type Meta = SatView['birds'][number]
   const metaByNorad = new Map<number, Meta>()
   const metaByName = new Map<string, Meta>()
@@ -167,18 +176,17 @@ export function rollPassesToBirds(
     set.add(p.norad)
     noradsByName.set(k, set)
   }
-  const rows = new Map<string, DiscoveryBird>()
-  for (const p of view.passes) {
-    if (p.losUnix <= nowSecs) continue // expired — nothing to act on
-    if (p.maxElDeg < WORKABLE_EL_DEG) continue // a grazer, not an opportunity
-    if (isFav(p.name, p.norad)) continue // ★ rows live in the schedule above
-    if (PLACEHOLDER_NAME.test(p.name)) continue
-    if ((noradsByName.get(p.name.toUpperCase())?.size ?? 0) > 1) continue
-    const meta =
-      (p.norad != null ? metaByNorad.get(p.norad) : undefined) ??
-      metaByName.get(p.name.toUpperCase())
+  const metaFor = (p: SatPass): Meta | undefined =>
+    (p.norad != null ? metaByNorad.get(p.norad) : undefined) ??
+    metaByName.get(p.name.toUpperCase())
+  const admits = (p: SatPass): boolean => {
+    if (p.losUnix <= nowSecs) return false // expired — nothing to act on
+    if (p.maxElDeg < WORKABLE_EL_DEG) return false // a grazer, not an opportunity
+    if (PLACEHOLDER_NAME.test(p.name)) return false
+    if ((noradsByName.get(p.name.toUpperCase())?.size ?? 0) > 1) return false
+    const meta = metaFor(p)
     const status = meta?.status ?? p.status ?? null
-    if (status === 'dead' || status === 're-entered' || status === 'future') continue
+    if (status === 'dead' || status === 're-entered' || status === 'future') return false
     // `amateur` is a real answer ONLY beside a present status (SatBird's own
     // doc: catalog_marks returns (None, false) for every bird it was never
     // ASKED about, and the bool rides the wire unconditionally). Believe
@@ -188,7 +196,30 @@ export function rollPassesToBirds(
     // catalog-less wire shape: imported TLEs, Celestrak-leg birds,
     // pre-catalog snapshots.
     const asked = meta?.status != null && meta.status !== ''
-    if (asked && meta.amateur === false) continue
+    if (asked && meta?.amateur === false) return false
+    return true
+  }
+  return { admits, metaFor }
+}
+
+/**
+ * One row per non-★ bird with at least one workable pass still open in the
+ * snapshot's window, worth-sorted (class tier, then worth, soonest AOS and
+ * name breaking ties — deterministic across runs). Pure: the caller passes
+ * its own ★ test so this module owns no storage. Admission is passAdmission
+ * (the shared rule, documented there), plus the band's own ★ exclusion.
+ */
+export function rollPassesToBirds(
+  view: SatView,
+  nowSecs: number,
+  isFav: (name: string, norad?: number | null) => boolean,
+): DiscoveryBird[] {
+  const { admits, metaFor } = passAdmission(view, nowSecs)
+  const rows = new Map<string, DiscoveryBird>()
+  for (const p of view.passes) {
+    if (!admits(p)) continue
+    if (isFav(p.name, p.norad)) continue // ★ rows live in the schedule above
+    const meta = metaFor(p)
     const key = p.norad != null ? `n${p.norad}` : p.name.toUpperCase()
     const cur = rows.get(key)
     if (cur == null) {

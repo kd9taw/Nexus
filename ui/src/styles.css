@@ -14953,6 +14953,36 @@ button.cq-skiptx1.on {
   color: var(--text-dim);
   margin: 0 0 var(--space-1) 0;
 }
+/* The strip's two labelled pairs (2026-08 Next/Best ruling): each group is a
+   side TAG beside its two rows — the labels spend width, not height, so the
+   four-row strip stays within one row-height of the old three-row layout.
+   fit-content all the way down: no height, no floor, the tag never grows
+   (panel-overflow.test.ts computes these winners). */
+.sats-best-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+h2.sats-best-tag {
+  flex: 0 0 3.5em;
+  margin: 0;
+}
+.sats-best-rows {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* ★ on a favourite's strip row — the app's ONE chase gold (.sat-star.on),
+   light theme overriding to the chase ink like every other gold star. */
+.sat-fav-mark {
+  color: #f5a524;
+  margin-right: var(--space-1);
+}
+[data-theme='light'] .sat-fav-mark {
+  color: #9d6500;
+}
 /* "Next up" rows: no longer one big button — a row hosting the mini pass-arc,
    the open-detail button (the why-line + earn chips) and the primary
    "Work this pass" action. Content-height rows; the column is not a grower. */
