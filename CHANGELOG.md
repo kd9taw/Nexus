@@ -86,6 +86,70 @@ cannot tell a landed uplink from an echo of what we just asked for, and confirmi
 difference needs a real radio on a real `rigctld` — which neither this tree nor CI has.
 Guessing wrong there puts your carrier in the transponder's downlink passband, on top of
 everyone else working the bird.
+### Fixed: switching modes no longer forgets your frequency
+
+Working a station on 20 m phone at 14.240, a stray click into CW and back reset the dial to
+14.225 — the start of the phone segment — and the contact was gone. Nexus now remembers the
+frequency you were using, per band and per mode, for the whole session. Switch from Phone to
+CW and back and you are on your own frequency again, not the segment default.
+
+Every band keeps its own memory. Leave 20 m phone for 40 m CW and your 14.240 waits: switch
+to Phone on 40 m and you get your last 40 m phone frequency (or the usual segment start if
+you have not used one yet), and picking 20 m from the band dropdown brings 14.240 back. Every
+mode remembers on a mode switch — Phone, CW, RTTY, and the digital Operate section — and the
+band dropdowns in the Phone and CW cockpits restore the band's memory too. Anything that
+names an exact frequency still goes exactly there, with no memory overlay — a typed MHz, a
+band-plan channel, a spot or Needed click carrying the spot's own frequency.
+
+The first visit to any band/mode this session behaves as it always has, and a restart starts
+genuinely fresh: the memory is never saved to disk, and the frequency Nexus starts on is not
+counted as one you chose — neither the dial in the settings file nor the one read off the rig
+when the CAT link first opens. It cannot be: those say where the radio IS, never who put it
+there, and that could as easily have been APRS, a repeater, an ISS pass or a satellite as you.
+So closing Nexus parked on the national APRS channel and opening it the next morning will
+never turn 144.390 into "your 2 m phone frequency". Memory starts the moment you tune
+somewhere yourself. License privileges are still checked on every return — if your class
+changed mid-session, the dial falls back to the legal segment start.
+
+Turning the VFO knob counts as choosing a frequency, with two exceptions. The first dial the
+CAT link reports is not a knob move at all — it only says where the rig already was, as above.
+And while Nexus is holding the dial on one of its own channels — APRS, an FM repeater or
+simplex channel, the ISS SSTV downlink, a satellite transponder — tuning around inside it is
+working that channel, not picking a frequency for the band, so it is not remembered. Move the
+knob to another band and the dial is yours again. The knob reports a frequency and nothing
+else, so a frequency you reach that way comes back on the band's usual sideband rather than
+the one you happened to be using on the band you left.
+
+Two coarsenesses worth naming. An FM channel or FM-bird hold stays in force until you tune
+somewhere explicitly (that is what keeps the rig in FM instead of dropping it the moment you
+nudge the VFO), and while it is set any knob move at 29 MHz or above counts as the
+machinery's, whichever VHF/UHF band you are on; APRS is held to 2 m only. The channel mark
+Nexus sets when it tunes one of its own channels lasts the same way: it is dropped at the next
+frequency you choose yourself — a band pick, a typed MHz, a mode home, or a knob move onto
+another band — and until then a knob move inside that band is the channel's. It names the one
+band the app parked on, so anywhere else it says nothing at all.
+
+Frequencies the app tunes for its own machinery are never mistaken for yours, and never the
+other way round either. Each part of Nexus that moves the dial says whose frequency it is at
+the moment it moves it, so the answer never depends on when the question is asked:
+
+- Work a satellite from 20 m phone and your 14.240 is still waiting when you come back.
+- A pass that ends leaves the radio parked on the bird. That Doppler-corrected frequency is
+  never adopted as your frequency on 2 m, however long you stay there afterwards — and
+  neither is a spot you hand-tuned to inside a linear bird's passband.
+- Tuning APRS from 146.520 keeps 146.520 as your 2 m phone frequency, even though 146.520 and
+  144.390 are the same band and nothing about the move looks like leaving it.
+- Switching radios banks the dial you were on before the handoff. The memory is station-wide:
+  a recalled frequency routes to the radio that owns that band and mode, exactly as any other
+  band change does.
+- The ISS SSTV auto-arm's 145.800 is one of those channels too: your 2 m frequency banks on
+  the way in, the 145.800 itself is never remembered, and hand-chasing the pass's Doppler
+  inside the armed window does not overwrite what you were on either.
+
+Two smaller things. Picking the band you are already on from the dropdown now keeps the
+frequency you are on, instead of snapping back to the segment start. And that dropdown's
+tooltip says what the control does: your last frequency on that band in that mode, else the
+start of your licensed segment.
 
 ### Fixed: the caller card's distance and bearing now agree with QRZ
 

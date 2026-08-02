@@ -24,7 +24,12 @@ const OFF_FREQ: IssRadio = { dialMhz: 14.074, band: '20m', sideband: 'USB' }
 const ON_CHANNEL: IssRadio = { dialMhz: 145.8, band: '2m', sideband: 'FM' }
 
 function deps() {
-  return { setFrequency: vi.fn(), sstvArm: vi.fn(), sstvAutoDisarm: vi.fn() }
+  return {
+    tuneChannel: vi.fn(),
+    setFrequency: vi.fn(),
+    sstvArm: vi.fn(),
+    sstvAutoDisarm: vi.fn(),
+  }
 }
 
 beforeEach(() => {
@@ -38,8 +43,12 @@ describe('tickIssAutoArm', () => {
     const now = 1_900_000_000
     // Rose 1 min ago, still up — an in-progress pass.
     tickIssAutoArm(pass(now - 60), OFF_FREQ, true, d, now)
-    expect(d.setFrequency).toHaveBeenCalledTimes(1)
-    expect(d.setFrequency).toHaveBeenCalledWith(145.8, '2m', 'FM')
+    // ⭐ tuneChannel, NOT setFrequency: 145.800 is the APP's channel. Arriving as an
+    // operator tune it would be banked as the operator's 2 m dial by the per-(band, mode)
+    // dial memory the moment they switched modes inside the armed window.
+    expect(d.tuneChannel).toHaveBeenCalledTimes(1)
+    expect(d.tuneChannel).toHaveBeenCalledWith(145.8, '2m', 'FM')
+    expect(d.setFrequency).not.toHaveBeenCalled()
     expect(d.sstvArm).toHaveBeenCalledTimes(1)
     expect(d.sstvArm).toHaveBeenCalledWith(true)
     expect(String(toasts.mock.calls[0][0])).toContain('145.800 FM')
@@ -50,11 +59,13 @@ describe('tickIssAutoArm', () => {
     const now = 1_900_000_000
     const p = pass(now - 60)
     tickIssAutoArm(p, OFF_FREQ, true, d, now)
+    d.tuneChannel.mockClear()
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
     d.sstvAutoDisarm.mockClear()
     // 30 s later, still in the same pass, rig now on-channel — must NOT re-arm.
     tickIssAutoArm(p, ON_CHANNEL, true, d, now + 30)
+    expect(d.tuneChannel).not.toHaveBeenCalled()
     expect(d.setFrequency).not.toHaveBeenCalled()
     expect(d.sstvArm).not.toHaveBeenCalled()
   })
@@ -64,14 +75,17 @@ describe('tickIssAutoArm', () => {
     const now = 1_900_000_000
     const p = pass(now - 60)
     tickIssAutoArm(p, OFF_FREQ, true, d, now) // arm; savedDial = OFF_FREQ
+    d.tuneChannel.mockClear()
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
     d.sstvAutoDisarm.mockClear()
     // Pass ended; the rig is still parked on 145.800 FM → restore is safe.
     tickIssAutoArm(p, ON_CHANNEL, true, d, p.losUnix + 60)
     expect(d.sstvAutoDisarm).toHaveBeenCalledTimes(1)
+    // The RESTORE is an ordinary operator tune — that dial really is theirs.
     expect(d.setFrequency).toHaveBeenCalledTimes(1)
     expect(d.setFrequency).toHaveBeenCalledWith(14.074, '20m', 'USB')
+    expect(d.tuneChannel).not.toHaveBeenCalled()
   })
 
   it('does not restore against the operator — a mid-pass manual QSY is left alone', () => {
@@ -79,6 +93,7 @@ describe('tickIssAutoArm', () => {
     const now = 1_900_000_000
     const p = pass(now - 60)
     tickIssAutoArm(p, OFF_FREQ, true, d, now) // arm
+    d.tuneChannel.mockClear()
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
     d.sstvAutoDisarm.mockClear()
@@ -92,6 +107,7 @@ describe('tickIssAutoArm', () => {
     const d = deps()
     const now = 1_900_000_000
     tickIssAutoArm(pass(now - 60), OFF_FREQ, true, d, now) // arm while enabled
+    d.tuneChannel.mockClear()
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
     d.sstvAutoDisarm.mockClear()
@@ -105,6 +121,7 @@ describe('tickIssAutoArm', () => {
     const d = deps()
     const now = 1_900_000_000
     tickIssAutoArm(pass(now - 60), OFF_FREQ, true, d, now) // arm mid-pass
+    d.tuneChannel.mockClear()
     d.setFrequency.mockClear()
     d.sstvArm.mockClear()
     d.sstvAutoDisarm.mockClear()
@@ -143,6 +160,7 @@ describe('tickIssAutoArm', () => {
   it('a disabled tick with nothing armed is a no-op', () => {
     const d = deps()
     tickIssAutoArm(pass(1_900_000_000), ON_CHANNEL, false, d, 1_900_000_000)
+    expect(d.tuneChannel).not.toHaveBeenCalled()
     expect(d.setFrequency).not.toHaveBeenCalled()
     expect(d.sstvArm).not.toHaveBeenCalled()
     expect(d.sstvAutoDisarm).not.toHaveBeenCalled()

@@ -30,6 +30,13 @@ export interface IssRadio {
 
 /** The rig actions the tick performs, injected so tests can observe them. */
 export interface IssArmDeps {
+  /** Park the rig on the 145.800 downlink — the APP's channel, not the operator's dial.
+   * MUST be the tuneChannel verb, never setFrequency: the backend records who authored a
+   * dial write, and 145.800 arriving as an operator tune would be banked as their 2 m
+   * frequency by the per-(band, mode) dial memory the moment they switched modes. */
+  tuneChannel: (dialMhz: number, band: string, mode: string) => void
+  /** Put the operator's OWN saved dial back at LOS. This one really is theirs, so it is an
+   * ordinary operator tune. */
   setFrequency: (dialMhz: number, band: string, mode: string) => void
   /** Start the SSTV receiver for the pass. Explicit, because the operator opted in. */
   sstvArm: (on: boolean) => unknown
@@ -121,7 +128,7 @@ export function tickIssAutoArm(
     savedDial = radio
       ? { dialMhz: radio.dialMhz, band: radio.band, sideband: radio.sideband }
       : null
-    deps.setFrequency(ISS_DIAL_MHZ, ISS_BAND, ISS_MODE)
+    deps.tuneChannel(ISS_DIAL_MHZ, ISS_BAND, ISS_MODE)
     fireAndForget(() => deps.sstvArm(true))
     weArmedIt = true
     // Finite (not persistent) so the banner can't linger past LOS reading "armed"

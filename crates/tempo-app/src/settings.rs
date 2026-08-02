@@ -17,7 +17,7 @@ use std::path::Path;
 /// the rig for keying: the FT8/FT1 slot sequencer never keys while it's active, and
 /// the RTTY keyer never keys outside it. The phone/CW/RTTY operating sections set
 /// this; the digital cockpit leaves it `Digital`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum OperatingMode {
     #[default]

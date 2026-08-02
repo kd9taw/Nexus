@@ -756,6 +756,56 @@ pub fn n1mm_contact_for(
     }
 }
 
+/// WHO authored a dial write — declared BY THE WRITE SITE, never inferred afterwards.
+///
+/// The per-(band, mode) dial memory has exactly one question to answer: is this dial the
+/// operator's, or the app's own machinery? Round 1 answered it at BANK time by reading the
+/// hold flags (`sat_dial_owner` / `aprs_fm` / `fm_channel` / `sat_fm`), and those flags are
+/// set and cleared on a DIFFERENT schedule from banking — so the answer was wrong in both
+/// directions: a satellite pick set its hold before the departing QSY (an operator dial
+/// discarded as machinery), and a released pass left a Doppler-steered dial flagged as
+/// nobody's (machinery banked as the operator's). Provenance travels WITH the write instead,
+/// which is the same discipline the rest of the engine follows: report what was DONE, never
+/// what can be computed about it later.
+#[derive(Clone, Copy, Debug)]
+enum DialOrigin {
+    /// The OPERATOR asked for this frequency AND its sideband: a band pick, a typed MHz, a
+    /// spot/needed click, a mode home, a restore from this very memory. Bankable, sideband
+    /// and all — every one of these paths passes the sideband it means.
+    Operator,
+    /// The operator turned the VFO KNOB. Bankable in exactly the same way, with one thing
+    /// missing: the rig reported a FREQUENCY and nothing else. `observe_rig_freq` leaves the
+    /// sideband to the rig-mode policy, so at that moment `settings.sideband` still names
+    /// the sideband of the band being LEFT — 2 m FM on the way down to 20 m phone. The
+    /// residency therefore records NO sideband, and a restore falls back to the band/mode
+    /// default (see [`Engine::recall_dial_memory`]) rather than replaying a stale one.
+    OperatorKnob,
+    /// The APP moved the dial for its own machinery: an APRS/repeater/ISS channel, a
+    /// satellite transponder pick, a Doppler correction. Never bankable — and it ENDS the
+    /// operator residency it displaced (which is what banks 146.520 when APRS takes 2 m).
+    Machinery,
+}
+
+/// The operator's live, not-yet-banked dial — captured AT THE WRITE, so the bank never has
+/// to reconstruct it from state that has moved on.
+///
+/// Carrying band and mode here (rather than reading `settings` at bank time) is what makes
+/// the ordering trap disappear: a leave-event can bank at any point in its caller, before or
+/// after the band/mode/hold mutations, and still record the cell the dial was actually used
+/// in. It is also why a composite verb (`work_spot`: mode first, then frequency) cannot
+/// attribute the old mode's dial to the new mode's cell.
+#[derive(Debug)]
+struct DialResidency {
+    band: String,
+    mode: crate::settings::OperatingMode,
+    dial_mhz: f64,
+    /// `None` when the write named only a frequency — a VFO-knob QSY
+    /// ([`DialOrigin::OperatorKnob`]). Absence is recorded as absence rather than as
+    /// whatever `settings.sideband` happened to hold, which on a cross-band knob move is
+    /// the departed band's; the restore resolves the band/mode default instead.
+    sideband: Option<String>,
+}
+
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
@@ -1067,6 +1117,74 @@ pub struct Engine {
     /// band change clears it so QSY re-asserts the auto sideband. FM as a persistent default
     /// still lives in `settings.phone_mode`.
     sideband_override: Option<String>,
+    /// Session-scoped per-(band, mode) dial memory: the last dial + sideband the operator
+    /// USED in each (band, operating-mode) cell, restored when they return to that cell
+    /// instead of the band-plan segment default (field report: a Phone → CW → Phone round
+    /// trip reset 14.240 to the 14.225 segment default and cost a live contact). Banked at
+    /// LEAVE time — mode switch away, band change away, radio handoff, or machinery taking
+    /// the dial — and only for dials written with [`DialOrigin::Operator`] provenance: a
+    /// Doppler-steered pass, an APRS/repeater/ISS channel tune or a transponder pick is the
+    /// machinery's frequency, and restoring one later would restore garbage.
+    ///
+    /// STATION-WIDE, deliberately not per-radio: this records where the OPERATOR works a
+    /// band in a mode, which is a habit of the station, not a property of a rig. Per-radio
+    /// dial state already exists and is persisted (`RadioProfile::last_dial_mhz/last_band/
+    /// last_sideband`, restored by [`Engine::set_active_radio`]) — a second per-radio memory
+    /// would be a competing answer to a question that already has one. A restore rides the
+    /// ordinary `set_frequency`, so band+mode ROUTING sends a recalled 2 m dial to the 2 m
+    /// rig rather than onto whatever is active.
+    ///
+    /// NEVER persisted (session-only, like `sstv_armed`): the Engine is not serialized, so a
+    /// fresh launch starts empty — every first entry gets the segment default as before.
+    /// That holds only because the boot dial opens NO residency (see `dial_residency`):
+    /// settings.json carries a dial but not its provenance, so a launch that inferred one
+    /// would let a persisted machinery frequency in through the restart door.
+    /// The cell's sideband is `Option`al for the same reason the residency's is: a
+    /// VFO-knob QSY names a frequency and nothing else, and a cell that stored the live
+    /// `settings.sideband` there would be remembering the departed band's. `None` = "no
+    /// sideband was chosen here" and the restore resolves the band/mode default.
+    freq_memory:
+        std::collections::HashMap<(String, crate::settings::OperatingMode), (f64, Option<String>)>,
+    /// The operator's CURRENT dial residency — recorded at the write (with its band, mode,
+    /// dial and sideband), consumed by the first leave-event. `None` = there is nothing of
+    /// the operator's to bank: the dial belongs to machinery, the last residency was already
+    /// banked, or nothing has been tuned yet this session. See [`DialResidency`] and
+    /// [`Engine::record_dial`].
+    ///
+    /// STARTS `None` AT CONSTRUCTION, and that is load-bearing rather than incidental: the
+    /// persisted dial and the rig's dial at CAT open (`seed_rig_dial`) are both statements
+    /// about where the radio IS, never about who put it there. Provenance is recorded at the
+    /// write, so a dial written in a previous session has none — and inferring `Operator` for
+    /// it is what would launder an APRS/repeater/ISS/satellite park into the memory across a
+    /// restart. The first dial the operator tunes THIS session opens the first residency.
+    dial_residency: Option<DialResidency>,
+    /// The band the APP last parked the dial on for its own machinery — set at the machinery
+    /// write ([`Engine::record_dial`] with [`DialOrigin::Machinery`]), cleared at the next
+    /// operator write. The MARK the knob test needs: a hold plainly exists while the app is
+    /// sitting on its own channel, but the FM flags only describe some of them. `aprs_tune`
+    /// and `repeater_tune` re-arm one after their tune; `tune_channel` (the ISS SSTV park)
+    /// arms none, and a LINEAR transponder sets no `sat_fm` at all — so a knob nudge inside
+    /// either was banked as the operator's dial for that band. Recording the park where
+    /// provenance is already declared costs one field and covers every machinery verb,
+    /// present and future, instead of another per-verb flag.
+    ///
+    /// Holds the BAND, not a span: off that band the park says nothing and the knob is an
+    /// ordinary QSY (which then clears it). Session-only, like the memory it guards.
+    machinery_park: Option<String>,
+    /// Has the CAT link told us where the rig is yet, THIS session? Set by the boot seed
+    /// ([`Engine::seed_rig_dial`]) and by the first [`Engine::observe_rig_freq`], never
+    /// cleared.
+    ///
+    /// The last door of the same kind as the persisted dial and the boot seed: the FIRST
+    /// dial the link reports is a statement about where the rig IS, not about who put it
+    /// there. The boot probe reads it through `seed_rig_dial` only when the rig answers
+    /// immediately — a radio still powering up, a slow rigctld, or CAT connected mid-session
+    /// on a Settings save all deliver that first word through `observe_rig_freq` instead,
+    /// which models a knob QSY and would open an `Operator` residency for a rig still parked
+    /// where the app left it last night (APRS, a repeater, a bird). Unknown provenance
+    /// produces no residency, here as everywhere else; once the link has said where the rig
+    /// is, every later knob move is the operator's exactly as before.
+    rig_dial_seen: bool,
     /// CW transmit queue (CAT keyer path): expanded CW text the radio loop drains and
     /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor).
     cw_queue: VecDeque<String>,
@@ -2525,6 +2643,19 @@ impl Engine {
             xit_dirty: false,
             vfo_dirty: false,
             sideband_override: None,
+            freq_memory: std::collections::HashMap::new(),
+            // NO boot residency. settings.json records the dial but never who wrote it, and
+            // the machinery verbs persist theirs (aprs_tune, repeater_tune, tune_channel all
+            // save dial/band/sideband on the way out), so the persisted dial may be the
+            // national APRS channel, a repeater output, an ISS downlink or a satellite park.
+            // Asserting `Operator` for it would claim what was COMPUTED rather than what was
+            // DONE — the exact error the provenance-at-write model exists to delete, arriving
+            // through the restart door. Unknown provenance produces no residency: nothing to
+            // bank, so a restart really does start fresh and the first dial the operator
+            // themselves tunes this session opens the first residency.
+            dial_residency: None,
+            machinery_park: None,
+            rig_dial_seen: false,
             cw_queue: VecDeque::new(),
             cw_sent: VecDeque::new(),
             cw_keyer_error: None,
@@ -3104,6 +3235,14 @@ impl Engine {
             p.last_band = self.settings.band.clone();
             p.last_sideband = self.settings.sideband.clone();
         }
+        // …and a handoff is a leave-event on the RADIO axis for the per-(band, mode) dial
+        // memory, for exactly the same reason: the operator is leaving a residency they were
+        // running. Without this the outgoing rig's dial was simply lost and a later return
+        // to that band+mode fell back to the segment default. The memory is station-wide, so
+        // the cell survives the swap (see `freq_memory`); the NEW radio's adopted tune below
+        // deliberately opens NO residency — it comes from a profile or a monitor read, not
+        // from anything the operator just did, and its per-radio persistence already owns it.
+        self.bank_dial_memory();
         // A radio swap is a hard context change (different antenna/band): stop TX + drop the decode
         // context + roster, exactly like a band QSY.
         self.halt_tx();
@@ -3260,13 +3399,59 @@ impl Engine {
         self.settings.sync_flat_from_active();
     }
 
+    /// THE operator QSY: every band picker, typed MHz, spot click, needed click, mode home
+    /// and dial-memory restore lands here. Declares [`DialOrigin::Operator`] provenance —
+    /// the dial it writes is bankable into the per-(band, mode) memory.
     pub fn set_frequency(&mut self, dial_mhz: f64, band: &str, mode: &str) {
+        self.tune_dial(dial_mhz, band, mode, DialOrigin::Operator);
+    }
+
+    /// The QSY the APP performs for its own machinery — an APRS/repeater/ISS channel or a
+    /// satellite transponder pick. Byte-for-byte the same retune as [`Self::set_frequency`]
+    /// (routing, TX halt, split clear, hold clears, gate bump: all of it), differing in ONE
+    /// respect: it declares [`DialOrigin::Machinery`], so the dial it writes never enters the
+    /// per-(band, mode) memory, and the operator residency it displaces is banked on the way
+    /// in — including an IN-BAND displacement (146.520 → APRS 144.390 is one band, so no
+    /// band-change event fires, and the operator's simplex calling frequency used to vanish).
+    fn machinery_tune(&mut self, dial_mhz: f64, band: &str, mode: &str) {
+        self.tune_dial(dial_mhz, band, mode, DialOrigin::Machinery);
+    }
+
+    /// Park the dial on one of the APP's OWN fixed channels, from a write site that lives in
+    /// the UI rather than in an engine verb. Today's only caller is the ISS SSTV auto-arm
+    /// (145.800 FM at AOS; the operator's own dial is restored through `set_frequency` at LOS,
+    /// because THAT dial is theirs). It exists because provenance is declared by the write
+    /// site, and a UI-driven auto-tune is a write site like any other: without it the engine
+    /// cannot tell 145.800 from a frequency the operator typed, and a mode switch inside an
+    /// armed window banks the ISS downlink as their 2 m dial.
+    ///
+    /// Identical to [`Self::set_frequency`] in every effect on the radio. It differs only in
+    /// what the per-(band, mode) dial memory makes of it: nothing is recorded, and the
+    /// operator residency it displaces is banked on the way in.
+    pub fn tune_channel(&mut self, dial_mhz: f64, band: &str, mode: &str) {
+        self.machinery_tune(dial_mhz, band, mode);
+    }
+
+    fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
         // Canonicalise the band ONCE, at the boundary where it enters state: a
         // band-plan CHANNEL token ("2m-fm", "6m-2") must never become the stored
         // band — `settings.band` feeds `QsoRecord.band`, the ADIF file and the
         // QRZ/eQSL uploads verbatim, and awards/needs/interop accept only the
         // base label (a token earned no DXCC/VUCC/WAS slot and never confirmed).
         let band = &crate::bandplan::canonical_band(band);
+        // Leaving the band is a leave-event for the per-(band, mode) dial memory. The
+        // residency carries the band it was RECORDED on, so this asks the only question
+        // that matters ("is the operator leaving the cell they were in?") without reading
+        // live state that the lines below are about to move. (Machinery taking the dial is
+        // the OTHER leave-event; `record_dial` handles it after the write, which is what
+        // catches a same-band displacement.)
+        if self
+            .dial_residency
+            .as_ref()
+            .is_some_and(|r| !r.band.eq_ignore_ascii_case(band))
+        {
+            self.bank_dial_memory();
+        }
         // A fresh QSY request is a fresh attempt: drop any earlier refusal so a stale "the radio
         // refused 144.390" can't sit on screen next to a frequency that worked.
         self.rig_refused_dial_mhz = None;
@@ -3366,6 +3551,9 @@ impl Engine {
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.to_string();
         self.settings.sideband = mode.to_string();
+        // Declare the provenance of the dial just written: an operator QSY opens a fresh
+        // residency; a machinery tune banks the residency it displaced and opens none.
+        self.record_dial(origin);
         self.app.set_radio(dial_mhz, band, mode);
         // Operator QSY → the radio loop must follow on the very next iteration, not
         // when it happens to notice the dial changed. (Single-click precision.)
@@ -3384,6 +3572,15 @@ impl Engine {
     /// sideband to the rig-mode policy (the radio loop still owns what it commands).
     pub fn observe_rig_freq(&mut self, hz: u64) {
         let mhz = hz as f64 / 1_000_000.0;
+        // Is this the first thing the CAT link has ever said? Then it is not a knob move at
+        // all: it is the link reporting where the rig ALREADY was, which is the boot seed's
+        // event with the seed's exact provenance — unknown. Everything else below still runs
+        // (the dial really is not where we believed, so the decode context, TX and split
+        // bookkeeping all apply); only the dial-memory verdict changes, and it is the same
+        // one `Engine::new` and `seed_rig_dial` give: no bank, no residency. See
+        // `rig_dial_seen`.
+        let link_opened = !self.rig_dial_seen;
+        self.rig_dial_seen = true;
         // A knob move DURING A PASS, inside the transponder, is not a QSY — it
         // is the operator chasing a station across the passband, and the uplink
         // has to follow them (mirrored, if the transponder inverts). Adopt it
@@ -3400,6 +3597,10 @@ impl Engine {
         if self.sat_observe_operator_tune(hz) {
             self.settings.dial_mhz = mhz;
             let (band, sb) = (self.settings.band.clone(), self.settings.sideband.clone());
+            // MACHINERY provenance: the hand on the knob is the operator's, but the dial is
+            // a position inside a transponder passband that Doppler owns and keeps moving.
+            // It is the bird's frequency, not "the operator's 2 m phone dial".
+            self.record_dial(DialOrigin::Machinery);
             self.app.set_radio(mhz, &band, &sb);
             return;
         }
@@ -3408,6 +3609,28 @@ impl Engine {
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
+        }
+        // A cross-band knob QSY is a leave-event for the per-(band, mode) dial memory
+        // too — bank the residency being left before adopting the knob's dial. An
+        // OUT-of-band knob move during a satellite pass falls through the early return
+        // above, and there is nothing to bank there: the transponder pick was a machinery
+        // tune, so no operator residency survived it.
+        //
+        // The link's first word is not a leave-event: nobody left anywhere, the rig was
+        // simply always there. It banks nothing and drops nothing, exactly like
+        // `seed_rig_dial` — an outstanding residency (CAT opening mid-session, after the
+        // operator has been working) is left alone to bank into the cell it was really used
+        // in at the next real leave-event, which it can do because it carries its own band.
+        if !link_opened {
+            if let Some(new_band) = crate::bandplan::band_for_dial(mhz) {
+                if self
+                    .dial_residency
+                    .as_ref()
+                    .is_some_and(|r| !r.band.eq_ignore_ascii_case(new_band))
+                {
+                    self.bank_dial_memory();
+                }
+            }
         }
         self.settings.dial_mhz = mhz;
         if let Some(band) = crate::bandplan::band_for_dial(mhz) {
@@ -3429,6 +3652,26 @@ impl Engine {
             }
             self.settings.band = band.to_string();
         }
+        // Declare the knob's provenance after the band write, so whichever answer it is
+        // names the cell the dial landed in. The hand on the knob is always the operator's,
+        // but a nudge INSIDE a channel the machinery is holding is tuning around within that
+        // channel, not choosing a frequency for this band and mode — and banking it would
+        // overwrite the dial the machinery tune correctly saved on its way in (146.520 lost
+        // one click after APRS took 2 m). Off the held band the hold means nothing and the
+        // knob is an ordinary QSY, which is why the test is `machinery_holds_dial`'s and not
+        // a bare flag read.
+        //
+        // Nothing is declared for the link's first word: it is nobody's tune (see
+        // `rig_dial_seen`), and declaring `Machinery` for it would be its own lie — it would
+        // mark the band as parked and bank an outstanding residency.
+        if !link_opened {
+            let origin = if self.machinery_holds_dial(&self.settings.band, self.settings.dial_mhz) {
+                DialOrigin::Machinery
+            } else {
+                DialOrigin::OperatorKnob
+            };
+            self.record_dial(origin);
+        }
         self.app.set_radio(
             self.settings.dial_mhz,
             &self.settings.band,
@@ -3445,8 +3688,22 @@ impl Engine {
     /// drops the sideband override. All no-ops on a fresh engine *today* — but a boot
     /// seed that depends on that coincidence breaks the day launch order changes. A seed
     /// must be provably side-effect-free.
+    ///
+    /// It touches the per-(band, mode) dial memory in NEITHER direction: nothing is banked and
+    /// nothing is dropped. A seed says where the radio IS, never who put it there — the rig may
+    /// simply still be parked on the APRS channel or the ISS downlink this app left it on last
+    /// session — so it declares no provenance and opens no residency (the same reason the boot
+    /// dial opens none; see `dial_residency`). An outstanding residency is left alone rather
+    /// than superseded, so it still banks into the cell it was actually used in at the next
+    /// real leave-event. At the one real call site (CAT open, pre-loop) there is no residency
+    /// yet and this is a no-op — but it is now a no-op by rule, not by launch order.
+    ///
+    /// It also RECORDS that the link has spoken (`rig_dial_seen`), which is what keeps the
+    /// first knob move after a successful boot probe an ordinary operator tune: the
+    /// provenance-unknown first word has already been spent here.
     pub fn seed_rig_dial(&mut self, hz: u64) {
         let mhz = hz as f64 / 1_000_000.0;
+        self.rig_dial_seen = true;
         self.settings.dial_mhz = mhz;
         if let Some(band) = crate::bandplan::band_for_dial(mhz) {
             self.settings.band = band.to_string();
@@ -3626,6 +3883,167 @@ impl Engine {
         }
     }
 
+    /// Declare the provenance of the dial that was JUST written — the one place the
+    /// per-(band, mode) memory learns whose frequency it is looking at.
+    ///
+    /// - [`DialOrigin::Operator`] opens a residency: this band, this operating mode, this
+    ///   dial and sideband, held until a leave-event banks it. A second operator write in
+    ///   the same cell simply supersedes the first (the last dial used there is the one
+    ///   worth remembering). It also ends any machinery park: the operator has taken the
+    ///   dial back.
+    /// - [`DialOrigin::OperatorKnob`] is the same residency with NO sideband: the knob named
+    ///   a frequency only, and `settings.sideband` still describes the band being left.
+    /// - [`DialOrigin::Machinery`] BANKS the outstanding residency and opens none. Machinery
+    ///   taking the dial ends the operator's residency wherever it was, band change or not —
+    ///   that is what records 146.520 when APRS tunes 144.390 on the same band — and the
+    ///   machinery dial itself is never recorded, so a released pass leaves nothing behind
+    ///   for a later leave-event to mistake for the operator's frequency. It also MARKS the
+    ///   band as parked, which is what lets a later knob move be read as tuning around inside
+    ///   the app's channel rather than choosing a frequency (see `machinery_park`).
+    fn record_dial(&mut self, origin: DialOrigin) {
+        match origin {
+            DialOrigin::Operator | DialOrigin::OperatorKnob => {
+                self.machinery_park = None;
+                self.dial_residency = Some(DialResidency {
+                    band: self.settings.band.clone(),
+                    mode: self.settings.operating_mode,
+                    dial_mhz: self.settings.dial_mhz,
+                    sideband: matches!(origin, DialOrigin::Operator)
+                        .then(|| self.settings.sideband.clone()),
+                })
+            }
+            DialOrigin::Machinery => {
+                self.machinery_park = Some(self.settings.band.clone());
+                self.bank_dial_memory()
+            }
+        }
+    }
+
+    /// Bank the outstanding operator residency into its (band, operating-mode) cell — called
+    /// at every leave-event: a mode switch away ([`Engine::set_operating_mode`]), a band
+    /// change away (`tune_dial` / a cross-band knob QSY in `observe_rig_freq`), a radio
+    /// handoff ([`Engine::set_active_radio`]), or machinery taking the dial (`record_dial`).
+    ///
+    /// It reads NOTHING from live state — the residency carries the band, mode, dial and
+    /// sideband it was RECORDED with. That is the whole point: a leave-event may fire before
+    /// or after its caller's band/mode/hold mutations and still record the cell the dial was
+    /// actually used in, and a dial with no operator residency (machinery's, or already
+    /// banked) has nothing to record, which is how a Doppler-steered pass or an APRS hold
+    /// stays out of the memory whatever the hold flags say at the time.
+    fn bank_dial_memory(&mut self) {
+        if let Some(r) = self.dial_residency.take() {
+            self.freq_memory
+                .insert((r.band, r.mode), (r.dial_mhz, r.sideband));
+        }
+    }
+
+    /// The remembered dial + sideband for (`band`, `om`) — IF the operator may still key
+    /// that emission there. The privilege gate re-runs on EVERY restore (the license
+    /// class can change mid-session in Settings); a failed check answers `None` and the
+    /// caller falls back to the segment default. The dial was legal when banked, so this
+    /// is a re-check of the same model `tx_allowed` uses — never a bypass.
+    ///
+    /// A cell banked from a VFO-knob QSY carries NO sideband (the knob reported a frequency
+    /// only — see [`DialOrigin::OperatorKnob`]), so the band/mode default supplies one:
+    /// exactly what an unremembered cell would have used on this band in this mode. The gate
+    /// then runs on the sideband actually about to be set, whichever way it was resolved.
+    fn recall_dial_memory(
+        &self,
+        band: &str,
+        om: crate::settings::OperatingMode,
+    ) -> Option<(f64, String)> {
+        let (dial, sideband) = self.freq_memory.get(&(band.to_string(), om))?.clone();
+        let sideband = match sideband {
+            Some(sb) => sb,
+            None => self.band_pick_default(band, om).map(|(_, sb)| sb)?,
+        };
+        self.emission_allowed(om, dial, &sideband)
+            .then_some((dial, sideband))
+    }
+
+    /// Today's band-dropdown default for (`band`, `om`) — mirrors what the pickers land on
+    /// when no memory cell exists (`get_licensed_band_plan` for Phone/CW, the band-plan
+    /// channel for Digital, the RTTY plan for RTTY). An empty cell must park EXACTLY where
+    /// the dropdown always did; `None` = no privilege / no channel → leave the dial put.
+    fn band_pick_default(
+        &self,
+        band: &str,
+        om: crate::settings::OperatingMode,
+    ) -> Option<(f64, String)> {
+        use crate::settings::OperatingMode;
+        let class = self.settings.license_class;
+        match om {
+            OperatingMode::Phone => crate::privileges::segment_start(class, band, om)
+                .map(|lo| (lo, if lo < 10.0 { "LSB" } else { "USB" }.to_string())),
+            // CW parks in the activity window (14.030, not the dead 14.000 edge), clamped
+            // to the licensed segment start; sideband is inert for CW (the rig-mode
+            // policy commands CW) — "USB" matches the dropdown it mirrors.
+            OperatingMode::Cw => crate::privileges::segment_start(class, band, om).map(|lo| {
+                let dial = crate::bandplan::cw_activity_mhz(band).map_or(lo, |a| a.max(lo));
+                (dial, "USB".to_string())
+            }),
+            OperatingMode::Digital => self
+                .band_plan()
+                .into_iter()
+                .find(|c| c.band == band)
+                .map(|c| (c.dial_mhz, c.mode)),
+            OperatingMode::Rtty => crate::bandplan::rtty_band_plan()
+                .into_iter()
+                .find(|c| c.band == band)
+                .filter(|c| self.rtty_emission_ok(c.dial_mhz))
+                .map(|c| (c.dial_mhz, c.mode)),
+        }
+    }
+
+    /// Band pick by NAME — the CW/Phone cockpit band dropdowns (`BandPicker`), and the only
+    /// caller. Land on the operator's last dial for (band, mode) THIS SESSION, else the
+    /// default the dropdown has always used. This verb exists because the dropdown used to
+    /// compute that default dial CLIENT-side and call plain `set_frequency` — the engine could
+    /// not tell a default band pick from an explicit MHz entry, and an explicit entry must
+    /// stay authoritative (no memory overlay). Naming the band, not a dial, is what makes the
+    /// pick restorable. With no memory cell, [`Self::band_pick_default`] reproduces
+    /// `get_licensed_band_plan`'s own dial exactly, so an unremembered band is byte-for-byte
+    /// the behaviour the dropdown always had.
+    ///
+    /// `mode`: the cockpit's mode ("phone"/"cw"/…), passed explicitly for the same
+    /// entry-race reason as `get_licensed_band_plan`; `None` = the engine's current
+    /// operating mode. No memory + no default = no-op — the dropdown only lists licensed
+    /// bands, and the TX lockout guards the air regardless.
+    pub fn pick_band(&mut self, band: &str, mode: Option<&str>) {
+        use crate::settings::OperatingMode;
+        let band = crate::bandplan::canonical_band(band);
+        let om = match mode.map(str::to_ascii_lowercase).as_deref() {
+            Some("phone") => OperatingMode::Phone,
+            Some("cw") => OperatingMode::Cw,
+            Some("rtty") => OperatingMode::Rtty,
+            Some(_) => OperatingMode::Digital,
+            None => self.settings.operating_mode,
+        };
+        // A band pick is a leave-event for the cell it is about to READ, including — especially
+        // — when that cell is the one the operator is sitting in. `set_frequency` banks on a
+        // band CHANGE, so re-picking the band you are already on would otherwise restore a
+        // stale cell straight over the live dial and lose it. Banking first makes the recall
+        // read the dial the operator is actually on, so the same-band pick is a no-op instead
+        // of a rollback. Cross-band, this is the bank `set_frequency` would have done anyway —
+        // it just happens a moment earlier, into the same cell (the residency carries its own
+        // band, so nothing is misattributed).
+        self.bank_dial_memory();
+        if let Some((dial, sideband)) = self
+            .recall_dial_memory(&band, om)
+            .or_else(|| self.band_pick_default(&band, om))
+        {
+            // Arms the retune, and opens the residency this pick should be remembered by.
+            self.set_frequency(dial, &band, &sideband);
+            // Record it in the cell the recall READ. `set_frequency` opens the residency with
+            // `settings.operating_mode`, which is exactly the value that may still lag `om`
+            // during cockpit entry — the race `mode` is passed to dodge. One mode decides both
+            // halves, or the pick banks a Phone dial into the CW cell.
+            if let Some(r) = self.dial_residency.as_mut() {
+                r.mode = om;
+            }
+        }
+    }
+
     /// Set the per-section operating mode (Digital / Phone / CW) — the rig-mode policy.
     /// Digital → DATA-U/DATA-L; Phone forces USB/LSB by band; CW forces CW. Always flags an
     /// immediate retune so the radio loop applies the mode on its very next iteration,
@@ -3641,6 +4059,11 @@ impl Engine {
     /// manual tune within a mode survives non-operating nav.
     pub fn set_operating_mode(&mut self, mode: &str, follow_freq: bool) {
         use crate::settings::OperatingMode;
+        // Bank the dial being LEFT into its (band, old-mode) memory cell FIRST — before
+        // the hold flags (cleared just below) stop distinguishing an operator dial from
+        // machinery, and before `settings.operating_mode` stops naming the mode this
+        // dial was actually used in.
+        self.bank_dial_memory();
         // Entering a real operating section ends the APRS FM-simplex context, and the FM-channel
         // and satellite FM-bird holds with it — that section's own mode policy takes over here.
         self.aprs_fm = false;
@@ -3664,13 +4087,22 @@ impl Engine {
             let cur = self.rf_power.or(self.rig_rf_power).unwrap_or(ceiling);
             self.rf_power = Some(cur.min(ceiling));
         }
-        // Explicit operating-section entry → drop to that mode's home freq on the current
-        // band. `mode_home` returns None when the operator has no privilege there (Tech on
-        // 20 m phone, 60 m, a band with no FT8 channel) — then we leave the dial put and let
-        // the TX lockout guard the air.
+        // Explicit operating-section entry → the (current band, new mode) memory cell
+        // FIRST: the dial the operator was on the last time they ran this mode on this
+        // band this session (field report: Phone 14.240 → CW → Phone must return to
+        // 14.240, not the 14.225 segment default). The privilege gate re-runs inside
+        // `recall_dial_memory` (the license class can change mid-session); an empty or
+        // no-longer-privileged cell falls back to `mode_home` — exactly today's segment
+        // default. `mode_home` None still leaves the dial put (no privilege there — Tech
+        // on 20 m phone, 60 m, a band with no FT8 channel) and lets the TX lockout guard
+        // the air. The restore is an ordinary `set_frequency`, so every existing guard —
+        // routing, TX halt semantics, split clear, privilege lockout — applies unchanged.
         if follow_freq {
-            if let Some((dial, sideband)) = self.mode_home(om) {
-                let band = self.settings.band.clone();
+            let band = self.settings.band.clone();
+            if let Some((dial, sideband)) = self
+                .recall_dial_memory(&band, om)
+                .or_else(|| self.mode_home(om))
+            {
                 self.set_frequency(dial, &band, &sideband); // also flags immediate_retune
             }
         }
@@ -3975,6 +4407,37 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// Is `(band, dial_mhz)` inside a channel the APP is holding — APRS, an FM repeater/simplex
+    /// channel, the ISS SSTV park, an FM bird or a held transponder? The dial-memory question,
+    /// and ONLY that: it decides whose frequency a rig-reported knob move is (see
+    /// `observe_rig_freq`), never what gets keyed.
+    ///
+    /// `machinery_park` is the general answer, because it is set where provenance is declared —
+    /// at the machinery write itself — so it covers every machinery verb rather than the ones
+    /// that happen to arm an FM flag afterwards (`tune_channel` arms none; a LINEAR transponder
+    /// sets no `sat_fm`). It is band-exact: off the parked band the park says nothing.
+    ///
+    /// The FM flags stay as a second, coarser term, and they are the reason this is not a bare
+    /// `machinery_park` read. They survive a knob QSY on purpose
+    /// (`fm_does_not_follow_the_operator_down_to_hf`): the rig is still IN FM, so
+    /// [`Engine::rig_mode_effective`] and [`Engine::route_mode`] still treat it as a channel
+    /// context, and the same gates are used here so all three answer alike. Their gates are
+    /// coarser than a band — APRS counts on 2 m, the FM-channel and FM-bird holds at/above
+    /// 29 MHz — so while one is set a knob move anywhere on VHF/UHF is the machinery's. That is
+    /// the disclosed cost of not clearing them: the alternative, clearing a hold on a knob QSY,
+    /// breaks the FM rule above.
+    ///
+    /// NOT a bank-time provenance test: banking still reads only the residency. This runs at a
+    /// WRITE, which is where provenance is allowed to be decided.
+    fn machinery_holds_dial(&self, band: &str, dial_mhz: f64) -> bool {
+        self.machinery_park
+            .as_deref()
+            .is_some_and(|p| p.eq_ignore_ascii_case(band))
+            || (self.aprs_fm && band.eq_ignore_ascii_case("2m"))
+            || (self.fm_channel && dial_mhz >= 29.0)
+            || (self.sat_fm && dial_mhz >= 29.0)
     }
 
     /// Where a given (band, mode class) WOULD route right now — the Settings "test" affordance, so
@@ -6776,8 +7239,13 @@ impl Engine {
             // the Phone policy commands there anyway); FM is a correctness gate,
             // not a preference — an FM-repeater or packet downlink demodulated
             // as USB is garbled audio, exactly as it is for terrestrial APRS.
-            self.set_frequency(down_mhz, band, if fm { "FM" } else { "USB" });
-            // `set_frequency` clears the FM holds (a QSY normally leaves one), so
+            // MACHINERY provenance: the bird's downlink is Doppler's frequency, not the
+            // operator's dial on that band — and, crucially, the dial being LEFT here IS
+            // the operator's (they were on 20 m phone when the pass came over), so it banks
+            // on the way out. The command sets `sat_dial_owner` BEFORE calling this, which
+            // is precisely why the answer cannot come from reading that flag now.
+            self.machinery_tune(down_mhz, band, if fm { "FM" } else { "USB" });
+            // The tune clears the FM holds (a QSY normally leaves one), so
             // — exactly like `aprs_tune` and `repeater_tune` — re-arm after it.
             // Set ONLY on the leg actually written: with no dial write there was
             // no handoff, and putting a rig we were never handed into FM would be
@@ -7357,6 +7825,12 @@ impl Engine {
         self.settings.dial_mhz = dial_mhz;
         let band = self.settings.band.clone();
         let sb = self.settings.sideband.clone();
+        // MACHINERY provenance, declared here rather than left for a later leave-event to
+        // infer from `sat_dial_owner`: the hold is handed back at LOS with the radio still
+        // parked on the bird, and a Doppler-corrected downlink that nothing owns any more is
+        // still not the operator's frequency. Declaring it at the write is what stops the
+        // next leave-event, whenever it comes, from banking it.
+        self.record_dial(DialOrigin::Machinery);
         self.app.set_radio(dial_mhz, &band, &sb);
         // The loop must follow promptly — the correction is only useful now.
         self.immediate_retune = true;
@@ -8030,9 +8504,12 @@ impl Engine {
         // QSY would route on the class of the section being LEFT — sending an APRS tune to the FT8
         // radio when the operator happened to come from Operate.
         self.route_intent = Some(crate::settings::RouteMode::Fm);
-        // set_frequency does the radio hand-off + dial + band and clears aprs_fm; re-arm FM after so
+        // The tune does the radio hand-off + dial + band and clears aprs_fm; re-arm FM after so
         // the loop commands FM (via rig_mode_effective) with simplex plumbing (via fm_repeater_config).
-        self.set_frequency(dial_mhz, "2m", "FM");
+        // MACHINERY provenance: 144.390 is the APRS network's frequency, never "the operator's
+        // 2 m dial", and declaring it here banks the dial this tune displaces even when the
+        // move is IN-band (146.520 → 144.390 fires no band-change event).
+        self.machinery_tune(dial_mhz, "2m", "FM");
         self.aprs_fm = true;
         self.immediate_retune = true;
         Ok(())
@@ -8090,10 +8567,12 @@ impl Engine {
         // Program, Operate or CW, and `route_mode` would otherwise answer for the section being
         // LEFT. Set only after the gates pass, so a refusal can't leave a stale intent behind.
         self.route_intent = Some(crate::settings::RouteMode::Fm);
-        // set_frequency clears the FM-channel hold (a QSY normally leaves one), so — exactly like
+        // The tune clears the FM-channel hold (a QSY normally leaves one), so — exactly like
         // aprs_tune with aprs_fm — re-arm it after, and the loop then commands FM via
         // rig_mode_effective with this machine's shift/tone via fm_repeater_config.
-        self.set_frequency(output_mhz, band, "FM");
+        // MACHINERY provenance for the same reason as aprs_tune: a repeater's output is the
+        // machine's channel, and the dial it displaces is the operator's and banks here.
+        self.machinery_tune(output_mhz, band, "FM");
         self.fm_channel = true;
         self.immediate_retune = true;
         Ok(())
@@ -9237,15 +9716,32 @@ impl Engine {
     /// higher-class-only edge can still emit inside it. Every TX path ANDs this in; the
     /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
+        self.emission_allowed(
+            self.settings.operating_mode,
+            self.settings.dial_mhz,
+            &self.settings.sideband,
+        )
+    }
+
+    /// May the operator's class key `om`'s EMISSION with the dial at `dial` (`sideband`
+    /// only matters for Digital, whose audio offset is sideband-signed)? THE one
+    /// emission-passband model: [`Engine::tx_allowed`] judges the live dial through it,
+    /// and the per-(band, mode) dial memory re-runs it at restore time — the license
+    /// class can change mid-session, so a remembered dial is re-checked, never trusted.
+    fn emission_allowed(
+        &self,
+        om: crate::settings::OperatingMode,
+        dial: f64,
+        sideband: &str,
+    ) -> bool {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
-        let dial = self.settings.dial_mhz;
-        let allow = |f: f64| crate::privileges::tx_allowed(class, f, self.settings.operating_mode);
-        match self.settings.operating_mode {
+        let allow = |f: f64| crate::privileges::tx_allowed(class, f, om);
+        match om {
             OperatingMode::Digital => {
                 // Narrow data signal at the audio offset: ABOVE the dial on USB, BELOW on LSB.
                 let off = self.tx_offset_hz as f64 / 1_000_000.0;
-                let lsb = self.settings.sideband.eq_ignore_ascii_case("LSB");
+                let lsb = sideband.eq_ignore_ascii_case("LSB");
                 allow(if lsb { dial - off } else { dial + off })
             }
             OperatingMode::Phone => {
@@ -13187,6 +13683,629 @@ mod tests {
             (e.settings().dial_mhz - 28.074).abs() < 1e-9,
             "Tech digital on 10 m snaps to the FT8 watering hole, got {}",
             e.settings().dial_mhz
+        );
+    }
+
+    #[test]
+    fn mode_round_trip_restores_the_dial_the_operator_was_on() {
+        // THE field report (KD9TAW): operating Phone at 14.240, bumped the mouse into CW,
+        // switched back to Phone — the app reset the dial to the 14.225 segment default
+        // and the live contact was lost. A mode switch must return to the dial last used
+        // in that mode on this band THIS SESSION; only an empty cell gets the default.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        // First Phone entry: no memory yet → exactly today's behaviour, the General
+        // 20 m phone segment default (the infamous 14.225).
+        e.set_operating_mode("phone", true);
+        assert!(
+            (e.settings().dial_mhz - 14.225).abs() < 1e-9,
+            "first entry unchanged: the segment default, got {}",
+            e.settings().dial_mhz
+        );
+        e.set_frequency(14.240, "20m", "USB"); // the live contact's frequency
+        e.set_operating_mode("cw", true); // the bumped mode switch (CW home 14.030)
+        assert!(
+            (e.settings().dial_mhz - 14.030).abs() < 1e-9,
+            "CW first entry is its own default, got {}",
+            e.settings().dial_mhz
+        );
+        e.set_operating_mode("phone", true); // switch straight back
+        assert!(
+            (e.settings().dial_mhz - 14.240).abs() < 1e-9,
+            "Phone returns to the operator's 14.240, NOT the 14.225 segment default — got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    #[test]
+    fn cw_remembers_its_own_dial_independently_of_phone() {
+        // The memory is per MODE, not one slot: a CW QSY must come back on the CW side
+        // without disturbing what Phone remembers.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", true); // first CW entry: the 20 m activity default
+        assert!((e.settings().dial_mhz - 14.030).abs() < 1e-9);
+        e.set_frequency(14.055, "20m", "USB"); // QSY within CW
+        e.set_operating_mode("phone", true); // leave (banks 14.055 into the CW cell)…
+        e.set_operating_mode("cw", true); // …and return
+        assert!(
+            (e.settings().dial_mhz - 14.055).abs() < 1e-9,
+            "CW returns to 14.055, not the 14.030 activity default — got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    #[test]
+    fn each_band_holds_its_own_cell_the_20m_40m_walk() {
+        // The operator-confirmed two-dimensional shape ("each band remembers its own
+        // phone frequency"), pinned verbatim: 20 m phone → CW → CW QSYs to 40 m → back
+        // to Phone. The mode switch happens ON 40 m, so the (40 m, phone) cell decides —
+        // empty this session, so the 40 m phone segment default. The 20 m phone
+        // frequency still waits in the (20 m, phone) cell for the return to 20 m.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.240, "20m", "USB"); // the 20 m phone residency
+        e.set_operating_mode("cw", true); // → CW (20 m activity 14.030)
+        e.pick_band("40m", Some("cw")); // CW QSYs to 40 m via the band dropdown
+        assert!(
+            (e.settings().dial_mhz - 7.030).abs() < 1e-9,
+            "empty (40m, CW) cell parks on the dropdown's default (7.030), got {}",
+            e.settings().dial_mhz
+        );
+        e.set_operating_mode("phone", true); // the mode switch happens ON 40 m
+        assert!(
+            (e.settings().dial_mhz - 7.1778).abs() < 1e-9,
+            "(40m, phone) is empty → the 40 m phone segment default (General 7.175 + \
+             the LSB passband lift), got {}",
+            e.settings().dial_mhz
+        );
+        e.pick_band("20m", Some("phone")); // back to 20 m in Phone
+        assert!(
+            (e.settings().dial_mhz - 14.240).abs() < 1e-9,
+            "the (20m, phone) cell was waiting: 14.240, got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    #[test]
+    fn an_app_channel_tune_is_machinery_not_the_operators_dial() {
+        use crate::settings::OperatingMode;
+        // DEFECT 6. The ISS SSTV auto-arm parks the rig on 145.800 FM from the UI. It is the
+        // APP's channel, so it goes through `tune_channel` and declares itself: the 145.800
+        // never enters the memory, and the operator dial it displaced banks on the way in.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(146.520, "2m", "FM"); // the operator's 2 m simplex dial
+        e.tune_channel(145.800, "2m", "FM"); // ISS AOS — the app takes the dial
+        e.set_operating_mode("cw", true); // a mode switch INSIDE the armed window
+        assert_eq!(
+            e.freq_memory.get(&("2m".to_string(), OperatingMode::Phone)),
+            Some(&(146.520, Some("FM".to_string()))),
+            "the displaced operator dial banks; 145.800 is the app's channel, not theirs"
+        );
+    }
+
+    #[test]
+    fn dial_memory_is_session_only_and_starts_empty() {
+        // Construction = restart. The memory must start empty so a fresh launch behaves
+        // exactly as before this feature (segment defaults everywhere). The Engine is
+        // never serialized — Settings is the persisted struct — so this holds by
+        // construction; pinned here so it stays that way.
+        let e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.freq_memory.is_empty(),
+            "a fresh engine holds no per-(band, mode) dials"
+        );
+        assert!(
+            e.dial_residency.is_none(),
+            "the persisted dial's provenance is unknown, so a restart opens NO residency"
+        );
+    }
+
+    #[test]
+    fn a_restart_parked_on_a_machinery_dial_banks_nothing() {
+        use crate::settings::OperatingMode;
+        // THE RESTART DOOR. settings.json records the dial but never who wrote it, and the
+        // machinery verbs persist theirs on the way out (aprs_tune / repeater_tune /
+        // tune_channel all save dial+band+sideband). Quit parked on the ISS SSTV channel and
+        // the next launch must NOT adopt 145.800 as "your 2 m phone dial": unknown provenance
+        // opens no residency, so the first leave-event of the session has nothing to bank.
+        let mut e = Engine::with_settings(Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: "EN52".into(),
+            band: "2m".into(),
+            dial_mhz: 145.800,
+            sideband: "FM".into(),
+            operating_mode: OperatingMode::Phone,
+            license_class: crate::settings::LicenseClass::Extra,
+            ..Settings::default()
+        });
+        e.set_operating_mode("cw", true); // the first leave-event of the new session
+        assert!(
+            e.freq_memory.is_empty(),
+            "a persisted dial of unknown provenance must never be banked — got {:?}",
+            e.freq_memory
+        );
+        e.set_operating_mode("phone", true); // …and returning gets the ordinary default
+        assert!(
+            (e.settings().dial_mhz - 145.800).abs() > 1e-9,
+            "the ISS channel must not be restored as the operator's 2 m phone dial"
+        );
+    }
+
+    #[test]
+    fn the_first_entry_after_a_restart_is_the_segment_default() {
+        use crate::settings::OperatingMode;
+        // The session-only promise, pinned on the REAL construction path: launch with a
+        // persisted (20 m, Phone, 14.240) and the very first Phone entry of the session must
+        // behave exactly as it did before this feature — the 14.225 segment default, not the
+        // persisted dial laundered through a boot residency. (`Engine::new` cannot see this:
+        // Settings::default() boots Digital/14.074, so the cell it opens is never the one the
+        // test then enters.)
+        let mut e = Engine::with_settings(Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: "EN52".into(),
+            band: "20m".into(),
+            dial_mhz: 14.240,
+            sideband: "USB".into(),
+            operating_mode: OperatingMode::Phone,
+            license_class: crate::settings::LicenseClass::General,
+            ..Settings::default()
+        });
+        e.set_operating_mode("phone", true);
+        assert!(
+            (e.settings().dial_mhz - 14.225).abs() < 1e-9,
+            "a fresh launch starts empty: the first Phone entry is the 14.225 segment \
+             default, got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    #[test]
+    fn a_knob_move_inside_a_machinery_hold_is_not_the_operators_dial() {
+        use crate::settings::OperatingMode;
+        // The hand on the knob is the operator's, but the CONTEXT is machinery's: nudging the
+        // VFO while the APRS FM hold is in force is tuning around inside the APRS channel, not
+        // choosing a 2 m phone frequency. Banking it would overwrite the 146.520 the APRS tune
+        // had just correctly saved — undoing the in-band displacement fix one knob click later.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        // CAT open, the boot probe answered: the link has spent its provenance-unknown first
+        // word (`rig_dial_seen`), so the nudge below is tested as the knob move it is —
+        // otherwise this test would pass on the first-read rule and prove nothing about holds.
+        e.seed_rig_dial(14_074_000);
+        e.set_operating_mode("phone", true);
+        e.set_frequency(146.520, "2m", "FM"); // the operator's 2 m simplex dial
+        e.aprs_tune(144.390).unwrap(); // banks 146.520, takes the dial, arms the FM hold
+        e.observe_rig_freq(144_395_000); // a VFO nudge INSIDE the APRS context
+                                         // …and then a knob QSY right OFF the held band, with the flag still set (a knob QSY
+                                         // deliberately does not clear it — `fm_does_not_follow_the_operator_down_to_hf`).
+                                         // The hold is band-gated, so it says nothing about HF: this dial is the operator's.
+        e.observe_rig_freq(14_240_000);
+        e.set_operating_mode("cw", true); // leave, banking whatever survived
+        assert_eq!(
+            e.freq_memory.get(&("2m".to_string(), OperatingMode::Phone)),
+            Some(&(146.520, Some("FM".to_string()))),
+            "146.520 stands; the nudge inside the APRS hold is the machinery's frequency"
+        );
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Phone))
+                .map(|(d, _)| *d),
+            Some(14.240),
+            "…while a knob QSY off the held band is an ordinary operator dial"
+        );
+    }
+
+    #[test]
+    fn a_knob_nudge_inside_the_apps_own_channel_park_is_not_the_operators_dial() {
+        use crate::settings::OperatingMode;
+        // The APP's own channel park is a hold like APRS's, and hand-chasing the ISS
+        // downlink's ±3.5 kHz Doppler is routine on an SSTV pass. `aprs_tune` and
+        // `repeater_tune` each re-arm an FM flag after their tune; `tune_channel` arms none,
+        // so nothing marked the park and the nudge was banked as the operator's 2 m phone
+        // dial — overwriting the 146.520 the park had just correctly saved, and parking a
+        // later return to 2 m Phone on the ISS downlink.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.seed_rig_dial(14_074_000); // CAT open: the link's first word is spent (see above)
+        e.set_operating_mode("phone", true);
+        e.set_frequency(146.520, "2m", "FM"); // the operator's 2 m simplex dial
+        e.tune_channel(145.800, "2m", "FM"); // ISS AOS — the app parks its own channel
+        e.observe_rig_freq(145_803_500); // chasing the downlink's Doppler by hand
+        e.set_operating_mode("cw", true); // a mode switch inside the armed window
+        assert_eq!(
+            e.freq_memory.get(&("2m".to_string(), OperatingMode::Phone)),
+            Some(&(146.520, Some("FM".to_string()))),
+            "146.520 stands; a nudge inside the app's own channel park is the machinery's"
+        );
+    }
+
+    #[test]
+    fn a_knob_nudge_inside_a_held_linear_transponder_is_not_the_operators_dial() {
+        use crate::settings::OperatingMode;
+        // The same shape through the satellite door, and the leg the FM flag cannot cover: a
+        // LINEAR bird sets no `sat_fm`, and before AOS there is no range rate, so
+        // `sat_observe_operator_tune` declines and the knob falls through to the ordinary QSY
+        // path. Tuning across a held transponder's passband is working the bird — that dial is
+        // Doppler's and moves all pass; banking it as "your 2 m phone frequency" is the
+        // original garbage-restore class.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.seed_rig_dial(14_074_000); // CAT open: the link's first word is spent (see above)
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.240, "20m", "USB"); // the operator's HF dial
+        pick_bird(&mut e); // a V/U LINEAR bird: 145.960 down, no rate yet
+        e.observe_rig_freq(145_965_000); // hunting across the passband, pre-AOS
+        e.set_operating_mode("cw", true); // leave, banking whatever survived
+        assert!(
+            !e.freq_memory
+                .contains_key(&("2m".to_string(), OperatingMode::Phone)),
+            "a transponder-passband dial is never the operator's 2 m phone frequency — got {:?}",
+            e.freq_memory.get(&("2m".to_string(), OperatingMode::Phone))
+        );
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Phone)),
+            Some(&(14.240, Some("USB".to_string()))),
+            "…and the HF dial the pass displaced is still theirs"
+        );
+    }
+
+    #[test]
+    fn a_band_pick_records_the_cell_it_read() {
+        use crate::settings::OperatingMode;
+        // The cockpit's band dropdown passes its OWN mode, because `settings.operating_mode` is
+        // set asynchronously on section entry and can still name the section being LEFT — the
+        // entry race `mode` exists to dodge. The recall reads that mode, so the record must
+        // too: otherwise the pick banks a phone dial into the CW cell and poisons it.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", true); // the engine still says CW (20 m activity 14.030)…
+        e.pick_band("20m", Some("phone")); // …while the Phone cockpit's dropdown picks 20 m
+        assert!(
+            (e.settings().dial_mhz - 14.225).abs() < 1e-9,
+            "the pick resolves the PHONE default it was asked for, got {}",
+            e.settings().dial_mhz
+        );
+        e.set_operating_mode("rtty", true); // a leave-event banks the residency
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Phone)),
+            Some(&(14.225, Some("USB".to_string()))),
+            "…and banks it into the Phone cell it read"
+        );
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Cw))
+                .map(|(d, _)| *d),
+            Some(14.030),
+            "…leaving the CW cell holding the CW dial, not the phone one"
+        );
+    }
+
+    #[test]
+    fn re_picking_the_band_you_are_on_keeps_the_dial_you_are_on() {
+        // Picking the band you are ALREADY on from the dropdown. The pick is itself a
+        // leave-event for the cell it is about to restore — without banking first it restores
+        // a stale cell OVER the live dial and the operator loses the frequency they are
+        // working.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.230, "20m", "USB");
+        e.set_operating_mode("cw", true); // banks (20 m, Phone) = 14.230
+        e.set_operating_mode("phone", true); // back on 14.230
+        e.set_frequency(14.240, "20m", "USB"); // the operator moves up on a live contact
+        e.pick_band("20m", Some("phone")); // …and re-picks the band they are on
+        assert!(
+            (e.settings().dial_mhz - 14.240).abs() < 1e-9,
+            "the live 14.240 banks first and comes straight back; the stale 14.230 must not \
+             be restored over it, got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    #[test]
+    fn the_boot_seed_neither_banks_nor_drops_the_operators_residency() {
+        use crate::settings::OperatingMode;
+        // `seed_rig_dial` is a BELIEF update at CAT open — the rig telling us where it is,
+        // which is provenance-unknown for exactly the same reason the persisted dial is. It
+        // must not open a residency (that is the restart door again, through the CAT port),
+        // and it must not silently drop an outstanding one: what it says it does is what it
+        // does. The real caller runs once pre-loop, where there is no residency at all.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.240, "20m", "USB"); // the operator's live 20 m phone residency
+        e.seed_rig_dial(7_200_000); // the rig reports it is really on 40 m
+        assert!(
+            e.freq_memory.is_empty(),
+            "nothing is banked by a seed — got {:?}",
+            e.freq_memory
+        );
+        e.set_operating_mode("cw", true); // the next real leave-event
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Phone)),
+            Some(&(14.240, Some("USB".to_string()))),
+            "…and nothing is dropped: the 20 m residency survives the seed and banks into \
+             the cell it was used in"
+        );
+    }
+
+    #[test]
+    fn the_first_dial_the_cat_link_reports_is_not_an_operator_tune() {
+        use crate::settings::OperatingMode;
+        // THE LAST CAT-OPEN DOOR. Construction opens no residency for the persisted dial and
+        // `seed_rig_dial` opens none for the rig's, but the boot probe only reads when the rig
+        // answers immediately: a radio still powering up, a slow rigctld, or CAT connected
+        // mid-session on a Settings save all leave the FIRST thing the link ever says arriving
+        // through `observe_rig_freq`. That dial has exactly the same unknown provenance — the
+        // rig may simply still be parked where the app left it last night, on the national
+        // APRS channel, a repeater, or a bird — so it must not open an operator residency
+        // either. Launch parked on machinery, let CAT open and report it: nothing may be
+        // banked.
+        let mut e = Engine::with_settings(Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: "EN52".into(),
+            band: "20m".into(),
+            dial_mhz: 14.240,
+            sideband: "USB".into(),
+            operating_mode: OperatingMode::Phone,
+            license_class: crate::settings::LicenseClass::Extra,
+            ..Settings::default()
+        });
+        e.observe_rig_freq(144_390_000); // CAT opens: the rig is on the APRS channel
+        assert!(
+            e.dial_residency.is_none(),
+            "the first dial the link reports says where the rig IS, never who put it there \
+             — got {:?}",
+            e.dial_residency
+        );
+        e.set_operating_mode("cw", true); // the first leave-event of the session
+        assert!(
+            e.freq_memory.is_empty(),
+            "the CAT-open read must bank nothing — got {:?}",
+            e.freq_memory
+        );
+        // …and once the link has told us where the rig is, the knob is the operator's again.
+        e.set_operating_mode("phone", true);
+        e.observe_rig_freq(146_520_000);
+        e.set_operating_mode("cw", true);
+        assert_eq!(
+            e.freq_memory
+                .get(&("2m".to_string(), OperatingMode::Phone))
+                .map(|(d, _)| *d),
+            Some(146.520),
+            "the next knob move IS theirs — only the link's first word is provenance-unknown"
+        );
+    }
+
+    #[test]
+    fn a_knob_qsy_records_no_sideband_from_the_band_it_left() {
+        // The knob tells the app a FREQUENCY and nothing else: `observe_rig_freq`
+        // deliberately never touches `settings.sideband` (the rig-mode policy owns what is
+        // commanded), so when a cross-band knob QSY opens its residency that field still
+        // names the sideband of the band being LEFT. Banking it would remember 2 m FM as the
+        // sideband of a 20 m phone dial — and on the digital side `Settings::rig_mode` reads
+        // `sideband` directly, so a restored LSB would command PKTLSB where PKTUSB belongs.
+        // The residency records NO sideband and the restore falls back to the band/mode
+        // default.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.seed_rig_dial(14_074_000); // CAT opens: the link has said where the rig is…
+        e.set_operating_mode("phone", true);
+        e.set_frequency(146.520, "2m", "FM"); // 2 m FM simplex — settings.sideband = "FM"
+        e.observe_rig_freq(14_240_000); // …so this really is the knob, down to 20 m phone
+        e.set_operating_mode("cw", true); // leave, banking the 20 m phone dial
+        e.set_operating_mode("phone", true); // …and come back to restore it
+        assert!(
+            (e.settings().dial_mhz - 14.240).abs() < 1e-9,
+            "the knob's 14.240 is restored, got {}",
+            e.settings().dial_mhz
+        );
+        assert_eq!(
+            e.settings().sideband,
+            "USB",
+            "the restore takes the 20 m phone default sideband, never the FM the knob left \
+             behind on 2 m"
+        );
+    }
+
+    #[test]
+    fn machinery_held_dials_are_never_banked() {
+        use crate::settings::OperatingMode;
+        // A dial the APRS tune holds, or a satellite pass owns (Doppler-steered), is the
+        // machinery's frequency — not "the operator's dial in this mode". Leaving while
+        // held must record nothing, or a later return would restore garbage.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.240, "20m", "USB");
+        // APRS: the tune itself banks the 20 m phone dial (a genuine leave-event), then
+        // holds 144.390 — leaving APRS must NOT bank 144.390 as a 2 m operator dial.
+        e.aprs_tune(144.390).unwrap();
+        e.set_operating_mode("cw", true); // leave while the APRS FM hold is in force
+        assert!(
+            !e.freq_memory
+                .contains_key(&("2m".to_string(), OperatingMode::Phone)),
+            "the APRS 144.390 hold is not the operator's 2 m phone frequency"
+        );
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Phone)),
+            Some(&(14.240, Some("USB".to_string()))),
+            "…while the real 20 m phone dial was banked on the way out"
+        );
+        // Satellite: the operator has a 2 m CW dial of their own, a pass takes the radio,
+        // and Doppler writes the dial directly (steer_sat_dial bypasses the QSY path by
+        // design). Leaving mid-pass must bank THEIR dial and never the bird's.
+        e.set_frequency(144.100, "2m", "USB");
+        pick_bird(&mut e);
+        e.steer_sat_dial(145.962566);
+        e.set_operating_mode("phone", true); // leave while the pass still owns the dial
+        assert_eq!(
+            e.freq_memory.get(&("2m".to_string(), OperatingMode::Cw)),
+            Some(&(144.100, Some("USB".to_string()))),
+            "the operator's own 2 m CW dial banked at the pick"
+        );
+        assert!(
+            !e.freq_memory
+                .values()
+                .any(|(d, _)| (*d - 145.960).abs() < 0.01),
+            "no Doppler-steered dial ever reached the memory — got {:?}",
+            e.freq_memory
+        );
+    }
+
+    #[test]
+    fn restore_re_runs_the_privilege_gate() {
+        // The remembered dial was legal when banked, but the license class can change
+        // mid-session (Settings edit). The restore runs the SAME emission-passband model
+        // as the live TX gate — a no-longer-privileged cell falls back to the segment
+        // default, never bypasses the gate.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true); // Extra 20 m phone home 14.150
+        e.set_frequency(14.160, "20m", "USB"); // legal for Extra, below the General segment
+        e.set_operating_mode("cw", true); // banks (20m, phone) = 14.160
+        e.set_license_class("general"); // downgraded mid-session
+        e.set_operating_mode("phone", true);
+        assert!(
+            (e.settings().dial_mhz - 14.225).abs() < 1e-9,
+            "General may not phone at 14.160 — fall back to the 14.225 segment default, got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    #[test]
+    fn working_a_cross_band_spot_banks_the_old_mode_not_the_new() {
+        use crate::settings::OperatingMode;
+        // work_spot sets the MODE first, then the frequency. The band-change bank inside
+        // set_frequency must not attribute the old (digital) dial to the NEW (phone)
+        // mode — one bank per residency: set_operating_mode already banked it into the
+        // cell it was actually used in.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_frequency(14.074, "20m", "USB"); // digital residency (the default mode)
+        e.work_spot("phone", 7.200, "40m"); // a 40 m phone spot
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Digital)),
+            Some(&(14.074, Some("USB".to_string()))),
+            "the 20 m dial banks into the DIGITAL cell it was used in"
+        );
+        assert!(
+            !e.freq_memory
+                .contains_key(&("20m".to_string(), OperatingMode::Phone)),
+            "…never into the Phone cell the composite verb had just switched to"
+        );
+    }
+
+    /// A V/U bird: 2 m down, 70 cm up — so a transponder pick is a CROSS-BAND
+    /// move off HF, exactly the shape the dial-memory defects showed up in.
+    const VU_BIRD: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 435_640_000,
+        downlink_centre_hz: 145_960_000,
+        invert: true,
+        half_width_hz: 30_000,
+    };
+
+    /// The satellite command's ORDER, verbatim (src-tauri/src/lib.rs `set_sat_transponder`):
+    /// the hold is set FIRST, then the nominal tune runs. Reproduced in the tests because
+    /// that order is exactly what a bank-time hold-flag read gets wrong.
+    fn pick_bird(e: &mut Engine) {
+        confirm_map_for_all(e, crate::settings::SatVfoMap::MainDownSubUp);
+        e.set_sat_transponder(Some(("AO-7|linear V/U".to_string(), 0, VU_BIRD)));
+        e.sat_tune_nominal(false, 1_000_000);
+    }
+
+    #[test]
+    fn a_released_pass_leaves_no_doppler_dial_to_bank() {
+        use crate::settings::OperatingMode;
+        // DEFECT 1. Doppler steers the dial for the whole pass; when the pass ends the hold
+        // is handed back with the radio still parked on the bird. The exclusion must not be
+        // merely DEFERRED past the release: the next leave-event, whenever it comes, must
+        // not record the Doppler-steered downlink as "the operator's 2 m phone frequency"
+        // (a later return to 2 m phone would restore a stale machinery dial).
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.240, "20m", "USB");
+        pick_bird(&mut e); // cross-band to the 2 m downlink
+        e.steer_sat_dial(145.962566); // a Doppler correction mid-pass
+        e.set_sat_transponder(None); // LOS: the hold is handed back
+        e.set_operating_mode("cw", true); // the first leave-event AFTER the release
+        assert!(
+            !e.freq_memory
+                .contains_key(&("2m".to_string(), OperatingMode::Phone)),
+            "a released pass leaves a machinery dial, never an operator residency — got {:?}",
+            e.freq_memory.get(&("2m".to_string(), OperatingMode::Phone))
+        );
+    }
+
+    #[test]
+    fn a_transponder_pick_banks_the_dial_it_is_leaving() {
+        use crate::settings::OperatingMode;
+        // DEFECT 2. Working a bird from 20 m phone must not cost the operator their HF
+        // residency: the dial being LEFT is theirs, whatever the destination regime is.
+        // (The satellite command sets the hold BEFORE the tune, so reading the hold flag
+        // at bank time called 14.240 "machinery" and dropped it — the original field bug
+        // resurfacing through the satellite flow.)
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.240, "20m", "USB");
+        pick_bird(&mut e);
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Phone)),
+            Some(&(14.240, Some("USB".to_string()))),
+            "the departing 20 m phone dial is the OPERATOR's and banks on the way to the bird"
+        );
+    }
+
+    #[test]
+    fn an_in_band_aprs_tune_banks_the_phone_dial_it_displaces() {
+        use crate::settings::OperatingMode;
+        // DEFECT 3. 146.520 → 144.390 is ONE band, so no band-change leave-event fires;
+        // machinery TAKING the dial is the leave-event, and without it the operator's 2 m
+        // simplex calling frequency vanished (a later return fell back to the segment default).
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(146.520, "2m", "FM"); // the 2 m phone residency
+        e.aprs_tune(144.390).unwrap(); // same band — no band-change event
+        e.set_operating_mode("cw", true);
+        assert_eq!(
+            e.freq_memory.get(&("2m".to_string(), OperatingMode::Phone)),
+            Some(&(146.520, Some("FM".to_string()))),
+            "the APRS tune displaced 146.520, so 146.520 banks as the operator dial it was"
+        );
+    }
+
+    #[test]
+    fn switching_radios_banks_the_departing_dial() {
+        use crate::settings::OperatingMode;
+        // DEFECT 5. A radio handoff is a leave-event on the RADIO axis: the outgoing rig's
+        // live tune is persisted into its profile, and the (band, mode) residency it was
+        // running must be banked with it. The memory is STATION-WIDE (one map, not one per
+        // rig) — see `freq_memory` — so the cell survives the swap and a restore re-routes.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        let second = e.add_radio(); // add_radio makes the new rig active…
+        e.set_active_radio(0); // …so come back to the first radio (id 0) to start
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.240, "20m", "USB");
+        e.set_active_radio(second);
+        assert_eq!(
+            e.freq_memory
+                .get(&("20m".to_string(), OperatingMode::Phone)),
+            Some(&(14.240, Some("USB".to_string()))),
+            "the departing radio's 20 m phone residency banks at the handoff"
         );
     }
 

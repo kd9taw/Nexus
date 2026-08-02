@@ -930,6 +930,29 @@ export async function setFrequency(
   return invoke<AppSnapshot>('set_frequency', { dialMhz, band, mode })
 }
 
+/** Park the dial on one of the APP's OWN fixed channels (the ISS SSTV auto-arm's 145.800 FM).
+ * Identical to setFrequency on the radio; it differs only in what the per-(band, mode) dial
+ * memory makes of it — an app-driven auto-tune is not the operator's dial in that mode, so it
+ * is never remembered, and the dial it displaces is banked. Restoring the operator's OWN saved
+ * dial afterwards uses setFrequency, because that one IS theirs. */
+export async function tuneChannel(
+  dialMhz: number,
+  band: string,
+  mode: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('tune_channel', { dialMhz, band, mode })
+}
+
+/** Band pick by NAME — the CW/Phone cockpit band dropdowns. The engine lands on the last
+ * dial you used on that band in that mode THIS SESSION, else the same licensed default the
+ * dropdown always used. Every explicit-frequency path keeps calling setFrequency: a typed
+ * MHz, a spot's frequency or a band-plan channel stays authoritative, with no memory
+ * overlay. `mode` = the cockpit's mode (race-safe on entry, like getLicensedBandPlan);
+ * omit for the engine's current operating mode. */
+export async function pickBand(band: string, mode?: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('pick_band', { band, mode: mode ?? null })
+}
+
 /** Set the per-section operating mode (the rig-mode policy): "digital" obeys the rig,
  * "phone" forces USB/LSB by band, "cw" forces CW. `followFreq` = true when the operator
  * clicks an actual operating-section tab — then the rig QSYs to that mode's home frequency

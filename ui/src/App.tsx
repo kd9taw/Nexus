@@ -20,6 +20,7 @@ import {
   setChatCq as apiSetChatCq,
   resumeChatCq as apiResumeChatCq,
   setFrequency as apiSetFrequency,
+  tuneChannel as apiTuneChannel,
   aprsTune,
   setMode as apiSetMode,
   setTier as apiSetTier,
@@ -523,7 +524,15 @@ export default function App() {
           // the decoder, at LOS restore the dial. Only fetch the pass when the
           // opt-in is ON (no IPC otherwise); when OFF we still tick so an arm in
           // flight unwinds — the disabled path ignores the pass.
-          const issDeps = { setFrequency: handleSetFrequency, sstvArm, sstvAutoDisarm }
+          // `tuneChannel` for the 145.800 ARM (the app's own channel — never remembered as
+          // the operator's 2 m dial); `setFrequency` for the LOS restore, which puts back a
+          // dial that really is theirs.
+          const issDeps = {
+            tuneChannel: handleTuneChannel,
+            setFrequency: handleSetFrequency,
+            sstvArm,
+            sstvAutoDisarm,
+          }
           if (settingsRef.current?.issSstvAutoArm === true) {
             getIssPass()
               .then((issPass) =>
@@ -1138,6 +1147,18 @@ export default function App() {
     },
     [],
   )
+
+  // The app parking the dial on one of its OWN channels (the ISS SSTV auto-arm's 145.800 FM).
+  // A dedicated verb, not handleSetFrequency: the backend records who authored a dial write,
+  // and an app-driven auto-tune must not be remembered as the operator's dial on that band.
+  const handleTuneChannel = useCallback((dialMhz: number, band: string, mode: string) => {
+    void withErrorToast(
+      () => apiTuneChannel(dialMhz, band, mode),
+      'Could not set frequency',
+    ).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
 
   // APRS Tune: QSY to the APRS frequency on 2 m FM simplex, auto-routing to the 2 m-capable radio.
   // A dedicated verb (not handleSetFrequency) because APRS isn't an operating section, so the rig
