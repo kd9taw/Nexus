@@ -173,6 +173,26 @@ channels coordinate so you never get two popups for the same rise.
 The popup never steals keyboard focus and never blocks the screen. The tones are on by
 default — that was the ask — with a "Pass alert sounds" switch beside the satellite
 Doppler settings for operating from a quiet shack; the popups stay either way.
+### Changed: the pass strip says what it ranks — "Next" and "Best 24 h", over every bird
+
+The strip above the Satellites schedule was labelled "Next up" but ranked by pass quality,
+so a spectacular pass hours away could sit above a workable one rising in ten minutes —
+entries "further away than what's in the schedule", as the field report put it. It also
+read only your ★ favorites, so a good pass on an unstarred bird could never surface there.
+
+The strip is now two labelled pairs, drawn from every workable bird over your grid: "Next"
+is the two soonest passes in clock order — a pass already in progress leads, marked
+"already up" when it rose before the scan window — and "Best 24 h" is the two
+highest-quality passes in the next 24 hours, by the same elevation-first rank the old
+strip used. A pass that earns both spots shows once, under Next, and Best fills in with
+the next one down. ★ marks your favorites, the mode pill ([FM voice], [Linear SSB/CW], …)
+rides every classified row, and ▶ Work runs the same chain for any bird, starred or not.
+Needed-grid chips stay on ★ rows — they come from the favorites schedule, which is the
+only place that computes them.
+
+The strip admits exactly the birds the "Other birds overhead" band admits — one rule, so
+a bird that band refuses (reported dead or re-entered, placeholder rideshare names) never
+appears in the strip either. The schedule below and the band are unchanged.
 
 ### Fixed: the caller card's distance and bearing now agree with QRZ
 

@@ -245,6 +245,24 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
     expect(winner('.sats-best', 'grid-row')).toBe('2')
     expect(winner('.sats-sched', 'grid-row')).toBe('3')
   })
+  it('the Next/Best strip stays fit-content — no floors, the side tags never grow', () => {
+    // The strip sits in the auto row above the schedule grower with a budget
+    // of four content rows (the 2026-08 two-pairs ruling: within one
+    // row-height of the old three-row strip). A height floor here, or a group
+    // tag that grows, is how the strip would squeeze the grower — the
+    // overhaul's own bug class.
+    for (const sel of ['.sats-best', '.sats-best-group', '.sats-best-rows', '.sats-best-row']) {
+      expect(winner(sel, 'height'), `${sel} must not fix a height`).toBeNull()
+      expect(winner(sel, 'min-height'), `${sel} must not floor its height`).toBeNull()
+    }
+    expect(winner('h2.sats-best-tag', 'flex'), 'the group tag is a fixed side label').toBe(
+      '0 0 3.5em',
+    )
+    expect(
+      winner('.sats-best-rows', 'min-width'),
+      'the rows column must be shrinkable (long why-lines under a narrow schedule column)',
+    ).toBe('0')
+  })
   it('the sticky detail heading (the ✕ home) has an opaque background', () => {
     expect(winner('.sats-detail h2', 'position')).toBe('sticky')
     const bg = winner('.sats-detail h2', 'background')

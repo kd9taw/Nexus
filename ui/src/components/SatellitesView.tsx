@@ -61,6 +61,7 @@ import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAla
 import {
   DISCOVERY_ROW_CAP,
   modePillWord,
+  passAdmission,
   primaryClass,
   rollPassesToBirds,
 } from '../features/satDiscovery'
@@ -113,7 +114,10 @@ function passScore(p: SatPass): number {
 const qualityWord = (el: number) =>
   el >= 60 ? 'overhead pass' : el >= 30 ? 'high pass' : el >= 15 ? 'workable pass' : 'low horizon pass'
 
-/** Plain-language "why" line for the best-passes strip. */
+/** Plain-language "why" line for the Next/Best strip. aosClamped passes get
+ * the backscan honesty (report what was DONE): "already up", never the scan
+ * window's edge dressed as a rise time — and the duration is then the lower
+ * bound it is, marked +. */
 function whyLine(p: SatPass, nowSecs: number): string {
   const el = Math.round(p.maxElDeg)
   const dur = Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))
@@ -124,7 +128,8 @@ function whyLine(p: SatPass, nowSecs: number): string {
       : p.status === 'dead' || p.status === 're-entered'
         ? ` · reported ${p.status.toUpperCase()} (SatNOGS)`
         : ''
-  return `${hhmm(p.aosUnix)} ${countdown(p, nowSecs)} — ${el}° ${quality}, ${dur} min, ${wind8(p.aosAzDeg)}→${wind8(p.losAzDeg)}${status}`
+  const when = p.aosClamped ? 'already up' : `${hhmm(p.aosUnix)} ${countdown(p, nowSecs)}`
+  return `${when} — ${el}° ${quality}, ${dur}${p.aosClamped ? '+' : ''} min, ${wind8(p.aosAzDeg)}→${wind8(p.losAzDeg)}${status}`
 }
 
 /** What a pass would EARN, in the app's one need-chip vocabulary (NEED_CHIP +
@@ -1909,16 +1914,54 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
       </button>
     </th>
   )
-  // "Your best passes": next 24 h, ranked by quality, top 3.
-  const best = useMemo(
-    () =>
-      upcoming
-        .filter((p) => p.aosUnix < nowSecs + 24 * 3600)
-        .slice()
-        .sort((a, b) => passScore(b) - passScore(a))
-        .slice(0, 3),
-    [upcoming, nowSecs],
-  )
+  // THE NEXT/BEST STRIP (operator ruling, 2026-08 field report: "Next up"
+  // ranked by pass QUALITY while claiming to be next, and read the ★ set
+  // only, so a nearer workable pass on an unstarred bird could never
+  // surface). Two labelled pairs over ALL admitted birds — candidates come
+  // through the discovery band's OWN admission (passAdmission: ONE rule,
+  // never two — what the band refuses cannot surface here either), from the
+  // same `view.passes` snapshot, windowed to 24 h.
+  const strip = useMemo(() => {
+    type StripRow = { pass: SatPass; fav: boolean }
+    const empty = { next: [] as StripRow[], best: [] as StripRow[] }
+    if (view == null) return empty
+    const { admits } = passAdmission(view, nowSecs)
+    const horizon = nowSecs + 24 * 3600
+    const cands: StripRow[] = view.passes
+      .filter((p) => p.aosUnix < horizon && admits(p))
+      .map((p) => {
+        // ★ rows: the favourites schedule fetch knows more than the element
+        // snapshot — the live SatNOGS status and the stamped `earn` (matched
+        // by bird + AOS, detailEarn's ±180 s tolerance). Non-★ rows carry
+        // NEITHER: earn is stamped only by get_sat_pass_needs (the
+        // declined-cost ruling) and the snapshot's status reads 'alive' for
+        // every admitted bird (the discovery band's no-status-chip refusal,
+        // same reason) — so no claim, never a guessed one.
+        const fav = isSatChased(p.name, p.norad, chaseKeys)
+        const live = fav
+          ? schedule.find((s) => s.name === p.name && Math.abs(s.aosUnix - p.aosUnix) <= 180)
+          : undefined
+        return { pass: { ...p, status: live?.status ?? null, earn: live?.earn ?? null }, fav }
+      })
+    // "Next": the 2 soonest workable passes, clock order. An in-progress
+    // pass's AOS is already behind the clock (clamped or not), so plain
+    // ascending AOS leads with it — the pass overhead right now is the most
+    // actionable thing on the board.
+    const next = cands
+      .slice()
+      .sort((a, b) => a.pass.aosUnix - b.pass.aosUnix)
+      .slice(0, 2)
+    // "Best 24 h": the existing passScore rank, computed on the DECORATED
+    // pass (a favourite the live overlay calls dead sinks instead of being
+    // crowned). A pass already shown in Next renders once — Best backfills
+    // with the next-ranked, never a duplicate.
+    const shown = new Set(next.map((c) => `${c.pass.name}|${c.pass.aosUnix}`))
+    const best = cands
+      .sort((a, b) => passScore(b.pass) - passScore(a.pass))
+      .filter((c) => !shown.has(`${c.pass.name}|${c.pass.aosUnix}`))
+      .slice(0, 2)
+    return { next, best }
+  }, [view, nowSecs, chaseKeys, schedule])
 
   // The Birds list rows. Two sources, because existence used to be
   // elements-only: a bird nothing carries current elements for has no `birds`
@@ -2588,34 +2631,76 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         </div>
       ) : (
         <>
-          {/* "NEXT UP" — the primary action surface (litigation ①): a pass is
-              WORKED from here, not merely opened. The mini arc is Look4Sat's
-              pick-by-shape idea; the why-line keeps the plain-language case;
-              the earn chips say what the pass is worth (Phase 2); and ▶ runs
-              the whole chain in one consented click. STAYS ★-ONLY (upheld
-              deliberately): mixing a non-favourite into the primary action
-              surface is the "second list to mentally merge" in reverse. */}
-          {upcoming.length > 0 && (
+          {/* THE NEXT/BEST STRIP — still the primary action surface
+              (litigation ①: a pass is WORKED from here, not merely opened),
+              re-ruled 2026-08 after the field report: the old "Next up" was a
+              quality rank wearing a clock label, and read favorites-only.
+              Two labelled pairs over ALL admitted birds now — "Next" = the 2
+              soonest workable passes in clock order (in-progress first, with
+              the backscan's already-up honesty), "Best 24 h" = the 2 highest
+              passScore passes, deduped against Next. ★ marks a favourite, the
+              mode pill rides every classified row, and ▶ Work + the open
+              click run the same chain for any bird — an unstarred linear
+              bird can finally surface. Side tags spend width, not height:
+              four content rows, within one row-height of the old three. */}
+          {strip.next.length > 0 && (
           <section className="sats-best">
-            <h2>Next up (24 h)</h2>
-            {best.map((p) => (
-              <div
-                key={`${p.name}-${p.aosUnix}`}
-                className={`sats-best-row${p.aosUnix <= nowSecs ? ' live' : ''}`}
-              >
-                <PassArcMini pass={p} />
-                <button
-                  className="sats-best-open"
-                  onClick={() => setSelected(p.name)}
-                  title="Open this bird's detail"
-                >
-                  <b>{p.name}</b> {whyLine(p, nowSecs)} <EarnChips earn={p.earn} />
-                </button>
-                <button className="sat-work" onClick={() => workPass(p)} title={workTitle}>
-                  ▶ Work this pass
-                </button>
-              </div>
-            ))}
+            {(
+              [
+                [
+                  'Next',
+                  'The two soonest workable passes (10° peak or better), any bird — a pass already in progress leads',
+                  strip.next,
+                ],
+                [
+                  'Best 24 h',
+                  'The two highest-quality passes in the next 24 h — max elevation first, duration breaking ties',
+                  strip.best,
+                ],
+              ] as const
+            )
+              .filter(([, , rows]) => rows.length > 0)
+              .map(([label, why, rows]) => (
+                <div key={label} className="sats-best-group">
+                  <h2 className="sats-best-tag" title={why}>
+                    {label}
+                  </h2>
+                  <div className="sats-best-rows">
+                    {rows.map(({ pass: p, fav }) => {
+                      const pill = pillFor(p.name, p.norad)
+                      return (
+                        <div
+                          key={`${p.name}-${p.aosUnix}`}
+                          className={`sats-best-row${p.aosUnix <= nowSecs ? ' live' : ''}`}
+                        >
+                          <PassArcMini pass={p} />
+                          <button
+                            className="sats-best-open"
+                            onClick={() => setSelected(p.name)}
+                            title="Open this bird's detail"
+                          >
+                            {fav && (
+                              <span className="sat-fav-mark" title="One of your ★ birds">
+                                ★
+                              </span>
+                            )}
+                            <b>{p.name}</b>
+                            {pill && <span className="sat-mode-pill">{pill}</span>}{' '}
+                            {whyLine(p, nowSecs)} <EarnChips earn={p.earn} />
+                          </button>
+                          <button
+                            className="sat-work"
+                            onClick={() => workPass(p)}
+                            title={workTitle}
+                          >
+                            ▶ Work this pass
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
           </section>
           )}
 

@@ -26,6 +26,9 @@ import type { SatDetail, SatPass, SatPassEarn, SatTrackStatus, SatView } from '.
 
 const api = vi.hoisted(() => ({
   getSatellites: vi.fn((): Promise<SatView | null> => Promise.resolve(null)),
+  // (implementation set in beforeEach — the Next/Best strip reads the element
+  // snapshot's all-bird passes since the 2026-08 ruling, so a null view means
+  // no strip at all.)
   getSatSchedule: vi.fn((): Promise<SatPass[]> => Promise.resolve([])),
   getSatPassNeeds: vi.fn((): Promise<SatPass[]> => Promise.resolve([])),
   getSatDetail: vi.fn(),
@@ -179,10 +182,32 @@ const settings = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
+/** The element snapshot the Next/Best strip reads (2026-08 ruling: all-bird
+ * from `view.passes` — earn never rides this wire; the strip matches it from
+ * the schedule fetch for ★ rows). */
+const theView = (): SatView => ({
+  tleAgeDays: 1,
+  usableCount: 300,
+  agingCount: 0,
+  heldBackCount: 0,
+  tleFetchedAt: NOW,
+  tleSource: 'mirror',
+  birds: [
+    { name: 'RS-44', norad: 44909, lat: 0, lon: 0, altKm: 500, footprintKm: 2000, track: [], status: 'alive', amateur: true },
+    { name: 'AO-91', norad: 43017, lat: 0, lon: 0, altKm: 500, footprintKm: 2000, track: [], status: 'alive', amateur: true },
+  ],
+  passes: [
+    { ...aoPass(), earn: undefined },
+    { ...rsPass(), earn: undefined },
+  ],
+  excluded: [],
+})
+
 beforeEach(() => {
   localStorage.clear()
   localStorage.setItem('nexus.sats.chasing', JSON.stringify(['RS-44', 'AO-91']))
-  api.getSatellites.mockClear()
+  api.getSatellites.mockReset()
+  api.getSatellites.mockImplementation(() => Promise.resolve(theView()))
   api.getSatSchedule.mockReset()
   api.getSatSchedule.mockImplementation(() => Promise.resolve([aoPass(), rsPass()]))
   api.getSatPassNeeds.mockReset()
