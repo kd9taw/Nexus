@@ -10,7 +10,7 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
 |---|---|
 | `cargo test --workspace` **excludes src-tauri** | src-tauri is not a workspace member. Also run: `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio` |
 | src-tauri needs `--features radio` | Without it, ~13 phantom `tempo_audio` unresolved-crate errors. They are not real. |
-| tempo-audio full tests | `cargo test -p tempo-audio --features device,serial` |
+| tempo-audio full tests | `cargo test -p tempo-audio --features device,serial` — and **clippy needs the same features**: CI lints `cargo clippy tempo-audio --features device,serial`; a plain `--workspace` clippy sweep misses feature-gated code (bit 2026-08-02) |
 | propagation live fetchers | `--features live` |
 | UI typecheck is `tsc -b` | Not `--noEmit` (project references). Build = `tsc -b && vite build`; tests = `npm test` (vitest) in `ui/` |
 | Toolchain pinned 1.93.1 | CI pins exact stable; match it locally for clippy parity |
