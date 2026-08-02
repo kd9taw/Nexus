@@ -236,6 +236,15 @@ typedef struct {
  *                   are saved into the a7 table and the cross-cycle replay runs
  *                   (recovered decodes report nap = 7). 0 = early partial pass:
  *                   slot bookkeeping only, no save/replay.
+ *   lft8apon      : nonzero = a-priori decoding ON (WSJT-X "Enable AP"): ft8b's
+ *                   AP passes 5-8 run and the a7 replay is allowed. 0 = AP off:
+ *                   regular passes only AND the a7 replay is skipped (both
+ *                   consumers of ft8b's lft8apon; a7 slot bookkeeping still
+ *                   runs so re-enabling AP next slot has a live table).
+ *   lapcqonly     : nonzero = restrict AP to the CQ hypothesis (ft8b lapcqonly:
+ *                   one AP pass, iaptype=1). WSJT-X derives this automatically
+ *                   (>300 s without TX); here the caller decides. Ignored when
+ *                   lft8apon = 0.
  *   out           : caller array of ft8_decode_t (capacity max_out)
  *   max_out       : capacity of out
  *
@@ -247,6 +256,7 @@ int ft8_decode_frame(const int16_t *iwave /*[FT8_NMAX]*/,
                      const char *mycall, const char *hiscall,
                      int nqso_progress, int nfqso,
                      int nutc, int la7final,
+                     int lft8apon, int lapcqonly,
                      ft8_decode_t *out, int max_out);
 
 /*
@@ -309,6 +319,11 @@ typedef struct {
  *   nqso_progress : QSO progress index (AP pass schedule)
  *   nfqso         : QSO/RX audio freq (Hz) being worked (WSJT-X nfqso); the deep
  *                   AP passes center on it. 0 / out of [nfa,nfb] = band mid
+ *   lapcqonly     : nonzero = restrict AP to the CQ hypothesis (the vendored
+ *                   ft4_decoder's lapcqonly: iaptype forced 1, one AP pass).
+ *                   NOTE: the vendored FT4 decoder has NO AP on/off flag — AP
+ *                   runs whenever ndepth > 1; CQ-only is FT4's only
+ *                   decoder-honest AP restriction.
  *   out           : caller array of ft4_decode_t (capacity max_out)
  *   max_out       : capacity of out
  *
@@ -319,6 +334,7 @@ int ft4_decode_frame(const int16_t *iwave /*[FT4_NMAX]*/,
                      int nfa, int nfb, int ndepth,
                      const char *mycall, const char *hiscall,
                      int nqso_progress, int nfqso,
+                     int lapcqonly,
                      ft4_decode_t *out, int max_out);
 
 /*===========================================================================

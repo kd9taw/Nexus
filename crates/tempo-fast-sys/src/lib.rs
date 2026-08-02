@@ -589,9 +589,11 @@ extern "C" {
         mycall: *const c_char,
         hiscall: *const c_char,
         nqso_progress: c_int,
-        nfqso: c_int,    // QSO/RX freq (Hz); deep AP + sync center; 0/oob ⇒ band mid
-        nutc: c_int,     // a7 slot key: slot UTC seconds-of-day (slot*15); see libtempo.h
-        la7final: c_int, // 1 = authoritative pass (a7 save + replay); 0 = early pass
+        nfqso: c_int,     // QSO/RX freq (Hz); deep AP + sync center; 0/oob ⇒ band mid
+        nutc: c_int,      // a7 slot key: slot UTC seconds-of-day (slot*15); see libtempo.h
+        la7final: c_int,  // 1 = authoritative pass (a7 save + replay); 0 = early pass
+        lft8apon: c_int,  // nonzero = AP on (WSJT-X "Enable AP"); 0 also skips the a7 replay
+        lapcqonly: c_int, // nonzero = AP restricted to the CQ hypothesis (iaptype 1)
         out: *mut Ft8DecodeT,
         max_out: c_int,
     ) -> c_int;
@@ -634,7 +636,8 @@ extern "C" {
         mycall: *const c_char,
         hiscall: *const c_char,
         nqso_progress: c_int,
-        nfqso: c_int, // QSO/RX freq (Hz); deep AP center; 0/oob ⇒ band mid
+        nfqso: c_int,     // QSO/RX freq (Hz); deep AP center; 0/oob ⇒ band mid
+        lapcqonly: c_int, // nonzero = AP restricted to CQ (no AP on/off exists for FT4)
         out: *mut Ft4DecodeT,
         max_out: c_int,
     ) -> c_int;

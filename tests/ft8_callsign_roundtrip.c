@@ -128,7 +128,8 @@ int main(void) {
 
         ft8_a7_reset();
         int ndec = ft8_decode_frame(iwave, 200, 2900, 3, "", "", 0, 0,
-                                    /*nutc*/0, /*la7final*/1, out, MAXOUT);
+                                    /*nutc*/0, /*la7final*/1,
+                                    /*lft8apon*/1, /*lapcqonly*/0, out, MAXOUT);
         if (ndec < 0) {
             printf("  FAIL '%s' — decoder error %d\n", msgs[m], ndec);
             failed++;

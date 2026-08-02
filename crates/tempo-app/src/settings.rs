@@ -1243,6 +1243,33 @@ pub struct Settings {
     /// `rename` matches the UI's `decodeFHighHz` key — see `decode_flow_hz` above.
     #[serde(default = "default_decode_fhigh", rename = "decodeFHighHz")]
     pub decode_fhigh_hz: u32,
+    /// WSJT-X "Enable AP" (Decode menu): a-priori decoding. ON is stock and the
+    /// default; off = the decoder tries no hypothesis-assisted passes (and no a7
+    /// cross-cycle replay). FT8 only — the vendored FT4 decoder has no AP
+    /// on/off flag (its AP is part of Normal/Deep depth), which the UI states.
+    /// Key emits as `apDecode` (plain camelCase, no rename trap).
+    #[serde(default = "default_on")]
+    pub ap_decode: bool,
+    /// Restrict AP to the CQ hypothesis only (the decoders' `lapcqonly`;
+    /// FT8 + FT4). WSJT-X flips this automatically after >5 idle minutes as a
+    /// stale-context guard; Nexus exposes it as an explicit expert choice. OFF
+    /// (all AP hypotheses) is stock and the default. Emits as `apCqOnly`.
+    #[serde(default)]
+    pub ap_cq_only: bool,
+    /// Single decode: narrow the FT8/FT4 search band to the operator's RX
+    /// offset ± 25 Hz — the same "decode this one station" window WSJT-X uses
+    /// for its double-click redecode (decoder.f90 nagainfil). Applied host-side
+    /// in `build_decode_job` (never touches the modem), and ONLY at the FT8/FT4
+    /// tiers: 50 Hz is narrower than one signal in the other native tiers
+    /// (JT65 ~178 Hz, Q65's wider submodes, MSK144's whole passband), where it
+    /// would decode nothing rather than isolate anything. Applies only while
+    /// the RX offset sits inside the decode passband, else the full passband is
+    /// searched. OFF (full passband) is stock and the default. NOTE: stock
+    /// WSJT-X's own "Single decode" checkbox is inert for FT8/FT4 (verified in
+    /// 3.0.2 — decoder.f90 only reads the bit for JT65/Q65/FST4), so this is a
+    /// deliberate Nexus improvement, not parity. Emits as `singleDecode`.
+    #[serde(default)]
+    pub single_decode: bool,
     /// WSJT-X "Special operating activity": Hound = work a DXpedition Fox
     /// (calls ≥ 1000 Hz, auto-move to the Fox's frequency for the R+report,
     /// Fox multi-payload messages split at ingest). Fox role: not yet.
@@ -2400,6 +2427,9 @@ impl Default for Settings {
             decode_depth: 3,
             decode_flow_hz: 200,
             decode_fhigh_hz: 2900,
+            ap_decode: true,      // stock WSJT-X: Enable AP on
+            ap_cq_only: false,    // stock: all AP hypotheses
+            single_decode: false, // stock: full-passband decode
             working_frequencies: Vec::new(),
             qsy_enabled: false,
             qsy_set: vec!["20m".to_string(), "40m".to_string(), "30m".to_string()],
@@ -4214,6 +4244,30 @@ mod tests {
         let old: Settings = serde_json::from_str(partial).unwrap();
         assert!(!old.monitor_enabled);
         assert_eq!(old.monitor_level, 0.5);
+    }
+
+    /// The decode-config settings ride the UI round-trip on exactly the keys
+    /// the frontend writes (the `decodeFLowHz` rename trap is why wire keys are
+    /// asserted literally), and an old settings file without them loads with
+    /// stock WSJT-X behaviour — absent = current behaviour, the decode-parity
+    /// contract for this surface.
+    #[test]
+    fn decode_config_defaults_and_roundtrip() {
+        let s = Settings::default();
+        assert!(s.ap_decode, "stock: Enable AP on");
+        assert!(!s.ap_cq_only, "stock: all AP hypotheses");
+        assert!(!s.single_decode, "stock: full-passband decode");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"apDecode\":true"));
+        assert!(json.contains("\"apCqOnly\":false"));
+        assert!(json.contains("\"singleDecode\":false"));
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+        // A pre-decode-config settings file: stock behaviour, not zeroed bools.
+        let partial = r#"{"mycall":"W9XYZ"}"#;
+        let old: Settings = serde_json::from_str(partial).unwrap();
+        assert!(old.ap_decode, "absent apDecode must default ON (stock)");
+        assert!(!old.ap_cq_only);
+        assert!(!old.single_decode);
     }
 
     #[test]

@@ -98,6 +98,8 @@ fn decode_file(path: &str) -> Result<usize, String> {
             nqso_progress: 0,
             nfqso: 0,
             frame_time_ms: (slot as i64) * 7_500, // FT4 slot key
+            ap: true,                             // stock (FT4 consumes only ap_cq_only)
+            ap_cq_only: false,                    // stock: all AP hypotheses
         };
         let mut decs = src.decode(&req);
         decs.sort_by(|a, b| {

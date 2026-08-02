@@ -431,7 +431,10 @@ pub trait Mode: Send + Sync {
     /// (Hz) being worked — WSJT-X's nfqso, which centers the deep AP passes and
     /// sync (FT8/FT4); pass 0 / out-of-band for band-center. `frame_time_ms` is a
     /// monotonic timestamp for this frame, used by modes with cross-frame IR-HARQ
-    /// (FT1); modes without these ignore the respective argument.
+    /// (FT1). `ap` is WSJT-X "Enable AP" (FT8 only — the vendored FT4 decoder
+    /// has no such flag) and `ap_cq_only` restricts AP to the CQ hypothesis
+    /// (FT8 + FT4); `(true, false)` is stock. Modes without these ignore the
+    /// respective argument.
     #[allow(clippy::too_many_arguments)] // mirrors the modem decode ABI
     fn decode_frame(
         &self,
@@ -444,6 +447,8 @@ pub trait Mode: Send + Sync {
         nqso_progress: i32,
         nfqso: i32,
         frame_time_ms: i64,
+        ap: bool,
+        ap_cq_only: bool,
     ) -> Vec<Decode>;
 
     /// [`decode_frame`](Mode::decode_frame) plus the cross-cycle a-priori flag.
@@ -467,6 +472,8 @@ pub trait Mode: Send + Sync {
         nfqso: i32,
         frame_time_ms: i64,
         _a7_final: bool,
+        ap: bool,
+        ap_cq_only: bool,
     ) -> Vec<Decode> {
         self.decode_frame(
             iwave,
@@ -478,6 +485,8 @@ pub trait Mode: Send + Sync {
             nqso_progress,
             nfqso,
             frame_time_ms,
+            ap,
+            ap_cq_only,
         )
     }
 }
@@ -567,6 +576,8 @@ impl Mode for Ft8Mode {
         nqso_progress: i32,
         nfqso: i32,
         _frame_time_ms: i64, // a7-inert legacy path (constant slot key)
+        ap: bool,
+        ap_cq_only: bool,
     ) -> Vec<Decode> {
         ft8::decode_frame(
             iwave,
@@ -577,6 +588,8 @@ impl Mode for Ft8Mode {
             hiscall,
             nqso_progress,
             nfqso,
+            ap,
+            ap_cq_only,
         )
         .into_iter()
         .map(Into::into)
@@ -594,6 +607,8 @@ impl Mode for Ft8Mode {
         nfqso: i32,
         frame_time_ms: i64,
         a7_final: bool,
+        ap: bool,
+        ap_cq_only: bool,
     ) -> Vec<Decode> {
         // a7 slot key = slot UTC seconds-of-day. frame_time_ms is slot*15000 for
         // FT8, so /1000 gives slot seconds; rem_euclid keeps i32 valid past 2038
@@ -612,6 +627,8 @@ impl Mode for Ft8Mode {
             nfqso,
             nutc,
             a7_final,
+            ap,
+            ap_cq_only,
         )
         .into_iter()
         .map(Into::into)
@@ -668,6 +685,10 @@ impl Mode for Ft4Mode {
         nqso_progress: i32,
         nfqso: i32,
         _frame_time_ms: i64, // FT4 has no cross-frame IR-HARQ
+        _ap: bool,           // HONESTLY ignored: the vendored FT4 decoder has no AP
+        // on/off flag — AP runs whenever ndepth > 1 (ft4_decode.f90). Wiring
+        // this would be a placebo; the UI documents the FT8-only scope.
+        ap_cq_only: bool,
     ) -> Vec<Decode> {
         ft4::decode_frame(
             iwave,
@@ -678,6 +699,7 @@ impl Mode for Ft4Mode {
             hiscall,
             nqso_progress,
             nfqso,
+            ap_cq_only,
         )
         .into_iter()
         .map(Into::into)
@@ -773,6 +795,8 @@ impl Mode for Ft1Mode {
         nqso_progress: i32,
         _nfqso: i32, // FT1 uses IR-HARQ, not WSJT-X nfqso-windowed AP
         frame_time_ms: i64,
+        _ap: bool, // WSJT-X FT8 AP control — FT1 has its own IR-HARQ, no WSJT-X AP
+        _ap_cq_only: bool,
     ) -> Vec<Decode> {
         // FT1's decoder keys cross-frame IR-HARQ combining off frame_time_ms; the
         // caller resets HARQ buffers (tempo_fast::harq_reset) on band/QSO change.
@@ -824,6 +848,8 @@ mod tx_capability_tests {
             _nqso_progress: i32,
             _nfqso: i32,
             _frame_time_ms: i64,
+            _ap: bool,
+            _ap_cq_only: bool,
         ) -> Vec<Decode> {
             Vec::new()
         }
@@ -1114,6 +1140,8 @@ impl Mode for Fst4Mode {
         nqso_progress: i32,
         nfqso: i32,
         _frame_time_ms: i64, // FST4 has no cross-frame state (no a7, no IR-HARQ)
+        _ap: bool,           // FT8/FT4 operator AP controls — this wrapper's C ABI pins its own
+        _ap_cq_only: bool,
     ) -> Vec<Decode> {
         fst4::decode_frame(
             iwave,
@@ -1226,7 +1254,9 @@ impl Mode for Q65Mode {
         nqso_progress: i32,
         nfqso: i32,
         _frame_time_ms: i64, // Q65 has no cross-frame state here: the ABI pins
-                             // lclearave, so message averaging never spans calls.
+        // lclearave, so message averaging never spans calls.
+        _ap: bool, // FT8/FT4 operator AP controls — Q65's C ABI pins its own
+        _ap_cq_only: bool,
     ) -> Vec<Decode> {
         q65::decode_frame(
             iwave,
@@ -1332,6 +1362,8 @@ impl Mode for Msk144Mode {
         _nqso_progress: i32,
         nfqso: i32,
         frame_time_ms: i64,
+        _ap: bool, // FT8/FT4 operator AP controls — MSK144 has no AP path
+        _ap_cq_only: bool,
     ) -> Vec<Decode> {
         // ⭐ frame_time_ms IS the nutc the C ABI needs. mskrtd uses it as the
         // period label: it is the UTC field of the decoder's output line and one
@@ -1438,6 +1470,8 @@ impl Mode for Jt65Mode {
         _nqso_progress: i32,
         nfqso: i32,
         _frame_time_ms: i64, // JT65 has no cross-frame state here: clearave is pinned.
+        _ap: bool,           // FT8/FT4 operator AP controls — JT65's C ABI pins its own
+        _ap_cq_only: bool,
     ) -> Vec<Decode> {
         jt65::decode_frame(
             iwave,
@@ -1530,6 +1564,8 @@ impl Mode for WsprMode {
         _nqso_progress: i32,
         _nfqso: i32,
         _frame_time_ms: i64,
+        _ap: bool, // FT8/FT4 operator AP controls — WSPR has no AP path
+        _ap_cq_only: bool,
     ) -> Vec<Decode> {
         // ⭐ nfa/nfb/mycall/hiscall/nfqso are IGNORED, and that is not an
         // oversight. WSPR searches its own fixed 200 Hz sub-band around the dial

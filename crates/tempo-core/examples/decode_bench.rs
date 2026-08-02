@@ -481,5 +481,7 @@ fn req_for<'a>(iwave: &'a [i16], ndepth: i32, frame_time_ms: i64) -> DecodeReque
         nqso_progress: 0,
         nfqso: 0,
         frame_time_ms,
+        ap: true,          // stock: AP on (engine ap_decode default)
+        ap_cq_only: false, // stock: all AP hypotheses
     }
 }

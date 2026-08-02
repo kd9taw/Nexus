@@ -90,8 +90,11 @@ int main(int argc, char **argv) {
         }
 
         int nqso_progress = f % 6;
+        /* lapcqonly=0: AP unrestricted (all hypotheses), the worst case this
+         * gate exists to measure. Do not narrow it to shrink a regression. */
         int ndec = ft4_decode_frame(iwave, 200, 2900, 3, mycall, hiscall,
-                                    nqso_progress, nfqso, out, MAXOUT);
+                                    nqso_progress, nfqso, /*lapcqonly*/0,
+                                    out, MAXOUT);
         if (ndec < 0) {
             printf("RESULT: FAIL (decoder error on frame %d, ndec=%d)\n", f, ndec);
             return 1;
