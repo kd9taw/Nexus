@@ -136,6 +136,12 @@ const liveStatus = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   name: 'RS-44',
   state: 'tracking',
   mode: 'doppler-only',
+  dopplerDownlink: true,
+  dopplerUplink: true,
+  uplinkOffer: 'none',
+  uplinkOfferMap: null,
+  uplinkRadio: 'IC-9700',
+  uplinkRadioId: 1,
   // The ENGINE's declared TX-leg sideband (what the real wire carries for an
   // inverting bird under an uplink-driving mapping) — the display reads THIS,
   // never a re-derivation from the SatNOGS record.
@@ -167,7 +173,7 @@ const settings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
   rotatorModel: 0,
   rotatorHost: '',
-  satDoppler: true,
+  satDopplerOff: false,
   satVfoMap: 'main-down-sub-up',
   ...over,
 })

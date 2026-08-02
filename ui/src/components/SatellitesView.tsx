@@ -36,6 +36,7 @@ import {
   getSatDetail,
   getSettings,
   setSettings,
+  confirmSatUplink,
   setSatTransponder,
   getSatTransponder,
   startSatTrack,
@@ -44,7 +45,7 @@ import {
   fetchTlesNow,
 } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
-import { SAT_VFO_MAPS } from '../features/satVfo'
+import { SAT_VFO_MAPS, satVfoLabel, satVfoPair } from '../features/satVfo'
 import { isSatChased, satChaseKeys, satChasingSet, toggleSatChasing } from '../features/satChase'
 import { satBirdHealth, satExcludedHealth } from '../features/satHealth'
 import { elementBandParts, elementBandSummary } from '../features/elementBands'
@@ -819,21 +820,32 @@ const fmtShift = (hz: number) => {
 /** What Doppler has the radio tuned to, per leg, straight from the engine.
  *
  * HONESTY: every frequency here is nullable and null means "we are not tuning
- * that leg". No zeros, no placeholder dashes — an absent row, plus one line
- * saying WHY when there is nothing at all (the reasons are all things this
- * component actually knows: the two opt-in switches, whether a transponder is
- * held, and whether the pass has started). */
+ * that leg" — which is now routine rather than exceptional, since the downlink
+ * is corrected automatically while the uplink waits for a mapping confirmed
+ * for the radio in play. No zeros, no placeholder dashes — an absent row, plus
+ * one line saying WHY when there is nothing at all (the reasons are all things
+ * this component actually knows: the off switch, the track's own per-leg
+ * consent, whether a transponder is held, and whether the pass has started). */
 function DopplerReadout({
   rotor,
   dopplerOn,
-  vfoMap,
   held,
+  uplinkOnly,
+  undrivableUplink,
   txMode,
 }: {
   rotor: SatTrackStatus
   dopplerOn: boolean
-  vfoMap: SatVfoMap
   held: boolean
+  /** The mapping in force is Uplink only — the one mapping under which the
+   * dial is never Doppler's, so the pre-hold promise must name the uplink
+   * instead (round 3, defect 6). */
+  uplinkOnly: boolean
+  /** The held bird has no uplink leg an uplink-only mapping could drive — a
+   * one-channel (simplex) transponder or a beacon. Splits the no-legs reason:
+   * "not confirmed for this radio" is the wrong sentence (and the wrong fix)
+   * when confirmation would change nothing on this bird. */
+  undrivableUplink: boolean
   /** The sideband the ENGINE declares for the TX (split) leg — the DTO's
    * `txMode`, i.e. `Engine::sat_tx_mode`'s own per-tick answer, so this shows
    * exactly what the radio loop writes and nothing else. Null = the engine
@@ -847,10 +859,18 @@ function DopplerReadout({
   if (!any) {
     const why = !dopplerOn
       ? 'Doppler is off — nothing is being tuned (Settings ▸ Radio ▸ Satellite Doppler).'
-      : vfoMap === 'off'
-        ? 'VFO mapping is Off — Doppler is not writing to the radio.'
-        : !held
-          ? 'No transponder selected — pick one below to put the dial under Doppler.'
+      : !held
+        ? uplinkOnly
+          ? // Confirmation-aware (round 4), same rule as the rail's waiting
+            // copy: an unconfirmed mapping must not promise the drive.
+            rotor.uplinkOffer === 'confirm-mapping'
+            ? 'No transponder selected — pick one below; once your mapping is confirmed for this radio, Doppler tunes your uplink and the dial stays yours.'
+            : 'No transponder selected — pick one below and Doppler tunes your uplink; the dial stays yours.'
+          : 'No transponder selected — pick one below to put the dial under Doppler.'
+        : !rotor.dopplerDownlink && !rotor.dopplerUplink
+          ? undrivableUplink
+            ? 'Your uplink-only mapping has nothing to drive here — this bird has no separate uplink. Nothing is being tuned.'
+            : 'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned.'
           : rotor.state !== 'tracking'
             ? 'Doppler corrects from AOS — nothing to correct until the bird is up.'
             : 'Doppler has not reported a tuning for this pass yet.'
@@ -1188,11 +1208,18 @@ const kindWord = (k: string | null) =>
  * track FROZE at arm (per-pass freeze, now visible), hollow past the 14 d
  * stale line with a refresh fix.
  *
- * The two Settings switches (satDoppler, satVfoMap) are MIRRORED here live —
+ * The two Settings switches (satDopplerOff, satVfoMap) are MIRRORED here live —
  * Settings ▸ Radio stays canonical, writes go read-modify-write through
  * getSettings → setSettings (the OperateCockpit precedent) so nothing else in
  * the settings object is clobbered. The rail never flips a default itself:
  * every change is the operator's click on this pass, right now.
+ *
+ * The DOPPLER row reads the TRACK, not those mirrors, for what is being
+ * driven: the two legs are separately consented (the downlink is automatic
+ * once a transponder is held; the uplink needs a mapping confirmed for the rig
+ * actually under the split, which routing can change mid-pass), and only the
+ * backend knows which rig that is. The mirrors stay for the CONTROLS — the off
+ * switch and the mapping select — because those write settings.
  *
  * Layout: content-height (fit) inside .sats-detail — the .sats-side scroller
  * owns overflow; the rail is never a grower. */
@@ -1251,17 +1278,22 @@ function TrackRail({
   nowSecs: number
   onStop: () => void
   onDopplerOn: () => void
-  onVfoMap: (v: SatVfoMap) => void
+  /** Write the mapping + confirmation. `radio` is the RadioProfile.id the
+   * grant lands on — the rail passes the DTO's uplinkRadioId (the rig its
+   * copy names); omitted, the writer falls back to the active radio. `v`
+   * undefined = confirm the mapping IN FORCE, resolved by the backend at
+   * write time (round 4): the DTO's copy of it is poll-time state. */
+  onVfoMap: (v: SatVfoMap | undefined, radio?: number) => void
   onGoToPicker: () => void
   /** The Elements row's fix — the same manual refresh the stale chip fires. */
   onRefreshElements: () => void
   scrollRef: React.RefObject<HTMLDivElement>
 }) {
   // The rotor half of the track is fixed at arm time (DTO `mode`); the Doppler
-  // rows below mirror the LIVE settings pair, which is what the engine re-reads
-  // each tick — so a toggle here moves both the behaviour and the row together.
+  // row below reports the two legs the engine re-reads each tick — so a change
+  // here moves both the behaviour and the row together.
   const rotorInTrack = track.mode === 'rotor+doppler' || track.mode === 'rotor-only'
-  const dopplerLive = dopplerOn && vfoMap !== 'off'
+  const dopplerLive = track.dopplerDownlink || track.dopplerUplink
   const minsToAos = Math.max(1, Math.round((track.aosUnix - nowSecs) / 60))
   const minsToLos = Math.max(0, Math.round((track.losUnix - nowSecs) / 60))
   const passText =
@@ -1272,6 +1304,56 @@ function TrackRail({
       : track.state === 'prepositioning'
         ? 'slewing to the AOS azimuth'
         : `IN PASS — ${minsToLos} min to LOS`
+  // THE DOPPLER ROW's sentence. Six states, so it is computed rather than
+  // nested into the JSX: what is being driven right now (from the track, never
+  // re-derived here), and — when the transmit leg is not ours — what it would
+  // take, in the words of the radio the split would actually land on.
+  const offerRig = track.uplinkRadio.trim() || 'your radio'
+  const offerPair = track.uplinkOfferMap ? satVfoPair(track.uplinkOfferMap) : null
+  // Two confirmable offers, and the copy must not conflate them: 'confirm' is
+  // a mapping DERIVED from the rig model; 'confirm-mapping' is the mapping
+  // ALREADY IN FORCE, unconfirmed for this radio (a second rig, a reused id,
+  // or an upgraded uplink-only file) — confirming keeps the operator's
+  // choice. Without its own affordance that state was unrecoverable: the
+  // select already shows the mapping, and a same-value re-pick fires no
+  // change event (round 3, defect 4).
+  const canConfirm =
+    (track.uplinkOffer === 'confirm' || track.uplinkOffer === 'confirm-mapping') &&
+    offerPair != null
+  const uplinkNext =
+    track.uplinkOffer === 'confirm' && offerPair != null
+      ? `Confirm the uplink and Doppler drives ${offerRig} as ${offerPair}.`
+      : track.uplinkOffer === 'confirm-mapping' && track.uplinkOfferMap != null
+        ? `Confirm ${satVfoLabel(track.uplinkOfferMap)} for ${offerRig} and Doppler drives its uplink.`
+        : track.uplinkOffer === 'ask'
+          ? 'Pick which VFO carries your uplink to have Doppler tune that too.'
+          : 'The transmit VFO stays yours.'
+  // SIMPLEX before the leg pairs: a one-channel bird has no uplink leg, so the
+  // honest wire reports dopplerUplink false there even under a confirmed
+  // mapping — and the offer sentence must never render (confirming would
+  // record a permanent consent for a split the engine refuses on this bird).
+  const dopplerText = !dopplerOn
+    ? 'off — nothing is being tuned'
+    : heldDesc == null
+      ? vfoMap === 'uplink-only'
+        ? // Confirmation-aware (round 4): while the mapping in force is not
+          // confirmed for the radio in play (the DTO's offer says so), "then
+          // Doppler tunes your uplink" promises an unconsented drive.
+          track.uplinkOffer === 'confirm-mapping'
+          ? 'waiting for a transponder — once your mapping is confirmed for this radio, Doppler tunes your uplink; the dial stays yours'
+          : 'waiting for a transponder — then Doppler tunes your uplink; the dial stays yours'
+        : 'waiting for a transponder — then the downlink follows the bird'
+      : simplex
+        ? track.dopplerDownlink
+          ? 'on — one channel: both legs ride the same dial'
+          : 'one channel and an uplink-only mapping — nothing is being tuned; the dial stays yours'
+        : track.dopplerDownlink && track.dopplerUplink
+          ? 'correcting the downlink and the uplink'
+          : track.dopplerDownlink
+            ? `correcting the downlink. ${uplinkNext}`
+            : track.dopplerUplink
+              ? 'correcting the uplink — the dial stays yours'
+              : `uplink-only mapping, nothing is being tuned. ${uplinkNext}`
   const rotorText = !rotorInTrack
     ? rotorOn
       ? 'not in this track — re-arm to take the rotor'
@@ -1328,37 +1410,63 @@ function TrackRail({
       <div className="sat-rail-row">
         {railDot(dopplerLive)}
         <span className="sat-rail-name">Doppler</span>
-        {/* The MAPPING is deliberately not named here. The select at the end of
-            this row is both the live value and the control for it, so spelling
-            it out in the state text printed the same sentence twice on one line
-            ("on — VFO A = uplink, VFO B = downlink", then the identical option).
-            What the text owns is what the select cannot say: whether Doppler is
-            driving anything at all, and the one transponder shape where both
-            legs share a single dial. */}
-        <span className="sat-rail-state">
-          {dopplerLive
-            ? simplex
-              ? 'on — one channel: both legs ride the same dial'
-              : 'on'
-            : !dopplerOn
-              ? 'off — nothing is being tuned'
-              : 'VFO map is Off — Doppler writes nothing to the radio'}
-        </span>
+        {/* The CURRENT mapping is deliberately not named here. The select at
+            the end of this row is both the live value and the control for it,
+            so spelling it out in the state text printed the same sentence
+            twice on one line ("on — VFO A = uplink, VFO B = downlink", then
+            the identical option). What the text owns is what the select cannot
+            say: which legs are actually being driven, and — when the transmit
+            leg is not ours — what one confirmation would hand over, named for
+            the radio that would receive it. */}
+        <span className="sat-rail-state">{dopplerText}</span>
         {!dopplerOn && (
           <button
             className="sat-rail-fix"
             onClick={onDopplerOn}
-            title="Turn Satellite Doppler on (the same switch as Settings ▸ Radio ▸ Satellite Doppler)"
+            title="Turn Doppler correction back on (the same switch as Settings ▸ Radio ▸ Satellite Doppler)"
           >
             turn on
+          </button>
+        )}
+        {/* The one-time confirmation, where the operator already is. Rendered
+            only while there is something derived to confirm, the uplink is
+            not already ours, and the held bird HAS an uplink leg to hand over
+            (never on simplex — the backend suppresses the offer there too;
+            this is the belt to that suspender). Confirming records the
+            mapping FOR THE RADIO THE DTO NAMES (uplinkRadioId — the same rig
+            the title names), so a radio switch between the poll and the
+            click can never grant a rig the operator did not see named. For
+            the mapping ALREADY IN FORCE ('confirm-mapping') no map is sent
+            at all — the DTO's copy of it is poll-time state, and the backend
+            resolves "the mapping in force" at write time exactly as it
+            resolves the radio (round 4). The derived offer ('confirm') must
+            still send its map: that mapping is NOT in force yet. */}
+        {dopplerOn && !track.dopplerUplink && canConfirm && !simplex && (
+          <button
+            className="sat-rail-fix"
+            onClick={() =>
+              onVfoMap(
+                track.uplinkOffer === 'confirm-mapping'
+                  ? undefined
+                  : (track.uplinkOfferMap as SatVfoMap),
+                track.uplinkRadioId,
+              )
+            }
+            title={
+              track.uplinkOffer === 'confirm'
+                ? `Confirm ${offerPair} for ${offerRig}. Nexus read this from your radio model; nothing reaches your transmit VFO until you confirm it, and a wrong mapping transmits on your own downlink.`
+                : `Confirm ${satVfoLabel(track.uplinkOfferMap ?? 'off')} — your chosen mapping — for ${offerRig}. Nothing reaches its transmit VFO until you confirm it for this radio, and a wrong mapping transmits on your own downlink.`
+            }
+          >
+            confirm uplink
           </button>
         )}
         <select
           className="sat-rail-vfo"
           value={vfoMap}
-          onChange={(e) => onVfoMap(e.target.value as SatVfoMap)}
+          onChange={(e) => onVfoMap(e.target.value as SatVfoMap, track.uplinkRadioId)}
           aria-label="Satellite VFO mapping"
-          title="Match this to how your radio is wired. A wrong mapping transmits on your own downlink — into the satellite's output passband, on top of everyone else working the bird. Off is the default and writes nothing to the radio."
+          title="Which VFO carries your uplink — match it to how your radio is wired. A wrong mapping transmits on your own downlink, into the satellite's output passband, on top of everyone else working the bird. Picking one confirms it for the radio Doppler is driving. Every mapping except Uplink only keeps the downlink corrected; Uplink only hands your one VFO to the transmit leg."
         >
           {SAT_VFO_MAPS.map((m) => (
             <option key={m.value} value={m.value}>
@@ -1654,7 +1762,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         setRotorOn((s.rotatorModel ?? 0) > 0 || s.rotatorHost.trim() !== '')
         setGridSet(s.mygrid.trim().length >= 4) // passes need a real locator
         setMyGrid(s.mygrid)
-        setDopplerOn(!!s.satDoppler)
+        setDopplerOn(!s.satDopplerOff)
         setVfoMap(s.satVfoMap ?? 'off')
       })
       .catch(() => {})
@@ -1701,7 +1809,14 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               const rotorHalf = prev.mode === 'rotor+doppler' || prev.mode === 'rotor-only'
               pushToast(
                 `${prev.name} pass complete — LOS.` +
-                  (prev.transponder != null ? ' Dial handed back.' : '') +
+                  // What came back keys on the LEGS that were driven: the
+                  // downlink leg held the dial; an uplink-only track only
+                  // ever held the TX split (round 3, defect 5).
+                  (prev.dopplerDownlink
+                    ? ' Dial handed back.'
+                    : prev.dopplerUplink
+                      ? ' Uplink split released.'
+                      : '') +
                   // Only when the mast is about to move ON ITS OWN — the
                   // "stop" policy leaves it where the pass finished, and a
                   // stationary rotor needs no announcement.
@@ -1732,7 +1847,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         getSettings()
           .then((s: Settings) => {
             if (!live || settingsWriteBusy.current) return
-            setDopplerOn(!!s.satDoppler)
+            setDopplerOn(!s.satDopplerOff)
             setVfoMap(s.satVfoMap ?? 'off')
             setPegged(!!s.radioPegged)
             rotPostPassRef.current = s.rotPostPass ?? 'stop'
@@ -2002,9 +2117,10 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   // Which of the SELECTED bird's transponders was handed to the engine; null =
   // none of this bird's (a hold on another bird is called out under the table).
   const heldIndex = tuned && detail && tuned.name === detail.name ? tuned.index : null
-  // Will a pick actually move the radio? Both switches are operator opt-ins and
-  // both default off, so saying nothing here would look like a dead control.
-  const dopplerLive = dopplerOn && vfoMap !== 'off'
+  // Will a pick actually move the radio? The downlink follows any pick unless
+  // the operator switched correction off (or mapped their one VFO to the
+  // uplink), so saying nothing here would leave a live control looking dead.
+  const dopplerLive = dopplerOn && vfoMap !== 'uplink-only'
 
   // Auto-track status, but only when it belongs to the bird on screen — a badge
   // for a different bird must never decorate this one's sky dome.
@@ -2057,6 +2173,12 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         : heldIndex != null
           ? (detail.transmitters[heldIndex] ?? null)
           : null
+  // The held bird is a ONE-CHANNEL (simplex) transponder — from the ENGINE's
+  // binding, gated on the hold being THIS bird (the binding is global), and
+  // never re-derived from the SatNOGS record: two copies of a rule that
+  // decides where the radio transmits is a wrong-uplink generator. Feeds the
+  // chooser state line and the Doppler readout's reason.
+  const heldSimplex = !!(detail != null && binding?.simplex && tuned?.name === detail.name)
   // The RECORD's per-leg sidebands differing (SatNOGS data) — used only to
   // decide whether the chooser's TX-sideband note renders at all, and for the
   // pre-arm FORECAST wording. What the engine actually commands is the DTO's
@@ -2184,7 +2306,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         // Settings may have changed since this section mounted.
         getSettings()
           .then((s: Settings) => {
-            setDopplerOn(!!s.satDoppler)
+            setDopplerOn(!s.satDopplerOff)
             setVfoMap(s.satVfoMap ?? 'off')
           })
           .catch(() => {})
@@ -2203,7 +2325,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const writeDopplerOn = () => {
     settingsWriteBusy.current = true
     getSettings()
-      .then((s: Settings) => setSettings({ ...s, satDoppler: true }))
+      .then((s: Settings) => setSettings({ ...s, satDopplerOff: false }))
       .then(() => setDopplerOn(true))
       .catch((e) => pushToast(`Doppler setting: ${e instanceof Error ? e.message : e}`, 'error'))
       .finally(() => {
@@ -2223,11 +2345,25 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         settingsWriteBusy.current = false
       })
   }
-  const writeVfoMap = (v: SatVfoMap) => {
+  /** The uplink mapping — and, in the same write, the CONFIRMATION that it is
+   * the mapping for the radio Doppler is driving. The two are one operator
+   * act: choosing (or confirming an offered) mapping here is them stating how
+   * this station is wired. The write goes through the backend verb
+   * (`confirmSatUplink`, api.ts) — the consent pair is engine-owned live
+   * state that a whole-settings payload cannot carry, so a stale snapshot
+   * can never re-point the mapping or resurrect a pruned consent.
+   *
+   * `radio` = the RadioProfile.id the rail's copy NAMED (the DTO's
+   * uplinkRadioId — the rig that would receive the split). The grant is
+   * recorded for that rig, not for whichever radio is active when the click
+   * lands: if the two differ, consenting the active one would authorize a
+   * radio the operator never saw named. */
+  const writeVfoMap = (v: SatVfoMap | undefined, radio?: number) => {
     settingsWriteBusy.current = true
-    getSettings()
-      .then((s: Settings) => setSettings({ ...s, satVfoMap: v }))
-      .then(() => setVfoMap(v))
+    confirmSatUplink(v, radio)
+      // `v` undefined = confirming the mapping already in force (round 4):
+      // the mapping did not change, so the mirror has nothing to learn.
+      .then(() => v != null && setVfoMap(v))
       .catch((e) => pushToast(`VFO mapping: ${e instanceof Error ? e.message : e}`, 'error'))
       .finally(() => {
         settingsWriteBusy.current = false
@@ -2378,12 +2514,21 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               // The claim must match the DTO's `mode` — a rotor-less track
               // never borrows the rotor wording.
               track.mode === 'pass-only'
-                ? 'Pass timing only — nothing is driven: no rotor in this track, and Doppler is not driving the dial (off, no VFO mapping, or no transponder held). The pass clock and geometry still run.'
+                ? 'Pass timing only — nothing is driven: no rotor in this track, and Doppler is not driving the dial (correction switched off, no transponder held, or an uplink-only mapping that is not driving this pass). The pass clock and geometry still run.'
                 : track.mode === 'doppler-only'
-                  ? `No rotator in this track — Doppler ${
-                      track.downlinkHz != null || track.uplinkHz != null
-                        ? 'is steering the radio dial'
-                        : 'takes the radio dial at AOS'
+                  ? // Dial ownership keys on the DOWNLINK leg — the leg that
+                    // writes the dial. An uplink-only track drives only the
+                    // TX (split) VFO, and claiming the dial for it would
+                    // contradict the rail's own "the dial stays yours" on
+                    // the same screen (round 3, defect 5).
+                    `No rotator in this track — Doppler ${
+                      track.dopplerDownlink
+                        ? track.downlinkHz != null
+                          ? 'is steering the radio dial'
+                          : 'takes the radio dial at AOS'
+                        : track.uplinkHz != null
+                          ? 'is steering the TX (split) VFO — the dial stays yours'
+                          : 'takes the TX (split) VFO at AOS — the dial stays yours'
                     }; nothing moves an antenna`
                   : track.azDeg == null
                     ? 'The rotor has NOT been commanded yet — auto-track takes it 5 min before AOS'
@@ -2898,8 +3043,11 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                     <DopplerReadout
                       rotor={detailTrack}
                       dopplerOn={dopplerOn}
-                      vfoMap={vfoMap}
                       held={heldIndex != null || detailTrack.transponder != null}
+                      uplinkOnly={vfoMap === 'uplink-only'}
+                      // Simplex from the engine's binding; a beacon from the
+                      // held record having no uplink at all.
+                      undrivableUplink={heldSimplex || (heldT != null && heldT.uplinkLowHz == null)}
                       txMode={detailTrack.txMode ?? null}
                     />
                     {/* The strip goes under the readout: the readout says what
@@ -3053,29 +3201,51 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                           {heldT.downlinkMode} while Doppler runs this pass.
                         </>
                       ) : (
+                        // The component KNOWS the cause — name the live one
+                        // instead of an enumeration whose first entry
+                        // ("Doppler off") is false in the default state, one
+                        // row under "correcting the downlink".
                         <>
                           This bird lists {txSwapMode} up / {heldT.downlinkMode} down
                           (SatNOGS) — the TX sideband is not being commanded for this
-                          pass (Doppler off, a mapping that does not drive the uplink,
-                          or the mode is yours).
+                          pass (
+                          {!dopplerOn
+                            ? 'Doppler correction is off'
+                            : !detailTrack.dopplerUplink
+                              ? 'Doppler is not driving the uplink on this radio'
+                              : 'the legs share a sideband, or the mode is yours'}
+                          ).
                         </>
                       )
                     ) : (
                       <>
                         TX sideband: this bird runs {txSwapMode} up /{' '}
-                        {heldT.downlinkMode} down (SatNOGS). With Doppler on and a VFO
-                        mapping that drives the uplink, the TX (split) VFO is set to
-                        match while a tracked pass runs (Settings ▸ Radio).
+                        {heldT.downlinkMode} down (SatNOGS). Once your uplink mapping is
+                        confirmed for the radio in use, the TX (split) VFO is set to
+                        match while a tracked pass runs.
                       </>
                     )}
                   </div>
                 )}
+                {/* The uplink-only branches key on the TRACK's per-leg truth
+                    (the engine's own legs), never the settings mirror alone:
+                    "only the transmit VFO is tuned" was rendered while the
+                    mapping was unconfirmed for the radio in play — a present-
+                    tense claim directly under the engine's own "nothing was
+                    tuned" binding note. With no live track the line states
+                    the mechanism conditionally instead of claiming a write. */}
                 {heldIndex != null && (
                   <div className={`sat-tp-state${dopplerLive ? '' : ' warn'}`}>
                     {!dopplerOn
-                      ? 'Doppler is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.'
-                      : vfoMap === 'off'
-                        ? 'VFO mapping is Off, so nothing is being tuned. Pick a mapping in Settings ▸ Radio ▸ Satellite Doppler.'
+                      ? 'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.'
+                      : vfoMap === 'uplink-only'
+                        ? heldSimplex || heldT?.uplinkLowHz == null
+                          ? 'Your uplink-only mapping has nothing to drive here — this bird has no separate uplink. Nothing is being tuned.'
+                          : detailTrack != null
+                            ? detailTrack.dopplerUplink
+                              ? 'Your uplink-only mapping keeps the dial yours — only the transmit VFO is tuned.'
+                              : 'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned. Confirm it on the pass rail.'
+                            : 'Your uplink-only mapping keeps the dial yours — the transmit VFO is tuned once it is confirmed for the radio in use and a tracked pass runs.'
                         : 'Doppler tunes this transponder while auto-track is following the pass.'}
                   </div>
                 )}

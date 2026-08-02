@@ -499,8 +499,9 @@ export interface SatTransmitter {
   kind: string | null
 }
 
-/** Which VFO carries the uplink and which the downlink during a pass
- * (Settings.satVfoMap). "off" = Doppler never writes to the radio. */
+/** Which VFO carries the UPLINK during a pass (Settings.satVfoMap).
+ * "off" = no uplink mapping, so nothing is written to a transmit VFO; the
+ * downlink is corrected without one. */
 export type SatVfoMap =
   | 'off'
   | 'downlink-only'
@@ -540,14 +541,50 @@ export interface SatTrackStatus {
    * slew, so it stays 'armed' until AOS. */
   state: 'armed' | 'prepositioning' | 'tracking'
   /** Which steering surfaces this track is allowed to drive. The rotor half
-   * is fixed at arm time; the Doppler half follows the live consents
-   * (Settings ▸ satDoppler + a VFO mapping ≠ off + a HELD transponder —
-   * without one the tick tunes nothing, and the label must not claim a dial
-   * the operator kept), so a mid-pass toggle or a transponder release moves
-   * the label exactly when it moves the behaviour. 'pass-only' = neither
-   * surface: pass state/geometry only — legal, useful for timing, and the UI
-   * should say exactly that rather than implying the radio or mast is driven. */
+   * is fixed at arm time; the Doppler half follows the live consents (EITHER
+   * leg driven + a HELD transponder — without one the tick tunes nothing, and
+   * the label must not claim a dial the operator kept), so a mid-pass change
+   * or a transponder release moves the label exactly when it moves the
+   * behaviour. 'pass-only' = neither surface: pass state/geometry only —
+   * legal, useful for timing, and the UI should say exactly that rather than
+   * implying the radio or mast is driven.
+   *
+   * ROTOR-vs-RADIO only. WHICH leg is driven is dopplerDownlink /
+   * dopplerUplink — the legs are separately consented, and one string cannot
+   * carry two facts without lying about one of them. */
   mode: 'rotor+doppler' | 'rotor-only' | 'doppler-only' | 'pass-only'
+  /** Is Doppler correcting the RECEIVE dial, and the TRANSMIT VFO? Read from
+   * the engine's own legs derivation (the one the tick writes by), every
+   * tick, so they report what is being DONE. They come apart routinely: the
+   * downlink is automatic once a transponder is held; the uplink waits for a
+   * mapping confirmed for the radio in play AND for a transponder with an
+   * uplink leg at all — on a simplex (one-channel) bird or a beacon,
+   * dopplerUplink is false even under a confirmed mapping, because the engine
+   * writes no split there. Neither says a correction has been SENT —
+   * downlinkHz / uplinkHz do that, and only once one has. */
+  dopplerDownlink: boolean
+  dopplerUplink: boolean
+  /** What can be offered for the uplink on the radio in play, when Doppler is
+   * not already driving it. 'confirm' = uplinkOfferMap was derived from the
+   * connected rig and needs one confirmation; 'confirm-mapping' =
+   * uplinkOfferMap is the mapping ALREADY IN FORCE, unconfirmed for this
+   * radio (a second rig, a reused id, or an upgraded uplink-only file) —
+   * confirming keeps the operator's choice, never replaces it; 'ask' = full
+   * duplex, but the wiring is the operator's to state (no pre-fill); 'none' =
+   * one VFO, or a rig we cannot identify — nothing to propose. */
+  uplinkOffer: 'confirm' | 'confirm-mapping' | 'ask' | 'none'
+  /** The mapping for 'confirm'/'confirm-mapping'; null otherwise — a guess
+   * here is the wrong-uplink generator the enumeration exists to prevent. */
+  uplinkOfferMap: SatVfoMap | null
+  /** The radio the offer (and any uplink write) is about, by name. Routing and
+   * peg-lock can change it mid-pass. '' when no profile names it. */
+  uplinkRadio: string
+  /** …and by RadioProfile.id — what a confirmation must be RECORDED for. The
+   * confirm button and the rail's mapping select pass THIS id to
+   * confirmSatUplink, never the active radio at click time: the copy names
+   * uplinkRadio, and the grant has to land on the rig the operator saw named
+   * even if the active radio moved between the poll and the click. */
+  uplinkRadioId: number
   /** The sideband the engine will command the TX (split) VFO into while this
    * pass owns the uplink (the inverting-bird swap), or null when nothing is
    * commanded. THE display source for the TX-sideband claim — never re-derive
@@ -2227,12 +2264,28 @@ export interface Settings {
   /** May the rotator run past 90° elevation (flip)? Off by default — plenty of
    * rotators physically cannot. */
   rotAllowFlip?: boolean
-  /** SATELLITE DOPPLER master switch. Off by default: a station with no
-   * satellite interest never has its dial moved by a pass. */
-  satDoppler?: boolean
-  /** Which VFO carries which leg. A WRONG MAPPING TRANSMITS ON YOUR OWN
-   * DOWNLINK, so it is explicit and defaults to "off" (no radio writes). */
+  /** SATELLITE DOPPLER — the operator's OFF switch. Absent/false = the
+   * downlink is corrected during a pass, which is what arming one and holding
+   * a transponder asks for. (Inverted on purpose: it replaced a satDoppler
+   * opt-in that every pre-0.26 settings file carries as false whether or not
+   * its operator ever saw the switch.) */
+  satDopplerOff?: boolean
+  /** Which VFO carries the UPLINK. A WRONG MAPPING TRANSMITS ON YOUR OWN
+   * DOWNLINK, so it is explicit and defaults to "off" (no transmit-VFO
+   * writes). Half the consent — satUplinkRadios is the other half.
+   * READ-ONLY here: the pair is backend-owned live state written only by
+   * `confirmSatUplink` (api.ts); a value sent through setSettings is
+   * discarded, so a stale form can never re-point where the radio
+   * transmits. */
   satVfoMap?: SatVfoMap
+  /** The radio ids (RadioProfile.id) satVfoMap has been CONFIRMED for. The
+   * satellite path routes, so the rig under the split is not always the one
+   * the operator was looking at; the uplink is driven only on a radio in this
+   * list. null = transient pre-migration state (the backend resolves it on
+   * load; a live pre-0.26 grant is materialized into concrete ids there).
+   * READ-ONLY like satVfoMap — write through `confirmSatUplink`, never
+   * setSettings. */
+  satUplinkRadios?: number[] | null
   /** Minimum correction (Hz) worth sending to the radio; below it the dial is
    * left alone. 0 = write every update. */
   satMinShiftHz?: number

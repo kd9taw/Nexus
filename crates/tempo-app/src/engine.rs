@@ -2146,15 +2146,22 @@ impl TxOwner {
 }
 
 /// What Doppler has the radio on right now — the UI's read-back.
+///
+/// PER LEG. The two legs are separately consented (the receive dial is
+/// automatic; the transmit VFO needs a mapping confirmed for the radio in
+/// play), so each frequency is `Some` only while Doppler is actually driving
+/// that leg. Absent means "nothing of ours is on that VFO" — never a zero, and
+/// never last pass's number, either of which a display would render as a
+/// frequency the radio is sitting on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SatTuningNow {
     pub label: String,
     pub index: Option<usize>,
     pub inverting: bool,
-    pub downlink_hz: u64,
-    pub uplink_hz: u64,
-    pub downlink_shift_hz: i64,
-    pub uplink_shift_hz: i64,
+    pub downlink_hz: Option<u64>,
+    pub uplink_hz: Option<u64>,
+    pub downlink_shift_hz: Option<i64>,
+    pub uplink_shift_hz: Option<i64>,
     /// Where the operator sits INSIDE the passband, signed from its centre.
     /// This is the coordinate both legs share: on an inverting transponder the
     /// uplink sits at `-offset_hz` while the downlink sits at `+offset_hz`,
@@ -2689,6 +2696,17 @@ impl Engine {
         // form loaded before the rules were written — and would silently revert them.
         let live_rules = std::mem::take(&mut self.settings.routing_rules);
         let live_default_radio = self.settings.default_radio;
+        // The satellite uplink CONSENT PAIR (sat_vfo_map + sat_uplink_radios) is live state owned
+        // by `confirm_sat_uplink` — an operator click on the pass rail or the Settings select —
+        // and it keys on `RadioProfile::id` exactly like the rules above. It MUST be captured too,
+        // and as ONE unit (the list means "confirmed for THIS mapping"; letting a form move either
+        // half alone desyncs them): the panel's form is a whole-Settings snapshot, the panel's own
+        // live verbs can remove a radio (which prunes its consent) and re-add one that REUSES the
+        // freed id, and a later Save of that stale snapshot would hand the replacement rig a
+        // Main/Sub confirmation nobody gave it — the `ensure_routing_targets` prune below keys on
+        // id EXISTENCE and cannot tell a reused id from the radio that consented.
+        let live_sat_vfo_map = self.settings.sat_vfo_map;
+        let live_sat_uplink_radios = std::mem::take(&mut self.settings.sat_uplink_radios);
         let (live_dial, live_band, live_sideband) = (
             self.settings.dial_mhz,
             self.settings.band.clone(),
@@ -2711,6 +2729,8 @@ impl Engine {
         self.settings.radio_pegged = live_pegged;
         self.settings.routing_rules = live_rules;
         self.settings.default_radio = live_default_radio;
+        self.settings.sat_vfo_map = live_sat_vfo_map;
+        self.settings.sat_uplink_radios = live_sat_uplink_radios;
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
         // describe the radio SHOWN in the form, which may differ from the live active radio if a
@@ -2985,6 +3005,15 @@ impl Engine {
         // A radio swap is a hard context change (different antenna/band): stop TX + drop the decode
         // context + roster, exactly like a band QSY.
         self.halt_tx();
+        // …and exactly like a QSY, take the queued split one-shot
+        // (`set_frequency` / `observe_rig_freq` do the identical three lines).
+        // A pending split was authorized against the OUTGOING radio — for the
+        // satellite path, literally consented per radio — and leaving it dirty
+        // let the loop apply that TX frequency to whichever rig came next.
+        // Marking dirty commands the NEW radio back to simplex instead.
+        if self.split_tx_mhz.take().is_some() {
+            self.split_dirty = true;
+        }
         self.clear_decode_context();
         self.app.clear_stations();
         // The a7 cross-cycle AP table holds the OLD radio's decodes — replaying
@@ -3034,6 +3063,40 @@ impl Engine {
     /// Peg-lock: when on, band selection never auto-switches the active radio (P4). Light setter.
     pub fn set_radio_pegged(&mut self, on: bool) {
         self.settings.radio_pegged = on;
+    }
+
+    /// THE writer of the satellite uplink consent pair (`sat_vfo_map` +
+    /// `sat_uplink_radios`): record the operator's confirmation of `map` for
+    /// `radio_id` — `None` = the radio active RIGHT NOW, never a UI form
+    /// snapshot's idea of it (a Settings panel can sit open across a radio
+    /// switch made elsewhere). A `map` of `None` resolves the same way, to
+    /// the mapping IN FORCE at write time — the rail's "confirm uplink" for a
+    /// mapping already in force sends no map at all, because the DTO's copy
+    /// of it is poll-time state and the mapping can change between the poll
+    /// and the click (round 4). The pair is LIVE engine state:
+    /// [`apply_settings`](Self::apply_settings) captures and restores it like
+    /// the roster, so a stale whole-settings Save can neither re-point the
+    /// mapping nor resurrect a pruned consent — only this verb, fed by an
+    /// operator click (the pass rail's confirm, or the Settings ▸ Radio
+    /// select), writes it. Light path: no mode reset, no queue clear —
+    /// `sat_doppler_legs` re-reads the consent every tick, so the change
+    /// takes effect on the next correction either way.
+    ///
+    /// A `radio_id` that is not in the roster is REFUSED: the DTO that named
+    /// it can outlive the radio (removed mid-pass), freed ids are reused, and
+    /// a consent recorded for a ghost would hand the next rig added a
+    /// confirmation nobody gave it.
+    pub fn confirm_sat_uplink(
+        &mut self,
+        radio_id: Option<u32>,
+        map: Option<crate::settings::SatVfoMap>,
+    ) {
+        let id = radio_id.unwrap_or(self.settings.active_radio);
+        if !self.settings.radios.iter().any(|p| p.id == id) {
+            return;
+        }
+        let map = map.unwrap_or(self.settings.sat_vfo_map);
+        self.settings.confirm_sat_uplink(id, map);
     }
 
     /// Add a new (2nd/3rd…) radio to the roster and SWITCH TO IT (returns its id). Switching makes the
@@ -6530,19 +6593,18 @@ impl Engine {
             pending_uplink_mhz: None,
             note: None,
         };
-        // ---- the two fail-safe consents, in the rail's own words ----
-        if !self.settings.sat_doppler {
+        // ---- the operator's off switch, in the rail's own words ----
+        // The ONE settings refusal left. What used to be a second gate here —
+        // "no VFO mapping" — no longer stops the receive dial: a mapping is the
+        // TRANSMIT leg's consent, and it is checked at the transmit leg below,
+        // per radio. Holding a transponder on an armed pass is the whole ask
+        // for the downlink.
+        if self.settings.sat_doppler_off {
             binding.note = Some(
-                "Satellite Doppler is off — the transponder is held, but nothing was tuned."
+                "Doppler correction is off in Settings — the transponder is held, but nothing \
+                 was tuned."
                     .to_string(),
             );
-            self.sat_binding = Some(binding.clone());
-            return binding;
-        }
-        let map = self.settings.sat_vfo_map;
-        if !map.active() {
-            binding.note =
-                Some("VFO mapping is None — the dial stays yours; nothing was tuned.".to_string());
             self.sat_binding = Some(binding.clone());
             return binding;
         }
@@ -6588,7 +6650,7 @@ impl Engine {
         // `set_rig_refused_dial` / `split_rejected` on a refusal). The binding
         // fills in from those reports, so the rail can only ever show a
         // frequency the rig actually took.
-        if map.drives_downlink() {
+        if self.settings.sat_doppler_downlink() {
             // Name the mode class EXPLICITLY: the operator may be arriving from
             // Operate or Phone, and `route_mode` would otherwise answer for the
             // section being LEFT. Set only after the gates pass, so a refusal
@@ -6623,7 +6685,15 @@ impl Engine {
         // satellite VFOs on the way. Mid-pass it gets worse, not better: the two
         // legs want opposite corrections, ≈7 kHz apart at 145.825, which is a
         // same-band odd split the rig cannot express at all.
-        if map.drives_uplink() && t.uplink_centre_hz != 0 && !t.is_simplex() {
+        //
+        // Asked AFTER the downlink leg, and through THE legs derivation
+        // (`sat_doppler_legs`) rather than the map alone: the QSY above may
+        // have HANDED OFF to another radio, and the split lands on whichever
+        // rig is active now. The consent inside it resolves against that rig,
+        // so a mapping confirmed for the IC-9700 cannot authorise a
+        // transmit-VFO write on the FTdx10; the beacon and simplex refusals
+        // ride in the same derivation the tick writes by.
+        if self.sat_doppler_legs().uplink {
             // AFTER the QSY, never before: a plain `set_frequency` returns the
             // rig to simplex (leftover pile-up split must not shift the next
             // frequency), which would drop a split written first.
@@ -6647,13 +6717,24 @@ impl Engine {
                 .unwrap_or_default();
         }
         if binding.pending_downlink_mhz.is_none() && binding.pending_uplink_mhz.is_none() {
-            // Reachable, and only here: an uplink-only mapping pointed at a
-            // BEACON, which has no transmit leg at all. Neither leg was written,
-            // so neither may be claimed.
-            binding.note = Some(
+            // Reachable only under an UPLINK-ONLY mapping — the one mapping
+            // that takes the receive dial out of Doppler's hands. Either the
+            // transponder has no uplink leg Doppler could drive (a beacon or a
+            // simplex channel), or that mapping has not been confirmed for
+            // this radio. Neither leg was written, so neither may be claimed.
+            //
+            // CAUSE PRIORITY (round 4): the undrivable hold is asked FIRST.
+            // Both can be true at once — an unconfirmed mapping over a beacon
+            // — and pointing the operator at the confirm there is a dead end:
+            // confirming would drive nothing on this bird.
+            binding.note = Some(if self.sat_uplink_leg_undrivable() {
                 "Your VFO mapping drives no leg this transponder has — nothing was tuned."
-                    .to_string(),
-            );
+                    .to_string()
+            } else {
+                "Your uplink-only mapping isn't confirmed for this radio yet — nothing was \
+                 tuned. Confirm it on the pass rail."
+                    .to_string()
+            });
         } else if binding.pending_downlink_mhz.is_none() {
             // An uplink-only mapping is a deliberate half-duplex choice, but it
             // still means the dial the operator is looking at did not move —
@@ -6661,7 +6742,7 @@ impl Engine {
             binding.note = Some(
                 "Uplink-only mapping — the transmit VFO is set; the dial stays yours.".to_string(),
             );
-        } else if binding.simplex && map.drives_uplink() {
+        } else if binding.simplex && self.settings.sat_doppler_uplink() {
             // ONE leg, on purpose. The operator's mapping asked for an uplink and
             // got a single frequency instead, so say why in place of leaving them
             // to wonder which VFO the transmit leg landed on. Only under a mapping
@@ -6805,10 +6886,11 @@ impl Engine {
     /// owning the transmit VFO:
     ///
     /// - a transponder is held, and it HAS an uplink (a beacon has none);
-    /// - the operator opted the radio in — `sat_doppler` plus a mapping that
-    ///   [`crate::settings::SatVfoMap::drives_uplink`]. That opt-in is what put
-    ///   a split TX frequency on the rig at all; a mode command onto a VFO we
-    ///   never tuned would be moving a radio nobody handed us;
+    /// - the transmit VFO is ours to drive on the radio in play —
+    ///   [`crate::settings::Settings::sat_doppler_uplink`], the same
+    ///   confirmed-mapping consent that put a split TX frequency on the rig at
+    ///   all; a mode command onto a VFO we never tuned would be moving a radio
+    ///   nobody handed us;
     /// - the operator has not taken the mode back
     ///   ([`Engine::request_sideband_override`]);
     /// - and the two legs actually DIFFER. An FM bird is FM both ways and a
@@ -6819,16 +6901,15 @@ impl Engine {
     /// `None` and the loop stops writing, which is exactly what releasing the
     /// transponder already does with the dial (hand it back, don't rewind it).
     pub fn sat_tx_mode(&self) -> Option<String> {
-        if self.sat_mode_released || !self.settings.sat_doppler {
-            return None;
-        }
-        if !self.settings.sat_vfo_map.drives_uplink() {
+        // THE legs derivation (`sat_doppler_legs`): the same consent that put
+        // a split TX frequency on the rig at all, plus the transponder-shape
+        // refusals (a beacon has no transmit leg to put in a mode; a simplex
+        // channel has no second VFO to command). One derivation, so the mode
+        // write can never claim a leg the frequency writer refused.
+        if self.sat_mode_released || !self.sat_doppler_legs().uplink {
             return None;
         }
         let st = self.sat_tune.as_ref()?;
-        if st.transponder.uplink_centre_hz == 0 {
-            return None; // a beacon: there is no transmit leg to put in a mode
-        }
         // The DOWNLINK mode is whatever the loop is commanding for the dial —
         // read from the one write-side canon rather than a second guess at it,
         // so the two legs can never be derived from different beliefs.
@@ -6946,6 +7027,54 @@ impl Engine {
         true
     }
 
+    /// THE per-leg drive answer — the ONE derivation of which legs Doppler is
+    /// driving right now, shared by the writer ([`Self::sat_doppler_tick`]),
+    /// the pre-AOS writer ([`Self::sat_tune_nominal`]), the TX-sideband
+    /// declaration ([`Self::sat_tx_mode`]), the readout
+    /// ([`Self::sat_tuning_now`]) and the wire (the track DTO's
+    /// `dopplerDownlink`/`dopplerUplink`). It existed in three hand-copies and
+    /// they disagreed: the tick and the readout skipped the beacon guard the
+    /// nominal writer had (a hand-picked beacon under a confirmed mapping put
+    /// the bird's own DOWNLINK on the split TX dial), and the DTO skipped the
+    /// simplex rule, so the rail claimed "correcting the uplink" while the
+    /// engine wrote nothing.
+    ///
+    /// Both legs are `false` with no HELD transponder — there is nothing to
+    /// tune. Inside a hold:
+    /// - downlink = the off switch + a mapping that leaves the dial ours
+    ///   ([`crate::settings::Settings::sat_doppler_downlink`]);
+    /// - uplink = the per-radio confirmed consent
+    ///   ([`crate::settings::Settings::sat_doppler_uplink`], re-resolved
+    ///   against the radio active RIGHT NOW) AND a transponder that has an
+    ///   uplink leg at all: not a beacon (`uplink_centre_hz == 0`) and not a
+    ///   SIMPLEX channel — one dial carries both legs there, and a split would
+    ///   engage the rig's cross-band satellite mode on a same-band channel.
+    pub fn sat_doppler_legs(&self) -> tempo_core::doppler::Legs {
+        let Some(st) = self.sat_tune.as_ref() else {
+            return tempo_core::doppler::Legs {
+                downlink: false,
+                uplink: false,
+            };
+        };
+        tempo_core::doppler::Legs {
+            downlink: self.settings.sat_doppler_downlink(),
+            uplink: self.settings.sat_doppler_uplink()
+                && st.transponder.uplink_centre_hz != 0
+                && !st.transponder.is_simplex(),
+        }
+    }
+
+    /// The held transponder exists but has NO uplink leg Doppler could ever
+    /// drive — a one-channel (simplex) bird or a beacon. `false` when nothing
+    /// is held. The consent DTO uses this to suppress the uplink offer: a
+    /// "confirm and Doppler drives …" proposal on a hold the engine will
+    /// refuse is a promise the click cannot keep.
+    pub fn sat_uplink_leg_undrivable(&self) -> bool {
+        self.sat_tune
+            .as_ref()
+            .is_some_and(|st| st.transponder.uplink_centre_hz == 0 || st.transponder.is_simplex())
+    }
+
     /// One Doppler tick. Returns what was actually written to the radio, or
     /// `None` when nothing was due — the rate limits, the freeze-during-over
     /// policy and the operator's VFO mapping all decide here rather than at the
@@ -6963,23 +7092,22 @@ impl Engine {
         // the range-rate in force right now to undo the Doppler the operator is
         // hearing, and it needs it whether or not we are steering the dial.
         self.sat_last_rate = Some(range_rate_km_s);
-        let map = self.settings.sat_vfo_map;
-        if !self.settings.sat_doppler || !map.active() {
+        // PER LEG, and re-asked every tick, from THE one derivation
+        // (`sat_doppler_legs`): the transmit consent resolves against the
+        // radio that is active RIGHT NOW — a handoff mid-pass must move the
+        // consent with the rig, not run on what was true at arm time — and the
+        // held transponder's own shape (simplex / beacon) can refuse the
+        // uplink leg outright. Hand-copying those rules here is how the tick
+        // once wrote a beacon's downlink onto the split TX dial.
+        let legs = self.sat_doppler_legs();
+        if !legs.downlink && !legs.uplink {
             return None;
         }
         let limits = dop::SteerLimits {
             min_shift_hz: self.settings.sat_min_shift_hz,
             min_interval_ms: self.settings.sat_update_ms,
         };
-        // Read the hold BEFORE the legs: a SIMPLEX bird has no uplink leg to
-        // drive — one dial carries both — and letting the mapping alone decide
-        // would grow a split back mid-pass that the pick deliberately declined,
-        // engaging the rig's cross-band satellite mode on a same-band channel.
         let st = self.sat_tune.as_ref()?;
-        let legs = dop::Legs {
-            downlink: map.drives_downlink(),
-            uplink: map.drives_uplink() && !st.transponder.is_simplex(),
-        };
         // Slot-timed modes hold the dial still for the length of an over; the
         // manual modes steer through it. See doppler::TxPolicy.
         let policy = dop::TxPolicy::for_slot_mode(
@@ -7041,22 +7169,33 @@ impl Engine {
     /// uplink, and `split_tx_mhz` is also ordinary pile-up split, so reading
     /// either back would mislabel exactly the cases that matter).
     ///
-    /// `None` unless a transponder is held AND the operator enabled Doppler
-    /// with a mapping — the UI then shows no frequencies rather than wrong ones.
+    /// `None` unless a transponder is held AND at least one leg is actually
+    /// being driven — and PER LEG inside that, so a leg nobody is writing has
+    /// no frequency at all rather than a computed one displayed as a done
+    /// thing. With the uplink unconfirmed the transmit fields are absent, which
+    /// is the truth: that number is not on anybody's radio.
     pub fn sat_tuning_now(&self, range_rate_km_s: f64) -> Option<SatTuningNow> {
-        if !self.settings.sat_doppler || !self.settings.sat_vfo_map.active() {
+        let st = self.sat_tune.as_ref()?;
+        // THE legs `sat_doppler_tick` writes by — literally the same function
+        // (`sat_doppler_legs`), so the readout and the writes cannot disagree.
+        // A hand-copy here once skipped the beacon guard and displayed an
+        // uplink number nothing was writing.
+        let tempo_core::doppler::Legs {
+            downlink: down,
+            uplink: up,
+        } = self.sat_doppler_legs();
+        if !down && !up {
             return None;
         }
-        let st = self.sat_tune.as_ref()?;
         let t = tempo_core::doppler::tuning(&st.transponder, st.state, range_rate_km_s);
         Some(SatTuningNow {
             label: st.label.clone(),
             index: st.index,
             inverting: st.transponder.invert,
-            downlink_hz: t.downlink_hz,
-            uplink_hz: t.uplink_hz,
-            downlink_shift_hz: t.downlink_shift_hz,
-            uplink_shift_hz: t.uplink_shift_hz,
+            downlink_hz: down.then_some(t.downlink_hz),
+            uplink_hz: up.then_some(t.uplink_hz),
+            downlink_shift_hz: down.then_some(t.downlink_shift_hz),
+            uplink_shift_hz: up.then_some(t.uplink_shift_hz),
             // CLAMPED, because `tuning` above clamps before computing the
             // frequencies. Reporting the raw stored offset would let a cursor
             // drawn at it sit outside the passband it is drawn on, disagreeing
@@ -19372,10 +19511,11 @@ mod tests {
     }
 
     #[test]
-    fn doppler_never_touches_the_radio_until_the_operator_opts_in() {
-        // Two independent opt-ins, both off by default: a station with no
-        // satellite interest must never have its dial moved by a pass, and a
-        // wrong VFO mapping is the one that transmits on your own downlink.
+    fn doppler_corrects_the_downlink_and_waits_for_the_uplink() {
+        // The consent split, at the tick. The receive dial follows the bird as
+        // soon as a transponder is held — it cannot transmit, so it asks for
+        // nothing. The transmit VFO waits for a mapping confirmed for this
+        // radio, because a wrong one transmits on your own downlink.
         use tempo_core::doppler::Transponder;
         let tp = Transponder {
             uplink_centre_hz: 145_965_000,
@@ -19387,27 +19527,17 @@ mod tests {
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
         let dial_before = e.settings().dial_mhz;
 
-        // Default settings: doppler off, mapping Off.
-        assert!(e.sat_doppler_tick(5.0, 1_000, false).is_none());
-        assert_eq!(e.settings().dial_mhz, dial_before, "dial untouched");
+        // DEFAULT settings — nothing configured, nothing confirmed.
+        let c = e
+            .sat_doppler_tick(5.0, 1_000, false)
+            .expect("a held transponder is the whole ask for the downlink");
+        assert!(c.downlink_hz.is_some(), "the dial follows the bird");
+        assert_eq!(c.uplink_hz, None, "the transmit VFO is not ours yet");
+        assert_ne!(e.settings().dial_mhz, dial_before, "dial moved");
 
-        // Doppler on but no mapping chosen: still nothing.
-        {
-            let mut s = e.settings().clone();
-            s.sat_doppler = true;
-            e.apply_settings(s);
-        }
-        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
-        assert!(e.sat_doppler_tick(5.0, 2_000, false).is_none());
-        assert_eq!(e.settings().dial_mhz, dial_before, "no mapping ⇒ no writes");
-
-        // Opted in properly: the first correction of the pass goes out.
-        {
-            let mut s = e.settings().clone();
-            s.sat_doppler = true;
-            s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
-            e.apply_settings(s);
-        }
+        // Confirmed for this radio: the first correction of the pass goes out
+        // on BOTH legs.
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
         let c = e
             .sat_doppler_tick(5.0, 3_000, false)
@@ -19463,12 +19593,7 @@ mod tests {
         };
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_frequency(435.640, "70cm", "USB");
-        {
-            let mut s = e.settings().clone();
-            s.sat_doppler = true;
-            s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
-            e.apply_settings(s);
-        }
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
 
         // Before any tick there is no range-rate, so a knob move is DECLINED
@@ -19495,10 +19620,11 @@ mod tests {
         assert_eq!(now.offset_hz, 5_000, "the offset IS where they tuned");
         // INVERTING: up 5 kHz on the downlink is DOWN 5 kHz on the uplink.
         assert_eq!(
-            now.uplink_hz, 145_960_000,
+            now.uplink_hz,
+            Some(145_960_000),
             "an inverting transponder mirrors the operator's move"
         );
-        assert_eq!(now.downlink_hz, 435_645_000);
+        assert_eq!(now.downlink_hz, Some(435_645_000));
 
         // The TX gate identity moved with them: an over planned at the old spot
         // in the passband is no longer the same tuning.
@@ -19524,7 +19650,7 @@ mod tests {
         // Our OWN Doppler write, seen coming back off the rig, is not an
         // operator move — otherwise every correction would bump the TX-gate
         // identity and nudge the offset for the whole pass.
-        let sent = e.sat_tuning_now(rate).unwrap().downlink_hz;
+        let sent = e.sat_tuning_now(rate).unwrap().downlink_hz.unwrap();
         e.sat_doppler_tick(rate, 20_000, false);
         assert!(
             !e.sat_observe_operator_tune(sent),
@@ -19545,10 +19671,9 @@ mod tests {
         {
             let mut s = e.settings().clone();
             s.operating_mode = crate::settings::OperatingMode::Phone;
-            s.sat_doppler = true;
-            s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
             e.apply_settings(s);
         }
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         (e, tp)
     }
 
@@ -19605,21 +19730,34 @@ mod tests {
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
         assert!(e.sat_tx_mode().is_some(), "precondition");
 
-        // Doppler off: the operator never opted the radio in.
+        // Doppler switched off: the operator told us to leave the radio alone.
         {
             let mut s = e.settings().clone();
-            s.sat_doppler = false;
+            s.sat_doppler_off = true;
             e.apply_settings(s);
         }
         assert_eq!(e.sat_tx_mode(), None, "Doppler off ⇒ we drive nothing");
-
-        // Receive-only mapping: we must never touch a transmit VFO at all.
         {
             let mut s = e.settings().clone();
-            s.sat_doppler = true;
-            s.sat_vfo_map = crate::settings::SatVfoMap::DownlinkOnly;
+            s.sat_doppler_off = false;
             e.apply_settings(s);
         }
+
+        // The mapping is not confirmed for THIS radio: the frequency is not
+        // ours to write, so neither is the sideband. (Direct live-state
+        // writes: the consent pair is engine-owned and no longer reachable
+        // through a settings payload — round 3, defect 2.)
+        let confirmed = e.settings.sat_uplink_radios.clone();
+        e.settings.sat_uplink_radios = Some(Vec::new());
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "an unconfirmed mapping commands nothing onto a transmit VFO"
+        );
+        e.settings.sat_uplink_radios = confirmed;
+
+        // Receive-only mapping: we must never touch a transmit VFO at all.
+        e.settings.sat_vfo_map = crate::settings::SatVfoMap::DownlinkOnly;
         assert_eq!(
             e.sat_tx_mode(),
             None,
@@ -19627,11 +19765,7 @@ mod tests {
         );
 
         // A beacon has no uplink to be in any mode.
-        {
-            let mut s = e.settings().clone();
-            s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
-            e.apply_settings(s);
-        }
+        e.settings.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
         let beacon = tempo_core::doppler::Transponder {
             uplink_centre_hz: 0,
             ..tp
@@ -19764,6 +19898,20 @@ mod tests {
     // repeater tune, on the nominal centres, RX-side only.
 
     /// RS-44's inverting linear transponder: 70 cm down, 2 m up.
+    /// Seed the uplink consent pair the way it exists on a real station: `map`
+    /// confirmed for EVERY radio in the roster — exactly what the migration
+    /// materializes a legacy station-wide grant into, and what an operator
+    /// confirming each rig produces. The pair is LIVE state `apply_settings`
+    /// refuses from a form payload (round 3, defect 2), so tests write it
+    /// through the same rule the verbs use, never through a settings save.
+    fn confirm_map_for_all(e: &mut Engine, map: crate::settings::SatVfoMap) {
+        e.settings.ensure_radio_profiles();
+        let ids: Vec<u32> = e.settings.radios.iter().map(|p| p.id).collect();
+        for id in ids {
+            e.settings.confirm_sat_uplink(id, map);
+        }
+    }
+
     const RS44: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
         uplink_centre_hz: 145_965_000,
         downlink_centre_hz: 435_640_000,
@@ -19792,9 +19940,8 @@ mod tests {
         e.set_routing_rules(rules);
         let mut s = e.settings().clone();
         s.operating_mode = crate::settings::OperatingMode::Phone;
-        s.sat_doppler = true;
-        s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
         e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         (e, ic9700, ft991a)
     }
 
@@ -19959,9 +20106,7 @@ mod tests {
         assert_eq!(e.sat_split_tx_vfo(14_235_000), Ok("VFOB"));
 
         // An A/B mapping keeps the shipped path even for the bird's uplink.
-        let mut s = e.settings().clone();
-        s.sat_vfo_map = crate::settings::SatVfoMap::ADownBUp;
-        e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 2_000_000);
         assert_eq!(e.sat_split_tx_vfo(145_965_000), Ok("VFOB"));
@@ -19969,9 +20114,7 @@ mod tests {
         // Main = uplink / Sub = downlink is NOT drivable (satellite mode fixes
         // TX on Sub): refused in the operator's words, never silently accepted
         // — accepting it would transmit on their own downlink.
-        let mut s = e.settings().clone();
-        s.sat_vfo_map = crate::settings::SatVfoMap::MainUpSubDown;
-        e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainUpSubDown);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 3_000_000);
         let err = e.sat_split_tx_vfo(145_965_000).unwrap_err();
@@ -20003,9 +20146,8 @@ mod tests {
         e.set_active_radio(0);
         let mut s = e.settings().clone();
         s.operating_mode = crate::settings::OperatingMode::Phone;
-        s.sat_doppler = true;
-        s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
         e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         e.settings.band = "20m".into();
         e.settings.dial_mhz = 14.074;
         // The radio loop's capability probe has answered for the ACTIVE rig.
@@ -20143,36 +20285,39 @@ mod tests {
     }
 
     #[test]
-    fn none_leave_the_dial_to_me_still_means_exactly_that() {
-        // The VFO map is the "you may drive my radio" consent. Off must keep the
-        // pick as a pure bookkeeping hold: no QSY, no split, no radio handoff.
-        let (mut e, _, _) = sat_station();
-        let mut s = e.settings().clone();
-        s.sat_vfo_map = crate::settings::SatVfoMap::Off;
-        e.apply_settings(s);
+    fn no_uplink_mapping_still_tunes_the_dial_and_never_the_transmit_vfo() {
+        // The VFO map is the "you may drive my TRANSMIT VFO" consent, and
+        // nothing else. With none chosen the pick does the whole receive job —
+        // route to the rig that owns the band, QSY it to the downlink — and
+        // leaves the transmit leg exactly where it found it.
+        let (mut e, ic9700, _) = sat_station();
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::Off);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         let b = e.sat_tune_nominal(false, 1_000_000);
 
-        assert_eq!(e.settings.active_radio, 0, "no handoff");
-        assert!((e.settings.dial_mhz - 14.074).abs() < 1e-9, "no QSY");
+        assert_eq!(e.settings.active_radio, ic9700, "the QSY still routes");
+        assert!(
+            (e.settings.dial_mhz - 435.640).abs() < 1e-9,
+            "dial on the bird"
+        );
         assert_eq!(e.split_tx_mhz(), None, "no transmit frequency written");
-        assert_eq!(b.downlink_mhz, None);
+        assert_eq!(b.pending_uplink_mhz, None);
         assert_eq!(b.uplink_mhz, None);
-        assert!(b.note.is_some(), "and the rail is told WHY nothing moved");
+        assert_eq!(e.sat_tx_mode(), None, "and no sideband onto that VFO");
         assert!(
             e.sat_transponder_held().is_some(),
-            "the hold still stands — the pick was not refused, only the tune"
+            "the hold still stands — the pick was not refused, only the uplink"
         );
     }
 
     #[test]
     fn doppler_switched_off_holds_the_transponder_but_tunes_nothing() {
-        // The rail's other fail-safe switch. Same contract as the Off mapping:
-        // hold yes, radio no, and say so.
+        // The operator's own OFF switch — the one refusal left in the pick.
+        // Hold yes, radio no, and say so.
         let (mut e, _, _) = sat_station();
         let mut s = e.settings().clone();
-        s.sat_doppler = false;
+        s.sat_doppler_off = true;
         e.apply_settings(s);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
@@ -20188,9 +20333,7 @@ mod tests {
         // Downlink-only is the half-duplex listener. The dial moves; the
         // transmit leg is not ours to write, exactly as in `sat_doppler_tick`.
         let (mut e, ic9700, _) = sat_station();
-        let mut s = e.settings().clone();
-        s.sat_vfo_map = crate::settings::SatVfoMap::DownlinkOnly;
-        e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::DownlinkOnly);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         let b = e.sat_tune_nominal(false, 1_000_000);
@@ -20202,6 +20345,245 @@ mod tests {
         assert!(b.pending_downlink_mhz.is_some(), "the dial leg is queued");
     }
 
+    /// A FRESH install on the reporting operator's own station: one IC-9700 on
+    /// native CI-V, and NOT ONE satellite setting touched. Everything about the
+    /// satellite half is whatever the defaults are.
+    fn fresh_ic9700_station() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.rig_model = 3081;
+        e.settings.rig_model_name = "Icom IC-9700".into();
+        e.settings.icom_native_cat = true;
+        e.settings.sync_active_from_flat();
+        e.rename_radio(0, "IC-9700");
+        e.settings.band = "70cm".into();
+        e.settings.dial_mhz = 432.100;
+        e
+    }
+
+    #[test]
+    fn a_pass_corrects_the_downlink_with_no_settings_visit() {
+        // THE operator-reported bug: "he armed a pass and Doppler did not tune,
+        // because it is gated behind two Settings switches he had never set."
+        // Arming a pass and holding a transponder IS the intent; correcting the
+        // receive dial cannot transmit, so it asks for nothing.
+        let mut e = fresh_ic9700_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+
+        // The pre-AOS pick puts the dial on the nominal downlink centre.
+        let b = e.sat_tune_nominal(false, 1_000_000);
+        assert!(
+            (e.settings.dial_mhz - 435.640).abs() < 1e-9,
+            "the pick tunes the downlink, got {}",
+            e.settings.dial_mhz
+        );
+        assert!(b.pending_downlink_mhz.is_some());
+
+        // And in the pass, the correction follows the bird down the band.
+        let c = e
+            .sat_doppler_tick(5.0, 2_000_000, false)
+            .expect("a held transponder in a pass corrects the downlink");
+        assert!(
+            c.downlink_hz.is_some_and(|hz| hz < 435_640_000),
+            "receding ⇒ hear low"
+        );
+        assert!(
+            (e.settings.dial_mhz - 435.640).abs() > 1e-6,
+            "the dial moved"
+        );
+    }
+
+    #[test]
+    fn the_uplink_is_not_written_until_the_mapping_is_confirmed() {
+        // The other half of the same ruling: the RECEIVE leg is free, the
+        // TRANSMIT leg is not. Nothing reaches the transmit VFO — not the
+        // pick's split, not the tick's, not the inverting-bird sideband —
+        // until the operator has confirmed a mapping for this radio.
+        let mut e = fresh_ic9700_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        let b = e.sat_tune_nominal(false, 1_000_000);
+        assert_eq!(e.split_tx_mhz(), None, "no split from the pick");
+        assert_eq!(b.pending_uplink_mhz, None);
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "no sideband onto a VFO we never tuned"
+        );
+
+        let c = e.sat_doppler_tick(5.0, 2_000_000, false).expect("downlink");
+        assert_eq!(c.uplink_hz, None, "the transmit leg is not ours yet");
+        assert_eq!(e.split_tx_mhz(), None, "and nothing was queued for the rig");
+    }
+
+    #[test]
+    fn confirming_the_derived_mapping_hands_over_the_uplink() {
+        // The one-time confirmation, end to end: the rail writes the derived
+        // mapping AND records the radio it was confirmed for, and only then
+        // does the transmit leg move.
+        let mut e = fresh_ic9700_station();
+        assert_eq!(
+            e.settings().sat_uplink_offer(),
+            crate::settings::SatUplinkOffer::Confirm(crate::settings::SatVfoMap::MainDownSubUp),
+            "an IC-9700 on native CI-V is unambiguous"
+        );
+        // The operator's click, through THE verb (the same one the rail's
+        // confirm button and the Settings select invoke).
+        e.confirm_sat_uplink(None, Some(crate::settings::SatVfoMap::MainDownSubUp));
+
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        let b = e.sat_tune_nominal(false, 1_000_000);
+        assert_eq!(
+            b.pending_uplink_mhz.map(|m| (m * 1e6).round() as u64),
+            Some(145_965_000)
+        );
+        let c = e
+            .sat_doppler_tick(5.0, 2_000_000, false)
+            .expect("both legs");
+        assert!(c.uplink_hz.is_some_and(|hz| hz > 145_965_000));
+    }
+
+    #[test]
+    fn a_confirmation_does_not_carry_to_another_radio() {
+        // Peg-lock, a routing rule or a mid-pass handoff can put a DIFFERENT
+        // rig under the split. A mapping confirmed for the IC-9700 says
+        // nothing about how the FTdx10 is wired, so the uplink stays put.
+        let (mut e, ic9700, _) = sat_station();
+        // Narrow the helper's every-radio consent to the 9700 alone (live
+        // state; a settings payload can no longer carry it).
+        e.settings.sat_uplink_radios = Some(vec![ic9700]);
+        assert!(
+            !e.settings().sat_doppler_uplink(),
+            "radio 0 is not the confirmed rig"
+        );
+
+        e.set_active_radio(ic9700);
+        assert!(
+            e.settings().sat_doppler_uplink(),
+            "on the confirmed rig the same mapping drives the uplink"
+        );
+    }
+
+    #[test]
+    fn an_existing_explicit_mapping_survives_the_upgrade() {
+        // The upgrading operator who ALREADY had a live mapping keeps it, is
+        // not asked again on the radios they had, and is not downgraded to
+        // downlink-only.
+        let (mut e, _, _) = sat_station();
+        // What `Settings::load` now delivers for that station: the grant
+        // MATERIALIZED as concrete consent for every radio in the file
+        // (round 3, defect 1 — the `None` sentinel could not survive a
+        // save+relaunch, so it no longer exists post-load).
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
+        assert!(e.settings().sat_doppler_uplink());
+
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        let c = e
+            .sat_doppler_tick(5.0, 2_000_000, false)
+            .expect("both legs");
+        assert!(c.uplink_hz.is_some(), "their uplink still follows the bird");
+    }
+
+    #[test]
+    fn nothing_moves_without_a_pass_and_a_held_transponder() {
+        // What replaced the default-off switch as the non-satellite station's
+        // protection, pinned rather than inherited on faith: correction needs a
+        // HELD transponder (the tick has nothing to tune without one) and an
+        // owned dial (`steer_sat_dial` refuses otherwise). An HF station that
+        // never opens Satellites satisfies neither.
+        let mut e = fresh_ic9700_station();
+        e.settings.band = "20m".into();
+        e.settings.dial_mhz = 14.074;
+        assert!(
+            e.sat_doppler_tick(5.0, 1_000_000, false).is_none(),
+            "no transponder held ⇒ no correction"
+        );
+        assert!((e.settings.dial_mhz - 14.074).abs() < 1e-9);
+
+        // Even holding one, the dial has to have been handed over.
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.set_sat_dial_owner(None);
+        e.sat_doppler_tick(5.0, 2_000_000, false);
+        assert!(
+            (e.settings.dial_mhz - 14.074).abs() < 1e-9,
+            "the dial is the operator's until a pass takes it"
+        );
+    }
+
+    #[test]
+    fn the_operators_own_off_switch_still_stops_everything() {
+        // Removing a default-off GATE is not removing the OFF SWITCH. An
+        // operator who says "don't touch my radio" is obeyed on both legs.
+        let mut e = fresh_ic9700_station();
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
+        let mut s = e.settings().clone();
+        s.sat_doppler_off = true;
+        e.apply_settings(s);
+
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        let b = e.sat_tune_nominal(false, 1_000_000);
+        assert!((e.settings.dial_mhz - 432.100).abs() < 1e-9, "no QSY");
+        assert_eq!(e.split_tx_mhz(), None);
+        assert!(b.note.is_some(), "and the rail is told why");
+        assert!(e.sat_doppler_tick(5.0, 2_000_000, false).is_none());
+    }
+
+    #[test]
+    fn the_tuning_readout_reports_only_the_legs_being_driven() {
+        // `sat_tuning_now` fills every Doppler field the UI shows. With the
+        // uplink unconfirmed it must not hand back an uplink frequency for a
+        // leg nobody is writing — a computed number displayed as a done thing.
+        let mut e = fresh_ic9700_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        let now = e.sat_tuning_now(5.0).expect("the downlink IS being driven");
+        assert!(now.downlink_hz.is_some());
+        assert_eq!(now.uplink_hz, None);
+        assert_eq!(now.uplink_shift_hz, None);
+    }
+
+    #[test]
+    fn an_ambiguous_station_is_asked_and_never_guessed_for() {
+        use crate::settings::{SatUplinkOffer, SatVfoMap};
+        // A confident default for a known full-duplex rig is not a licence to
+        // guess for an unknown one.
+        let mut e = fresh_ic9700_station();
+        // Same radio, served by Hamlib rather than our own CI-V: the Main/Sub
+        // split recipe is not wired there, so the mapping is not ours to
+        // pre-fill — ask.
+        let mut s = e.settings().clone();
+        s.icom_native_cat = false;
+        s.sync_active_from_flat();
+        e.apply_settings(s);
+        assert_eq!(e.settings().sat_uplink_offer(), SatUplinkOffer::Ask);
+
+        // A full-duplex non-Icom: full duplex is a fact, WHICH VFO is wiring.
+        let mut s = e.settings().clone();
+        s.rig_model = 1001; // Yaesu FT-847
+        s.sync_active_from_flat();
+        e.apply_settings(s);
+        assert_eq!(e.settings().sat_uplink_offer(), SatUplinkOffer::Ask);
+
+        // A half-duplex HF rig has no uplink leg to offer at all.
+        let mut s = e.settings().clone();
+        s.rig_model = 3073; // IC-7300
+        s.sync_active_from_flat();
+        e.apply_settings(s);
+        assert_eq!(e.settings().sat_uplink_offer(), SatUplinkOffer::Nothing);
+
+        // And the undrivable mapping is never derived anywhere.
+        for model in [3081u32, 3044, 3068, 3090, 1001, 2014, 3073, 0] {
+            let mut s = e.settings().clone();
+            s.rig_model = model;
+            s.icom_native_cat = true;
+            s.sync_active_from_flat();
+            e.apply_settings(s);
+            assert_ne!(
+                e.settings().sat_uplink_offer(),
+                SatUplinkOffer::Confirm(SatVfoMap::MainUpSubDown),
+                "model {model}: satellite mode always transmits on Sub"
+            );
+        }
+    }
+
     #[test]
     fn an_uplink_only_mapping_names_the_rig_that_actually_got_the_split() {
         // The one place routing and the writes come apart. Uplink-only drives no
@@ -20209,9 +20591,7 @@ mod tests {
         // split lands on whichever radio was already active. Naming the ROUTED
         // rig here would print "IC-9700" beside a split that went to the FTdx10.
         let (mut e, ic9700, _) = sat_station();
-        let mut s = e.settings().clone();
-        s.sat_vfo_map = crate::settings::SatVfoMap::UplinkOnly;
-        e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         let b = e.sat_tune_nominal(false, 1_000_000);
@@ -20234,14 +20614,202 @@ mod tests {
     }
 
     #[test]
+    fn a_radio_swap_clears_a_queued_uplink_split() {
+        // Round 2, defect 4. `set_frequency` and `observe_rig_freq` both take
+        // the split one-shot on a QSY so a stale split can never shift TX on
+        // the next frequency. A RADIO SWAP is a harder context change than
+        // either — the queued uplink was consented against the OUTGOING rig —
+        // yet `set_active_radio` left it pending, so the loop applied it to
+        // whichever radio came next.
+        let (mut e, ic9700, _) = sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(false, 1_000_000);
+        assert_eq!(e.settings().active_radio, ic9700, "precondition: routed");
+        // Drain the pick's own one-shot: the loop applied it to the 9700.
+        assert_eq!(e.take_split_request(), Some(Some(145.965)));
+        // Doppler queues the NEXT correction for the 9700…
+        e.sat_doppler_tick(5.0, 2_000_000, false);
+        assert!(
+            e.split_tx_mhz().is_some(),
+            "precondition: an uplink split is queued for the 9700"
+        );
+        // …and the operator swaps radios before the loop applies it.
+        e.set_active_radio(0);
+        assert_eq!(
+            e.split_tx_mhz(),
+            None,
+            "a queued split must not follow the operator onto another rig"
+        );
+        assert_eq!(
+            e.take_split_request(),
+            Some(None),
+            "the one-shot now clears the split instead of applying the stale one"
+        );
+    }
+
+    #[test]
+    fn a_stale_settings_form_save_cannot_resurrect_a_pruned_uplink_consent() {
+        // ROUND 3, DEFECT 2 — the exact resurrection sequence, end to end.
+        // The Settings panel's form is a WHOLE-Settings snapshot taken when it
+        // opened. The operator then replaces a rig through the panel's own
+        // LIVE verbs — set_active_radio / remove_radio (backend prunes the
+        // consent) / add_radio (the freed id is REUSED) — and later hits Save.
+        // apply_settings took `sat_uplink_radios` verbatim from that stale
+        // payload, and the ensure_routing_targets prune keys on id EXISTENCE
+        // (the reused id is live again), so the replacement rig came out
+        // confirmed for a mapping nobody confirmed on it and the next pick
+        // queued a transmit frequency for it.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.rename_radio(0, "FTdx10");
+        let ic9700 = e.add_radio(); // id 1, becomes active
+        e.rename_radio(ic9700, "IC-9700");
+        e.confirm_sat_uplink(
+            Some(ic9700),
+            Some(crate::settings::SatVfoMap::MainDownSubUp),
+        );
+        assert!(e.settings().sat_doppler_uplink(), "precondition: confirmed");
+
+        // The panel opens: its form is a snapshot carrying satUplinkRadios=[1].
+        let stale_form = e.settings().clone();
+        assert_eq!(stale_form.sat_uplink_radios.as_deref(), Some(&[ic9700][..]));
+
+        // The operator replaces the rig through the panel's live verbs.
+        e.set_active_radio(0);
+        assert!(e.remove_radio(ic9700));
+        assert!(
+            !e.settings().sat_uplink_confirmed(ic9700),
+            "precondition: the backend pruned the consent with the radio"
+        );
+        let reused = e.add_radio();
+        assert_eq!(reused, ic9700, "the freed id is reused — the trap");
+
+        // A later Save sends the stale snapshot.
+        e.apply_settings(stale_form);
+        assert!(
+            !e.settings().sat_uplink_confirmed(reused),
+            "a stale form Save must not hand the new rig a confirmation nobody gave it"
+        );
+        assert!(!e.settings().sat_doppler_uplink());
+
+        // …and the pick writes no transmit frequency for it.
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        let b = e.sat_tune_nominal(false, 1_000_000);
+        assert_eq!(
+            e.split_tx_mhz(),
+            None,
+            "no split may be queued off a resurrected consent"
+        );
+        assert_eq!(b.pending_uplink_mhz, None);
+    }
+
+    #[test]
+    fn the_confirm_verb_records_the_live_active_radio_and_refuses_ghosts() {
+        // ROUND 3, DEFECT 3 (backend half). The Settings select's form
+        // snapshot can hold a stale activeRadio; the verb resolves `None`
+        // against the radio active AT WRITE TIME. And an id the roster does
+        // not contain is refused outright — freed ids are reused, so a ghost
+        // consent would be inherited by the next rig added.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let b = e.add_radio(); // becomes active
+        e.confirm_sat_uplink(None, Some(crate::settings::SatVfoMap::MainDownSubUp));
+        assert!(
+            e.settings().sat_uplink_confirmed(b),
+            "None resolves to the radio active at write time"
+        );
+        assert!(!e.settings().sat_uplink_confirmed(0));
+
+        e.confirm_sat_uplink(Some(99), Some(crate::settings::SatVfoMap::MainDownSubUp));
+        assert!(
+            !e.settings().sat_uplink_confirmed(99),
+            "a radio id the roster does not contain is refused"
+        );
+    }
+
+    #[test]
+    fn a_map_less_confirm_records_the_mapping_in_force_at_write_time() {
+        // ROUND 4, residual 3. The rail's "confirm uplink" for a mapping
+        // already IN FORCE posts no map at all: the DTO's copy of it is
+        // poll-time state, and the mapping can change between the poll and
+        // the click. `None` resolves against the mapping in force AT WRITE
+        // TIME — the same rule the radio id follows.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let b = e.add_radio();
+        // The mapping in force moves AFTER the poll the click was based on…
+        e.confirm_sat_uplink(Some(0), Some(crate::settings::SatVfoMap::UplinkOnly));
+        e.confirm_sat_uplink(Some(0), Some(crate::settings::SatVfoMap::ADownBUp));
+        // …and the map-less confirm consents THIS radio to what is in force
+        // NOW — never to the stale poll-time value.
+        e.confirm_sat_uplink(Some(b), None);
+        assert_eq!(
+            e.settings().sat_vfo_map,
+            crate::settings::SatVfoMap::ADownBUp,
+            "a map-less confirm never re-points the mapping"
+        );
+        assert!(e.settings().sat_uplink_confirmed(b));
+        assert!(
+            e.settings().sat_uplink_confirmed(0),
+            "confirming the mapping in force is not a change — other consents stay"
+        );
+    }
+
+    #[test]
+    fn a_beacon_never_reaches_the_transmit_vfo_even_confirmed() {
+        // Round 2, defect 5 (engine half). `sat_tune_nominal` always guarded
+        // the uplink leg with `uplink_centre_hz != 0`; the tick and the
+        // readout did not — so a hand-picked beacon under a confirmed mapping
+        // put the bird's own DOWNLINK on the split TX dial. One legs
+        // derivation (`sat_doppler_legs`) now serves all of them.
+        //
+        // ROUND 4, residual 1: consent is seeded through the ENGINE verb —
+        // the one real writer. The old seeding (confirm on a settings clone,
+        // then `apply_settings`) went vacuous the moment round 3 taught
+        // `apply_settings` to discard a payload's consent pair: this test
+        // kept passing with consent never live, guarding nothing. The
+        // precondition assert keeps it honest.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.confirm_sat_uplink(None, Some(crate::settings::SatVfoMap::MainDownSubUp));
+        assert!(
+            e.settings().sat_doppler_uplink(),
+            "precondition: the consent is LIVE — without it every assert below is vacuous"
+        );
+        let beacon = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 0,
+            downlink_centre_hz: 435_605_000,
+            invert: false,
+            half_width_hz: 0,
+        };
+        e.set_sat_transponder(Some(("RS-44|CW beacon".into(), 1, beacon)));
+
+        let c = e
+            .sat_doppler_tick(5.0, 1_000, false)
+            .expect("the downlink still corrects — that is the bird's one leg");
+        assert!(c.downlink_hz.is_some());
+        assert_eq!(
+            c.uplink_hz, None,
+            "a beacon has no uplink leg — nothing to write"
+        );
+        assert_eq!(
+            e.split_tx_mhz(),
+            None,
+            "no transmit frequency may be queued for a downlink-only bird"
+        );
+        let now = e.sat_tuning_now(5.0).expect("readout mirrors the tick");
+        assert_eq!(now.uplink_hz, None, "no computed number shown as done");
+        assert_eq!(now.uplink_shift_hz, None);
+        assert!(now.downlink_hz.is_some());
+    }
+
+    #[test]
     fn a_beacon_under_an_uplink_only_map_claims_nothing_it_did_not_write() {
         // A beacon has no transmit leg, so an uplink-only mapping drives NEITHER
         // leg of it. The line must not borrow the uplink-only wording and report
         // "the transmit VFO is set" about a VFO nothing was written to.
         let (mut e, _, _) = sat_station();
-        let mut s = e.settings().clone();
-        s.sat_vfo_map = crate::settings::SatVfoMap::UplinkOnly;
-        e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
 
         let beacon = tempo_core::doppler::Transponder::channel(0, 435_605_000);
         e.set_sat_transponder(Some(("RS-44|CW beacon".into(), 1, beacon)));
@@ -20255,6 +20823,43 @@ mod tests {
             !note.contains("transmit VFO is set"),
             "must not claim a write that never happened, got: {note}"
         );
+    }
+
+    #[test]
+    fn an_undrivable_hold_outranks_the_unconfirmed_mapping_in_the_note() {
+        // ROUND 4, residual 2. A simplex or beacon hold under an UNCONFIRMED
+        // uplink-only mapping: both reasons are true at once, but only one of
+        // them names anything. "Confirm it on the pass rail" is a dead end —
+        // the hold has no uplink leg to drive, confirmed or not — so the
+        // undrivable-hold explanation must win the branch, for BOTH hold
+        // shapes.
+        for tp in [
+            // a beacon: no transmit leg at all
+            tempo_core::doppler::Transponder::channel(0, 435_605_000),
+            // a simplex channel: one dial carries both legs
+            tempo_core::doppler::Transponder::channel(145_825_000, 145_825_000),
+        ] {
+            let (mut e, ic9700, _) = sat_station();
+            // Uplink-only IN FORCE, confirmed only for the 9700 — the ACTIVE
+            // radio (the FTdx10) is unconfirmed: the second-rig shape.
+            e.confirm_sat_uplink(Some(ic9700), Some(crate::settings::SatVfoMap::UplinkOnly));
+            assert!(
+                !e.settings().sat_doppler_uplink(),
+                "precondition: unconfirmed for the radio in play"
+            );
+            e.set_sat_transponder(Some(("bird|hold".into(), 0, tp)));
+            let b = e.sat_tune_nominal(false, 1_000_000);
+            assert_eq!(e.split_tx_mhz(), None);
+            let note = b.note.expect("nothing moved ⇒ there is a reason to give");
+            assert!(
+                note.contains("drives no leg"),
+                "an undrivable hold outranks the unconfirmed mapping, got: {note}"
+            );
+            assert!(
+                !note.contains("confirmed"),
+                "must not send the operator to a confirmation that drives nothing, got: {note}"
+            );
+        }
     }
 
     #[test]
@@ -20313,9 +20918,8 @@ mod tests {
         e.settings.dial_mhz = 14.074;
         let mut s = e.settings().clone();
         s.operating_mode = crate::settings::OperatingMode::Phone;
-        s.sat_doppler = true;
-        s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
         e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         (e, ic9700)
     }
 
@@ -20433,14 +21037,12 @@ mod tests {
         }
     }
 
-    /// Arm the two consents `sat_tune_nominal` checks before it will move anything. Routing
-    /// rules survive `apply_settings` (the live-verb fields are taken and restored), so callers
-    /// set rules FIRST via `set_routing_rules`, then arm.
+    /// Arm the two consents `sat_tune_nominal` checks before it will move anything — the
+    /// mapping confirmed for every rig, exactly as the migration materializes a legacy grant.
+    /// The consent pair is live state like the routing rules (both survive `apply_settings`),
+    /// so callers set rules via `set_routing_rules`, arm here, and neither rides a save.
     fn sat_ready(e: &mut Engine) {
-        let mut s = e.settings().clone();
-        s.sat_doppler = true;
-        s.sat_vfo_map = crate::settings::SatVfoMap::MainDownSubUp;
-        e.apply_settings(s);
+        confirm_map_for_all(e, crate::settings::SatVfoMap::MainDownSubUp);
     }
 
     /// The operator's shack plus their requested Satellite designation: the FM & APRS →
@@ -20570,9 +21172,7 @@ mod tests {
         // simplex on their own downlink, the precise hazard that fall-through's
         // early return exists to prevent. `sent` records what was DONE, per leg.
         let (mut e, _, _) = sat_station();
-        let mut s = e.settings().clone();
-        s.sat_vfo_map = crate::settings::SatVfoMap::UplinkOnly;
-        e.apply_settings(s);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 1_000_000);

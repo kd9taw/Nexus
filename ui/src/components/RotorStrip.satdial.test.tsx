@@ -35,6 +35,12 @@ const track = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   name: 'RS-44',
   state: 'tracking',
   mode: 'doppler-only',
+  dopplerDownlink: true,
+  dopplerUplink: true,
+  uplinkOffer: 'none',
+  uplinkOfferMap: null,
+  uplinkRadio: 'IC-9700',
+  uplinkRadioId: 1,
   azDeg: null,
   elDeg: null,
   aosAzDeg: 100,
@@ -98,5 +104,23 @@ describe('the dial-ownership marker (no rotor configured)', () => {
     const { container } = render(<RotorStrip />)
     await waitFor(() => expect(api.getSatTrackStatus).toHaveBeenCalled())
     expect(container.textContent).toBe('')
+  })
+
+  it('never claims the dial for an uplink-only track — it names the TX VFO (round 3)', async () => {
+    // Defect 5: dial ownership keys on the DOWNLINK leg. Under uplink-only
+    // confirmed-and-driving the engine writes only the split TX VFO; the chip
+    // stays visible (a frequency is still moving by itself) but must name the
+    // VFO it actually owns, not the dial it never touched.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        track({ dopplerDownlink: false, dopplerUplink: true, downlinkHz: null }),
+      ),
+    )
+    render(<RotorStrip />)
+    const chip = await screen.findByRole('group', { name: /doppler owns the tx vfo/i })
+    expect(chip.textContent).toMatch(/RS-44/)
+    expect(chip.textContent).not.toMatch(/holds the dial/i)
+    expect(chip.textContent).toMatch(/TX VFO/)
+    expect(screen.queryByRole('group', { name: /doppler owns the dial/i })).toBeNull()
   })
 })

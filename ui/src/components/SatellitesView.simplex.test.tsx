@@ -91,10 +91,20 @@ const held = (over: Partial<SatBinding> = {}): SatTransponderHeld => ({
   binding: binding(over),
 })
 
-const trackStatus = (): SatTrackStatus => ({
+const trackStatus = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   name: 'ISS',
   state: 'armed',
   mode: 'doppler-only',
+  dopplerDownlink: true,
+  // The HONEST wire for a held simplex channel: one dial carries both legs,
+  // the engine writes no split, so the uplink leg reads false even under a
+  // confirmed mapping (Engine::sat_doppler_legs — the same derivation the
+  // tick writes by).
+  dopplerUplink: false,
+  uplinkOffer: 'none',
+  uplinkOfferMap: null,
+  uplinkRadio: 'IC-9700',
+  uplinkRadioId: 1,
   azDeg: null,
   elDeg: null,
   aosAzDeg: 100,
@@ -115,13 +125,14 @@ const trackStatus = (): SatTrackStatus => ({
   elementEpochUnix: NOW - 104_000,
   aosUnix: NOW + 720,
   losUnix: NOW + 1500,
+  ...over,
 })
 
 const settings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
   rotatorModel: 0,
   rotatorHost: '',
-  satDoppler: true,
+  satDopplerOff: false,
   satVfoMap: 'a-up-b-down',
   radioPegged: false,
   ...over,
@@ -186,9 +197,34 @@ describe('a simplex bird on the readiness rail', () => {
     expect(row.querySelector('.sat-rail-state')!.textContent).not.toMatch(/VFO A/)
   })
 
+  it('never promises an uplink confirmation on a one-channel bird', async () => {
+    // Round 2, defect 5. Confirming a Main/Sub mapping on a simplex hold
+    // records a permanent per-radio consent for a split the engine refuses on
+    // this bird — the promise in the offer copy cannot be kept, so the rail
+    // must not render it. (The backend suppresses the offer on such a hold
+    // too; the rail's simplex branch is the belt to that suspender.)
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({ uplinkOffer: 'confirm', uplinkOfferMap: 'main-down-sub-up' }),
+      ),
+    )
+    render(<SatellitesView focusSat="ISS" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const row = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /Doppler/.test(r.textContent ?? ''),
+    )!
+    expect(row.querySelector('.sat-rail-state')!.textContent).toMatch(/same dial/)
+    expect(row.textContent).not.toMatch(/Confirm the uplink/)
+    expect(screen.queryByRole('button', { name: /confirm uplink/i })).toBeNull()
+  })
+
   it('leaves a CROSS-BAND bird alone — two frequencies, no simplex wording', async () => {
     // SO-50 is an FM bird too, but its legs are 2 m up / 70 cm down: it keeps
-    // its split, and nothing here may tell the operator otherwise.
+    // its split, and nothing here may tell the operator otherwise. The wire
+    // reports its uplink genuinely driven.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(trackStatus({ dopplerUplink: true })),
+    )
     api.getSatTransponder.mockImplementation(() =>
       Promise.resolve(
         held({ simplex: false, uplinkMhz: 145.85, downlinkMhz: 436.795, note: null }),
@@ -205,6 +241,8 @@ describe('a simplex bird on the readiness rail', () => {
     const row = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
       /Doppler/.test(r.textContent ?? ''),
     )!
-    expect(row.querySelector('.sat-rail-state')!.textContent).toBe('on')
+    expect(row.querySelector('.sat-rail-state')!.textContent).toBe(
+      'correcting the downlink and the uplink',
+    )
   })
 })

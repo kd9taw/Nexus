@@ -14,10 +14,14 @@
 //    workable transponder (never a beacon; never overriding the operator's explicit
 //    "None"), arm the pass. The click is the consent — nothing arms without it.
 //  - The readiness rail renders the chain AS a chain: five rows (Elements joined in
-//    the currency overhaul), each gate's absence visible and fixable in place. The two Settings switches (satDoppler, satVfoMap)
-//    get live mirrors here — writes go read-modify-write through getSettings →
-//    setSettings so no other setting is clobbered. The rail never flips a fail-safe
-//    default by itself.
+//    the currency overhaul), each gate's absence visible and fixable in place. The
+//    Doppler row reports the two SEPARATELY consented legs from the track itself
+//    (downlink automatic, uplink confirmed per radio) and carries the one-time
+//    uplink confirmation as its fix. The off switch is a live mirror (writes go
+//    read-modify-write through getSettings → setSettings so no other setting is
+//    clobbered); the MAPPING writes through the backend confirmSatUplink verb —
+//    the consent pair is engine-owned live state a settings payload cannot
+//    carry (round 3). The rail never flips a fail-safe default by itself.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
@@ -31,6 +35,7 @@ const api = vi.hoisted(() => ({
   getSatDetail: vi.fn(),
   getSettings: vi.fn(),
   setSettings: vi.fn((_s: unknown) => Promise.resolve({} as never)),
+  confirmSatUplink: vi.fn((_m: unknown, _r?: number) => Promise.resolve({} as never)),
   setSatTransponder: vi.fn(() => Promise.resolve()),
   getSatTransponder: vi.fn((): Promise<import('../types').SatTransponderHeld | null> => Promise.resolve(null)),
   startSatTrack: vi.fn((): Promise<SatTrackStatus | null> => Promise.resolve(null)),
@@ -119,6 +124,14 @@ const trackStatus = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   name: 'RS-44',
   state: 'armed',
   mode: 'doppler-only',
+  dopplerDownlink: true,
+  dopplerUplink: true,
+  uplinkOffer: 'none',
+  uplinkOfferMap: null,
+  uplinkRadio: 'IC-9700',
+  // Matches mkSettings' activeRadio — the DTO names the rig any confirmation
+  // lands on, and the click confirms for THIS id, never the active one.
+  uplinkRadioId: 3,
   azDeg: null,
   elDeg: null,
   aosAzDeg: 100,
@@ -147,8 +160,9 @@ const mkSettings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
   rotatorModel: 0,
   rotatorHost: '',
-  satDoppler: false,
+  satDopplerOff: false,
   satVfoMap: 'off',
+  activeRadio: 3,
   ...over,
 })
 
@@ -166,6 +180,8 @@ beforeEach(() => {
   api.getSettings.mockImplementation(() => Promise.resolve(mkSettings()))
   api.setSettings.mockReset()
   api.setSettings.mockImplementation(() => Promise.resolve({} as never))
+  api.confirmSatUplink.mockReset()
+  api.confirmSatUplink.mockImplementation(() => Promise.resolve({} as never))
   api.setSatTransponder.mockReset()
   api.setSatTransponder.mockImplementation(() => Promise.resolve())
   api.getSatTransponder.mockReset()
@@ -355,7 +371,9 @@ describe('"Work this pass" runs the chain', () => {
 describe('the readiness rail', () => {
   it('renders the five gates with honest not-ready states and shape-carried bullets', async () => {
     api.getSatTrackStatus.mockImplementation(() =>
-      Promise.resolve(trackStatus({ mode: 'pass-only' })),
+      Promise.resolve(
+        trackStatus({ mode: 'pass-only', dopplerDownlink: false, dopplerUplink: false }),
+      ),
     )
     render(<SatellitesView focusSat="RS-44" />)
     const rail = await screen.findByTestId('sat-rail')
@@ -367,7 +385,9 @@ describe('the readiness rail', () => {
     expect(text).toMatch(/Transponder/)
     expect(text).toMatch(/none — the dial stays yours/)
     expect(text).toMatch(/Doppler/)
-    expect(text).toMatch(/off — nothing is being tuned/)
+    // No transponder held, so nothing is being tuned YET — and the row says
+    // what it is waiting for rather than "off", which is a different fact.
+    expect(text).toMatch(/waiting for a transponder/)
     expect(text).toMatch(/Elements/)
     expect(text).toMatch(/1\.2 d old — current/)
     // Shape, not colour: filled ● for ready, hollow ○ for not — 5 rows,
@@ -377,22 +397,202 @@ describe('the readiness rail', () => {
     expect(rail.querySelectorAll('.sat-rail-dot.ok').length).toBe(2)
   })
 
+  it('the Doppler row says the downlink is corrected and offers the uplink once', async () => {
+    // THE operator's report, as the rail sees it: nothing configured, a
+    // transponder held, and the receive dial already following the bird. The
+    // transmit VFO is the only thing left to ask about — once, for this radio,
+    // in the words of the radio itself.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'doppler-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          dopplerDownlink: true,
+          dopplerUplink: false,
+          uplinkOffer: 'confirm',
+          uplinkOfferMap: 'main-down-sub-up',
+          uplinkRadio: 'IC-9700',
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const row = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /Doppler/.test(r.textContent ?? ''),
+    )!
+    const state = row.querySelector('.sat-rail-state')!.textContent ?? ''
+    expect(state).toMatch(/correcting the downlink/)
+    expect(state).toMatch(/Doppler drives IC-9700 as Main = downlink, Sub = uplink/)
+    // The example parenthetical belongs to the select, not to the sentence.
+    expect(state).not.toMatch(/full duplex\)/)
+    // One click hands the transmit VFO over — mapping AND the radio it is
+    // confirmed for (the DTO's uplinkRadioId), through the ONE backend verb:
+    // the consent pair is engine-owned live state, never a settings payload.
+    fireEvent.click(screen.getByRole('button', { name: /confirm uplink/i }))
+    await waitFor(() => expect(api.confirmSatUplink).toHaveBeenCalledWith('main-down-sub-up', 3))
+  })
+
+  it('the confirmation lands on the radio the copy names, not whichever is active at click time', async () => {
+    // Round 2, defect 6a. The DTO names the rig the offer is about
+    // (uplinkRadio / uplinkRadioId — the rig that would receive the split).
+    // If the active radio moves between the DTO poll and the click, the grant
+    // must still land on the NAMED rig: consent for any other radio was never
+    // shown to the operator.
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(mkSettings({ activeRadio: 7 })),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'doppler-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          dopplerDownlink: true,
+          dopplerUplink: false,
+          uplinkOffer: 'confirm',
+          uplinkOfferMap: 'main-down-sub-up',
+          uplinkRadio: 'IC-9700',
+          uplinkRadioId: 3,
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    await screen.findByTestId('sat-rail')
+    fireEvent.click(screen.getByRole('button', { name: /confirm uplink/i }))
+    // The verb is invoked with the NAMED rig's id — the backend records it
+    // for that id, not for whichever radio is active when the click lands.
+    await waitFor(() => expect(api.confirmSatUplink).toHaveBeenCalledWith('main-down-sub-up', 3))
+    expect(api.confirmSatUplink).not.toHaveBeenCalledWith('main-down-sub-up', 7)
+  })
+
+  it('the chooser does not claim the transmit VFO is tuned while the mapping is unconfirmed', async () => {
+    // Round 2, defect 5. The old line keyed on the settings mirror alone
+    // ("uplink-only ⇒ only the transmit VFO is tuned") and contradicted the
+    // engine's own binding note in the same column when the mapping was not
+    // confirmed for the radio in play. Truth comes from the track's per-leg
+    // booleans, which ARE the engine's legs.
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(mkSettings({ satVfoMap: 'uplink-only' })),
+    )
+    api.getSatTransponder.mockImplementation(() =>
+      Promise.resolve({
+        name: 'RS-44',
+        index: 2,
+        description: 'SSB/CW linear transponder',
+        binding: null,
+      }),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'pass-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          transponderIndex: 2,
+          dopplerDownlink: false,
+          dopplerUplink: false,
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    await screen.findByTestId('sat-rail')
+    const state = document.querySelector('.sat-tp-state')!
+    expect(state.textContent).not.toMatch(/only the transmit VFO is tuned/)
+    expect(state.textContent).toMatch(/not confirmed for this radio/)
+  })
+
+  it("the pass-only badge title enumerates causes that can actually apply now", async () => {
+    // Round 2, defect 7. In the D2 half-state (correction on, transponder
+    // held, uplink-only mapping unconfirmed) the old title blamed
+    // "correction switched off, or no transponder held" — both false. The
+    // actionable cause has to be in the list.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({ mode: 'pass-only', dopplerDownlink: false, dopplerUplink: false }),
+      ),
+    )
+    const { container } = render(<SatellitesView focusSat="RS-44" />)
+    await waitFor(() => expect(container.querySelector('.sats-tracking-badge')).toBeTruthy())
+    const title = container.querySelector('.sats-tracking-badge')!.getAttribute('title')!
+    expect(title).toMatch(/uplink-only mapping/)
+  })
+
+  it('the TX-sideband note names the live cause, never "Doppler off" in the default state', async () => {
+    // Round 2, defect 7. With correction ON and the downlink being corrected
+    // one row up, the note still listed "Doppler off" first among its causes.
+    // The component knows the actual cause — name it alone.
+    api.getSatTransponder.mockImplementation(() =>
+      Promise.resolve({
+        name: 'RS-44',
+        index: 2,
+        description: 'SSB/CW linear transponder',
+        binding: null,
+      }),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'doppler-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          transponderIndex: 2,
+          dopplerDownlink: true,
+          dopplerUplink: false,
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    await screen.findByTestId('sat-rail')
+    const note = await screen.findByTestId('sat-tp-txmode')
+    expect(note.textContent).not.toMatch(/Doppler off/)
+    expect(note.textContent).toMatch(/not driving the uplink on this radio/)
+  })
+
+  it('never offers a mapping it cannot derive — it asks', async () => {
+    // A confident default for a known full-duplex rig is not a licence to
+    // guess for an unknown one. No confirm button, no pre-filled mapping.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'doppler-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          dopplerDownlink: true,
+          dopplerUplink: false,
+          uplinkOffer: 'ask',
+          uplinkOfferMap: null,
+          uplinkRadio: 'FT-847',
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    expect(rail.textContent).toMatch(/Pick which VFO carries your uplink/)
+    expect(screen.queryByRole('button', { name: /confirm uplink/i })).toBeNull()
+  })
+
   it('is absent when no track is armed for this bird', async () => {
     render(<SatellitesView focusSat="RS-44" />)
     await screen.findByRole('img') // detail (sky dome) settled
     expect(screen.queryByTestId('sat-rail')).toBeNull()
   })
 
-  it("the Doppler row's fix IS the row: 'turn on' writes satDoppler read-modify-write", async () => {
+  it("the Doppler row's fix IS the row: 'turn on' clears satDopplerOff read-modify-write", async () => {
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(mkSettings({ satDopplerOff: true })),
+    )
     api.getSatTrackStatus.mockImplementation(() =>
-      Promise.resolve(trackStatus({ mode: 'pass-only' })),
+      Promise.resolve(
+        trackStatus({ mode: 'pass-only', dopplerDownlink: false, dopplerUplink: false }),
+      ),
     )
     render(<SatellitesView focusSat="RS-44" />)
     const rail = await screen.findByTestId('sat-rail')
     fireEvent.click(await screen.findByRole('button', { name: /turn on/i }))
     await waitFor(() => expect(api.setSettings).toHaveBeenCalled())
     const written = api.setSettings.mock.calls[0][0] as Record<string, unknown>
-    expect(written.satDoppler).toBe(true)
+    expect(written.satDopplerOff).toBe(false)
     // Read-modify-write: the rest of the settings object rode along untouched.
     expect(written.mygrid).toBe('EN52')
     expect(rail).toBeTruthy()
@@ -407,10 +607,12 @@ describe('the readiness rail', () => {
     const sel = screen.getByLabelText('Satellite VFO mapping') as HTMLSelectElement
     expect(sel.title).toMatch(/transmits on your own downlink/)
     fireEvent.change(sel, { target: { value: 'main-down-sub-up' } })
-    await waitFor(() => expect(api.setSettings).toHaveBeenCalled())
-    const written = api.setSettings.mock.calls[0][0] as Record<string, unknown>
-    expect(written.satVfoMap).toBe('main-down-sub-up')
-    expect(written.mygrid).toBe('EN52')
+    // The mapping and the radio it applies to are ONE write, through the
+    // backend verb (the engine drives the uplink only on a confirmed radio,
+    // so a mapping written alone would leave the rail asking forever) — and
+    // the rail passes the DTO's uplinkRadioId, the rig its copy names.
+    await waitFor(() => expect(api.confirmSatUplink).toHaveBeenCalledWith('main-down-sub-up', 3))
+    expect(api.setSettings).not.toHaveBeenCalled()
   })
 
   it('disables the pick button WITH its reason when the bird lists no transmitters', async () => {
@@ -482,6 +684,163 @@ describe('the Rotor gate for a rotor-less station', () => {
   })
 })
 
+// ROUND 3. The consent write goes through the ONE backend verb
+// (confirmSatUplink — the pair is engine-owned live state, so a stale
+// whole-settings Save can never resurrect a pruned consent), the rail's
+// confirm affordance extends to a mapping already in force but unconfirmed
+// for the radio in play, and every dial-ownership claim keys on the DOWNLINK
+// leg — the leg that actually holds the dial.
+describe('round 3: the consent verb and the mapping-in-force offer', () => {
+  it('confirming the derived offer goes through the backend verb, for the radio the copy names', async () => {
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'doppler-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          dopplerDownlink: true,
+          dopplerUplink: false,
+          uplinkOffer: 'confirm',
+          uplinkOfferMap: 'main-down-sub-up',
+          uplinkRadio: 'IC-9700',
+          uplinkRadioId: 3,
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    await screen.findByTestId('sat-rail')
+    fireEvent.click(screen.getByRole('button', { name: /confirm uplink/i }))
+    await waitFor(() => expect(api.confirmSatUplink).toHaveBeenCalledWith('main-down-sub-up', 3))
+    // Never a whole-settings write: a form-shaped payload is what let a stale
+    // snapshot resurrect a pruned consent.
+    expect(api.setSettings).not.toHaveBeenCalled()
+  })
+
+  it('offers to confirm the mapping IN FORCE — never replacing it with a derived one', async () => {
+    // Defect 4: uplink-only, unconfirmed for this radio — the migration's own
+    // destination for a legacy uplink-only file. The select already shows
+    // uplink-only (a same-value re-pick fires no change event), so the rail
+    // must carry a real confirm affordance for THAT mapping.
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(mkSettings({ satVfoMap: 'uplink-only' })),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'pass-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          dopplerDownlink: false,
+          dopplerUplink: false,
+          uplinkOffer: 'confirm-mapping',
+          uplinkOfferMap: 'uplink-only',
+          uplinkRadio: 'IC-9700',
+          uplinkRadioId: 3,
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    // The copy names the operator's own mapping, not a derived replacement.
+    expect(rail.textContent).toMatch(/Confirm Uplink only \(transmit\) for IC-9700/)
+    const btn = screen.getByRole('button', { name: /confirm uplink/i })
+    // The button confirms the mapping in force for the DTO's radio — with NO
+    // map argument (round 4, residual 3): the DTO's map is poll-time state,
+    // so the backend resolves "the mapping in force" at write time, the same
+    // way it already resolves the radio.
+    fireEvent.click(btn)
+    await waitFor(() => expect(api.confirmSatUplink).toHaveBeenCalledWith(undefined, 3))
+    // …and its title does not claim the mapping was read from the radio.
+    expect(btn.title).not.toMatch(/read this from your radio model/i)
+  })
+
+  it('keys dial ownership on the downlink leg: uplink-only driving never claims the dial', async () => {
+    // Defect 5: uplink-only confirmed and driving — mode doppler-only,
+    // uplinkHz set, downlinkHz null. The engine only writes the split TX
+    // VFO; the badge title must not say Doppler is steering the dial.
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'doppler-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          dopplerDownlink: false,
+          dopplerUplink: true,
+          downlinkHz: null,
+          uplinkHz: 145_962_680,
+          uplinkShiftHz: 770,
+        }),
+      ),
+    )
+    const { container } = render(<SatellitesView focusSat="RS-44" />)
+    await waitFor(() => expect(container.querySelector('.sats-tracking-badge')).toBeTruthy())
+    const title = container.querySelector('.sats-tracking-badge')!.getAttribute('title')!
+    expect(title).not.toMatch(/steering the radio dial/)
+    expect(title).not.toMatch(/takes the radio dial/)
+    expect(title).toMatch(/dial stays yours/i)
+  })
+
+  it('pre-hold copy follows the mapping in force: uplink-only promises the uplink, not the downlink', async () => {
+    // Defect 6: with nothing held, the rail promised "then the downlink
+    // follows the bird" — deterministically false under uplink-only.
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(mkSettings({ satVfoMap: 'uplink-only' })),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({ mode: 'pass-only', dopplerDownlink: false, dopplerUplink: false }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const row = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /Doppler/.test(r.textContent ?? ''),
+    )!
+    const state = row.querySelector('.sat-rail-state')!.textContent ?? ''
+    expect(state).toMatch(/waiting for a transponder/)
+    expect(state).not.toMatch(/the downlink follows the bird/)
+    expect(state).toMatch(/uplink/)
+    // The Doppler readout's no-hold line makes the same promise — it must not
+    // offer to "put the dial under Doppler" under a mapping that never will.
+    const readout = document.querySelector('.sat-doppler.none')
+    expect(readout?.textContent ?? '').not.toMatch(/put the dial under Doppler/)
+  })
+
+  it('the waiting copy is confirmation-aware: no promised drive while the mapping is unconfirmed', async () => {
+    // ROUND 4, residual 5. Uplink-only IN FORCE but unconfirmed for the radio
+    // in play (the DTO's offer says so: confirm-mapping). "then Doppler tunes
+    // your uplink" promised a drive nobody had consented to — the waiting
+    // copy must name the confirmation gate instead.
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(mkSettings({ satVfoMap: 'uplink-only' })),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          mode: 'pass-only',
+          dopplerDownlink: false,
+          dopplerUplink: false,
+          uplinkOffer: 'confirm-mapping',
+          uplinkOfferMap: 'uplink-only',
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const row = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /Doppler/.test(r.textContent ?? ''),
+    )!
+    const state = row.querySelector('.sat-rail-state')!.textContent ?? ''
+    expect(state).toMatch(/waiting for a transponder/)
+    expect(state).not.toMatch(/then Doppler tunes your uplink/)
+    expect(state).toMatch(/once your mapping is confirmed/i)
+    // The Doppler readout's no-hold line must not make the promise either.
+    const readout = document.querySelector('.sat-doppler.none')?.textContent ?? ''
+    expect(readout).not.toMatch(/pick one below and Doppler tunes your uplink/)
+    expect(readout).toMatch(/once your mapping is confirmed/i)
+  })
+})
+
 describe('the LOS handback', () => {
   // The backend releases the transponder hold at LOS; before this toast the
   // rail, binding line and header badge simply vanished on the next poll —
@@ -490,6 +849,11 @@ describe('the LOS handback', () => {
     const ended = trackStatus({
       state: 'tracking',
       mode: 'doppler-only',
+      dopplerDownlink: true,
+      dopplerUplink: true,
+      uplinkOffer: 'none',
+      uplinkOfferMap: null,
+      uplinkRadio: 'IC-9700',
       transponder: 'SSB/CW linear transponder',
       aosUnix: NOW - 700,
       losUnix: NOW - 5,
@@ -507,6 +871,38 @@ describe('the LOS handback', () => {
     )
   })
 
+  // ROUND 3, defect 5: the handback claim keys on the DOWNLINK leg. An
+  // uplink-only track never held the dial — the engine wrote only the split
+  // TX VFO — so "Dial handed back" would report the return of a dial that
+  // never left. Name what was actually released.
+  it('an uplink-only pass never claims the dial came back — it releases the split', async () => {
+    vi.mocked(pushToast).mockClear()
+    const ended = trackStatus({
+      state: 'tracking',
+      mode: 'doppler-only',
+      dopplerDownlink: false,
+      dopplerUplink: true,
+      downlinkHz: null,
+      uplinkHz: 145_962_680,
+      uplinkOffer: 'none',
+      uplinkOfferMap: null,
+      uplinkRadio: 'IC-9700',
+      transponder: 'SSB/CW linear transponder',
+      aosUnix: NOW - 700,
+      losUnix: NOW - 5,
+    })
+    api.getSatTrackStatus.mockImplementationOnce(() => Promise.resolve(ended))
+    render(<SatellitesView focusSat="RS-44" />)
+    await waitFor(
+      () => expect(vi.mocked(pushToast)).toHaveBeenCalled(),
+      { timeout: 4000 },
+    )
+    const msg = vi.mocked(pushToast).mock.calls[0][0] as string
+    expect(msg).toMatch(/RS-44 pass complete — LOS\./)
+    expect(msg).not.toMatch(/Dial handed back/)
+    expect(msg).toMatch(/split released/i)
+  })
+
   // The 2 s tick can lap a slow answer. If the lapped (stale) answer is
   // applied when it finally lands, it re-seeds the previous-track ref with the
   // dead pass as "live" — and the NEXT null poll announces the same handback a
@@ -516,6 +912,11 @@ describe('the LOS handback', () => {
     const ended = trackStatus({
       state: 'tracking',
       mode: 'doppler-only',
+      dopplerDownlink: true,
+      dopplerUplink: true,
+      uplinkOffer: 'none',
+      uplinkOfferMap: null,
+      uplinkRadio: 'IC-9700',
       transponder: 'SSB/CW linear transponder',
       aosUnix: NOW - 700,
       losUnix: NOW - 5,

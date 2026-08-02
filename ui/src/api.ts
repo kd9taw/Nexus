@@ -1731,6 +1731,24 @@ export async function setSettings(settings: Settings): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_settings', { settings })
 }
 
+/** THE writer of the satellite uplink consent pair (VFO mapping + per-radio
+ * confirmation) — the pass rail's confirm/select and Settings ▸ Radio's
+ * mapping select both go through it. The pair is backend-owned live state
+ * (`set_settings` payloads cannot carry it), so a stale form snapshot can
+ * never resurrect a pruned consent. `radioId` = the RadioProfile.id the UI's
+ * copy named (the DTO's uplinkRadioId); omitted, the backend records the
+ * radio that is ACTIVE at write time — never a form snapshot's. `map`
+ * omitted = confirm the mapping IN FORCE, resolved by the backend at write
+ * time under the same rule: the rail's confirm for a mapping already in
+ * force sends none, because its DTO copy is poll-time state (round 4). An
+ * explicit pick (select, derived offer) always sends its map. */
+export async function confirmSatUplink(
+  map?: NonNullable<Settings['satVfoMap']>,
+  radioId?: number,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('confirm_sat_uplink', { map, radioId })
+}
+
 /** Enumerate available serial / COM ports for rig control. */
 export async function getSerialPorts(): Promise<string[]> {
   return invoke<string[]>('get_serial_ports')

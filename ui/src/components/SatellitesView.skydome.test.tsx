@@ -89,6 +89,12 @@ const status = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   name: 'RS-44',
   state: 'tracking',
   mode: 'rotor+doppler',
+  dopplerDownlink: true,
+  dopplerUplink: true,
+  uplinkOffer: 'none',
+  uplinkOfferMap: null,
+  uplinkRadio: 'IC-9700',
+  uplinkRadioId: 1,
   azDeg: 141,
   elDeg: 46,
   aosAzDeg: 100,
@@ -116,7 +122,7 @@ const settings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
   rotatorModel: 2, // a rotor IS configured, so the track status is polled
   rotatorHost: '',
-  satDoppler: false,
+  satDopplerOff: false,
   satVfoMap: 'off',
   ...over,
 })
@@ -696,7 +702,7 @@ describe('the pass timeline', () => {
 describe('the Doppler readout', () => {
   it('shows both legs, the per-leg shift and the inverting state', async () => {
     api.getSettings.mockImplementation(() =>
-      Promise.resolve(settings({ satDoppler: true, satVfoMap: 'main-down-sub-up' })),
+      Promise.resolve(settings({ satVfoMap: 'main-down-sub-up' })),
     )
     api.getSatTrackStatus.mockImplementation(() =>
       Promise.resolve(
@@ -725,7 +731,10 @@ describe('the Doppler readout', () => {
   })
 
   it('shows NOTHING but a reason when Doppler is off — no zeros, no dashes', async () => {
-    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(status()))
+    api.getSettings.mockImplementation(() => Promise.resolve(settings({ satDopplerOff: true })))
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ dopplerDownlink: false, dopplerUplink: false })),
+    )
     const { container } = render(<SatellitesView focusSat="RS-44" />)
     await screen.findByTestId('sat-ghost')
     const dop = container.querySelector('.sat-doppler')
@@ -738,17 +747,26 @@ describe('the Doppler readout', () => {
     expect(dop?.textContent).not.toMatch(/0\.00000/)
   })
 
-  it('names the VFO mapping as the reason when that is what is blocking it', async () => {
-    api.getSettings.mockImplementation(() => Promise.resolve(settings({ satDoppler: true })))
-    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(status()))
+  it('names the unconfirmed uplink-only mapping when that is what is blocking it', async () => {
+    // The one mapping that takes the receive dial away from Doppler. With it
+    // unconfirmed for this radio, NEITHER leg is driven — and the readout says
+    // which of the two facts is the blocking one.
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(settings({ satVfoMap: 'uplink-only' })),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(status({ dopplerDownlink: false, dopplerUplink: false, transponder: 'RS-44|linear' })),
+    )
     const { container } = render(<SatellitesView focusSat="RS-44" />)
     await screen.findByTestId('sat-ghost')
-    expect(container.querySelector('.sat-doppler')?.textContent).toMatch(/VFO mapping is Off/)
+    expect(container.querySelector('.sat-doppler')?.textContent).toMatch(
+      /uplink-only mapping is not confirmed for this radio/,
+    )
   })
 
-  it('asks for a transponder when both switches are on and none is held', async () => {
+  it('asks for a transponder when correction is on and none is held', async () => {
     api.getSettings.mockImplementation(() =>
-      Promise.resolve(settings({ satDoppler: true, satVfoMap: 'main-down-sub-up' })),
+      Promise.resolve(settings({ satVfoMap: 'main-down-sub-up' })),
     )
     api.getSatTrackStatus.mockImplementation(() => Promise.resolve(status()))
     const { container } = render(<SatellitesView focusSat="RS-44" />)

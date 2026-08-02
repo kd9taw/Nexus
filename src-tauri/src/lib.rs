@@ -1062,6 +1062,13 @@ fn config_dir() -> PathBuf {
 
 /// The config-dir profile name that a radio drives, keyed on its STABLE `RadioProfile::id`
 /// (`"r0"`, `"r1"`, …) so renaming a radio never orphans its window's config/journals.
+///
+/// KNOWN LIMITATION (pre-existing; recorded during the 2026-08 Doppler-consent audit, out of
+/// its scope): the roster one level up REUSES freed ids — `Settings::add_radio_profile`
+/// allocates `max+1`, so removing the highest-id radio and adding another hands the newcomer
+/// the departed radio's id, and with it this `tempo-r<id>/` config dir: settings, window
+/// geometry and journals included. The engine-side uplink consent prunes on remove for exactly
+/// this reason; the per-radio config dirs do not. Also noted in CHANGELOG ▸ Known limitations.
 fn radio_profile_key(radio_id: u32) -> String {
     format!("r{radio_id}")
 }
@@ -5312,13 +5319,57 @@ struct SatTrackDto {
     /// Which steering surfaces this track is allowed to drive —
     /// "rotor+doppler", "rotor-only", "doppler-only" or "pass-only" (see
     /// `tempo_app::settings::sat_track_mode`). The rotor half is fixed at arm
-    /// time; the Doppler half follows the live consents (satDoppler + VFO
-    /// mapping + a HELD transponder — without one the tick tunes nothing, and
-    /// the label must not claim a dial the operator kept), so a mid-pass
-    /// Settings toggle or transponder release moves the label exactly when it
-    /// moves the behaviour. A LABEL for the UI's honesty, never a gate — the
-    /// refusals live where they always did.
+    /// time; the Doppler half follows the live consents (EITHER leg driven,
+    /// plus a HELD transponder — without one the tick tunes nothing, and the
+    /// label must not claim a dial the operator kept), so a mid-pass Settings
+    /// change or transponder release moves the label exactly when it moves the
+    /// behaviour. A LABEL for the UI's honesty, never a gate — the refusals
+    /// live where they always did.
+    ///
+    /// ROTOR-vs-RADIO only. Which LEG is driven is `doppler_downlink` /
+    /// `doppler_uplink` below: the legs are separately consented and one string
+    /// cannot carry two facts without lying about one of them.
     mode: String,
+    /// Is Doppler correcting the RECEIVE dial, and the TRANSMIT VFO? Re-read
+    /// every tick from `Engine::sat_doppler_legs` — LITERALLY the derivation
+    /// `sat_doppler_tick` writes by — so they report what the engine is
+    /// DOING, not what the settings could allow. They come apart routinely:
+    /// the downlink is automatic once a transponder is held, while the uplink
+    /// waits for a mapping confirmed for the radio in play (see
+    /// `uplink_offer`) AND for a transponder that has an uplink leg at all —
+    /// on a simplex (one-channel) bird or a beacon, `doppler_uplink` is false
+    /// even with the mapping confirmed, because the engine writes no split
+    /// there.
+    ///
+    /// Neither says a correction has been SENT — the frequencies do that, and
+    /// only once one has (`downlink_hz` / `uplink_hz`).
+    doppler_downlink: bool,
+    doppler_uplink: bool,
+    /// What can be offered for the UPLINK on the radio in play, when Doppler
+    /// is not already driving it: "confirm" (a mapping derived from the
+    /// connected rig, in `uplink_offer_map`, awaiting one confirmation),
+    /// "confirm-mapping" (the mapping ALREADY IN FORCE, unconfirmed for this
+    /// radio — a second rig, a reused id, or an upgraded uplink-only file;
+    /// confirming keeps the operator's choice, it never replaces it), "ask"
+    /// (full duplex, but the wiring is the operator's to state) or "none"
+    /// (one VFO, or a rig we cannot identify — nothing to propose).
+    /// Derived, never applied: only the operator's click writes a mapping.
+    uplink_offer: String,
+    /// The mapping for "confirm"/"confirm-mapping", as the wire value the
+    /// settings VFO map uses (`main-down-sub-up`). Absent for "ask"/"none" —
+    /// there is nothing to pre-fill, and a guess here is the wrong-uplink
+    /// generator the whole enumeration exists to prevent.
+    uplink_offer_map: Option<String>,
+    /// The radio the offer (and any uplink write) is about, by name — the rig
+    /// that would receive the split, which routing and peg-lock can change
+    /// mid-pass. Empty when no profile names it.
+    uplink_radio: String,
+    /// …and by `RadioProfile::id` — what a confirmation must be RECORDED for.
+    /// The UI confirms for THIS id, never for whatever radio happens to be
+    /// active at click time: the button's copy names `uplink_radio`, and the
+    /// grant has to land on the rig the operator saw named even if the active
+    /// radio moved between the poll and the click.
+    uplink_radio_id: u32,
     /// The sideband the engine will command the TX (split) VFO into while
     /// this pass owns the uplink (`Engine::sat_tx_mode` — the inverting-bird
     /// swap), or `None` when nothing is commanded: legs share a mode, a
@@ -5364,9 +5415,11 @@ struct SatTrackDto {
     /// `range_km` — never a sentinel 0, which a surface would have to decode
     /// as "not computed yet" and would otherwise draw on the ground.
     alt_km: Option<f64>,
-    /// What Doppler has the radio tuned to, and by how much. `None` unless a
-    /// transponder is selected AND Doppler is enabled — never a fabricated
-    /// frequency (the plain dial is NOT the downlink under an uplink-only map).
+    /// What Doppler has the radio tuned to, and by how much. PER LEG, and
+    /// `None` unless a transponder is held AND that leg is actually being
+    /// driven — never a fabricated frequency (the plain dial is NOT the
+    /// downlink under an uplink-only map), and never an uplink computed for a
+    /// transmit VFO nobody is writing.
     downlink_hz: Option<u64>,
     uplink_hz: Option<u64>,
     downlink_shift_hz: Option<i64>,
@@ -5434,16 +5487,107 @@ fn send_rot_step(addr: &str, step: tempo_core::rotator::RotStep) -> tempo_core::
 static SAT_TRACK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SAT_TRACK: Mutex<Option<SatTrackDto>> = Mutex::new(None);
 
+/// The Doppler half of the badge, read WHOLE from the engine the tick is
+/// about to run on. One read, one snapshot: the label, the two legs and the
+/// uplink offer all have to describe the same instant, and the radio under the
+/// split can change mid-pass (routing, peg-lock, a handoff), so the track loop
+/// re-takes this every tick rather than latching it at arm time.
+///
+/// Reads the ENGINE, not bare settings: the legs come from
+/// `Engine::sat_doppler_legs` — the same derivation `sat_doppler_tick` writes
+/// by — because the held transponder's shape (simplex / beacon) refuses the
+/// uplink leg in ways no settings snapshot can see. A settings-only read here
+/// is how the rail once claimed "correcting the uplink" over an engine that
+/// was writing nothing.
+struct SatDopplerConsent {
+    downlink: bool,
+    uplink: bool,
+    offer: &'static str,
+    offer_map: Option<String>,
+    /// The radio any confirmation would land on — id and name, THE SAME radio:
+    /// the id is what the UI must confirm for, so the grant goes to the rig
+    /// the copy named even if the active radio moves between poll and click.
+    radio_id: u32,
+    radio: String,
+}
+
+impl SatDopplerConsent {
+    fn read(eng: &tempo_app::engine::Engine) -> Self {
+        use tempo_app::settings::{SatUplinkOffer, SatVfoMap};
+        let st = eng.settings();
+        // What the engine is DRIVING — held transponder included.
+        let legs = eng.sat_doppler_legs();
+        // …versus what the operator has CONSENTED to. The two part exactly on
+        // a hold with no uplink leg, where consent stands but nothing is
+        // driven — the offer logic needs the consent, the leg booleans need
+        // the drive.
+        let consented = st.sat_doppler_uplink();
+        // The offer renders only where a confirmation would change what is
+        // driven AND the question is still open:
+        //  - already consented → nothing to propose;
+        //  - the operator explicitly answered "Downlink only (receive)" →
+        //    that IS the answer. Re-proposing a derived Main/Sub every pass
+        //    would nag them into replacing their explicit choice one click;
+        //  - the held transponder has no uplink leg (simplex / beacon) → the
+        //    engine refuses the uplink whatever is confirmed, so "confirm and
+        //    Doppler drives …" would promise a write that will not happen.
+        let answered = matches!(st.sat_vfo_map, SatVfoMap::DownlinkOnly);
+        let undrivable = eng.sat_uplink_leg_undrivable();
+        // Serialized through serde so the wire value is the one the settings
+        // field itself uses — a hand-written string here is how a UI ends up
+        // posting a mapping the backend never matches.
+        let wire = |m: SatVfoMap| {
+            serde_json::to_value(m)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+        };
+        let (offer, offer_map) = if consented || answered || undrivable {
+            ("none", None)
+        } else if st.sat_vfo_map.drives_uplink() {
+            // A mapping IN FORCE, unconfirmed for the radio in play — a
+            // second radio, a reused id after a remove+add, or the migrated
+            // legacy uplink-only file. The offer is to confirm THAT mapping
+            // for THIS radio (round 3, defect 4): falling through to the
+            // derived offer either replaced the operator's explicit choice
+            // with Main/Sub one click, or — where nothing derives — pointed
+            // the recovery copy at a select whose same-value re-pick fires
+            // no change event. Its own wire word, so the UI's copy can say
+            // "your chosen mapping" rather than "read from your radio".
+            ("confirm-mapping", wire(st.sat_vfo_map))
+        } else {
+            match st.sat_uplink_offer() {
+                SatUplinkOffer::Nothing => ("none", None),
+                SatUplinkOffer::Ask => ("ask", None),
+                SatUplinkOffer::Confirm(m) => ("confirm", wire(m)),
+            }
+        };
+        SatDopplerConsent {
+            downlink: legs.downlink,
+            uplink: legs.uplink,
+            offer,
+            offer_map,
+            radio_id: st.active_radio,
+            radio: st
+                .radios
+                .iter()
+                .find(|p| p.id == st.active_radio)
+                .map(|p| p.name.clone())
+                .unwrap_or_default(),
+        }
+    }
+}
+
 /// Arm auto-track for a bird's pass. With a rotator: far from AOS the loop is
 /// merely "armed" (no rotor commands); from 5 min out it slews to the AOS
 /// azimuth (the S.A.T. behavior — on target before the bird rises), then
 /// follows az/el every 3 s until LOS, then stops the rotor. WITHOUT a rotator
 /// the same loop runs with the pointing half skipped — pass state, geometry
 /// and the Doppler tick are all still live (the Arrow-antenna operator's
-/// mode); the DTO's `mode` says which shape this arm actually is. Every
-/// consent gate is unchanged: arming is still per pass, and the radio is
-/// still only touched when satDoppler is on with a VFO mapping (both checked
-/// inside `sat_doppler_tick`, every tick). `aos_unix` picks WHICH pass
+/// mode); the DTO's `mode` says which shape this arm actually is. The consent
+/// gates are unchanged in kind: arming is still per pass, the receive dial is
+/// corrected only for a HELD transponder, and the transmit VFO is touched only
+/// under a mapping confirmed for the radio in play (all checked inside
+/// `sat_doppler_tick`, every tick). `aos_unix` picks WHICH pass
 /// (±3 min tolerance — the schedule row the operator clicked); omitted =
 /// the current/next one. `None` = no grid, unknown bird, or no matching
 /// pass in the next 48 h — the UI says so plainly.
@@ -5453,15 +5597,14 @@ async fn start_sat_track(
     name: String,
     aos_unix: Option<i64>,
 ) -> Result<Option<SatTrackDto>, String> {
-    let (mygrid, addr, rot_cfg, sat_doppler, sat_vfo_map, sat_held, sat_tx_mode0) = {
+    let (mygrid, addr, rot_cfg, consent0, sat_held, sat_tx_mode0) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
             effective_rotator_addr(st),
             st.rotator_config(),
-            st.sat_doppler,
-            st.sat_vfo_map,
+            SatDopplerConsent::read(&eng),
             eng.sat_transponder_held().is_some(),
             eng.sat_tx_mode(),
         )
@@ -5506,8 +5649,18 @@ async fn start_sat_track(
             "armed"
         }
         .to_string(),
-        mode: tempo_app::settings::sat_track_mode(addr.is_some(), sat_doppler, sat_vfo_map, sat_held)
-            .to_string(),
+        mode: tempo_app::settings::sat_track_mode(
+            addr.is_some(),
+            consent0.downlink || consent0.uplink,
+            sat_held,
+        )
+        .to_string(),
+        doppler_downlink: consent0.downlink && sat_held,
+        doppler_uplink: consent0.uplink && sat_held,
+        uplink_offer: consent0.offer.to_string(),
+        uplink_offer_map: consent0.offer_map.clone(),
+        uplink_radio: consent0.radio.clone(),
+        uplink_radio_id: consent0.radio_id,
         tx_mode: sat_tx_mode0,
         az_deg: None,
         el_deg: None,
@@ -5562,10 +5715,14 @@ async fn start_sat_track(
         // `cmd` is the last pair genuinely SENT, `el_sent` is false on an
         // az-only rotator (elevation is then reported as absent, never 0), and
         // `sat` is the look angle only once there is one — below the horizon
-        // there isn't. `mode` is the per-tick honesty label (the Doppler half
-        // of it follows the live settings). `range`/`rate`/`alt` are the live
-        // geometry of the same tick: all three absent until the bird is up.
+        // there isn't. `mode` is the per-tick honesty label and `con` the
+        // per-tick Doppler consent it was computed from (both follow the live
+        // settings and the radio actually in play). `range`/`rate`/`alt` are
+        // the live geometry of the same tick: all three absent until the bird
+        // is up.
         let badge = |mode: &str,
+                     con: &SatDopplerConsent,
+                     held: bool,
                      tx_mode: Option<String>,
                      state: &str,
                      cmd: Option<(f64, f64)>,
@@ -5578,6 +5735,14 @@ async fn start_sat_track(
             name: name.clone(),
             state: state.to_string(),
             mode: mode.to_string(),
+            // A leg is only being DRIVEN while a transponder is held: without
+            // one the tick has nothing to tune and returns before either leg.
+            doppler_downlink: con.downlink && held,
+            doppler_uplink: con.uplink && held,
+            uplink_offer: con.offer.to_string(),
+            uplink_offer_map: con.offer_map.clone(),
+            uplink_radio: con.radio.clone(),
+            uplink_radio_id: con.radio_id,
             tx_mode,
             az_deg: cmd.map(|c| c.0),
             el_deg: cmd.and_then(|c| el_sent.then_some(c.1)),
@@ -5587,10 +5752,10 @@ async fn start_sat_track(
             range_km: range,
             range_rate_km_s: rate,
             alt_km: alt,
-            downlink_hz: dop.map(|d| d.downlink_hz),
-            uplink_hz: dop.map(|d| d.uplink_hz),
-            downlink_shift_hz: dop.map(|d| d.downlink_shift_hz),
-            uplink_shift_hz: dop.map(|d| d.uplink_shift_hz),
+            downlink_hz: dop.and_then(|d| d.downlink_hz),
+            uplink_hz: dop.and_then(|d| d.uplink_hz),
+            downlink_shift_hz: dop.and_then(|d| d.downlink_shift_hz),
+            uplink_shift_hz: dop.and_then(|d| d.uplink_shift_hz),
             transponder: dop.map(|d| d.label.clone()),
             transponder_index: dop.and_then(|d| d.index),
             inverting: dop.is_some_and(|d| d.inverting),
@@ -5612,20 +5777,23 @@ async fn start_sat_track(
             }
             // The per-tick honesty label (+ the declared TX-leg sideband).
             // The rotor half was fixed at arm time; the Doppler half re-reads
-            // the SAME consents `sat_doppler_tick` needs — settings pair plus
-            // a held transponder — so a mid-pass Settings toggle or a
-            // transponder release moves the label exactly when it moves the
-            // behaviour.
-            let (mode, tx_mode) = {
+            // the SAME consents `sat_doppler_tick` needs — both legs, resolved
+            // against the radio that is active RIGHT NOW, plus a held
+            // transponder — so a mid-pass Settings change, a handoff to
+            // another rig or a transponder release moves the label exactly
+            // when it moves the behaviour.
+            let (mode, consent, held, tx_mode) = {
                 let eng = engine_lock(&dop_engine);
-                let st = eng.settings();
+                let con = SatDopplerConsent::read(&eng);
+                let held = eng.sat_transponder_held().is_some();
                 (
                     tempo_app::settings::sat_track_mode(
                         addr.is_some(),
-                        st.sat_doppler,
-                        st.sat_vfo_map,
-                        eng.sat_transponder_held().is_some(),
+                        con.downlink || con.uplink,
+                        held,
                     ),
+                    con,
+                    held,
                     eng.sat_tx_mode(),
                 )
             };
@@ -5645,6 +5813,8 @@ async fn start_sat_track(
                 // carries under its own name.
                 update_badge(badge(
                     mode,
+                    &consent,
+                    held,
                     tx_mode.clone(),
                     "armed",
                     None,
@@ -5716,6 +5886,8 @@ async fn start_sat_track(
             let Some(addr) = addr.as_deref() else {
                 update_badge(badge(
                     mode,
+                    &consent,
+                    held,
                     tx_mode.clone(),
                     phase,
                     None,
@@ -5742,6 +5914,8 @@ async fn start_sat_track(
                 // show.
                 update_badge(badge(
                     mode,
+                    &consent,
+                    held,
                     tx_mode.clone(),
                     phase,
                     driver.last_aim(),
@@ -5772,6 +5946,8 @@ async fn start_sat_track(
                 // absent, not a 0 the UI would have to decode.
                 update_badge(badge(
                     mode,
+                    &consent,
+                    held,
                     tx_mode.clone(),
                     phase,
                     driver.last_aim(),
@@ -5794,6 +5970,8 @@ async fn start_sat_track(
                 // are ~15 s of the operator wondering.
                 update_badge(badge(
                     mode,
+                    &consent,
+                    held,
                     tx_mode.clone(),
                     phase,
                     driver.last_aim(),
@@ -7748,6 +7926,32 @@ fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapsh
        // mirror, but the rotator daemon only follows an explicit sync.
     sync_rotctld(&settings);
     Ok(snap)
+}
+
+/// THE writer of the satellite uplink consent pair (VFO mapping + per-radio
+/// confirmation). The pair is LIVE engine state — `apply_settings` captures it
+/// across every whole-settings save, so a stale Settings-form snapshot can
+/// neither re-point the mapping nor resurrect a consent the backend pruned
+/// (round 3, defect 2) — which makes this verb, fed by an operator click (the
+/// pass rail's confirm button or select, or Settings ▸ Radio's mapping
+/// select), the only path that writes it. `radio_id` = the rig the UI's copy
+/// named (the DTO's `uplink_radio_id`); omitted, the engine records the radio
+/// active AT WRITE TIME — never a form snapshot's idea of it. `map` omitted =
+/// confirm the mapping IN FORCE at write time, the same rule: the rail's
+/// confirm for a mapping already in force sends no map, because its DTO copy
+/// is poll-time state (round 4). Persisted; returns the snapshot.
+#[tauri::command(async)]
+fn confirm_sat_uplink(
+    state: State<'_, SharedEngine>,
+    map: Option<tempo_app::settings::SatVfoMap>,
+    radio_id: Option<u32>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.confirm_sat_uplink(radio_id, map);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: confirm_sat_uplink save failed: {e}");
+    }
+    Ok(eng.snapshot())
 }
 
 /// Peg-lock the active radio (dual-radio): when on, selecting a band never auto-switches the
@@ -13956,6 +14160,7 @@ pub fn run() {
             set_rx_gain,
             set_active_radio,
             set_peg_lock,
+            confirm_sat_uplink,
             add_radio,
             remove_radio,
             rename_radio,
@@ -14378,6 +14583,157 @@ mod tests {
             "an empty legacy array is not a cache"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Round 2, defect 6c: an operator who explicitly answered "Downlink only
+    /// (receive)" has ANSWERED the uplink question. The consent reader must
+    /// not keep proposing a derived Main/Sub mapping at them every pass — and
+    /// one click on that offer would replace their explicit choice. The offer
+    /// is for a station that has said nothing.
+    #[test]
+    fn an_explicit_downlink_only_answer_is_never_re_prompted() {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        let mut s = e.settings().clone();
+        s.rig_model = 3081; // IC-9700, our own CI-V — the strongest offer case
+        s.icom_native_cat = true;
+        s.sync_active_from_flat();
+        e.apply_settings(s);
+        // The operator's answer goes through THE verb — the consent pair is
+        // live state a settings payload can no longer carry (round 3).
+        e.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::DownlinkOnly));
+        let con = super::SatDopplerConsent::read(&e);
+        assert_eq!(
+            con.offer, "none",
+            "downlink-only is an answer, not an absence"
+        );
+        assert_eq!(con.offer_map, None);
+    }
+
+    /// ROUND 3, DEFECT 4. With a mapping IN FORCE that drives the uplink but
+    /// is not confirmed for the radio in play — the exact state the 0.26
+    /// migration routes an inert legacy uplink-only file into, and what any
+    /// second radio sees — the chooser and the engine's binding note say
+    /// "Confirm it on the pass rail". Round 2's offer logic fell through to
+    /// the DERIVED offer there: for an unknown rig that is "ask"/"none" (the
+    /// rail's select already shows the mapping, and a same-value re-pick
+    /// fires no change event — nothing to click), and for an IC-9700 it was
+    /// a button that confirmed Main/Sub, REPLACING the operator's explicit
+    /// choice. The offer must be the mapping in force, named as such.
+    #[test]
+    fn an_unconfirmed_mapping_in_force_is_offered_for_confirmation_never_replaced() {
+        use tempo_app::settings::{SatVfoMap, Settings};
+        // The migrated legacy uplink-only file on an unidentifiable rig:
+        // mapping kept, consent empty, no derived offer possible.
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        s.sat_vfo_map = SatVfoMap::UplinkOnly;
+        s.sat_uplink_radios = Some(Vec::new());
+        let e = tempo_app::engine::Engine::with_settings(s);
+        let con = super::SatDopplerConsent::read(&e);
+        assert_eq!(
+            con.offer, "confirm-mapping",
+            "the mapping in force is offered for confirmation on this radio"
+        );
+        assert_eq!(
+            con.offer_map.as_deref(),
+            Some("uplink-only"),
+            "…that mapping — never a derived replacement"
+        );
+
+        // Same rule when a derived offer EXISTS (IC-9700 on native CI-V):
+        // the operator's standing mapping wins over the derivation — one
+        // click confirms what is in force, it does not replace it.
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        s.rig_model = 3081;
+        s.icom_native_cat = true;
+        s.sync_active_from_flat();
+        s.sat_vfo_map = SatVfoMap::AUpBDown;
+        s.sat_uplink_radios = Some(Vec::new());
+        let e = tempo_app::engine::Engine::with_settings(s);
+        let con = super::SatDopplerConsent::read(&e);
+        assert_eq!(con.offer, "confirm-mapping");
+        assert_eq!(con.offer_map.as_deref(), Some("a-up-b-down"));
+    }
+
+    /// Round 2, defect 5 (wire half): the DTO's per-leg booleans and the
+    /// uplink offer must describe what the ENGINE will do with the held
+    /// transponder — not what the settings alone would allow. A simplex
+    /// (one-channel) bird and a beacon have no uplink leg: the engine writes
+    /// no split there, so `uplink` must read false even under a confirmed
+    /// mapping, and the offer must not promise a drive the engine refuses.
+    #[test]
+    fn the_consent_dto_reports_the_legs_the_engine_drives() {
+        use tempo_core::doppler::Transponder;
+        let mk = |confirm: bool| {
+            let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+            let mut s = e.settings().clone();
+            s.rig_model = 3081; // IC-9700 on native CI-V: the Confirm case
+            s.icom_native_cat = true;
+            s.sync_active_from_flat();
+            e.apply_settings(s);
+            if confirm {
+                // Through THE verb — the consent pair is live state a
+                // settings payload can no longer carry (round 3).
+                e.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::MainDownSubUp));
+            }
+            e
+        };
+
+        // A held SIMPLEX channel (ISS-class, 145.825 both ways), mapping
+        // CONFIRMED: one dial carries both legs — the engine drives the dial
+        // via the downlink leg and refuses the split. The wire says so.
+        let mut e = mk(true);
+        e.set_sat_transponder(Some((
+            "ISS|Mode V APRS".into(),
+            0,
+            Transponder::channel(145_825_000, 145_825_000),
+        )));
+        let con = super::SatDopplerConsent::read(&e);
+        assert!(con.downlink, "the one dial IS driven (downlink leg)");
+        assert!(!con.uplink, "no split exists to drive — the wire must not claim one");
+        assert_eq!(con.offer, "none", "nothing to confirm on a one-channel bird");
+
+        // Same bird, mapping NOT confirmed: still no offer — confirming here
+        // would change nothing this pass, and the promise in the offer copy
+        // ("Doppler drives … as Main = downlink, Sub = uplink") is one the
+        // engine would refuse to keep.
+        let mut e = mk(false);
+        e.set_sat_transponder(Some((
+            "ISS|Mode V APRS".into(),
+            0,
+            Transponder::channel(145_825_000, 145_825_000),
+        )));
+        let con = super::SatDopplerConsent::read(&e);
+        assert_eq!(con.offer, "none");
+        assert!(!con.uplink);
+
+        // A held BEACON under a confirmed mapping: downlink-only bird.
+        let mut e = mk(true);
+        e.set_sat_transponder(Some((
+            "RS-44|CW beacon".into(),
+            1,
+            Transponder {
+                uplink_centre_hz: 0,
+                downlink_centre_hz: 435_605_000,
+                invert: false,
+                half_width_hz: 0,
+            },
+        )));
+        let con = super::SatDopplerConsent::read(&e);
+        assert!(con.downlink);
+        assert!(!con.uplink, "a beacon has no uplink leg");
+        assert_eq!(con.offer, "none");
+
+        // No hold at all: the offer stands (the rail decides where to show
+        // it), the legs are false (nothing to tune yet), and the consent
+        // names the radio a confirmation would land on — BY ID, so the click
+        // can never grant a rig the copy did not name.
+        let e = mk(false);
+        let con = super::SatDopplerConsent::read(&e);
+        assert!(!con.downlink && !con.uplink);
+        assert_eq!(con.offer, "confirm");
+        assert_eq!(con.radio_id, e.settings().active_radio);
     }
 
     /// A written snapshot round-trips through its own serde (camelCase keys on

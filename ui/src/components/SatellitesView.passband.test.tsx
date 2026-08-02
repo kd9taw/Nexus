@@ -77,6 +77,12 @@ const status = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   name: 'RS-44',
   state: 'tracking',
   mode: 'rotor+doppler',
+  dopplerDownlink: true,
+  dopplerUplink: true,
+  uplinkOffer: 'none',
+  uplinkOfferMap: null,
+  uplinkRadio: 'IC-9700',
+  uplinkRadioId: 1,
   azDeg: 141,
   elDeg: 46,
   aosAzDeg: 100,
@@ -104,7 +110,7 @@ const settings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
   rotatorModel: 2, // a rotor IS configured, so the track status is polled
   rotatorHost: '',
-  satDoppler: true,
+  satDopplerOff: false,
   satVfoMap: 'main-down-sub-up',
   ...over,
 })
