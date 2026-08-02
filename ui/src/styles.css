@@ -14753,6 +14753,13 @@ select.settings-input {
   font-size: var(--fs-micro);
   padding: 0;
 }
+/* The badge text is the way BACK to a live pass (it opens the tracked bird's
+   detail); it must read as the badge, not as the stop control beside it. */
+.sats-tracking-badge .sats-badge-open {
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
 /* The one-time seeding notice. A HEADER child, not a grid child: .sats-view's
    rows are `auto auto minmax(0,1fr)` and an extra column-1 item would push
    .sats-sched out of the grower row (the schedule would stop scrolling and
@@ -14790,6 +14797,13 @@ select.settings-input {
 }
 .sats-best {
   grid-column: 1;
+  /* EXPLICIT rows for the two column-1 sections: "Next up" no longer renders
+     on the zero-favourites path, and auto-placement would then land
+     .sats-sched in the `auto` row — an unbounded table under the view's
+     overflow:hidden, the overhaul's own bug class. Pinning the rows keeps
+     the schedule in the grower whether or not Next-up exists (an empty row 2
+     collapses to nothing but its gap). */
+  grid-row: 2;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -14884,10 +14898,100 @@ select.settings-input {
   margin-left: var(--space-1);
   vertical-align: middle;
 }
+/* THE SCHEDULE SHELL (2026-08 discovery-band split): a flex column of a
+   fit=content control strip + ONE inner scroller. Before this, .sats-sched
+   itself scrolled and its h2 scrolled away with the rows (only the th was
+   sticky) — the disclosure chip for the discovery band must NEVER scroll, or
+   nothing below a 126-row schedule is findable. Scroll-owner count is
+   unchanged: still exactly one in column 1, one level deeper. The bound on
+   the discovery band is a ROW COUNT in the component (DISCOVERY_ROW_CAP) —
+   never a max-height here, which would be a second nested scroller. */
 .sats-sched {
   grid-column: 1;
+  grid-row: 3; /* the grower — pinned; see .sats-best's comment */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.sats-sched-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  /* The pop-out's 420px minimum: the h2 and the chip wrap, never clip. */
+  flex-wrap: wrap;
+}
+.sats-sched-scroll {
+  flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
+}
+/* The discovery disclosure: a live count in the schedule's own title line —
+   top of column 1, the section's primary reading position. */
+.sats-more-chip {
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.sats-more-chip:hover,
+.sats-more-chip[aria-expanded='true'] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+/* The band's divider / inline notice rows: prose, not pass rows — they wrap,
+   they don't answer the pointer, and they don't light up on hover. */
+.sats-sched tr.sats-more-bar,
+.sats-sched tr.sats-inline-empty,
+.sats-sched tr.sats-more-all {
+  cursor: default;
+}
+.sats-sched tr.sats-more-bar:hover td,
+.sats-sched tr.sats-inline-empty:hover td,
+.sats-sched tr.sats-more-all:hover td {
+  background: transparent;
+}
+.sats-more-bar td,
+.sats-inline-empty td {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  white-space: normal;
+}
+.sats-more-all td {
+  text-align: center;
+}
+.sats-more-all button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: var(--fs-micro);
+  padding: 2px 6px;
+}
+/* The mode pill ([FM voice] / [Linear SSB/CW] / [Digital] / [Beacon]) beside
+   a bird's name — rendered only when the catalog carries a class (absent =
+   no pill, never a guess). */
+.sat-mode-pill {
+  font-size: var(--fs-micro);
+  font-weight: 400;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-left: var(--space-1);
+}
+/* Discovery-row facts beside the name (pass rhythm, live altitude). */
+.sats-disc-note {
+  font-size: var(--fs-micro);
+  font-weight: 400;
+  color: var(--text-dim);
+  margin-left: var(--space-1);
 }
 .sats-sched table {
   width: 100%;
@@ -15037,6 +15141,38 @@ button.sat-chip:disabled {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: var(--space-2);
+}
+/* THE STICKY DETAIL HEADING — home of the ✕ close. Sticky inside the
+   .sats-side scroller (at sm/xs, inside the page scroller — one rule, both
+   widths): the dome + globe below are together taller than the column at
+   every window size, so a close that scrolls away is a close that does not
+   exist. Opaque background (the contract's rule for sticky surfaces) and
+   negative inline margins spanning .sats-detail's padding gutters so content
+   never scrolls visibly beside it. Wins over the shared sats h2 rule by
+   source order (same specificity, later). */
+.sats-detail h2 {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  background: var(--bg);
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-1);
+}
+.sats-detail-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--fs-body);
+  padding: 0 2px;
+}
+.sats-detail-close:hover {
+  color: var(--text);
 }
 .sat-norad {
   font-size: var(--fs-micro);
@@ -15569,13 +15705,40 @@ button.sat-chip:disabled {
 [data-viewport='sm'] .sats-view,
 [data-viewport='xs'] .sats-view {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  /* All-auto rows: .sats-view is the PAGE scroller here, so no track may
+     bound a child — a bounded child with its own scroller is the nested-
+     scroller violation, and one with overflow:visible spills its track. */
+  grid-template-rows: auto auto auto auto;
   overflow-y: auto;
+}
+/* The page scroller owns the COLUMN at these widths: the schedule shell and
+   the side column release their overflow to it. (The .sats-side nested
+   scroller predates the discovery band; it was the same violation.) The
+   sticky detail heading now sticks in the page scroller — one rule, both
+   widths. */
+[data-viewport='sm'] .sats-sched,
+[data-viewport='xs'] .sats-sched {
+  overflow: visible;
+}
+/* …but the TABLE keeps its horizontal escape. The 11-column nowrap table's
+   min-content (~700–800 px) exceeds these widths while .sats-view clips
+   overflow-x, so without a scroll owner HERE the Status/Needed/⏰/▶ Work
+   columns are right-clipped with NO path to them — including the sats
+   pop-out at its 420 px minimum, which stamps data-viewport=xs. The .dxm
+   precedent: wide content scrolls inside its own container; the page body
+   never scrolls sideways. overflow-x ONLY (a shorthand would re-release both
+   axes — the round-1 regression): the base overflow-y:auto still computes,
+   but the box is content-sized here, so it never vertically scrolls and the
+   page scroller keeps the column. */
+[data-viewport='sm'] .sats-sched-scroll,
+[data-viewport='xs'] .sats-sched-scroll {
+  overflow-x: auto;
 }
 [data-viewport='sm'] .sats-side,
 [data-viewport='xs'] .sats-side {
   grid-column: 1;
   grid-row: auto;
+  overflow: visible;
 }
 
 /* ============ Setup wizard: step framework (station → rig → goals) ============ */

@@ -3455,6 +3455,15 @@ struct SatPassDto {
     /// which computes it on demand; absent on every other pass surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     earn: Option<propagation::SatPassEarn>,
+    /// The pass OUT-LASTED the 6 h backscan: `aos_unix` is the scan window's
+    /// edge, not a rise time the sky ever saw (an AO-10-class multi-hour pass
+    /// is longer than the backscan, so [`view_passes`]' clamp still fires).
+    /// Stamped only on `get_satellites` rows so the discovery band can say
+    /// "already up" instead of printing a fabricated clock time — report what
+    /// was DONE, never a sentinel the consumer must guess about. Absent when
+    /// false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    aos_clamped: bool,
 }
 
 /// Post the operator's own DX spot to the human DX cluster. Formats a canonical
@@ -3502,6 +3511,33 @@ async fn get_contests() -> Result<Vec<propagation::live::contests::ContestEvent>
     )
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The Satellites-view pass scan for ONE bird: the next-24 h window
+/// `SatView.passes` rows come from. Extracted so the WINDOW itself is
+/// testable — the window, not the geometry, is where this surface diverged
+/// from the schedule commands.
+///
+/// Scan from 6 h back so a pass ALREADY in progress keeps its real AOS and
+/// its full peak elevation — the same window `get_sat_schedule` /
+/// `get_sat_pass_needs` use, for the reason their comment names: with no
+/// backscan a bird above the horizon at the window edge got a FABRICATED
+/// `aos_unix = now` and a max elevation understated to the from-now
+/// remainder, and this surface re-served that row for the pass cache's full
+/// 600 s. The horizon widens by the backscan so the reach stays 24 h
+/// FORWARD; rows fully in the past are dropped (SatPassesPane's
+/// `losUnix > now` filter made this honest client-side — the wire is honest
+/// itself now, and its consumers keep working unchanged).
+/// A pass LONGER than the backscan still gets a window-edge AOS from the scan
+/// (widening further balloons the scan cost for every bird); the DTO's
+/// [`SatPassDto::aos_clamped`] — `aos_unix == now - VIEW_PASS_BACKSCAN_SECS`,
+/// the exact clamp shape — is how that honest admission reaches the wire.
+const VIEW_PASS_BACKSCAN_SECS: i64 = 21_600;
+fn view_passes(t: &propagation::sat::Tle, obs: (f64, f64), now: i64) -> Vec<propagation::sat::Pass> {
+    propagation::sat::passes(t, obs, now - VIEW_PASS_BACKSCAN_SECS, 24 + 6)
+        .into_iter()
+        .filter(|p| p.los_unix > now)
+        .collect()
 }
 
 /// Current amateur-satellite picture: sub-satellite points for the Celestrak
@@ -3583,7 +3619,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                 });
                 if need_passes {
                     if let Some(obs) = observer {
-                        for p in sat::passes(t, obs, now, 24) {
+                        for p in view_passes(t, obs, now) {
                             computed_passes.push(SatPassDto {
                                 name: t.name.clone(),
                                 norad,
@@ -3594,6 +3630,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                                 los_az_deg: p.los_az_deg,
                                 status: status.clone(),
                                 earn: None,
+                                aos_clamped: p.aos_unix == now - VIEW_PASS_BACKSCAN_SECS,
                             });
                         }
                     }
@@ -4694,7 +4731,11 @@ async fn get_sat_schedule(
                     aos_az_deg: p.aos_az_deg,
                     los_az_deg: p.los_az_deg,
                     status: status.clone(),
+                    // Never stamped on schedule rows (the same clamp shape
+                    // exists here): the favourites wire is frozen, and its
+                    // renderers already treat a past AOS as "now".
                     earn: None,
+                    aos_clamped: false,
                 });
             }
         }
@@ -4805,6 +4846,7 @@ async fn get_sat_pass_needs(
                     los_az_deg: p.los_az_deg,
                     status: status.clone(),
                     earn: Some(earn),
+                    aos_clamped: false, // favourites wire frozen — see get_sat_schedule
                 });
             }
         }
@@ -4875,6 +4917,9 @@ fn iss_pass_from_tles(
             los_az_deg: p.los_az_deg,
             status: None,
             earn: None,
+            // A 30 min backscan against ~10 min ISS passes: the clamp shape
+            // cannot occur on this surface.
+            aos_clamped: false,
         }))
 }
 
@@ -5057,6 +5102,7 @@ async fn get_sat_detail(
                                 los_az_deg: p.los_az_deg,
                                 status: status.clone(),
                                 earn: None,
+                                aos_clamped: false, // detail pane renders its own clock
                             }),
                             track,
                         )
@@ -13998,7 +14044,8 @@ mod tests {
         load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, rect_lands_on_work_area,
         resolve_bird, resolve_birds, sanitize_profile, sat_excluded, tle_absorb_foreign,
         tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
-        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, write_json_atomic,
+        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, view_passes,
+        write_json_atomic,
         AssistanceEvent, AssistanceSourceState, SatBird, TLE_FETCHING, TleFlightGuard,
         TleSnapshot
     };
@@ -14406,6 +14453,53 @@ mod tests {
         assert!((epoch - ISS_EPOCH_UNIX).abs() <= 1, "epoch {epoch}");
         let err = tle_act_gate(&iss_tle(), ISS_EPOCH_UNIX + 40 * day).unwrap_err();
         assert!(err.contains("40 days old") && err.contains(ISS_NAME), "{err}");
+    }
+
+    /// PIN: a bird already above the horizon reports its TRUE AOS (in the
+    /// past) and its FULL peak elevation on the Satellites view, not a
+    /// fabricated window-edge AOS with the peak understated to the remainder.
+    /// `get_sat_schedule`/`get_sat_pass_needs` backscan 6 h for exactly this
+    /// (their comment names the symptom for multi-hour MEO birds); the view's
+    /// scan had NO backscan and its rows are cached for 600 s, so the defect
+    /// recurred every cache bucket — systematically defaming the one pass the
+    /// operator can act on right now.
+    #[test]
+    fn view_passes_keeps_the_true_aos_of_an_in_progress_pass() {
+        let truth = propagation::sat::passes(&iss_tle(), EN52, ISS_EPOCH_UNIX, 24)
+            .into_iter()
+            .next()
+            .expect("at least one ISS pass in 24 h");
+        // Anchor `now` two minutes before LOS: most of the pass — including its
+        // peak — is already behind us, which is where the no-backscan window
+        // both fabricated the AOS and understated the max elevation.
+        let now = truth.los_unix - 120;
+        let got = view_passes(&iss_tle(), EN52, now);
+        let cur = got
+            .iter()
+            .find(|p| p.aos_unix <= now && p.los_unix > now)
+            .expect("the in-progress pass is reported");
+        assert!(
+            cur.aos_unix < now - 300,
+            "true AOS in the past, not a fabricated now-AOS (aos {} vs now {})",
+            cur.aos_unix,
+            now
+        );
+        assert!(
+            (cur.aos_unix - truth.aos_unix).abs() <= 60,
+            "the reported AOS is the pass's real rise ({} vs {})",
+            cur.aos_unix,
+            truth.aos_unix
+        );
+        assert!(
+            (cur.max_el_deg - truth.max_el_deg).abs() < 1.5,
+            "full peak elevation, not the from-now remainder ({} vs {})",
+            cur.max_el_deg,
+            truth.max_el_deg
+        );
+        // The backscan must not leak history: rows fully in the past stay off
+        // the wire (the SatPassesPane filter made this honest client-side;
+        // the wire itself is honest now).
+        assert!(got.iter().all(|p| p.los_unix > now), "no expired rows");
     }
 
     /// A synthetic bird with a chosen NORAD + epoch (yy/doy columns) — enough

@@ -55,6 +55,11 @@ import {
   type SatSeedRecord,
 } from '../features/satSeed'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
+import {
+  DISCOVERY_ROW_CAP,
+  modePillWord,
+  rollPassesToBirds,
+} from '../features/satDiscovery'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
 import { pushToast } from '../toast'
@@ -98,11 +103,17 @@ function passScore(p: SatPass): number {
   return (dead ? -1000 : 0) + p.maxElDeg + Math.min(durMin, 15) * 0.8 + (p.status === 'alive' ? 8 : 0)
 }
 
+/** The pass-quality ladder — the section's ONE quality vocabulary. The
+ * discovery band reuses it (as a tooltip on the elevation cell) so there is
+ * one language for "how good is this pass", never a second dialect. */
+const qualityWord = (el: number) =>
+  el >= 60 ? 'overhead pass' : el >= 30 ? 'high pass' : el >= 15 ? 'workable pass' : 'low horizon pass'
+
 /** Plain-language "why" line for the best-passes strip. */
 function whyLine(p: SatPass, nowSecs: number): string {
   const el = Math.round(p.maxElDeg)
   const dur = Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))
-  const quality = el >= 60 ? 'overhead pass' : el >= 30 ? 'high pass' : el >= 15 ? 'workable pass' : 'low horizon pass'
+  const quality = qualityWord(el)
   const status =
     p.status === 'alive'
       ? ' · reported alive (SatNOGS)'
@@ -1280,6 +1291,14 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     satSeedNoticeOpen() ? satSeedRecord() : null,
   )
 
+  // THE DISCOVERY BAND's disclosure. null = follow the default (open only on
+  // the zero-favourites path at md+; collapsed everywhere else — the calm
+  // default is today's screen plus one chip). Deliberately NOT persisted:
+  // the disclosure plus a live count is the whole control surface this needs.
+  const [discOpen, setDiscOpen] = useState<boolean | null>(null)
+  // Past the row cap, "show all N" — reset when the band collapses.
+  const [discAll, setDiscAll] = useState(false)
+
   // Map click hand-off: follow later clicks too, not just the mount value.
   useEffect(() => {
     if (focusSat) setSelected(focusSat)
@@ -1513,7 +1532,15 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
           return p.earn?.score ?? -1
       }
     }
-    const rows = schedule.filter((p) => p.losUnix > nowSecs)
+    // Filtered against the CURRENT ★ set, not just the fetch that produced
+    // it: `schedule` lags a favourites change by one effect pass, and for
+    // that frame the stale rows kept rendering Next-up + fav rows after the
+    // last unstar. A row for a bird that is not ★ right now is never honest
+    // here, whatever state it arrived in. Steady-state this is a no-op — the
+    // fetch is favourites-only by construction.
+    const rows = schedule.filter(
+      (p) => p.losUnix > nowSecs && isSatChased(p.name, p.norad, chaseKeys),
+    )
     rows.sort((a, b) => {
       const va = val(a)
       const vb = val(b)
@@ -1522,7 +1549,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
       return (schedSort.asc ? c : -c) || a.aosUnix - b.aosUnix
     })
     return rows
-  }, [schedule, nowSecs, schedSort])
+  }, [schedule, nowSecs, schedSort, chaseKeys])
   const schedTh = (label: string, key: SchedSortKey) => (
     <th
       aria-sort={schedSort.key === key ? (schedSort.asc ? 'ascending' : 'descending') : undefined}
@@ -1599,6 +1626,76 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   }, [view, search, chaseKeys])
 
   const tleStale = view != null && view.tleAgeDays > 14
+
+  // THE DISCOVERY ROLLUP — one row per non-★ bird with a workable pass in the
+  // snapshot's 24 h window, worth-sorted (satDiscovery.ts owns the volume law
+  // and every admission rule). Computed from `view.passes` alone: the array
+  // is already fetched at 60 s for the seed and was otherwise unread here —
+  // zero new IPC. ★ exclusion is NORAD-first (isSatChased), so a promoted
+  // bird leaves the band the moment it is starred.
+  const discovery = useMemo(
+    () =>
+      view == null
+        ? []
+        : rollPassesToBirds(view, nowSecs, (n, no) => isSatChased(n, no, chaseKeys)),
+    [view, nowSecs, chaseKeys],
+  )
+  // Collapsed at sm/xs ALWAYS (there .sats-view is the page scroller and
+  // twelve extra rows push the Birds list further away — the exact failure
+  // this design fixes); open by default only on the zero-favourites path,
+  // where the band IS the answer and is learned before it must be found.
+  const vpClass = document.documentElement.getAttribute('data-viewport')
+  const smallViewport = vpClass === 'sm' || vpClass === 'xs'
+  const discoveryOpen = discOpen ?? (favs.size === 0 && !smallViewport)
+  // THE LATCH: a null default that has RENDERED open behaves as an explicit
+  // open until the operator toggles. Without it the FIRST ★ flips favs.size
+  // to 1, the null default re-evaluates to collapsed, and all twelve rows
+  // vanish under the operator's cursor — punishing exactly the promotion act
+  // the band exists for.
+  useEffect(() => {
+    if (discOpen == null && discoveryOpen) setDiscOpen(true)
+  }, [discOpen, discoveryOpen])
+  const discShown = discAll ? discovery : discovery.slice(0, DISCOVERY_ROW_CAP)
+
+  // Mode pills: the per-bird class, when the catalog can say (types.ts
+  // `birdType` — optional and defensive; absent renders NO pill). NORAD
+  // first, name fallback, the same identity order every ★ surface uses.
+  const birdTypeByKey = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const b of view?.birds ?? []) {
+      if (b.birdType == null) continue
+      if (b.norad != null) m.set(`n${b.norad}`, b.birdType)
+      m.set(b.name.toUpperCase(), b.birdType)
+    }
+    return m
+  }, [view])
+  const pillFor = (name: string, norad?: number | null) =>
+    modePillWord(
+      (norad != null ? birdTypeByKey.get(`n${norad}`) : undefined) ??
+        birdTypeByKey.get(name.toUpperCase()),
+    )
+
+  // ESCAPE closes the detail — the missing navigation primitive (nothing in
+  // this file ever passed setSelected(null) before). Guarded on the arm
+  // confirm: the Radix Dialog owns Escape while it is open, and closing the
+  // detail underneath it would yank the ground out from under the confirm.
+  // Closing is a NAVIGATION act, never a disarm — the track, the rotor and
+  // the transponder hold are untouched.
+  useEffect(() => {
+    if (selected == null) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || armConfirm != null || e.defaultPrevented) return
+      // Escape INSIDE a text or select control belongs to that control (clear
+      // the field, close the native dropdown) — a window-level close here
+      // would yank the detail out from under the alarm-lead <select> or the
+      // Birds-list search mid-use. Buttons and the detail body still close.
+      const t = e.target
+      if (t instanceof Element && t.closest('input, select, textarea')) return
+      setSelected(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected, armConfirm])
 
   // Stable empty inputs for the embedded detail globe (it shows only the birds —
   // no stations, spots, or needs), so MapView's per-tick projections don't rebuild.
@@ -1985,21 +2082,32 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                 the operator actually has — where to look — without dressing it
                 up as a command we withheld on purpose. An az-only rotor is
                 never sent an elevation either, and must not print one. */}
-            ⟳ {track.state === 'armed' ? 'armed' : 'tracking'} {track.name}
-            {/* The MODE word, only when a surface is missing: the full
-                rotor+doppler track is the unmarked case; every partial one
-                names what it actually drives. */}
-            {track.mode === 'doppler-only'
-              ? ' · Doppler only'
-              : track.mode === 'pass-only'
-                ? ' · pass timing only'
-                : track.mode === 'rotor-only'
-                  ? ' · rotor only'
-                  : ''}{' '}
-            ·{' '}
-            {track.azDeg == null
-              ? `rises az ${Math.round(track.aosAzDeg)}°`
-              : `cmd az ${Math.round(track.azDeg)}° ${track.elDeg == null ? '(az only)' : `el ${Math.round(track.elDeg)}°`}`}
+            {/* THE WAY BACK to a live pass: the badge text is a button doing
+                setSelected(track.name) — the one control that never scrolls
+                away once the detail's ✕ exists. Round trip: ✕ → browse →
+                badge → back on the dome. Navigation only; the ■ beside it
+                stays the separate stop control, untouched. */}
+            <button
+              className="sats-badge-open"
+              onClick={() => setSelected(track.name)}
+              title="Open this pass's detail (sky dome, readiness rail) — tracking is not affected"
+            >
+              ⟳ {track.state === 'armed' ? 'armed' : 'tracking'} {track.name}
+              {/* The MODE word, only when a surface is missing: the full
+                  rotor+doppler track is the unmarked case; every partial one
+                  names what it actually drives. */}
+              {track.mode === 'doppler-only'
+                ? ' · Doppler only'
+                : track.mode === 'pass-only'
+                  ? ' · pass timing only'
+                  : track.mode === 'rotor-only'
+                    ? ' · rotor only'
+                    : ''}{' '}
+              ·{' '}
+              {track.azDeg == null
+                ? `rises az ${Math.round(track.aosAzDeg)}°`
+                : `cmd az ${Math.round(track.azDeg)}° ${track.elDeg == null ? '(az only)' : `el ${Math.round(track.elDeg)}°`}`}
+            </button>
             <button
               onClick={disarmTrack}
               title={
@@ -2044,23 +2152,16 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         )}
       </header>
 
+      {/* THE GATE LADDER, reordered (2026-08 schedule rethink): only !gridSet
+          short-circuits — no grid, no passes, nothing honest to show. The old
+          favs.size===0 branch replaced the entire planning column with one
+          sentence while ~1,800 all-bird pass rows sat unread in memory; an
+          empty ★ set is an inline line INSIDE the schedule now, with the
+          discovery band open beneath it carrying the actual answer. */}
       {!gridSet ? (
         <div className="sats-empty">
           Set your grid square (Settings ▸ Station) first — passes are computed over
           YOUR location, and without a locator there is nothing honest to show.
-        </div>
-      ) : favs.size === 0 ? (
-        <div className="sats-empty">
-          No favorites yet — star birds in the Birds list; the schedule, best-pass
-          picks, and alarms all run off your ★ set (the S.A.T. workflow).
-        </div>
-      ) : upcoming.length === 0 ? (
-        <div className="sats-empty">
-          No upcoming passes for your favorites in the next {SCHEDULE_HOURS} h
-          {view == null
-            ? ' — waiting for orbital elements (first fetch needs the network once)'
-            : ' (birds whose elements are older than 30 days are excluded until a refresh)'}
-          .
         </div>
       ) : (
         <>
@@ -2068,7 +2169,10 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               WORKED from here, not merely opened. The mini arc is Look4Sat's
               pick-by-shape idea; the why-line keeps the plain-language case;
               the earn chips say what the pass is worth (Phase 2); and ▶ runs
-              the whole chain in one consented click. */}
+              the whole chain in one consented click. STAYS ★-ONLY (upheld
+              deliberately): mixing a non-favourite into the primary action
+              surface is the "second list to mentally merge" in reverse. */}
+          {upcoming.length > 0 && (
           <section className="sats-best">
             <h2>Next up (24 h)</h2>
             {best.map((p) => (
@@ -2090,9 +2194,31 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               </div>
             ))}
           </section>
+          )}
 
           <section className="sats-sched">
-            <h2>Schedule — favorites, next {SCHEDULE_HOURS} h</h2>
+            {/* The control strip NEVER scrolls (fit=content; the table below
+                lives in the section's ONE scroller). The disclosure chip
+                lives here so it stays findable under a 126-row schedule —
+                and its live count is the discoverability mechanism: a number
+                that moves is what peripheral vision catches. */}
+            <div className="sats-sched-strip">
+              <h2>Schedule — favorites, next {SCHEDULE_HOURS} h</h2>
+              <button
+                type="button"
+                className="sats-more-chip"
+                aria-expanded={discoveryOpen}
+                onClick={() => {
+                  setDiscOpen(!discoveryOpen)
+                  if (discoveryOpen) setDiscAll(false)
+                }}
+                title="Birds outside your ★ set flying a workable pass (10° peak or better) over your grid in the next 24 h — one row per bird, its best pass. Star one to move it into your schedule."
+              >
+                Other birds overhead · {discovery.length} workable · 24 h{' '}
+                {discoveryOpen ? '▴' : '▾'}
+              </button>
+            </div>
+            <div className="sats-sched-scroll">
             <table>
               <thead>
                 <tr>
@@ -2114,10 +2240,27 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                   <th></th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="fav">
+                {/* The ladder's old middle branches, inline: the schedule
+                    frame (and the discovery band below it) stay on screen,
+                    and the words stay exactly as honest as the branches were. */}
+                {upcoming.length === 0 && (
+                  <tr className="sats-inline-empty">
+                    <td colSpan={11}>
+                      {favs.size === 0
+                        ? 'No ★ birds yet — star a bird (☆ in the rows below, or in the Birds list) and its passes, alarms and needed-grid chips appear here.'
+                        : `No upcoming passes for your favorites in the next ${SCHEDULE_HOURS} h${
+                            view == null
+                              ? ' — waiting for orbital elements (first fetch needs the network once)'
+                              : ' (birds whose elements are older than 30 days are excluded until a refresh)'
+                          }.`}
+                    </td>
+                  </tr>
+                )}
                 {upcoming.map((p) => {
                   const inPass = p.aosUnix <= nowSecs
                   const armed = p.name.toUpperCase() in alarms
+                  const pill = pillFor(p.name, p.norad)
                   return (
                     <tr
                       key={`${p.name}-${p.aosUnix}`}
@@ -2136,7 +2279,12 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                           ★
                         </button>
                       </td>
-                      <td className="sat-name">{p.name}</td>
+                      <td className="sat-name">
+                        {p.name}
+                        {/* The mode pill ([FM voice]/[Linear SSB/CW]/…), when
+                            the catalog can say — absent class, no pill. */}
+                        {pill && <span className="sat-mode-pill">{pill}</span>}
+                      </td>
                       <td>{hhmm(p.aosUnix)}</td>
                       <td className="sat-count">{countdown(p, nowSecs)}</td>
                       <td>{Math.round(p.maxElDeg)}°</td>
@@ -2206,7 +2354,141 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                   )
                 })}
               </tbody>
+              {/* THE DISCOVERY BAND — the second tbody in the SAME table, so
+                  its rows share the schedule's columns and read as the same
+                  schedule, never a second list to mentally merge. Collapsed =
+                  ZERO rows in the DOM. One row per BIRD (its best 24 h pass),
+                  worth-sorted, capped at DISCOVERY_ROW_CAP with the remainder
+                  stated — satDiscovery.ts owns the volume law. Starring a row
+                  PROMOTES the bird into the ★ tbody above, where earn chips
+                  and the ⏰ alarm live (both are withheld here on purpose —
+                  the module header says why). */}
+              <tbody className="more">
+                {discoveryOpen && (
+                  <>
+                    <tr className="sats-more-bar">
+                      <td colSpan={11}>
+                        Other birds — each row is that bird's best pass in the
+                        next 24 h · ☆ moves it into your schedule
+                      </td>
+                    </tr>
+                    {discShown.map((b) => {
+                      const p = b.best
+                      const pill = modePillWord(b.birdType)
+                      return (
+                        <tr
+                          key={`d-${b.norad ?? b.name}`}
+                          className={`sats-disc${selected === b.name ? ' sel' : ''}${p.aosUnix <= nowSecs ? ' live' : ''}`}
+                          onClick={() => setSelected(b.name)}
+                        >
+                          <td>
+                            <button
+                              className="sat-star"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                onToggleFav(b.name, b.norad)
+                              }}
+                              title="Star to move this bird into your schedule above — it gains needed-grid chips, the pass alarm and the 48 h view"
+                            >
+                              ★
+                            </button>
+                          </td>
+                          <td className="sat-name">
+                            {b.name}
+                            {pill && <span className="sat-mode-pill">{pill}</span>}
+                            <span
+                              className="sats-disc-note"
+                              title="Workable passes (10° peak or better) in the next 24 h"
+                            >
+                              {b.workable} in 24 h
+                            </span>
+                            {b.altKm != null && (
+                              <span className="sats-disc-note" title="Current altitude">
+                                {Math.round(b.altKm)} km up
+                              </span>
+                            )}
+                          </td>
+                          {/* aosClamped: the pass out-lasted the backend's
+                              6 h backscan, so aosUnix is the scan window's
+                              edge — a clock time the sky never saw. Say what
+                              was DONE ("already up"), never the fabrication;
+                              the duration is then a lower bound, marked +. */}
+                          <td>
+                            {p.aosClamped ? (
+                              <span title="Rose before the 6 h scan window — its true rise time is unknown here">
+                                already up
+                              </span>
+                            ) : (
+                              hhmm(p.aosUnix)
+                            )}
+                          </td>
+                          <td className="sat-count">{countdown(p, nowSecs)}</td>
+                          <td title={qualityWord(p.maxElDeg)}>{Math.round(p.maxElDeg)}°</td>
+                          <td>
+                            {Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))}
+                            {p.aosClamped ? '+' : ''} m
+                          </td>
+                          <td>
+                            {wind8(p.aosAzDeg)}→{wind8(p.losAzDeg)}
+                          </td>
+                          {/* Status: EMPTY on purpose. These rows carry the
+                              bundled catalog's status, which reads 'alive'
+                              for every bird admitted here — including birds
+                              the live SatNOGS overlay (favorites-only) knows
+                              are dead. A constant chip that is sometimes
+                              false is false hope, not information. */}
+                          <td></td>
+                          {/* Needed: earn is stamped only by
+                              get_sat_pass_needs — a non-★ row shows worth-to-
+                              work, never a guessed earn. Absent, not zero. */}
+                          <td className="sat-need"></td>
+                          {/* ⏰ withheld: the alarm map is name-keyed through
+                              the schedule's alias resolution; these rows
+                              carry the element file's CURRENT name, and an
+                              alarm armed under it on a renamed bird would
+                              silently never fire. Star first — the promoted
+                              row above carries the bell. */}
+                          <td></td>
+                          <td>
+                            <button
+                              className="sat-track"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                workPass(p)
+                              }}
+                              title={workTitle}
+                            >
+                              ▶ Work
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    {!discAll && discovery.length > DISCOVERY_ROW_CAP && (
+                      <tr className="sats-more-all">
+                        <td colSpan={11}>
+                          {/* The cap sits on the worth-sorted list, so it can
+                              never hide the best thing — and the remainder is
+                              always on screen. */}
+                          <button type="button" onClick={() => setDiscAll(true)}>
+                            show all {discovery.length} ▾
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                    {discovery.length === 0 && (
+                      <tr className="sats-inline-empty">
+                        <td colSpan={11}>
+                          no other birds with a workable pass (10° peak or better) over your
+                          grid in the next 24 h
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                )}
+              </tbody>
             </table>
+            </div>
           </section>
         </>
       )}
@@ -2218,6 +2500,22 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               {detail.name}
               {detail.norad != null && <span className="sat-norad"> · NORAD {detail.norad}</span>}
               {detail.status && <span className={`sat-chip ${detail.status === 'alive' ? 'alive' : 'dead'}`}>{detail.status}</span>}
+              {/* THE CLOSE — the section's missing navigation primitive. The
+                  heading is sticky (styles.css) so this stays one click away
+                  however far down the dome/globe stack the column is
+                  scrolled: the two square graphics alone are taller than the
+                  column at every window size. Closing is navigation, never a
+                  disarm — a live track keeps running (the header badge is
+                  the way back). */}
+              <button
+                type="button"
+                className="sats-detail-close"
+                aria-label="Close this bird's detail"
+                title="Close — a tracked pass keeps tracking; the badge up top brings you back"
+                onClick={() => setSelected(null)}
+              >
+                ✕
+              </button>
             </h2>
             {/* THE READINESS RAIL, directly under the bird's name: once a pass
                 is armed the chain is visible AS a chain, each gate fixable in

@@ -376,6 +376,12 @@ export interface SatView {
      * work". Seeding requires it true; the Birds list marks alive-but-false
      * birds silent (satHealth.ts). */
     amateur?: boolean
+    /** Per-bird mode class ('fm' | 'linear' | 'digital' | 'beacon') — drives
+     * the schedule/discovery mode pills and the discovery tier. OPTIONAL AND
+     * DEFENSIVE ON PURPOSE: the backend half lands with feat/sat-bird-type;
+     * until it does (and wherever the catalog cannot say) absence renders NO
+     * pill — never a guess (kindWord's law). */
+    birdType?: string | null
   }[]
   /** Sorted by AOS; geometry only — no transponder/workability claim. */
   passes: SatPass[]
@@ -420,6 +426,12 @@ export interface SatPass {
   /** What this pass could EARN (needed grids/entities reachable through the
    * footprint). Stamped ONLY by get_sat_pass_needs; absent everywhere else. */
   earn?: SatPassEarn | null
+  /** The pass OUT-LASTED the backend's 6 h backscan: `aosUnix` is the scan
+   * window's edge, not a rise time the sky ever saw (AO-10-class multi-hour
+   * passes). Stamped by get_satellites so a surface can say "already up"
+   * instead of printing a fabricated clock time — report what was done,
+   * never a sentinel the consumer must guess about. Absent when false. */
+  aosClamped?: boolean
 }
 
 /** One pass's earn summary (spec §3 needs-aware ranking). Counts are complete;
