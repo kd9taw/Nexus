@@ -247,7 +247,7 @@ describe('RecallPanel — the avatar opens the QRZ page', () => {
   })
 
   it('renders no link at all while the call is unresolved', () => {
-    // No name / QTH / photo has arrived: the card is still the "Tab or press QRZ" prompt, so
+    // No name / QTH / photo has arrived: the card is still the "Tab or press Lookup" prompt, so
     // there is nothing resolved to look at — the avatar stays the plain inert circle.
     const { container } = render(<RecallPanel call="W1ABC" band="20m" hist={hist()} />)
     expect(screen.queryByRole('button')).toBeNull()

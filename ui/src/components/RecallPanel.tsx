@@ -101,7 +101,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
   // The link rides on CS resolution (operator, 2026-07-31: open the call's QRZ page from the
   // recall photo "to look at the page while you're working them"): once ANY identity content is
   // in — name, place line, or photo — the avatar is a live QRZ button, photo or initials alike.
-  // Before that the card is still the "Tab or press QRZ" prompt, so the circle stays inert.
+  // Before that the card is still the "Tab or press Lookup" prompt, so the circle stays inert.
   const resolved = Boolean(nm || where || image)
 
   const avatarInner = (
@@ -161,7 +161,9 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
             {nm && <span className="recall-call mono">{cu}</span>}
           </div>
           <div className="recall-where">
-            {where || <span className="recall-where-empty">Tab or press QRZ for name / QTH</span>}
+            {/* Names the button the operator actually sees: the log strip's callbook button is
+                "Lookup" (it answers from QRZ or HamQTH), not "QRZ". */}
+            {where || <span className="recall-where-empty">Tab or press Lookup for name / QTH</span>}
           </div>
           {geo && (
             <div className="recall-geo mono" title={geoTitle}>

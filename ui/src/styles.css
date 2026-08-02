@@ -6653,6 +6653,20 @@ input.cw-pitch::-webkit-inner-spin-button {
 .le-qrz:disabled {
   opacity: 0.4;
 }
+/* The callbook lookup is a UTILITY, not a commit. It sat next to Log in the same row wearing
+   the same bold pill shape, and the operator logged several contacts by mistake reaching for
+   it (2026-08-02). Log moved out to its own row (.le-actions); this makes the difference
+   visible as well as positional — dim label, soft border, no accent fill. Declared AFTER
+   .le-qrz: same specificity (0,1,0), so source order is what carries these overrides. */
+.le-lookup {
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--bg-elev-2, var(--bg-elev));
+  border-color: var(--border-soft);
+}
+.le-lookup:hover:not(:disabled) {
+  color: var(--text);
+}
 .le-log-btn {
   flex: 0 0 auto;
   padding: var(--space-2) 18px;
@@ -6683,6 +6697,14 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .le-spot-btn:disabled {
   opacity: 0.4;
+}
+/* Log + Spot, alone, directly above the callsign card and under the "logs to the shared
+   logbook as …" line — read what will be written, then commit. Inherits .le-row (so it wraps
+   like every other row and owns no scrolling of its own); the extra top gap is what keeps it
+   from reading as one more field row. */
+.le-actions {
+  margin-top: var(--space-2);
+  gap: var(--space-3);
 }
 .le-notes {
   width: 100%;
