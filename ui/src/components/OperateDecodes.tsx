@@ -15,6 +15,8 @@ import {
   type DecodeSort,
 } from '../decodeHistory'
 import { loadDecodeFilter, saveDecodeFilter } from '../operateFilters'
+import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
+import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
 import { gridFromMessage, isIgnored } from '../txMessages'
 import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
@@ -112,6 +114,17 @@ interface Props {
    * decodes vanished ("no decodes" mid-session; operator report 2026-07-21). When
    * omitted (detached panels, other hosts) a private history is used as before. */
   history?: DecodeHistory
+  /**
+   * Apply the operator's country exclusion to this pane (default on).
+   *
+   * OperateCockpit passes `false` for the Rx Frequency panes, and the split is the point:
+   * Band Activity answers "who is on the band that I want to work" — a chase list, and the
+   * right place to thin countries out. Rx Frequency answers "what is happening on MY
+   * operating frequency", which is situational awareness — an excluded-country station
+   * sitting on top of us is exactly what we need to see to understand why we are being
+   * covered up, and hiding it would make our own frequency read as clear when it is not.
+   */
+  hideExcludedCountries?: boolean
 }
 
 /** Shared empty set so the ignore checks stay allocation-free per render. */
@@ -122,6 +135,9 @@ const NO_HIGHLIGHTS: Map<string, HighlightEntry> = new Map()
 
 /** Shared empty map so need lookups stay allocation-free when no alerts are supplied. */
 const NO_NEEDS: Map<string, NeedAlert[]> = new Map()
+
+/** Shared empty set for a pane that does not apply the country exclusion. */
+const NO_ENTITIES: ReadonlySet<string> = new Set()
 
 /** Max need micro-icons shown per row before collapsing into a "+N" chip. */
 const MAX_NEED_ICONS = 3
@@ -160,6 +176,7 @@ export function OperateDecodes({
   onErase,
   clearTick = 0,
   history,
+  hideExcludedCountries = true,
 }: Props) {
   // Cockpit-owned history when provided (survives layout remounts); private otherwise.
   const localHistRef = useRef<DecodeHistory | null>(null)
@@ -179,6 +196,11 @@ export function OperateDecodes({
     setFilterState(f)
   }
   const [sort, setSort] = useState<DecodeSort>('time')
+
+  // The operator's country exclusion — app-global (every window agrees) and RX-display
+  // only. See features/countryExclude.ts for why it is not a Rust setting.
+  const countries = useCountryExclude()
+  const hiddenEntities = hideExcludedCountries ? countries.hidden : NO_ENTITIES
 
   // Bottom-pinned auto-scroll (WSJT-X flow) — the shared discipline, extracted
   // to usePinnedScroll (which keeps the every-render re-pin this pane's
@@ -213,7 +235,27 @@ export function OperateDecodes({
   }, [clearTick, repin])
 
   const list = orderEntries(
-    histRef.current.entries().filter((d) => passesFilter(d, filter, rxOffsetHz)),
+    histRef.current
+      .entries()
+      .filter((d) => passesFilter(d, filter, rxOffsetHz))
+      // The country exclusion is ANDed with the chip, and it is the last word on what the
+      // pane shows — so `list.length` (the "N heard" readout) counts what is on screen.
+      .filter(
+        (d) =>
+          !isHiddenByCountry(
+            {
+              entity: d.country,
+              call: d.from,
+              // The Tx panel's DX call: never hide the station we are working, mid-exchange.
+              qsoPartner: selectedCall,
+              addressedToMe: d.directedToMe || Boolean(d.mine),
+              // NEEDED OUTRANKS EXCLUDED, on the engine's own flags — a new entity or a new
+              // band slot still surfaces from a country the operator has switched off.
+              needed: Boolean(d.newDxcc || d.newBand),
+            },
+            hiddenEntities,
+          ),
+      ),
     sort,
   )
 
@@ -283,6 +325,9 @@ export function OperateDecodes({
                 </button>
               ))}
             </div>
+            {/* Outside the chip group on purpose: those chips are one-of-N (aria-pressed),
+                this is an independent set that ANDs with whichever one is lit. */}
+            <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} />
             <label className="od-sort">
               <span className="od-sort-label">sort</span>
               <select value={sort} onChange={(e) => setSort(e.target.value as DecodeSort)}>
@@ -301,6 +346,15 @@ export function OperateDecodes({
         <span className={`od-paused${!pinned ? ' on' : ''}`} aria-live="polite">
           {pinned ? `${list.length} heard` : '▲ reviewing — scroll to bottom to follow'}
         </span>
+        {/* Beside the count, so a pane that is hiding rows always says so — including the
+            compact panes, which render no chip bar to notice the picker in. */}
+        {hideExcludedCountries && (
+          <CountryHiddenChip
+            count={countries.keys.size}
+            onClear={countries.clear}
+            testId="od-hidden"
+          />
+        )}
         {harqRescues > 0 && (
           <span className="harq-chip" title={`IR-HARQ recovered ${harqRescues} decode(s) this session`}>
             HARQ ×{harqRescues}

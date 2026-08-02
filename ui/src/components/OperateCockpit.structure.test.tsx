@@ -115,7 +115,7 @@ function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLay
 
 function renderCockpit(
   state: Partial<Record<OperatePanelId, PanelState>>,
-  over: { transmitting?: boolean } = {},
+  over: { transmitting?: boolean; layoutMode?: 'classic' | 'roster' } = {},
 ) {
   const noop = () => {}
   const onCall = vi.fn()
@@ -143,7 +143,7 @@ function renderCockpit(
       needByCall={new Map()}
       selectedCall={null}
       onSelect={noop}
-      layoutMode="classic"
+      layoutMode={over.layoutMode ?? 'classic'}
       onLayoutMode={noop}
       panels={panelsApi(state)}
       active={false}
@@ -220,6 +220,26 @@ describe('both decode panes share one click model (prop identity, never a fork)'
     // …and the work-station path is the cockpit's onCall prop — no new sequencing path.
     expect(rx!.onCall).toBe(onCall)
     expect(rx!.compact).toBe(true)
+  })
+})
+
+describe('the country exclusion stops at the chase list', () => {
+  // Band Activity is "who is on the band that I want to work" — the right place to thin
+  // countries out. Rx Frequency is "what is happening on MY frequency": an excluded-country
+  // station sitting on top of us is exactly what we must see, and hiding it would make our
+  // own frequency read as clear when it is not. Pinned in BOTH layouts, because the Rx pane
+  // is mounted twice and one of the two silently gaining the filter is the drift this file
+  // exists to catch.
+  it.each(['classic', 'roster'] as const)('%s: Rx Frequency opts out, Band Activity does not', (layoutMode) => {
+    renderCockpit({}, { layoutMode })
+    const rx = [...captured].reverse().find((p) => p.lockedFilter === 'rx')
+    const band = [...captured].reverse().find((p) => p.lockedFilter === undefined)
+    expect(rx, 'no Rx-Frequency pane rendered').toBeTruthy()
+    expect(band, 'no Band Activity pane rendered').toBeTruthy()
+    expect(rx!.hideExcludedCountries).toBe(false)
+    // Left at its default (on) rather than passed explicitly — a pane that must filter
+    // should not depend on a call site remembering to ask for it.
+    expect(band!.hideExcludedCountries).toBeUndefined()
   })
 })
 

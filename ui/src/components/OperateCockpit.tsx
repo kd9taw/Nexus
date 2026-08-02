@@ -1059,6 +1059,10 @@ export function OperateCockpit({
                         {...decodeClickProps}
                         onErase={() => notifyErase(1)}
                         lockedFilter="rx"
+                        // This pane is situational awareness, not a chase list: a station
+                        // from an excluded country sitting on OUR frequency is exactly what
+                        // we need to see, so the exclusion stops at Band Activity.
+                        hideExcludedCountries={false}
                         compact
                         title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
                       />
@@ -1114,6 +1118,10 @@ export function OperateCockpit({
                         {...decodeClickProps}
                         onErase={() => notifyErase(1)}
                         lockedFilter="rx"
+                        // This pane is situational awareness, not a chase list: a station
+                        // from an excluded country sitting on OUR frequency is exactly what
+                        // we need to see, so the exclusion stops at Band Activity.
+                        hideExcludedCountries={false}
                         compact
                         title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
                       />

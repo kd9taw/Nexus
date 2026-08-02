@@ -64,6 +64,12 @@ const SHARED = [
   'nexus.connect.chaseDefault.v1',
   'nexus.connect.mode',
   'nexus.cw.sensitivity',
+  // The FT country-exclusion list. SHARED, and the one key here where that is a RULING
+  // rather than a classification: a standing statement about how this operator chases is
+  // not a property of a window. Per-surface, a torn-off band map would inherit it once and
+  // then diverge on its first toggle, so the pop-out would show the decodes the main
+  // window hides — two surfaces disagreeing about what is on the band.
+  'nexus.decodes.countryExclude',
   'nexus.cw.tuneStep',
   'nexus.cwAssist',
   'nexus.dev.xray',

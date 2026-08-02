@@ -13432,10 +13432,16 @@ button.cq-skiptx1.on {
   padding: 2px 6px;
   font-size: 0.75rem;
 }
+/* Wraps for the same reason `.od-filters` does: `.cockpit-side` / `.cockpit-panes` CLIP
+   overflow-x rather than scroll it, and the status chips are nowrap atoms. As a nowrap row
+   the hidden-country chip would be painted outside the clip — unreachable — past the 260px
+   rail minimum. `justify-content` is deliberately absent: the auto margin below already
+   groups the chips right on a single line, and it packs them LEFT once the row wraps,
+   where space-between would fling them to both edges of the second line. */
 .od-status {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
   padding: 6px 0;
   font-size: 0.75rem;
@@ -13444,6 +13450,77 @@ button.cq-skiptx1.on {
 .od-paused.on {
   color: var(--accent);
   font-weight: 600;
+}
+/* The heard count absorbs the slack, so the status chips group at the right edge instead
+   of spreading across the row once there is more than one of them. */
+.od-paused {
+  margin-right: auto;
+}
+
+/* --- Country exclusion: the picker (portaled) + the "N countries hidden" chip ---
+   Placed after .ui-menu-item so .country-item wins on equal specificity; the
+   [data-highlighted] rule up there is (0,2,0) and deliberately still wins for hover. */
+.country-menu {
+  min-width: 15em;
+  /* Radix reports the room it actually has; the fallback keeps a sane box if the variable
+     is ever absent. Scrolls internally rather than growing past the window — 18 rows plus
+     the note is taller than a short laptop screen at pinned zoom. */
+  max-height: var(--radix-dropdown-menu-content-available-height, 26em);
+  overflow-y: auto;
+}
+.country-menu-head {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+.country-item::before {
+  /* Fixed tick column so the labels align whether or not a country is ticked. Drawn in CSS
+     rather than rendered, so a checkbox's accessible name stays exactly its label —
+     aria-checked (Radix) is what conveys the state. */
+  content: '';
+  flex: none;
+  width: 1em;
+  text-align: center;
+  color: var(--accent);
+}
+.country-item[data-state='checked']::before {
+  content: '✓';
+}
+.country-menu-note {
+  max-width: 20em;
+  padding: var(--space-1) var(--space-2);
+  margin-top: var(--space-1);
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--fs-label);
+  line-height: 1.35;
+  color: var(--text-faint);
+}
+.country-hidden-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  /* Matches .od-chip's horizontal rhythm — it sits in the same status row. */
+  padding: 2px 9px;
+  border: 1px solid var(--alert-warning);
+  border-radius: 999px;
+  color: var(--alert-warning);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.country-hidden-clear {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.country-hidden-clear:hover {
+  color: var(--text);
 }
 .od-scroll {
   flex: 1;
