@@ -152,6 +152,25 @@ it never covers either triangle, the satellite, the satellite's own readout, or 
 marker, and it stays inside the horizon at every bearing. The whole body of the set mark is
 now hoverable, so its tooltip, which also carries the time, is reachable without threading
 the mouse onto a line.
+### Added: the satellite surfaces say how high the bird is
+
+The Birds list, the world map's satellite hover and the sky dome each show the bird's
+altitude — how far above the earth it is, right now.
+
+It is the number that tells you what kind of pass you are about to work before you open
+anything: a 630 km LEO screams over in ten minutes with the Doppler running away from
+you, while an elliptical bird near apogee loiters for the better part of an hour with a
+shift that barely moves. Down the Birds list the figures line up in a column, so a low
+circular bird and a high elliptical one tell themselves apart at a glance.
+
+Altitude is always labelled, and on the sky dome it sits directly under the range it is
+easily confused with — range is how far the bird is from you, altitude is how far it is
+from the ground. The dome's number is recomputed with the rest of the pass geometry every
+three seconds, because on an elliptical orbit it genuinely moves.
+
+A bird nothing carries current elements for shows no altitude rather than a zero, and
+neither does an armed pass before the bird rises: there is no position computed yet, and
+0 km would put a satellite on the ground.
 
 ## [0.25.0] — 2026-08-01
 

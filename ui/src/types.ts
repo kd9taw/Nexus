@@ -554,6 +554,13 @@ export interface SatTrackStatus {
    * AOS, when there is nothing to measure. */
   rangeKm: number | null
   rangeRateKmS: number | null
+  /** How high the bird is above the earth (km) — its ALTITUDE, not the slant
+   * range above, which is measured from the operator. Recomputed each tick
+   * because it genuinely moves (an elliptical bird runs hundreds of km between
+   * perigee and apogee, and that shape is what a fast or a lazy Doppler shift
+   * looks like from the ground). Absent until the bird is up, on the same
+   * terms as `rangeKm` — a surface shows no altitude at all rather than 0 km. */
+  altKm?: number | null
   /** What Doppler has the radio tuned to, and by how much (Hz). All null
    * unless a transponder is held AND Doppler is enabled — never a fabricated
    * frequency (the plain dial is NOT the downlink under an uplink-only map). */

@@ -15598,6 +15598,17 @@ button.sat-chip:disabled {
   text-align: left;
   flex: 1;
 }
+/* How high the bird is, at the row's trailing edge (.sat-pick's flex:1 puts it
+   there) — a quiet fact beside the name, never competing with the health
+   chips. Mono so the digits line up down the list: that column is what makes a
+   630 km LEO and a 1500 km elliptical bird tell themselves apart at a glance. */
+.sat-row-alt {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  padding-right: var(--space-1);
+  white-space: nowrap;
+}
 .sats-search {
   width: 100%;
   background: var(--bg-elev);
