@@ -69,6 +69,7 @@ import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { tleRefreshMessage } from '../features/tleMessages'
+import { elementBandParts } from '../features/elementBands'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, revealAllTxt } from '../api'
@@ -3519,9 +3520,14 @@ export function SettingsPanel({
                       .finally(() => setTleImporting(false))
                   }}
                 />
+                {/* The birds the ceiling holds back, and the ones drifting
+                    toward it, ride the line that is ALWAYS here — not the
+                    "Last refresh" line below, which renders only while a
+                    refresh has failed. A count an operator can read only
+                    during an error is not a count. */}
                 <span className="settings-hint">
                   {tleStatus && tleStatus.count > 0
-                    ? `${tleStatus.count} birds · ${
+                    ? `${[`${tleStatus.count} birds`, ...elementBandParts(tleStatus)].join(' · ')} · ${
                         tleStatus.fetchedAt > 0
                           ? `fetched ${new Date(tleStatus.fetchedAt * 1000).toISOString().slice(0, 10)}`
                           : 'never fetched'

@@ -284,6 +284,21 @@ export interface TleStatus {
   count: number
   /** …of which pass the per-bird 30 d usability gate. */
   usableCount: number
+  /** …of THOSE, how many are past the 14 d stale line and drifting (the 14–30 d
+   * band). A subset of `usableCount`, never a sibling — these birds are still
+   * drawn. The median alone hides exactly one shape: half the catalog at 29 d,
+   * the other half fetched this morning, every set-wide surface quiet. This is
+   * the number that shape cannot hide behind. */
+  agingCount: number
+  /** …and how many the 30 d gate holds BACK entirely (elements past 30 d).
+   * Disjoint from `usableCount` — these sit out — so `usableCount +
+   * heldBackCount` is every bird with a readable epoch. Required, never
+   * optional and never derived as `count - usableCount`: that difference also
+   * swallows unparseable epochs, and an absent counter is the sentinel that
+   * makes two surfaces guess differently. Stated beside the age so a current
+   * catalog with a few slow-cadence birds excluded cannot read like a set
+   * that has gone stale. */
+  heldBackCount: number
   /** Unix stamp of the last successful fetch/304; 0 = never. */
   fetchedAt: number
   /** "mirror" | "celestrak" | "import" | "legacy" | "bundled" | "none".
@@ -292,8 +307,11 @@ export interface TleStatus {
   source: string
   /** Operator file-imports riding the snapshot (persist across refreshes). */
   importedCount: number
-  /** Age (days) of the oldest USABLE (≤30 d) set — the Satellites badge scalar.
-   * Absent when no set is usable. */
+  /** MEDIAN age (days) of the USABLE (≤30 d) sets — the Satellites badge
+   * scalar, and what every currency surface compares against 14 d. Median,
+   * never the oldest: the 30 d ceiling bounds the oldest ADMITTED bird just
+   * under itself, so a max reads "stale" however fresh the set is. Absent
+   * when no set is usable. */
   elementAgeDays?: number | null
   /** Celestrak 403/404 hard stop's end (unix); 0 = not blocked. */
   blockedUntil: number

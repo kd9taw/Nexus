@@ -346,8 +346,24 @@ export interface PcaView {
 /** Satellites view (get_satellites): amateur-bird subpoints now + next-24h passes
  * over the QTH. Null = no orbital elements (or all >30 d stale) — draw nothing. */
 export interface SatView {
-  /** Age of the oldest element set (days) — badge stale when > 14. */
+  /** MEDIAN age (days) of the element sets INSIDE the 30 d ceiling — the sets
+   * this view was built from, whether or not each produced a `birds` row (a
+   * bird sgp4 refused is counted here and named in `excluded` as
+   * `noPosition`). Badge stale when > 14. Median, never the oldest: the 30 d
+   * ceiling that decides which birds are usable also bounds the oldest usable
+   * one just under itself, so a max badges a current catalog stale forever. */
   tleAgeDays: number
+  /** The set-wide bands behind `tleAgeDays`, the same three `TleStatus`
+   * carries and from the same backend partition — the Satellites chip and the
+   * Connect Passes pane read them here, Settings and the Now-Bar lane read
+   * them there, and one catalog described two ways is the bug class this
+   * readout came from. `usableCount` is what the ceiling admits (`agingCount`
+   * of them past the 14 d line and drifting); `heldBackCount` sits out
+   * entirely and is disjoint from it, each of those birds named in
+   * `excluded`. */
+  usableCount: number
+  agingCount: number
+  heldBackCount: number
   /** When the serving element snapshot was FETCHED (unix; 0 = never/legacy/
    * bundled) and where it came from ("mirror" | "celestrak" | "import" |
    * "legacy" | "bundled" — the installer's seed snapshot) —

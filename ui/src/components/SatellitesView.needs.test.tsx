@@ -329,6 +329,9 @@ describe('the favorites-list search still narrows (guard for the aside rework)',
     api.getSatellites.mockImplementation(() =>
       Promise.resolve({
         tleAgeDays: 1,
+        usableCount: 97,
+        agingCount: 0,
+        heldBackCount: 0,
         tleFetchedAt: 1_785_542_400,
         tleSource: 'mirror',
         birds: [

@@ -10,6 +10,8 @@ function status(over: Partial<TleStatus>): TleStatus {
   return {
     count: 93,
     usableCount: 93,
+    agingCount: 0,
+    heldBackCount: 0,
     fetchedAt: NOW - 3600,
     source: 'mirror',
     importedCount: 0,
@@ -71,6 +73,50 @@ describe('satElementsLane', () => {
     const s = status({
       lastError: 'TLE mirror fetch failed: HTTP 404',
       lastErrorKind: 'mirrorUnreachable',
+    })
+    expect(satElementsLane(s, NOW)).toBeNull()
+  })
+
+  // THE FIELD REPORT (2026-08-01): birds sitting out past the 30 d ceiling
+  // are a normal, permanent feature of the catalog (AO-7 and the SatNOGS
+  // slow-cadence tail). They must not put a warning chip on every screen —
+  // the age the lane judges is the MEDIAN of the usable sets, and the
+  // held-back birds are their own count, spoken where there is room for it.
+  it('a current catalog with birds sitting out past 30 d is quiet', () => {
+    const s = status({ count: 367, usableCount: 337, heldBackCount: 30, elementAgeDays: 0.2 })
+    expect(satElementsLane(s, NOW)).toBeNull()
+  })
+
+  // THE RESIDUAL FALSE CALM a median alone still allows: 51 birds fetched
+  // this morning, 49 sitting at 29 d and 40 past the ceiling. The median is
+  // 0.2 d and TRUE — every age test on this lane passes — while two thirds of
+  // the operator's catalog drifts. The band counters are what the lane reads
+  // to catch it; the age alone cannot.
+  it('most of the catalog past the 14 d line warns, even on a calm median', () => {
+    const s = status({
+      count: 140,
+      usableCount: 100,
+      agingCount: 49,
+      heldBackCount: 40,
+      elementAgeDays: 0.2,
+    })
+    const lane = satElementsLane(s, NOW)
+    expect(lane?.tier).toBe('warning')
+    expect(lane?.message).toBe('Sat: 89 of 140 past 14 d')
+    expect(lane?.detail).toContain('89 of 140')
+  })
+
+  // …and the same lane must NOT nag. This chip is app-wide furniture: the
+  // shipped catalog permanently carries a slow-cadence tail (AO-7 and the
+  // SatNOGS birds re-observed every few weeks), and a minority past the line
+  // is what a healthy catalog looks like — not a warning.
+  it('a large minority past the line is still quiet — the chip is not a nag', () => {
+    const s = status({
+      count: 367,
+      usableCount: 337,
+      agingCount: 60,
+      heldBackCount: 30,
+      elementAgeDays: 0.2,
     })
     expect(satElementsLane(s, NOW)).toBeNull()
   })

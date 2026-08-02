@@ -3390,6 +3390,17 @@ fn sat_excluded(
             // Report what actually happened, never the likeliest guess:
             // current elements that sgp4 still refused (a decaying orbit
             // does this) is a different fact from elements gone stale.
+            //
+            // The `_` arm is the past-30-d case ONLY, which is what makes
+            // these rows and `SatView::held_back_count` count the same birds.
+            // The other value it could take — an epoch that will not parse —
+            // cannot reach here: every path that admits a bird to the snapshot
+            // (`validate_tles` on both fetch legs, the seed's retain,
+            // `import_tles`) runs `tle_bird_ok`, which requires a readable
+            // epoch. If that gate is ever loosened, split this arm rather than
+            // letting a garbled bird report as merely old — the operator's fix
+            // for the two is not the same, and the counter would disagree with
+            // the row by one.
             reason: match sat::tle_age_days(&t.line1, now) {
                 Some(a) if a <= SAT_STALE_DAYS => "noPosition",
                 _ => "staleElements",
@@ -3417,8 +3428,24 @@ fn sat_excluded(
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SatView {
-    /// Age of the OLDEST element set in days — the UI badges > 14 d as stale.
+    /// MEDIAN age in days of the element sets INSIDE the 30 d ceiling — the
+    /// sets this view was built from, whether or not each one produced a row
+    /// (a bird with current elements that sgp4 still refused is counted here
+    /// and reported in `excluded` as `noPosition`). Not the drawn birds, and
+    /// not every bird held: `held_back_count` is the rest. The UI badges
+    /// > 14 d as stale. Median, never the oldest ([`TleSetCurrency`]): a
+    /// slow-cadence tail must not badge a current catalog.
     tle_age_days: f64,
+    /// The same three set-wide bands `TleStatus` carries, from the same
+    /// partition ([`tle_set_currency`]) — the Satellites chip and the Connect
+    /// Passes pane read the view, the Settings line and the Now-Bar lane read
+    /// the status, and two surfaces describing one catalog differently is the
+    /// bug class this whole readout came from. `usable_count` is the ceiling's
+    /// intake (`aging_count` of them past the 14 d line and drifting);
+    /// `held_back_count` sits out, each bird named in `excluded`.
+    usable_count: usize,
+    aging_count: usize,
+    held_back_count: usize,
     /// When the serving snapshot was FETCHED (unix; 0 = never/legacy) and
     /// where it came from ("mirror" | "celestrak" | "import" | "legacy") —
     /// pipe health, a different fact from `tle_age_days`' physics quality.
@@ -3548,12 +3575,23 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         if fresh.is_empty() {
             return None; // every element set is decayed — honest no-data
         }
-        // Badge scalar = oldest INCLUDED bird (an excluded outlier must not
-        // make the whole pane read stale).
-        let tle_age_days = fresh
-            .iter()
-            .filter_map(|t| sat::tle_age_days(&t.line1, now))
-            .fold(0.0f64, f64::max);
+        // The set-wide facts, over EVERY bird the snapshot holds (`fresh` is
+        // exactly this partition's usable band) — one call, so the counts the
+        // view publishes and the age it badges cannot describe two different
+        // catalogs.
+        //
+        // Badge scalar = the median. Excluding the outliers was only half the
+        // story: the oldest bird still INCLUDED is pinned just under the
+        // ceiling by the very filter that built `fresh`, so a max badges a
+        // current catalog stale forever. The held-back birds are counted here
+        // and reported by name in `excluded`, which is where a per-bird fact
+        // belongs.
+        let currency = tle_set_currency(
+            tles.iter().map(|t| sat::tle_age_days(&t.line1, now)),
+            TLE_STALE_LINE_DAYS,
+            SAT_STALE_DAYS,
+        );
+        let tle_age_days = currency.median_age_days.unwrap_or(0.0); // `fresh` non-empty.
         let mut birds = Vec::new();
         let mut computed_passes = Vec::new();
         // Which birds actually got a row — the rest are reported below rather
@@ -3614,6 +3652,9 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         Some((
             SatView {
                 tle_age_days,
+                usable_count: currency.usable,
+                aging_count: currency.aging,
+                held_back_count: currency.held_back,
                 tle_fetched_at,
                 tle_source,
                 birds,
@@ -4253,6 +4294,87 @@ fn tle_provenance() -> (i64, String) {
         .unwrap_or((0, "none".into()))
 }
 
+/// What a whole element SET is worth right now — the one place a statistic
+/// describing the catalog (rather than one bird) is computed, shared by every
+/// set-wide producer ([`tle_status`] for Settings + the Now-Bar lane,
+/// [`get_satellites`] for the Satellites chip and the Connect Passes badge).
+/// One formula, because the same wrong one shipped in two places.
+///
+/// The headline age is the MEDIAN of the birds inside `ceiling_days`, NEVER
+/// the max. `propagation::live::tle::validate_tles` already gates a *fetched*
+/// set median-shaped ("never max: AO-10 is legitimately old and must not
+/// condemn a fresh set"), and `scripts/gen-tles.mjs` publishes under the same
+/// rule — the readout is the layer that never got it. A max is worse here
+/// than there: the ceiling that BUILDS the set also bounds the max just under
+/// it, so the number parks in the 20s and reads "stale" however fresh the
+/// operator's elements actually are (field report 2026-08-01 — a catalog with
+/// a 0.2 d median badged "TLE 26 days — STALE", and as each tail bird crossed
+/// 30 d the next one took its place). The median cannot mislead in either
+/// direction: a set that genuinely rots takes more than half its birds past
+/// the line and the median goes with them.
+///
+/// A median alone still leaves ONE false-calm shape, which is why the bands
+/// below are counted beside it: half the catalog sitting at 29 d, the other
+/// half fetched this morning. The median is 0.2 d and true, and every
+/// set-wide surface goes quiet while half the operator's birds are drifting.
+/// `aging` is the number that shape cannot hide behind — a reader compares it
+/// against `usable` to tell "current, a few excluded" from "the whole set is
+/// going off". It is reachable in normal use: `import_tles` admits any bird
+/// `tle_bird_ok` accepts, at any age inside the ceiling.
+///
+/// Per-bird honesty is unchanged and lives elsewhere — [`tle_act_gate`]
+/// refuses one bird by name and age, and `SatView::excluded` reports each
+/// held-back bird with its reason. This type only stops the SET-wide scalar
+/// from speaking for birds it is not describing.
+struct TleSetCurrency {
+    /// Birds inside `ceiling_days` — what the satellite surfaces may draw on.
+    /// `aging` of them are past `stale_line_days`; the rest are current.
+    usable: usize,
+    /// The 14–30 d band: birds still drawn, but past `stale_line_days` — the
+    /// same line the badge, the lane and the arm-confirm treat as STALE. A
+    /// SUBSET of `usable` (they are in use, they just drift), never a sibling
+    /// of it: `usable - aging` is the current birds.
+    aging: usize,
+    /// Birds held whose elements are PAST the ceiling: parseable-but-too-old
+    /// only. Disjoint from `usable` — these sit out — so `usable + held_back`
+    /// is every bird with a readable epoch. Counted rather than derived as
+    /// `count - usable`, which would also swallow birds whose epoch will not
+    /// parse: a different failure with a different fix.
+    held_back: usize,
+    /// Median age (days) of the `usable` birds; `None` when none are usable.
+    median_age_days: Option<f64>,
+}
+
+/// Partition `ages` (one entry per held bird; `None` = no parseable epoch) on
+/// the 14 d stale line and the 30 d ceiling, and describe the set — see
+/// [`TleSetCurrency`]. Both edges are INCLUSIVE of the bird sitting exactly on
+/// them, matching the per-bird gates: [`tle_act_gate`] still admits 30.0 d,
+/// and the arm-confirm does not ask about 14.0 d.
+fn tle_set_currency(
+    ages: impl IntoIterator<Item = Option<f64>>,
+    stale_line_days: f64,
+    ceiling_days: f64,
+) -> TleSetCurrency {
+    let mut usable: Vec<f64> = Vec::new();
+    let mut held_back = 0usize;
+    for a in ages {
+        match a {
+            Some(a) if a <= ceiling_days => usable.push(a),
+            Some(_) => held_back += 1,
+            None => {}
+        }
+    }
+    // Upper median on an even count — the same pick `validate_tles` makes, so
+    // the acceptance gate and the readout can never disagree by a half-step.
+    usable.sort_by(f64::total_cmp);
+    TleSetCurrency {
+        median_age_days: (!usable.is_empty()).then(|| usable[usable.len() / 2]),
+        aging: usable.iter().filter(|a| **a > stale_line_days).count(),
+        usable: usable.len(),
+        held_back,
+    }
+}
+
 /// Element-currency status for the Settings "Orbital elements" fieldset and
 /// the Now-Bar `sat` lane — everything the operator needs to judge (and fix)
 /// the pipeline, none of it guessed.
@@ -4263,6 +4385,19 @@ struct TleStatus {
     count: usize,
     /// …of which pass the per-bird 30 d usability gate.
     usable_count: usize,
+    /// …of THOSE, how many are past the 14 d stale line and drifting (the
+    /// 14–30 d band). A subset of `usable_count`, never a sibling: these birds
+    /// are still drawn. Without it the median hides one shape — half the
+    /// catalog at 29 d, the other half fetched this morning, every surface
+    /// quiet — see [`TleSetCurrency`].
+    aging_count: usize,
+    /// …and how many the 30 d gate holds BACK entirely. Disjoint from
+    /// `usable_count`, and its own counter rather than `count - usable_count`:
+    /// that difference also swallows birds whose epoch will not parse, and the
+    /// two have different fixes. The operator surfaces state it beside the age
+    /// so "my catalog is current, a few slow-cadence birds sit out" cannot
+    /// read like "my whole set has gone stale".
+    held_back_count: usize,
     /// Unix stamp of the last successful fetch/304; 0 = never (or legacy).
     fetched_at: i64,
     /// "mirror" | "celestrak" | "import" | "legacy" | "bundled" | "none".
@@ -4271,8 +4406,10 @@ struct TleStatus {
     source: String,
     /// Operator file-imports riding the snapshot (persist across refreshes).
     imported_count: usize,
-    /// Age (days) of the oldest USABLE (≤30 d) element set — the same scalar
-    /// the Satellites badge shows. Absent when no set is usable.
+    /// MEDIAN age (days) of the USABLE (≤30 d) element sets — the same scalar
+    /// the Satellites badge shows, and what every currency surface compares
+    /// against the 14 d line. Median, never the oldest: see
+    /// [`TleSetCurrency`]. Absent when no set is usable.
     #[serde(skip_serializing_if = "Option::is_none")]
     element_age_days: Option<f64>,
     /// Celestrak 403/404 hard stop's end (unix); 0 = not blocked.
@@ -4306,20 +4443,24 @@ fn tle_status() -> TleStatus {
         },
         Err(_) => (Vec::new(), 0, "none".into(), 0),
     };
-    let usable: Vec<f64> = merged
-        .iter()
-        .filter_map(|t| propagation::sat::tle_age_days(&t.line1, now))
-        .filter(|a| *a <= TLE_ACT_STALE_DAYS)
-        .collect();
+    let currency = tle_set_currency(
+        merged
+            .iter()
+            .map(|t| propagation::sat::tle_age_days(&t.line1, now)),
+        TLE_STALE_LINE_DAYS,
+        TLE_ACT_STALE_DAYS,
+    );
     let blocked_until = TLE_BLOCKED_UNTIL.load(Ordering::SeqCst);
     let last = TLE_LAST_ERROR.lock().ok().and_then(|g| g.clone());
     TleStatus {
         count: merged.len(),
-        usable_count: usable.len(),
+        usable_count: currency.usable,
+        aging_count: currency.aging,
+        held_back_count: currency.held_back,
         fetched_at,
         source,
         imported_count,
-        element_age_days: usable.iter().copied().reduce(f64::max),
+        element_age_days: currency.median_age_days,
         blocked_until: if blocked_until > now { blocked_until } else { 0 },
         last_error: last.as_ref().map(|(_, raw)| raw.clone()),
         last_error_kind: last.map(|(kind, _)| kind.wire()),
@@ -4508,6 +4649,14 @@ async fn import_tles(text: String) -> Result<TleStatus, String> {
 /// would drive the antenna and dial off a fiction. (The 14 d STALE line is
 /// the warn+confirm threshold; this is the refusal.)
 const TLE_ACT_STALE_DAYS: f64 = 30.0;
+
+/// The WARN line, not a refusal: past 14 days pointing and Doppler drift
+/// enough to notice, so the badge says STALE and arming asks first. The UI has
+/// always owned this number (the chip, the Now-Bar lane, the arm-confirm all
+/// compare against 14); the backend carries it only to COUNT the birds inside
+/// it ([`TleSetCurrency::aging`]) — the two must stay the same number, which
+/// is why the count is computed here rather than re-derived per surface.
+const TLE_STALE_LINE_DAYS: f64 = 14.0;
 
 /// Gate an acting surface on `tle`'s element age. `Ok((age_days,
 /// epoch_unix))` when usable; `Err` NAMING the bird and the age when past the
@@ -14017,9 +14166,9 @@ mod tests {
         load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, rect_lands_on_work_area,
         resolve_bird, resolve_birds, sanitize_profile, sat_excluded, tle_absorb_foreign,
         tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
-        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, write_json_atomic,
-        AssistanceEvent, AssistanceSourceState, SatBird, TLE_FETCHING, TleFlightGuard,
-        TleSnapshot
+        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, tle_set_currency,
+        write_json_atomic, AssistanceEvent, AssistanceSourceState, SatBird, TLE_ACT_STALE_DAYS,
+        TLE_FETCHING, TLE_STALE_LINE_DAYS, TleFlightGuard, TleSnapshot
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -14425,6 +14574,161 @@ mod tests {
         assert!((epoch - ISS_EPOCH_UNIX).abs() <= 1, "epoch {epoch}");
         let err = tle_act_gate(&iss_tle(), ISS_EPOCH_UNIX + 40 * day).unwrap_err();
         assert!(err.contains("40 days old") && err.contains(ISS_NAME), "{err}");
+    }
+
+    // --- the SET-WIDE readout (field report 2026-08-01) -----------------------
+
+    /// THE OPERATOR'S SITUATION, from the catalog that actually ships: the
+    /// Satellites chip read "TLE 26 days — STALE · refresh" and Settings said
+    /// "your elements are 26 d old" on a catalog whose typical bird was hours
+    /// old. Nothing was wrong and there was nothing to do.
+    ///
+    /// Ages are measured relative to the FRESHEST bird in the bundle, not to
+    /// the wall clock: that anchors the fixture to the SET, so it survives
+    /// both the passage of time and a regenerated seed. Today's bundle: 367
+    /// birds, 337 inside the 30 d ceiling, 30 past it, median 0.2 d, oldest
+    /// admitted 25.5 d.
+    #[test]
+    fn the_set_wide_readout_describes_the_set_not_its_oldest_bird() {
+        let seed = tle_seed(SEED_NOW).expect("the seed must load");
+        let raw: Vec<f64> = seed
+            .elements
+            .iter()
+            .filter_map(|t| propagation::sat::tle_age_days(&t.line1, SEED_NOW))
+            .collect();
+        assert!(raw.len() >= 300, "the bundle must be present: {}", raw.len());
+        let newest = raw.iter().copied().fold(f64::INFINITY, f64::min);
+        let ages: Vec<Option<f64>> = raw.iter().map(|a| Some(a - newest)).collect();
+
+        // The fixture still reproduces the report: a slow-cadence tail (AO-7
+        // and the SatNOGS birds re-observed every few weeks) whose oldest
+        // ADMITTED member is well past the 14 d line.
+        let oldest_admitted = ages
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|a| *a <= TLE_ACT_STALE_DAYS)
+            .fold(0.0f64, f64::max);
+        assert!(
+            oldest_admitted > 14.0,
+            "the seed no longer carries a slow-cadence tail (oldest admitted \
+             {oldest_admitted:.1} d) — this test no longer reproduces the bug"
+        );
+
+        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        assert!(c.usable >= 300, "usable birds: {}", c.usable);
+        assert!(
+            c.held_back > 0,
+            "the held-back birds are counted: {}",
+            c.held_back
+        );
+        let headline = c.median_age_days.expect("usable birds exist");
+        assert!(
+            headline <= 14.0,
+            "the set-wide readout is {headline:.1} d, so every currency \
+             surface reads STALE on a current catalog"
+        );
+        // …and not merely inside the line: this catalog is HOURS old.
+        assert!(headline < 3.0, "headline {headline:.2} d");
+    }
+
+    /// THE MECHANISM, isolated from any particular bundle: a max over the
+    /// admitted birds is bounded below the ceiling BY the ceiling that admits
+    /// them, so it parks just under 30 d whatever the set does — as each tail
+    /// bird crosses the line the next one inherits the badge. The headline
+    /// must not follow the tail down.
+    #[test]
+    fn the_headline_does_not_park_just_under_the_30_day_ceiling() {
+        // 200 birds re-observed today, plus a tail that keeps handing the
+        // oldest-admitted title along as its members age out.
+        for tail_top in [29.9f64, 28.0, 26.0, 20.0] {
+            let ages: Vec<Option<f64>> = (0..200)
+                .map(|i| Some(0.2 + f64::from(i) * 0.001))
+                .chain((0..12).map(|i| Some(tail_top - f64::from(i) * 0.5)))
+                .collect();
+            let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+            let headline = c.median_age_days.expect("usable birds exist");
+            assert!(
+                headline < 1.0,
+                "tail top {tail_top} d pinned the headline at {headline:.2} d"
+            );
+            assert_eq!(c.held_back, 0, "nothing is past the ceiling here");
+        }
+    }
+
+    /// THE MIRROR-IMAGE FAILURE the fix must not introduce: a set that has
+    /// really gone stale still reads stale. More than half the birds past the
+    /// 14 d line takes the median with them, and a wholly rotten set reports
+    /// no age at all rather than a reassuring one.
+    #[test]
+    fn a_genuinely_stale_set_still_reads_stale() {
+        let ages: Vec<Option<f64>> = (0..18)
+            .map(|i| Some(16.0 + f64::from(i) * 0.7))
+            .chain((0..4).map(|_| Some(0.5)))
+            .collect();
+        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        let headline = c.median_age_days.expect("usable birds exist");
+        assert!(headline > 14.0, "a rotting set must warn: {headline:.1} d");
+
+        let rotten: Vec<Option<f64>> = (0..20).map(|i| Some(31.0 + f64::from(i))).collect();
+        let c = tle_set_currency(rotten.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        assert_eq!((c.usable, c.aging, c.held_back), (0, 0, 20));
+        assert!(
+            c.median_age_days.is_none(),
+            "no usable set has no age — the UI's import escape hatch reads this"
+        );
+    }
+
+    /// The held-back count is its OWN fact. `count - usable` would fold in
+    /// birds whose epoch will not parse — a different failure with a different
+    /// fix — and hand the operator a number no counter supports.
+    #[test]
+    fn unparseable_epochs_are_in_no_band_at_all() {
+        let ages = [Some(0.4), Some(1.2), None, Some(44.0), None];
+        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        assert_eq!(c.usable, 2);
+        assert_eq!(c.held_back, 1, "count - usable would say 3");
+        assert_eq!(c.aging, 0);
+        assert_eq!(c.median_age_days, Some(1.2), "upper median, as validate_tles picks");
+    }
+
+    /// THE RESIDUAL FALSE CALM the median alone still allows: half the catalog
+    /// sitting at 29 d while the other half was fetched this morning. The
+    /// median is 0.2 d and TRUE — the typical bird really is current — but
+    /// every set-wide surface goes quiet and nothing tells the operator that
+    /// half his birds are drifting. `aging` is that missing number: what the
+    /// reader compares against `usable` to tell "current, a few excluded" from
+    /// "the whole set is going off". Reachable in practice — `import_tles`
+    /// admits any bird `tle_bird_ok` accepts, at any age inside the ceiling.
+    #[test]
+    fn the_band_between_the_stale_line_and_the_ceiling_is_counted() {
+        let ages: Vec<Option<f64>> = (0..51)
+            .map(|i| Some(0.2 + f64::from(i) * 0.001))
+            .chain((0..49).map(|i| Some(29.0 - f64::from(i) * 0.01)))
+            .chain((0..30).map(|i| Some(31.0 + f64::from(i))))
+            .collect();
+        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        // ONE bucket per bird, and the bands are readable as a share:
+        // `aging` sits INSIDE `usable` (those birds are still drawn),
+        // `held_back` is disjoint from it (those sit out) — so
+        // `usable + held_back` is every bird with a readable epoch.
+        assert_eq!((c.usable, c.aging, c.held_back), (100, 49, 30));
+        assert_eq!(c.usable + c.held_back, ages.len());
+        // The headline stays honest — this catalog IS current…
+        assert!(c.median_age_days.expect("usable birds exist") < 1.0);
+        // …and it is no longer the only number the operator gets.
+        assert!(c.aging > 0);
+    }
+
+    /// The band edges, stated once: the 14 d line and the 30 d ceiling are
+    /// both INCLUSIVE of the birds sitting exactly on them. A bird at 14.0 d
+    /// is not yet aging (the arm-confirm does not ask about it either), and
+    /// one at 30.0 d is still usable (`tle_act_gate` still admits it).
+    #[test]
+    fn the_band_edges_match_the_per_bird_gates() {
+        let ages = [Some(14.0), Some(14.01), Some(30.0), Some(30.01)];
+        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        assert_eq!((c.usable, c.aging, c.held_back), (3, 2, 1));
     }
 
     /// A synthetic bird with a chosen NORAD + epoch (yy/doy columns) — enough

@@ -69,6 +69,9 @@ const pass = (name: string, norad: number, maxElDeg = 45, n = 0): SatPass => ({
 
 const view = (over: Partial<SatView> = {}): SatView => ({
   tleAgeDays: 1,
+  usableCount: 97,
+  agingCount: 0,
+  heldBackCount: 0,
   tleFetchedAt: NOW - 3600,
   tleSource: 'mirror',
   birds: [],

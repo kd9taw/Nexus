@@ -47,6 +47,7 @@ import { NEED_CHIP } from '../features/needVisuals'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { isSatChased, satChaseKeys, satChasingSet, toggleSatChasing } from '../features/satChase'
 import { satBirdHealth, satExcludedHealth } from '../features/satHealth'
+import { elementBandParts, elementBandSummary } from '../features/elementBands'
 import {
   ackSatSeedNotice,
   satSeedNoticeOpen,
@@ -1598,7 +1599,19 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
     return rows
   }, [view, search, chaseKeys])
 
+  // `tleAgeDays` is the MEDIAN age of the sets inside the 30 d ceiling (never
+  // the oldest one — the ceiling pins that just under itself), so this reads
+  // "the typical bird in my catalog is past the line", which is what the chip
+  // claims. Individual old birds are named in the Birds list's excluded rows;
+  // how many there are is the band note beside the chip.
   const tleStale = view != null && view.tleAgeDays > 14
+
+  // What the median does NOT cover, stated where the operator already is: a
+  // catalog with a slow-cadence tail and one that is quietly going off both
+  // reported nothing here (an excluded bird gets a row only when it is
+  // starred or matched by the search box, so by default it appeared nowhere).
+  const bandNote =
+    view == null || elementBandParts(view).length === 0 ? null : elementBandSummary(view)
 
   // Stable empty inputs for the embedded detail globe (it shows only the birds —
   // no stations, spots, or needs), so MapView's per-tick projections don't rebuild.
@@ -1932,6 +1945,19 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
           passes over your grid — modelled from Celestrak elements
           {view && !tleStale ? ` (${view.tleAgeDays.toFixed(1)} d old)` : ''}
         </span>
+        {/* The birds the age does not speak for — drifting, or held back past
+            30 d — as a share of the catalog, so "30 of 367 sit out" cannot
+            read like "51 of 100". Dim: it is a fact about a working catalog,
+            not a warning. */}
+        {bandNote && (
+          <span
+            className="sats-sub"
+            data-testid="sat-element-bands"
+            title="Elements past the 14-day line still fly the pass, with drifting times; elements past 30 days are not used at all — each of those birds is listed, with its reason, in the Birds list."
+          >
+            {bandNote}
+          </span>
+        )}
         {/* Stale elements stop being a dim parenthetical (the appliance's own
             failure mode — it buries `tledate`): an amber chip the eye lands
             on — and the chip IS the manual refresh now (fetch_tles_now,
@@ -1950,6 +1976,30 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                 past 14 days. */}
             TLE {Math.round(view.tleAgeDays)} days — STALE{' '}
             {tleRefreshing ? '· refreshing…' : '· refresh'}
+          </button>
+        )}
+        {/* THE SECTION'S MANUAL REFRESH when nothing is wrong. The amber chip
+            above IS the refresh, but under median semantics it correctly
+            disappears on a healthy catalog — which used to take the section's
+            only refresh affordance with it (leaving the arm-confirm, the armed
+            rail past 14 d, and Settings ▸ Radio ▸ Orbital elements). It is
+            here with no elements at all, too: that is when fetching them is
+            the only thing to do. Quiet by construction — it states no age and
+            makes no claim, so it can never be the warning that lied. Exactly
+            one of the two chips renders. */}
+        {!tleStale && (
+          <button
+            type="button"
+            className="sat-chip quiet"
+            disabled={tleRefreshing}
+            onClick={() => void refreshTles()}
+            title={
+              view
+                ? `Orbital elements are ${view.tleAgeDays.toFixed(1)} days old (the median of the ${view.usableCount} sets in use). They refresh automatically every 6 h when the network allows; click to refresh now.`
+                : 'No usable orbital elements are cached. Click to fetch them now; you can also import a file under Settings ▸ Radio ▸ Orbital elements.'
+            }
+          >
+            {tleRefreshing ? '⟳ refreshing…' : '⟳ refresh elements'}
           </button>
         )}
         {track && (

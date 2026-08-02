@@ -38,6 +38,9 @@ const pass = (name: string, norad: number, aosInS: number) => ({
 })
 const view: SatView = {
   tleAgeDays: 1,
+  usableCount: 97,
+  agingCount: 0,
+  heldBackCount: 0,
   tleFetchedAt: NOW,
   tleSource: 'mirror',
   birds: [],
@@ -131,6 +134,36 @@ describe('SatPassesPane status honesty', () => {
     expect(await screen.findByText(/AO-85/)).toBeTruthy()
     expect(screen.getByText(/no elements/)).toBeTruthy()
     expect(screen.queryByText(/PACSAT/)).toBeNull()
+  })
+
+  // The pane plans passes, so a set that has quietly gone off matters here —
+  // but its own held-back birds are a permanent feature of the catalog, and a
+  // planning pane that always carries a warning teaches the operator to stop
+  // reading it. The line appears for a degraded SET, not for a slow-cadence
+  // tail. (Both used to render byte-identically: nothing at all.)
+  it('says so when most of the catalog is past the 14 d line, on a calm median', async () => {
+    api.getSatellites.mockResolvedValue({
+      ...view,
+      tleAgeDays: 0.2,
+      usableCount: 100,
+      agingCount: 49,
+      heldBackCount: 40,
+    })
+    render(<SatPassesPane />)
+    expect(await screen.findByText(/89 of 140 past 14 d/)).toBeTruthy()
+  })
+
+  it('stays quiet for the shipped catalog: current, with a tail sitting out', async () => {
+    api.getSatellites.mockResolvedValue({
+      ...view,
+      tleAgeDays: 0.2,
+      usableCount: 337,
+      agingCount: 0,
+      heldBackCount: 30,
+    })
+    render(<SatPassesPane />)
+    expect(await screen.findByText('RS-44')).toBeTruthy()
+    expect(screen.queryByText(/past 14 d|stale elements/)).toBeNull()
   })
 
   it('renders for a ★ bird that has ONLY an exclusion — never falls back to nothing', async () => {

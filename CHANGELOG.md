@@ -67,6 +67,54 @@ invented motion — every change removes real delay between the antenna and the 
   keep the gentler cadence; that limit is the radio's, not the app's.
 - The meter bars no longer ease their width in CSS. The eased bar smeared every real
   reading by another 80–120 ms; color changes still ease, measurements do not.
+### Fixed: "TLE 26 days — STALE" on a catalog that is hours old
+
+The Satellites screen carried an amber "TLE 26 days — STALE · refresh" chip, a warning
+chip in the status bar on every screen, and a Settings line reading "The element mirror
+is unreachable and your elements are 26 d old — import a fresh element file or retry
+later." None of it was true, and there was nothing to do about it.
+
+Every one of those surfaces was reading the age of the single oldest satellite in the
+catalog and presenting it as the age of your elements. The catalog is 367 birds, and the
+typical one is a few hours old — but a handful are legitimately old. AO-7 launched in
+1974 and gets fresh elements when someone observes it; a few dozen more are re-observed
+every few weeks rather than every day. One of those set the number for all of them.
+
+Worse, the number could not come down. A satellite whose elements pass 30 days is
+dropped from the set, so the oldest one still counted is always just under 30 — as one
+aged out, the next in line inherited the badge. The chip was going to read stale forever
+no matter how fresh your elements were, and the calm "your elements are current" message
+the app already had could never appear.
+
+The chip, the status-bar chip, the Settings line and the Connect Passes badge now report
+the median age of the elements they draw on: what the typical satellite in your catalog
+carries, not what the slowest-observed one does. On the catalog shipped with this
+release that reads a fraction of a day. A set that genuinely goes stale still says so —
+once more than half the birds pass the 14-day line the median goes with them.
+
+Satellites held back by the 30-day ceiling are counted and reported in their own right,
+so "my catalog is current and a few birds sit out" no longer reads identically to "my
+whole set has gone stale". The Satellites header states the number beside the age ("367
+birds · 30 sit out past 30 d"); Settings ▸ Radio ▸ Orbital elements carries it on the
+line that is always there, not only while a refresh has failed; and every refresh result
+— landed, blocked or failed — accounts for those birds.
+
+Satellites in the 14-to-30-day band are counted too: still used, still drifting. A
+median can hide that band, and this is the shape it hides — half your birds sitting at
+29 days while the other half arrived this morning reads as a current catalog, because
+the typical bird is one. The Satellites header carries both counts whenever they are not
+zero, and when most of the elements you hold are past the 14-day line the status bar and
+the Connect Passes pane say so as well. A slow-cadence tail on an otherwise current
+catalog stays quiet, which is what the shipped catalog looks like.
+
+The Satellites section always has a way to refresh elements. The amber chip was also the
+section's refresh button, and it correctly disappears now that the reading is honest, so
+a quiet "⟳ refresh elements" chip sits in the header whenever the amber one does not.
+
+Unchanged: the per-satellite rules. A satellite past 30 days is still refused by name and
+age when you arm it, arming a satellite with elements past 14 days still asks first, the
+Birds list still explains every excluded bird individually, and a fresh bird still arms
+cleanly no matter how old anything else in the catalog is.
 
 ## [0.25.0] — 2026-08-01
 
