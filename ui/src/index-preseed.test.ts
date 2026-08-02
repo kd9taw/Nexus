@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readFileSync, readdirSync } from 'node:fs'
+import { resolve, join } from 'node:path'
+import { fitScale, naturalFor } from './useScale'
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
 // between launch and a first-paint flash, and it must mirror the React hooks EXACTLY
@@ -64,5 +65,103 @@ describe('index.html preseed', () => {
     expect(railVar('--right-rail-w')).toBe('964px')
     // Storage is never rewritten by the seed — the big-monitor preference survives.
     expect(localStorage.getItem('tempo-right-rail-w')).toBe('2064')
+  })
+})
+
+// The seed carries its OWN copy of the per-surface natural table (it runs before any
+// module loads — that is the point of it). A copy is a drift risk, so it is compared to
+// the real fitScale/naturalFor rather than to hand-typed constants: every openable panel
+// (scanned from the call sites, so a new pop-out is covered the day it appears) at every
+// window shape a pop-out can take. Without the seed mirroring the table, every pop-out
+// first-painted at the 65% floor and then jumped — the flash class this file exists for.
+const OPENABLE = (() => {
+  const dir = resolve(process.cwd(), 'src')
+  const found = new Set<string>()
+  for (const rel of readdirSync(dir, { recursive: true }) as string[]) {
+    if (!/\.tsx?$/.test(rel) || /\.test\.tsx?$/.test(rel)) continue
+    for (const m of readFileSync(join(dir, rel), 'utf8').matchAll(/openPanelWindow\(\s*'([A-Za-z0-9]+)'/g))
+      found.add(m[1])
+  }
+  return [...found].sort()
+})()
+
+/** open_panel_window's default inner sizes, plus the shapes a dragged/docked pop-out
+ *  takes. Parity must hold at every one of them, not just where a window opens. */
+const SHAPES: [number, number][] = [
+  [420, 780], // band map default
+  [420, 360], // band map / generic min_inner_size
+  [420, 1400], // band map docked as a full-height edge strip
+  [900, 300], // waterfall default
+  [380, 180], // waterfall min_inner_size
+  [760, 660], // generic pop-out default
+  [560, 760], // fieldday default
+  [1140, 760], // operate default
+  [1920, 1080], // a pop-out dragged to full screen
+]
+
+describe('index.html preseed: per-surface natural footprint', () => {
+  it('seeds every openable pop-out at exactly the scale useScale would compute', () => {
+    expect(OPENABLE.length).toBeGreaterThan(5) // the scan actually found call sites
+    const bad: string[] = []
+    for (const slug of OPENABLE) {
+      for (const [w, h] of SHAPES) {
+        localStorage.clear()
+        document.documentElement.removeAttribute('style')
+        window.history.replaceState(null, '', '/?panel=' + slug)
+        setWin(w, h)
+        runPreseed()
+        const want = String(fitScale(w, h, 100, undefined, naturalFor(slug)) / 100)
+        const got = document.documentElement.style.getPropertyValue('--ui-zoom')
+        if (got !== want) bad.push(`${slug} @ ${w}×${h}: seed ${got} ≠ fitScale ${want}`)
+      }
+    }
+    expect(bad).toEqual([])
+  })
+
+  it('seeds an inherited PIN at the panel’s own ceiling, not the 65 floor', () => {
+    // The other half of the same bug, and the half that flashes: the seed caps a
+    // pop-out's pin at this window's fit ceiling (mirroring capPinnedScale). Against the
+    // cockpit footprint that ceiling was 65, so a pinned operator's band map painted at
+    // 65 and then jumped when React published the real scale.
+    window.history.replaceState(null, '', '/?panel=bandmapCw')
+    localStorage.setItem('nexus-ui-scale-mode', '175') // main's pin, inherited (bare key)
+    setWin(420, 780)
+    runPreseed()
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe('1.1')
+    // A MAIN-window pin still applies verbatim — no ceiling, no change.
+    localStorage.clear()
+    document.documentElement.removeAttribute('style')
+    window.history.replaceState(null, '', '/')
+    localStorage.setItem('nexus-ui-scale-mode', '175')
+    setWin(900, 600)
+    runPreseed()
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe('1.75')
+  })
+
+  it('an UNKNOWN panel seeds the generic pop-out natural, not the main cockpit’s', () => {
+    window.history.replaceState(null, '', '/?panel=nosuchpanel')
+    setWin(760, 660)
+    runPreseed()
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(
+      String(fitScale(760, 660, 100, undefined, naturalFor('nosuchpanel')) / 100),
+    )
+  })
+
+  it('the MAIN window seed is unchanged — no ?panel=, main cockpit footprint', () => {
+    for (const [w, h] of [
+      [1920, 1080],
+      [1366, 768],
+      [1200, 720],
+      [900, 600],
+    ] as const) {
+      localStorage.clear()
+      document.documentElement.removeAttribute('style')
+      window.history.replaceState(null, '', '/')
+      setWin(w, h)
+      runPreseed()
+      expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(
+        String(fitScale(w, h) / 100),
+      )
+    }
   })
 })

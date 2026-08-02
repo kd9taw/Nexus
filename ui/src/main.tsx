@@ -15,8 +15,11 @@ import './cockpit-panes.css'
 // and renders just that panel for multi-monitor use.
 const panel = new URLSearchParams(window.location.search).get('panel')
 
-// Tag the document so per-panel CSS can target a torn-off window (e.g. the Needed
-// window bumps its font/line size — the operator reads it from across the shack).
+// Tag the document so per-panel CSS can target one torn-off window. No rule uses it
+// today (the Needed window's font bump was removed when pop-outs stopped being pinned to
+// the 65% zoom floor — see useScale.ts); the hook stays because a per-panel override has
+// nowhere else to live, and because the attribute is what tells you, in the inspector,
+// which surface a window is.
 if (panel) document.documentElement.dataset.panel = panel
 
 // Fresh main-window boot: clear any stale "popped out" state. A detached panel window never

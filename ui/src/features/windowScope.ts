@@ -108,6 +108,18 @@ export function surfaceId(): string {
   return inst === 'main' ? panel : `${panel}.${inst}`
 }
 
+/**
+ * This window's PANEL slug (`?panel=`), or `null` in the main window.
+ *
+ * Deliberately NOT [`surfaceId`]: a slug is not a storage scope. The one consumer is the
+ * per-surface natural footprint in `useScale.ts`, which is a property of the PANEL — a
+ * second band-map board (`bandmapCw.w2`) is the same content in the same window shape as
+ * `bandmapCw` and must resolve to the same box.
+ */
+export function surfacePanel(): string | null {
+  return search().get('panel')
+}
+
 export type KeyScope = 'global' | 'surface' | 'radio'
 
 /**

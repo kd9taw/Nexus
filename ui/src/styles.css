@@ -12427,14 +12427,13 @@ select.settings-input {
   flex: 1;
   min-height: 0;
 }
-/* The torn-off Needed window auto-opens on launch and is read from across the shack, so
-   bump its overall font + line size ~25%: the rem-based text scales off the root font-size
-   and every row's padding/gap scales off the --space-scale ladder. Scoped to that window
-   only — main.tsx tags <html data-panel="needed"> — so the in-app Needed board is untouched. */
-html[data-panel='needed'] {
-  font-size: 125%;
-  --space-scale: 1.25;
-}
+/* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
+   it is read from across the shack and every pop-out was pinned to the 65% zoom floor
+   (0.65 × 1.25 ≈ 0.81 effective). That floor was the per-surface-natural bug in
+   useScale.ts, not a design choice: the window now auto-fits to 100%, so the hand
+   compensation would stack into 1.25 effective — a 54% jump on a board whose .np-row grid
+   is px-floored (~654 px of column minima in a 760 px window). Removed with the fix; the
+   board reads LARGER than it did before, at an honest 1.0. */
 .np-grid {
   flex: 1;
   min-height: 0;

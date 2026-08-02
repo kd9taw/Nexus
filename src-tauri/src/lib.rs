@@ -8626,6 +8626,38 @@ fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnaps
     Ok(eng.snapshot())
 }
 
+/// Default inner size (CSS px) a pop-out OPENS at, per panel slug — "give this panel
+/// plenty of room", not a content minimum. The Operate cockpit (waterfall + Band
+/// Activity + roster) needs more room than the narrower insight panels; the band map is
+/// tall + narrow (a vertical frequency axis).
+///
+/// Paired with `PANEL_NATURAL` in ui/src/useScale.ts, which declares the smallest box in
+/// which each panel's content is whole (the UI's zoom-fit denominator). The two are NOT
+/// the same number — a band map opens 780 tall but its track is height-elastic — and
+/// `ui/src/popout-natural.test.ts` parses this table to enforce the relation that must
+/// hold between them (natural ≤ default inner, and natural ≤ min inner ÷ the 65% zoom
+/// floor). Extracted from `open_panel_window`'s if/else chain, literal for literal, so
+/// that guard has a table to read.
+fn panel_default_inner(slug: &str) -> (f64, f64) {
+    match slug {
+        "operate" => (1140.0, 760.0),
+        "bandmapPhone" | "bandmapCw" => (420.0, 780.0),
+        "fieldday" => (560.0, 760.0), // the scoreboard: operator + tiles + sections board
+        "waterfall" => (900.0, 300.0), // a wide, short monitoring strip
+        _ => (760.0, 660.0),
+    }
+}
+
+/// Smallest inner size (CSS px) a pop-out can be dragged to. The UI's zoom floor is 65%,
+/// so this size divided by 0.65 is the largest content box that window can ever show —
+/// see `panel_default_inner` for the guard that holds the two sides together.
+fn panel_min_inner(slug: &str) -> (f64, f64) {
+    match slug {
+        "waterfall" => (380.0, 180.0),
+        _ => (420.0, 360.0),
+    }
+}
+
 /// Open (or focus) a standalone OS window showing one panel — multi-monitor
 /// tear-off. The detached window loads the app at `?panel=<panel>` and renders just
 /// that panel against the same shared engine the main window uses.
@@ -8676,8 +8708,6 @@ async fn open_panel_window(
         "bandmapCw" => "Nexus — Band map (CW)".to_string(),
         other => format!("Nexus — {other}"),
     };
-    // The Operate cockpit (waterfall + Band Activity + roster) needs more room than the
-    // narrower insight panels; the band map is tall + narrow (a vertical frequency axis).
     let is_bandmap = slug == "bandmapPhone" || slug == "bandmapCw";
     // The band map reopens where the operator left it (size + position), so a Windows-snapped
     // vertical strip on the side survives restarts. Other pop-outs keep their fixed defaults.
@@ -8705,17 +8735,10 @@ async fn open_panel_window(
         (w, h)
     } else if let Some(g) = &saved {
         (g.w, g.h)
-    } else if slug == "operate" {
-        (1140.0, 760.0)
-    } else if is_bandmap {
-        (420.0, 780.0)
-    } else if slug == "fieldday" {
-        (560.0, 760.0) // the scoreboard: operator + tiles + sections board
-    } else if slug == "waterfall" {
-        (900.0, 300.0) // a wide, short monitoring strip
     } else {
-        (760.0, 660.0)
+        panel_default_inner(&slug)
     };
+    let (min_w, min_h) = panel_min_inner(&slug);
     // `instance` is a SEPARATE query parameter, never baked into the slug — the slug filter
     // would strip the separator and alias it. Appended only above `main`, so every window that
     // is openable today keeps the exact URL it has always had.
@@ -8730,10 +8753,7 @@ async fn open_panel_window(
     )
     .title(title)
     .inner_size(w, h)
-    .min_inner_size(
-        if slug == "waterfall" { 380.0 } else { 420.0 },
-        if slug == "waterfall" { 180.0 } else { 360.0 },
-    );
+    .min_inner_size(min_w, min_h);
     if let Some(g) = &saved {
         if matches!(free, Some((_, _, false))) {
             // FREE window whose saved top-left no longer lands on any monitor (unplugged or

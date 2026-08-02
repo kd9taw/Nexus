@@ -13,11 +13,11 @@
           var den = localStorage.getItem('nexus-density')
           if (den === 'guided' || den === 'standard' || den === 'dense') d.setAttribute('data-density', den)
           if (localStorage.getItem('nexus-motion') === 'reduce') d.setAttribute('data-motion', 'reduce')
-          // First-paint zoom seed — keep in sync with useScale.ts (SCALE_STEPS,
-          // NAT_W/NAT_H fit model, keys nexus-ui-scale-mode / nexus-ui-scale-cap):
-          // a pinned Manual scale applies directly (capped in a pop-out, see below);
-          // otherwise auto-fit to the window (min(w/1200, h/900), snapped DOWN to a
-          // step, capped, floor 65).
+          // First-paint zoom seed — keep in sync with useScale.ts (SCALE_STEPS, the
+          // per-surface natural fit model, keys nexus-ui-scale-mode /
+          // nexus-ui-scale-cap): a pinned Manual scale applies directly (capped in a
+          // pop-out, see below); otherwise auto-fit to the window (min(w/natW, h/natH),
+          // snapped DOWN to a step, capped, floor 65).
           var STEPS = [65, 70, 75, 80, 85, 90, 100, 110, 125, 150, 175]
           // Per-surface mode key (mirror windowScope surfaceKey/surfaceGet, incl. the
           // instance-token grammar): a pop-out (?panel=) may carry its own pin under
@@ -37,7 +37,20 @@
           // bounded by it; so is a PIN in a pop-out (no scale UI there to recover
           // with — mirrors capPinnedScale in src/useScale.ts). A main-window pin is
           // an operator choice and applies verbatim.
-          var target = Math.min(window.innerWidth / 1200, window.innerHeight / 900) * 100
+          // Per-surface NATURAL footprint (the fit denominator) — mirror of
+          // PANEL_NATURAL in src/useScale.ts; index-preseed.test.ts compares this copy
+          // to the real fitScale for every openable panel rather than to constants. A
+          // pop-out is a small window the APP sized for its content, so fitting one
+          // against the main cockpit's 1200×900 pinned EVERY pop-out at the 65% floor
+          // (the "font is very, very small" band-map field report).
+          var NAT = { operate: [1200, 900], bandmapPhone: [380, 520], bandmapCw: [380, 520],
+                      waterfall: [560, 200], fieldday: [560, 540] }
+          var natW = 1200, natH = 900
+          if (panel) {
+            var n = Object.prototype.hasOwnProperty.call(NAT, panel) ? NAT[panel] : [640, 520]
+            natW = n[0]; natH = n[1]
+          }
+          var target = Math.min(window.innerWidth / natW, window.innerHeight / natH) * 100
           var fitCeil = 65
           for (var i = 0; i < STEPS.length; i++) {
             if (STEPS[i] <= target) fitCeil = STEPS[i]
