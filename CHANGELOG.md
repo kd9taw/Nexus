@@ -193,6 +193,40 @@ only place that computes them.
 The strip admits exactly the birds the "Other birds overhead" band admits — one rule, so
 a bird that band refuses (reported dead or re-entered, placeholder rideshare names) never
 appears in the strip either. The schedule below and the band are unchanged.
+### Added: hide the countries you have stopped chasing
+
+On a busy evening most of a waterfall is a handful of countries you worked years ago. Band
+Activity gains a **Countries** button beside the filter chips: tick the ones you do not want
+to see and they leave Band Activity and the Call Roster.
+
+The list is 18 — the high-density entities an experienced chaser actually wants gone, rather
+than the full DXCC table with a search box:
+
+United States (K/W/N) · Canada (VE) · Mexico (XE) · Germany (DL) · Italy (I) · Spain (EA) ·
+England (G) · France (F) · Japan (JA) · Brazil (PY) · Argentina (LU) · Poland (SP) ·
+European Russia (UA) · Ukraine (UR) · Netherlands (PA) · Czech Republic (OK) ·
+Slovenia (S5) · China (BY)
+
+It is a view filter and only a view filter. Decoding, logging, the QSO sequencer and your
+needed-entity alerts never see it, so nothing you have switched off can cost you a contact:
+
+- a station **calling you** always shows, whatever its country;
+- the station you are **working** stays put mid-exchange;
+- **needed outranks excluded** — a new entity or a new band slot from a country you have
+  hidden still comes through.
+
+Matching is on the DXCC entity the callsign resolves to, not the letters it starts with, so
+`VE3XYZ/W1` counts as United States and `W1ABC/VE3` as Canada, and hiding Germany catches
+DA, DB, DJ and DK as well as DL.
+
+While anything is hidden both panes carry a **"3 countries hidden"** chip with a Clear
+beside it, so a thinned band is never a mystery — and the "N heard" and roster counts state
+what is on screen, not what arrived. The Rx Frequency pane is deliberately left alone: it
+answers "what is on my frequency", and a station you are not chasing sitting on top of you
+is exactly what you need to see.
+
+Your choice is remembered per station, not per window — pop out a band map and it shows the
+same band as the main window.
 
 ### Fixed: the caller card's distance and bearing now agree with QRZ
 

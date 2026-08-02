@@ -271,6 +271,67 @@ mod tests {
         assert_eq!(resolve("KH8/N0CALL").unwrap().entity, "American Samoa");
         assert!(resolve("").is_none());
     }
+
+    /// The entity names the UI's country-exclusion catalog matches on
+    /// (`ui/src/features/countryExclude.ts`). That catalog stores the cty.dat
+    /// entity NAME — there is no numeric DXCC id here, `DxccInfo.entity` is a
+    /// `&'static str` — so a name that stops resolving does not error anywhere:
+    /// the operator's ticked box silently hides nothing. A cty.dat refresh that
+    /// respells one fails here, and again in countryExclude.catalog.test.ts.
+    #[test]
+    fn resolves_every_excludable_country() {
+        for (call, entity) in [
+            ("KD9TAW", "United States"),
+            ("VE3ABC", "Canada"),
+            ("XE1ABC", "Mexico"),
+            // The operator says "Germany (DL)"; cty.dat says this.
+            ("DL1ABC", "Fed. Rep. of Germany"),
+            ("I1ABC", "Italy"),
+            ("EA4XYZ", "Spain"),
+            ("G3XYZ", "England"),
+            ("F5ABC", "France"),
+            ("JA1XYZ", "Japan"),
+            ("PY2ABC", "Brazil"),
+            ("LU1ABC", "Argentina"),
+            ("SP1ABC", "Poland"),
+            ("UA3ABC", "European Russia"),
+            ("UR5ABC", "Ukraine"),
+            ("PA0ABC", "Netherlands"),
+            ("OK1ABC", "Czech Republic"),
+            ("S51ABC", "Slovenia"),
+            ("BY1ABC", "China"),
+        ] {
+            assert_eq!(resolve(call).unwrap().entity, entity, "{call}");
+        }
+    }
+
+    /// Excluding a country must key on the RESOLVED entity, never on the letters
+    /// a callsign starts with — the catalog's prefixes are operator vocabulary
+    /// only. These are the cases a text prefix gets wrong in both directions.
+    #[test]
+    fn exclusion_identity_survives_portable_calls() {
+        // The location side wins over the home call, and vice versa.
+        assert_eq!(resolve("VE3XYZ/W1").unwrap().entity, "United States");
+        assert_eq!(resolve("W1ABC/VE3").unwrap().entity, "Canada");
+        // A plain operating suffix keeps the home entity.
+        assert_eq!(
+            resolve("DL1ABC/QRP").unwrap().entity,
+            "Fed. Rep. of Germany"
+        );
+        assert_eq!(resolve("VE3ABC/M").unwrap().entity, "Canada");
+        assert_eq!(resolve("XE1ABC/2").unwrap().entity, "Mexico");
+        // Hiding "United States" must catch every US block, not just K.
+        for c in ["AA1AA", "KD9TAW", "N0CALL", "W1AW", "AB7XX"] {
+            assert_eq!(resolve(c).unwrap().entity, "United States", "{c}");
+        }
+        // …and hiding Germany must catch the whole DA–DR range, not just "DL".
+        for c in ["DA1ABC", "DB2ABC", "DJ3ABC", "DK4ABC", "DL5ABC"] {
+            assert_eq!(resolve(c).unwrap().entity, "Fed. Rep. of Germany", "{c}");
+        }
+        // A US call that merely STARTS with the letters of an excluded prefix is
+        // United States, not Germany — the false positive a text match would make.
+        assert_eq!(resolve("WD8L").unwrap().entity, "United States");
+    }
 }
 
 #[cfg(test)]

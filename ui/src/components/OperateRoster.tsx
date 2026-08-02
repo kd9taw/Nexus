@@ -13,6 +13,8 @@ import { NEED_CHIP } from '../features/needVisuals'
 import { alertsForSurface, chaseRank, strongestNeed } from '../features/needs'
 import { isIgnored } from '../txMessages'
 import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
+import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
+import { CountryHiddenChip } from './CountryExclude'
 import { RarityChip } from './RarityChip'
 
 interface Props {
@@ -110,6 +112,9 @@ export function OperateRoster({
       return next
     })
   }
+  // The operator's country exclusion. Shared with Band Activity through one app-global key,
+  // so the two panes can never show different bands.
+  const countries = useCountryExclude()
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
 
   const rows = useMemo(() => {
@@ -155,6 +160,21 @@ export function OperateRoster({
     // Keep only stations heard within the recency window — the roster stays a
     // live picture of the band, not a running tally.
     let f = built.filter((x) => x.age <= ACTIVE_ROSTER_CYCLES)
+    // The country exclusion, on the SAME predicate Band Activity uses so the two panes
+    // cannot drift on what "protected" means. `needAll` is the surface-GATED need set, so a
+    // cross-band claim this roster could not close never rescues a row either.
+    f = f.filter(
+      (x) =>
+        !isHiddenByCountry(
+          {
+            entity: x.s.country,
+            call: x.s.call,
+            qsoPartner: selectedCall,
+            needed: hasOverridingNeed(x.needAll),
+          },
+          countries.hidden,
+        ),
+    )
     if (neededOnly) f = f.filter((x) => x.need != null)
     if (hideWorked) f = f.filter((x) => !x.s.worked || x.need != null)
     const dir = sort.dir === 'asc' ? 1 : -1
@@ -206,6 +226,8 @@ export function OperateRoster({
     sort,
     neededOnly,
     hideWorked,
+    countries.hidden,
+    selectedCall,
   ])
 
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works, Alt+Enter ignores.
@@ -254,6 +276,13 @@ export function OperateRoster({
             onChange={(e) => setFilter({ hideWorked: e.target.checked })}
           /> Hide worked
         </label>
+        {/* Beside the row count, so a thinned roster always says why. The picker itself
+            lives in the Band Activity chip bar — one control for one shared list. */}
+        <CountryHiddenChip
+          count={countries.keys.size}
+          onClear={countries.clear}
+          testId="or-hidden"
+        />
         {onSpot && (
           <button
             type="button"
