@@ -77,6 +77,18 @@
   "norad_cat_id": 7530
  },
  {
+  "uuid": "FIXT7530b",
+  "description": "Mode V/A (A) Lin SSB",
+  "alive": true,
+  "type": "Transponder",
+  "status": "active",
+  "service": "Amateur",
+  "uplink_low": 145850000,
+  "downlink_low": 29400000,
+  "mode": "USB",
+  "norad_cat_id": 7530
+ },
+ {
   "uuid": "FIXT43678",
   "description": "APRS Digipeater",
   "alive": true,

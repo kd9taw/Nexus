@@ -226,12 +226,24 @@ fn raw_offset_for(t: &Transponder, tuned_downlink_hz: u64, range_rate_km_s: f64)
 /// compound: `"FSK AX.25 G3RUH"`, `"MSK AX.100 Mode 5"`, `"GFSK/BPSK"`,
 /// `"GENESIS FSK"`, `"AFSK TUBiX10"`. A prefix test reads only the first word
 /// and misses three of those; a substring test would swallow `MFSK`.
-const FM_MODE_TOKENS: [&str; 14] = [
+const FM_MODE_TOKENS: [&str; 15] = [
     // FM voice, both spellings SatNOGS uses.
     "FM", "FMN", "NFM", //
     // Packet/data carried BY an FM signal — the radio still demodulates FM and
     // the payload comes off the discriminator. AFSK is the ISS/APRS class.
     "AFSK", "FSK", "4FSK", "GFSK", "FFSK", "GMSK", "MSK", "DUV", "DSTAR",
+    // SATELLITE SSTV IS NARROWBAND FM, and this is the one place it differs
+    // from the HF habit. On HF, SSTV is an audio mode through an SSB path —
+    // which is why it sat in the SSB column here and had a test pinning it
+    // there. In orbit it never is: all 20 live SSTV downlinks are VHF, UHF or
+    // S-band and none is below 30 MHz, so the HF case cannot reach this map at
+    // all (it is the SATELLITE mode table — `Transmitter::is_fm` and the sat
+    // routing class are its only readers). Upstream says so in its own words
+    // where it bothers to: the ISS files 145.800 "Mode V Imaging" and
+    // 437.800 "Mode U - SSTV", and CSS/Tianhe files 145.985 and 436.510 as
+    // "imaging SSTV-FM". Demodulated as USB the picture is garbled — exactly
+    // the failure the mode map exists to prevent.
+    "SSTV", //
     // Not SatNOGS `mode` values (APRS lives in `description`), but other
     // sources spell packet birds this way and they are FM all the same.
     "PKT", "PACKET",
@@ -247,7 +259,8 @@ const FM_MODE_TOKENS: [&str; 14] = [
 /// |---|---|---|
 /// | `FM`, `FMN` | FM | FM voice — the SO-50/AO-91 repeaters |
 /// | `AFSK`, `FSK …`, `GFSK`, `GMSK`, `MSK …`, `4FSK`, `FFSK`, `DUV`, `DSTAR` | FM | data carried by an FM signal: the rig demodulates FM, the modem takes the audio |
-/// | `USB`, `LSB`, `CW`, `AM`, `BPSK`, `QPSK`, `MFSK`, `FT8`, `SSTV`, `DVB-S2`, … | SSB | linear-path modes — an SSB/linear transponder or a soundcard tone mode |
+/// | `SSTV` | FM | every satellite SSTV downlink is narrowband FM — see the token table |
+/// | `USB`, `LSB`, `CW`, `AM`, `BPSK`, `QPSK`, `MFSK`, `FT8`, `DVB-S2`, … | SSB | linear-path modes — an SSB/linear transponder or a soundcard tone mode |
 /// | anything unrecognised, or absent | SSB | see below |
 ///
 /// UNKNOWN READS AS SSB, for two reasons. It is what this path did for every
@@ -607,13 +620,22 @@ mod tests {
             "MSK AX.100 Mode 6",
             "DUV",
             "DSTAR",
-            " afsk ", // case/space tolerant, like every other mode compare here
+            // SSTV: this assertion USED TO SIT IN THE LIST BELOW, and it was
+            // wrong. The HF habit (SSTV is audio through an SSB path) does not
+            // hold in orbit — every one of the 20 live satellite SSTV
+            // downlinks is VHF/UHF/S-band narrowband FM, and none is below
+            // 30 MHz, so no HF SSTV signal can reach this satellite-only map.
+            // Clicking the ISS's 145.800 "Mode V Imaging" row put the rig in
+            // USB and garbled the picture.
+            "SSTV",
+            "Mode U - SSTV - Robot-36", // …and the compound names upstream files
+            " afsk ",                   // case/space tolerant, like every other mode compare here
         ] {
             assert!(mode_is_fm(m), "{m} is FM to a radio");
         }
         for m in [
             "USB", "LSB", "CW", "AM", "DSB", "BPSK", "DBPSK", "QPSK", "OQPSK", "PSK31", "64-QAM",
-            "OFDM", "APT", "ASK", "LoRa", "DVB-S2", "SSTV", "FT8", "WSJT", "CERTO", "SIDLOC",
+            "OFDM", "APT", "ASK", "LoRa", "DVB-S2", "FT8", "WSJT", "CERTO", "SIDLOC",
             // MFSK is the trap a substring match on "FSK" falls into: the
             // WSJT/FT8 family and the MFSK image modes are audio tone modes
             // through an SSB path, not discriminator modes.

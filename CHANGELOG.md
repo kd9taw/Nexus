@@ -171,6 +171,55 @@ three seconds, because on an elliptical orbit it genuinely moves.
 A bird nothing carries current elements for shows no altitude rather than a zero, and
 neither does an armed pass before the bird rises: there is no position computed yet, and
 0 km would put a satellite on the ground.
+### Fixed: the starter favorites now cover the birds you can actually work
+
+The one-time favorites seed ranked every bird on pass count, and pass count is mostly a
+statement about altitude. FO-29 flies an 800 × 1320 km ellipse at 13.5 orbits a day; a
+480 km cubesat flies 15.3, so the cubesat shows more passes over your grid every day of
+the year. Run the app's own pass predictor over the catalog it ships with — 24-hour
+windows from six grids at four different start times — and the old ten came out 3 to 9
+beacon-only telemetry cubesats out of ten, 6.5 on average: birds you can hear and cannot
+work. That is the shape of the catalog rather than bad luck. 305 of the 367 birds that
+carry elements have a downlink and no uplink, and 18 of the top 20 by orbital rate are
+among them, so a pass-count ranking fills its ten mostly from birds nothing can be
+worked on.
+
+What happened to FO-29 is the other half of it. Across those same 24 runs it ranked
+anywhere from 2nd to 81st, and it reached the top ten in 6 of them; some SSB/CW
+transponder reached the ten in 14 of 24. Ranked on passes alone, whether you got a
+workable bird at all came down to the geometry of the day you first opened Satellites.
+
+The catalog now records what each bird is worked WITH — an FM voice repeater, a linear
+(SSB/CW) transponder, a digital/packet channel, or a beacon downlink and nothing else —
+and the seed fills its ten by rotating through those three workable kinds, each one
+offering its own best bird under the same pass-count-and-elevation rank as before. A
+beacon-only bird takes a slot only after the three are exhausted. On today's catalog that
+is four linear, three FM and three digital — at every one of those 24 grid-and-window
+measurements, with no beacon-only bird in any of them.
+
+Nothing else about the seed changed. It still runs once ever, still never seeds over
+anyone who has stars or ever had them, still requires a bird to be alive, to carry a live
+amateur transmitter, to hold current elements and to fly a workable pass over your grid,
+and still waits rather than spending itself when your grid or the catalog is not there
+yet. A bird can hold more than one kind at once, which 60 of today's 372 active amateur
+birds do — QO-100 carries a linear transponder, digital segments and a beacon — and each
+one counts wherever it belongs.
+
+Existing stars are untouched. This affects a first run only.
+
+### Fixed: satellite SSTV puts the radio in FM
+
+Clicking an SSTV row on the ISS — 145.800 "Mode V Imaging", 437.800 or 437.550 "Mode U -
+SSTV" — set the radio to USB. Every SSTV downlink in orbit is narrowband FM, so the
+picture arrived garbled. Satellite SSTV rows now set FM. HF SSTV is unaffected: it really
+is an SSB mode, and no satellite transmits SSTV below 30 MHz.
+
+### Known: a satellite that publishes an LSB downlink is still tuned USB
+
+FO-82 (NORAD 40320) declares its transponder downlink as LSB. Picking it sets the radio to
+USB and the uplink is then derived from that, so both ends come out on the wrong sideband.
+It is one bird, and the fix belongs with the wider transponder-tuning work rather than
+here.
 
 ## [0.25.0] — 2026-08-01
 

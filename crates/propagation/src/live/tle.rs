@@ -194,6 +194,30 @@ pub struct SatCatalogEntry {
     /// A decay date is on record upstream.
     #[serde(default)]
     pub decayed: bool,
+    /// What an operator WORKS this bird with, from the publisher's read of its
+    /// live amateur transmitters: any of `linear` (an SSB/CW transponder
+    /// passband), `fm` (an FM voice repeater), `digital` (a packet/data
+    /// channel pair) and `beacon` (a downlink and nothing else). A SET — 60 of
+    /// the 372 active amateur birds carry more than one (measured 2026-08-02
+    /// UTC), QO-100 carrying three at once, so a single "primary" label would
+    /// delete half of what is there, irrecoverably.
+    ///
+    /// `Option<Vec<_>>` rather than a bare `Vec`, and the distinction is the
+    /// whole point: `None` is NEVER CLASSIFIED, `Some([])` is CLASSIFIED WITH
+    /// NOTHING LEFT TO WORK (a bird alive in orbit whose every transmitter has
+    /// gone silent). A `#[serde(default)] Vec<String>` would collapse the two
+    /// into the same empty vec and force every consumer to guess which it was
+    /// looking at.
+    ///
+    /// `None` is not only the legacy case. It is a schema-1 manifest, the
+    /// Celestrak fallback leg, the installer's bundled seed snapshot until it
+    /// is re-cut — and a DOWNGRADE ROUND-TRIP: this catalog is persisted to
+    /// disk, so a build that predates the field re-serializes it away and the
+    /// next build up reads a cache with the classification silently gone.
+    /// Absence must therefore be inert on every surface downstream, not merely
+    /// tolerated once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classes: Option<Vec<String>>,
     /// Which mirror leg supplied this bird's elements — `None` when the
     /// publisher had none to give: either no source carried any (the whole
     /// point of the catalog — a bird known, alive, amateur and unfindable) or
@@ -762,10 +786,13 @@ BROKEN BIRD\r\n\
             "line2":"2 25544  51.6315  78.8506 0007211 358.5886   1.5081 15.49290909578688"}],
           "catalog":[
             {"norad":25544,"name":"ISS (ZARYA)","status":"alive","amateur":true,"decayed":false,
-             "src":"celestrak-amateur"},
-            {"norad":40320,"name":"FO-82","status":"alive","amateur":true,"decayed":false},
-            {"norad":40967,"name":"FOX-1A","status":"alive","amateur":false,"decayed":false},
-            {"norad":50988,"name":"TEVEL-1","status":"re-entered","amateur":true,"decayed":true}]
+             "classes":["digital"],"src":"celestrak-amateur"},
+            {"norad":40320,"name":"FO-82","status":"alive","amateur":true,"decayed":false,
+             "classes":["linear"]},
+            {"norad":40967,"name":"FOX-1A","status":"alive","amateur":false,"decayed":false,
+             "classes":[]},
+            {"norad":50988,"name":"TEVEL-1","status":"re-entered","amateur":true,"decayed":true,
+             "classes":["fm"]}]
         }"#;
         let m = parse_mirror_manifest(json).expect("schema 2 parses");
         assert_eq!(m.elements.len(), 1);
@@ -779,6 +806,7 @@ BROKEN BIRD\r\n\
                 status: "alive".into(),
                 amateur: true,
                 decayed: false,
+                classes: Some(vec!["digital".into()]),
                 src: Some("celestrak-amateur".into()),
             }
         );
@@ -797,6 +825,35 @@ BROKEN BIRD\r\n\
         assert_eq!(m.catalog[3].status, "re-entered");
         assert!(m.catalog[3].decayed);
         assert_eq!(m.catalog[3].src, None);
+        // The classification rides the same rows. The two answers that must
+        // never be confused both appear here: FOX-1A is CLASSIFIED with
+        // nothing left to work, and neither of them is an absence.
+        assert_eq!(
+            m.catalog[1].classes.as_deref(),
+            Some(["linear".to_string()].as_slice())
+        );
+        assert_eq!(
+            m.catalog[2].classes.as_deref(),
+            Some([].as_slice()),
+            "alive and silent: classified, and empty — NOT unclassified"
+        );
+    }
+
+    #[test]
+    fn a_catalog_without_classes_is_unclassified_and_never_guessed() {
+        // The payload every consumer must still cope with: schema 2 as it
+        // shipped before the classification existed, which is also what a
+        // downgrade round-trip leaves behind (an older build deserializes the
+        // catalog, drops the key it does not know, and writes the cache back
+        // without it) and what the Celestrak fallback leg has always served.
+        let json = r#"{"schema":2,"generated":"2026-07-31T00:00:00.000Z","elements":[],
+          "catalog":[{"norad":24278,"name":"JAS-2 (FO-29)","status":"alive","amateur":true,
+                      "decayed":false,"src":"celestrak-amateur"}]}"#;
+        let m = parse_mirror_manifest(json).expect("a pre-classification schema 2 still parses");
+        assert_eq!(
+            m.catalog[0].classes, None,
+            "absent is absent, never an empty set"
+        );
     }
 
     #[test]
@@ -822,6 +879,7 @@ BROKEN BIRD\r\n\
             status: "alive".into(),
             amateur: true,
             decayed: false,
+            classes: Some(vec!["fm".into(), "beacon".into()]),
             src: Some("celestrak-amateur".into()),
         };
         let json = serde_json::to_string(&entry).unwrap();
@@ -830,12 +888,29 @@ BROKEN BIRD\r\n\
             entry
         );
         assert!(!json.contains("null"), "an absent src is absent, not null");
+        // A round trip through OUR OWN cache must not lose the classification
+        // — this struct is Serialize as well as Deserialize precisely because
+        // the catalog is written back to disk on every refresh.
+        let unclassified = SatCatalogEntry {
+            classes: None,
+            ..entry
+        };
+        let json = serde_json::to_string(&unclassified).unwrap();
+        assert!(
+            !json.contains("classes"),
+            "an unclassified bird writes no key at all — an empty array would be a claim"
+        );
+        assert_eq!(
+            serde_json::from_str::<SatCatalogEntry>(&json).unwrap(),
+            unclassified
+        );
         // Only norad/name/status are required; the flags default.
         let thin: SatCatalogEntry =
             serde_json::from_str(r#"{"norad":7530,"name":"AO-7","status":"alive"}"#).unwrap();
         assert!(!thin.amateur);
         assert!(!thin.decayed);
         assert_eq!(thin.src, None);
+        assert_eq!(thin.classes, None);
     }
 
     // --- tle_fetch_target ----------------------------------------------------

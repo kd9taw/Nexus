@@ -126,6 +126,180 @@ describe('rankSatSeedCandidates — "most-workable ACTIVE birds"', () => {
   })
 })
 
+// --- the stratified quota --------------------------------------------------
+//
+// THE OPERATOR'S CASE, verbatim: "FO-29 was not in favorites, but it's
+// active." FO-29 is in the catalog, alive, amateur, with current elements —
+// it simply lost the pass-count race. It flies 13.53 rev/day in an
+// 800 × 1320 km ellipse; the birds that beat it fly ~15.3 rev/day at ~480 km,
+// so they show more passes over any grid, every day, forever. Run the real
+// predictor over the shipped catalog (six grids × four window starts,
+// 2026-08-02 UTC) and FO-29 lands between 2nd and 81st of the ~332 birds with
+// a workable pass, inside the geometry ten in 6 of the 24 runs: the SSB/CW
+// transponders — the only birds this operator can work with an SSB rig and a
+// hand-turned rotator — are not reliably last, they are reliably a coin toss.
+//
+// The bigger burial is what the ten is SPENT on: of the 367 birds in the
+// shipped catalog that carry elements, 305 are beacon-only telemetry cubesats
+// that cannot be worked at all, 18 of the top 20 by orbital rate are among
+// them, and 3 to 9 of each pure-geometry ten was beacon-only. So these
+// fixtures stack BOTH kinds of loser in front of FO-29 — the beacons that
+// dominate the real pool and the FM birds the operator named.
+describe('rankSatSeedCandidates — the ten span what the operator can WORK', () => {
+  /** n passes at a plausible peak elevation, spread across the window. */
+  const many = (name: string, norad: number, n: number, el = 40) =>
+    Array.from({ length: n }, (_, i) => pass(name, norad, el, i))
+
+  /** The real pool in miniature: beacon-only telemetry cubesats and FM birds
+   * in low orbits, every one of them out-passing the one linear bird. */
+  const buriedFo29 = () => {
+    const birds: Bird[] = []
+    const passes: ReturnType<typeof pass>[] = []
+    // 12 beacon-only cubesats — the class that actually fills the top of the
+    // pass-count table, and the class an operator cannot work at all.
+    for (let i = 0; i < 12; i++) {
+      const name = `CUBESAT-${String(i).padStart(2, '0')}`
+      birds.push(bird(name, 90200 + i, { classes: ['beacon'] }))
+      passes.push(...many(name, 90200 + i, 6, 55))
+    }
+    // 3 FM voice birds — workable, and still out-passing FO-29.
+    for (const [name, norad] of [
+      ['SO-50', 27607],
+      ['AO-91', 43017],
+      ['PO-101', 43678],
+    ] as const) {
+      birds.push(bird(name, norad, { classes: ['fm'] }))
+      passes.push(...many(name, norad, 5, 50))
+    }
+    // 2 packet birds.
+    for (const [name, norad] of [
+      ['ISS', 25544],
+      ['GREENCUBE', 53106],
+    ] as const) {
+      birds.push(bird(name, norad, { classes: ['digital'] }))
+      passes.push(...many(name, norad, 4, 45))
+    }
+    // …and the bird the operator actually wanted: a high elliptical linear
+    // transponder with the fewest passes in the set.
+    birds.push(bird('FO-29', 24278, { classes: ['linear'] }))
+    passes.push(...many('FO-29', 24278, 2, 35))
+    return view({ birds, passes })
+  }
+
+  it("stars FO-29 even though every other bird out-passes it — the operator's case", () => {
+    const picked = rankSatSeedCandidates(buriedFo29()).map((c) => c.name)
+    expect(picked).toHaveLength(SAT_SEED_CAP)
+    expect(picked).toContain('FO-29')
+  })
+
+  it('spends its ten on birds that can be worked before any beacon-only bird', () => {
+    // The half of the operator's ruling that "guarantee one linear bird"
+    // would have missed: beacon-only birds cannot be worked at ALL, so they
+    // are the LAST call on a star, not the first.
+    const classesOf = (name: string) =>
+      buriedFo29().birds.find((b) => b.name === name)?.classes ?? []
+    const picked = rankSatSeedCandidates(buriedFo29()).map((c) => c.name)
+    const beacons = picked.filter((n) => classesOf(n).includes('beacon'))
+    // 1 linear + 3 fm + 2 digital = 6 workable birds exist; the other four
+    // slots fall to the beacons, by rank.
+    expect(beacons).toHaveLength(4)
+    expect(picked.filter((n) => !classesOf(n).includes('beacon')).sort()).toEqual(
+      ['AO-91', 'FO-29', 'GREENCUBE', 'ISS', 'PO-101', 'SO-50'],
+    )
+  })
+
+  it('rotates the classes, so no single class takes the whole set', () => {
+    // Ten of each workable class available. The rotation gives 4 linear /
+    // 3 fm / 3 digital — never ten FM birds because FM happens to fly lower.
+    const birds: Bird[] = []
+    const passes: ReturnType<typeof pass>[] = []
+    const add = (cls: string, n: number, count: number, el: number) => {
+      for (let i = 0; i < 10; i++) {
+        const name = `${cls.toUpperCase()}-${String(i).padStart(2, '0')}`
+        birds.push(bird(name, n + i, { classes: [cls] }))
+        passes.push(...many(name, n + i, count, el))
+      }
+    }
+    add('fm', 91000, 8, 60) // the low fliers sweep the geometry rank …
+    add('digital', 92000, 6, 50)
+    add('linear', 93000, 2, 30) // … and the linear birds are last, as in life
+    const picked = rankSatSeedCandidates(view({ birds, passes })).map((c) => c.name)
+    const count = (p: string) => picked.filter((n) => n.startsWith(p)).length
+    expect(picked).toHaveLength(SAT_SEED_CAP)
+    expect([count('LINEAR'), count('FM'), count('DIGITAL')]).toEqual([4, 3, 3])
+  })
+
+  it('still returns ten when the whole workable set is ONE class', () => {
+    const birds: Bird[] = []
+    const passes: ReturnType<typeof pass>[] = []
+    for (let i = 0; i < 14; i++) {
+      const name = `FMBIRD-${String(i).padStart(2, '0')}`
+      birds.push(bird(name, 94000 + i, { classes: ['fm'] }))
+      passes.push(...many(name, 94000 + i, 14 - i, 40))
+    }
+    const picked = rankSatSeedCandidates(view({ birds, passes }))
+    expect(picked).toHaveLength(SAT_SEED_CAP)
+    // …and the geometry rank still orders them INSIDE that one class.
+    expect(picked.map((c) => c.name)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `FMBIRD-${String(i).padStart(2, '0')}`),
+    )
+  })
+
+  it('an UNCLASSIFIED catalog seeds exactly as it always did', () => {
+    // Not theoretical: the installer's bundled seed snapshot carries no
+    // classification until it is re-cut, the Celestrak fallback leg never
+    // carries one, and a build that predates this field rewrites the on-disk
+    // catalog WITHOUT it. All three must land on today's top-ten-by-passes.
+    const birds: Bird[] = []
+    const passes: ReturnType<typeof pass>[] = []
+    for (let i = 0; i < 14; i++) {
+      const name = `PLAIN-${String(i).padStart(2, '0')}`
+      birds.push(bird(name, 95000 + i)) // no `classes` key at all
+      passes.push(...many(name, 95000 + i, 14 - i, 40))
+    }
+    const v = view({ birds, passes })
+    const picked = rankSatSeedCandidates(v).map((c) => c.name)
+    expect(picked).toEqual(
+      // the pre-classification answer: most passes first, ties on elevation
+      [...v.birds]
+        .map((b) => b.name)
+        .sort()
+        .slice(0, SAT_SEED_CAP),
+    )
+  })
+
+  it('ranks an empty class list and an absent one alike — both behind a workable bird', () => {
+    // The two states the WIRE keeps apart (`[]` = classified with nothing left
+    // to work; absent = never classified) reach the same answer HERE, and that
+    // is the design, not an oversight: neither offers a class the rotation can
+    // place, so both fall to the residual in geometry rank. The test names it
+    // so nobody "fixes" one of them into jumping the queue.
+    //
+    // Both cases are run, side by side, precisely because a single case with
+    // one expectation would pass whether or not the code distinguished them.
+    const contender = (classes: string[] | undefined) =>
+      view({
+        birds: [
+          bird('LOUD-BUT-UNWORKABLE', 90500, classes === undefined ? {} : { classes }),
+          bird('RS-44', 44909, { classes: ['linear'] }),
+        ],
+        passes: [...many('LOUD-BUT-UNWORKABLE', 90500, 9, 70), ...many('RS-44', 44909, 1, 20)],
+      })
+    // One slot, and it goes to the workable bird in BOTH readings — even
+    // though the other bird has nine times the passes and twice the elevation.
+    expect(rankSatSeedCandidates(contender([]), 1).map((c) => c.name)).toEqual(['RS-44'])
+    expect(rankSatSeedCandidates(contender(undefined), 1).map((c) => c.name)).toEqual(['RS-44'])
+    // …and with room for both, the residual takes the loud one on geometry —
+    // again identically, and the returned order is rank order, not pick order.
+    for (const classes of [[], undefined] as (string[] | undefined)[]) {
+      expect(rankSatSeedCandidates(contender(classes), 2).map((c) => c.name)).toEqual([
+        'LOUD-BUT-UNWORKABLE',
+        'RS-44',
+      ])
+    }
+  })
+})
+
 describe('seedSatFavorites — once, ever', () => {
   const good = () =>
     view({

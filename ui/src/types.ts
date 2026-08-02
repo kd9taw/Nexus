@@ -392,6 +392,23 @@ export interface SatView {
      * work". Seeding requires it true; the Birds list marks alive-but-false
      * birds silent (satHealth.ts). */
     amateur?: boolean
+    /** What an operator WORKS this bird with, derived by the mirror publisher
+     * from the bird's live amateur transmitters: any of `'linear'` (an
+     * SSB/CW transponder passband), `'fm'` (an FM voice repeater),
+     * `'digital'` (a packet/data channel pair) and `'beacon'` (downlink only
+     * — nothing to work). A SET, not one label: QO-100 really does carry
+     * three at once (a linear transponder, digital segments and a beacon),
+     * and a bird with both an FM repeater and a linear transponder must not
+     * have half of itself thrown away.
+     *
+     * ABSENT = the catalog never classified this bird, and is NEVER a guess.
+     * That happens on an old mirror payload, on the installer's bundled seed
+     * snapshot until it is re-cut, on the Celestrak fallback leg, and after a
+     * downgrade round-trip (a build that predates this field rewrites the
+     * on-disk catalog without it). Every consumer must degrade to its
+     * pre-classification behaviour, never to a guessed class. An EMPTY array
+     * is a different answer: classified, with nothing live to work. */
+    classes?: string[] | null
   }[]
   /** Sorted by AOS; geometry only — no transponder/workability claim. */
   passes: SatPass[]

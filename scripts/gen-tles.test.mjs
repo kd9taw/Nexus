@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   assemble,
+  classifyTransmitter,
   deriveAmateurCatalog,
   FIXTURE_LIMITS,
   PROD_LIMITS,
@@ -132,6 +133,156 @@ test('the transmitter join falls back to NORAD when a record carries no sat_id',
   assert.equal(ao7.bandAmateur, true, '29.502 MHz is the 10 m satellite segment')
 })
 
+// --- what an operator works the bird with ----------------------------------
+
+test('a transmitter is classified by its TYPE, because mode cannot carry the class', () => {
+  // The census that decides this (measured 2026-08-02 UTC over the live API):
+  // 1100 ALIVE records are `Transmitter | FM` — FM-modulated telemetry
+  // beacons — against 26 `Transceiver | FM`, which are the actual repeaters. A
+  // mode-first rule publishes 1100 beacons as FM voice. `type` is 100%
+  // populated and is the only field that answers "can I put a signal INTO
+  // this": 0 of the 2788 alive `Transmitter` records carry an uplink.
+  const t = (type, mode) => classifyTransmitter({ type, mode })
+  assert.equal(t('Transmitter', 'FM'), 'beacon', 'an FM-modulated telemetry beacon is not a repeater')
+  assert.equal(t('Transmitter', 'CW'), 'beacon')
+  assert.equal(t('Transmitter', 'USB'), 'beacon', 'a downlink is not a transponder')
+  assert.equal(t('Transceiver', 'FM'), 'fm', 'SO-50 / AO-91: uplink + downlink + FM voice')
+  assert.equal(t('Transceiver', 'FMN'), 'fm', 'the other spelling SatNOGS uses')
+  assert.equal(t('Transceiver', 'DSTAR'), 'fm')
+  assert.equal(t('Transceiver', 'AFSK'), 'digital', 'the ISS APRS digipeater')
+  assert.equal(t('Transceiver', 'FSK AX.100 Mode 5'), 'digital', 'GREENCUBE packet')
+  assert.equal(t('Transceiver', 'GMSK'), 'digital')
+  assert.equal(t('Transponder', 'USB'), 'linear', 'FO-29 / RS-44 / AO-73')
+  assert.equal(t('Transponder', 'LSB'), 'linear', 'FO-82 files its downlink LSB')
+  assert.equal(t('Transponder', 'CW'), 'linear', "AO-7's Mode A CW segment")
+  assert.equal(t('Transponder', null), 'linear', "RS-44's record carries no mode at all")
+  // Absent/unseen shapes are reported as unclassifiable, never guessed.
+  assert.equal(t(undefined, 'FM'), null, 'no type, no class')
+  assert.equal(t('Telescope', 'FM'), null, 'an upstream type this table has not seen')
+})
+
+test('a Transponder is LINEAR even when SatNOGS files its mode as FM', () => {
+  // THE documented decision, pinned with the two counter-examples that force
+  // it. Upstream is genuinely ambiguous here: 9 of the 30 alive Transponder
+  // records say FM and 8 of those 9 describe an SSB or digimode segment of a
+  // linear transponder. Reading `mode` would file the two widest linear
+  // transponders in the sky as FM voice repeaters.
+  const t = (mode, description) => classifyTransmitter({ type: 'Transponder', mode, description })
+  assert.equal(t('FM', 'SSB Only Transpoder'), 'linear', 'QO-100 (43700), verbatim upstream')
+  assert.equal(t('FM', 'Mode H/U - Linear Transponder'), 'linear', '98533, verbatim upstream')
+  // The cost of the rule, stated out loud: the one genuine FM transponder in
+  // the set reads linear too. It flies on 98533, which carries two real
+  // linear transponders anyway, so the BIRD's classification is unchanged.
+  assert.equal(t('FM', 'Mode V/U - FM Transponder'), 'linear')
+  // `mode` IS trusted on a transponder for the narrower "does this leg carry
+  // DATA" question — 0 of the 5 alive data-mode transponder records is wrong,
+  // against 8 of 9 on the FM axis.
+  assert.equal(t('BPSK', 'BPSK400 Middle Beacon'), 'digital', "QO-100's beacon segments")
+  assert.equal(t('AFSK', 'Mode HF/U - Onboard SDR'), 'digital', '49402 is a data relay, not a passband')
+})
+
+test('an upstream type this build has never seen is NAMED in the job log', () => {
+  // The drop is real and deliberate — nothing is guessed — but it must not be
+  // silent: the bird keeps its row, its class set simply omits that leg, and
+  // the only place that can ever say so is this run. A whole population
+  // arriving under a new `type` would otherwise publish as "nothing to work
+  // here" with a clean log.
+  const { stats } = derive()
+  // The corpus classifies whole — and this also pins the two exclusions: its
+  // ORPHAN record carries no `type` AND no id to join on, so it reaches no
+  // bird and is not a classification drop.
+  assert.deepEqual(stats.unclassified, [], 'the fixture corpus classifies whole')
+
+  const tx = JSON.parse(read('satnogs-transmitters.json'))
+  const unseen = (uuid, type) => ({
+    uuid,
+    description: 'a shape this table has not met',
+    alive: true,
+    type,
+    status: 'active',
+    service: 'Amateur',
+    downlink_low: 145900000,
+    mode: 'FM',
+    norad_cat_id: 7530, // an existing bird: the POPULATION must not move
+  })
+  const withUnseen = [...tx, unseen('FIXTX1', 'Repeater'), unseen('FIXTX2', 'Repeater')]
+  // …and a DEAD one of the same shape, which must not cry wolf: a silent leg
+  // contributes no class either way.
+  withUnseen.push({ ...unseen('FIXTX3', 'Relay'), alive: false })
+
+  const { birds, stats: loud } = deriveAmateurCatalog(
+    JSON.parse(read('satnogs-satellites.json')),
+    withUnseen,
+    NOW,
+  )
+  assert.deepEqual(loud.unclassified, [['Repeater', 2]], 'named, counted, live only')
+  assert.deepEqual(
+    birds.find((b) => b.norad === 7530).classes,
+    ['linear', 'beacon'],
+    'the bird still publishes what IS classified — the unseen leg is omitted, not guessed',
+  )
+
+  const { log } = build({ transmitters: JSON.stringify(withUnseen) })
+  const line = log.find((l) => l.startsWith('UNCLASSIFIED:'))
+  assert.ok(line, `the run must say so — log was:\n${log.join('\n')}`)
+  assert.match(line, /2 live amateur transmitter record\(s\)/)
+  assert.match(line, /Repeater ×2/, 'the unseen value itself, so it can be looked up upstream')
+  assert.ok(
+    !build().log.some((l) => l.startsWith('UNCLASSIFIED:')),
+    'and says nothing at all on a clean run',
+  )
+})
+
+test('a bird carries the SET of classes its live transmitters add up to', () => {
+  const { birds } = derive()
+  const classes = (n) => birds.find((b) => b.norad === n)?.classes
+  // AO-7: a Mode A linear transponder AND a CW beacon — the multi-class case
+  // is not hypothetical, and a single "primary" label would delete half of it.
+  assert.deepEqual(classes(7530), ['linear', 'beacon'])
+  assert.deepEqual(classes(44909), ['linear'], 'RS-44, from a record with no mode at all')
+  assert.deepEqual(classes(27607), ['fm', 'beacon'], 'SO-50: the repeater and its telemetry')
+  assert.deepEqual(classes(43017), ['fm'], 'AO-91')
+  assert.deepEqual(classes(25544), ['digital'], 'the ISS APRS digipeater')
+  assert.deepEqual(classes(39444), ['beacon'], "AO-73's fixture record is telemetry only")
+  // Emission order is fixed, so the published bytes do not churn.
+  for (const b of birds) {
+    assert.deepEqual(
+      b.classes,
+      ['linear', 'fm', 'digital', 'beacon'].filter((c) => b.classes.includes(c)),
+      `${b.name} classes out of canonical order`,
+    )
+  }
+})
+
+test('a bird with nothing live left is classified EMPTY, never unclassified', () => {
+  // The sentinel this design refuses: `[]` says "we looked, there is nothing
+  // to work"; the field being ABSENT says "this payload predates the
+  // classification". They must never collapse into one value — a client that
+  // cannot tell them apart has to guess, which is the whole failure mode.
+  const { birds } = derive()
+  const ao85 = birds.find((b) => b.norad === 40967)
+  assert.equal(ao85.amateur, false, 'alive in orbit, every transmitter dead')
+  assert.deepEqual(ao85.classes, [], 'a real answer, and an empty one')
+  // …and a DEAD bird still says what it was, from the transmitters that are
+  // still marked live: the row exists so a ★ stays readable.
+  assert.deepEqual(birds.find((b) => b.norad === 53106).classes, ['beacon'])
+})
+
+test('every catalog row carries its classes, with or without elements', () => {
+  // Both row-emission sites must agree: the dedupe keeps whichever row it
+  // prefers, so a field on only one of them is a field that vanishes at random.
+  const { manifest } = build()
+  for (const row of manifest.catalog) {
+    assert.ok(Array.isArray(row.classes), `${row.name} (${row.norad}) has no classes`)
+  }
+  const withEls = manifest.catalog.find((r) => r.norad === 7530)
+  assert.ok(withEls.src, 'AO-7 has elements')
+  assert.deepEqual(withEls.classes, ['linear', 'beacon'])
+  const sourceless = manifest.catalog.find((r) => r.norad === 61999)
+  assert.equal(sourceless.src, undefined, 'and this one has none')
+  assert.deepEqual(sourceless.classes, ['beacon'])
+})
+
 // --- the union -------------------------------------------------------------
 
 test('the union publishes elements for exactly the ACTIVE amateur population', () => {
@@ -174,7 +325,14 @@ test('a bird that leaves the population keeps a row that says what happened', ()
   const row = (n) => manifest.catalog.find((b) => b.norad === n)
   assert.deepEqual(
     { ...row(53106) },
-    { norad: 53106, name: 'GREENCUBE', status: 'dead', amateur: true, decayed: false },
+    {
+      norad: 53106,
+      name: 'GREENCUBE',
+      status: 'dead',
+      amateur: true,
+      decayed: false,
+      classes: ['beacon'],
+    },
     'dead in orbit: status dead, its transmitter record still claims alive',
   )
   assert.equal(row(40967).status, 'alive')
@@ -298,6 +456,7 @@ test('per-bird status fields ride the catalog', () => {
     status: 'alive',
     amateur: true,
     decayed: false,
+    classes: ['digital'],
     src: 'celestrak-amateur',
   })
 })
