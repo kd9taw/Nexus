@@ -92,6 +92,7 @@ import {
   getXrayNow,
   getDxpedWindows,
   getSatSchedule,
+  getSatTrackStatus,
   getIssPass,
   getTleStatus,
   sstvArm,
@@ -124,6 +125,7 @@ import { processFlare, effectiveXray } from './flareAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
+import { tickSatPassAlert } from './features/satPassAlert'
 import { tickIssAutoArm } from './features/issAutoArm'
 import { satElementsLane } from './features/satLane'
 import { dxpedWorkMode } from './components/connect/paneFormat'
@@ -584,6 +586,40 @@ export default function App() {
         .catch(() => {})
     load()
     const id = setInterval(load, 30_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [])
+  // AOS/LOS alerts for the ARMED pass track ("Work this pass") — the operator
+  // armed it from Satellites but may be anywhere in the app when the bird
+  // rises, so the watch lives HERE, not in a view (every view-scoped poll dies
+  // with its view). 2 s matches the section's own cadence; the read is a mutex
+  // clone backend-side. Edge detection + all firing rules live in
+  // satPassAlert.ts; this effect only feeds it answers in arrival order.
+  useEffect(() => {
+    let live = true
+    // The 2 s tick can lap a slow answer, and a lapped answer applied late
+    // re-seeds the module's previous-track state with a dead pass as "live".
+    // The module's per-pass fired keys already make that harmless, but a
+    // straggler must still not REORDER the observed truth — drop it.
+    let issued = 0
+    let applied = 0
+    const load = () => {
+      const seq = ++issued
+      getSatTrackStatus()
+        .then((t) => {
+          if (!live || seq < applied) return
+          applied = seq
+          tickSatPassAlert(t, Math.floor(Date.now() / 1000), {
+            soundOff: settingsRef.current?.satPassAlertSoundOff === true,
+            rotPostPass: settingsRef.current?.rotPostPass ?? 'stop',
+          })
+        })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 2000)
     return () => {
       live = false
       clearInterval(id)

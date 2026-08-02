@@ -121,6 +121,24 @@ export function txEarcon(on: boolean): void {
   }
 }
 
+/** Pass-start (AOS) earcon for the ARMED satellite track (satPassAlert.ts): a
+ * rising three-tone. Three notes, not two, and frequencies no other alert
+ * uses (BEEP_HZ, the 990 Hz ⏰ alarm, the 660/880 TX pair) — the operator's
+ * hands are on a rotor and the sound alone must say which event this is. */
+export function aosEarcon(): void {
+  beep(523)
+  window.setTimeout(() => beep(784), 120)
+  window.setTimeout(() => beep(1046), 240)
+}
+
+/** Pass-end (LOS) earcon — the falling mirror of [`aosEarcon`], so rise and
+ * set are tellable apart blind. */
+export function losEarcon(): void {
+  beep(1046)
+  window.setTimeout(() => beep(784), 120)
+  window.setTimeout(() => beep(523), 240)
+}
+
 /** What the operator is currently doing in the FT8/FT4 sequencer — lets the
  * alerts stay quiet while they're already engaged (the chatty-popup fix). */
 export interface QsoContext {

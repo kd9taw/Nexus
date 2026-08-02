@@ -604,6 +604,10 @@ export interface SatTrackStatus {
   /** Where the bird RISES — from the pass, not a command. Honest during the
    * armed phase, under its own name. */
   aosAzDeg: number
+  /** How high the pass PEAKS (degrees) — from the pass geometry like aosAzDeg,
+   * so it is known for the whole track. The AOS alert (satPassAlert.ts) states
+   * the pass facts from this, without a second IPC fetch. */
+  maxElDeg: number
   /** Where the BIRD is, unrounded by rotator policy. The gap between this and
    * the commanded pair IS the tracking error — with a deadband in play the two
    * legitimately differ by a couple of degrees. Null until AOS: below the
@@ -2292,6 +2296,10 @@ export interface Settings {
   /** Minimum interval (ms) between corrections — the other half of the rate
    * limit. The radio is a serial device, not a socket. */
   satUpdateMs?: number
+  /** Audible AOS/LOS tones for the ARMED pass track (satPassAlert.ts). An OFF
+   * switch, inverted like satDopplerOff: absent/false = tones ON (the operator
+   * asked for audible). Silences only the tones — the popups always fire. */
+  satPassAlertSoundOff?: boolean
   /** Run the rigctld-compatible CAT broker so other apps share the radio. */
   catBroker: boolean
   /** TCP port the CAT broker listens on (Hamlib NET rigctl default 4532). */
