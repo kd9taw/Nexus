@@ -153,7 +153,13 @@ interface FieldDef {
 // Operator basics (band / dial / sideband are handled by FrequencyControl).
 const BASIC_FIELDS: FieldDef[] = [
   { key: 'mycall', label: 'Callsign', type: 'text', placeholder: 'KD9TAW', hint: 'Your station callsign (required).' },
-  { key: 'mygrid', label: 'Grid', type: 'text', placeholder: 'EN52', hint: 'Maidenhead locator.' },
+  {
+    key: 'mygrid',
+    label: 'Grid',
+    type: 'text',
+    placeholder: 'EN52xa',
+    hint: 'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.',
+  },
   { key: 'opName', label: 'Operator name', type: 'text', placeholder: 'Seth', hint: 'Used by the CW {NAME} macro and logging.' },
   { key: 'opState', label: 'State', type: 'text', placeholder: 'WI', hint: 'Your US state/province — the CW {MYSTATE} macro (ragchew QTH).' },
 ]

@@ -144,6 +144,10 @@ export function LogEntry({
   const [logCountry, setLogCountry] = useState('')
   // Callbook profile photo (display-only, not written to the log). Cleared when the call changes.
   const [logImage, setLogImage] = useState<string | null>(null)
+  // The callbook's exact coordinates for this call (display-only, like logImage, and
+  // cleared with it when the call changes). Absent whenever the callbook vouched for no
+  // real position — the card then falls back to the locator.
+  const [logCoords, setLogCoords] = useState<{ lat: number; lon: number } | null>(null)
   // POTA/SOTA park of the station worked (ota.their_*). Prefilled from a hunted spot; editable.
   const [logParkProgram, setLogParkProgram] = useState('POTA')
   const [logParkRef, setLogParkRef] = useState('')
@@ -225,6 +229,7 @@ export function LogEntry({
       setLogState('')
       setLogCountry('')
       setLogImage(null)
+      setLogCoords(null)
       setLogParkRef('') // the park was for the previous call
       // The wiped name may have been the CW decoder's copy — un-latch so it can refill for the
       // new call (declared below; the effect callback runs after render, so it's initialized).
@@ -439,6 +444,9 @@ export function LogEntry({
     if (r.state) setLogState((v) => (v.trim() ? v : r.state ?? ''))
     if (r.country) setLogCountry((v) => (v.trim() ? v : r.country ?? ''))
     setLogImage(r.image ?? null) // display-only; no operator value to preserve
+    // Same: display-only, and only when the callbook vouched for a REAL position (the
+    // backend refuses QRZ's grid-derived and DXCC-centroid fallbacks).
+    setLogCoords(r.lat != null && r.lon != null ? { lat: r.lat, lon: r.lon } : null)
     enrichedForRef.current = call.toUpperCase()
     // Feed the worked station's name/state to the engine for the {HISNAME}/{HISSTATE} CW-macro
     // tokens (keyed to the call so a stale lookup can't key the wrong name).
@@ -509,6 +517,7 @@ export function LogEntry({
     setLogState('')
     setLogCountry('')
     setLogImage(null)
+    setLogCoords(null)
     setLogParkRef('')
     void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // When the other-radio override is open, refresh its UTC time to now for the next contact
@@ -1048,6 +1057,8 @@ export function LogEntry({
         name={logName}
         qth={logQth}
         grid={logGrid}
+        lat={logCoords?.lat ?? null}
+        lon={logCoords?.lon ?? null}
         country={logCountry}
         image={logImage}
         myGrid={snap.mygrid}

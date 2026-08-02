@@ -5,6 +5,42 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed: the caller card's distance and bearing now agree with QRZ
+
+Work a station on Phone or CW and the card that appears when the call resolves reported a
+bearing that did not match the one on the station's QRZ page. The maths was right — the
+inputs were coarse. QRZ measures between the two stations' exact coordinates; Nexus was
+measuring between the centres of grid squares, and a square is a box, not a point.
+
+QRZ and HamQTH both hand us the station's real position in the same lookup that fills in
+the name and QTH, and Nexus was throwing it away. It now keeps it, and the caller card
+measures from it. Worked against a 4-character locator that is worth about a degree of
+bearing and a dozen miles — W1AW from EN52 read 823 mi · 89°, and now reads 835 mi · 88°,
+measured to the same pin QRZ computes its own figures from.
+
+Nexus only accepts a position the callbook actually vouches for. QRZ returns coordinates
+for every record, but tags where they came from — a real pin, a geocoded address, or a
+fallback back-derived from the grid square or the DXCC entity. The last of those can sit
+hundreds of miles from the station, so Nexus uses only the first two and falls back to the
+locator otherwise. A station with no position on file is unchanged.
+
+The larger half of the gap is your own grid. Everything is measured from where you say you
+are, and a 4-character locator says only "somewhere in this ~100-mile square" — so Nexus
+measures from the middle of it. On a DX path that costs about a degree, but on a station a
+couple of hours away it is worth up to ~30°, whatever the other end does, and it puts every
+distance out by up to ~60 miles at any range. The setup wizard used to tell you 4 characters
+was plenty. It no longer does, Settings says the same, and the caller card's tooltip now
+names whichever side is still a square instead of presenting the number as exact. Setting a
+6-character grid closes it.
+
+Distance is unchanged in method (great-circle, statute miles) and gains the same precision.
+The Operate roster's bearing column and the map are untouched. So is rotator pointing, which
+answers a deliberately different question — "point at this callsign's DXCC entity" — and
+still swings to the entity's nominal centre, not to the station. On DX that is within a
+beamwidth; for a stateside contact the two numbers are not meant to agree.
+
 ## [0.25.0] — 2026-08-01
 
 ### Fixed: torn-off windows open at a readable size

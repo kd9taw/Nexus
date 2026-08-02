@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { RecallPanel } from './RecallPanel'
 import { openQrzPage } from '../api'
-import { distanceLabel, bearingLabel } from '../grid'
+import { distanceLabel, bearingLabel, distanceLabelAt, bearingLabelAt, gridToLatLon } from '../grid'
 import type { CallHistory } from '../features/callHistory'
 import type { LoggedQso } from '../types'
 
@@ -115,6 +115,52 @@ describe('RecallPanel — the full card', () => {
     const geo = container.querySelector('.recall-geo')
     expect(geo, 'no distance/bearing line').not.toBeNull()
     expect(geo!.textContent).toBe(`${distanceLabel('EN52', 'FN31')} · ${bearingLabel('EN52', 'FN31')}`)
+  })
+
+  // Operator report 2026-08-01 (Phone + CW): "bearing does not match QRZ". QRZ computes
+  // from both stations' EXACT coordinates; the card was re-deriving the peer from the
+  // center of its grid square even when the lookup had handed us the real position.
+  it('computes from the callbook coordinates when the lookup vouched for a position', () => {
+    // W1AW's QRZ position (41.7147, -72.7272) against a 4-character FN31, whose center
+    // is ~60 km away: the card must show 835 mi · 88°, not the square's 823 mi · 89°.
+    const exact = { lat: 41.7147, lon: -72.7272 }
+    const { container } = render(
+      <RecallPanel call="W1ABC" band="20m" name="Alice" grid="FN31" lat={exact.lat} lon={exact.lon} myGrid="EN52" hist={hist()} />,
+    )
+    const me = gridToLatLon('EN52')!
+    const shown = container.querySelector('.recall-geo')!.textContent
+    expect(shown).toBe(`${distanceLabelAt(me, exact)} · ${bearingLabelAt(me, exact)}`)
+    // …and that is NOT what the grid square alone would have said.
+    expect(shown).not.toBe(`${distanceLabel('EN52', 'FN31')} · ${bearingLabel('EN52', 'FN31')}`)
+  })
+
+  it('falls back to the locator when the callbook vouched for no position', () => {
+    const { container } = render(
+      <RecallPanel call="W1ABC" band="20m" grid="FN31pr" lat={null} lon={null} myGrid="EN52" hist={hist()} />,
+    )
+    expect(container.querySelector('.recall-geo')!.textContent).toBe(
+      `${distanceLabel('EN52', 'FN31pr')} · ${bearingLabel('EN52', 'FN31pr')}`,
+    )
+  })
+
+  // A 4-character square is ±1° of longitude — up to ~29° of bearing on a close-in
+  // station. Saying which side is still a square is what keeps that visible rather
+  // than silently disagreeing with QRZ.
+  it('says so when a side is still a grid square, and stays quiet when neither is', () => {
+    const coarse = render(<RecallPanel call="W1ABC" band="20m" grid="FN31" myGrid="EN52" hist={hist()} />)
+    const t = coarse.container.querySelector('.recall-geo')!.getAttribute('title')!
+    expect(t).toContain('approximate')
+    expect(t).toContain('your EN52 square')
+    expect(t).toContain('their FN31 square')
+    expect(t).toContain('6-character grid in Settings')
+    cleanup()
+    // Operator on a 6-char grid, peer position exact: nothing to apologise for.
+    const sharp = render(
+      <RecallPanel call="W1ABC" band="20m" grid="FN31pr" lat={41.7147} lon={-72.7272} myGrid="EN52ab" hist={hist()} />,
+    )
+    expect(sharp.container.querySelector('.recall-geo')!.getAttribute('title')).toBe(
+      'Great-circle distance · true bearing from your QTH',
+    )
   })
 
   it('omits the geo line when my grid or theirs is unknown (no "NaN mi")', () => {
