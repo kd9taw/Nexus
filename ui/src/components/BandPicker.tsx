@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AppSnapshot, BandChannel } from '../types'
-import { getLicensedBandPlan, setFrequency } from '../api'
+import { getLicensedBandPlan, pickBand } from '../api'
 import { bandColor } from '../bandColors'
 
 interface Props {
@@ -14,10 +14,14 @@ interface Props {
 
 /**
  * Licensed-band dropdown for the CW/Phone cockpits: lists only the bands the operator may use
- * in the current mode (per their license class), and selecting one parks the VFO at the START
- * of their licensed segment (CW-segment start in CW, phone-segment start in Phone). Plus a
- * TX-LOCK chip when the current dial/mode is outside privileges (transmit hard-blocked by the
- * engine). Open-mode operators see all bands and never the lock.
+ * in the current mode (per their license class). Selecting one names the BAND to the engine
+ * (pickBand) rather than computing a dial here, so the pick can consult the per-(band, mode)
+ * dial memory: the VFO lands on the last dial used on that band in this mode THIS SESSION,
+ * and on the START of the licensed segment (CW-segment start in CW, phone-segment start in
+ * Phone) when there is none — the same dial this dropdown always sent. Explicit MHz entry
+ * (setFrequency) stays authoritative. Plus a TX-LOCK chip when the current dial/mode is
+ * outside privileges (transmit hard-blocked by the engine). Open-mode operators see all bands
+ * and never the lock.
  */
 export function BandPicker({ snap, mode, onSnap }: Props) {
   const [plan, setPlan] = useState<BandChannel[]>([])
@@ -26,9 +30,8 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
   }, [mode])
 
   const onPick = (band: string) => {
-    const ch = plan.find((c) => c.band === band)
-    if (!ch) return
-    void setFrequency(ch.dialMhz, ch.band, ch.mode)
+    if (!plan.some((c) => c.band === band)) return
+    void pickBand(band, mode)
       .then((s) => onSnap?.(s))
       .catch(() => {})
   }
@@ -48,7 +51,7 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
         className="band-picker-select"
         value={snap.radio.band}
         onChange={(e) => onPick(e.target.value)}
-        title="Band — jump to the start of your licensed segment on this band"
+        title="Band — your last frequency on this band in this mode this session, else the start of your licensed segment"
         style={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
       >
         {!known && <option value={snap.radio.band}>{snap.radio.band}</option>}

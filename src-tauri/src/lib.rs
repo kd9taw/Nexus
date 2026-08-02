@@ -8414,6 +8414,49 @@ fn set_frequency(
     Ok(eng.snapshot())
 }
 
+/// Park the dial on one of the APP's OWN fixed channels — the ISS SSTV auto-arm's 145.800 FM.
+/// Identical to `set_frequency` on the radio; it differs only in what the per-(band, mode)
+/// dial memory makes of it. An app-driven auto-tune is not the operator's dial in that mode,
+/// so it is never remembered — and the operator dial it displaces is banked on the way in
+/// (the auto-arm restores their own dial through `set_frequency` at LOS, because that one IS
+/// theirs). Persists, retunes, returns the snapshot.
+#[tauri::command(async)]
+fn tune_channel(
+    state: State<'_, SharedEngine>,
+    dial_mhz: f64,
+    band: String,
+    mode: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.tune_channel(dial_mhz, &band, &mode);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist frequency: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
+/// Band pick by NAME — the CW/Phone cockpit band dropdowns (`BandPicker`). The engine lands
+/// on the last dial the operator used on that band in that mode THIS SESSION, else the same
+/// licensed default the dropdown always used (`get_licensed_band_plan`'s own dial, so an
+/// unremembered band is byte-for-byte the old behaviour). Every explicit-frequency path keeps
+/// calling `set_frequency`: a typed MHz, a spot's frequency or a band-plan channel stays
+/// authoritative, with no memory overlay. `mode` = the cockpit's mode (race-safe on entry,
+/// like `get_licensed_band_plan`); None = the engine's current operating mode. Persists,
+/// retunes, returns the snapshot.
+#[tauri::command(async)]
+fn pick_band(
+    state: State<'_, SharedEngine>,
+    band: String,
+    mode: Option<String>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.pick_band(&band, mode.as_deref());
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist frequency: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Set the per-section operating mode — the rig-mode policy. "digital" obeys the rig
 /// (FT8/FT4 default); "phone" forces USB/LSB by band; "cw" forces CW. The phone/CW
 /// operating sections call this so the rig follows; the radio loop applies it on the
@@ -14114,6 +14157,8 @@ pub fn run() {
             set_license_class,
             get_licensed_band_plan,
             set_frequency,
+            pick_band,
+            tune_channel,
             set_operating_mode,
             work_spot,
             get_connection_log,
