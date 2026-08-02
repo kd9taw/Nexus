@@ -259,6 +259,43 @@ understated to what remained — and the cached scan repeated that answer for up
 minutes. The scan now looks back six hours, the same way the schedule always has: a pass
 in progress keeps its real rise time and its full peak. This also corrects the map view's
 pass pane and the first-run favorites seeding, which read the same scan.
+### Changed: the FT8 Classic view puts the decode window where you operate
+
+Field feedback from an advanced DX operator, running Nexus beside WSJT-X on an
+ultrawide: the Rx Frequency pane — the stream you actually run a QSO from — was a
+small box at the bottom of the side rail, and too much of the screen went to chrome.
+
+The Classic layout is now three columns: Band Activity on the left, a full-height
+Rx Frequency pane beside it with the Tx1–Tx6 message machine docked underneath —
+the same bottom-right geometry as WSJT-X — and the Stations roster on the right.
+Your own transmissions appear in the Rx Frequency stream in yellow, interleaved
+with the answers, so you click a call and watch the whole exchange line by line.
+Clicking a decode there does exactly what it does in Band Activity. A drag handle
+between the pane column and the roster lets you tune the balance; the split is
+remembered.
+
+The chrome got out of the way. The status line, the QSO panel's three rows and the
+permanent TX-meters line are now ONE compact strip under the waterfall. Call CQ /
+S&P and TX On / Tune / Stop TX / Hold Tx come first, anchored at the strip's left
+edge, and they hold the same position whether the strip is idle, mid-QSO or
+transmitting — the DX call appearing or the rig keying never moves Stop TX. After
+the buttons: the TX state and sequencer readout with the DX call and report, what
+is being sent now, the free text box (sized to the 13 characters it can actually
+hold), and — moved into the strip from the old status line — TX AUTO / Skip Tx1
+and the next-slot countdown, plus the SWR/ALC/Po/COMP meters in a fixed-width cell
+that shows live bars while transmitting and the dimmed last readings between
+overs, so nothing jumps when transmit starts. Every control that was on screen
+before is still on screen, always visible, just smaller and closer together. The
+header packs into one row on wide screens: the DXpedition mode is a dropdown,
+Spot and Pop out are icon buttons, Record QSO is a dot, and the memory chips keep
+to a single line.
+
+At ultrawide half-screen the strip is a single row and the Rx Frequency pane
+grows from roughly 15 visible decode lines to over 60; Band Activity and the
+roster both gain height. On a 1366x768 laptop the three columns hold and the
+strip wraps at a fixed point into two stable rows — buttons and readout above,
+sending/free-text/meters below; on narrow windows everything stacks in one
+column as before.
 
 ## [0.25.0] — 2026-08-01
 

@@ -177,11 +177,22 @@ const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
   roster: ['waterfall', 'callRoster', 'bandActivity', 'rxfreq', 'txmeters'],
 }
 
-/** Side-rail occupants per layout — the rail unmounts when all of them are removed. */
+/** Side-rail occupants per layout — the rail unmounts when all of them are removed.
+ *  Classic's rail is the Stations roster alone since the decode-first rebuild: the
+ *  Rx-Frequency pane + Tx machine hold their own middle column (.cockpit-qsocol). */
 const SIDE_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['txmsgs', 'rxfreq', 'stations'],
+  classic: ['stations'],
   roster: ['bandActivity', 'rxfreq'],
 }
+
+/** Classic three-column geometry: Band Activity | the promoted Rx-Frequency column
+ *  (decode pane + Tx1–Tx6 machine) | the Stations roster. Drives the populated-column
+ *  count (`data-cols`) so removing panels collapses the grid track-for-track. */
+const CLASSIC_COLUMNS: readonly (readonly OperatePanelId[])[] = [
+  ['bandActivity'],
+  ['rxfreq', 'txmsgs'],
+  ['stations'],
+]
 
 /**
  * The Operate cockpit — the nerve center's primary operating surface. The
@@ -238,10 +249,31 @@ export function OperateCockpit({
   // share-driven (`--pane-share`), so deleting Band Activity grows Rx Frequency to fill.
   const decodesSideRef = useRef<HTMLDivElement>(null)
   const rxfreqRef = useRef<HTMLDivElement>(null)
+  // Classic 3-col grid: the container (its template consumes the --op-col-a/-b
+  // fr tokens the column seam paints on it), the middle qsocol and the roster
+  // column — the x-axis seam splits the latter two.
+  const lowerClassicRef = useRef<HTMLDivElement>(null)
+  const qsocolRef = useRef<HTMLDivElement>(null)
+  const classicSideRef = useRef<HTMLElement>(null)
   // Only apply a stored share; an un-dragged pane keeps the CSS default proportions.
   const shareStyle = (id: OperatePanelId): React.CSSProperties | undefined => {
     const s = panels.layout.share[id]
     return s != null ? ({ '--pane-share': s } as React.CSSProperties) : undefined
+  }
+  // Persisted Classic column shares → fr tokens on the grid container (a grid template
+  // cannot read a var off its children). Keys: 'txmsgs' = the qsocol column (its Tx
+  // machine — deliberately NOT 'rxfreq', whose share the roster-mode y-seam already
+  // owns; sharing the key would let a roster drag silently reshape the Classic
+  // columns), 'stations' = the roster column. Undragged → the CSS defaults apply.
+  // Values are clamped on load by coercePanelLayout ([MIN_SHARE, 2−MIN_SHARE]).
+  const classicColStyle = (): React.CSSProperties | undefined => {
+    const a = panels.layout.share['txmsgs']
+    const b = panels.layout.share['stations']
+    if (a == null && b == null) return undefined
+    const s: Record<string, string> = {}
+    if (a != null) s['--op-col-a'] = `${a}fr`
+    if (b != null) s['--op-col-b'] = `${b}fr`
+    return s as React.CSSProperties
   }
   const source = snap.radio.source
 
@@ -384,6 +416,7 @@ export function OperateCockpit({
     side: SIDE_PANELS[layoutMode],
     main: layoutMode === 'roster' ? 'callRoster' : 'bandActivity',
     labels: PANEL_LABELS,
+    ...(layoutMode === 'classic' ? { columns: CLASSIC_COLUMNS } : {}),
   }
   const { shown, sideShown, dataCols, menuItems } = panelHost(panels, panelSpec)
   const wfState = stateOf('waterfall')
@@ -715,22 +748,24 @@ export function OperateCockpit({
         }}
         txState={false}
       >
-        {/* DXpedition special-op selector — compact 3-chip control, always visible
-            in both classic and roster layouts. Edits settings.specialOp. */}
-        <div className="cockpit-specialop" role="group" aria-label="DXpedition mode">
+        {/* DXpedition special-op selector — one compact select (was a 3-chip group;
+            header-density pass 2026-08), always visible in both layouts. Edits
+            settings.specialOp. */}
+        <div className="cockpit-specialop">
           <span className="cockpit-specialop-label">DXped:</span>
-          {SPECIAL_OPS.map((op) => (
-            <button
-              key={op.value}
-              type="button"
-              className={`cockpit-specialop-chip${specialOp === op.value ? ' active' : ''}`}
-              aria-pressed={specialOp === op.value}
-              onClick={() => handleSpecialOp(op.value)}
-              title={op.title}
-            >
-              {op.label}
-            </button>
-          ))}
+          <select
+            className="cockpit-specialop-select"
+            aria-label="DXpedition mode"
+            value={specialOp === 'superhound' ? 'hound' : specialOp}
+            onChange={(e) => handleSpecialOp(e.target.value as NonNullable<Settings['specialOp']>)}
+            title={SPECIAL_OPS.find((op) => op.value === (specialOp === 'superhound' ? 'hound' : specialOp))?.title}
+          >
+            {SPECIAL_OPS.map((op) => (
+              <option key={op.value} value={op.value} title={op.title}>
+                {op.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="cockpit-meta">
@@ -738,7 +773,7 @@ export function OperateCockpit({
             className="cockpit-source"
             role="group"
             aria-label="Signal source"
-            title={`Where decodes come from — ${snap.radio.sourceLabel || 'native engine'}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP ${companionAddr || '127.0.0.1:2237'}.`}
+            title={`Where decodes come from — active: ${snap.radio.sourceLabel || 'Native'}${source === 'companion' ? ` · listening ${companionAddr || '127.0.0.1:2237'}` : ''}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP ${companionAddr || '127.0.0.1:2237'}.`}
           >
             <button
               type="button"
@@ -759,10 +794,8 @@ export function OperateCockpit({
               ⇄ Companion
             </button>
           </div>
-          <span className="cockpit-source-label" title="Active decode source">
-            {snap.radio.sourceLabel || 'Native'}
-            {source === 'companion' && ` · listening ${companionAddr || '127.0.0.1:2237'}`}
-          </span>
+          {/* The active-source label folded into the source group's tooltip
+              (header-density pass 2026-08 — the label alone was ~220px). */}
           {/* DF readouts: type an exact audio offset and commit on Enter/blur
               (clamped to the 200–4000 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
           <div className="cockpit-offsets" role="group" aria-label="Audio offsets (Hz)">
@@ -783,13 +816,14 @@ export function OperateCockpit({
             className={`ph-rec${recording ? ' on' : ''}`}
             onClick={toggleRecord}
             disabled={recBusy}
+            aria-label={recording ? 'Stop recording this QSO' : 'Record QSO audio'}
             title={
               recording
-                ? 'Stop recording this QSO'
+                ? 'Recording — click to stop recording this QSO'
                 : 'Record the received audio to a WAV in the recordings folder'
             }
           >
-            {recording ? '■ Recording' : '● Record QSO'}
+            {recording ? '■' : '●'}
           </button>
           {snap.radio.splitTxMhz != null && (
             <span
@@ -805,7 +839,7 @@ export function OperateCockpit({
               className={`clt-opt${layoutMode === 'classic' ? ' active' : ''}`}
               aria-pressed={layoutMode === 'classic'}
               onClick={() => onLayoutMode('classic')}
-              title="Classic — WSJT-X layout (Band Activity dominant)"
+              title="Classic — WSJT-X layout (Band Activity + Rx Frequency pair, roster aside)"
             >
               Classic
             </button>
@@ -829,75 +863,31 @@ export function OperateCockpit({
           )}
           <button
             type="button"
-            className="cockpit-popout"
+            className="cockpit-popout icon"
             onClick={() => openSpot(dxCall || selectedCall || '')}
+            aria-label="Spot a callsign to the DX cluster"
             title="Spot a callsign to the DX cluster (opens a popup — call, frequency, comment)"
           >
-            📢 Spot
+            📢
           </button>
           {onPopOut && (
             <button
               type="button"
-              className="cockpit-popout"
+              className="cockpit-popout icon"
               onClick={onPopOut}
+              aria-label="Open Operate in its own window"
               title="Open Operate in its own window (for a second monitor)"
             >
-              ⧉ Pop out
+              ⧉
             </button>
           )}
         </div>
       </CockpitHeader>
 
-      <div className={`cockpit-status ${snap.radio.transmitting ? 'tx' : 'rx'}`}>
-        <span className="cs-state">
-          {snap.radio.transmitting ? '▲ TRANSMITTING' : snap.radio.txEnabled ? '▼ Receiving' : '■ TX off'}
-        </span>
-        {snap.radio.transmitting && snap.qso?.txNow && (
-          <span className="cs-msg mono">{snap.qso.txNow}</span>
-        )}
-        {/* Active DXpedition mode badge — prominent, next to the TX indicator */}
-        {specialOpBadge}
-        <span className="cs-spacer" />
-        <RotorStrip
-          active={active}
-          targetCall={selectedCall}
-          onPointAt={(call) =>
-            pointRotatorAtCall(call)
-              .then((bearing) => pushToast(`Rotator → ${call}: ${Math.round(bearing)}°`, 'info'))
-              .catch((e) => pushToast(`Rotator: ${e instanceof Error ? e.message : e}`, 'error'))
-          }
-        />
-        <button
-          type="button"
-          className={`cs-period${snap.radio.txCycleAuto ? ' is-auto' : ''}`}
-          onClick={() => {
-            // Cycle: Auto → lock 1st → lock 2nd → Auto.
-            if (snap.radio.txCycleAuto) onSetTxEven(true)
-            else if (snap.radio.txEven) onSetTxEven(false)
-            else onSetTxCycleAuto(true)
-          }}
-          title="Transmit cycle — click to cycle Auto → Tx 1st → Tx 2nd. Auto picks the opposite cycle of the station you answer; the station you work must be on the OPPOSITE period."
-        >
-          {snap.radio.txCycleAuto
-            ? `TX AUTO / ${snap.radio.txEven ? '1st' : '2nd'}`
-            : snap.radio.txEven
-              ? 'TX 1st / even'
-              : 'TX 2nd / odd'}
-        </button>
-        <button
-          type="button"
-          className={`cs-skiptx1${skipTx1 ? ' on' : ''}`}
-          aria-pressed={skipTx1}
-          onClick={() => handleSkipTx1(!skipTx1)}
-          title="Skip Tx1 — when you answer a CQ, open with your signal report (Tx2) instead of your grid (Tx1), saving a cycle. Standard callsigns only (a compound call still sends its grid). Resets each launch, like WSJT-X."
-        >
-          Skip Tx1
-        </button>
-        <span className="cs-next" title="Time to the next slot">
-          next {nextSlotSec}s
-        </span>
-      </div>
-
+      {/* The old .cockpit-status row is GONE — its TX-state/txNow display duplicated
+          the QSO strip's; its protected controls (period, Skip Tx1, next-Ns, HOUND
+          badge, rotor) merged INTO the strip below. ~42px of the reported blank gray
+          space lived here. */}
       <div className="cockpit-body" ref={bodyRef}>
         {/* Waterfall: a short full-width strip (not a tall column) — the spectrum
             is a glance tool; the real estate goes to the decode lists + roster. */}
@@ -937,7 +927,10 @@ export function OperateCockpit({
           </>
         )}
 
-        {/* Prominent operating bar: Call CQ / S&P / Now-sending / Resend / Tx5. */}
+        {/* THE merged operating strip (one row at lg/xl): state cap + sequencer +
+            Call CQ / S&P + the TX cluster + now-sending + Tx5 free text, PLUS the
+            controls absorbed from the deleted status row (period, Skip Tx1, next-Ns,
+            HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
           qso={snap.qso}
           radio={snap.radio}
@@ -956,17 +949,40 @@ export function OperateCockpit({
           onResend={onResend}
           onFreetext={onFreetext}
           onLog={onLog}
+          onSetTxEven={onSetTxEven}
+          onSetTxCycleAuto={onSetTxCycleAuto}
+          skipTx1={skipTx1}
+          onSkipTx1={handleSkipTx1}
+          nextSlotSec={nextSlotSec}
+          specialOpBadge={specialOpBadge}
+          rotor={
+            <RotorStrip
+              active={active}
+              targetCall={selectedCall}
+              onPointAt={(call) =>
+                pointRotatorAtCall(call)
+                  .then((bearing) => pushToast(`Rotator → ${call}: ${Math.round(bearing)}°`, 'info'))
+                  .catch((e) => pushToast(`Rotator: ${e instanceof Error ? e.message : e}`, 'error'))
+              }
+            />
+          }
+          // Transmit meters (SWR / ALC / Po / COMP): the old PERMANENT body row is
+          // gone (the operator's "eating up a whole line" complaint) — the same
+          // pinned semantics (live while keyed, last readings dimmed between overs)
+          // now render into the strip's fixed-width telemetry cell, so the FT TX
+          // cycle still cannot bounce the layout. Still a ⊞ Panels entry.
+          telemetry={shown('txmeters') ? <TxMeters radio={snap.radio} inline /> : undefined}
         />
-
-        {/* Transmit meters (SWR / ALC / Po / COMP) — PINNED: rendered permanently (live while
-            keyed, last readings dimmed between overs) so the FT TX cycle doesn't bounce the
-            layout every 15 s. A ⊞ Panels entry, so it can be hidden entirely. */}
-        {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
         {/* data-cols collapses the grid to ONE column once the main cell or the whole
             side rail is gone — otherwise the survivor keeps its 2fr/1fr track and the
             removed panel's space is never actually reclaimed. */}
-        <div className={`cockpit-lower ${layoutMode}`} data-cols={dataCols}>
+        <div
+          className={`cockpit-lower ${layoutMode}`}
+          data-cols={dataCols}
+          ref={layoutMode === 'classic' ? lowerClassicRef : undefined}
+          style={layoutMode === 'classic' ? classicColStyle() : undefined}
+        >
           {layoutMode === 'roster' ? (
             <>
               {/* Roster layout (GridTracker-style): the full sortable Call Roster is
@@ -1053,9 +1069,14 @@ export function OperateCockpit({
             </>
           ) : (
             <>
-              {/* Classic layout (WSJT-X two-pane): Band Activity takes the full
-                  left column; the compact Tx1–Tx6 message machine, Rx Frequency,
-                  and the Stations roster ride the side rail. */}
+              {/* Classic layout — DECODE-FIRST (2026-08 field feedback from an advanced
+                  DX operator): a three-column grid whose first two columns are the
+                  WSJT-X pair. Band Activity (col 1) beside the PROMOTED full-height
+                  Rx-Frequency pane — the QSO stream with the operator's own TX lines
+                  interleaved — with the compact Tx1–Tx6 machine docked beneath it
+                  (col 2, WSJT-X's bottom-right geometry), and the Stations roster as
+                  col 3. Click a call in either pane, watch the exchange line-by-line
+                  in col 2, next TX visible right below. */}
               {shown('bandActivity') && (
                 <div className="cockpit-decodes panel">
                   <OperateDecodes
@@ -1073,8 +1094,31 @@ export function OperateCockpit({
                   />
                 </div>
               )}
-              {sideShown && (
-                <aside className="cockpit-side">
+              {(shown('rxfreq') || shown('txmsgs')) && (
+                <div className="cockpit-qsocol" ref={qsocolRef}>
+                  {shown('rxfreq') && (
+                    <div className="cockpit-rxfreq panel">
+                      {/* Identical decodeClickProps spread as Band Activity — click
+                          parity is free and STAYS free because the props are shared,
+                          never forked (guarded by OperateCockpit.structure.test). */}
+                      <OperateDecodes
+                        history={rxHistRef.current}
+                        decodes={snap.recentDecodes}
+                        slot={snap.radio.slot}
+                        rxOffsetHz={snap.radio.rxOffsetHz}
+                        band={snap.radio.band}
+                        tier={tier}
+                        harqRescues={snap.harqRescues}
+                        onCall={onCall}
+                        needAlertsByCall={needAlertsByCall}
+                        {...decodeClickProps}
+                        onErase={() => notifyErase(1)}
+                        lockedFilter="rx"
+                        compact
+                        title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
+                      />
+                    </div>
+                  )}
                   {shown('txmsgs') && (
                     <TxPanel
                       compact
@@ -1094,26 +1138,29 @@ export function OperateCockpit({
                       qsoMacros={qsoMacros}
                     />
                   )}
-                  {shown('rxfreq') && (
-                    <div className="cockpit-rxfreq panel">
-                      <OperateDecodes
-                        history={rxHistRef.current}
-                        decodes={snap.recentDecodes}
-                        slot={snap.radio.slot}
-                        rxOffsetHz={snap.radio.rxOffsetHz}
-                        band={snap.radio.band}
-                        tier={tier}
-                        harqRescues={snap.harqRescues}
-                        onCall={onCall}
-                        needAlertsByCall={needAlertsByCall}
-                        {...decodeClickProps}
-                        onErase={() => notifyErase(1)}
-                        lockedFilter="rx"
-                        compact
-                        title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
-                      />
-                    </div>
+                  {/* Column seam: lets the operator tune the pair/roster balance by
+                      drag. Not a grid CHILD (that would burn a track/cell) and not
+                      inside the aside (whose overflow clips): it rides the qsocol's
+                      right edge, overlaying the grid gap, via absolute CSS. The drag
+                      paints --op-col-a/-b fr tokens on the grid container — which
+                      ONLY the three-column template consumes, so the seam renders
+                      only at data-cols='three' (at 'two' the drag would be visually
+                      dead while still rewriting the persisted shares). */}
+                  {dataCols === 'three' && (
+                    <SplitterSeam
+                      above={qsocolRef}
+                      below={classicSideRef}
+                      axis="x"
+                      columnsOn={lowerClassicRef}
+                      varName="--op-col"
+                      onCommit={(av, bv) => panels.setShares({ txmsgs: av, stations: bv })}
+                      label="Rx Frequency column / Stations roster"
+                    />
                   )}
+                </div>
+              )}
+              {sideShown && (
+                <aside className="cockpit-side" ref={classicSideRef}>
                   {shown('stations') && <div className="cockpit-roster panel">{roster}</div>}
                 </aside>
               )}

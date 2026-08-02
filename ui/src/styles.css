@@ -7619,6 +7619,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: 0.74rem;
   min-width: 3.2em;
 }
+/* Inline telemetry-cell variant (the Operate strip's fixed-width .cq-telemetry):
+   pinned semantics in cell geometry — narrower bar floor so SWR/ALC/Po/COMP fit
+   the 21em cell, zero padding (the cell/strip own the spacing). */
+.ph-txmeters.inline {
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 1px var(--space-2);
+  padding: 0;
+}
 /* Between overs: keep the last readings visible but clearly not live. */
 .ph-txmeters.idle .ph-txmeter-fill {
   opacity: 0.35;
@@ -11361,7 +11369,9 @@ select.settings-input {
 .layout.single.operate-cockpit {
   display: flex;
   flex-direction: column;
-  gap: var(--gap);
+  /* Density pass (2026-08 field feedback): --space-2 (8px), not var(--gap) 12px —
+     five vertical gaps in the stack, and every reclaimed px is a decode row. */
+  gap: var(--space-2);
   min-height: 0;
   overflow: hidden;
 }
@@ -11657,30 +11667,23 @@ select.settings-input {
   font-weight: 600;
   white-space: nowrap;
 }
-.cockpit-specialop-chip {
+/* One compact select (header-density pass 2026-08 — was a 3-chip group ~180px). */
+.cockpit-specialop-select {
   font-size: 0.72rem;
   font-weight: 700;
-  padding: 2px var(--space-2);
+  padding: 2px var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
   color: var(--text-dim);
   cursor: pointer;
-  transition: var(--transition);
-  white-space: nowrap;
 }
-.cockpit-specialop-chip:hover {
+.cockpit-specialop-select:hover {
   border-color: var(--accent);
   color: var(--text);
 }
-.cockpit-specialop-chip.active {
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg-elev));
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 800;
-}
 
-/* Active DXpedition mode badge — shown next to the TX indicator in cockpit-status. */
+/* Active DXpedition mode badge — shown in the merged operating strip. */
 .cockpit-specialop-badge {
   font-size: 0.7rem;
   font-weight: 900;
@@ -11743,17 +11746,8 @@ select.settings-input {
   color: var(--accent-ink);
   background: var(--accent);
 }
-.cockpit-source-label {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-dim);
-  white-space: nowrap;
-  /* Cap + ellipsize so the long Companion address ("Companion · listening 127.0.0.1:2237")
-     can't push the control row wide enough to clip the trailing controls. */
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* (.cockpit-source-label removed 2026-08: the active-source echo folded into the
+   source group's tooltip — the label alone was ~220px of header width.) */
 .cockpit-offsets {
   display: inline-flex;
   align-items: center;
@@ -11880,7 +11874,7 @@ select.settings-input {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--gap);
+  gap: var(--space-2); /* density pass — see .layout.single.operate-cockpit */
 }
 /* Waterfall: a SHORT full-width strip (a glance tool), not a tall column — the
    real estate goes to the decode lists + roster below. */
@@ -11925,6 +11919,29 @@ select.settings-input {
 .cockpit-lower[data-cols='one'] {
   grid-template-columns: minmax(0, 1fr);
 }
+/* DECODE-FIRST Classic (2026-08 field feedback): THREE columns — Band Activity |
+   the promoted Rx-Frequency column (decode pane + Tx1–Tx6 machine) | the Stations
+   roster. The WSJT-X pair takes ~75% of the width; every track is minmax so no
+   min-content floor can force horizontal blow-out. Columns 2/3 consume the
+   --op-col-a/-b fr tokens the column seam (SplitterSeam axis='x') paints on this
+   container, so the operator tunes the pair/roster balance by drag; undragged,
+   the 0.95fr/0.72fr defaults apply. Tighter 8px gap (density pass). */
+.cockpit-lower.classic {
+  grid-template-columns:
+    minmax(0, 1.15fr)
+    minmax(300px, var(--op-col-a, 0.95fr))
+    minmax(260px, var(--op-col-b, 0.72fr));
+  gap: var(--space-2);
+}
+/* Populated-column collapse (data-cols is the COUNT the cockpit derives): the
+   survivors flow into the smaller generic template in source order, exactly the
+   old two→one collapse semantics. */
+.cockpit-lower.classic[data-cols='two'] {
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 1fr);
+}
+.cockpit-lower.classic[data-cols='one'] {
+  grid-template-columns: minmax(0, 1fr);
+}
 .cockpit-side {
   display: flex;
   flex-direction: column;
@@ -11949,15 +11966,154 @@ select.settings-input {
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: minmax(0, 1fr);
 }
+/* The classic data-cols overrides above are 3-specific selectors, so the narrow
+   stack needs its own 3-specific rule AFTER them or the columns crush at phone /
+   pinned-zoom widths. Source order: BA → qsocol (Rx pane + Tx machine) → roster. */
+[data-viewport='sm'] .cockpit-lower.classic,
+[data-viewport='xs'] .cockpit-lower.classic {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
+}
 
-/* Side column: compact QSO strip on top, Band Activity (the big scroller), then
-   the Call Roster — all visible at once, single-screen Operate. */
+/* THE merged operating strip (decode-first rebuild 2026-08): ONE ~36px row at
+   xl — Call CQ/S&P · TX cluster · TX/RX state cap · sequencer state/DX call ·
+   now-sending · capped free text · HOUND/rotor · period/Skip Tx1 · next-Ns ·
+   telemetry cell. The button clusters come FIRST (position stability: the six
+   panic-adjacent controls must not move as QSO/TX state changes — every member
+   sharing their row edge resolves a state-independent width, see
+   operate-classic-grid.test.ts + OperateQsoStrip.geometry.test). It absorbed
+   the deleted .cockpit-status row (whose TX-state + txNow display duplicated
+   this strip's) — merging rows WITHIN the always-visible protected strip is
+   arrangement, not hiding. Wraps below xl at the deliberate .cq-break point,
+   never at a content-dependent spot mid-QSO. */
 .cockpit-qso {
   flex: none;
-  padding: var(--space-2) 10px;
+  padding: 3px 10px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  /* Explicit row: the strip also carries .panel, whose flex-direction: column
+     would otherwise win the cascade and stack the one-row strip into a clipped
+     column jumble. Pinned by operate-classic-grid.test.ts (computed winner). */
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px var(--space-2);
+}
+/* The ▲ TRANSMITTING pulse moved here from the deleted status row — the strip
+   goes loud while keyed (the double-click feedback), same animation. */
+.cockpit-qso.tx {
+  border-color: var(--tx);
+  animation: cockpit-tx-pulse 1s ease-in-out infinite;
+}
+@keyframes cockpit-tx-pulse {
+  0%, 100% { background: color-mix(in srgb, var(--tx) 12%, var(--bg-elev-2)); }
+  50% { background: color-mix(in srgb, var(--tx) 26%, var(--bg-elev-2)); }
+}
+.cq-statecap {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.cockpit-qso.rx .cq-statecap {
+  color: var(--state-good, #29c281);
+}
+.cockpit-qso.tx .cq-statecap {
+  color: var(--tx);
+}
+/* Deliberate wrap point (graft of the two-row discipline): hidden at xl ONLY,
+   where the one row always fits; everywhere below it forces the break BETWEEN
+   the buttons+readout and the sending/free-text/period tail — a stable second
+   row instead of a content-dependent wrap mid-QSO. lg is deliberate too: it
+   spans effective 1600–2400 and includes the 1366x768 laptop (85 % auto-fit →
+   effective 1607), where the one-row minimum plus the HOUND badge or rotor
+   strip overflows and wrapped at an arbitrary member — measured 38→70 px
+   mid-QSO before this rule. Tier decision pinned by operate-classic-grid.test. */
+.cq-break {
+  flex-basis: 100%;
+  height: 0;
+}
+[data-viewport='xl'] .cq-break {
+  display: none;
+}
+/* Transmit-period + Skip Tx1 + next-slot countdown — absorbed from the status row
+   (cs-* → cq-*), enablement unchanged (they never disabled on rx-only tiers). */
+.cq-period,
+.cq-next {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The countdown's digit count ticks every second ('next 9s' ↔ 'next 14s'): a
+   fixed floor (covers 'next 999s' at its 0.72rem font) keeps the period and
+   Skip Tx1 pills from shifting with the clock in the end-anchored tail. */
+.cq-next {
+  min-width: 5em;
+}
+button.cq-period {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+button.cq-period:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+button.cq-skiptx1 {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px var(--space-2);
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+button.cq-skiptx1:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+button.cq-skiptx1.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* Fixed-width TX telemetry cell — the "meters eating a whole line" fix. The pinned
+   row is GONE; the same pinned semantics (live while keyed, dimmed last readings
+   between overs) render into this cell at the strip's right end. The FIXED em
+   width is the invariant: constant flex basis = zero geometry change per 15s TX
+   cycle — the same anti-bounce mechanism commit 722ef273 shipped, at zero
+   vertical cost. Meters now spend spare WIDTH in a row that exists anyway. */
+.cq-telemetry {
+  flex: none;
+  width: 21em;
+  min-width: 0;
+  overflow: hidden;
+}
+/* TX cluster density — SCOPED to the strip: .op-btn/.op-controls are shared with
+   the TopBar and RoamPanel, an unscoped shrink would bleed there. Shrinking only:
+   same place, same handlers, always visible (dock law allows styling, forbids
+   hiding/relocating). ~24px tall vs the old 32px. */
+.cockpit-qso .op-controls {
+  padding: 2px;
+}
+.cockpit-qso .op-btn {
+  min-height: 24px;
+  padding: 3px var(--space-2);
+  font-size: 11px;
+}
+/* The toggle's label flips TX On ↔ TX Off (incl. the automatic disable after 73):
+   a fixed floor keeps Tune / Stop TX / Hold Tx from shifting with it. em at the
+   button's own 11px font — sized to 'TX Off' plus padding. */
+.cockpit-qso .op-btn.monitor {
+  min-width: 5.4em;
 }
 /* WSJT-X Tx1–Tx6 standard-message panel (Classic layout): DX Call/Grid +
    Generate on the left, the six message rows (next-dot · text · Tx button)
@@ -12119,9 +12275,37 @@ select.settings-input {
 .tx-panel-compact .txp-dx-actions {
   flex: 1 1 100%;
 }
-/* Classic rail with the Tx machine on top: Rx Frequency and Stations become
-   equal flex fillers (both scroll internally) so the content-sized Tx panel
-   above them can't push the roster off the bottom. No px floors — the panes
+/* The promoted Rx-Frequency column (grid col 2): decode pane above (the grower —
+   the QSO stream the operator runs the contact from), the content-sized Tx1–Tx6
+   machine docked beneath (WSJT-X bottom-right geometry). position:relative hosts
+   the absolute column seam on its right edge (the seam overlays the grid gap —
+   it must NOT be a grid child, that would burn a track/cell). No px floors. */
+.cockpit-qsocol {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* Column seam (SplitterSeam axis='x'): a full-height grab line over the 8px grid
+   gap between the pair column and the roster. Drags paint --op-col-a/-b on the
+   grid container; commit persists via panels.setShares (clamped on load). */
+.cockpit-qsocol > .pane-splitter.col-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -10px;
+  width: 12px;
+  cursor: col-resize;
+}
+/* Stacked layouts: a column drag is meaningless, hide the seam. */
+[data-viewport='sm'] .pane-splitter.col-seam,
+[data-viewport='xs'] .pane-splitter.col-seam {
+  display: none;
+}
+/* Inside the column: Rx Frequency is the flex filler (scrolls internally) so the
+   content-sized Tx panel beneath can't starve it. No px floors — the panes
    shrink freely and their inner scrollers absorb overflow; the whole UI
    fit-scales (useScale) so at normal sizes everything stays comfortably
    visible, and only genuinely tiny windows fall back to internal scroll. */
@@ -12165,6 +12349,14 @@ select.settings-input {
 }
 .cockpit-lower.classic .tx-panel-compact .txp-btn {
   padding: 1px var(--space-2);
+}
+/* Qsocol density: DX Call / Grid / Generate / Clear share ONE row when the column
+   is wide enough (the actions stop forcing their own 100% row and the fields'
+   128px flex-basis wraps them naturally when it isn't). ~40px back. The six Tx
+   rows are KEPT even when empty — they are the Alt+1–6 map and WSJT-X parity;
+   collapsing them would shift layout mid-QSO. */
+.cockpit-lower.classic .tx-panel-compact .txp-dx-actions {
+  flex: 0 1 auto;
 }
 .cockpit-lower.classic .cockpit-roster .filter-row {
   padding: var(--space-1) var(--space-2);
@@ -12373,6 +12565,14 @@ select.settings-input {
 .dxped-popout:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* Icon-only Spot / Pop-out (header-density pass 2026-08): 24px square-ish targets,
+   the verb moved to the title tooltip + aria-label. */
+.cockpit-popout.icon {
+  padding: 2px 7px;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  min-height: 24px;
 }
 /* The 2D/3D map-mode toggle — groups to the right next to Pop-out. */
 .connect-3d-toggle {
@@ -12950,86 +13150,11 @@ select.settings-input {
   margin: auto;
 }
 
-/* TX/RX status strip — the at-a-glance "is it working" line under the cockpit
-   bar. Goes loud red while transmitting (the double-click feedback). */
-.cockpit-status {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 5px 14px;
-  font-size: 0.78rem;
-  font-weight: 800;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-soft);
-  background: var(--bg-elev-2);
-}
-.cockpit-status .cs-spacer {
-  flex: 1;
-}
-.cockpit-status .cs-state {
-  letter-spacing: 0.04em;
-}
-.cockpit-status.rx .cs-state {
-  color: var(--state-good, #29c281);
-}
-.cockpit-status.tx {
-  border-color: var(--tx);
-  background: color-mix(in srgb, var(--tx) 16%, var(--bg-elev-2));
-  animation: cockpit-tx-pulse 1s ease-in-out infinite;
-}
-.cockpit-status.tx .cs-state {
-  color: var(--tx);
-}
-@keyframes cockpit-tx-pulse {
-  0%, 100% { background: color-mix(in srgb, var(--tx) 12%, var(--bg-elev-2)); }
-  50% { background: color-mix(in srgb, var(--tx) 26%, var(--bg-elev-2)); }
-}
-.cockpit-status .cs-msg {
-  color: var(--tx);
-  font-weight: 700;
-}
-.cockpit-status .cs-period,
-.cockpit-status .cs-next {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-}
-/* The transmit-period indicator is a clickable toggle (Tx 1st/even ↔ 2nd/odd). */
-.cockpit-status button.cs-period {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elev-2);
-  padding: 2px var(--space-2);
-  cursor: pointer;
-  letter-spacing: 0.02em;
-}
-.cockpit-status button.cs-period:hover {
-  color: var(--text);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-/* Skip Tx1 (WSJT-X parity) toggle — sits beside the TX AUTO/1st/2nd control; the
-   auto-sequence group. Highlights (accent fill) when armed. */
-.cockpit-status button.cs-skiptx1 {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elev-2);
-  color: var(--text-dim);
-  padding: 2px var(--space-2);
-  cursor: pointer;
-  letter-spacing: 0.02em;
-}
-.cockpit-status button.cs-skiptx1:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-.cockpit-status button.cs-skiptx1.on {
-  color: var(--accent-ink);
-  background: var(--accent);
-  border-color: var(--accent);
-}
+/* The old .cockpit-status strip is GONE (decode-first rebuild 2026-08): its
+   TX-state/txNow display duplicated the merged .cockpit-qso strip's, and its
+   protected controls (period, Skip Tx1, next-Ns, HOUND badge, rotor) moved into
+   that strip as cq-* classes. ~42px of the reported blank gray space lived here.
+   operate-classic-grid.test.ts holds the negative census. */
 
 /* DXCC country on a roster row. */
 .station-country {
@@ -13037,18 +13162,7 @@ select.settings-input {
   font-weight: 600;
 }
 
-/* --- compact inline QSO sequencer strip --- */
-.cq-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.cq-title {
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  color: var(--text-faint);
-}
+/* --- the merged operating strip's members (see .cockpit-qso above) --- */
 .cq-state {
   font-size: 0.72rem;
   font-weight: 700;
@@ -13108,14 +13222,18 @@ select.settings-input {
   gap: 6px;
 }
 .cq-role {
-  padding: 6px var(--space-4);
+  /* Density pass (operator: "huge buttons that could be far smaller") — ~24px
+     tall, same place, same handlers, always visible. Shrinking is styling;
+     hiding or relocating would break the dock law. */
+  padding: 3px 10px;
   border: 1px solid var(--accent);
   background: var(--bg-elev-2);
   color: var(--text);
-  font-size: 0.84rem;
+  font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0.02em;
   border-radius: var(--radius-sm);
+  white-space: nowrap;
 }
 .cq-role:hover {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
@@ -13138,10 +13256,18 @@ select.settings-input {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+  padding: 2px var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--bg-elev-2);
   border: 1px solid var(--border-soft);
+  /* FIXED basis, never a grower (position stability): a growing now-cell splits
+     row surplus with .cq-spacer, so every readout-width change would shift the
+     free-text/Log group. 22em fits the longest FT8/FT4 message; the message
+     ellipsizes inside; shrink engages only under overflow (which is itself
+     state-independent — everything on that row has fixed width). .cq-spacer is
+     the strip's single absorber. */
+  flex: 0 1 22em;
+  min-width: 0;
 }
 .cq-now.stalled {
   border-color: var(--state-bad, #e5484d);
@@ -13187,11 +13313,15 @@ select.settings-input {
 .cq-free {
   display: flex;
   gap: 6px;
+  flex: none;
 }
 .cq-free input {
-  flex: 1;
+  /* Capped, never a grower: the free-text payload maxes at 13 chars (maxLength),
+     so a full-width row was pure surplus — 16ch covers it with slack, and the
+     shrink basis lets a tight row squeeze it before wrapping. */
+  flex: 0 1 16ch;
   min-width: 0;
-  padding: 5px var(--space-2);
+  padding: 3px var(--space-2);
   border: 1px solid var(--border);
   background: var(--bg-elev-1);
   color: var(--text);
@@ -13205,7 +13335,7 @@ select.settings-input {
 }
 .cq-free button {
   flex: none;
-  padding: 5px var(--space-3);
+  padding: 3px var(--space-3);
   border: 1px solid var(--accent);
   background: var(--accent);
   color: var(--accent-ink);
@@ -13218,7 +13348,7 @@ select.settings-input {
 }
 .cq-log {
   flex: none;
-  padding: 5px var(--space-3);
+  padding: 3px var(--space-3);
   border: 1px solid var(--state-good, #29c281) !important;
   background: color-mix(in srgb, var(--state-good, #29c281) 18%, transparent) !important;
   color: var(--state-good, #29c281) !important;
@@ -16488,15 +16618,18 @@ button.sat-chip:disabled {
    so the header height is capped no matter how many favorites exist. */
 .mem-strip {
   display: flex;
-  flex-wrap: wrap;
+  /* ONE 26px row (density pass 2026-08 — the operator's "massive icons" header
+     complaint): chips never wrap, surplus chips scroll horizontally inside the
+     strip. Still hard-capped so the header-growth bug stays dead. */
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-1);
   flex: 0 1 auto;
   min-width: 0;
   max-width: 40rem;
-  max-height: 52px; /* ~two chip rows — the hard cap that fixes the header-growth bug */
-  overflow-y: auto;
-  overflow-x: hidden;
+  max-height: 26px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .mem-strip-label {
   font-size: 0.68rem;

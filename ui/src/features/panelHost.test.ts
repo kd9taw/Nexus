@@ -36,6 +36,25 @@ describe('panelHost', () => {
     expect(panelHost(api({ sideA: 'removed', sideB: 'removed' }), spec).sideShown).toBe(false)
   })
 
+  it('columns spec: dataCols is the POPULATED-column count (the 3-col Classic grid)', () => {
+    const spec3: PanelHostSpec<P> = {
+      ...spec,
+      columns: [['main'], ['sideA'], ['sideB']],
+    }
+    expect(panelHost(api({}), spec3).dataCols).toBe('three')
+    // One column emptied → the survivors flow into the 2-track template.
+    expect(panelHost(api({ sideA: 'removed' }), spec3).dataCols).toBe('two')
+    // Two emptied → single column.
+    expect(panelHost(api({ main: 'removed', sideB: 'removed' }), spec3).dataCols).toBe('one')
+    // A column with ANY shown occupant stays populated (popped still holds a slot).
+    const shared: PanelHostSpec<P> = { ...spec, columns: [['main'], ['sideA', 'sideB']] }
+    expect(panelHost(api({ sideA: 'removed', sideB: 'popped' }), shared).dataCols).toBe('two')
+    // Everything removed still renders a one-column region, never a zero-track grid.
+    expect(
+      panelHost(api({ main: 'removed', sideA: 'removed', sideB: 'removed' }), spec3).dataCols,
+    ).toBe('one')
+  })
+
   it('menuItems mirror the spec menu order, labels, and live state', () => {
     const h = panelHost(api({ sideB: 'removed' }), spec)
     expect(h.menuItems).toEqual([

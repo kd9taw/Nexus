@@ -19,6 +19,11 @@ export interface PanelHostSpec<P extends string> {
   readonly main: P
   /** Display label per panel. */
   readonly labels: Record<P, string>
+  /** Optional N-column geometry (the 3-col Classic grid): each entry lists the panels
+   *  that populate one column. When present, `dataCols` becomes the POPULATED-column
+   *  count — survivors flow into the smaller generic template exactly as the old
+   *  two→one collapse did. */
+  readonly columns?: readonly (readonly P[])[]
 }
 
 export interface PanelHost<P extends string> {
@@ -29,9 +34,10 @@ export interface PanelHost<P extends string> {
   sideShown: boolean
   /** The main-cell panel still shown. */
   mainShown: boolean
-  /** 'two' when both the main cell and the rail hold content, else 'one' (grid collapse
-   *  so the big pane reclaims the space). */
-  dataCols: 'one' | 'two'
+  /** Populated-region count for the grid collapse. Without a `columns` spec: 'two'
+   *  when both the main cell and the rail hold content, else 'one'. With one: the
+   *  populated-column count ('one' | 'two' | 'three'), floored at 'one'. */
+  dataCols: 'one' | 'two' | 'three'
   /** Ready-made PanelsMenu items for this layout. */
   menuItems: Array<{ id: P; label: string; state: PanelState }>
 }
@@ -47,11 +53,17 @@ export function panelHost<P extends string>(
   const shown = (id: P) => api.stateOf(id) !== 'removed'
   const mainShown = shown(spec.main)
   const sideShown = spec.side.some(shown)
+  const COUNT = ['one', 'one', 'two', 'three'] as const
+  const dataCols = spec.columns
+    ? COUNT[Math.max(1, spec.columns.filter((col) => col.some(shown)).length)]
+    : mainShown && sideShown
+      ? 'two'
+      : 'one'
   return {
     shown,
     sideShown,
     mainShown,
-    dataCols: mainShown && sideShown ? 'two' : 'one',
+    dataCols,
     menuItems: spec.menu.map((id) => ({ id, label: spec.labels[id], state: api.stateOf(id) })),
   }
 }
