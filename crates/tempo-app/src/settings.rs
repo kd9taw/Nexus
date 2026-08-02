@@ -35,12 +35,20 @@ pub enum OperatingMode {
 /// mode is transmitting into the satellite's output passband — the single
 /// rudest thing you can do on a linear bird.
 ///
-/// The default is [`SatVfoMap::Off`]: no mapping means no Doppler writes to the
-/// radio at all. A station must OPT IN to having its VFOs driven.
+/// This governs the **UPLINK**. The downlink needs no mapping: correcting the
+/// receive dial cannot transmit, so it follows the pass automatically (see
+/// [`Settings::sat_doppler_downlink`]) and the only mapping that stops it is
+/// [`SatVfoMap::UplinkOnly`], where the operator has said their one VFO IS the
+/// transmit leg. The default is [`SatVfoMap::Off`] — no uplink mapping chosen,
+/// so nothing is ever written to a transmit VFO — and choosing one is only half
+/// the consent: [`Settings::sat_uplink_radios`] records WHICH RADIO it was
+/// chosen for, because a mapping is a fact about one station's wiring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum SatVfoMap {
-    /// Doppler does not touch the radio (default — fail safe).
+    /// No uplink mapping — Doppler corrects the receive dial and writes
+    /// nothing to a transmit VFO (default — fail safe on the leg that can
+    /// cause harm).
     #[default]
     Off,
     /// Half-duplex, receive only: one VFO, corrected for the downlink. The
@@ -85,13 +93,13 @@ impl Settings {
 }
 
 impl SatVfoMap {
-    /// Does this mapping drive the radio at all?
-    pub fn active(self) -> bool {
-        !matches!(self, SatVfoMap::Off)
-    }
-
     /// Is the uplink under Doppler control in this mapping? (False for
     /// downlink-only, where we must never write a transmit frequency.)
+    ///
+    /// NOT the whole uplink consent on its own — the mapping also has to have
+    /// been confirmed for the radio that will receive the write. Ask
+    /// [`Settings::sat_doppler_uplink`], which is the one place both halves
+    /// are checked together.
     pub fn drives_uplink(self) -> bool {
         matches!(
             self,
@@ -103,16 +111,16 @@ impl SatVfoMap {
         )
     }
 
-    /// Is the downlink under Doppler control?
+    /// Is the RECEIVE dial Doppler's to correct under this mapping?
+    ///
+    /// True for every mapping except [`SatVfoMap::UplinkOnly`] — including
+    /// [`SatVfoMap::Off`], which means "no uplink mapping", not "hands off the
+    /// radio". Correcting the dial cannot transmit: the worst case is that the
+    /// operator does not hear the bird. Uplink-only is the one operator
+    /// statement that the single VFO in play is the TRANSMIT leg, and moving it
+    /// to the downlink there would be the wrong write.
     pub fn drives_downlink(self) -> bool {
-        matches!(
-            self,
-            SatVfoMap::DownlinkOnly
-                | SatVfoMap::ADownBUp
-                | SatVfoMap::AUpBDown
-                | SatVfoMap::MainDownSubUp
-                | SatVfoMap::MainUpSubDown
-        )
+        !matches!(self, SatVfoMap::UplinkOnly)
     }
 
     /// True when the pair rides Main/Sub rather than VFO A/B — the IC-9700's
@@ -127,12 +135,11 @@ impl SatVfoMap {
 /// never has to infer "is Doppler live?" from which fields happen to be null.
 ///
 /// The rotor half is decided at arm time (the loop captures its rotator
-/// address once); the Doppler half needs ALL THREE consents the tick itself
-/// needs — `sat_doppler` on, a VFO mapping other than [`SatVfoMap::Off`], AND
-/// a held transponder (without one `Engine::sat_doppler_tick` no-ops every
-/// tick: there is nothing to tune). The settings pair tracks a mid-pass
-/// toggle exactly as the behaviour does; the transponder half means an
-/// operator who picked "None — leave the dial to me" is never told Doppler
+/// address once); the Doppler half is `drives_a_leg` — [`Settings::sat_doppler_downlink`]
+/// or [`Settings::sat_doppler_uplink`], re-read every tick so a mid-pass change
+/// moves label and behaviour together — AND a held transponder (without one
+/// `Engine::sat_doppler_tick` no-ops every tick: there is nothing to tune), so
+/// an operator who picked "None — leave the dial to me" is never told Doppler
 /// owns a dial the engine will not touch. Four values:
 ///
 /// - `"rotor+doppler"` — both surfaces consented (the full appliance role)
@@ -141,21 +148,172 @@ impl SatVfoMap {
 /// - `"pass-only"`     — neither: pass state and geometry only, which is legal
 ///   and useful for timing — the label says so instead of pretending more
 ///
+/// WHICH LEG is deliberately not encoded here: the two legs are separately
+/// consented now, and one string cannot carry two facts without lying about
+/// one of them. The DTO reports them as their own fields (`dopplerDownlink` /
+/// `dopplerUplink`) and this stays the rotor-vs-radio label.
+///
 /// This is a LABEL, never a gate: the actual refusals live in
 /// `sat_doppler_tick` (radio) and the loop's rotor branch (mast). Pure so the
 /// whole table is testable outside the shell.
-pub fn sat_track_mode(
-    has_rotor: bool,
-    sat_doppler: bool,
-    map: SatVfoMap,
-    has_transponder: bool,
-) -> &'static str {
-    let doppler = sat_doppler && map.active() && has_transponder;
+pub fn sat_track_mode(has_rotor: bool, drives_a_leg: bool, has_transponder: bool) -> &'static str {
+    let doppler = drives_a_leg && has_transponder;
     match (has_rotor, doppler) {
         (true, true) => "rotor+doppler",
         (true, false) => "rotor-only",
         (false, true) => "doppler-only",
         (false, false) => "pass-only",
+    }
+}
+
+/// What Nexus can honestly PROPOSE for the uplink half on the radio in use —
+/// the input to the readiness rail's one-time confirmation.
+///
+/// A confident default for a known full-duplex rig is not a licence to guess
+/// for an unknown one: [`SatUplinkOffer::Confirm`] is only ever returned for a
+/// layout the rig can express in exactly one way AND that this build can
+/// actually drive. Everything else asks, or offers nothing. Nothing here
+/// WRITES a mapping — the operator's click does that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SatUplinkOffer {
+    /// No uplink to propose: one VFO (no full duplex), or a radio we cannot
+    /// identify. Doppler corrects the downlink and the transmit VFO stays the
+    /// operator's, unless they map it themselves.
+    Nothing,
+    /// Full duplex, but WHICH VFO carries which leg is this station's wiring —
+    /// ask, never guess.
+    Ask,
+    /// Derived from the connected rig, unambiguously: pre-fill this and let
+    /// the operator confirm it once.
+    Confirm(SatVfoMap),
+}
+
+/// Hamlib model numbers for the Icom satellite rigs whose SATELLITE MODE fixes
+/// transmit on Sub — so `Main = downlink / Sub = uplink` is the only
+/// full-duplex layout they can express (`Engine::sat_split_tx_vfo` refuses the
+/// reverse for exactly that reason). Numbers anchored on
+/// `tempo_audio::rigmodels` (`model = 1000 * backend + index`, append-only in
+/// Hamlib): IC-9700, IC-910, IC-9100, IC-905. Duplicated rather than imported
+/// because `tempo-app` does not depend on `tempo-audio` — the arrow points the
+/// other way.
+const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
+
+/// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the
+/// VFO pair is A/B and which one is the uplink is a station wiring choice no
+/// model string answers. FT-847, FT-736R, TS-2000, TS-790.
+const FULL_DUPLEX_AB_RIGS: [u32; 4] = [1001, 1010, 2014, 2007];
+
+impl Settings {
+    /// Is the RECEIVE dial Doppler's to correct?
+    ///
+    /// The operator's off switch, and the one mapping that claims the dial for
+    /// the transmit leg. Deliberately NOT gated on a per-radio confirmation:
+    /// this leg only ever moves the receive VFO, and the worst it can do is
+    /// leave the operator unable to hear the bird. Nothing can transmit from
+    /// here.
+    ///
+    /// The remaining preconditions are structural, not settings: the engine
+    /// tunes nothing without a HELD transponder and a dial a pass actually
+    /// owns (`Engine::steer_sat_dial` refuses otherwise), so a station that
+    /// never opens Satellites is untouched by all of this.
+    pub fn sat_doppler_downlink(&self) -> bool {
+        !self.sat_doppler_off && self.sat_vfo_map.drives_downlink()
+    }
+
+    /// Is the TRANSMIT VFO Doppler's to correct — on the radio that would
+    /// actually receive the write?
+    ///
+    /// BOTH halves, in one place: a mapping that drives the uplink, and that
+    /// mapping confirmed for the ACTIVE radio (the rig the split one-shot
+    /// lands on). Callers re-ask every tick rather than latching at arm time —
+    /// a handoff can put a different rig under the split mid-pass, and a
+    /// confirmation granted for the IC-9700 says nothing about the FTdx10.
+    pub fn sat_doppler_uplink(&self) -> bool {
+        !self.sat_doppler_off
+            && self.sat_vfo_map.drives_uplink()
+            && self.sat_uplink_confirmed(self.active_radio)
+    }
+
+    /// Has the operator confirmed the current mapping for this radio?
+    ///
+    /// `None` in [`Settings::sat_uplink_radios`] is TRANSIENT pre-migration
+    /// state — a file from before per-radio confirmation, before
+    /// [`Settings::load`] resolves what it meant — and it confirms NOTHING:
+    /// an unresolved consent must fail safe on the leg that transmits. (It
+    /// used to mean the honoured station-wide grant, but an in-memory
+    /// sentinel with no serialized representation died on the first
+    /// save+relaunch; the migration now MATERIALIZES the live legacy grant
+    /// as concrete ids instead, so post-load this field is always `Some`.)
+    /// Every write records the radio, and a removed radio's entry is pruned
+    /// with it ([`Settings::ensure_routing_targets`]) because freed ids are
+    /// reused.
+    pub fn sat_uplink_confirmed(&self, radio_id: u32) -> bool {
+        match &self.sat_uplink_radios {
+            None => false,
+            Some(ids) => ids.contains(&radio_id),
+        }
+    }
+
+    /// Record the operator's uplink mapping confirmation for `radio_id` —
+    /// their click, never inferred. (A transient pre-migration `None` simply
+    /// becomes the explicit list: the operator is stating the mapping for
+    /// the radio in front of them.)
+    ///
+    /// A CHANGE of mapping retires every OTHER radio's confirmation. What a
+    /// radio was confirmed for is a specific mapping, and the mapping is one
+    /// field: leaving the other ids in place would have a second rig driving
+    /// its uplink under a layout nobody ever confirmed for it — the exact
+    /// wrong-uplink shape the enumeration exists to prevent. Re-confirming the
+    /// SAME mapping is not a change and leaves the others alone.
+    ///
+    /// The operator-facing writer is `Engine::confirm_sat_uplink` — the pass
+    /// rail's confirmation and Settings ▸ Radio's mapping select both invoke
+    /// it (the `confirm_sat_uplink` command), and `Engine::apply_settings`
+    /// treats the pair as live state it captures across a form save, so this
+    /// rule has exactly one operator-facing entry point.
+    pub fn confirm_sat_uplink(&mut self, radio_id: u32, map: SatVfoMap) {
+        if self.sat_vfo_map != map {
+            self.sat_uplink_radios = Some(Vec::new());
+        }
+        self.sat_vfo_map = map;
+        let ids = self.sat_uplink_radios.get_or_insert_with(Vec::new);
+        if !ids.contains(&radio_id) {
+            ids.push(radio_id);
+        }
+    }
+
+    /// What can honestly be proposed for the uplink on the ACTIVE radio.
+    ///
+    /// Derived from the rig's Hamlib model — the identity Nexus persists per
+    /// profile. The native CI-V broker can answer the same question by READING
+    /// satellite mode (`16 5A`) off the radio, which is better evidence, but it
+    /// lives in the device layer and only after a split has been attempted;
+    /// this is the model table one crate away from it, named as such.
+    ///
+    /// A Main/Sub rig is only proposed while `icom_native_cat` owns its CI-V
+    /// port: that is the path that engages satellite mode and select-writes the
+    /// Sub band. Served by Hamlib rigctld instead, the reliable recipe
+    /// (`U SATMODE 1` then per-VFO writes) is not wired — pre-filling a mapping
+    /// this build may not drive would offer a one-click confirmation for an
+    /// uplink the rail would then claim and never write.
+    pub fn sat_uplink_offer(&self) -> SatUplinkOffer {
+        let (model, native) = self
+            .radios
+            .iter()
+            .find(|p| p.id == self.active_radio)
+            .map(|p| (p.rig_model, p.icom_native_cat))
+            .unwrap_or((self.rig_model, self.icom_native_cat));
+        if MAIN_SUB_SAT_RIGS.contains(&model) {
+            return if native {
+                SatUplinkOffer::Confirm(SatVfoMap::MainDownSubUp)
+            } else {
+                SatUplinkOffer::Ask
+            };
+        }
+        if FULL_DUPLEX_AB_RIGS.contains(&model) {
+            return SatUplinkOffer::Ask;
+        }
+        SatUplinkOffer::Nothing
     }
 }
 
@@ -570,15 +728,51 @@ pub struct Settings {
     #[serde(default)]
     pub rot_allow_flip: bool,
 
-    /// SATELLITE DOPPLER — master switch. Off by default: a station with no
-    /// satellite interest must never have its dial moved by a pass.
+    /// SATELLITE DOPPLER — the operator's OFF switch. Absent (false) = correct
+    /// the downlink during a pass, which is what arming one and holding a
+    /// transponder asks for.
+    ///
+    /// The polarity is inverted deliberately. This replaced a `satDoppler`
+    /// OPT-IN that defaulted off, and every settings file written before 0.26
+    /// carries `"satDoppler": false` whether or not its operator ever saw the
+    /// switch — so flipping that default would have reached nobody, least of
+    /// all the station that reported "I armed a pass and Doppler did not
+    /// tune". An absent field is the only honest "never said". The old key
+    /// never seeds THIS switch; [`Settings::load`] reads it for exactly one
+    /// thing — deciding whether a pre-0.26 mapping was a live uplink grant or
+    /// an inert pick (see the consent migration there).
+    ///
+    /// An off SWITCH is fine; a default-off GATE is not. This stops both legs.
     #[serde(default)]
-    pub sat_doppler: bool,
-    /// Which VFO carries which leg. **This is the setting that can transmit on
+    pub sat_doppler_off: bool,
+    /// Which VFO carries the UPLINK. **This is the setting that can transmit on
     /// your own downlink if it is wrong**, so it is explicit, enumerated and
-    /// operator-visible rather than inferred — see [`SatVfoMap`].
+    /// operator-visible rather than inferred — see [`SatVfoMap`]. The downlink
+    /// needs no mapping ([`Settings::sat_doppler_downlink`]).
     #[serde(default)]
     pub sat_vfo_map: SatVfoMap,
+    /// The radios `sat_vfo_map` has been CONFIRMED for, by `RadioProfile::id`.
+    ///
+    /// A VFO mapping is a fact about one station's wiring, and the satellite
+    /// path routes: peg-lock, a routing rule or a mid-pass handoff can put a
+    /// different rig under the split than the one the operator was looking at
+    /// when they chose. So the consent carries the radio it was granted for,
+    /// and [`Settings::sat_doppler_uplink`] re-checks it against the rig that
+    /// will actually receive the write.
+    ///
+    /// `None` = TRANSIENT pre-migration state (a file with no key — pre-0.26
+    /// — or a `null`), and it confirms nothing: [`Settings::load`] always
+    /// resolves it, so post-load this is `Some`. A pre-0.26 file whose
+    /// retired `satDoppler` master switch was on beside an uplink-driving
+    /// mapping (the pair that actually drove the transmit VFO pre-upgrade)
+    /// has its station-wide grant MATERIALIZED as the ids of every radio in
+    /// the file — durable across save/load, prunable with removed radios —
+    /// and every other loaded file normalizes to `Some(vec![])`: a mapping
+    /// picked while the master was off drove nothing, and drives nothing now
+    /// until a radio is confirmed. A fresh install reaches the uplink only
+    /// through a confirmation, which writes the list.
+    #[serde(default)]
+    pub sat_uplink_radios: Option<Vec<u32>>,
     /// Minimum correction (Hz) worth sending to the radio. Below this the dial
     /// is left alone: continuous CI-V writes fight the operator's knob and
     /// saturate the bus for a shift nobody can hear. 0 = send every update.
@@ -1992,8 +2186,9 @@ impl Default for Settings {
             rot_cal_az_deg: 0.0,
             rot_cal_el_deg: 0.0,
             rot_allow_flip: false,
-            sat_doppler: false,
+            sat_doppler_off: false,
             sat_vfo_map: SatVfoMap::Off,
+            sat_uplink_radios: None,
             sat_min_shift_hz: default_sat_min_shift_hz(),
             sat_update_ms: default_sat_update_ms(),
             cat_broker: false,
@@ -2368,11 +2563,22 @@ impl Settings {
     /// rig. A merely DISABLED radio keeps its rules (unplugging a rig for the afternoon must not
     /// delete the routing table; `route_radio` skips a disabled target at resolve time instead).
     /// Idempotent; called on load, on every save, and after `remove_radio`.
+    ///
+    /// ALSO prunes `sat_uplink_radios`, and for a harder reason than the rules:
+    /// `add_radio_profile` allocates max(id)+1 over SURVIVING profiles, so a
+    /// freed id is REUSED — a consent entry that outlived its radio would hand
+    /// the next rig added a Main/Sub uplink confirmation it never got, and the
+    /// engine would drive its transmit VFO on it. A stale rule merely never
+    /// fires; a stale consent transmits. (A transient pre-migration `None`
+    /// has no ids to prune and confirms nothing; `load` resolves it.)
     pub fn ensure_routing_targets(&mut self) {
         let live: Vec<u32> = self.radios.iter().map(|p| p.id).collect();
         self.routing_rules.retain(|r| live.contains(&r.radio));
         if self.default_radio.is_some_and(|id| !live.contains(&id)) {
             self.default_radio = None;
+        }
+        if let Some(ids) = self.sat_uplink_radios.as_mut() {
+            ids.retain(|id| live.contains(id));
         }
     }
 
@@ -2587,6 +2793,16 @@ impl Settings {
     /// bad file is set aside as a sibling `.corrupt` file for recovery, then defaults
     /// apply.
     pub fn load(path: &Path) -> Self {
+        // The RETIRED `satDoppler` opt-in, read from the raw file before serde
+        // discards it as an unknown key. It is dead as a switch (the downlink
+        // no longer asks), but it is the one signal that separates a pre-0.26
+        // mapping that actually DROVE the uplink (master on) from one that was
+        // picked and never enabled (master off — the pass rail rendered the
+        // mapping select unconditionally, so that state is one click away).
+        // Consumed by the consent migration below, and by nothing else — in
+        // particular it must never seed `sat_doppler_off`, or the polarity
+        // flip would reach nobody.
+        let mut legacy_sat_doppler: Option<bool> = None;
         let mut s: Settings = match std::fs::read_to_string(path) {
             // Missing file: a normal first run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
@@ -2603,7 +2819,17 @@ impl Settings {
                 Settings::default()
             }
             Ok(text) => match serde_json::from_str(&text) {
-                Ok(s) => s,
+                Ok(s) => {
+                    #[derive(Deserialize)]
+                    struct LegacyDoppler {
+                        #[serde(rename = "satDoppler")]
+                        sat_doppler: Option<bool>,
+                    }
+                    legacy_sat_doppler = serde_json::from_str::<LegacyDoppler>(&text)
+                        .ok()
+                        .and_then(|l| l.sat_doppler);
+                    s
+                }
                 Err(e) => {
                     // Corrupt file: preserve the evidence (best-effort — defaults are
                     // still the right fallback even if the rename fails).
@@ -2678,9 +2904,48 @@ impl Settings {
                     && seen.insert(h.to_ascii_lowercase())
             })
             .collect();
+        // Migration: SATELLITE UPLINK CONSENT (0.26). A file with no
+        // `satUplinkRadios` key predates per-radio confirmation. Its mapping
+        // was only ever a live uplink grant when the retired `satDoppler`
+        // master switch was ALSO on — with the master off (or absent), the
+        // pair drove nothing, and promoting it now would put an unconfirmed
+        // uplink on the transmit VFO the first time the operator launches this
+        // build. So:
+        //   * live pair  (satDoppler == true AND a mapping that drives the
+        //     uplink) → the real station-wide grant: MATERIALIZED below, once
+        //     the roster exists, as concrete consent for every radio in the
+        //     file. The operator keeps their uplink and is never re-asked on
+        //     the radios they had; a radio added later asks like any second
+        //     radio. Materializing (rather than keeping the in-memory `None`
+        //     sentinel) is what lets the grant survive save+relaunch: save()
+        //     wrote `None` as `"satUplinkRadios": null` while dropping the
+        //     retired `satDoppler` key, so the NEXT load saw no legacy
+        //     evidence and normalized the grant away after one session.
+        //   * anything else → `Some(vec![])`: the mapping is kept, the
+        //     downlink corrects, and the uplink waits for the per-radio
+        //     confirmation like a fresh install's would.
+        // A file that HAS a `satUplinkRadios` key wrote its own consent under
+        // the new rules; the legacy key means nothing beside it. (A 0.26 file
+        // that carries `null` — there was a window in which save() could
+        // write one — lands here too, and normalizes to ask: fail safe.)
+        let legacy_live = s.sat_uplink_radios.is_none()
+            && legacy_sat_doppler == Some(true)
+            && s.sat_vfo_map.drives_uplink();
+        if s.sat_uplink_radios.is_none() && !legacy_live {
+            s.sat_uplink_radios = Some(Vec::new());
+        }
         // Multi-radio: migrate an older (flat-only) settings file to a single radio profile, then
         // mirror the active profile into the flat fields so every existing consumer reads unchanged.
         s.ensure_radio_profiles();
+        // The live legacy pair, materialized against the roster that now
+        // exists: the station-wide grant becomes per-radio consent for the
+        // radios present at upgrade — durable across any number of
+        // save/load cycles, and prunable by `ensure_routing_targets` exactly
+        // like consent written under the new rules. After this point
+        // `sat_uplink_radios` is always `Some`.
+        if legacy_live {
+            s.sat_uplink_radios = Some(s.radios.iter().map(|p| p.id).collect());
+        }
         s.ensure_distinct_radio_ports(); // two live daemons (dual-radio) need distinct ports
         s.ensure_routing_targets(); // drop rules aimed at radios this config no longer has
         s.sync_flat_from_active();
@@ -4623,41 +4888,332 @@ mod tests {
     }
 
     /// The track loop's honesty label: which steering surfaces the loop is
-    /// actually allowed to drive. The Doppler half must be exactly the consents
-    /// `sat_doppler_tick` needs to touch the radio (satDoppler on AND a VFO
-    /// mapping AND a held transponder) — if this table and that gate ever
-    /// disagree, the status lies about whether the radio can be touched.
+    /// actually allowed to drive. The Doppler half must be exactly what
+    /// `sat_doppler_tick` will touch the radio for — EITHER leg driven, plus a
+    /// held transponder — if this table and that gate ever disagree, the status
+    /// lies about whether the radio can be touched.
     #[test]
     fn sat_track_mode_reports_the_drivable_surfaces() {
-        use SatVfoMap::*;
         // Both halves live: the full appliance replacement.
-        assert_eq!(sat_track_mode(true, true, ADownBUp, true), "rotor+doppler");
-        // No rotor, Doppler consented: the Arrow-antenna operator's mode.
-        assert_eq!(
-            sat_track_mode(false, true, DownlinkOnly, true),
-            "doppler-only"
-        );
-        // Rotor only — Doppler switched off entirely…
-        assert_eq!(
-            sat_track_mode(true, false, MainDownSubUp, true),
-            "rotor-only"
-        );
-        // …or ON but with no VFO mapping: Off means "never write to the
-        // radio", so the mode must NOT claim Doppler is driving anything.
-        assert_eq!(sat_track_mode(true, true, Off, true), "rotor-only");
+        assert_eq!(sat_track_mode(true, true, true), "rotor+doppler");
+        // No rotor, a leg driven: the Arrow-antenna operator's mode. One leg is
+        // enough — a downlink-only station IS being tuned.
+        assert_eq!(sat_track_mode(false, true, true), "doppler-only");
+        // Rotor only — the operator switched Doppler off entirely.
+        assert_eq!(sat_track_mode(true, false, true), "rotor-only");
         // Neither surface consented: pass state/geometry only — legal and
         // useful for timing, and the label says exactly that.
-        assert_eq!(
-            sat_track_mode(false, false, MainUpSubDown, true),
-            "pass-only"
-        );
-        assert_eq!(sat_track_mode(false, true, Off, true), "pass-only");
-        // The THIRD consent: no held transponder means the tick tunes nothing
+        assert_eq!(sat_track_mode(false, false, true), "pass-only");
+        // The other consent: no held transponder means the tick tunes nothing
         // (`sat_tune` is None ⇒ every tick no-ops), so the label must not
         // claim the dial — an operator who picked "None — leave the dial to
         // me" was being told "SAT ⟳ · dial at AOS" by the app-wide chip.
-        assert_eq!(sat_track_mode(false, true, ADownBUp, false), "pass-only");
-        assert_eq!(sat_track_mode(true, true, ADownBUp, false), "rotor-only");
+        assert_eq!(sat_track_mode(false, true, false), "pass-only");
+        assert_eq!(sat_track_mode(true, true, false), "rotor-only");
+    }
+
+    /// The consent split the 0.26 ruling turned on: the receive dial is
+    /// automatic, the transmit VFO is confirmed per radio. Every row here is a
+    /// station that must not be surprised by the change.
+    #[test]
+    fn the_downlink_is_automatic_and_the_uplink_is_confirmed_per_radio() {
+        // A fresh install has chosen nothing: the dial is corrected, and
+        // nothing can reach a transmit VFO.
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        assert!(s.sat_doppler_downlink());
+        assert!(!s.sat_doppler_uplink());
+
+        // The operator's OFF switch stops both legs.
+        s.sat_doppler_off = true;
+        assert!(!s.sat_doppler_downlink());
+        s.sat_doppler_off = false;
+
+        // An UPLINK-ONLY mapping is the one operator statement that the single
+        // VFO in play is the transmit leg — the dial is theirs.
+        s.sat_vfo_map = SatVfoMap::UplinkOnly;
+        assert!(!s.sat_doppler_downlink());
+
+        // Confirming records the radio it was confirmed FOR.
+        s.confirm_sat_uplink(s.active_radio, SatVfoMap::MainDownSubUp);
+        assert!(s.sat_doppler_uplink());
+        assert_eq!(s.sat_uplink_radios.as_deref(), Some(&[s.active_radio][..]));
+        // Another radio is another station's wiring question.
+        assert!(!s.sat_uplink_confirmed(s.active_radio + 1));
+
+        // A second radio confirms the SAME mapping: both stand.
+        s.confirm_sat_uplink(9, SatVfoMap::MainDownSubUp);
+        assert!(s.sat_uplink_confirmed(9) && s.sat_uplink_confirmed(s.active_radio));
+        // CHANGING the mapping retires the others. They confirmed Main/Sub;
+        // there is one mapping field, so leaving them listed would drive radio
+        // 9's uplink under a layout nobody confirmed for it.
+        s.confirm_sat_uplink(s.active_radio, SatVfoMap::ADownBUp);
+        assert!(s.sat_uplink_confirmed(s.active_radio));
+        assert!(
+            !s.sat_uplink_confirmed(9),
+            "9 confirmed a different mapping"
+        );
+
+        // A raw `None` list is TRANSIENT pre-migration state, and it confirms
+        // NOTHING: `Settings::load` materializes a live legacy grant into
+        // concrete ids (see the round-trip pin below), so an unresolved
+        // absence reaching a consent check can only mean something skipped
+        // the migration — and an unresolved consent must fail safe on the
+        // leg that transmits. (Round 2 read `None` as a station-wide grant;
+        // that sentinel had no serialized form and died on the first save.)
+        let mut old = Settings::default();
+        old.ensure_radio_profiles();
+        old.sat_vfo_map = SatVfoMap::ADownBUp;
+        old.sat_uplink_radios = None;
+        assert!(
+            !old.sat_doppler_uplink(),
+            "unresolved consent drives nothing"
+        );
+        assert!(!old.sat_uplink_confirmed(7));
+    }
+
+    /// THE UPGRADE GATE (round 2, defect 1). A pre-0.26 settings.json could
+    /// carry a VFO mapping that drove NOTHING, because the retired `satDoppler`
+    /// opt-in was the first gate in front of it. Loading that file must not
+    /// promote the inert mapping into live transmit-side consent: only a pair
+    /// that was actually LIVE pre-upgrade (`satDoppler: true` AND an
+    /// uplink-driving mapping) is a station-wide grant worth keeping. An inert
+    /// mapping upgrades to downlink-only plus the confirmation offer.
+    #[test]
+    fn load_promotes_only_a_live_legacy_pair_to_uplink_consent() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo_settings_satdop_migration_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let load_raw = |json: &str| {
+            std::fs::write(&path, json).unwrap();
+            Settings::load(&path)
+        };
+
+        // (a) The INERT pair: a mapping picked while the old master switch was
+        // off. Under 0.25.0 this station drove nothing — the mapping was one
+        // click away on the pass rail's own select, next to a separate "turn
+        // on" button, so it is a realistic state for the reporting operator.
+        let s =
+            load_raw(r#"{"mycall":"KD9TAW","satDoppler":false,"satVfoMap":"main-down-sub-up"}"#);
+        assert!(
+            s.sat_doppler_downlink(),
+            "the downlink upgrade is the point"
+        );
+        assert_eq!(
+            s.sat_vfo_map,
+            SatVfoMap::MainDownSubUp,
+            "the mapping itself is kept — never silently overwritten"
+        );
+        assert_eq!(
+            s.sat_uplink_radios.as_deref(),
+            Some(&[][..]),
+            "an inert mapping upgrades to ASK (empty consent), never to a grant"
+        );
+        assert!(
+            !s.sat_doppler_uplink(),
+            "no transmit VFO may be driven off a setting that never drove one"
+        );
+        assert!(!s.sat_uplink_confirmed(0) && !s.sat_uplink_confirmed(41));
+
+        // (b) No `satDoppler` key at all (even older file, or hand-edited):
+        // there is no evidence the pair was ever live — same as inert.
+        let s = load_raw(r#"{"mycall":"KD9TAW","satVfoMap":"main-down-sub-up"}"#);
+        assert_eq!(s.sat_uplink_radios.as_deref(), Some(&[][..]));
+        assert!(!s.sat_doppler_uplink());
+
+        // (c) The LIVE pair: the operator turned the old switch on AND mapped
+        // the uplink — that combination really did drive the transmit VFO
+        // under 0.25.0, so the station-wide grant is kept: MATERIALIZED as
+        // consent for every radio in the file (here the single migrated
+        // profile, id 0), and the upgrading operator is not re-asked or
+        // downgraded — including across save/load, which the round-trip pin
+        // below proves.
+        let s = load_raw(r#"{"mycall":"KD9TAW","satDoppler":true,"satVfoMap":"main-down-sub-up"}"#);
+        assert_eq!(
+            s.sat_uplink_radios.as_deref(),
+            Some(&[0u32][..]),
+            "a live legacy grant is materialized for the radios that exist"
+        );
+        assert!(s.sat_doppler_uplink());
+        assert!(
+            !s.sat_uplink_confirmed(7),
+            "a radio this station does not have gets its own confirmation"
+        );
+
+        // (d) The old switch on but NO uplink-driving mapping: nothing was
+        // driven, so there is nothing to grant. (Off = no mapping chosen.)
+        let s = load_raw(r#"{"mycall":"KD9TAW","satDoppler":true,"satVfoMap":"off"}"#);
+        assert_eq!(s.sat_uplink_radios.as_deref(), Some(&[][..]));
+
+        // (e) A post-0.26 file has its own consent list — the legacy key means
+        // nothing beside it and the list rides through untouched. (The roster
+        // must contain the id: consent for a radio that does not exist is
+        // pruned, which is defect 2's rule, not this one's.)
+        let s = load_raw(
+            r#"{"mycall":"KD9TAW","satDoppler":true,"satVfoMap":"main-down-sub-up",
+                "satUplinkRadios":[1],
+                "radios":[{"id":0,"name":"FTdx10"},{"id":1,"name":"IC-9700"}]}"#,
+        );
+        assert_eq!(s.sat_uplink_radios.as_deref(), Some(&[1][..]));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ROUND 3, DEFECT 1 — the round-trip pin. The honoured pre-0.26
+    /// station-wide grant must survive ARBITRARILY MANY save/load cycles, and
+    /// still prune with removed radios. Round 2 carried it as the in-memory
+    /// sentinel `None`, which `save()` wrote as `"satUplinkRadios": null`
+    /// while (correctly) dropping the retired `satDoppler` key — so the NEXT
+    /// load found no legacy evidence and normalized to `Some([])`: the grant
+    /// silently died after one save+relaunch and the upgraded operator lost
+    /// uplink Doppler with no prompt. The fix MATERIALIZES the grant at
+    /// migration time as concrete consent for the radios in the file — the
+    /// station-wide meaning, made durable and prunable.
+    #[test]
+    fn the_legacy_grant_survives_every_save_reload_cycle_and_prunes_with_removed_radios() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo_settings_satdop_roundtrip_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+
+        // The LIVE legacy pair, on a two-radio station: satDoppler on beside
+        // an uplink-driving mapping really drove the transmit VFO pre-0.26,
+        // on whichever rig was under the split.
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","satDoppler":true,"satVfoMap":"main-down-sub-up",
+                "activeRadio":0,
+                "radios":[{"id":0,"name":"FTdx10"},{"id":1,"name":"IC-9700"}]}"#,
+        )
+        .unwrap();
+        let mut s = Settings::load(&path);
+        assert!(
+            s.sat_doppler_uplink(),
+            "the grant is honoured on first load"
+        );
+        assert!(s.sat_uplink_confirmed(0) && s.sat_uplink_confirmed(1));
+
+        // THE DEFECT: any ordinary save (every settings apply, a rail click)
+        // plus a relaunch must keep the grant — for as many cycles as the
+        // operator has sessions.
+        for cycle in 1..=3 {
+            s.save(&path).unwrap();
+            s = Settings::load(&path);
+            assert!(
+                s.sat_doppler_uplink(),
+                "the honoured grant survives save+relaunch (cycle {cycle})"
+            );
+            assert!(
+                s.sat_uplink_confirmed(0) && s.sat_uplink_confirmed(1),
+                "…for the radios it was granted to (cycle {cycle})"
+            );
+        }
+
+        // MATERIALIZED, not remembered: the grant is concrete per-radio
+        // consent for the radios that existed at upgrade — a shape save()
+        // can round-trip, unlike the `None` sentinel.
+        assert_eq!(
+            s.sat_uplink_radios.as_deref(),
+            Some(&[0u32, 1][..]),
+            "the station-wide grant is materialized for the radios in the file"
+        );
+
+        // …and it is PRUNABLE, exactly like consent written under the new
+        // rules: a removed radio takes its share of the grant with it, and a
+        // replacement that REUSES the freed id starts unconfirmed — across a
+        // relaunch too.
+        assert!(s.remove_radio_profile(1));
+        assert!(!s.sat_uplink_confirmed(1), "consent died with the radio");
+        assert!(
+            s.sat_uplink_confirmed(0),
+            "the surviving radio keeps its share"
+        );
+        s.save(&path).unwrap();
+        s = Settings::load(&path);
+        assert!(s.sat_uplink_confirmed(0) && !s.sat_uplink_confirmed(1));
+        let n = s.add_radio_profile();
+        assert_eq!(n, 1, "max(id)+1 over survivors reuses the freed id");
+        assert!(
+            !s.sat_uplink_confirmed(n),
+            "the reused id starts unconfirmed — the grant never leaks to a new rig"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Radio ids ARE reused (`add_radio_profile` = max(id)+1 over SURVIVORS),
+    /// so per-radio consent must die with the radio it names — otherwise the
+    /// next rig added inherits a Main/Sub uplink confirmation it never got
+    /// (round 2, defect 2).
+    #[test]
+    fn a_removed_radios_uplink_consent_dies_with_it() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles(); // radio 0
+        let b = s.add_radio_profile(); // highest id
+        s.confirm_sat_uplink(b, SatVfoMap::MainDownSubUp);
+        assert!(s.sat_uplink_confirmed(b), "precondition");
+
+        assert!(s.remove_radio_profile(b));
+        assert_eq!(
+            s.sat_uplink_radios.as_deref(),
+            Some(&[][..]),
+            "consent is pruned with the radio, like the routing rules beside it"
+        );
+
+        // The replacement REUSES the id — that is the trap this test pins.
+        let n = s.add_radio_profile();
+        assert_eq!(n, b, "max(id)+1 over survivors reuses a freed id");
+        assert!(
+            !s.sat_uplink_confirmed(n),
+            "a brand-new rig starts unconfirmed, whatever id it was dealt"
+        );
+    }
+
+    /// Derivation is only ever a PROPOSAL, and only where the radio can
+    /// express the layout one way and this build can drive it.
+    #[test]
+    fn the_uplink_offer_derives_only_what_it_can_prove() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        // Nothing known about the rig: nothing to propose.
+        assert_eq!(s.sat_uplink_offer(), SatUplinkOffer::Nothing);
+
+        // The IC-9700 in satellite mode transmits on Sub, full stop — but only
+        // our own CI-V path drives that, so Hamlib-served asks instead.
+        s.rig_model = 3081;
+        s.icom_native_cat = false;
+        s.sync_active_from_flat();
+        assert_eq!(s.sat_uplink_offer(), SatUplinkOffer::Ask);
+        s.icom_native_cat = true;
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.sat_uplink_offer(),
+            SatUplinkOffer::Confirm(SatVfoMap::MainDownSubUp)
+        );
+
+        // Full duplex on VFO A/B: which one is the uplink is station wiring.
+        for model in [1001u32, 1010, 2014, 2007] {
+            s.rig_model = model;
+            s.sync_active_from_flat();
+            assert_eq!(s.sat_uplink_offer(), SatUplinkOffer::Ask, "model {model}");
+        }
+        // Half-duplex HF rigs have no uplink leg to offer at all.
+        for model in [3073u32, 1042, 2031, 0] {
+            s.rig_model = model;
+            s.sync_active_from_flat();
+            assert_eq!(
+                s.sat_uplink_offer(),
+                SatUplinkOffer::Nothing,
+                "model {model}"
+            );
+        }
     }
 
     #[test]

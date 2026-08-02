@@ -93,7 +93,7 @@ const settings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
   rotatorModel: 0,
   rotatorHost: '',
-  satDoppler: false,
+  satDopplerOff: false,
   satVfoMap: 'off',
   ...over,
 })

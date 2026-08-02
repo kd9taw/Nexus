@@ -22,9 +22,19 @@ export interface Profile {
 
 /** Fields a profile NEVER imports: who you are (mycall), what you're licensed
  * for (licenseClass — a TX-safety gate), THIS machine's radio roster and active
- * slot (hardware, not configuration), and the connector sync cursors (loading a
- * profile must not re-fetch history). Everything else merges over the current
- * settings, and a key the profile predates (absent) keeps its current value. */
+ * slot (hardware, not configuration), the connector sync cursors (loading a
+ * profile must not re-fetch history), and the satellite uplink pair
+ * (satVfoMap + satUplinkRadios). The pair is machine wiring exactly like the
+ * roster it describes: the mapping says which VFO of THIS station's radios
+ * carries the transmit leg, and the consent list is raw RadioProfile.ids —
+ * meaningless against a roster the profile does not bring. Importing either
+ * would also bypass the backend `confirm_sat_uplink` verb, the ONE writer
+ * whose change-retires-other-consents rule keeps a radio from driving its
+ * uplink under a layout nobody confirmed for it (the pair is engine-owned
+ * live state — even a whole-settings save cannot carry it). Everything else
+ * merges over
+ * the current settings, and a key the profile predates (absent) keeps its
+ * current value. */
 const NEVER_IMPORT: readonly string[] = [
   'mycall',
   'licenseClass',
@@ -32,6 +42,8 @@ const NEVER_IMPORT: readonly string[] = [
   'activeRadio',
   'qrzLastSyncUnix',
   'eqslLastSync',
+  'satVfoMap',
+  'satUplinkRadios',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.

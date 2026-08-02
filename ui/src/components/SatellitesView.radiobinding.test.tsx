@@ -69,7 +69,7 @@ const settings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
   rotatorModel: 0,
   rotatorHost: '',
-  satDoppler: true,
+  satDopplerOff: false,
   satVfoMap: 'main-down-sub-up',
   radioPegged: false,
   ...over,

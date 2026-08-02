@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { SAT_VFO_MAPS } from '../features/satVfo'
+import { confirmSatUplink } from '../api'
 import type {
   AudioDevices,
   BandChannel,
@@ -900,9 +901,23 @@ export function SettingsPanel({
     setForm((prev) => (prev ? { ...prev, splitMode: m } : prev))
   }
 
+  /** Choosing a VFO mapping IS confirming it — for the OPERATING (active)
+   * radio, resolved by the BACKEND at write time: the pick invokes the
+   * `confirmSatUplink` verb with no radio id, so a form snapshot that went
+   * stale while the panel sat open (the active radio can change elsewhere)
+   * can never record consent for the wrong rig. Write-through, not
+   * form-buffered — the consent pair is engine-owned live state that the
+   * Save payload cannot carry, which is what keeps a stale snapshot from
+   * resurrecting a pruned consent. The select still disables itself in the
+   * per-radio Edit flow: a live pick there would confirm the operating
+   * radio while the panel shows another rig's card. A second radio is
+   * confirmed on the pass rail. */
   const setSatVfoMap = (m: NonNullable<Settings['satVfoMap']>) => {
-    markDirty()
+    // Mirror into the form for display only — the backend owns the value.
     setForm((prev) => (prev ? { ...prev, satVfoMap: m } : prev))
+    void confirmSatUplink(m).catch(() =>
+      pushToast('Could not confirm the VFO mapping', 'error'),
+    )
   }
 
   // --- working-frequency overrides (Frequencies tab) ---
@@ -3359,7 +3374,8 @@ export function SettingsPanel({
             <p className="settings-note">
               Corrects both legs of a pass: the downlink you listen on and the uplink you
               transmit on. Nexus tunes only while auto-track is following a pass and you have
-              picked a transponder in the Satellites section.
+              picked a transponder in the Satellites section. The downlink needs no setup here;
+              the uplink is confirmed once per radio, on the pass itself.
             </p>
             <div className="settings-grid">
               <label className="settings-field">
@@ -3367,23 +3383,45 @@ export function SettingsPanel({
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
-                    checked={!!form.satDoppler}
-                    onChange={(e) => updateBool('satDoppler', e.target.checked)}
+                    checked={!form.satDopplerOff}
+                    onChange={(e) => updateBool('satDopplerOff', !e.target.checked)}
                     aria-label="Enable satellite Doppler correction"
                   />
                   <span className="settings-hint">
                     Retunes the radio through a pass so you stay on the station you are working.
-                    Off by default. With the VFO mapping below set to Off, nothing is tuned
-                    either way.
+                    On: the downlink follows the bird as soon as you arm a pass and hold a
+                    transponder. Clearing this stops both legs.
                   </span>
                 </span>
               </label>
 
               <label className="settings-field">
                 <span className="settings-label">VFO mapping</span>
+                {/* DISABLED while the panel is editing a radio that is not the
+                    operating one: the mapping is a flat (station-level) field
+                    whose pick is a LIVE write confirming the uplink for the
+                    OPERATING radio (the backend resolves it at write time) —
+                    in the per-radio Edit flow that would confirm the active
+                    rig while the panel shows another radio's card. A control
+                    that consents a radio the operator is not looking at,
+                    under a hint naming the wrong one, is how a wrong-uplink
+                    consent gets minted — refuse with the reason instead.
+                    The guard keys on the LIVE activeRadioId prop — the same
+                    live state the verb resolves against — never the form
+                    snapshot's activeRadio, which goes stale while the panel
+                    sits open and would disable the select for the very radio
+                    the operator is operating (round 4). */}
                 <select
                   className="settings-input"
                   value={form.satVfoMap ?? 'off'}
+                  disabled={
+                    editingRadioId != null && editingRadioId !== (activeRadioId ?? form.activeRadio)
+                  }
+                  title={
+                    editingRadioId != null && editingRadioId !== (activeRadioId ?? form.activeRadio)
+                      ? 'The uplink mapping is confirmed per radio, for the radio you are operating. Confirm it for this radio on the pass rail during a pass, or make it the active radio first.'
+                      : undefined
+                  }
                   onChange={(e) => setSatVfoMap(e.target.value as NonNullable<Settings['satVfoMap']>)}
                   aria-label="Satellite VFO mapping"
                 >
@@ -3394,10 +3432,12 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  Match this to how your radio is wired.{' '}
+                  Which VFO carries your uplink. Match this to how your radio is wired.{' '}
                   <strong>A wrong mapping transmits on your own downlink</strong> — into the
                   satellite&apos;s output passband, on top of everyone else working the bird.
-                  Off is the default and writes nothing to the radio.
+                  Picking one applies immediately and confirms it for the radio you are
+                  operating; a second radio gets its own confirmation on the pass rail. Every
+                  mapping except Uplink only keeps the downlink corrected.
                 </span>
               </label>
 

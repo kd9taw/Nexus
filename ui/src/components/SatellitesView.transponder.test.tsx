@@ -90,7 +90,7 @@ const settings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
   rotatorModel: 0,
   rotatorHost: '',
-  satDoppler: false,
+  satDopplerOff: false,
   satVfoMap: 'off',
   ...over,
 })
@@ -177,16 +177,29 @@ describe('what the row tells the operator', () => {
   })
 
   it('says plainly when a pick will not tune anything', async () => {
-    // Doppler and the VFO mapping are both opt-ins that default off. Without this the picker
-    // looks like a dead control.
+    // The operator's own off switch is the one thing that stops a pick tuning.
+    // Without this line the picker looks like a dead control.
+    api.getSettings.mockImplementation(() => Promise.resolve(settings({ satDopplerOff: true })))
     render(<SatellitesView focusSat="RS-44" />)
     fireEvent.click(await linearRadio())
-    expect(await screen.findByText(/Doppler is off, so nothing is being tuned/)).toBeTruthy()
+    expect(
+      await screen.findByText(/Doppler correction is off, so nothing is being tuned/),
+    ).toBeTruthy()
   })
 
-  it('with Doppler armed, says when the tuning actually happens', async () => {
+  it('out of the box, says when the tuning actually happens', async () => {
+    // NOTHING configured — no switch flipped, no mapping chosen. A pick tunes
+    // the downlink, and the line says so rather than pointing at Settings.
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await linearRadio())
+    expect(
+      await screen.findByText(/tunes this transponder while auto-track is following the pass/),
+    ).toBeTruthy()
+  })
+
+  it('with a confirmed mapping, says the same', async () => {
     api.getSettings.mockImplementation(() =>
-      Promise.resolve(settings({ satDoppler: true, satVfoMap: 'main-down-sub-up' })),
+      Promise.resolve(settings({ satVfoMap: 'main-down-sub-up' })),
     )
     render(<SatellitesView focusSat="RS-44" />)
     fireEvent.click(await linearRadio())

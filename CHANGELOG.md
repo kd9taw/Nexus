@@ -5,6 +5,95 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed: Doppler corrects your downlink without being asked
+
+Arming a pass and picking a transponder is the whole ask. Nexus corrects the receive dial
+for the pass from that moment, with nothing to switch on first.
+
+Before this, two settings stood between an armed pass and a moving dial — Satellite
+Doppler, and the VFO mapping — and both shipped off. A station that had never opened
+Settings ▸ Radio armed a pass, held a transponder, and watched the dial sit still with
+nothing on screen saying why. Staying on an SSB signal as it walks several kHz across a
+70 cm pass is most of what Doppler correction is for, and it was behind two switches.
+
+The two switches were never the same kind of thing, and only one of them is kept as a
+precondition:
+
+- **The downlink is automatic.** Correcting the receive dial cannot transmit. The worst
+  case is that you do not hear the bird, so it asks for nothing.
+- **The uplink is still confirmed, once per radio.** A wrong VFO mapping transmits on
+  your own downlink — into the satellite's output passband, on top of everyone working
+  the bird — so nothing reaches your transmit VFO until you have said which VFO carries
+  the uplink on the radio in use.
+
+The confirmation now happens where you already are. On the pass readiness rail, the
+Doppler row reads what your radio can do and offers it in plain words — "Confirm the
+uplink and Doppler drives IC-9700 as Main = downlink, Sub = uplink" — with one button and
+the mapping list beside it if the derived answer is wrong. Confirm it once and that radio
+is never asked again.
+
+Where the answer is not certain, Nexus asks instead of guessing. An IC-9700, IC-910,
+IC-9100 or IC-905 running on Nexus's own CI-V connection has exactly one full-duplex
+layout it can express, and that is the one offered. A full-duplex radio Nexus drives
+through Hamlib, an FT-847, FT-736R, TS-2000 or TS-790, or a radio it cannot identify gets
+the question, not a pre-filled answer. A single-VFO radio is offered nothing at all: its
+downlink is corrected and the transmit dial stays yours.
+
+The confirmation is recorded per radio because the satellite path routes. A pass can hand
+the QSY to whichever rig covers the band, and peg-lock or a mid-pass handoff can change
+which radio is under the split — so the uplink is driven only on a radio you confirmed,
+re-checked every correction rather than assumed at arm time.
+
+**If you were already correcting the uplink — Satellite Doppler on, a VFO mapping set —
+nothing changes for you.** The mapping is kept exactly as written, it is not re-derived,
+and you are not asked to confirm it again on any radio your station had when you
+upgraded: the old station-wide grant is recorded as a confirmation for each of those
+radios, and it survives every save and relaunch. A radio you add later gets its own
+one-time confirmation, like any second radio. If you had picked a mapping but never
+turned the old Satellite Doppler switch on, that pair never tuned anything — so the
+mapping is kept, your downlink now corrects automatically, and the transmit VFO waits for
+the same one-per-radio confirmation a fresh install gets. Nothing reaches a transmit VFO
+on upgrade that was not already being driven before it.
+
+**Satellite Doppler is still a switch you can turn off** — Settings ▸ Radio ▸ Satellite
+Doppler — and off still means off, both legs, no dial and no split. What is gone is
+having it off by default. Non-satellite stations are untouched either way: the correction
+runs only inside a pass you armed, on a transponder you are holding, on a dial that pass
+owns.
+
+The pass rail now says which legs are actually being driven, separately — downlink
+corrected with the transmit VFO still yours reads as exactly that, and the Doppler
+readout shows an uplink frequency only when there is an uplink being written. That
+honesty extends to the birds with nothing to split: a one-channel (simplex) bird rides
+one dial and the rail says so instead of offering an uplink confirmation the pass cannot
+use, and a beacon — downlink only — never puts anything on the transmit VFO. A radio you
+remove takes its uplink confirmation with it (a replacement radio starts unconfirmed),
+config profiles carry neither the VFO mapping nor the confirmations between stations,
+and an operator who answers "Downlink only" is not asked again.
+
+The confirmation itself has one writer. Picking a mapping — on the pass rail or in
+Settings ▸ Radio — applies immediately and is recorded for the radio in play at that
+moment; a Settings window left open across radio changes cannot re-point the mapping or
+revive a removed radio's confirmation when you later press Save. When your chosen
+mapping is not yet confirmed for the radio under the split — a second rig, or an
+upgraded uplink-only station — the rail's confirm button offers exactly that mapping for
+exactly that radio; it never swaps in a derived one over your choice. And every surface
+that names who owns a frequency keys on what is actually driven: under an uplink-only
+mapping the tracking badge, the rotor strip and the end-of-pass notice say the transmit
+(split) VFO is Doppler's and the dial stays yours, instead of claiming a dial that never
+moved.
+
+### Known limitations
+
+- Multi-window per-radio profiles keep their files under a directory named by the radio's
+  internal id, and ids are reused: remove a radio and add another, and the new radio can
+  inherit the removed radio's window settings, geometry and journals. Pre-existing and
+  unchanged in this release — recorded here so it is not mistaken for a new fault. The
+  uplink confirmation is NOT affected: it is pruned when a radio is removed, so a
+  replacement radio always starts unconfirmed.
+
 ## [0.25.0] — 2026-08-01
 
 ### Fixed: torn-off windows open at a readable size

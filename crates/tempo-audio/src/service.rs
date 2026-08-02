@@ -8814,10 +8814,14 @@ mod tests {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         {
             let mut eng = engine.lock().unwrap();
-            let mut s = eng.settings().clone();
-            s.sat_doppler = true;
-            s.sat_vfo_map = tempo_app::settings::SatVfoMap::MainDownSubUp;
+            // Materialize the single radio profile (id 0) the way a real
+            // launch does, then confirm through THE verb — the consent pair
+            // is engine-owned live state a settings payload cannot carry
+            // (round 3, defect 2), so baking it into `apply_settings` would
+            // be discarded.
+            let s = eng.settings().clone();
             eng.apply_settings(s);
+            eng.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::MainDownSubUp));
             eng.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
             eng.sat_tune_nominal(false, 1_000_000);
         }

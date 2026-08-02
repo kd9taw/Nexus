@@ -81,24 +81,35 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
     }
   }, [active])
 
-  // Does the live sat track own the RADIO DIAL? Read from the DTO's `mode` —
+  // Is Doppler driving a radio surface at all? Read from the DTO's `mode` —
   // the engine's own per-tick answer (a pass-only track drives nothing and
   // must claim nothing). This is the app-wide ownership marker: a frequency
   // moving by itself with no visible owner is a trust failure, and the
   // rotor-less station is exactly the one with no other strip to say so.
-  const dopplerOwnsDial =
+  const dopplerInTrack =
     satTrack != null && (satTrack.mode === 'rotor+doppler' || satTrack.mode === 'doppler-only')
+  // …but WHICH surface it owns keys on the DOWNLINK leg — the leg that
+  // writes the dial. An uplink-only track drives only the TX (split) VFO,
+  // and this chip claiming the dial for it contradicted the rail's own
+  // "the dial stays yours" (round 3, defect 5).
+  const dopplerOwnsDial = satTrack != null && dopplerInTrack && satTrack.dopplerDownlink
 
   // No rotor configured at all → nothing to show (most stations) — UNLESS a
-  // rotor-less Doppler track holds the dial, which must never be invisible.
+  // rotor-less Doppler track holds a VFO, which must never be invisible.
   if (az == null && !configured) {
-    if (!dopplerOwnsDial || satTrack == null) return null
+    if (!dopplerInTrack || satTrack == null) return null
     const steering = satTrack.downlinkHz != null || satTrack.uplinkHz != null
     return (
       <span
         role="group"
-        aria-label="Satellite Doppler owns the dial"
-        title={`Satellite Doppler is ${steering ? 'steering the radio dial' : 'armed to take the radio dial at AOS'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and hands the dial back`}
+        aria-label={
+          dopplerOwnsDial ? 'Satellite Doppler owns the dial' : 'Satellite Doppler owns the TX VFO'
+        }
+        title={
+          dopplerOwnsDial
+            ? `Satellite Doppler is ${steering ? 'steering the radio dial' : 'armed to take the radio dial at AOS'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and hands the dial back`
+            : `Satellite Doppler is ${steering ? 'steering the TX (split) VFO — the dial stays yours' : 'armed to take the TX (split) VFO at AOS — the dial stays yours'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and releases the split`
+        }
         style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
       >
         <span
@@ -108,7 +119,14 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
           SAT
         </span>
         <span className="mono" style={{ fontSize: '0.9em', fontWeight: 600, whiteSpace: 'nowrap' }}>
-          ⟳ {satTrack.name} · {steering ? 'Doppler holds the dial' : 'dial at AOS'}
+          ⟳ {satTrack.name} ·{' '}
+          {dopplerOwnsDial
+            ? steering
+              ? 'Doppler holds the dial'
+              : 'dial at AOS'
+            : steering
+              ? 'Doppler holds the TX VFO'
+              : 'TX VFO at AOS'}
         </span>
         <button
           type="button"
@@ -186,10 +204,10 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
         <span
           className="mono"
           style={{ fontSize: '0.75em', opacity: 0.8, whiteSpace: 'nowrap' }}
-          title={`Auto-tracking ${satTrack.name} (${satTrack.state}) — the Satellites section owns the rotor until LOS${dopplerOwnsDial ? '; Doppler owns the radio dial too' : ''}`}
+          title={`Auto-tracking ${satTrack.name} (${satTrack.state}) — the Satellites section owns the rotor until LOS${dopplerOwnsDial ? '; Doppler owns the radio dial too' : dopplerInTrack ? '; Doppler drives the TX (split) VFO too — the dial stays yours' : ''}`}
         >
           ⟳ {satTrack.name}
-          {dopplerOwnsDial ? ' +dial' : ''}
+          {dopplerOwnsDial ? ' +dial' : dopplerInTrack ? ' +uplink' : ''}
         </span>
       )}
       {targetCall && onPointAt && (

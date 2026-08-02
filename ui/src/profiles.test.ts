@@ -124,3 +124,39 @@ describe('mergeProfile — the profile-load contract', () => {
     expect(merged.maxPowerDigital).toBe(0.5)
   })
 })
+
+// Round 2, defect 3. `confirmSatUplink` (features/satVfo.ts) is THE
+// uplink-mapping writer — the retire-on-change rule lives there, in both
+// languages. `mergeProfile` was a third writer: a profile saved by 0.25.0
+// carries `satVfoMap` and no `satUplinkRadios`, so loading it re-pointed the
+// mapping while every standing confirmation survived — a radio left listed as
+// confirmed for a layout it never confirmed, the exact state the rule exists
+// to make unreachable. And a post-0.26 profile carries `satUplinkRadios` (raw
+// `RadioProfile.id`s) while `radios`/`activeRadio` — the ids' meaning — are
+// declared machine-local and refused. The pair is machine wiring, exactly like
+// the roster it describes: neither key rides a profile.
+describe('mergeProfile — the satellite uplink pair never imports', () => {
+  const current = {
+    mycall: 'KD9TAW',
+    satVfoMap: 'main-down-sub-up',
+    satUplinkRadios: [0],
+    band: '20m',
+  } as unknown as Settings
+
+  it('a pre-0.26 profile cannot re-point the mapping under standing confirmations', () => {
+    const old = { satVfoMap: 'a-up-b-down', band: '70cm' } as unknown as Settings
+    const merged = mergeProfile(current, old) as unknown as Record<string, unknown>
+    expect(merged.satVfoMap).toBe('main-down-sub-up')
+    expect(merged.satUplinkRadios).toEqual([0])
+    expect(merged.band).toBe('70cm') // the rest of the profile still applies
+  })
+
+  it('a post-0.26 profile cannot import consent ids for a roster it did not bring', () => {
+    const foreign = {
+      satVfoMap: 'main-down-sub-up',
+      satUplinkRadios: [2], // id 2 on the SAVING machine — a different rig here
+    } as unknown as Settings
+    const merged = mergeProfile(current, foreign) as unknown as Record<string, unknown>
+    expect(merged.satUplinkRadios).toEqual([0])
+  })
+})
