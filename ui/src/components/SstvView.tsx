@@ -875,6 +875,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             <Waterfall
               theme={theme}
               active={active}
+              rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
               transmitting={snap?.radio.transmitting ?? false}
               rxOffsetHz={0}
               txOffsetHz={0}

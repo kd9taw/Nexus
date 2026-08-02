@@ -251,6 +251,17 @@ const TX_METER_POLL_MS: f64 = 150.0;
 /// reading the dial only on the 750 ms health cadence). A single `F`-read is cheap on a healthy
 /// serial link, and the transport-aware read deadline bounds a stalled one.
 const FREQ_POLL_MS: f64 = 180.0;
+/// How often to re-read the CAT S-meter on a healthy link (display liveliness, 2026-08-01).
+/// STRENGTH used to ride only the 750 ms heavy poll, making the S-meter a ~1.3 Hz
+/// sample-and-hold — "accurate, but slow". DELIBERATELY every OTHER dial interval
+/// (2 × [`FREQ_POLL_MS`]), not the dial's own cadence: at the dial cadence the fast reads
+/// DOUBLED the healthy-link CAT tick rate, and `feed_rx_audio` sits behind those blocking
+/// reads in the tick — the meter is not worth that bus pressure. At 360 ms the added reads
+/// are ~2.8/s (half the dial's), the needle is still >2× fresher than the old 750 ms hold,
+/// and the two fast reads interleave on different loop ticks (see the fast-mirror block), so
+/// no tick issues two blocking CAT reads. Slow serial links keep the heavy cadence — their
+/// read deadline is the honest ceiling there.
+const SMETER_FAST_POLL_MS: f64 = 2.0 * FREQ_POLL_MS;
 /// Consecutive heavy-poll dial-read failures before the CAT breaker trips. >1 so a single slow
 /// reply (the short serial deadline can cut off a legitimately-slow band-stack switch / USB spike)
 /// doesn't permanently kill read-back; small enough that a truly dead link still stops the loop
@@ -346,6 +357,10 @@ pub struct RadioConfig {
     pub spectrum_feed: tempo_app::engine::SpectrumFeed,
     /// The wait-free capture tee the rx-dsp thread drains (rxtap.rs).
     pub rx_tap: Arc<crate::rxtap::RxTap>,
+    /// The live meter bus (RX audio level + CAT S-meter) — written by the rx-dsp thread and
+    /// this loop, read lock-free by the UI's `get_meters`. Defaulted so existing
+    /// constructions (tests, tools) need no change.
+    pub meter_feed: tempo_app::engine::MeterFeed,
     /// PTT method: `"cat"` (launch + use rigctld), `"rts"`, `"dtr"`, or `"vox"`.
     pub ptt_method: String,
     /// Hamlib rig model number for `rigctld -m` (0 = none / VOX).
@@ -392,6 +407,7 @@ impl Default for RadioConfig {
         Self {
             spectrum_feed: tempo_app::engine::SpectrumFeed::default(),
             rx_tap: Arc::new(crate::rxtap::RxTap::new()),
+            meter_feed: tempo_app::engine::MeterFeed::default(),
             ptt_method: "vox".to_string(),
             rig_model: 0,
             serial_port: String::new(),
@@ -487,7 +503,11 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), Str
     if let Some((ring, rate)) = backend.spectrum_tap() {
         cfg.rx_tap.publish_card(ring, rate);
     }
-    crate::rxdsp::spawn(cfg.rx_tap.clone(), cfg.spectrum_feed.clone());
+    crate::rxdsp::spawn(
+        cfg.rx_tap.clone(),
+        cfg.spectrum_feed.clone(),
+        cfg.meter_feed.clone(),
+    );
 
     // Resolve the PTT method into a Rig and probe it. `open_rig` launches rigctld
     // for CAT (its kill-on-drop handle lives as long as the rig) and reports the
@@ -1163,6 +1183,11 @@ fn handoff_if_switched(
         {
             let mut e = engine_lock(engine);
             e.forget_radio_live(active);
+            // TWO-MIRROR RULE: `reset_for_handoff` below clears the meter BUS ("the new radio
+            // hasn't reported STRENGTH yet"); the engine snapshot copy must go with it, or the
+            // two mirrors disagree until the new rig's first STRENGTH poll (~750 ms, or seconds
+            // if it has no S-meter).
+            e.clear_rig_smeter();
         }
         // The new active rig is ALREADY connected + on its own frequency; reset the per-rig caches so
         // step()'s retune re-asserts the restored dial/mode and the health/capability re-probe runs.
@@ -1192,7 +1217,11 @@ fn handoff_if_switched(
         {
             let mut e = engine_lock(engine);
             e.forget_radio_live(active);
+            // Same both-mirror clear as the adopt branch: the new radio hasn't reported
+            // STRENGTH yet — "—", never the old rig's needle, on either mirror.
+            e.clear_rig_smeter();
         }
+        state.meter_feed.set_smeter_db(None);
         // The active radio changed — force the RX audio to rebuild to the new radio's device even if
         // step()'s rig_differs path handles the CAT (audio_differs alone can miss an empty-vs-empty).
         state.force_audio_rebuild = true;
@@ -1594,6 +1623,10 @@ struct RadioLoop {
     /// cadence than the heavy reads so a manual VFO-knob turn tracks like HRD (~⅕ s), not the
     /// 750 ms health poll — the heavy reads (S-meter/mode/funcs) stay slow to bound CAT traffic.
     last_freq_poll: f64,
+    /// Last time we read the CAT S-meter on the FAST cadence (ms). Healthy links re-read
+    /// STRENGTH every [`SMETER_FAST_POLL_MS`] on a tick of its own (never the dial-read tick);
+    /// capability probing and give-up accounting stay with the heavy poll.
+    last_smeter_poll: f64,
     /// Consecutive HEAVY-poll dial-read failures. The CAT breaker only trips after a few in a row
     /// (not a single miss) so one legitimately-slow reply — a band-stack switch, a USB-serial
     /// latency spike — doesn't permanently disable read-back. Reset to 0 on any successful read.
@@ -1674,6 +1707,10 @@ struct RadioLoop {
     spectrum_feed: tempo_app::engine::SpectrumFeed,
     /// The wait-free tee the rx-dsp thread drains. Republished on every audio (re)open.
     rx_tap: Arc<crate::rxtap::RxTap>,
+    /// The live meter bus. The rx-dsp thread writes the RX level; THIS loop writes the CAT
+    /// S-meter at every place it observes/clears the engine mirror, so the lock-free reader
+    /// (`get_meters`) and the snapshot can never disagree.
+    meter_feed: tempo_app::engine::MeterFeed,
     /// Per-extended-level capability ([RFPOWER, MICGAIN, NR, AGC], see the `LVL_*` indices), the
     /// same miss-tolerant caching as `func_supported`: `Some(false)` after 3 get-misses → stop
     /// issuing that read, so a rig slow/silent on it doesn't churn the CAT socket every poll
@@ -1778,6 +1815,7 @@ impl RadioLoop {
             last_tx_meter_poll: 0.0,
             tx_meter_idx: 0,
             last_freq_poll: now_unix_ms(),
+            last_smeter_poll: 0.0,
             freq_misses: 0,
             cat_ok: None,
             cat_retry_at: 0.0,
@@ -1797,6 +1835,7 @@ impl RadioLoop {
             func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; 5],
             spectrum_feed: cfg.spectrum_feed.clone(),
             rx_tap: cfg.rx_tap.clone(),
+            meter_feed: cfg.meter_feed.clone(),
             level_supported: [None; 4],
             level_misses: [0; 4],
 
@@ -1877,6 +1916,9 @@ impl RadioLoop {
                 self.spectrum_src = crate::flexspectrum::FlexSpectrum::start(
                     engine.clone(),
                     self.spectrum_feed.clone(),
+                    // The meter BUS too — route_meters writes both S-meter mirrors (the
+                    // cockpits read `get_meters`, which reads this bus, not the snapshot).
+                    self.meter_feed.clone(),
                     ip.clone(),
                     dial_hz,
                 )
@@ -2107,6 +2149,7 @@ impl RadioLoop {
         self.audio_rig_split = false;
         self.last_rig_poll = 0.0; // poll the new rig's health/mode/S-meter immediately
         self.last_freq_poll = 0.0;
+        self.last_smeter_poll = 0.0;
         self.freq_misses = 0;
         self.cat_ok = None; // re-establish CAT health from the new rig
         self.cat_retry_at = 0.0;
@@ -2124,6 +2167,8 @@ impl RadioLoop {
         self.split_on_sub = false;
         self.smeter_supported = None;
         self.smeter_misses = 0;
+        // The NEW radio hasn't reported STRENGTH yet — show "—", not the old rig's needle.
+        self.meter_feed.set_smeter_db(None);
         self.func_supported = [None; 5];
         self.func_misses = [0; 5];
         self.func_state = [None; 5];
@@ -2822,6 +2867,7 @@ impl RadioLoop {
                 }
                 self.last_rig_poll = now;
                 self.last_freq_poll = now; // heavy tick reads the dial too — don't double-read below
+                self.last_smeter_poll = now; // …and STRENGTH — same no-double-read rule
                 self.rig_poll_ticks = self.rig_poll_ticks.wrapping_add(1);
                 // Periodically re-probe a rig whose S-meter was found unsupported — a few
                 // STRENGTH misses can be a transient hiccup, not a real lack of support — so it
@@ -2976,6 +3022,9 @@ impl RadioLoop {
                                 Some(db) => {
                                     self.smeter_supported = Some(true);
                                     self.smeter_misses = 0;
+                                    // Lock-free mirror first (the fast `get_meters` reader),
+                                    // then the engine snapshot copy — same value, always both.
+                                    self.meter_feed.set_smeter_db(Some(db));
                                     {
                                         let mut eng = engine_lock(engine);
                                         eng.observe_rig_smeter(db);
@@ -2988,7 +3037,9 @@ impl RadioLoop {
                                     self.smeter_misses = self.smeter_misses.saturating_add(1);
                                     if self.smeter_misses >= 3 {
                                         self.smeter_supported = Some(false);
-                                        // Don't leave the last good reading frozen on the UI.
+                                        // Don't leave the last good reading frozen on the UI —
+                                        // both mirrors, so the fast reader goes "—" too.
+                                        self.meter_feed.set_smeter_db(None);
                                         {
                                             let mut eng = engine_lock(engine);
                                             eng.clear_rig_smeter();
@@ -3165,6 +3216,8 @@ impl RadioLoop {
                                 cat_down_message(&self.applied, &e),
                                 self.live_backend_label(&self.applied),
                             );
+                            // Both S-meter mirrors — the fast reader must go "—" with the snapshot.
+                            self.meter_feed.set_smeter_db(None);
                             {
                                 let mut eng = engine_lock(engine);
                                 // Clear the read-backs so a dead link doesn't freeze the
@@ -3204,6 +3257,43 @@ impl RadioLoop {
                         }
                     }
                 }
+            }
+
+            // Fast CAT S-meter mirror (display liveliness, 2026-08-01): STRENGTH used to ride
+            // only the 750 ms heavy poll, which made the S-meter a ~1.3 Hz sample-and-hold —
+            // the operator's "accurate, but slow". On a healthy link it's re-read every OTHER
+            // dial interval (360 ms — see SMETER_FAST_POLL_MS for the CAT-budget reasoning).
+            // Gated exactly like the fast dial read, PLUS:
+            //  - the heavy poll must have PROVEN STRENGTH works (`smeter_supported ==
+            //    Some(true)`) — capability probing and give-up accounting stay heavy-poll-owned;
+            //  - never on a slow serial link (a read there can block to 2500 ms; the heavy
+            //    cadence is the honest ceiling on such links);
+            //  - never on a tick that already issued the dial read (`last_freq_poll == now`),
+            //    so at most ONE blocking CAT read lands per 20 ms loop tick — the two fast
+            //    reads interleave on adjacent ticks instead of stacking on one.
+            if !retuned
+                && self.tx_until_ms.is_none()
+                && !self.tuning_keyed
+                && !self.manual_ptt_applied
+                && self.cat_ok != Some(false)
+                && self.freq_misses == 0
+                && self.smeter_supported == Some(true)
+                && !crate::rigmodels::is_slow_serial_link(self.applied.rig_model, self.applied.baud)
+                && self.last_freq_poll != now
+                && now - self.last_smeter_poll >= SMETER_FAST_POLL_MS
+            {
+                self.last_smeter_poll = now;
+                if let Some(db) = rig.read_smeter_db() {
+                    // Same value onto both mirrors, lock-free bus first: `get_meters` reads the
+                    // bus; the engine copy keeps the snapshot honest.
+                    self.meter_feed.set_smeter_db(Some(db));
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.observe_rig_smeter(db);
+                    }
+                }
+                // A miss here is IGNORED — one fast-path timeout must not count against a
+                // meter the heavy poll has proven; `smeter_misses` stays heavy-poll-owned.
             }
 
             // Apply a pending SPLIT request (after the dial/mode retune so the TX
@@ -4242,8 +4332,11 @@ impl RadioLoop {
         self.clock_offset_ms = eng.clock_offset_ms().unwrap_or(0);
         // Keep the TopBar's next-slot countdown live every iteration.
         eng.set_slot_timing(self.clock.ms_to_next_slot(now) as u64);
-        // RX input meter + live waterfall audio (decoupled from the slot decoder).
-        eng.set_rx_level(backend.rx_level());
+        // RX input meter: MIRROR the rx-dsp thread's ballistics-shaped level into the snapshot
+        // (SetupWizard health strip + any old reader). The LIVE path is `get_meters` reading the
+        // meter bus directly — this copy rides the CAT-blocking loop, so it may stall; the bus
+        // may not. (The backend's own callback meter still exists for the audio_probe tool.)
+        eng.set_rx_level(self.meter_feed.rx_level());
         // The WATERFALL row is NOT produced here any more — see rxtap.rs / rxdsp.rs. This loop
         // issues every blocking CAT call (up to 2500 ms on slow serial), and while it was also
         // the sole producer of spectrum rows, any CAT stall froze the waterfall. These mode
@@ -6123,6 +6216,23 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
 mod tests {
     use super::*;
     use crate::backend::MockBackend;
+
+    /// Display-liveliness round 2: the fast STRENGTH read is DECIMATED against the dial —
+    /// every other dial interval, never the dial's own cadence. At 1:1 the added reads
+    /// doubled the healthy-link CAT tick rate (with `feed_rx_audio` queued behind those
+    /// blocking reads); at 1:2 the meter still samples >2× faster than the old 750 ms hold.
+    #[test]
+    fn the_fast_smeter_cadence_is_decimated_against_the_dial() {
+        assert_eq!(
+            SMETER_FAST_POLL_MS,
+            2.0 * FREQ_POLL_MS,
+            "STRENGTH reads every OTHER dial interval — the CAT-budget/liveliness compromise"
+        );
+        assert!(
+            SMETER_FAST_POLL_MS <= RIG_POLL_MS / 2.0,
+            "and still meaningfully fresher than the old heavy-poll sample-and-hold"
+        );
+    }
 
     /// The IC-7610 zero-bytes saga, P1: Test CAT (and the CAT-down breaker) must SAY which
     /// backend was actually exercised — a native-CI-V radio silently falling back to

@@ -39,8 +39,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tauri::Manager;
 use tauri::State;
 use tempo_app::dto::{
-    AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, SourceKind,
-    Spectrum, Tier, UploadReportDto,
+    AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, MeterReadout,
+    SourceKind, Spectrum, Tier, UploadReportDto,
 };
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::{Settings, VoiceMessage};
@@ -5852,6 +5852,18 @@ fn get_spectrum_row(
     // computed on demand from the last decoded buffer. Rare, low-rate, and correct to block on.
     let eng = engine_lock(&state);
     Ok(eng.spectrum_row())
+}
+
+/// The live meters (RX audio level + CAT S-meter), read lock-free off the meter bus — never
+/// the engine mutex, which the radio loop holds across blocking CAT (the same stall that used
+/// to freeze the waterfall would freeze a snapshot-fed needle). The meter widgets poll this at
+/// ~100 ms so the needle tracks the audio instead of the 300 ms snapshot cadence.
+#[tauri::command(async)]
+fn get_meters(meters: State<'_, tempo_app::engine::MeterFeed>) -> Result<MeterReadout, String> {
+    Ok(MeterReadout {
+        rx_level: meters.rx_level(),
+        smeter_db: meters.smeter_db(),
+    })
 }
 
 /// Set the operating mode: "chat" | "qso-run" | "qso-monitor" | "fieldday-run"
@@ -12942,6 +12954,10 @@ pub fn run() {
     // that separation is the point: the row must not be reachable only through the engine mutex,
     // which the radio loop holds across blocking CAT. See tempo-audio/src/rxtap.rs.
     let spectrum_feed = tempo_app::engine::SpectrumFeed::default();
+    // The live meter bus (RX level + CAT S-meter) — same shape as the spectrum feed, for the
+    // same reason: `get_meters` must read WITHOUT the engine mutex, which the radio loop holds
+    // across blocking CAT. See tempo_app::engine::MeterFeed.
+    let meter_feed = tempo_app::engine::MeterFeed::default();
 
     // Build the radio config from settings before the engine takes ownership.
     #[cfg(feature = "radio")]
@@ -12951,6 +12967,7 @@ pub fn run() {
         // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
         spectrum_feed: spectrum_feed.clone(),
         rx_tap: std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+        meter_feed: meter_feed.clone(),
         ptt_method: settings.ptt_method.clone(),
         rig_model: settings.rig_model,
         serial_port: settings.serial_port.clone(),
@@ -13549,6 +13566,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(engine)
         .manage(spectrum_feed)
+        .manage(meter_feed)
         .manage(prop_cache)
         .manage(aurora_cache)
         .manage(kc2g_cache)
@@ -13574,6 +13592,7 @@ pub fn run() {
             set_tier,
             set_source,
             get_spectrum_row,
+            get_meters,
             set_mode,
             get_settings,
             set_settings,

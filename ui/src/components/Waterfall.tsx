@@ -75,6 +75,13 @@ interface Props {
   cursors?: { hz: number; color: string; label: string }[]
   /** Header hint text override (default: the left/right/Shift/Ctrl legend). */
   hint?: string
+  /** New-row poll cadence (ms). The producer makes a fresh row every 20 ms, so this only
+   * decides how many are SHOWN. Default 120 = the FT surfaces (slot-synchronous mode; ~8
+   * rows/s is plenty and matches WSJT-X). The live-instrument surfaces (RTTY cockpit, SSTV
+   * band) pass 50 to match the rig scope's 20 Hz (PhoneScope) — at 120 they discarded 5 of
+   * every 6 rows, the operator's "smoothed out" report (2026-07-30). Reduced-motion still
+   * overrides to the gentler 480 either way. */
+  rowMs?: number
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -104,6 +111,7 @@ export function Waterfall({
   onPopOut,
   cursors,
   hint,
+  rowMs = 120,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -130,6 +138,7 @@ export function Waterfall({
   const txOffRef = useRef(txOffsetHz)
   const cursorsRef = useRef(cursors)
   const activeRef = useRef(active)
+  const rowMsRef = useRef(rowMs)
   const gainRef = useRef(gain)
   const zeroRef = useRef(zero)
   const viewLoRef = useRef(view.lo)
@@ -162,6 +171,7 @@ export function Waterfall({
   txOffRef.current = txOffsetHz
   cursorsRef.current = cursors
   activeRef.current = active
+  rowMsRef.current = rowMs
   gainRef.current = gain
   zeroRef.current = zero
   viewLoRef.current = view.lo
@@ -209,7 +219,8 @@ export function Waterfall({
     let drawing = false // single-flight guard: never overlap async drawRow calls
     let acc = 0
     let last = performance.now()
-    const ROW_MS = 120 // new waterfall row cadence (full motion)
+    // Row cadence comes from the rowMs prop (via ref — this effect runs once): 120 on the FT
+    // surfaces, 50 on the live-instrument surfaces (RTTY / SSTV band). See the prop doc.
     const ROW_MS_REDUCED = 480 // gentler cadence under reduced-motion
 
     // Reduced motion: the OS preference OR the in-app `data-motion=reduce`
@@ -599,7 +610,7 @@ export function Waterfall({
       }
       acc += now - last
       last = now
-      const rowMs = reducedMotion() ? ROW_MS_REDUCED : ROW_MS
+      const rowMs = reducedMotion() ? ROW_MS_REDUCED : rowMsRef.current
       // single-flight: only advance the waterfall when no fetch is in flight, so
       // a slow row simply skips its tick (history stays exactly 1:1 with data).
       if (acc >= rowMs && !drawing) {

@@ -14,6 +14,7 @@ import type {
   CatTestResult,
   CatProbeResult,
   CwDecodeResult,
+  MeterReadout,
   SkimHit,
   RttyState,
   SstvState,
@@ -1872,6 +1873,13 @@ export function subscribeSnapshot(fn: (snap: AppSnapshot) => void): () => void {
 /** Fetch the next waterfall row (a real Spectrum from the core). */
 export async function getSpectrumRow(_transmitting: boolean): Promise<Spectrum> {
   return invoke<Spectrum>('get_spectrum_row')
+}
+
+/** Fetch the live meters (RX audio level + CAT S-meter). Lock-free backend-side (no engine
+ * mutex), so it is safe to poll fast and a CAT stall cannot freeze it — one shared ~100 ms
+ * poll feeds every meter widget instead of riding the 300 ms snapshot (see `LiveMeters`). */
+export async function getMeters(): Promise<MeterReadout> {
+  return invoke<MeterReadout>('get_meters')
 }
 
 // ---------------------------------------------------------------------------

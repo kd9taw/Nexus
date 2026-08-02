@@ -1189,6 +1189,16 @@ export interface Spectrum {
   source?: string
 }
 
+/** Live meter readout (`get_meters`) — polled fast (~100 ms); lock-free backend-side, so a
+ * CAT stall can never freeze it (unlike the snapshot, whose engine lock the radio loop holds
+ * across blocking CAT). */
+export interface MeterReadout {
+  /** RX input level (0..1 RMS, instrument ballistics applied). 0 when no capture is open. */
+  rxLevel: number
+  /** CAT S-meter (dB relative to S9); null = the rig reports no STRENGTH (meter shows "—"). */
+  smeterDb: number | null
+}
+
 /** A single decoded signal in the most-recent RX slot (WSJT-X style row). */
 export interface DecodeRow {
   from: string | null

@@ -5,10 +5,18 @@
 //! blocking CAT (up to 2500 ms on slow serial), and it was also the only producer of spectrum
 //! rows, so every CAT stall froze the waterfall.
 //!
-//! THE SAFETY ARGUMENT IS THE CAPTURE LIST. [`RxDsp::tick`] takes an `&RxTap` and a
-//! `&SpectrumFeed` and nothing else, and the thread in [`spawn`] closes over exactly those two.
-//! No `Rig`, no `CatDaemon`, no `CpalBackend`, no `Engine`. A CAT call cannot be issued from
-//! here because nothing here can name one. That is a compile-time property, not a policy.
+//! THE SAFETY ARGUMENT IS THE CAPTURE LIST. [`RxDsp::tick`] takes an `&RxTap`, a
+//! `&SpectrumFeed` and a `&MeterFeed` and nothing else, and the thread in [`spawn`] closes over
+//! exactly those three. No `Rig`, no `CatDaemon`, no `CpalBackend`, no `Engine`. A CAT call
+//! cannot be issued from here because nothing here can name one. That is a compile-time
+//! property, not a policy.
+//!
+//! THE RX LEVEL METER LIVES HERE TOO (2026-08-01). The tick drains the exact post-gain mono
+//! samples the capture callback teed, so the level is measured from the same audio the decode
+//! path hears — and publishing it from THIS thread (onto the wait-free [`MeterFeed`]) means a
+//! CAT stall can no longer freeze the needle, which it did when the radio loop carried the copy.
+//! Ballistics are a real instrument's: fast attack, standard decay — shaping RESPONSE, never
+//! inventing motion.
 //!
 //! DELIBERATELY NOT MOVED: the mode taps (`feed_rx_audio` — CW/RTTY/APRS/SSTV/QSO rings) stay
 //! on the radio loop. Moving them here was designed and rejected: this thread would have to
@@ -22,7 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tempo_app::dto::Spectrum;
-use tempo_app::engine::SpectrumFeed;
+use tempo_app::engine::{MeterFeed, SpectrumFeed};
 
 use crate::capture_resample::CaptureResampler;
 use crate::rxtap::RxTap;
@@ -31,10 +39,28 @@ use crate::rxtap::RxTap;
 const ANALYSIS_RATE: f32 = tempo_core::tempo_fast::SAMPLE_RATE;
 /// Same rate as an integer, for the resampler and the test tones.
 const ANALYSIS_RATE_HZ: u32 = ANALYSIS_RATE as u32;
-/// Rolling window the FFT runs over. Same 4096 the radio loop used, so the row is identical.
-const WINDOW: usize = 4096;
+/// Rolling window the FFT runs over (must equal `tempo_core::spectrum::FFT_N`).
+///
+/// 2048 @ 12 kHz = 171 ms of audio. Halved from 4096 (341 ms) for display LIVELINESS
+/// (2026-08-01, operator report "smoothed out to remove response"): the Hann taper weights the
+/// newest samples near zero, so a signal edge only reaches full brightness a full window later —
+/// the window IS the display's time smear. 2048 keeps raw bins at 5.86 Hz, still finer than the
+/// 512-bin display's 7.81 Hz over 0–4000 Hz, so the visible resolution is unchanged while the
+/// edge-to-full-brightness lag halves (and the FFT gets cheaper). Pinned by
+/// `the_analysis_window_fits_the_display_liveliness_budget` below.
+const WINDOW: usize = 2048;
 /// Consumer cadence. Matches the radio loop's own 20 ms tick, so row rate is unchanged.
 pub const TICK_MS: u64 = 20;
+/// RX meter ATTACK per 20 ms tick: rising audio closes 60% of the remaining distance each tick,
+/// so a full-scale step reaches 90% within three ticks (60 ms) — near-instant, like a hardware
+/// S-meter (IC-9700 class). The old SYMMETRIC smoothing (0.85 both ways) took ~150–300 ms to
+/// register a key-down: the operator heard the signal before the needle moved ("accurate, but
+/// slow"). Attack fast / decay slow is standard instrument ballistics, not invented motion.
+const RX_METER_ATTACK: f32 = 0.6;
+/// RX meter DECAY per 20 ms tick: level falls to 85% each tick when the audio drops, ~285 ms to
+/// fall 90% — the standard smooth needle-fall of a hardware S-meter, and the same feel the old
+/// per-callback meter had (0.85 per ~10–20 ms callback). Decay is smoothing the eye WANTS.
+const RX_METER_DECAY: f32 = 0.85;
 
 /// Rolling-window state for the spectrum producer. Split out from the thread so tests can drive
 /// it deterministically, with no sleeps and no threads.
@@ -43,6 +69,8 @@ pub struct RxDsp {
     window: Vec<f32>,
     epoch: u64,
     rate: u32,
+    /// The ballistics-shaped RX level (0..1 RMS) published to the meter feed each tick.
+    meter: f32,
 }
 
 impl Default for RxDsp {
@@ -58,19 +86,23 @@ impl RxDsp {
             window: Vec::with_capacity(WINDOW * 2),
             epoch: 0,
             rate: ANALYSIS_RATE_HZ,
+            meter: 0.0,
         }
     }
 
-    /// Drain whatever the capture callback has teed, and publish a row.
+    /// Drain whatever the capture callback has teed, publish a row, and publish the RX level.
     ///
-    /// Returns true when a row was published. Takes only the tap and the feed — see the module
-    /// header; this signature IS the safety argument.
-    pub fn tick(&mut self, tap: &RxTap, feed: &SpectrumFeed) -> bool {
+    /// Returns true when a row was published. Takes only the tap and the two publish seams —
+    /// see the module header; this signature IS the safety argument.
+    pub fn tick(&mut self, tap: &RxTap, feed: &SpectrumFeed, meters: &MeterFeed) -> bool {
         let Some(src) = tap.current() else {
             // No audio open. Publish an EMPTY row rather than nothing: an empty row makes the
             // UI stop cleanly, whereas publishing nothing sends the reader down the engine-lock
-            // fallback, which returns a stale NON-empty row and reproduces the streak.
+            // fallback, which returns a stale NON-empty row and reproduces the streak. The
+            // meter goes to zero for the same honesty: no capture, no level.
             feed.publish_audio(empty_row());
+            self.meter = 0.0;
+            meters.set_rx_level(0.0);
             return false;
         };
         // A new source (device swap, rate change) must never smear two rates into one window.
@@ -85,8 +117,23 @@ impl RxDsp {
             dev.push(s);
         }
         if dev.is_empty() {
-            return false; // nothing new this tick; the last row stands (it is <2 s fresh)
+            return false; // nothing new this tick; the last row AND level stand (no new info)
         }
+        // ---- RX level meter: RMS of this tick's post-gain samples, instrument ballistics ----
+        // Measured on the DEVICE-rate samples (the exact `m` values the callback teed), before
+        // the display resample, so the reading matches what the sound card actually delivered.
+        // RMS (not peak) keeps the number comparable to WSJT-X's meter (the UI renders
+        // 20·log10(rms)+90.3, see ui LevelMeter).
+        let sum_sq: f32 = dev.iter().map(|s| s * s).sum();
+        let rms = (sum_sq / dev.len() as f32).sqrt().clamp(0.0, 1.0);
+        self.meter = if rms > self.meter {
+            // ATTACK: fast — the needle must move with the audio, not after it.
+            self.meter + (rms - self.meter) * RX_METER_ATTACK
+        } else {
+            // DECAY: the standard smooth fall (85%/tick).
+            self.meter * RX_METER_DECAY + rms * (1.0 - RX_METER_DECAY)
+        };
+        meters.set_rx_level(self.meter);
         let pcm = self.rs.process(&dev);
         if pcm.is_empty() {
             return false;
@@ -128,14 +175,18 @@ fn empty_row() -> Spectrum {
 /// Spawn the producer thread. Panic-wrapped: a silent death here would kill the waterfall with
 /// no other symptom, which is exactly the silent-fallback failure mode the TX-safety notes warn
 /// about, so the panic is surfaced rather than swallowed.
-pub fn spawn(tap: Arc<RxTap>, feed: SpectrumFeed) -> std::thread::JoinHandle<()> {
+pub fn spawn(
+    tap: Arc<RxTap>,
+    feed: SpectrumFeed,
+    meters: MeterFeed,
+) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("nexus-rx-dsp".into())
         .spawn(move || {
             let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut dsp = RxDsp::new();
                 loop {
-                    dsp.tick(&tap, &feed);
+                    dsp.tick(&tap, &feed, &meters);
                     std::thread::sleep(Duration::from_millis(TICK_MS));
                 }
             }));
@@ -188,12 +239,13 @@ mod tests {
         let ring = Arc::new(SpscRing::new(48_000));
         tap.publish_card(ring.clone(), 12_000);
         let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
         let mut dsp = RxDsp::new();
 
         let mut published = 0;
         for _ in 0..120 {
             ring.push_slice(&tone(12_000, 1500.0, 256));
-            if dsp.tick(&tap, &feed) {
+            if dsp.tick(&tap, &feed, &meters) {
                 published += 1;
             }
         }
@@ -206,6 +258,82 @@ mod tests {
         );
         let row = feed.row().expect("a row is published");
         assert!(!row.row.is_empty(), "and the row carries real spectrum");
+        // The RX level meter rides the same tick, so a CAT stall can't freeze the needle either
+        // (it used to: the radio loop carried the level copy, and the loop is the CAT thread).
+        assert!(
+            meters.rx_level() > 0.0,
+            "the meter publishes on this thread too — no CAT stall may freeze it"
+        );
+    }
+
+    /// METER BALLISTICS PIN — fast attack.
+    ///
+    /// A real S-meter (IC-9700 class) snaps UP nearly instantly and falls smoothly; symmetric
+    /// smoothing (the old per-callback EMA) made a key-down take ~150–300 ms to register, which
+    /// the operator read as "accurate, but slow". Pin the attack: a full-scale step must reach
+    /// 90% of the stored level within THREE 20 ms ticks (60 ms) of the audio that carries it.
+    #[test]
+    fn a_full_scale_step_reaches_90pct_within_three_ticks() {
+        let tap = RxTap::new();
+        let ring = Arc::new(SpscRing::new(48_000));
+        tap.publish_card(ring.clone(), 12_000);
+        let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
+        let mut dsp = RxDsp::new();
+        // Silence first, so the step starts from a settled 0 level.
+        ring.push_slice(&vec![0.0; 256]);
+        dsp.tick(&tap, &feed, &meters);
+        assert_eq!(meters.rx_level(), 0.0, "settled at zero before the step");
+        // Full-scale step: three ticks' worth of ±full-scale samples (RMS = 1.0).
+        for _ in 0..3 {
+            ring.push_slice(&vec![1.0; 256]);
+            dsp.tick(&tap, &feed, &meters);
+        }
+        assert!(
+            meters.rx_level() >= 0.9,
+            "a full-scale step must reach 90% within 3 ticks (60 ms); got {} — the attack is \
+             too slow, the operator sees the audio before the needle",
+            meters.rx_level()
+        );
+    }
+
+    /// METER BALLISTICS PIN — standard decay.
+    ///
+    /// The fast attack must NOT come with an instant drop: the needle falls smoothly (85% per
+    /// tick, ~285 ms to fall 90%) like a hardware meter, so syllables and CW elements read as
+    /// a live level, not a strobe.
+    #[test]
+    fn the_meter_falls_smoothly_not_instantly() {
+        let tap = RxTap::new();
+        let ring = Arc::new(SpscRing::new(48_000));
+        tap.publish_card(ring.clone(), 12_000);
+        let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
+        let mut dsp = RxDsp::new();
+        for _ in 0..10 {
+            ring.push_slice(&vec![1.0; 256]);
+            dsp.tick(&tap, &feed, &meters);
+        }
+        let peak = meters.rx_level();
+        assert!(peak > 0.95, "settled near full scale (got {peak})");
+        // One silent tick: the level must FALL, but only to ~85% — never snap to zero.
+        ring.push_slice(&vec![0.0; 256]);
+        dsp.tick(&tap, &feed, &meters);
+        let after_one = meters.rx_level();
+        assert!(
+            after_one < peak && after_one > 0.5 * peak,
+            "one silent tick decays smoothly (got {after_one} from {peak})"
+        );
+        // ~14 silent ticks (≈285 ms): 90% of the level is gone — standard needle fall.
+        for _ in 0..13 {
+            ring.push_slice(&vec![0.0; 256]);
+            dsp.tick(&tap, &feed, &meters);
+        }
+        assert!(
+            meters.rx_level() < 0.15,
+            "the needle has fallen ~90% after ~285 ms of silence (got {})",
+            meters.rx_level()
+        );
     }
 
     #[test]
@@ -214,10 +342,11 @@ mod tests {
         let ring = Arc::new(SpscRing::new(48_000));
         tap.publish_card(ring.clone(), 12_000);
         let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
         let mut dsp = RxDsp::new();
         ring.push_slice(&tone(12_000, 1500.0, WINDOW * 2));
         for _ in 0..4 {
-            dsp.tick(&tap, &feed);
+            dsp.tick(&tap, &feed, &meters);
         }
         let row = feed.row().expect("published").row;
         let (want, got) = (bin_of(1500.0), peak_bin(&row));
@@ -234,10 +363,11 @@ mod tests {
         let ring = Arc::new(SpscRing::new(200_000));
         tap.publish_card(ring.clone(), 44_100);
         let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
         let mut dsp = RxDsp::new();
         ring.push_slice(&tone(44_100, 1500.0, 44_100 / 2));
         for _ in 0..8 {
-            dsp.tick(&tap, &feed);
+            dsp.tick(&tap, &feed, &meters);
         }
         let row = feed.row().expect("published").row;
         let (want, got) = (bin_of(1500.0), peak_bin(&row));
@@ -252,20 +382,21 @@ mod tests {
     fn an_epoch_change_rebuilds_the_resampler_and_clears_the_window() {
         let tap = RxTap::new();
         let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
         let mut dsp = RxDsp::new();
 
         let a = Arc::new(SpscRing::new(200_000));
         tap.publish_card(a.clone(), 44_100);
         a.push_slice(&tone(44_100, 800.0, 44_100 / 2));
         for _ in 0..8 {
-            dsp.tick(&tap, &feed);
+            dsp.tick(&tap, &feed, &meters);
         }
 
         let b = Arc::new(SpscRing::new(48_000));
         tap.publish_card(b.clone(), 12_000);
         b.push_slice(&tone(12_000, 2500.0, WINDOW * 2));
         for _ in 0..4 {
-            dsp.tick(&tap, &feed);
+            dsp.tick(&tap, &feed, &meters);
         }
 
         let row = feed.row().expect("published").row;
@@ -283,12 +414,45 @@ mod tests {
     fn no_source_publishes_an_empty_row_not_nothing() {
         let tap = RxTap::new();
         let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
         let mut dsp = RxDsp::new();
-        assert!(!dsp.tick(&tap, &feed), "nothing to publish");
+        assert!(!dsp.tick(&tap, &feed, &meters), "nothing to publish");
         let row = feed.row().expect("an EMPTY row is still published");
         assert!(
             row.row.is_empty(),
             "and it is empty, so the UI stops cleanly"
+        );
+        assert_eq!(
+            meters.rx_level(),
+            0.0,
+            "no capture → the meter reads zero, never a stale level"
+        );
+    }
+
+    /// THE LIVELINESS BUDGET (operator report 2026-07-30: "the waterfall speed seems to be
+    /// 'smoothed out' to remove response").
+    ///
+    /// The only temporal smoothing on the spectrum is the analysis window itself: the row is a
+    /// Hann-windowed FFT over the last `WINDOW` samples, so a signal edge takes a full window
+    /// to reach full brightness (and ~half a window to reach half). At 4096 samples / 12 kHz
+    /// that was 341 ms — the literal "smoothed out". Pin the window's time span at ≤ 200 ms so
+    /// a future "more resolution" change can't quietly re-smear the display. (Frequency cost of
+    /// shrinking it: raw bins must stay finer than the 512-bin display over 0–4000 Hz, i.e.
+    /// ≤ 7.8 Hz — asserted alongside, so this pin can't be satisfied by gutting resolution.)
+    #[test]
+    fn the_analysis_window_fits_the_display_liveliness_budget() {
+        let window_s = WINDOW as f32 / ANALYSIS_RATE;
+        assert!(
+            window_s <= 0.200,
+            "analysis window is {:.0} ms of audio — a signal edge needs that long to reach \
+             full brightness, which reads as lag on CW/voice (budget: 200 ms)",
+            window_s * 1000.0
+        );
+        let raw_bin_hz = ANALYSIS_RATE / WINDOW as f32;
+        assert!(
+            raw_bin_hz <= 4000.0 / 512.0,
+            "raw FFT bins ({raw_bin_hz:.2} Hz) must stay finer than the 512-bin display \
+             (7.81 Hz) — liveliness may not be bought with visible resolution"
         );
     }
 
@@ -301,6 +465,11 @@ mod tests {
     ///
     /// A DIFF HERE IS A DSP BEHAVIOUR CHANGE. Justify it, then update the digest — do not
     /// loosen the assertion.
+    ///
+    /// Digest history:
+    /// - 2026-08-01: WINDOW/FFT_N 4096 → 2048 for display liveliness (see `WINDOW`). The row
+    ///   is now an FFT over half the history — deliberately different bytes. Resolution proof
+    ///   unchanged: `resolves_two_close_tones` (tempo-core) still splits tones 40 Hz apart.
     #[test]
     fn the_row_for_a_known_input_is_byte_stable() {
         // The exact generator the golden used: a sawtooth over the analysis window.
@@ -309,9 +478,10 @@ mod tests {
         let ring = Arc::new(SpscRing::new(WINDOW * 2));
         tap.publish_card(ring.clone(), ANALYSIS_RATE_HZ); // native rate → passthrough resampler
         let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
         let mut dsp = RxDsp::new();
         ring.push_slice(&saw);
-        assert!(dsp.tick(&tap, &feed), "a row is produced");
+        assert!(dsp.tick(&tap, &feed, &meters), "a row is produced");
         let row = feed.row().expect("published").row;
 
         assert_eq!(row.len(), 512, "bin count is part of the contract");
@@ -324,7 +494,7 @@ mod tests {
             }
         }
         assert_eq!(
-            h, 8_281_068_622_764_297_801,
+            h, 6_920_642_816_737_317_696,
             "waterfall row digest drifted for a fixed input"
         );
     }
@@ -337,6 +507,7 @@ mod tests {
         let ring = Arc::new(SpscRing::new(1024));
         tap.publish_card(ring.clone(), 12_000);
         let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
         let mut dsp = RxDsp::new();
         // Push far more than the ring holds — push_slice must not block or panic.
         let accepted = ring.push_slice(&tone(12_000, 1500.0, 100_000));
@@ -344,6 +515,9 @@ mod tests {
             accepted < 100_000,
             "the ring is bounded and drops the excess"
         );
-        assert!(dsp.tick(&tap, &feed), "and a row is still produced");
+        assert!(
+            dsp.tick(&tap, &feed, &meters),
+            "and a row is still produced"
+        );
     }
 }

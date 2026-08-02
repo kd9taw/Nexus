@@ -379,6 +379,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <Waterfall
           theme={theme}
           active={active}
+          rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
           transmitting={snap?.radio.transmitting ?? false}
           rxOffsetHz={(rtty.markHz + rtty.spaceHz) / 2}
           txOffsetHz={0}

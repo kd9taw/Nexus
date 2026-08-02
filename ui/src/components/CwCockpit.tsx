@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
+import { useSmeterDb } from './LiveMeters'
 import { TxMeters } from './TxMeters'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
@@ -197,6 +198,10 @@ export function CwCockpit({
   panels,
   unassisted,
 }: Props) {
+  // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
+  // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
+  // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
+  const smeterDb = useSmeterDb()
   const catOk = snap.radio.catOk === true
   // Wheel-to-tune over the CW scope, sharing the tuning strip's step selector.
   // Tuning step, persisted per cockpit ('nexus.cw.tuneStep'): the cockpit unmounts on every
@@ -1192,7 +1197,7 @@ export function CwCockpit({
         <PhoneScope
           transmitting={snap.radio.transmitting}
           theme={theme}
-          smeterDb={snap.radio.smeterDb}
+          smeterDb={smeterDb}
           viewLoHz={nativeRf ? rfSpan.lo : 300}
           viewHiHz={nativeRf ? rfSpan.hi : 1100}
           markerHz={nativeRf ? undefined : pitch}

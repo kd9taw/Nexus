@@ -5,6 +5,36 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed: the displays answer the audio — waterfalls, scopes and meters respond faster
+
+The voice/CW/RTTY/SSTV displays lagged the ear. You heard a signal and the screen answered
+late and rounded-off: the waterfall took a third of a second to bring a new signal to full
+brightness, the RTTY and SSTV waterfalls threw away five of every six spectrum rows, and
+both meters answered roughly half a second after the audio. Nothing here adds animation or
+invented motion — every change removes real delay between the antenna and the pixels.
+
+- The spectrum's analysis window is half as long. A key-down or a voice syllable reaches
+  full brightness in ~170 ms instead of ~340 ms, and short CW elements stop blurring
+  together. Nothing visible is lost: the finer raw resolution the long window bought was
+  below what the display can draw, and computing the shorter window costs less CPU.
+- The RTTY cockpit and the SSTV band waterfall scroll at 20 rows per second — the same
+  cadence the Phone/CW rig scope already runs — instead of 8. The FT8/FT4 waterfall is
+  unchanged: those modes are slot-synchronous and their display is right as it is.
+- The RX audio meter has real instrument ballistics: it snaps up with the audio (90% of a
+  step within ~60 ms) and falls smoothly, like a hardware S-meter. It used to smooth the
+  attack and the decay equally, so the needle registered a signal ~150–300 ms late.
+- Both meters read through a new fast lane, polled every 100 ms, that no longer rides the
+  radio loop or the 300 ms status poll — so a slow CAT read can no longer freeze the
+  needles for seconds at a time, and a meter whose readings stop arriving falls back to
+  rest within about two-thirds of a second instead of holding a stale needle. On a
+  healthy link the CAT S-meter is also re-read every 360 ms instead of every 750 ms —
+  twice as fresh, without crowding the link the radio dial shares. Slow serial links
+  keep the gentler cadence; that limit is the radio's, not the app's.
+- The meter bars no longer ease their width in CSS. The eased bar smeared every real
+  reading by another 80–120 ms; color changes still ease, measurements do not.
+
 ## [0.25.0] — 2026-08-01
 
 ### Fixed: torn-off windows open at a readable size

@@ -21,7 +21,11 @@ import * as api from '../api'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
 import type { PanelLayoutApi, SstvPanelId } from '../features/panelState'
 
-vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
+vi.mock('./Waterfall', () => ({
+  // Capture the cadence prop: the liveliness pin below asserts the SSTV band waterfall runs at
+  // the live-instrument 50 ms cadence, not the FT surfaces' 120 ms default.
+  Waterfall: (p: { rowMs?: number }) => <div data-testid="band-waterfall" data-rowms={p.rowMs} />,
+}))
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
   sstvArm: vi.fn(),
@@ -167,6 +171,16 @@ describe('SstvView pane shell', () => {
     const stage = document.querySelector('.sstv-canvas')
     expect(stage).not.toBeNull()
     expect(stage!.closest('.pane-frame')).toBeNull()
+  })
+
+  it('the band waterfall polls at the live-instrument cadence (50 ms), not the FT default', async () => {
+    // The idle RX stage IS the band ("what's on the frequency right now") — a live instrument
+    // like the rig scope, not a slot-synchronous FT surface. The producer makes a fresh row
+    // every 20 ms; the FT 120 ms poll would discard 5 of 6 rows (operator report 2026-07-30).
+    await renderView()
+    const wf = document.querySelector('[data-testid="band-waterfall"]')
+    expect(wf, 'idle band waterfall did not render — cadence untested').not.toBeNull()
+    expect(wf!.getAttribute('data-rowms')).toBe('50')
   })
 
   it('the TX bar is the LAST shell child — parked in the deficit valve (dock discipline)', async () => {

@@ -63,7 +63,11 @@ vi.mock('../toast', () => ({
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
 }))
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
-vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
+vi.mock('./Waterfall', () => ({
+  // Capture the cadence prop: the liveliness pin below asserts RTTY runs the waterfall at the
+  // live-instrument 50 ms cadence, not the FT surfaces' 120 ms default.
+  Waterfall: (p: { rowMs?: number }) => <div className="waterfall-wrap" data-rowms={p.rowMs} />,
+}))
 
 const snap = {
   mycall: 'KD9TAW',
@@ -124,6 +128,14 @@ describe('RttyCockpit pane shell', () => {
     expect(document.querySelector('.cw-keyer-warn'), 'warn banner did not render — census untested').not.toBeNull()
     expect(shell.querySelectorAll(':scope > .pane-frame').length).toBe(1)
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
+  })
+
+  it('the waterfall polls at the live-instrument cadence (50 ms), not the FT default', async () => {
+    // RTTY is a live band instrument like the rig scope (PhoneScope, 20 Hz) — the producer
+    // makes a fresh row every 20 ms, so the FT surfaces' 120 ms poll would discard 5 of every
+    // 6 rows and cap the scroll at 8 rows/s (the operator's "smoothed out" report, 2026-07-30).
+    await renderCockpit()
+    expect(document.querySelector('.waterfall-wrap')!.getAttribute('data-rowms')).toBe('50')
   })
 
   it('the decoded stream renders through a CockpitPaneFrame', async () => {

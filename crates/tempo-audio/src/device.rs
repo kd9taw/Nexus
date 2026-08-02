@@ -662,7 +662,8 @@ impl AudioBackend for CpalBackend {
     }
 
     /// Current RX input level (0.0–1.0): a decaying peak meter sampled on the
-    /// audio thread. The radio loop reads this each iteration for the UI meter.
+    /// audio thread. Diagnostics only since 2026-08-01 (`examples/audio_probe`) —
+    /// the app UI meters via the rx-dsp thread's `MeterFeed` (see rxdsp.rs).
     fn rx_level(&self) -> f32 {
         *self.rx_level.lock().unwrap_or_else(|e| e.into_inner())
     }
