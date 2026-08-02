@@ -21,7 +21,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tempo_app::engine::{engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine};
+use tempo_app::engine::{
+    engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine, SatCatBackend,
+};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
 
@@ -3316,13 +3318,37 @@ impl RadioLoop {
                             // accepting it would transmit on the operator's
                             // own downlink.
                             //
-                            // A 9700 served by REAL Hamlib rigctld (not our
-                            // native daemon) gets `S 1 Sub` + `I` + `X` here;
-                            // Hamlib's satmode split handling is version-
-                            // dependent, and the reliable recipe there is
-                            // `U SATMODE 1`, then `V Main`/`F`/`M` and
-                            // `V Sub`/`F`/`M`, verified with `v`/`f` — wire it
-                            // if a Hamlib-driven 9700 station ever surfaces.
+                            // WHICH DAEMON is serving decides whether Main/Sub
+                            // is drivable at all, so the engine is told — it
+                            // owns the mapping policy but cannot see the
+                            // socket. `CatDaemon::native()` is the LIVE fact,
+                            // not `icom_native_cat`: keying on the CAT port
+                            // forces rigctld (`keys_on_the_cat_port`) and a
+                            // failed native start falls back silently, so the
+                            // setting is necessary but not sufficient. `None`
+                            // (a rigctld someone else launched) is not native
+                            // — we cannot even read its model.
+                            //
+                            // Served by Hamlib, a Main/Sub sat split is
+                            // REFUSED here and nothing reaches the wire. It
+                            // used to send `S 1 Sub` + `I` + `X`: the
+                            // operator's 9700 rejected that outright (the
+                            // field report), and a rigctld that ACKs instead
+                            // is worse: nothing in this build reads the Sub
+                            // band back on that path, so the rail reports an
+                            // uplink applied on the strength of an ack alone —
+                            // which on the 9700 is how 0.24.2's uplink went
+                            // into the downlink's band register. The Hamlib
+                            // recipe (`U SATMODE 1`, then per-VFO `V`/`F`/`M`)
+                            // stays UNWIRED on purpose: `f` after `V Sub` can
+                            // be served from Hamlib's get-cache, so its
+                            // read-back cannot distinguish a landed write from
+                            // an echo of our own set — and that false positive
+                            // transmits on the operator's own downlink, into
+                            // the transponder's output passband. Verifying it
+                            // needs a real 9700 on a real rigctld; neither
+                            // this tree nor CI has one (CI's Hamlib is the
+                            // Dummy backend, not icom.c).
                             //
                             // ⚠️ A `let`, NEVER a `match` scrutinee: under
                             // edition 2021 a scrutinee temporary lives to the
@@ -3338,7 +3364,18 @@ impl RadioLoop {
                             // `;`, which also keeps the engine lock off the CAT
                             // round-trips below — the loop's own
                             // lock-scoped-then-I/O discipline.
-                            let tx_vfo = { engine_lock(engine).sat_split_tx_vfo(tx_hz) };
+                            let cat_backend = if self
+                                .rigctld_proc
+                                .as_ref()
+                                .and_then(CatDaemon::native)
+                                .is_some()
+                            {
+                                SatCatBackend::NativeCiv
+                            } else {
+                                SatCatBackend::Hamlib
+                            };
+                            let tx_vfo =
+                                { engine_lock(engine).sat_split_tx_vfo(tx_hz, cat_backend) };
                             match tx_vfo {
                                 Err(reason) => {
                                     // The mapping itself is undrivable: nothing
@@ -5672,8 +5709,16 @@ impl Transport {
 
     /// A networked rig (FlexRadio/SmartSDR or a remote rigctld): rigctld connects to
     /// `rig_addr` over TCP instead of a serial port. Requires a non-empty address.
+    ///
+    /// The RULE lives in tempo-app ([`tempo_app::settings::rig_conn_is_network`]) rather
+    /// than here, because tempo-app cannot import tempo-audio and Settings has to answer
+    /// the same question — the satellite refusal's "can the native CI-V daemon serve this
+    /// radio?" is `native_civ_addr`'s gate, and `native_civ_addr` is this. Re-implemented
+    /// there instead, the two parted company on every `rig_conn` that is neither exactly
+    /// "serial" nor exactly "network", and an IC-9700 from a settings file predating the
+    /// field was told its layout was a dead end while its daemon was one checkbox away.
     fn is_network(&self) -> bool {
-        self.rig_conn == "network" && !self.rig_addr.is_empty()
+        tempo_app::settings::rig_conn_is_network(&self.rig_conn, &self.rig_addr)
     }
 
     /// True if the selected sound-card input/output device changed.
@@ -6258,6 +6303,69 @@ mod tests {
         );
     }
 
+    /// ⭐ THE CONN-VALUE AGREEMENT TABLE — "is the native daemon reachable for
+    /// this radio?" answered ONCE.
+    ///
+    /// Two surfaces ask it: [`native_civ_addr`] (the daemon — the truth) and
+    /// `Settings::sat_native_civ_reachable`, which is what stops
+    /// `sat_uplink_offer` pre-filling a Main/Sub mapping on a station where the
+    /// native backend has no path. They used to hold two different connection
+    /// tests (`!is_network()` vs `rig_conn == "serial"`), and the two disagreed
+    /// for every `rig_conn` that is neither exactly "serial" nor exactly
+    /// "network" — the empty string included, which is what a settings.json
+    /// predating the field deserializes to and which the field's own doc
+    /// declares "is treated as serial". A legacy-file IC-9700 was then denied
+    /// the offer its daemon could have honoured.
+    ///
+    /// Both answers below are computed from ONE `Settings` value through the
+    /// PRODUCTION path (`Transport::from_settings` → `native_civ_addr`), so
+    /// this cannot be satisfied by a second copy of the rule that happens to
+    /// agree today. tempo-audio depends on tempo-app, so this cross-crate
+    /// check can only live on this side.
+    #[test]
+    fn one_reachability_rule_answers_for_the_daemon_and_for_the_refusal() {
+        let mut disagreed: Vec<String> = Vec::new();
+        // Every conn value the field can actually hold. "network" is the ONLY
+        // one the daemon refuses, and only with an address to connect to —
+        // `is_network()` is `rig_conn == "network" && !rig_addr.is_empty()`.
+        for (conn, addr) in [
+            ("serial", ""),
+            ("network", "192.168.1.50:4992"),
+            // A "network" pick with no address yet: rigctld has nowhere to
+            // connect, so the daemon does NOT treat it as a network rig.
+            ("network", ""),
+            // The legacy file: the field is `#[serde(default)]` and empty
+            // means serial. THE FIELD-REPORT CASE.
+            ("", ""),
+            ("Serial", ""),
+            ("SERIAL", ""),
+            ("Network", "192.168.1.50:4992"),
+            // Anything a newer build (or a hand-edited file) might write.
+            ("usb", ""),
+        ] {
+            let s = Settings {
+                rig_model: 3081, // IC-9700 — in NATIVE_CIV_SAT_RIGS
+                icom_native_cat: true,
+                rig_conn: conn.to_string(),
+                rig_addr: addr.to_string(),
+                ..Settings::default()
+            };
+            let daemon = native_civ_addr(&Transport::from_settings(&s)).is_some();
+            let offer_gate = s.sat_native_civ_reachable();
+            if offer_gate != daemon {
+                disagreed.push(format!(
+                    "  rig_conn {conn:?} rig_addr {addr:?} → daemon {daemon}, \
+                     offer gate {offer_gate}"
+                ));
+            }
+        }
+        assert!(
+            disagreed.is_empty(),
+            "one question, more than one answer:\n{}",
+            disagreed.join("\n")
+        );
+    }
+
     #[test]
     fn an_unanswerable_dsp_func_backs_off_instead_of_stalling_forever() {
         // Model the state machine exactly as the poll site drives it.
@@ -6694,6 +6802,21 @@ mod tests {
             None,
             &RadioConfig::default(),
         )
+    }
+    /// [`loop_state`] pinned to the ENGINE's rig model.
+    ///
+    /// Load-bearing, not tidiness: the sat scenes below run on the FIELD-REPORT
+    /// rig (an IC-9700, Hamlib model 3081), and a loop whose applied transport
+    /// still says "model 0" sees `rig_differs` on the very first step and
+    /// spends the tick tearing the rig down and re-opening it through
+    /// `mock_reopen_rig` — which hands back `Rig::vox()`. The step never
+    /// reaches the retune or the split apply, and the scene asserts nothing.
+    fn loop_state_for(engine: &Arc<Mutex<Engine>>) -> RadioLoop {
+        let cfg = RadioConfig {
+            rig_model: engine.lock().unwrap().settings().rig_model,
+            ..RadioConfig::default()
+        };
+        RadioLoop::new(Transport::from_cfg(&cfg), None, &cfg)
     }
     fn no_sinks() -> Sinks<'static> {
         Sinks {
@@ -8931,7 +9054,10 @@ mod tests {
             // is engine-owned live state a settings payload cannot carry
             // (round 3, defect 2), so baking it into `apply_settings` would
             // be discarded.
-            let s = eng.settings().clone();
+            // The FIELD-REPORT RIG, not an anonymous one: an IC-9700 (Hamlib
+            // model 3081), which is what the report was filed against.
+            let mut s = eng.settings().clone();
+            s.rig_model = 3081;
             eng.apply_settings(s);
             eng.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::MainDownSubUp));
             eng.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
@@ -8945,7 +9071,19 @@ mod tests {
     /// only way to demonstrate the wedge in bounded time is to time out
     /// waiting for it. On timeout the wedged thread is deliberately leaked
     /// (it holds the engine mutex forever; joining it would hang the suite).
-    fn step_with_watchdog(engine: &Arc<Mutex<Engine>>, rig: Rig, watchdog: Duration) {
+    ///
+    /// `daemon` is the CAT daemon the loop OWNS, and it is load-bearing rather
+    /// than bookkeeping: the split apply asks `CatDaemon::native()` whether
+    /// Main/Sub is drivable at all. A native scene that left this `None` would
+    /// take the Hamlib refusal and assert nothing about the CI-V path — so the
+    /// native tests hand their `CivDaemon` in here, which is also what
+    /// production does (`RadioLoop::new` is given the daemon it spawned).
+    fn step_with_watchdog(
+        engine: &Arc<Mutex<Engine>>,
+        rig: Rig,
+        daemon: Option<CatDaemon>,
+        watchdog: Duration,
+    ) {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let eng = Arc::clone(engine);
         std::thread::Builder::new()
@@ -8953,7 +9091,8 @@ mod tests {
             .spawn(move || {
                 let mut rig = rig;
                 let mut backend = MockBackend::new();
-                let mut state = loop_state();
+                let mut state = loop_state_for(&eng);
+                state.rigctld_proc = daemon;
                 let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
                 let mut station = StationSinks::new();
                 let res = state.step(
@@ -8987,10 +9126,15 @@ mod tests {
 
     #[test]
     fn sat_pick_split_apply_never_wedges_the_loop_and_lands_the_uplink() {
-        let (_d, rig, regs) = civ_daemon_rig(false);
+        let (d, rig, regs) = civ_daemon_rig(false);
         let engine = sat_pick_engine();
 
-        step_with_watchdog(&engine, rig, Duration::from_secs(10));
+        step_with_watchdog(
+            &engine,
+            rig,
+            Some(CatDaemon::Native(d)),
+            Duration::from_secs(10),
+        );
 
         // Liveness alone is not the feature — the pick must also have LANDED:
         // satellite mode engaged, downlink on Main, uplink select-written into
@@ -9018,16 +9162,195 @@ mod tests {
         );
     }
 
+    /// Every rigctld line this scene put on the wire, with the split verbs
+    /// picked out. `S`/`I`/`X` are the ONLY three that can move a transmit
+    /// dial, so a split that "wrote nothing" is provable by their absence.
+    fn split_verbs(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| {
+                let l = l.trim();
+                l.starts_with("S ") || l.starts_with("I ") || l.starts_with("X ")
+            })
+            .map(|l| l.trim().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_hamlib_served_9700_writes_no_sat_split_and_says_so() {
+        // THE FIELD REPORT, on the backend it actually happened on. `icom_native_cat`
+        // DEFAULTS OFF (settings.rs), so the default IC-9700 station is served by real
+        // Hamlib `rigctld`, not our native CI-V daemon — `rigctld_proc: None` here is
+        // exactly what a spawned-or-attached Hamlib daemon looks like to the loop.
+        //
+        // The stub ACKs every line with `RPRT 0`, which is the DANGEROUS rigctld: pre-fix
+        // the loop read those acks as a landed cross-band split and stamped the uplink on
+        // the binding rail. Nothing on that path ever read a Sub band back, so the rail
+        // said "split ON — TX 145.9650 MHz (Sub)" on the strength of an ack alone — and on
+        // the 9700 an unverified split is how 0.24.2 put the "uplink" in the register the
+        // DOWNLINK lives in.
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = sat_pick_engine();
+
+        step_with_watchdog(&engine, Rig::rigctld(&addr), None, Duration::from_secs(10));
+
+        // The DOWNLINK half still lands — that is the "435.640 ↓ MHz" the operator
+        // photographed, and this fix must not cost them their receive dial.
+        let lines = seen.lock().unwrap().clone();
+        assert!(
+            lines.iter().any(|l| l.trim() == "F 435640000"),
+            "the downlink dial is still written on the Hamlib path: {lines:?}"
+        );
+        // …and NOT ONE split verb reaches the wire. This build cannot drive Main/Sub
+        // through Hamlib (the `U SATMODE 1` + per-VFO recipe is unwired, and its
+        // read-back cannot be made cache-proof from here), so it writes nothing at all.
+        assert_eq!(
+            split_verbs(&seen),
+            Vec::<String>::new(),
+            "no split verb may reach a Hamlib-served 9700 under Main = downlink / Sub = uplink"
+        );
+        // The rail must not claim an uplink it never wrote.
+        let eng = engine.lock().unwrap();
+        let b = eng.sat_binding().expect("the pick left a binding");
+        assert_eq!(
+            b.uplink_mhz, None,
+            "no uplink was written, so none is claimed"
+        );
+        assert_eq!(
+            b.downlink_mhz.map(|m| (m * 1e6).round() as u64),
+            Some(435_640_000),
+            "the downlink leg is still confirmed by the rig's ack"
+        );
+        // …AND THE OPERATOR IS TOLD. The refusal reason is what the loop puts on the
+        // CAT status line, so the field report's "the rig refused the split" with no
+        // explanation is replaced by the engine's own sentence — pinned by identity
+        // against the const, not by a phrase that could drift.
+        assert_eq!(
+            eng.snapshot().radio.cat_detail,
+            tempo_app::engine::MAIN_SUB_HAMLIB_REFUSAL,
+            "the CAT status carries the engine's refusal verbatim"
+        );
+    }
+
+    #[test]
+    fn a_refused_hamlib_sat_split_leaves_nothing_to_tear_down() {
+        // Teardown symmetry, from the other end: a split that was never engaged must
+        // not be released as if it had been. `split_on_sub` is latched ONLY inside the
+        // applied arm, so after the refusal the return to simplex has to go out as
+        // `S 0 VFOA` — never `S 0 Sub`, which on a rig that is not in satellite mode
+        // addresses a VFO it does not have, and whose failure would raise the "rig
+        // would not leave satellite mode" note over a rig that was never in it.
+        //
+        // Two steps on ONE `RadioLoop`, because the latch is loop state: a fresh state
+        // per step would show `S 0 VFOA` no matter what the first step did.
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = sat_pick_engine();
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+
+        // 1) the pick — refused on the Hamlib path, nothing written.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert_eq!(
+            split_verbs(&seen),
+            Vec::<String>::new(),
+            "nothing was engaged"
+        );
+
+        // 2) back to simplex.
+        engine.lock().unwrap().request_split(None);
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                1.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert_eq!(
+            split_verbs(&seen),
+            vec!["S 0 VFOA".to_string()],
+            "the release is the plain A/B one — the Sub latch was never taken"
+        );
+    }
+
+    #[test]
+    fn a_lagging_hamlib_cannot_manufacture_a_claimed_uplink() {
+        // The get-cache hazard, run as a scene. `lagging_rigctld_stub` models the
+        // read-back that answers with a STALE dial — the documented reason the
+        // `U SATMODE 1` + `V Sub`/`F`/`f` recipe was NOT wired: a read-back a cached
+        // value can satisfy is a computed value dressed as a done value, and the false
+        // positive puts the operator's carrier in the transponder's downlink passband.
+        //
+        // The guarantee this pins is stronger than "the read-back is checked": on the
+        // Hamlib path NOTHING is written and NOTHING is read back, so there is no
+        // read-back for a cache to satisfy. Whatever the daemon would have replied,
+        // the uplink stays unclaimed.
+        let (addr, seen) = lagging_rigctld_stub(3);
+        let engine = sat_pick_engine();
+
+        step_with_watchdog(&engine, Rig::rigctld(&addr), None, Duration::from_secs(10));
+
+        assert_eq!(
+            split_verbs(&seen),
+            Vec::<String>::new(),
+            "a lagging (cache-serving) rigctld gets no split verbs either"
+        );
+        let eng = engine.lock().unwrap();
+        assert_eq!(
+            eng.sat_binding().and_then(|b| b.uplink_mhz),
+            None,
+            "no cached read-back can be mistaken for a landed uplink"
+        );
+        // ANCHOR (round 2, defect 5): both assertions above are also satisfied
+        // by a step that never REACHED the split apply — a lagging stub could
+        // stall the dial read, the split block never run, and this test would
+        // pass while exercising nothing. The refusal text can only come from
+        // the split apply's Err arm, so its presence is the positive proof the
+        // decision was made and the decision was "write nothing". Pinned by
+        // IDENTITY against the const, never by a phrase: a phrase match drifts
+        // silently out from under the message it is guarding (round 4 — this
+        // line matched "Native CI-V" against a sentence that says "native").
+        assert_eq!(
+            eng.snapshot().radio.cat_detail,
+            tempo_app::engine::MAIN_SUB_HAMLIB_REFUSAL,
+            "the step reached the split apply and refused there"
+        );
+    }
+
     #[test]
     fn terrestrial_up_split_apply_stays_live_and_rides_vfob() {
         // The same one-shot serves every pile-up "UP n" spot — pre-fix those
         // wedged identically (the scrutinee guard covered both arms), so the
         // A/B leg gets its own liveness pin.
-        let (_d, rig, regs) = civ_daemon_rig(false);
+        let (d, rig, regs) = civ_daemon_rig(false);
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         engine.lock().unwrap().request_split(Some(14.235));
 
-        step_with_watchdog(&engine, rig, Duration::from_secs(10));
+        step_with_watchdog(
+            &engine,
+            rig,
+            Some(CatDaemon::Native(d)),
+            Duration::from_secs(10),
+        );
 
         let r = regs.lock().unwrap();
         assert!(r.split, "0F 01 — the shipped A/B split");
@@ -9051,10 +9374,15 @@ mod tests {
             ("silent rig", |_| {}, true),
         ];
         for (name, inject, mute) in faults {
-            let (_d, rig, regs) = civ_daemon_rig(mute);
+            let (d, rig, regs) = civ_daemon_rig(mute);
             inject(&mut regs.lock().unwrap());
             let engine = sat_pick_engine();
-            step_with_watchdog(&engine, rig, Duration::from_secs(30));
+            step_with_watchdog(
+                &engine,
+                rig,
+                Some(CatDaemon::Native(d)),
+                Duration::from_secs(30),
+            );
             // Anchor: the step must have REACHED the split apply, or this test
             // is green while exercising nothing. A responsive-but-faulted rig
             // shows the attempt on the wire (`16 5A` — the satellite-mode

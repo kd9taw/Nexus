@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: a satellite uplink Nexus cannot verify is now refused instead of reported applied
+
+Hold a linear bird on an IC-9700, pick "Main = downlink, Sub = uplink" — the layout the
+radio is actually built for — and the pass rail answered "the uplink was not written". It
+never said why, and the mapping the operator picked was the right one for their rig.
+
+The missing piece was which CAT backend was serving. Nexus can drive an IC-9700's satellite
+mode two ways, and only one of them is wired: **Native CI-V**, where Nexus owns the CI-V port
+itself, engages the rig's satellite mode, writes the uplink into the Sub band and reads every
+step back off the radio before reporting it done. Native CI-V is off by default, so the usual
+IC-9700 station runs on Hamlib's `rigctld` instead — and this build has no verified satellite
+split there.
+
+- **"Main = downlink, Sub = uplink" when Native CI-V is not what is serving.** Nexus now
+  sends nothing at all — no split command, no transmit frequency — and the CAT status line
+  says so in one sentence: Nexus drives that layout only through its own native CI-V
+  backend, that backend is not what is serving this radio, nothing was written and nothing
+  was transmitted, and your receive dial is still being corrected. It does not guess which
+  backend *is* serving. Nexus may have started `rigctld` itself, fallen back to it when its
+  own daemon failed to start, or simply attached to a `rigctld` someone else launched — and
+  in that last case it has never even read the radio's model. Test CAT names the one in use.
+  Before, the split went out, and a `rigctld` that answered "ok" was enough for the pass rail
+  to display a transmit frequency the radio was not on.
+- **Every uplink mapping that rides VFO A/B on the IC-9700, IC-910, IC-9100 and IC-905 — a
+  behaviour change.** Nexus has no verified cross-band VFO A/B satellite split for these four
+  radios; sending one unverified is how 0.24.2's "uplink" went nowhere. The rule is now that
+  the uplink is written only where Nexus can place **both** legs of the pass on the same
+  band. A cross-band pass is refused — and so is a pass it cannot place on the band plan at
+  all, because then it cannot prove the two legs share a band. That second case is not
+  hypothetical: the band plan stops at 23 cm, so an IC-905 microwave bird is refused even
+  when both legs really are on 10 GHz. "Transmit only" is refused on these four radios for
+  the same reason — that mapping never writes a receive dial, so there is no second leg to
+  compare against. **V/V and U/U birds up to 23 cm keep the A/B split**: both legs on one
+  band is the case A/B carries, and it still carries it. Every other radio — the FT-847,
+  TS-2000, TS-790 and FT-736R class, and every ordinary HF rig — is untouched and still
+  takes a cross-band uplink on VFO B as before.
+- **Settings no longer pre-fills a mapping it cannot drive.** The one-click "Main = downlink,
+  Sub = uplink" offer now appears only where Nexus's own CI-V engine can actually serve the
+  radio — an IC-9700 or IC-905 on a serial/USB port. The IC-910 and IC-9100 are outside that
+  engine's coverage in this build, and so is any radio reached over the network rather than a
+  serial port, so those stations are asked instead of pre-filled. "Serial" here means exactly
+  what the CI-V daemon itself means by it, so a settings file written before Nexus had a
+  connection setting counts as serial, the same as it does everywhere else in the app.
+
+Doppler keeps correcting your **receive** dial wherever it was already correcting one, so no
+refusal above costs you the downlink; work the uplink from the radio's own front panel for
+that pass. On the A/B side a refusal does cost something real, and it is worth being plain
+about: the IC-910, IC-9100 and IC-905 used to get an uplink attempt on a cross-band pass, and
+now they do not. That attempt was only ever *acknowledged* — the radio answered "ok" and
+nothing in this build read the frequency back off it — so what it bought was a number on the
+pass rail that may or may not have been where the radio was transmitting. Losing it is the
+safer half of the trade: on a linear bird, a split you believe and the radio did not take
+puts your carrier in the transponder's downlink passband, on top of everyone else working
+it. (On the IC-9700 that attempt is known not to land — it is the 0.24.2 bug.) Ordinary A/B
+splits — including every terrestrial pile-up "UP 5" — are untouched on every radio and on
+both backends.
+
+The Hamlib satellite recipe stays deliberately unwired rather than sent hopefully. Hamlib can
+answer a frequency read-back out of its own cache, so a read-back a stale value can satisfy
+cannot tell a landed uplink from an echo of what we just asked for, and confirming the
+difference needs a real radio on a real `rigctld` — which neither this tree nor CI has.
+Guessing wrong there puts your carrier in the transponder's downlink passband, on top of
+everyone else working the bird.
+
 ### Fixed: the caller card's distance and bearing now agree with QRZ
 
 Work a station on Phone or CW and the card that appears when the call resolves reported a

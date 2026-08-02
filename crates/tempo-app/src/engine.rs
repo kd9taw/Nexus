@@ -239,6 +239,108 @@ pub fn engine_lock(m: &std::sync::Mutex<Engine>) -> std::sync::MutexGuard<'_, En
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Which CAT daemon is serving the radio RIGHT NOW, as the radio loop sees the
+/// socket it owns. The engine owns the satellite mapping POLICY but cannot see
+/// the wire, so the loop hands it this fact every split apply
+/// ([`Engine::sat_split_tx_vfo`]).
+///
+/// The LIVE backend, never the `icom_native_cat` setting: the two diverge in
+/// both directions (keying on the CAT port forces rigctld, and a failed native
+/// start falls back silently), so only the loop can answer it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SatCatBackend {
+    /// Nexus's own CI-V daemon owns the serial port — the one backend that can
+    /// engage the rig's satellite mode and select-write the Sub band, checking
+    /// every step against the radio's own read-back.
+    NativeCiv,
+    /// ANYTHING ELSE on that socket. The loop picks this arm from
+    /// `rigctld_proc.and_then(CatDaemon::native).is_none()`, which is three
+    /// different stations: the `rigctld` Nexus spawned, the `rigctld` it fell
+    /// back to when a native start failed (silently — `spawn_cat_daemon`
+    /// records the error and carries on), and a rigctld someone else launched
+    /// that Nexus merely attached to, where it cannot even read the model.
+    ///
+    /// The variant is named for the common case; the REFUSAL must not be. The
+    /// one fact true across all three — and the only one
+    /// [`MAIN_SUB_HAMLIB_REFUSAL`] asserts — is that the native CI-V backend is
+    /// not what is serving. Which backend IS, `cat_backend_label` answers with
+    /// the four-way distinction this two-way enum deliberately does not carry.
+    Hamlib,
+}
+
+/// What the operator is told when `Main = downlink / Sub = uplink` is refused
+/// because the native CI-V backend is not what is serving.
+///
+/// ⭐ ONE SENTENCE SET, TRUE FOR EVERY RIG THAT CAN REACH IT — the mapping can
+/// be picked on any radio, so every clause here is a fact about NEXUS, never
+/// about the rig in front of the operator:
+///  - Nexus drives this layout only on its native CI-V backend
+///    (`Engine::sat_split_tx_vfo` returns `Ok("Sub")` for that arm alone);
+///  - that backend is not what is serving — the exact content of
+///    [`SatCatBackend::Hamlib`], which is `CatDaemon::native()` coming back
+///    `None`;
+///  - nothing was written — the caller's `Err` path sends no CAT verb at all
+///    (pinned on the wire by tempo-audio's
+///    `a_hamlib_served_9700_writes_no_sat_split_and_says_so`);
+///  - the receive dial is still corrected — reaching here means Doppler is
+///    running (`sat_doppler_off` gates both legs, and the uplink was sent) and
+///    every Main/Sub mapping is `SatVfoMap::drives_downlink()`.
+///
+/// ⚠️ IT DOES NOT NAME THE BACKEND THAT IS SERVING. It used to say "Hamlib
+/// rigctld is serving this radio", which Nexus cannot know: the same arm is
+/// reached when it attached to a rigctld someone else launched — a daemon whose
+/// model it never read — and when its own native start failed and fell back
+/// without telling this code. `cat_backend_label` is the one place that holds
+/// the distinction ("native CI-V" / "Hamlib rigctld" / "Hamlib rigctld — the
+/// native CI-V daemon didn't start" / "a shared external rigctld"), and Test
+/// CAT is where the operator reads it, so the refusal points there instead of
+/// asserting a fourth answer of its own.
+///
+/// It names no cure ON PURPOSE. Any "turn on X" is wrong for some station that
+/// can reach this line (an IC-910 has no Native CI-V path to switch on), and a
+/// refusal that misdescribes the operator's radio is no better than the bare
+/// "the rig refused the split" the field report arrived as. Pointing at where a
+/// FACT is displayed is not a cure — it prescribes no change to the radio.
+/// `pub` so the radio loop's end-to-end scene can pin the EXACT string the
+/// engine produced (its proof that the step reached the split apply and refused
+/// there) instead of matching a phrase that could drift out from under it.
+pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
+    "Main = downlink / Sub = uplink was not driven — Nexus drives that layout only through its \
+     own native CI-V backend, and that backend is not what is serving this radio. Nothing was \
+     written to the radio and nothing was transmitted; your receive dial is still being \
+     corrected. Test CAT names the backend that is.";
+
+/// …and when a mapping that rides VFO A/B cannot be shown to keep both legs of
+/// the pass on one band, on one of the four Main/Sub satellite Icoms
+/// ([`crate::settings::Settings::sat_main_sub_rig`]) — the only rigs
+/// [`Engine::ab_cross_band_refusal`] can reach.
+///
+/// Same rule: only what Nexus knows. "No verified cross-band A/B split for this
+/// radio" is a statement about this build (the IC-9700 is where it was measured
+/// and the other three are refused with it, untested); it does not assert a
+/// register layout the tree evidences for one model only.
+///
+/// The band clause is "could not confirm both legs are on one band", NOT "the
+/// two legs are not on one band" — because [`Engine::ab_cross_band_refusal`]
+/// fails CLOSED in two ways that both reach this line with the legs genuinely
+/// on one band. Off the end of `bandplan::band_for_dial`'s 23 cm ceiling, an
+/// IC-905 pass with BOTH legs on 10 GHz answers two `None`s; and under
+/// uplink-only there IS no recorded downlink to compare (`sent` records the
+/// legs it wrote, and that mapping writes none). The stronger sentence would be
+/// a false statement about the operator's bird in both.
+///
+/// ⚠️ AND IT MAY NOT PROMISE THE RECEIVE DIAL — the difference from
+/// [`MAIN_SUB_HAMLIB_REFUSAL`], which can. That one is reachable only under
+/// Main/Sub, where `SatVfoMap::drives_downlink()` always holds; this one is
+/// reachable under uplink-only, the single mapping where it does not, and there
+/// the dial is the operator's and no Doppler correction is running on it. So
+/// the closing clause says what is true of every mapping that gets here:
+/// nothing else about the pass moved.
+const AB_CROSS_BAND_REFUSAL: &str =
+    "This uplink was not driven — Nexus has no verified cross-band VFO A/B satellite split for \
+     this radio, and it could not confirm both legs of this pass are on one band. Nothing was \
+     written to the radio and nothing was transmitted; nothing else about this pass changed.";
+
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
 /// [`Engine::ingest`] (Boundary), [`Engine::ingest_early`] (Early), and
@@ -3715,8 +3817,15 @@ impl Engine {
                 .is_some_and(|p| (tx_mhz - p).abs() < 1e-9)
             {
                 b.pending_uplink_mhz = None;
+                // "The SPLIT was not applied", never "the RIG refused it":
+                // since `sat_split_tx_vfo` gained a backend gate this arm is
+                // also reached when NEXUS refused before the wire, and blaming
+                // the operator's radio for our own decision is the same defect
+                // as a refusal that misdescribes their rig. Both paths share
+                // the one thing that is always true — the uplink was not
+                // written — and the CAT status carries who refused and why.
                 b.note = Some(
-                    "The rig refused the split — the uplink was not written (see the CAT status)."
+                    "The split was not applied — the uplink was not written (see the CAT status)."
                         .to_string(),
                 );
             }
@@ -6954,25 +7063,114 @@ impl Engine {
     ///   transmit on the operator's own downlink. The caller sends NOTHING and
     ///   surfaces the reason.
     ///
+    /// `cat` is which daemon is serving RIGHT NOW — the live socket, not the
+    /// `icom_native_cat` setting (keying on the CAT port forces Hamlib, and a
+    /// failed native start falls back silently). Only
+    /// [`SatCatBackend::NativeCiv`] can drive Main/Sub: it engages satellite
+    /// mode and select-writes the Sub band, verifying each step against the
+    /// rig's own read-back.
+    ///
+    /// Served by Hamlib `rigctld` instead, `Ok("Sub")` used to be returned
+    /// anyway — and `S 1 Sub` + `I <uplink>` went to a radio with no cross-band
+    /// split to reach for. On the operator's 9700 Hamlib refused it (the
+    /// 0.24.x field report: "the rig refused the split"); a rigctld that ACKs
+    /// instead is worse, because the rail then claims an uplink that is sitting
+    /// in the DOWNLINK's band register. The Hamlib recipe (`U SATMODE 1`, then
+    /// per-VFO writes) is deliberately NOT wired: its read-back can be served
+    /// from Hamlib's get-cache, so a false positive is indistinguishable from a
+    /// landed write, and that false positive keys the operator into the
+    /// transponder's downlink passband. An honest refusal is the correct
+    /// answer until it can be verified on real hardware.
+    ///
+    /// ⚠️ ONE REFUSAL, TRUE FOR EVERY RIG THAT CAN REACH IT. The operator can
+    /// pick this mapping on any radio, so the message states only what NEXUS
+    /// knows — which backend drives the layout, which one is serving, that
+    /// nothing was written, and that the receive dial is still corrected. It
+    /// deliberately prescribes no cure: earlier drafts branched on the rig and
+    /// each branch was wrong for some station (an IC-910 has no Native CI-V
+    /// toggle to be sent to; an FT-847 must not be told to give its uplink back
+    /// to the radio). A refusal an operator cannot act on is how the original
+    /// field report reached us, and a refusal that misdescribes their radio is
+    /// no better.
+    ///
     /// Gated by the identical "this split IS my uplink" identity check as
     /// [`Self::sat_tx_mode_for_split`], so a terrestrial "UP 5" worked while a
-    /// bird is held can never engage satellite mode on a pile-up.
-    pub fn sat_split_tx_vfo(&self, tx_hz: u64) -> Result<&'static str, String> {
+    /// bird is held can never engage satellite mode on a pile-up — and the
+    /// backend gate sits INSIDE that check, so a Hamlib rig keeps every
+    /// terrestrial A/B split it has always had.
+    pub fn sat_split_tx_vfo(&self, tx_hz: u64, cat: SatCatBackend) -> Result<&'static str, String> {
         let is_sat_uplink = self
             .sat_tune
             .as_ref()
             .is_some_and(|st| st.sent.sent && st.sent.uplink_hz == tx_hz);
-        if !is_sat_uplink || !self.settings.sat_vfo_map.is_main_sub() {
+        if !is_sat_uplink {
             return Ok("VFOB");
         }
+        if !self.settings.sat_vfo_map.is_main_sub() {
+            // A/B rides VFO B everywhere EXCEPT where the radio's A/B pair
+            // cannot reach the uplink's band at all.
+            return match self.ab_cross_band_refusal(tx_hz) {
+                Some(reason) => Err(reason),
+                None => Ok("VFOB"),
+            };
+        }
         match self.settings.sat_vfo_map {
-            crate::settings::SatVfoMap::MainDownSubUp => Ok("Sub"),
+            crate::settings::SatVfoMap::MainDownSubUp => match cat {
+                SatCatBackend::NativeCiv => Ok("Sub"),
+                SatCatBackend::Hamlib => Err(MAIN_SUB_HAMLIB_REFUSAL.to_string()),
+            },
             _ => Err(
                 "Main = uplink / Sub = downlink can't be driven — satellite mode always \
                  transmits on Sub. Nothing was written; pick Main = downlink / Sub = uplink."
                     .to_string(),
             ),
         }
+    }
+
+    /// Why an A/B mapping cannot carry THIS pass's uplink, or `None` when it
+    /// can — which is the overwhelming majority of the time.
+    ///
+    /// One rig class, one condition: on the four Main/Sub satellite Icoms Nexus
+    /// has no verified CROSS-BAND A/B split. The IC-9700 is where that was
+    /// measured — `0F 01` + `25 01` address the CURRENT band's other VFO, which
+    /// is how 0.24.2's uplink went nowhere — and the other three are refused
+    /// with it rather than written on an untested assumption.
+    ///
+    /// THE DISCRIMINATOR IS THE BIRD, NOT THE RIG. A V/V transponder is worked
+    /// on A/B by these radios every day, and refusing the mapping outright
+    /// would take that away; a cross-band bird written the same way is ACKed by
+    /// the rig without the uplink having landed, which is exactly the "split
+    /// BELIEVED that did not take" the never-on-the-downlink rule forbids.
+    ///
+    /// ⚠️ THE GATE ASKS `drives_uplink()`, NEVER A VARIANT LIST. It listed
+    /// `ADownBUp | AUpBDown` once, and [`crate::settings::SatVfoMap::UplinkOnly`]
+    /// — which drives an uplink and is not `is_main_sub()` — walked straight
+    /// past it to `Ok("VFOB")`: the same VFO B, the same unverified cross-band
+    /// write, on the same four rigs. The mapping's NAME is not a different wire.
+    /// `is_main_sub()` is answered by the caller before this is reached, so the
+    /// predicate resolves to exactly the three mappings that ride A/B.
+    ///
+    /// Fails CLOSED: if either leg is off any ham band we cannot prove the two
+    /// share one, so the split is refused rather than sent hopefully. That
+    /// covers an uplink above the `band_for_dial` table's 23 cm ceiling (an
+    /// IC-905 on 5.7 GHz or 10 GHz) — `up` is `None`, the same-band early
+    /// return cannot fire, and the refusal writes nothing. It also covers
+    /// uplink-only, where `sent.downlink_hz` is 0 because no downlink was ever
+    /// written: there is no second leg to compare, so on these four rigs that
+    /// mapping is refused for the whole pass, cross-band or not. That is the
+    /// honest reading of the same rule — Nexus cannot prove one band — and it
+    /// is what [`AB_CROSS_BAND_REFUSAL`] says.
+    fn ab_cross_band_refusal(&self, tx_hz: u64) -> Option<String> {
+        if !self.settings.sat_vfo_map.drives_uplink() || !self.settings.sat_main_sub_rig() {
+            return None;
+        }
+        let st = self.sat_tune.as_ref()?;
+        let band = |hz: u64| crate::bandplan::band_for_dial(hz as f64 / 1_000_000.0);
+        let (down, up) = (band(st.sent.downlink_hz), band(tx_hz));
+        if down.is_some() && down == up {
+            return None;
+        }
+        Some(AB_CROSS_BAND_REFUSAL.to_string())
     }
 
     /// The transponder hold, for UI read-back: the "BIRD|description" label
@@ -20099,31 +20297,420 @@ mod tests {
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 1_000_000);
 
-        // The bird's own uplink under Main-down/Sub-up ⇒ the Sub band.
-        assert_eq!(e.sat_split_tx_vfo(145_965_000), Ok("Sub"));
+        // The bird's own uplink under Main-down/Sub-up ⇒ the Sub band — on the
+        // native CI-V backend, the one that can engage satellite mode and
+        // select-write the Sub band.
+        assert_eq!(e.sat_split_tx_vfo(145_965_000, NATIVE), Ok("Sub"));
         // A terrestrial "UP 5" split while the bird is held ⇒ plain A/B split;
         // engaging satellite mode on a 20 m pile-up would be ours to answer for.
-        assert_eq!(e.sat_split_tx_vfo(14_235_000), Ok("VFOB"));
+        assert_eq!(e.sat_split_tx_vfo(14_235_000, NATIVE), Ok("VFOB"));
 
-        // An A/B mapping keeps the shipped path even for the bird's uplink.
+        // The SAME mapping served by Hamlib rigctld is refused: this build has
+        // no verified satellite split there, so nothing goes to the wire.
+        assert_eq!(
+            e.sat_split_tx_vfo(145_965_000, HAMLIB),
+            Err(MAIN_SUB_HAMLIB_REFUSAL.to_string())
+        );
+        // …and it costs a Hamlib rig NOTHING terrestrial: the pile-up split is
+        // untouched on either backend.
+        assert_eq!(e.sat_split_tx_vfo(14_235_000, HAMLIB), Ok("VFOB"));
+
+        // An A/B mapping on THIS rig cannot carry RS-44's cross-band uplink.
+        // Refused on either backend, and independent of the backend gate above:
+        // this is the radio, not the daemon. (The same-band half, and the rigs
+        // whose A/B DOES cross-band, are in
+        // `an_a_b_split_on_a_main_sub_icom_is_refused_only_when_it_would_cross_bands`.)
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 2_000_000);
-        assert_eq!(e.sat_split_tx_vfo(145_965_000), Ok("VFOB"));
+        for cat in [NATIVE, HAMLIB] {
+            assert_eq!(
+                e.sat_split_tx_vfo(145_965_000, cat),
+                Err(AB_CROSS_BAND_REFUSAL.to_string())
+            );
+        }
+        // …and the terrestrial pile-up split is still untouched under it.
+        assert_eq!(e.sat_split_tx_vfo(14_235_000, HAMLIB), Ok("VFOB"));
 
         // Main = uplink / Sub = downlink is NOT drivable (satellite mode fixes
         // TX on Sub): refused in the operator's words, never silently accepted
-        // — accepting it would transmit on their own downlink.
+        // — accepting it would transmit on their own downlink. Refused on the
+        // NATIVE backend too: this one is the rig's own contract, not a gap in
+        // a backend, so the wording must not blame one.
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainUpSubDown);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 3_000_000);
-        let err = e.sat_split_tx_vfo(145_965_000).unwrap_err();
-        assert!(
-            err.contains("Sub"),
-            "the refusal explains the contract: {err}"
-        );
+        for cat in [NATIVE, HAMLIB] {
+            let err = e.sat_split_tx_vfo(145_965_000, cat).unwrap_err();
+            assert!(
+                err.contains("always transmits on Sub"),
+                "the refusal explains the contract: {err}"
+            );
+            assert!(
+                !err.contains("CI-V"),
+                "an undrivable-by-contract mapping must not blame the backend: {err}"
+            );
+        }
         // …while a pile-up split under the same mapping still rides VFOB.
-        assert_eq!(e.sat_split_tx_vfo(14_235_000), Ok("VFOB"));
+        assert_eq!(e.sat_split_tx_vfo(14_235_000, NATIVE), Ok("VFOB"));
+    }
+
+    /// The native CI-V daemon serving; Hamlib rigctld serving.
+    const NATIVE: SatCatBackend = SatCatBackend::NativeCiv;
+    const HAMLIB: SatCatBackend = SatCatBackend::Hamlib;
+
+    /// A one-radio satellite station on `model`, held on RS-44 with the
+    /// Main/Sub mapping confirmed and the uplink already sent — i.e. the exact
+    /// state `sat_split_tx_vfo`'s identity gate wants, on the rig of our choice.
+    fn main_sub_station(model: u32) -> Engine {
+        main_sub_station_wired(model, "serial", "", false)
+    }
+
+    /// …with the two other axes the native daemon gates on: the CONNECTION
+    /// (`native_civ_addr` refuses a network transport — which is
+    /// `rig_conn == "network"` AND an address to reach, both, since a network
+    /// pick with nowhere to connect is not a network rig) and the operator's
+    /// `icom_native_cat` opt-in.
+    fn main_sub_station_wired(model: u32, conn: &str, addr: &str, native_on: bool) -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.rig_model = model;
+        e.settings.rig_conn = conn.to_string();
+        e.settings.rig_addr = addr.to_string();
+        e.settings.icom_native_cat = native_on;
+        e.settings.sync_active_from_flat();
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(false, 1_000_000);
+        e
+    }
+
+    #[test]
+    fn the_hamlib_main_sub_refusal_is_one_sentence_true_for_every_rig_that_reaches_it() {
+        // ⭐ THE ROUND-4 REDUCTION. Three earlier rounds branched this message
+        // on the rig and each branch was wrong for somebody: "turn on Native
+        // CI-V" pointed an IC-910/IC-9100 operator at a switch their radio has
+        // no path to; the dead-end variant told an FT-847 to give back an
+        // uplink Nexus drives for it. The mapping can be picked on ANY radio,
+        // so there is exactly one message and every clause in it is a fact
+        // about Nexus.
+        //
+        // Every rig class that can reach the refusal, in one table: the two
+        // Main/Sub Icoms the native daemon CAN serve, the two it can NEVER
+        // serve, the full-duplex A/B class, and an ordinary HF rig.
+        for model in [3081u32, 3090, 3044, 3068, 1001, 1010, 2014, 2007, 1042] {
+            let e = main_sub_station(model);
+            assert_eq!(
+                e.sat_split_tx_vfo(145_965_000, HAMLIB),
+                Err(MAIN_SUB_HAMLIB_REFUSAL.to_string()),
+                "model {model}"
+            );
+        }
+        // The two safety facts, spelled out so a future reword cannot drop
+        // them: nothing reached the radio, and the leg that IS still driven
+        // is named.
+        assert!(MAIN_SUB_HAMLIB_REFUSAL.contains("Nothing was written to the radio"));
+        assert!(MAIN_SUB_HAMLIB_REFUSAL.contains("receive dial is still being corrected"));
+        // …and it prescribes nothing. A "turn on"/"set"/"pick" here is the
+        // defect class this test exists to keep out: it cannot be true for
+        // every rig above.
+        for imperative in ["Turn on", "Set the uplink", "Set PTT", "pick "] {
+            assert!(
+                !MAIN_SUB_HAMLIB_REFUSAL.contains(imperative),
+                "the one refusal must name no cure — found {imperative:?}"
+            );
+        }
+        // ⭐ AND IT MAY NOT NAME THE BACKEND THAT IS SERVING. It said "Hamlib
+        // rigctld is serving this radio", which Nexus does not know:
+        // `SatCatBackend::Hamlib` is `CatDaemon::native()` returning `None`,
+        // and that is THREE stations — the rigctld Nexus spawned, the one it
+        // silently fell back to when its own daemon failed to start, and one
+        // someone else launched that Nexus only attached to, whose model it has
+        // never read. The negative is the assertion: what Nexus holds is that
+        // its OWN backend is not serving, and `cat_backend_label` (via Test
+        // CAT) is the one place the four-way answer lives.
+        for claim in ["Hamlib", "rigctld"] {
+            assert!(
+                !MAIN_SUB_HAMLIB_REFUSAL.contains(claim),
+                "the refusal must not assert which backend is serving — found {claim:?}"
+            );
+        }
+        assert!(MAIN_SUB_HAMLIB_REFUSAL.contains("that backend is not what is serving this radio"));
+    }
+
+    #[test]
+    fn the_native_daemons_reachability_rule_gates_the_uplink_offer() {
+        // The predicate the DAEMON itself uses (`native_civ_addr` →
+        // `Transport::is_network` → `settings::rig_conn_is_network`), consumed
+        // here so Nexus never PRE-FILLS a Main/Sub mapping for a station where
+        // it has no path: `sat_uplink_offer` may only return Confirm where the
+        // native backend can actually serve the radio.
+        //
+        // The IC-910 (3044) / IC-9100 (3068) have no `0x27` CI-V scope, so they
+        // are absent from `icom_scope_model` and the daemon can never start for
+        // them — `icom_native_cat` on or off.
+        for model in [3044u32, 3068] {
+            for on in [false, true] {
+                let e = main_sub_station_wired(model, "serial", "", on);
+                assert!(
+                    !e.settings().sat_native_civ_reachable(),
+                    "model {model} can never reach the native daemon"
+                );
+                assert_eq!(
+                    e.settings().sat_uplink_offer(),
+                    crate::settings::SatUplinkOffer::Ask,
+                    "model {model}, icom_native_cat {on}: never pre-filled"
+                );
+            }
+        }
+        // The connection axis is the DAEMON's (`!is_network()`), not a "serial"
+        // string match. A network IC-9700 cannot run it; the two rows after
+        // that are where a string match got it backwards — both DO reach the
+        // daemon, and the empty string is the FIELD-REPORT station (a
+        // settings.json predating the `rig_conn` field).
+        for (conn, addr, reachable) in [
+            ("network", "192.168.1.50:4992", false),
+            ("network", "", true),
+            ("", "", true),
+            ("serial", "", true),
+        ] {
+            let off = main_sub_station_wired(3081, conn, addr, false);
+            assert_eq!(
+                off.settings().sat_native_civ_reachable(),
+                reachable,
+                "rig_conn {conn:?} rig_addr {addr:?}"
+            );
+            assert_eq!(
+                off.settings().sat_uplink_offer(),
+                crate::settings::SatUplinkOffer::Ask,
+                "rig_conn {conn:?}: the switch is off, so nothing is pre-filled"
+            );
+            let on = main_sub_station_wired(3081, conn, addr, true);
+            assert_eq!(
+                on.settings().sat_uplink_offer(),
+                if reachable {
+                    crate::settings::SatUplinkOffer::Confirm(
+                        crate::settings::SatVfoMap::MainDownSubUp,
+                    )
+                } else {
+                    crate::settings::SatUplinkOffer::Ask
+                },
+                "rig_conn {conn:?} rig_addr {addr:?}"
+            );
+        }
+    }
+
+    /// A V/V linear transponder — 2 m in, 2 m out. The case an A/B split on a
+    /// Main/Sub Icom CAN legitimately carry, and the reason refusing A/B on
+    /// those rigs outright would be wrong.
+    const SAME_BAND: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 145_990_000,
+        downlink_centre_hz: 145_950_000,
+        invert: false,
+        half_width_hz: 15_000,
+    };
+
+    /// An IC-905 bird whose UPLINK is above `bandplan::band_for_dial`'s 23 cm
+    /// ceiling (5.67 GHz) while its downlink is still on it (23 cm). The
+    /// reachable fail-closed case: `band_for_dial` answers `None` for the
+    /// uplink, so the same-band early return cannot fire.
+    const SHF_UP: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 5_670_000_000,
+        downlink_centre_hz: 1_265_000_000,
+        invert: false,
+        half_width_hz: 250_000,
+    };
+
+    /// …and a 3 cm in-band repeater: BOTH legs on 10 GHz, so both answer
+    /// `None`. Genuinely SAME-band, which is what decides the wording of
+    /// [`AB_CROSS_BAND_REFUSAL`]'s second clause.
+    const SHF_SAME_BAND: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 10_450_000_000,
+        downlink_centre_hz: 10_489_500_000,
+        invert: false,
+        half_width_hz: 250_000,
+    };
+
+    #[test]
+    fn an_a_b_split_on_a_main_sub_icom_is_refused_only_when_it_would_cross_bands() {
+        // Shipped behaviour before this branch: an A/B mapping on these four
+        // rigs was written unconditionally — `sat_split_tx_vfo` short-circuited
+        // Ok("VFOB") before any model check, the loop sent `S 1 VFOB` +
+        // `I <uplink>` ack-only, `rig_split_applied` stamped the rail's
+        // `uplink_mhz` off that ack, and the note claimed "split ON — TX
+        // 145.9650 MHz (VFO B)". On the IC-9700 `0F 01` + `25 01` address the
+        // CURRENT band's other VFO, so the uplink landed in the downlink's band
+        // register — the 0.24.2 bug. The other three are refused with it rather
+        // than written on an untested assumption.
+        //
+        // The discriminator is the BIRD, not the rig: same-band birds use A/B
+        // legitimately.
+        for model in [3081u32, 3044, 3068, 3090] {
+            let mut e = main_sub_station(model);
+            confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
+            // RS-44: 2 m up, 70 cm down — CROSS-BAND.
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(false, 2_000_000);
+            for cat in [NATIVE, HAMLIB] {
+                assert_eq!(
+                    e.sat_split_tx_vfo(145_965_000, cat),
+                    Err(AB_CROSS_BAND_REFUSAL.to_string()),
+                    "model {model}"
+                );
+            }
+
+            // The SAME rig on a V/V bird: A/B is how it is done, and taking it
+            // away would cost a real operating case.
+            e.set_sat_transponder(Some(("SO-50|V/V".into(), 0, SAME_BAND)));
+            e.sat_tune_nominal(false, 3_000_000);
+            for cat in [NATIVE, HAMLIB] {
+                assert_eq!(
+                    e.sat_split_tx_vfo(145_990_000, cat),
+                    Ok("VFOB"),
+                    "model {model}: a same-band uplink still rides VFO B"
+                );
+            }
+            // …and a terrestrial pile-up split is untouched throughout.
+            assert_eq!(e.sat_split_tx_vfo(14_235_000, HAMLIB), Ok("VFOB"));
+        }
+        // FAILS CLOSED ABOVE THE BAND TABLE. `bandplan::band_for_dial` stops at
+        // 23 cm, so an IC-905 uplink on 5.7 GHz answers `None` — the same-band
+        // early return cannot fire on an unknown band, and the split is REFUSED
+        // rather than sent hopefully. That is the safe direction: an uplink we
+        // cannot classify must not be written to VFO B on a rig whose A/B
+        // cross-band split is unverified.
+        assert_eq!(
+            crate::bandplan::band_for_dial(5_670.0),
+            None,
+            "the table's ceiling is the premise of this case"
+        );
+        let mut e = main_sub_station(3090); // IC-905
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
+        e.set_sat_transponder(Some(("L/X|linear".into(), 0, SHF_UP))); // 5.67 GHz up, 23 cm down
+        e.sat_tune_nominal(false, 4_000_000);
+        for cat in [NATIVE, HAMLIB] {
+            assert_eq!(
+                e.sat_split_tx_vfo(5_670_000_000, cat),
+                Err(AB_CROSS_BAND_REFUSAL.to_string()),
+                "an uplink off the band table is refused, never written"
+            );
+        }
+
+        // …AND SO DOES A GENUINELY SAME-BAND PASS off the end of the table:
+        // 10 GHz in, 10 GHz out, BOTH legs `None`. Fail-closed is still the
+        // right call (Nexus cannot prove the legs share a band, and this rig's
+        // A/B cross-band split is unverified), but it is exactly why the
+        // message may not say "the two legs are not on one band" — here they
+        // ARE. It states only what Nexus knows: it could not confirm it.
+        //
+        // Reached through the DOPPLER TICK, because `sat_tune_nominal` refuses
+        // a bird whose DOWNLINK is off the band plan before it ever marks the
+        // pair sent — the layer above this one, and its own fail-closed.
+        let mut e = main_sub_station(3090);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
+        e.set_sat_transponder(Some(("3cm|X/X".into(), 0, SHF_SAME_BAND)));
+        let refused = e.sat_tune_nominal(false, 5_000_000);
+        assert_eq!(
+            (refused.downlink_mhz, refused.uplink_mhz),
+            (None, None),
+            "a downlink off the band plan tunes nothing at all"
+        );
+        let c = e
+            .sat_doppler_tick(0.0, 5_100_000, false)
+            .expect("the tick drives the held pair");
+        let up = c.uplink_hz.expect("the uplink leg is confirmed and driven");
+        assert_eq!(
+            crate::bandplan::band_for_dial(up as f64 / 1e6),
+            None,
+            "both legs are off the table — the premise of this case"
+        );
+        assert_eq!(
+            e.sat_split_tx_vfo(up, HAMLIB),
+            Err(AB_CROSS_BAND_REFUSAL.to_string()),
+            "an unclassifiable pass is refused, never written"
+        );
+        assert!(
+            AB_CROSS_BAND_REFUSAL
+                .contains("could not confirm both legs of this pass are on one band"),
+            "the band clause states Nexus's knowledge, not the bird's layout"
+        );
+
+        // Every OTHER radio keeps the cross-band A/B split it has always had —
+        // the FT-847/TS-2000/TS-790/FT-736R class and ordinary HF rigs, none of
+        // which the cross-band rule applies to.
+        for model in [1001u32, 1010, 2014, 2007, 1042] {
+            let mut e = main_sub_station(model);
+            confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(false, 2_000_000);
+            assert_eq!(e.sat_split_tx_vfo(145_965_000, HAMLIB), Ok("VFOB"));
+            assert_eq!(e.sat_split_tx_vfo(145_965_000, NATIVE), Ok("VFOB"));
+        }
+    }
+
+    #[test]
+    fn a_transmit_only_mapping_reaches_the_same_a_b_wire_and_the_same_refusal() {
+        // ⭐ THE HOLE THE VARIANT LIST LEFT. `ab_cross_band_refusal` enumerated
+        // the two A/B mappings, but `SatVfoMap::UplinkOnly` is ALSO
+        // `drives_uplink()` and is NOT `is_main_sub()` — so on a Main/Sub Icom
+        // it walked past the gate to `Ok("VFOB")`, and the unverified cross-band
+        // split this branch exists to stop went to the wire on the very rigs it
+        // was written for. Uplink-only rides VFO B exactly like A/B does; the
+        // operator's mapping name is not a different wire.
+        //
+        // The gate now asks the QUESTION (`drives_uplink`) instead of listing
+        // the variants that happened to exist when it was written — a list is
+        // how this hole opened, and the next mapping added would reopen it.
+        for model in [3081u32, 3044, 3068, 3090] {
+            let mut e = main_sub_station(model);
+            confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(false, 2_000_000);
+            for cat in [NATIVE, HAMLIB] {
+                assert_eq!(
+                    e.sat_split_tx_vfo(145_965_000, cat),
+                    Err(AB_CROSS_BAND_REFUSAL.to_string()),
+                    "model {model}"
+                );
+            }
+            // …and the terrestrial pile-up split is untouched under it.
+            assert_eq!(e.sat_split_tx_vfo(14_235_000, HAMLIB), Ok("VFOB"));
+        }
+        // WHY THE MESSAGE MAY NOT PROMISE THE RECEIVE DIAL. Uplink-only is the
+        // one mapping that is NOT `drives_downlink()`: the seed records only the
+        // leg it wrote, so `sent.downlink_hz` is 0 here and the dial is the
+        // operator's by their own choice. Both facts land on the same line —
+        // the refusal cannot say "your receive dial is still being corrected"
+        // (there is none to correct), and it cannot say the legs are on
+        // different bands (it never learned the downlink's). It says what it
+        // knows: it could not confirm, and nothing else about the pass moved.
+        let mut e = main_sub_station(3081);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(false, 2_000_000);
+        assert!(
+            !e.settings().sat_doppler_downlink(),
+            "precondition: uplink-only leaves the receive dial to the operator"
+        );
+        assert_eq!(
+            e.sat_tune.as_ref().map(|st| st.sent.downlink_hz),
+            Some(0),
+            "precondition: no downlink was written, so none was recorded"
+        );
+        assert!(
+            !AB_CROSS_BAND_REFUSAL.contains("receive dial is still being corrected"),
+            "a mapping that drives no receive dial can reach this line"
+        );
+
+        // Every OTHER radio keeps the transmit-only uplink it has always had.
+        for model in [1001u32, 1010, 2014, 2007, 1042] {
+            let mut e = main_sub_station(model);
+            confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(false, 2_000_000);
+            assert_eq!(e.sat_split_tx_vfo(145_965_000, HAMLIB), Ok("VFOB"));
+            assert_eq!(e.sat_split_tx_vfo(145_965_000, NATIVE), Ok("VFOB"));
+        }
     }
 
     /// The FIELD-REPORT station as it is ACTUALLY configured: an FTdx10

@@ -196,12 +196,69 @@ pub enum SatUplinkOffer {
 /// Hamlib): IC-9700, IC-910, IC-9100, IC-905. Duplicated rather than imported
 /// because `tempo-app` does not depend on `tempo-audio` — the arrow points the
 /// other way.
-const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
+pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
+
+/// The subset of [`MAIN_SUB_SAT_RIGS`] that Nexus's OWN CI-V daemon can ever
+/// serve — the intersection with `tempo_audio::rigmodels::icom_scope_model`,
+/// which is the table `native_civ_addr` gates on. **IC-9700 (3081) and
+/// IC-905 (3090) only.**
+///
+/// The IC-910 (3044) and IC-9100 (3068) are classic satellite rigs with no
+/// `0x27` spectrum scope, so they are absent from `icom_scope_model` and
+/// `native_civ_addr` returns `None` for them under every setting. Only the
+/// native daemon drives a Main/Sub satellite split (`Engine::sat_split_tx_vfo`),
+/// so on those two models the mapping has no path at all and
+/// [`Settings::sat_uplink_offer`] must not pre-fill it.
+///
+/// A second axis is NOT in this table because it is per-connection, not
+/// per-model: `native_civ_addr` also refuses `is_network()`, so a
+/// network-connected IC-9700 cannot reach the native daemon either. That axis
+/// is [`rig_conn_is_network`], and [`native_civ_reachable`] is the two
+/// together.
+///
+/// Duplicated here for the same reason as [`MAIN_SUB_SAT_RIGS`] (the crate
+/// arrow points the other way) and pinned against the real table by
+/// `tempo-audio`'s `the_native_capable_sat_rig_table_is_the_civ_scope_table`.
+pub const NATIVE_CIV_SAT_RIGS: [u32; 2] = [3081, 3090];
 
 /// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the
 /// VFO pair is A/B and which one is the uplink is a station wiring choice no
 /// model string answers. FT-847, FT-736R, TS-2000, TS-790.
 const FULL_DUPLEX_AB_RIGS: [u32; 4] = [1001, 1010, 2014, 2007];
+
+/// Is this rig transport a NETWORK one — rigctld reaching the radio over TCP
+/// (a Flex via SmartSDR, a remote rigctld) instead of a serial port?
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for that question, for the whole app.
+/// `tempo_audio::service::Transport::is_network` — which is what the CI-V
+/// daemon's own gate `native_civ_addr` consults — calls THIS function, so the
+/// daemon and every consumer of [`native_civ_reachable`] cannot answer
+/// differently. They used to: Settings tested `rig_conn == "serial"`, and the
+/// two parted company on the empty string, on mixed case, and on a "network"
+/// pick with no address yet. The empty string is not hypothetical — `rig_conn`
+/// is `#[serde(default)]` and a settings.json written before the field existed
+/// loads as `""`, which this rule (and the field's own doc) treats as serial.
+///
+/// An ADDRESS is required: a "network" pick with nothing to connect to is not
+/// a network rig, because rigctld would have nowhere to go.
+pub fn rig_conn_is_network(rig_conn: &str, rig_addr: &str) -> bool {
+    rig_conn == "network" && !rig_addr.is_empty()
+}
+
+/// Could Nexus's OWN CI-V daemon ever serve a radio wired like this — i.e. is
+/// "turn on Native CI-V" a cure that EXISTS for it?
+///
+/// The two gates `tempo_audio::service::native_civ_addr` applies, in one
+/// place: a model the CI-V engine knows ([`NATIVE_CIV_SAT_RIGS`]) on a
+/// non-network transport ([`rig_conn_is_network`]). False means the Main/Sub
+/// mapping has NO path in this build, so [`Settings::sat_uplink_offer`] must
+/// not pre-fill it — `Engine::sat_split_tx_vfo` would refuse the write.
+///
+/// Not gated on the operator's `icom_native_cat` opt-in: that is the separate
+/// "is it switched on" question, and it is answered where it is used.
+pub fn native_civ_reachable(rig_model: u32, rig_conn: &str, rig_addr: &str) -> bool {
+    NATIVE_CIV_SAT_RIGS.contains(&rig_model) && !rig_conn_is_network(rig_conn, rig_addr)
+}
 
 impl Settings {
     /// Is the RECEIVE dial Doppler's to correct?
@@ -297,14 +354,15 @@ impl Settings {
     /// this build may not drive would offer a one-click confirmation for an
     /// uplink the rail would then claim and never write.
     pub fn sat_uplink_offer(&self) -> SatUplinkOffer {
-        let (model, native) = self
-            .radios
-            .iter()
-            .find(|p| p.id == self.active_radio)
-            .map(|p| (p.rig_model, p.icom_native_cat))
-            .unwrap_or((self.rig_model, self.icom_native_cat));
+        let (model, _, _, native) = self.active_rig_facts();
         if MAIN_SUB_SAT_RIGS.contains(&model) {
-            return if native {
+            // `native` alone is not enough: a settings file can carry
+            // `icom_native_cat` on for a rig the daemon can never serve
+            // (the toggle is not rendered for the IC-910/IC-9100, but the
+            // field is), and pre-filling Main/Sub there would offer a
+            // one-click confirmation for a mapping the engine then refuses
+            // as a dead end.
+            return if native && self.sat_native_civ_reachable() {
                 SatUplinkOffer::Confirm(SatVfoMap::MainDownSubUp)
             } else {
                 SatUplinkOffer::Ask
@@ -314,6 +372,51 @@ impl Settings {
             return SatUplinkOffer::Ask;
         }
         SatUplinkOffer::Nothing
+    }
+
+    /// `(rig model, connection kind, network address, Native-CI-V opt-in)` for
+    /// the ACTIVE radio — the profile if there is one, else the flat legacy
+    /// fields. ONE resolution, because several callers reading a radio several
+    /// ways is how a per-radio answer ends up describing a different radio.
+    fn active_rig_facts(&self) -> (u32, &str, &str, bool) {
+        self.radios
+            .iter()
+            .find(|p| p.id == self.active_radio)
+            .map(|p| {
+                (
+                    p.rig_model,
+                    p.rig_conn.as_str(),
+                    p.rig_addr.as_str(),
+                    p.icom_native_cat,
+                )
+            })
+            .unwrap_or((
+                self.rig_model,
+                self.rig_conn.as_str(),
+                self.rig_addr.as_str(),
+                self.icom_native_cat,
+            ))
+    }
+
+    /// Could the native CI-V daemon EVER serve the active radio — i.e. does the
+    /// Main/Sub satellite split have a path on this station at all?
+    ///
+    /// [`native_civ_reachable`] answers it, and so does the daemon's own gate:
+    /// `native_civ_addr` refuses a network transport through the same
+    /// [`rig_conn_is_network`] this calls. Pinned across the crate boundary by
+    /// tempo-audio's `one_reachability_rule_answers_for_the_daemon_and_for_the_refusal`.
+    pub fn sat_native_civ_reachable(&self) -> bool {
+        let (model, conn, addr, _) = self.active_rig_facts();
+        native_civ_reachable(model, conn, addr)
+    }
+
+    /// Is the active radio one of the four Main/Sub satellite Icoms? On the
+    /// IC-9700 the A/B pair is PER BAND (`0F 01` + `25 01` address the CURRENT
+    /// band's other VFO — the 0.24.2 bug), and Nexus has no verified cross-band
+    /// A/B split for any of the four, which is why `Engine::sat_split_tx_vfo`
+    /// refuses one rather than sending it hopefully.
+    pub fn sat_main_sub_rig(&self) -> bool {
+        MAIN_SUB_SAT_RIGS.contains(&self.active_rig_facts().0)
     }
 }
 
@@ -5197,6 +5300,65 @@ mod tests {
             s.sat_uplink_offer(),
             SatUplinkOffer::Confirm(SatVfoMap::MainDownSubUp)
         );
+
+        // …and the IC-910 / IC-9100 are Main/Sub rigs the native daemon can
+        // NEVER serve (no `0x27` scope ⇒ absent from `icom_scope_model`), so
+        // Main/Sub has no path on them at all. `icom_native_cat` can still be
+        // ON in a settings file, and pre-filling Main/Sub off that flag would
+        // be a one-click confirmation for a mapping the engine then refuses.
+        // They stay at Ask, flag or no flag.
+        for model in [3044u32, 3068] {
+            s.rig_model = model;
+            for on in [false, true] {
+                s.icom_native_cat = on;
+                s.sync_active_from_flat();
+                assert_eq!(
+                    s.sat_uplink_offer(),
+                    SatUplinkOffer::Ask,
+                    "model {model}, icom_native_cat {on}"
+                );
+                assert!(!s.sat_native_civ_reachable(), "model {model}");
+            }
+        }
+        // Same for a NETWORK-connected IC-9700: `native_civ_addr` refuses a TCP
+        // transport, so the second axis has to be checked too. That axis is
+        // the DAEMON's — [`rig_conn_is_network`], which needs BOTH the pick and
+        // an address, exactly as `Transport::is_network` does. The table below
+        // is the whole of it, and every row is the daemon's own answer.
+        s.rig_model = 3081;
+        s.icom_native_cat = true;
+        for (conn, addr, reachable) in [
+            ("network", "192.168.1.50:4992", false),
+            // A "network" pick with nowhere to connect is not a network rig.
+            ("network", "", true),
+            // The legacy file: `rig_conn` is `#[serde(default)]` and its own
+            // doc says empty is serial. This is the field-report station, and
+            // a `rig_conn == "serial"` test put it in the dead-end bucket.
+            ("", "", true),
+            ("serial", "", true),
+        ] {
+            s.rig_conn = conn.into();
+            s.rig_addr = addr.into();
+            s.sync_active_from_flat();
+            assert_eq!(
+                s.sat_native_civ_reachable(),
+                reachable,
+                "rig_conn {conn:?} rig_addr {addr:?}"
+            );
+            assert_eq!(
+                s.sat_uplink_offer(),
+                if reachable {
+                    SatUplinkOffer::Confirm(SatVfoMap::MainDownSubUp)
+                } else {
+                    SatUplinkOffer::Ask
+                },
+                "rig_conn {conn:?} rig_addr {addr:?}"
+            );
+        }
+        s.rig_conn = "serial".into();
+        s.rig_addr = String::new();
+        s.icom_native_cat = false;
+        s.sync_active_from_flat();
 
         // Full duplex on VFO A/B: which one is the uplink is station wiring.
         for model in [1001u32, 1010, 2014, 2007] {

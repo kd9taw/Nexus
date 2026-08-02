@@ -300,6 +300,52 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    /// THE GROUND TRUTH the satellite refusal is worded from, pinned across the
+    /// crate boundary.
+    ///
+    /// `tempo_app::settings::MAIN_SUB_SAT_RIGS` lists the four Icoms whose satellite
+    /// mode fixes TX on Sub. Only some of them can reach Nexus's OWN CI-V daemon,
+    /// because `native_civ_addr` gates on [`icom_scope_model`] — a table built for
+    /// the `0x27` spectrum scope, not for satellites. `NATIVE_CIV_SAT_RIGS` is
+    /// tempo-app's copy of that intersection, and `Engine::sat_split_tx_vfo` decides
+    /// from it whether "turn on Native CI-V" is a cure that EXISTS for the rig in
+    /// front of the operator. If the two tables drift, the refusal starts naming a
+    /// switch that cannot help (IC-910/IC-9100) or withholding one that can.
+    ///
+    /// tempo-audio depends on tempo-app, so the check can only live on this side.
+    ///
+    /// Iterated over the UNION of the two tables, not over `MAIN_SUB_SAT_RIGS`
+    /// alone (round 3, defect 4): membership-agreement over one table cannot
+    /// see a model added to `NATIVE_CIV_SAT_RIGS` that is NOT a Main/Sub rig.
+    /// Adding the IC-7300 (3073) there would have passed the old check while
+    /// making `sat_native_civ_reachable` true for a radio with no Sub band —
+    /// so `main_sub_refusal` would tell that operator to switch on Native CI-V
+    /// for a mapping their rig cannot express. `NATIVE_CIV_SAT_RIGS` is an
+    /// INTERSECTION: every member must be in both parents.
+    #[test]
+    fn the_native_capable_sat_rig_table_is_the_civ_scope_table() {
+        use tempo_app::settings::{MAIN_SUB_SAT_RIGS, NATIVE_CIV_SAT_RIGS};
+        let mut union: Vec<u32> = MAIN_SUB_SAT_RIGS.to_vec();
+        union.extend(NATIVE_CIV_SAT_RIGS.iter().copied());
+        union.sort_unstable();
+        union.dedup();
+        for m in union {
+            assert_eq!(
+                NATIVE_CIV_SAT_RIGS.contains(&m),
+                MAIN_SUB_SAT_RIGS.contains(&m) && icom_scope_model(m).is_some(),
+                "model {m}: NATIVE_CIV_SAT_RIGS is MAIN_SUB_SAT_RIGS ∩ icom_scope_model, \
+                 and this model is on the wrong side of that"
+            );
+        }
+        // Spelled out, so a future edit to either table has to face the names:
+        // the IC-9700 and IC-905 have a native path; the IC-910 and IC-9100 have
+        // none and never will in this build.
+        assert!(icom_scope_model(3081).is_some(), "IC-9700");
+        assert!(icom_scope_model(3090).is_some(), "IC-905");
+        assert!(icom_scope_model(3044).is_none(), "IC-910 — no CI-V scope");
+        assert!(icom_scope_model(3068).is_none(), "IC-9100 — no CI-V scope");
+    }
+
     #[test]
     fn slow_serial_rig_flags_xiegu_and_vintage_kenwood_only() {
         // Xiegu family (slow CI-V backend) → the long deadline.
