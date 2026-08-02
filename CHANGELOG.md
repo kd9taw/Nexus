@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: torn-off windows open at a readable size
+
+Pop out the CW band map and the type was tiny — and stayed tiny at every size the window
+could be dragged to, docked or free. Every torn-off window sized itself by asking whether
+the full Operate cockpit fit inside it. A 420-pixel-wide band-map strip never fits a
+cockpit, so the answer was always "no" and every pop-out opened at the smallest scale the
+app has, permanently.
+
+Each pop-out is now measured against its own contents instead. The band map, the
+waterfall strip, the Needed board, Connect, DXpeditions, Memories, Satellites and the
+Field Day scoreboard all open at full size, and shrink only when you actually squash the
+window down toward its minimum — where shrinking is the right answer. The Operate pop-out
+is unchanged: it really does host the cockpit, so the cockpit is the right question for
+it. The main window is unchanged at every size.
+
+If you have pinned a scale in Settings, that pin now applies in a pop-out as far as the
+window can take it, instead of being crushed to the smallest step. A pin is still never
+rewritten by a pop-out, and still never enlarged past what the window can show.
+
+The Needed board no longer carries its 25% font compensation — it existed only to offset
+the scale bug, and the board now reads larger than before without it.
+
 ### Added: the satellite catalog ships with the app
 
 A new install used to start with nothing and go looking for orbital elements. If the

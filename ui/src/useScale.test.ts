@@ -1,9 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { capPinnedScale, fitScale, pickInitialZoom, SCALE_STEPS } from './useScale'
+import type { Scale } from './useScale'
+import {
+  capPinnedScale,
+  fitScale,
+  pickInitialZoom,
+  naturalFor,
+  MAIN_NATURAL,
+  SCALE_STEPS,
+} from './useScale'
 
-// Fit model: NAT_W=1200, NAT_H=900. Auto NEVER upscales (default cap 100), so 1080p
-// full-screen and anything bigger sit at 100%; only SMALLER windows scale down (gently)
-// toward the 65% floor. A raised cap (Settings) lets big panels go above 100%.
+// Fit model: the MAIN window fits against MAIN_NATURAL (1200×900). Auto NEVER upscales
+// (default cap 100), so 1080p full-screen and anything bigger sit at 100%; only SMALLER
+// windows scale down (gently) toward the 65% floor. A raised cap (Settings) lets big
+// panels go above 100%. A POP-OUT fits against its OWN natural — see the per-surface
+// block at the bottom of this file.
 
 describe('fitScale', () => {
   it('keeps 1080p full-screen (and bigger) at 100% — no upscaling by default', () => {
@@ -122,5 +132,147 @@ describe('pickInitialZoom (synchronous seed)', () => {
     ] as const) {
       expect(SCALE_STEPS).toContain(pickInitialZoom(w, h))
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Per-surface natural footprint (operator report: "the font is very, very small
+// when opening the CW band map").
+//
+// A pop-out is a small window the APP sized for its own content. Fitting one against
+// the dense cockpit's 1200×900 footprint asks whether the FT8 cockpit fits inside a
+// 420-px strip: 420/1200 = 0.35, below every step, so the width term wins the min()
+// and the window pins to the 65% floor at EVERY size it can legally have. Permanent,
+// not transient. `naturalFor(panel)` supplies the right denominator per surface.
+// ---------------------------------------------------------------------------
+
+describe('fitScale against a per-surface natural', () => {
+  it('the CW band map opens at 100%, not the 65% floor (operator report)', () => {
+    const nat = naturalFor('bandmapCw')
+    // open_panel_window's default inner size for a band map.
+    expect(fitScale(420, 780, 100, undefined, nat)).toBe(100)
+    // The Phone band map is the same window shape and must not diverge.
+    expect(fitScale(420, 780, 100, undefined, naturalFor('bandmapPhone'))).toBe(100)
+    // Docked as a full-height edge strip (snap_bandmap_to_edge keeps the width and
+    // takes the work-area height) — same answer, no step change on dock.
+    expect(fitScale(420, 1400, 100, undefined, nat)).toBe(100)
+  })
+
+  it('band map: auto still TAPERS as the window is squashed toward its minimum', () => {
+    const nat = naturalFor('bandmapCw')
+    // The natural is a CONTENT box (380×520), deliberately not the window minimum —
+    // so the operator's resize lever stays live and the floor still protects the
+    // 420×360 minimum, where the legend + the 240 px track floor stop fitting.
+    expect(fitScale(420, 620, 100, undefined, nat)).toBe(100)
+    expect(fitScale(420, 500, 100, undefined, nat)).toBe(90)
+    expect(fitScale(420, 440, 100, undefined, nat)).toBe(80)
+    expect(fitScale(420, 360, 100, undefined, nat)).toBe(65)
+  })
+
+  it('the waterfall strip is off the floor too, and tapers to it at its minimum', () => {
+    const nat = naturalFor('waterfall')
+    expect(fitScale(900, 300, 100, undefined, nat)).toBe(100) // default strip
+    expect(fitScale(380, 180, 100, undefined, nat)).toBe(65) // min_inner_size
+  })
+
+  it('the Operate pop-out keeps the main cockpit footprint — it hosts that cockpit', () => {
+    expect(naturalFor('operate')).toEqual(MAIN_NATURAL)
+    expect(fitScale(1140, 760, 100, undefined, naturalFor('operate'))).toBe(80)
+  })
+
+  it('an unknown panel resolves to the generic pop-out natural, never the prototype', () => {
+    // A Map, not an object literal: `?panel=constructor` must not resolve a function.
+    expect(naturalFor('constructor')).toEqual(naturalFor('nosuchpanel'))
+    expect(naturalFor('toString')).toEqual(naturalFor('nosuchpanel'))
+    // No panel at all == the main window.
+    expect(naturalFor(null)).toEqual(MAIN_NATURAL)
+  })
+})
+
+describe('capPinnedScale against a per-surface natural', () => {
+  it('main window: the pin is verbatim, whatever natural is passed', () => {
+    expect(capPinnedScale(175, true, 900, 600, naturalFor('bandmapCw'))).toBe(175)
+    expect(capPinnedScale(65, true, 3840, 2160, MAIN_NATURAL)).toBe(65)
+  })
+
+  it('pop-out: an inherited pin is honoured as far as THIS window can take it', () => {
+    // Before the per-surface natural the ceiling in a 420×780 band map was the 65
+    // floor, so every inherited pin was crushed to 65 — the pin half of the same bug.
+    expect(capPinnedScale(175, false, 420, 780, naturalFor('bandmapCw'))).toBe(110)
+    expect(capPinnedScale(100, false, 420, 780, naturalFor('bandmapCw'))).toBe(100)
+    // Still bounded: squashed to its minimum, the window cannot show 175.
+    expect(capPinnedScale(175, false, 420, 360, naturalFor('bandmapCw'))).toBe(65)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The main window did not move. `legacyFit` is the pre-change formula inlined
+// VERBATIM (NAT_W/NAT_H = 1200/900); the grid below straddles every step boundary,
+// every cap and every hysteresis dead-band, so "unchanged" is a computed fact rather
+// than an argument. Any main-window (default-natural) divergence lands in `bad`.
+// ---------------------------------------------------------------------------
+
+describe('main-window fit is byte-identical to the pre-change model', () => {
+  const NAT_W = 1200
+  const NAT_H = 900
+  const HYST = 0.03
+  function legacyFit(innerW: number, innerH: number, cap: Scale = 100, prev?: Scale): Scale {
+    const target = Math.min(innerW / NAT_W, innerH / NAT_H) * 100
+    const allowed = SCALE_STEPS.filter((s) => s <= cap)
+    let z: Scale = allowed[0] ?? 65
+    for (const s of allowed) if (s <= target) z = s
+    if (prev != null && allowed.includes(prev) && Math.abs(target - prev) <= prev * HYST) {
+      return prev
+    }
+    return z
+  }
+
+  const WIDTHS = [
+    320, 380, 420, 560, 700, 760, 780, 900, 1024, 1100, 1140, 1200, 1280, 1366, 1440, 1536, 1600,
+    1680, 1920, 2048, 2560, 3440, 3840,
+  ]
+  const HEIGHTS = [
+    180, 200, 300, 360, 500, 585, 600, 630, 660, 675, 700, 720, 760, 768, 780, 810, 864, 891, 900,
+    990, 1024, 1080, 1400, 1440, 2160,
+  ]
+  const PREVS: (Scale | undefined)[] = [undefined, ...SCALE_STEPS]
+
+  it('fitScale matches legacyFit over the whole w × h × cap × prev grid', () => {
+    const bad: string[] = []
+    for (const w of WIDTHS) {
+      for (const h of HEIGHTS) {
+        for (const cap of SCALE_STEPS) {
+          for (const prev of PREVS) {
+            const got = fitScale(w, h, cap, prev)
+            const want = legacyFit(w, h, cap, prev)
+            if (got !== want) bad.push(`${w}×${h} cap=${cap} prev=${prev}: ${got} ≠ ${want}`)
+          }
+        }
+      }
+    }
+    expect(bad).toEqual([])
+    // Sanity: the grid actually ran (a silently empty loop would also pass above).
+    expect(WIDTHS.length * HEIGHTS.length * SCALE_STEPS.length * PREVS.length).toBeGreaterThan(30000)
+  })
+
+  it('pickInitialZoom (no natural argument) is the legacy seed at the default cap', () => {
+    const bad: string[] = []
+    for (const w of WIDTHS) {
+      for (const h of HEIGHTS) {
+        if (pickInitialZoom(w, h) !== legacyFit(w, h)) bad.push(`${w}×${h}`)
+      }
+    }
+    expect(bad).toEqual([])
+  })
+
+  it('the exact main-window sizes the operator sees are unmoved', () => {
+    // Measured against the UNMODIFIED function before the change (see the report).
+    expect(fitScale(1920, 1080)).toBe(100)
+    expect(fitScale(1366, 768)).toBe(85)
+    expect(fitScale(1200, 900)).toBe(100)
+    expect(fitScale(1200, 720)).toBe(80)
+    expect(fitScale(900, 600)).toBe(65)
+    expect(fitScale(3440, 1440)).toBe(100)
+    expect(fitScale(3440, 1440, 175)).toBe(150)
   })
 })
