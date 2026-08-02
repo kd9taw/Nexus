@@ -25,7 +25,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
-import { pushToast } from '../toast'
 import type { SatDetail, SatPass, SatTrackStatus } from '../types'
 
 const api = vi.hoisted(() => ({
@@ -135,6 +134,7 @@ const trackStatus = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   azDeg: null,
   elDeg: null,
   aosAzDeg: 100,
+  maxElDeg: 45,
   satAzDeg: null,
   satElDeg: null,
   rangeKm: null,
@@ -841,105 +841,7 @@ describe('round 3: the consent verb and the mapping-in-force offer', () => {
   })
 })
 
-describe('the LOS handback', () => {
-  // The backend releases the transponder hold at LOS; before this toast the
-  // rail, binding line and header badge simply vanished on the next poll —
-  // the one ownership change in the section with zero notification.
-  it('says the pass ended and the dial came back when the track vanishes at LOS', async () => {
-    const ended = trackStatus({
-      state: 'tracking',
-      mode: 'doppler-only',
-      dopplerDownlink: true,
-      dopplerUplink: true,
-      uplinkOffer: 'none',
-      uplinkOfferMap: null,
-      uplinkRadio: 'IC-9700',
-      transponder: 'SSB/CW linear transponder',
-      aosUnix: NOW - 700,
-      losUnix: NOW - 5,
-    })
-    api.getSatTrackStatus.mockImplementationOnce(() => Promise.resolve(ended))
-    render(<SatellitesView focusSat="RS-44" />)
-    await waitFor(
-      () =>
-        expect(vi.mocked(pushToast)).toHaveBeenCalledWith(
-          expect.stringMatching(/RS-44 pass complete — LOS\. Dial handed back\./),
-          'info',
-          6000,
-        ),
-      { timeout: 4000 },
-    )
-  })
-
-  // ROUND 3, defect 5: the handback claim keys on the DOWNLINK leg. An
-  // uplink-only track never held the dial — the engine wrote only the split
-  // TX VFO — so "Dial handed back" would report the return of a dial that
-  // never left. Name what was actually released.
-  it('an uplink-only pass never claims the dial came back — it releases the split', async () => {
-    vi.mocked(pushToast).mockClear()
-    const ended = trackStatus({
-      state: 'tracking',
-      mode: 'doppler-only',
-      dopplerDownlink: false,
-      dopplerUplink: true,
-      downlinkHz: null,
-      uplinkHz: 145_962_680,
-      uplinkOffer: 'none',
-      uplinkOfferMap: null,
-      uplinkRadio: 'IC-9700',
-      transponder: 'SSB/CW linear transponder',
-      aosUnix: NOW - 700,
-      losUnix: NOW - 5,
-    })
-    api.getSatTrackStatus.mockImplementationOnce(() => Promise.resolve(ended))
-    render(<SatellitesView focusSat="RS-44" />)
-    await waitFor(
-      () => expect(vi.mocked(pushToast)).toHaveBeenCalled(),
-      { timeout: 4000 },
-    )
-    const msg = vi.mocked(pushToast).mock.calls[0][0] as string
-    expect(msg).toMatch(/RS-44 pass complete — LOS\./)
-    expect(msg).not.toMatch(/Dial handed back/)
-    expect(msg).toMatch(/split released/i)
-  })
-
-  // The 2 s tick can lap a slow answer. If the lapped (stale) answer is
-  // applied when it finally lands, it re-seeds the previous-track ref with the
-  // dead pass as "live" — and the NEXT null poll announces the same handback a
-  // second time. Stale in-flight answers must be dropped, not applied.
-  it('announces the handback once when a stale in-flight answer lands after it', async () => {
-    vi.mocked(pushToast).mockClear()
-    const ended = trackStatus({
-      state: 'tracking',
-      mode: 'doppler-only',
-      dopplerDownlink: true,
-      dopplerUplink: true,
-      uplinkOffer: 'none',
-      uplinkOfferMap: null,
-      uplinkRadio: 'IC-9700',
-      transponder: 'SSB/CW linear transponder',
-      aosUnix: NOW - 700,
-      losUnix: NOW - 5,
-    })
-    const pending: Array<(t: SatTrackStatus | null) => void> = []
-    api.getSatTrackStatus.mockImplementation(
-      () => new Promise<SatTrackStatus | null>((res) => pending.push(res)),
-    )
-    render(<SatellitesView focusSat="RS-44" />)
-    // Poll 1 answers live promptly; poll 2 stalls in flight.
-    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(1))
-    pending[0](ended)
-    // Poll 3 overtakes it with the truth: the track is gone — one toast.
-    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(3), { timeout: 6000 })
-    pending[2](null)
-    await waitFor(() => expect(vi.mocked(pushToast)).toHaveBeenCalledTimes(1))
-    // The lapped poll-2 answer finally lands, carrying the dead pass as live.
-    pending[1](ended)
-    // Poll 4 sees null again — a second "pass complete" would be a false claim.
-    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(4), { timeout: 6000 })
-    pending[3](null)
-    await new Promise((r) => setTimeout(r, 50))
-    expect(vi.mocked(pushToast)).toHaveBeenCalledTimes(1)
-    // Real timers ride the component's own 2 s poll cadence: four ticks.
-  }, 15000)
-})
+// The LOS handback notice moved to the app-wide armed-track watcher
+// (features/satPassAlert.ts, tested there): fired from a view-scoped poll it
+// only ever landed with this section open, and the operator may be anywhere
+// in the app at LOS.

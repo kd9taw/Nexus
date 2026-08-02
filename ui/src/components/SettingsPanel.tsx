@@ -3488,6 +3488,23 @@ export function SettingsPanel({
                   Shorter fights your own tuning knob and saturates a serial CAT link.
                 </span>
               </label>
+
+              <label className="settings-field">
+                <span className="settings-label">Pass alert sounds</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={!form.satPassAlertSoundOff}
+                    onChange={(e) => updateBool('satPassAlertSoundOff', !e.target.checked)}
+                    aria-label="Audible tones at pass start and end"
+                  />
+                  <span className="settings-hint">
+                    A rising tone the moment an armed pass starts and a falling one when it
+                    ends, alongside the popup — hear AOS with your hands on the rotor. On by
+                    default; clearing this silences only the tones, never the popups.
+                  </span>
+                </span>
+              </label>
             </div>
           </fieldset>
 

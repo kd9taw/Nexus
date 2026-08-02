@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: hear the pass — AOS and LOS alerts for the armed track
+
+Arm a pass with "Work this pass" and walk away from the screen: the moment the bird rises,
+Nexus now plays a rising three-tone and shows a loud popup with the facts you need at the
+rotor — the bird, the azimuth it rises on, how high the pass peaks, and how long you have.
+At LOS a falling tone (tellable from the rising one blind) accompanies the pass-complete
+notice, which keeps saying exactly what was handed back — the dial, the uplink split, and
+whether the rotor is about to park or move to ready on its own.
+
+The alerts fire wherever you are in the app, not only with the Satellites section open —
+the pass-complete notice used to be the section's alone, so working the Logbook at LOS
+meant missing it. They report the track's own state transitions, never a wall-clock timer:
+if the machine slept through the rise, waking mid-pass says "pass in progress" with the
+minutes left instead of a stale "starting now", and waking long after LOS says nothing.
+Alerts never touch the radio, the rotor, or the track — they only tell you what happened.
+
+This is the armed track's own channel, separate from the per-pass ⏰ alarm on the schedule.
+An alarm lead ("wake me 15 minutes before") still fires on its own moment; at AOS the two
+channels coordinate so you never get two popups for the same rise.
+
+The popup never steals keyboard focus and never blocks the screen. The tones are on by
+default — that was the ask — with a "Pass alert sounds" switch beside the satellite
+Doppler settings for operating from a quiet shack; the popups stay either way.
+
 ### Fixed: the caller card's distance and bearing now agree with QRZ
 
 Work a station on Phone or CW and the card that appears when the call resolves reported a

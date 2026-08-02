@@ -98,6 +98,7 @@ const status = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   azDeg: 141,
   elDeg: 46,
   aosAzDeg: 100,
+  maxElDeg: 45,
   satAzDeg: 143,
   satElDeg: 47,
   rangeKm: 812,

@@ -5395,6 +5395,11 @@ struct SatTrackDto {
     /// the armed phase — under its own name, rather than masquerading as a
     /// commanded azimuth.
     aos_az_deg: f64,
+    /// How high the pass PEAKS (degrees) — from the pass geometry, like
+    /// `aos_az_deg`, so it is known for the whole track. Carried so the AOS
+    /// alert (satPassAlert.ts) can state the pass facts without a second IPC
+    /// fetch against a schedule that may have been recomputed since arming.
+    max_el_deg: f64,
     /// Where the BIRD actually is, unrounded by rotator policy. The gap between
     /// this and the commanded pair IS the tracking error — they legitimately
     /// differ by a couple of degrees now that a deadband exists, and a UI
@@ -5665,6 +5670,7 @@ async fn start_sat_track(
         az_deg: None,
         el_deg: None,
         aos_az_deg: pass.aos_az_deg,
+        max_el_deg: pass.max_el_deg,
         sat_az_deg: None,
         sat_el_deg: None,
         range_km: None,
@@ -5747,6 +5753,7 @@ async fn start_sat_track(
             az_deg: cmd.map(|c| c.0),
             el_deg: cmd.and_then(|c| el_sent.then_some(c.1)),
             aos_az_deg: pass.aos_az_deg,
+            max_el_deg: pass.max_el_deg,
             sat_az_deg: sat.map(|s| s.0),
             sat_el_deg: sat.map(|s| s.1),
             range_km: range,
@@ -15900,6 +15907,7 @@ mod tests {
             az_deg: None,
             el_deg: None,
             aos_az_deg: 100.0,
+            max_el_deg: 45.0,
             sat_az_deg: None,
             sat_el_deg: None,
             range_km: None,

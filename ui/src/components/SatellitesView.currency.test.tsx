@@ -122,6 +122,7 @@ const trackStatus = (over: Partial<SatTrackStatus> = {}): SatTrackStatus => ({
   azDeg: null,
   elDeg: null,
   aosAzDeg: 100,
+  maxElDeg: 45,
   satAzDeg: null,
   satElDeg: null,
   rangeKm: null,

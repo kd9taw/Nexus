@@ -109,6 +109,21 @@ function markFired(key: string): void {
 // In-session dedup on top of the persisted set (covers storage-blocked runs).
 const firedSession = new Set<string>()
 
+/** Mark a pass fired WITHOUT firing anything — the cross-channel dedupe.
+ *
+ * The armed-track AOS alert (satPassAlert.ts) calls this the moment it fires:
+ * a ⏰ alarm with a lead fired minutes EARLIER is untouched (its key is already
+ * in the set — different moment, both firing is fine), but the ⏰ late-wake
+ * path ("is UP now", `nowSecs >= aosUnix`) can then never fire a SECOND thing
+ * at/after AOS for the same pass. Persisted like a real fire, so an app
+ * restart mid-pass cannot resurrect the double. */
+export function markSatPassFired(name: string, aosUnix: number): void {
+  const key = passKey(name, aosUnix)
+  if (firedSession.has(key)) return
+  firedSession.add(key)
+  markFired(key)
+}
+
 // ---- The firing loop (module state, mirrors dxpedAlarm exactly) ----
 
 let loopTimer: number | null = null

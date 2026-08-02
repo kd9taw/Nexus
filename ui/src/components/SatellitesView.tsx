@@ -1623,16 +1623,6 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const [showDead, setShowDead] = useState(false)
   const railRef = useRef<HTMLDivElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
-  // The previous poll's track, for the LOS-handback notice: the backend
-  // releases the hold and the track at LOS, and before this the rail, binding
-  // line and header badge simply vanished on the next 2 s poll — the one
-  // ownership change in the section with zero notification. Nulled on a manual
-  // stop (the operator did that; there is nothing to announce).
-  const lastTrack = useRef<SatTrackStatus | null>(null)
-  // Post-pass rotor policy mirror (read with the settings the poll already
-  // fetches): at LOS the mast may be about to move on its own — park/ready —
-  // and the handback notice must say so.
-  const rotPostPassRef = useRef('stop')
   // "Work this pass" wants the rail scrolled into view once it exists.
   const wantRailScroll = useRef(false)
   const [dopplerOn, setDopplerOn] = useState(false)
@@ -1785,9 +1775,11 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   useEffect(() => {
     let live = true
     // The 2 s tick can lap a slow answer, and a lapped answer applied late
-    // re-seeds `lastTrack` with a dead pass as "live" — the next null poll
-    // would announce the SAME handback twice. Answers carry their issue
-    // number; a straggler that lost the race is dropped, never applied.
+    // briefly shows a dead pass as "live". Answers carry their issue number;
+    // a straggler that lost the race is dropped, never applied. (The LOS
+    // handback notice this guard once protected now fires from the app-wide
+    // watcher — features/satPassAlert.ts — so it lands even when this
+    // section is closed at LOS.)
     let issued = 0
     let applied = 0
     const load = () => {
@@ -1796,39 +1788,6 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         .then((t) => {
           if (!live || seq < applied) return
           applied = seq
-          const prev = lastTrack.current
-          lastTrack.current = t
-          // LOS HANDBACK (the release happened backend-side — this reports
-          // what was DONE, it acts on nothing): a live track that vanishes
-          // just past its LOS ended by running out of pass, not by a click.
-          // A manual stop nulls the ref before this comparison can fire, and
-          // an armed track dropped before AOS has a future losUnix.
-          if (prev != null && t == null) {
-            const now = Math.floor(Date.now() / 1000)
-            if (now >= prev.losUnix && now - prev.losUnix < 300) {
-              const rotorHalf = prev.mode === 'rotor+doppler' || prev.mode === 'rotor-only'
-              pushToast(
-                `${prev.name} pass complete — LOS.` +
-                  // What came back keys on the LEGS that were driven: the
-                  // downlink leg held the dial; an uplink-only track only
-                  // ever held the TX split (round 3, defect 5).
-                  (prev.dopplerDownlink
-                    ? ' Dial handed back.'
-                    : prev.dopplerUplink
-                      ? ' Uplink split released.'
-                      : '') +
-                  // Only when the mast is about to move ON ITS OWN — the
-                  // "stop" policy leaves it where the pass finished, and a
-                  // stationary rotor needs no announcement.
-                  (rotorHalf && rotPostPassRef.current === 'park' ? ' Rotor parking.' : '') +
-                  (rotorHalf && rotPostPassRef.current === 'ready'
-                    ? ' Rotor moving to the ready position.'
-                    : ''),
-                'info',
-                6000,
-              )
-            }
-          }
           setTrack(t)
         })
         .catch(() => {})
@@ -1850,7 +1809,6 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             setDopplerOn(!s.satDopplerOff)
             setVfoMap(s.satVfoMap ?? 'off')
             setPegged(!!s.radioPegged)
-            rotPostPassRef.current = s.rotPostPass ?? 'stop'
           })
           .catch(() => {})
       }
@@ -2218,8 +2176,6 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   const disarmTrack = () => {
     stopSatTrack()
       .then(() => {
-        // The operator stopped this track — there is no handback to announce.
-        lastTrack.current = null
         setTrack(null)
         // Stopping a live track hands the dial back backend-side (the stop
         // command releases the transponder hold) — mirror it now rather than

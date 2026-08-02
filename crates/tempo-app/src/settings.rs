@@ -782,6 +782,13 @@ pub struct Settings {
     /// limit. The radio is a serial device, not a socket.
     #[serde(default = "default_sat_update_ms")]
     pub sat_update_ms: u32,
+    /// Audible AOS/LOS earcons for the ARMED pass track (the "Work this pass"
+    /// alerts, satPassAlert.ts). An OFF switch, inverted like
+    /// [`Settings::sat_doppler_off`]: absent/false = tones ON, which is what
+    /// was asked for ("we need audible tones … when a pass starts and ends").
+    /// Silences only the tones — the popups are not gated.
+    #[serde(default)]
+    pub sat_pass_alert_sound_off: bool,
 
     /// Run the rigctld-compatible CAT **broker** so other apps (WSJT-X / N1MM /
     /// loggers) share the radio THROUGH Nexus, on `cat_broker_port`. Off by default.
@@ -2191,6 +2198,7 @@ impl Default for Settings {
             sat_uplink_radios: None,
             sat_min_shift_hz: default_sat_min_shift_hz(),
             sat_update_ms: default_sat_update_ms(),
+            sat_pass_alert_sound_off: false,
             cat_broker: false,
             cat_broker_port: 4532,
             flex_radio_ip: String::new(),
