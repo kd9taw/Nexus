@@ -159,26 +159,30 @@ describe('OperateCockpit — waterfall removal', () => {
 })
 
 describe('OperateCockpit — the reclaimed space', () => {
-  it('classic: emptying the side rail unmounts it and collapses the grid to one column', () => {
+  it('classic: emptying the qsocol AND the roster column collapses the grid to one column', () => {
     const { container } = renderCockpit({ txmsgs: 'removed', rxfreq: 'removed', stations: 'removed' })
     expect(container.querySelector('aside.cockpit-side')).toBeNull()
+    expect(container.querySelector('.cockpit-qsocol')).toBeNull()
     expect(container.querySelector('.cockpit-lower')?.getAttribute('data-cols')).toBe('one')
     // Band Activity keeps its cell and now owns the full width.
     expect(container.querySelector('.cockpit-decodes')).not.toBeNull()
   })
 
-  it('classic: removing the MAIN pane collapses the grid too, so the rail reclaims', () => {
+  it('classic: removing Band Activity leaves the pair column + roster as two columns', () => {
     const { container } = renderCockpit({ bandActivity: 'removed' })
     expect(container.querySelector('.cockpit-decodes')).toBeNull()
-    expect(container.querySelector('aside.cockpit-side')).not.toBeNull()
-    expect(container.querySelector('.cockpit-lower')?.getAttribute('data-cols')).toBe('one')
-  })
-
-  it('keeps both columns while both sides hold a panel', () => {
-    const { container } = renderCockpit({ rxfreq: 'removed' })
-    expect(container.querySelector('.cockpit-rxfreq')).toBeNull()
+    expect(container.querySelector('.cockpit-qsocol')).not.toBeNull()
     expect(container.querySelector('aside.cockpit-side')).not.toBeNull()
     expect(container.querySelector('.cockpit-lower')?.getAttribute('data-cols')).toBe('two')
+  })
+
+  it('keeps all three columns while each holds a panel (Tx machine holds the qsocol alone)', () => {
+    const { container } = renderCockpit({ rxfreq: 'removed' })
+    expect(container.querySelector('.cockpit-rxfreq')).toBeNull()
+    // txmsgs still populates the middle column, stations the third.
+    expect(container.querySelector('.cockpit-qsocol')).not.toBeNull()
+    expect(container.querySelector('aside.cockpit-side')).not.toBeNull()
+    expect(container.querySelector('.cockpit-lower')?.getAttribute('data-cols')).toBe('three')
   })
 
   it('roster: the layout drops its own panels independently', () => {

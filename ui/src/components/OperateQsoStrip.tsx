@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 
 interface Props {
@@ -34,6 +34,25 @@ interface Props {
    * to act on. The engine refuses these entry points with a message either way;
    * this stops the strip offering them. */
   beacon?: boolean
+  // ── Absorbed from the deleted .cockpit-status row (decode-first rebuild) ──
+  // All optional: hosts that pass none (tests, future surfaces) get the strip
+  // exactly as before. NOTE: the relocated period/Skip-Tx1 controls keep their
+  // pre-move enablement — they did NOT disable on rx-only tiers outside the
+  // strip, and relocation must not change behaviour.
+  /** Transmit-period control (TX AUTO / 1st / 2nd) — rendered when BOTH handlers
+   *  and `radio` are present. */
+  onSetTxEven?: (even: boolean) => void
+  onSetTxCycleAuto?: (auto: boolean) => void
+  /** Skip Tx1 (WSJT-X parity) — rendered when the handler is present. */
+  skipTx1?: boolean
+  onSkipTx1?: (v: boolean) => void
+  /** Live next-slot countdown (seconds). */
+  nextSlotSec?: number
+  /** Active DXpedition badge (HOUND), rotor strip, and the fixed-width TX
+   *  telemetry cell — slotted nodes owned by the cockpit. */
+  specialOpBadge?: ReactNode
+  rotor?: ReactNode
+  telemetry?: ReactNode
 }
 
 function reportLabel(rx: number | null | undefined): string | null {
@@ -42,12 +61,39 @@ function reportLabel(rx: number | null | undefined): string | null {
 }
 
 /**
- * Compact, always-visible QSO sequencer for the single-screen Operate cockpit.
- * Shows the live sequencer state, DX call, the "Now sending" message (with a
- * Resend), the Call-CQ / Monitor role toggle, and an in-QSO free-text field —
- * so you work a station and watch it sequence WITHOUT leaving the waterfall.
+ * The ONE always-visible operating strip of the Operate cockpit (~36 px one row
+ * at xl; two stable rows below): Call CQ / S&P and the TX cluster (TX On / Tune /
+ * Stop TX / Hold Tx) anchored FIRST so they never move as a QSO runs, then the
+ * live TX/RX + sequencer readout with the DX call, "Now sending" with Resend,
+ * the compact Tx5 free-text field, the transmit-period + Skip Tx1 controls, the
+ * next-slot countdown and the fixed-width TX telemetry cell — so you work a
+ * station and watch it sequence WITHOUT leaving the waterfall. Merging the old
+ * status row in here is ARRANGEMENT, not hiding: every control stays permanently
+ * visible, and none of them has an id in any panel vocabulary.
  */
-export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext, onLog, radio, onSetTxEnabled, onSetTune, onHaltTx, onSetHoldTxFreq, rxOnly, beacon }: Props) {
+export function OperateQsoStrip({
+  qso,
+  onSetMode,
+  onCallCq,
+  onResend,
+  onFreetext,
+  onLog,
+  radio,
+  onSetTxEnabled,
+  onSetTune,
+  onHaltTx,
+  onSetHoldTxFreq,
+  rxOnly,
+  beacon,
+  onSetTxEven,
+  onSetTxCycleAuto,
+  skipTx1,
+  onSkipTx1,
+  nextSlotSec,
+  specialOpBadge,
+  rotor,
+  telemetry,
+}: Props) {
   const running = qso?.running ?? false
   const dxcall = qso?.dxcall ?? null
   const state = qso?.state ?? 'Idle'
@@ -73,100 +119,113 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
   }
 
   return (
-    <section className="cockpit-qso panel">
-      <div className="cq-head">
-        <span className="cq-title">QSO</span>
-        {running && (
-          <span
-            className="cq-autocq"
-            title="Auto CQ is running — calling CQ continuously, working each station that answers, then returning to CQ for the next one. Click S&P to stop."
-          >
-            <span className="cq-autocq-dot" aria-hidden="true" />
-            AUTO&#8288;-&#8288;CQ
-          </span>
-        )}
-        {/* role=status: the sequencer state is THE QSO progress signal — a
-            screen reader hears "AwaitReport… RR73… Done" as the exchange runs. */}
-        <span className={`cq-state${running ? ' running' : ''}`} role="status">
-          {state}
-        </span>
-        {dxcall && <span className="cq-dx mono">{dxcall}</span>}
-        {rpt && <span className="cq-rpt" title="Report received about your signal">{rpt}</span>}
-        <span className="cq-spacer" />
-        <div className="cq-roles" role="group" aria-label="Sequencer role">
+    <section className={`cockpit-qso panel${radio ? (radio.transmitting ? ' tx' : ' rx') : ''}`}>
+      {/* POSITION-STABILITY ORDER (OperateQsoStrip.geometry.test): the two button
+          clusters render FIRST, so the six panic-adjacent controls are anchored at
+          the strip's start. Every state-variable readout member (state cap,
+          AUTO-CQ pill, sequencer state, DX call, report) renders AFTER them —
+          before the fix, Stop TX drifted ~270 px as a QSO populated and again on
+          every 15 s TX transition. */}
+      <div className="cq-roles" role="group" aria-label="Sequencer role">
+        <button
+          type="button"
+          className={`cq-role cq-call${running ? ' active' : ''}`}
+          aria-pressed={running}
+          onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
+          disabled={noQso}
+          title={
+            noQso
+              ? noQsoWhy
+              : 'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically'
+          }
+        >
+          Call CQ
+        </button>
+        <button
+          type="button"
+          className={`cq-role${!running ? ' active' : ''}`}
+          aria-pressed={!running}
+          onClick={() => onSetMode('qso-monitor')}
+          disabled={noQso}
+          title={noQso ? noQsoWhy : 'Monitor — search & pounce'}
+        >
+          S&amp;P
+        </button>
+      </div>
+      {radio && (
+        <div className="op-controls cq-txctl" role="group" aria-label="Transmit controls">
           <button
             type="button"
-            className={`cq-role cq-call${running ? ' active' : ''}`}
-            aria-pressed={running}
-            onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
-            disabled={noQso}
+            className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
+            aria-pressed={radio.txEnabled}
+            onClick={() => onSetTxEnabled?.(!radio.txEnabled)}
+            disabled={noTx}
             title={
-              noQso
-                ? noQsoWhy
-                : 'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically'
+              noTx
+                ? noTxWhy
+                : radio.txEnabled
+                ? 'Transmit ENABLED — your queued message will go out. Click to disable: an FT over already in flight finishes, then TX stays off (Stop TX is the immediate halt). Receive keeps decoding either way.'
+                : 'Transmit DISABLED — receive keeps decoding. Click to enable transmit (WSJT-X "Enable Tx").'
             }
           >
-            Call CQ
+            {radio.txEnabled ? 'TX On' : 'TX Off'}
           </button>
           <button
             type="button"
-            className={`cq-role${!running ? ' active' : ''}`}
-            aria-pressed={!running}
-            onClick={() => onSetMode('qso-monitor')}
-            disabled={noQso}
-            title={noQso ? noQsoWhy : 'Monitor — search & pounce'}
+            className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
+            aria-pressed={radio.tuning}
+            onClick={() => onSetTune?.(!radio.tuning)}
+            disabled={noTx}
+            title={noTx ? noTxWhy : 'Key a tune carrier'}
           >
-            S&amp;P
+            Tune
+          </button>
+          <button
+            type="button"
+            className="op-btn stop"
+            onClick={() => onHaltTx?.()}
+            title="Stop transmitting immediately — cuts even an over already in flight"
+          >
+            Stop TX
+          </button>
+          <button
+            type="button"
+            className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
+            aria-pressed={radio.holdTxFreq}
+            onClick={() => onSetHoldTxFreq?.(!radio.holdTxFreq)}
+            title="Hold Tx Freq: keep your TX offset fixed when you click the waterfall to set RX"
+          >
+            Hold Tx
           </button>
         </div>
-        {radio && (
-          <div className="op-controls cq-txctl" role="group" aria-label="Transmit controls">
-            <button
-              type="button"
-              className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
-              aria-pressed={radio.txEnabled}
-              onClick={() => onSetTxEnabled?.(!radio.txEnabled)}
-              disabled={noTx}
-              title={
-                noTx
-                  ? noTxWhy
-                  : radio.txEnabled
-                  ? 'Transmit ENABLED — your queued message will go out. Click to disable: an FT over already in flight finishes, then TX stays off (Stop TX is the immediate halt). Receive keeps decoding either way.'
-                  : 'Transmit DISABLED — receive keeps decoding. Click to enable transmit (WSJT-X "Enable Tx").'
-              }
-            >
-              {radio.txEnabled ? 'TX On' : 'TX Off'}
-            </button>
-            <button
-              type="button"
-              className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
-              aria-pressed={radio.tuning}
-              onClick={() => onSetTune?.(!radio.tuning)}
-              disabled={noTx}
-              title={noTx ? noTxWhy : 'Key a tune carrier'}
-            >
-              Tune
-            </button>
-            <button
-              type="button"
-              className="op-btn stop"
-              onClick={() => onHaltTx?.()}
-              title="Stop transmitting immediately — cuts even an over already in flight"
-            >
-              Stop TX
-            </button>
-            <button
-              type="button"
-              className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
-              aria-pressed={radio.holdTxFreq}
-              onClick={() => onSetHoldTxFreq?.(!radio.holdTxFreq)}
-              title="Hold Tx Freq: keep your TX offset fixed when you click the waterfall to set RX"
-            >
-              Hold Tx
-            </button>
-          </div>
-        )}
-      </div>
+      )}
+      {radio && (
+        <span className="cq-statecap">
+          {radio.transmitting ? '▲ TRANSMITTING' : radio.txEnabled ? '▼ Receiving' : '■ TX off'}
+        </span>
+      )}
+      {running && (
+        <span
+          className="cq-autocq"
+          title="Auto CQ is running — calling CQ continuously, working each station that answers, then returning to CQ for the next one. Click S&P to stop."
+        >
+          <span className="cq-autocq-dot" aria-hidden="true" />
+          AUTO&#8288;-&#8288;CQ
+        </span>
+      )}
+      {/* role=status: the sequencer state is THE QSO progress signal — a
+          screen reader hears "AwaitReport… RR73… Done" as the exchange runs. */}
+      <span className={`cq-state${running ? ' running' : ''}`} role="status">
+        {state}
+      </span>
+      {dxcall && <span className="cq-dx mono">{dxcall}</span>}
+      {rpt && <span className="cq-rpt" title="Report received about your signal">{rpt}</span>}
+
+      {/* Deliberate wrap point: below xl the strip breaks into a stable second row
+          HERE (buttons + state readout above; sending/free-text/period/telemetry
+          below) instead of a content-dependent wrap mid-QSO. lg includes the
+          1366x768 laptop (85 % auto-fit → effective 1607). */}
+      <span className="cq-break" aria-hidden="true" />
 
       <div className={`cq-now${stalled ? ' stalled' : ''}`} role="status">
         <span className="cq-now-label">{stalled ? 'Stalled' : 'TX'}</span>
@@ -225,6 +284,47 @@ export function OperateQsoStrip({ qso, onSetMode, onCallCq, onResend, onFreetext
           Log
         </button>
       </form>
+
+      <span className="cq-spacer" />
+      {/* Active DXpedition mode badge — prominent, next to the period controls. */}
+      {specialOpBadge}
+      {rotor}
+      {radio && onSetTxEven && onSetTxCycleAuto && (
+        <button
+          type="button"
+          className={`cq-period${radio.txCycleAuto ? ' is-auto' : ''}`}
+          onClick={() => {
+            // Cycle: Auto → lock 1st → lock 2nd → Auto.
+            if (radio.txCycleAuto) onSetTxEven(true)
+            else if (radio.txEven) onSetTxEven(false)
+            else onSetTxCycleAuto(true)
+          }}
+          title="Transmit cycle — click to cycle Auto → Tx 1st → Tx 2nd. Auto picks the opposite cycle of the station you answer; the station you work must be on the OPPOSITE period."
+        >
+          {radio.txCycleAuto
+            ? `TX AUTO / ${radio.txEven ? '1st' : '2nd'}`
+            : radio.txEven
+              ? 'TX 1st / even'
+              : 'TX 2nd / odd'}
+        </button>
+      )}
+      {onSkipTx1 && (
+        <button
+          type="button"
+          className={`cq-skiptx1${skipTx1 ? ' on' : ''}`}
+          aria-pressed={skipTx1 ?? false}
+          onClick={() => onSkipTx1(!skipTx1)}
+          title="Skip Tx1 — when you answer a CQ, open with your signal report (Tx2) instead of your grid (Tx1), saving a cycle. Standard callsigns only (a compound call still sends its grid). Resets each launch, like WSJT-X."
+        >
+          Skip Tx1
+        </button>
+      )}
+      {nextSlotSec != null && (
+        <span className="cq-next" title="Time to the next slot">
+          next {nextSlotSec}s
+        </span>
+      )}
+      {telemetry != null && <div className="cq-telemetry">{telemetry}</div>}
     </section>
   )
 }

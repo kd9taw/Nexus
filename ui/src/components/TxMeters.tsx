@@ -51,7 +51,19 @@ export function compBar(db: number): { frac: number; value: string; zone: Zone }
 
 type MeterRow = { label: string; title: string; bar: ReturnType<typeof swrBar> }
 
-export function TxMeters({ radio, pinned = false }: { radio: RadioStatus; pinned?: boolean }) {
+export function TxMeters({
+  radio,
+  pinned = false,
+  inline = false,
+}: {
+  radio: RadioStatus
+  pinned?: boolean
+  /** Inline telemetry-cell variant (the Operate strip): pinned semantics — always
+   *  rendered, live while keyed, dimmed last readings between overs — inside a
+   *  FIXED-WIDTH cell, so the TX cycle causes zero geometry change at zero
+   *  vertical cost (the 722ef273 anti-bounce ruling without the dead row). */
+  inline?: boolean
+}) {
   // Retain the last live readings so the pinned strip has something to show between overs.
   // A plain ref (not state): the poll re-renders us anyway, and retention must never
   // itself cause a render. Unconditional hook — declared before any early return.
@@ -74,23 +86,25 @@ export function TxMeters({ radio, pinned = false }: { radio: RadioStatus; pinned
   const live = radio.transmitting && rows.length > 0
   if (live) lastRows.current = rows
 
-  if (!pinned) {
+  const pin = pinned || inline
+  const variant = `${pin ? ' pinned' : ''}${inline ? ' inline' : ''}`
+  if (!pin) {
     // Default (Phone/CW): appear only while keyed, exactly as before.
     if (!radio.transmitting || rows.length === 0) return null
   } else if (!live && lastRows.current.length === 0) {
     // Pinned but no reading has EVER arrived (rig reports no meters, or hasn't keyed yet):
     // a fixed-height hint keeps the panel discoverable without inventing numbers.
     return (
-      <div className="ph-txmeters pinned idle" role="group" aria-label="Transmit meters">
+      <div className={`ph-txmeters${variant} idle`} role="group" aria-label="Transmit meters">
         <span className="ph-txmeters-hint">TX meters — readings appear on transmit</span>
       </div>
     )
   }
 
-  const shown = live || !pinned ? rows : lastRows.current
+  const shown = live || !pin ? rows : lastRows.current
   return (
     <div
-      className={`ph-txmeters${pinned ? ' pinned' : ''}${!live && pinned ? ' idle' : ''}`}
+      className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}`}
       role="group"
       aria-label="Transmit meters"
     >

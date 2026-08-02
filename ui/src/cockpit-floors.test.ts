@@ -20,6 +20,12 @@ const PANE_SELECTORS = new Set([
   '.cockpit-decodes-side',
   '.cockpit-lower.classic .cockpit-rxfreq',
   '.cockpit-lower.classic .cockpit-roster',
+  // Decode-first Classic rebuild (2026-08): the promoted Rx-Frequency column and the
+  // merged operating strip are panes under the same no-px-floor law.
+  '.cockpit-qsocol',
+  '.cockpit-lower.classic .cockpit-qsocol',
+  '.cockpit-qso',
+  '.cockpit-decodes',
 ])
 
 describe('cockpit panes have no px min-height floor', () => {
