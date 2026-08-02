@@ -474,8 +474,12 @@ mod tests {
         assert_eq!(row[2], 1.0);
     }
 
+    /// The registry + value-pair shape [`slc_level_batch`] returns — named to keep
+    /// clippy's type-complexity line, not because a second consumer exists.
+    type SlcLevelBatch = (Arc<Mutex<HashMap<u16, MeterDef>>>, Vec<(u16, i16)>);
+
     /// One SLC/LEVEL registry entry + one value pair, as the VITA meter stream delivers them.
-    fn slc_level_batch() -> (Arc<Mutex<HashMap<u16, MeterDef>>>, Vec<(u16, i16)>) {
+    fn slc_level_batch() -> SlcLevelBatch {
         let meters = Arc::new(Mutex::new(HashMap::new()));
         meters.lock().unwrap().insert(
             7,

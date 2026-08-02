@@ -6228,10 +6228,12 @@ mod tests {
             2.0 * FREQ_POLL_MS,
             "STRENGTH reads every OTHER dial interval — the CAT-budget/liveliness compromise"
         );
-        assert!(
-            SMETER_FAST_POLL_MS <= RIG_POLL_MS / 2.0,
-            "and still meaningfully fresher than the old heavy-poll sample-and-hold"
-        );
+        const {
+            assert!(
+                SMETER_FAST_POLL_MS <= RIG_POLL_MS / 2.0,
+                "and still meaningfully fresher than the old heavy-poll sample-and-hold"
+            );
+        }
     }
 
     /// The IC-7610 zero-bytes saga, P1: Test CAT (and the CAT-down breaker) must SAY which
