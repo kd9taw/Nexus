@@ -12,6 +12,7 @@ import type {
   InsightLevel,
   MapSpot,
   NeedKind,
+  SatView,
   TrendDir,
 } from './types'
 
@@ -283,4 +284,39 @@ export function spotTooltip(sp: MapSpot): string {
   const freq = sp.freqMhz ? ` · ${sp.freqMhz.toFixed(4).replace(/\.?0+$/, '')} MHz` : ''
   const mode = sp.mode ? ` ${sp.mode}` : ''
   return `${sp.call} · ${sp.band}${mode}${freq} · ${age} ago${sp.heardMe ? ' · heard YOU' : ''}${sp.approx ? ' · ~location' : ''}`
+}
+
+/** The map hover-tooltip line for an amateur satellite — which bird, ★ or not,
+ * how high it is right now, and when it next comes over the operator.
+ * `clickable` appends the select-for-passes hint (only the full map has that
+ * gesture; the embedded detail globe does not).
+ *
+ * The altitude carries the word "alt" because this map's OTHER km figure is a
+ * station's distance from the operator: an unlabelled "1234 km" under the
+ * cursor would be read as range, and for a satellite those are wildly
+ * different numbers. It is the live height off the `birds` row, never a
+ * nominal orbit altitude — an elliptical bird's varies by hundreds of km
+ * across one orbit, which is exactly what the operator is looking at. A bird
+ * nothing carries elements for has no row, so it simply says nothing. */
+export function satTooltip(
+  name: string,
+  chased: boolean,
+  sats: SatView | null,
+  nowSecs: number,
+  clickable: boolean,
+): string {
+  const star = chased ? '★' : '☆'
+  const bird = sats?.birds.find((b) => b.name === name)
+  const alt = bird ? ` · alt ${Math.round(bird.altKm)} km` : ''
+  const pass = sats?.passes.find((pp) => pp.name === name && pp.losUnix > nowSecs)
+  let when = 'no pass over you in 24 h'
+  if (pass) {
+    const t = new Date(pass.aosUnix * 1000)
+    const hhmm = `${t.getHours().toString().padStart(2, '0')}:${t.getMinutes().toString().padStart(2, '0')}`
+    when =
+      pass.aosUnix <= nowSecs
+        ? `IN PASS now · max ${Math.round(pass.maxElDeg)}°`
+        : `next pass ${hhmm} (in ${Math.max(1, Math.round((pass.aosUnix - nowSecs) / 60))} min) · max ${Math.round(pass.maxElDeg)}°`
+  }
+  return `${name} ${star}${alt} · ${when}${clickable ? ' — click for passes' : ''} · dbl-click: favorite`
 }

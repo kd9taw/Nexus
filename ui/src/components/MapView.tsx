@@ -74,7 +74,7 @@ import {
   type Projection,
   type MapView3,
 } from '../mapGeo'
-import { needMeta, spotTooltip } from '../propViz'
+import { needMeta, satTooltip, spotTooltip } from '../propViz'
 import { modeClassOf } from '../features/needs'
 import { StateBlock } from './StateBlock'
 // Geochron-style shaded-relief basemap (Natural Earth I 50m, public domain),
@@ -2224,19 +2224,7 @@ export function MapView({
       return `${a.call}${what} · ${how} ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
     }
     if (hit.kind === 'sat') {
-      const star = hit.chased ? '★' : '☆'
-      const now = Date.now() / 1000
-      const pass = sats?.passes.find((pp) => pp.name === hit.name && pp.losUnix > now)
-      let when = 'no pass over you in 24 h'
-      if (pass) {
-        const t = new Date(pass.aosUnix * 1000)
-        const hhmm = `${t.getHours().toString().padStart(2, '0')}:${t.getMinutes().toString().padStart(2, '0')}`
-        when =
-          pass.aosUnix <= now
-            ? `IN PASS now · max ${Math.round(pass.maxElDeg)}°`
-            : `next pass ${hhmm} (in ${Math.max(1, Math.round((pass.aosUnix - now) / 60))} min) · max ${Math.round(pass.maxElDeg)}°`
-      }
-      return `${hit.name} ${star} · ${when}${onSelectSat ? ' — click for passes' : ''} · dbl-click: favorite`
+      return satTooltip(hit.name, hit.chased, sats, Date.now() / 1000, !!onSelectSat)
     }
     return `${spotTooltip(hit.sp)}${workHint}`
   }

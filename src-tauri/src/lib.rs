@@ -5140,6 +5140,15 @@ struct SatTrackDto {
     /// before AOS, when there is nothing to measure.
     range_km: Option<f64>,
     range_rate_km_s: Option<f64>,
+    /// How high the bird is above the earth (km) — its ALTITUDE, which is a
+    /// different quantity from the slant range above (that one is measured
+    /// from the operator). Recomputed every tick because it genuinely moves:
+    /// an elliptical bird runs hundreds of km between perigee and apogee, and
+    /// that shape is exactly what a fast or a lazy Doppler shift looks like
+    /// from the ground. `None` until the bird is up, on the same terms as
+    /// `range_km` — never a sentinel 0, which a surface would have to decode
+    /// as "not computed yet" and would otherwise draw on the ground.
+    alt_km: Option<f64>,
     /// What Doppler has the radio tuned to, and by how much. `None` unless a
     /// transponder is selected AND Doppler is enabled — never a fabricated
     /// frequency (the plain dial is NOT the downlink under an uplink-only map).
@@ -5292,6 +5301,7 @@ async fn start_sat_track(
         sat_el_deg: None,
         range_km: None,
         range_rate_km_s: None,
+        alt_km: None,
         downlink_hz: None,
         uplink_hz: None,
         downlink_shift_hz: None,
@@ -5338,7 +5348,8 @@ async fn start_sat_track(
         // az-only rotator (elevation is then reported as absent, never 0), and
         // `sat` is the look angle only once there is one — below the horizon
         // there isn't. `mode` is the per-tick honesty label (the Doppler half
-        // of it follows the live settings).
+        // of it follows the live settings). `range`/`rate`/`alt` are the live
+        // geometry of the same tick: all three absent until the bird is up.
         let badge = |mode: &str,
                      tx_mode: Option<String>,
                      state: &str,
@@ -5347,6 +5358,7 @@ async fn start_sat_track(
                      sat: Option<(f64, f64)>,
                      range: Option<f64>,
                      rate: Option<f64>,
+                     alt: Option<f64>,
                      dop: Option<&tempo_app::engine::SatTuningNow>| SatTrackDto {
             name: name.clone(),
             state: state.to_string(),
@@ -5359,6 +5371,7 @@ async fn start_sat_track(
             sat_el_deg: sat.map(|s| s.1),
             range_km: range,
             range_rate_km_s: rate,
+            alt_km: alt,
             downlink_hz: dop.map(|d| d.downlink_hz),
             uplink_hz: dop.map(|d| d.uplink_hz),
             downlink_shift_hz: dop.map(|d| d.downlink_shift_hz),
@@ -5425,6 +5438,7 @@ async fn start_sat_track(
                     None,
                     None,
                     None,
+                    None,
                 ));
                 std::thread::sleep(std::time::Duration::from_secs(3));
                 continue;
@@ -5454,7 +5468,14 @@ async fn start_sat_track(
             // stays a loop rather than growing satellite policy.
             let mut live_range: Option<f64> = None;
             let mut live_rate: Option<f64> = None;
+            // How high the bird is, from the same tick's propagation — the
+            // subpoint's third component. On the same "only once it is up"
+            // terms as the range beside it: reporting a height while the badge
+            // deliberately reports no position at all would be a lone number
+            // out of a state that has nothing else to say.
+            let mut live_alt: Option<f64> = None;
             if phase == "tracking" {
+                live_alt = sat::subpoint(&tle, t).map(|(_, _, alt_km)| alt_km);
                 if let Some((range, rate)) = sat::range_rate(&tle, obs, t) {
                     live_range = Some(range);
                     live_rate = Some(rate);
@@ -5487,6 +5508,7 @@ async fn start_sat_track(
                     rep_sat,
                     live_range,
                     live_rate,
+                    live_alt,
                     dop.as_ref(),
                 ));
                 std::thread::sleep(std::time::Duration::from_secs(3));
@@ -5512,6 +5534,7 @@ async fn start_sat_track(
                     rep_sat,
                     live_range,
                     live_rate,
+                    live_alt,
                     dop.as_ref(),
                 ));
                 std::thread::sleep(std::time::Duration::from_secs(3));
@@ -5541,6 +5564,7 @@ async fn start_sat_track(
                     rep_sat,
                     live_range,
                     live_rate,
+                    live_alt,
                     dop.as_ref(),
                 ));
             } else {
@@ -5562,6 +5586,7 @@ async fn start_sat_track(
                     rep_sat,
                     live_range,
                     live_rate,
+                    live_alt,
                     dop.as_ref(),
                 ));
             }
@@ -13999,8 +14024,8 @@ mod tests {
         resolve_bird, resolve_birds, sanitize_profile, sat_excluded, tle_absorb_foreign,
         tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
         tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, write_json_atomic,
-        AssistanceEvent, AssistanceSourceState, SatBird, TLE_FETCHING, TleFlightGuard,
-        TleSnapshot
+        AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, TLE_FETCHING,
+        TleFlightGuard, TleSnapshot
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -15016,6 +15041,56 @@ mod tests {
         })
         .unwrap();
         assert_eq!(json.get("amateur").and_then(|v| v.as_bool()), Some(false));
+    }
+
+    /// The live-track badge reports the bird's ALTITUDE — how far it is above
+    /// the earth, which is a different number from the slant range beside it —
+    /// and reports it ABSENT before AOS rather than as a sentinel 0. The whole
+    /// point of the number is that it MOVES (RS-44 runs 800–1500 km across one
+    /// orbit, and that is what a fast or slow Doppler shift looks like from the
+    /// ground), so a UI must never have to decode 0 as "not computed yet" and
+    /// draw a satellite sitting on the ground.
+    #[test]
+    fn the_track_badge_reports_altitude_absent_rather_than_zero() {
+        let badge = |alt_km: Option<f64>| SatTrackDto {
+            name: "RS-44".into(),
+            state: "armed".into(),
+            mode: "rotor+doppler".into(),
+            tx_mode: None,
+            az_deg: None,
+            el_deg: None,
+            aos_az_deg: 100.0,
+            sat_az_deg: None,
+            sat_el_deg: None,
+            range_km: None,
+            range_rate_km_s: None,
+            alt_km,
+            downlink_hz: None,
+            uplink_hz: None,
+            downlink_shift_hz: None,
+            uplink_shift_hz: None,
+            transponder: None,
+            transponder_index: None,
+            inverting: false,
+            offset_hz: None,
+            half_width_hz: None,
+            element_age_days: 1.2,
+            element_epoch_unix: 1_785_442_400,
+            aos_unix: 1_785_400_000,
+            los_unix: 1_785_400_600,
+        };
+        let waiting = serde_json::to_value(badge(None)).unwrap();
+        assert_eq!(
+            waiting.get("altKm"),
+            Some(&serde_json::Value::Null),
+            "nothing computed yet must reach the UI as null — never 0 km"
+        );
+        let up = serde_json::to_value(badge(Some(1_234.6))).unwrap();
+        assert_eq!(
+            up.get("altKm").and_then(|v| v.as_f64()),
+            Some(1_234.6),
+            "the key reaches the UI camelCase, unrounded (the surface rounds)"
+        );
     }
 
     /// A panic anywhere in a refresh flight must RELEASE the single-flight

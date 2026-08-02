@@ -441,7 +441,7 @@ function SkyDome({
         )}
         {rotor?.rangeKm != null && (
           <div>
-            <dt>Range</dt>
+            <dt title="Slant range — how far the bird is FROM YOU.">Range</dt>
             <dd>
               {Math.round(rotor.rangeKm)} km
               {rotor.rangeRateKmS != null &&
@@ -449,6 +449,21 @@ function SkyDome({
                   rotor.rangeRateKmS < 0 ? 'closing' : 'opening'
                 }`}
             </dd>
+          </div>
+        )}
+        {/* Directly under the range, because the pair is only useful read
+            together and only unambiguous when both are NAMED: range is the
+            distance from the shack, altitude the height above the earth. The
+            second one is what says whether this is a ten-minute LEO screamer
+            or a bird loitering near apogee — which is the difference between
+            Doppler running away from you and barely moving. Absent before AOS,
+            like the range above it: no row rather than 0 km. */}
+        {rotor?.altKm != null && (
+          <div>
+            <dt title="Altitude — how far above the earth the bird is. Not range (its distance from you).">
+              Altitude
+            </dt>
+            <dd>{Math.round(rotor.altKm)} km</dd>
           </div>
         )}
         {ghostText && (
@@ -1573,6 +1588,11 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         norad: b.norad ?? null,
         status: b.status ?? null,
         amateur: b.amateur,
+        // How high it is RIGHT NOW (the subpoint's height), which is how an
+        // operator tells a ten-minute LEO screamer from a bird loitering near
+        // apogee before ever opening it. Null for the excluded rows below —
+        // no elements, no subpoint, so no number.
+        altKm: b.altKm as number | null,
         reason: null as SatExcluded['reason'] | null,
       }))
     for (const e of view?.excluded ?? []) {
@@ -1591,6 +1611,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         // the catalog does not know the bird is "not asked", which satHealth
         // must never read as "no transmitters".
         amateur: e.amateur ?? undefined,
+        altKm: null,
         reason: e.reason,
       })
     }
@@ -2542,6 +2563,20 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                   {gap && (
                     <span className={`sat-chip ${gap.tone}`} title={gap.title}>
                       {gap.label}
+                    </span>
+                  )}
+                  {/* How high it is right now. "alt" is not decoration: the
+                      other km figure an operator reads on these surfaces is
+                      RANGE (distance from the shack), and the two are wildly
+                      different numbers for the same bird. A row with no
+                      elements has no subpoint and so shows nothing at all —
+                      never 0 km. */}
+                  {b.altKm != null && (
+                    <span
+                      className="sat-row-alt"
+                      title="Altitude — how far above the earth the bird is right now. Not range (its distance from you)."
+                    >
+                      alt {Math.round(b.altKm)} km
                     </span>
                   )}
                 </li>
