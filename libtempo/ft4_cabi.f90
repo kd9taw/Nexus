@@ -147,6 +147,11 @@ contains
   !   nfqso_in      : QSO/RX audio freq (Hz) the operator is working — WSJT-X's
   !                   nfqso. The deep a-priori passes fire near it. Pass 0 /
   !                   out-of-band ⇒ band center.
+  !   lapcqonly_in  : nonzero = restrict AP to the CQ hypothesis (the vendored
+  !                   ft4_decoder's lapcqonly: iaptype forced 1, one AP pass).
+  !                   NOTE the vendored FT4 decoder has NO AP on/off flag —
+  !                   AP passes run whenever ndepth > 1 (ft4_decode.f90); the
+  !                   only decoder-honest AP restriction FT4 offers is this one.
   !   out           : caller array of ft4_decode_t (capacity max_out)
   !   max_out       : capacity of out
   !
@@ -155,9 +160,11 @@ contains
   ! NOT thread-safe (the modem keeps process-global SAVE state + FFTW plans).
   !-------------------------------------------------------------------------
   function ft4_decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, &
-       nqso_progress, nfqso_in, out, max_out) result(ndec) bind(C, name="ft4_decode_frame")
+       nqso_progress, nfqso_in, lapcqonly_in, out, max_out) result(ndec) &
+       bind(C, name="ft4_decode_frame")
     integer(c_int16_t),     intent(in)  :: iwave(F4_NMAX)
     integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in, max_out
+    integer(c_int), value,  intent(in)  :: lapcqonly_in
     character(kind=c_char), intent(in)  :: mycall(*)
     character(kind=c_char), intent(in)  :: hiscall(*)
     type(ft4_decode_t),     intent(out) :: out(*)
@@ -185,7 +192,9 @@ contains
     else
        nfqso = (nfa + nfb) / 2
     end if
-    lapcqonly = .false.
+    ! Operator AP restriction (the decode-config surface): CQ-hypothesis-only.
+    ! This is FT4's ONLY AP control — the vendored decoder has no AP on/off.
+    lapcqonly = (lapcqonly_in /= 0)
     ncontest  = 0
 
     decoder%callback => ft4_collect_cb

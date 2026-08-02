@@ -2447,6 +2447,12 @@ export interface Settings {
   /** Decoder passband (Hz) — WSJT-X F Low / F High. */
   decodeFLowHz?: number
   decodeFHighHz?: number
+  /** A-priori decoding (WSJT-X "Enable AP"). FT8 only — FT4 has no AP off-switch. Stock on. */
+  apDecode?: boolean
+  /** Restrict AP to the CQ hypothesis (lapcqonly; FT8 + FT4). Stock off. */
+  apCqOnly?: boolean
+  /** Decode only near the RX offset (± 25 Hz) instead of the full passband. Stock off. */
+  singleDecode?: boolean
   // --- coordinated QSY ("move together") — separate, opt-in, off by default ---
   /** Master opt-in for coordinated QSY (announced-in-the-clear roaming). */
   qsyEnabled: boolean

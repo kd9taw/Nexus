@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: full FT8/FT4 decoder configuration — AP on/off, CQ-only AP, single decode
+
+The Decoder section (Settings ▸ Weak-signal digital) grows from depth-and-passband to the
+full set of receive controls the built-in WSJT-X decoder actually takes. A-priori (AP)
+decoding — the hypothesis-assisted passes that pull marginal replies out of the noise using
+your call, the DX call and the QSO state, including the cross-cycle replay — now has its
+WSJT-X "Enable AP" switch, on by default exactly as before. A second control restricts AP to
+the bare CQ hypothesis, the guard WSJT-X applies by itself after five idle minutes; Nexus
+makes it an explicit choice. And Single decode narrows the search to ±25 Hz around your RX
+marker — the same one-station window WSJT-X uses for a double-click re-decode — to isolate
+one weak station instead of working the whole passband. Single decode is FT8 and FT4 only:
+50 Hz is narrower than a single JT65, Q65 or MSK144 signal, so those modes keep the full
+passband whatever the switch says.
+
+Every control is wired through to the decoder itself and proven there: tests assert at the
+decode-job boundary that flipping a switch changes what the Fortran is called with, and
+behavioural tests show AP-off really does silence the FT8 AP passes and the cross-cycle
+replay, and that CQ-only really does cost FT4 the deep-hypothesis recoveries.
+Nothing placebo. Honesty notes, stated in the UI too: the AP on/off switch is FT8-only —
+FT4's decoder has no such flag (its AP is part of Normal/Deep depth), though the CQ-only
+restriction applies to both; and on a WSJT-X UDP companion source, decodes arrive already
+made, so none of the Decoder settings act. Defaults are untouched — leave the section alone
+and the decoder behaves byte-for-byte as it did.
+
 ### Fixed: the caller card's distance and bearing now agree with QRZ
 
 Work a station on Phone or CW and the card that appears when the call resolves reported a

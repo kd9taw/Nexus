@@ -108,8 +108,13 @@ int main(int argc, char **argv) {
         ft8_a7_reset();
 
         int nqso_progress = f % 6;
+        /* lft8apon=1 / lapcqonly=0: AP fully armed, every hypothesis live —
+         * the worst case this gate exists to measure. Do not "fix" a
+         * regression here by turning AP off; that hides the false decode
+         * instead of removing it. */
         int ndec = ft8_decode_frame(iwave, 200, 2900, 3, mycall, hiscall,
                                     nqso_progress, nfqso, /*nutc*/0, /*la7final*/1,
+                                    /*lft8apon*/1, /*lapcqonly*/0,
                                     out, MAXOUT);
         if (ndec < 0) {
             printf("RESULT: FAIL (decoder error on frame %d, ndec=%d)\n", f, ndec);

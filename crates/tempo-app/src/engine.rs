@@ -286,6 +286,11 @@ pub struct DecodeJob {
     hiscall: String,
     nqso_progress: i32,
     nfqso: i32,
+    /// Operator AP controls (settings `ap_decode` / `ap_cq_only`): WSJT-X
+    /// "Enable AP" — consumed by FT8 (ft8b lft8apon + the a7 replay) — and the
+    /// CQ-only AP restriction (FT8 + FT4 lapcqonly). Native branch only.
+    ap: bool,
+    ap_cq_only: bool,
     frame_time_ms: i64,
     /// Native branch: clear FT1 IR-HARQ buffers before decoding (HARQ disabled).
     harq_reset: bool,
@@ -464,6 +469,8 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         hiscall,
         nqso_progress,
         nfqso,
+        ap,
+        ap_cq_only,
         frame_time_ms,
         harq_reset,
         pass,
@@ -508,6 +515,8 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
                 nqso_progress,
                 nfqso,
                 frame_time_ms,
+                ap,
+                ap_cq_only,
             };
             src.decode_a7(&req, pass.a7_final())
         }
@@ -10330,6 +10339,8 @@ impl Engine {
                 hiscall: String::new(),
                 nqso_progress: 0,
                 nfqso: 0,
+                ap: true, // ignored: companion decodes arrive pre-made over UDP
+                ap_cq_only: false,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -10351,6 +10362,8 @@ impl Engine {
                 hiscall: String::new(),
                 nqso_progress: 0,
                 nfqso: 0,
+                ap: true, // ignored: DX1's robust path has no WSJT-X AP machinery
+                ap_cq_only: false,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -10394,6 +10407,36 @@ impl Engine {
             .clamp(300, 4000)
             .max(nfa as u32 + 100) as i32;
         let ndepth = self.settings.decode_depth.clamp(1, 3) as i32;
+        // WSJT-X nfqso = the freq we're working/listening on. Centers the deep
+        // AP passes + sync there so the gain follows the worked station.
+        let nfqso = self.rx_offset_hz as i32;
+        // Single decode: collapse the search band to nfqso ± 25 Hz — WSJT-X's
+        // own "decode this one station" window (decoder.f90's double-click
+        // redecode: nfa=max(nfa,nfqso-25), nfb=min(nfb,nfqso+25)). Host-side
+        // only; the modem just sees a small ordinary passband.
+        //
+        // FT8/FT4 ONLY, matching the setting's own label. A 50 Hz window is
+        // narrower than ONE signal in the other native tiers this block also
+        // builds jobs for — JT65 is ~178 Hz wide, Q65's wider submodes more,
+        // MSK144 spreads across the passband — so there the clamp would not
+        // isolate a station, it would decode nothing at all.
+        //
+        // Guarded on the RX offset actually sitting inside the operator
+        // passband: outside it the intersection is empty and the slot would
+        // silently decode NOTHING every period, so the full passband rides
+        // through instead. Stock does NOT fall back — decoder.f90:290-294
+        // aborts the whole decode ("nfqso is out of bandwidth", go to 800).
+        // That is right for a one-shot double-click and wrong for a persistent
+        // setting, which would otherwise sit there decoding nothing all
+        // session; the divergence is deliberate.
+        let (nfa, nfb) = if self.settings.single_decode
+            && matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4)
+            && (nfa..=nfb).contains(&nfqso)
+        {
+            (nfa.max(nfqso - 25), nfb.min(nfqso + 25))
+        } else {
+            (nfa, nfb)
+        };
         DecodeJob {
             source,
             frame,
@@ -10404,9 +10447,12 @@ impl Engine {
             mycall: ap_mycall,
             hiscall: ap_hiscall,
             nqso_progress: ap_progress,
-            // WSJT-X nfqso = the freq we're working/listening on. Centers the deep
-            // AP passes + sync there so the gain follows the worked station.
-            nfqso: self.rx_offset_hz as i32,
+            nfqso,
+            // Operator AP controls — ride into DecodeRequest → the FFI. The
+            // defaults (true, false) are stock WSJT-X; the settings only let
+            // the operator deviate deliberately.
+            ap: self.settings.ap_decode,
+            ap_cq_only: self.settings.ap_cq_only,
             frame_time_ms,
             harq_reset,
             pass,
@@ -16830,6 +16876,108 @@ mod tests {
             *flags.lock().unwrap(),
             vec![true, false, false],
             "a7_final must be: ingest=true, ingest_early=false, redecode=false"
+        );
+    }
+
+    /// The operator decode-config settings provably alter what the decoder is
+    /// CALLED with — asserted at the [`DecodeJob`] boundary (the exact struct
+    /// the worker feeds into `modes::DecodeRequest` → the FFI), not at the UI.
+    /// Guards the placebo-knob failure mode: a settings row that renders but
+    /// never changes the decode is worse than no row.
+    #[test]
+    fn decode_controls_reach_the_decode_job() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let frame = vec![0.0f32; 1024];
+
+        // Defaults are stock WSJT-X behaviour (the decode-parity contract:
+        // absent/untouched settings must not change what shipped).
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert_eq!(job.ndepth, 3, "default depth is Deep (3)");
+        assert!(job.ap, "default: AP enabled (stock lft8apon = true)");
+        assert!(
+            !job.ap_cq_only,
+            "default: all AP hypotheses (stock lapcqonly = false)"
+        );
+
+        // Depth: the Fast/Norm/Deep control must change the decoder's ndepth.
+        e.settings.decode_depth = 1;
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert_eq!(
+            job.ndepth, 1,
+            "decode_depth = 1 must reach the job as ndepth 1"
+        );
+
+        // Enable AP off must reach the job (→ ft8b's lft8apon + the a7 replay gate).
+        e.settings.ap_decode = false;
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert!(!job.ap, "ap_decode = false must reach the job's ap flag");
+
+        // CQ-only restriction must reach the job (→ lapcqonly, FT8 + FT4).
+        e.settings.ap_cq_only = true;
+        let job = e.build_decode_job(frame, 1, DecodePass::Boundary);
+        assert!(job.ap_cq_only, "ap_cq_only = true must reach the job");
+    }
+
+    /// Single decode narrows the search band the decoder is CALLED with to the
+    /// RX offset ± 25 Hz (WSJT-X's own "decode this one station" window, from
+    /// its double-click redecode path) — and NEVER produces an empty band: with
+    /// the RX offset outside the operator's decode passband the full passband
+    /// is kept, because an empty intersection would silently decode nothing
+    /// every slot. Scoped to FT8/FT4 — the tiers the setting names — because
+    /// the same code path builds jobs for JT65/Q65/MSK144, whose signals are
+    /// wider than the window.
+    #[test]
+    fn single_decode_narrows_the_job_band_around_rx_offset() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let frame = vec![0.0f32; 1024];
+        e.set_rx_offset(1500.0);
+
+        // Off (default): the operator passband rides through untouched.
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert_eq!((job.nfa, job.nfb), (200, 2900), "default: full passband");
+
+        // On: nfa/nfb collapse to nfqso ± 25 within the passband.
+        e.settings.single_decode = true;
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert_eq!(
+            (job.nfa, job.nfb),
+            (1475, 1525),
+            "single decode must clamp the band to rx_offset ± 25 Hz"
+        );
+        assert_eq!(job.nfqso, 1500, "nfqso stays the RX offset (window center)");
+
+        // Scope: FT8/FT4 only, exactly what the setting's label promises. FT4
+        // is in.
+        e.set_tier(Tier::Ft4);
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert_eq!(
+            (job.nfa, job.nfb),
+            (1475, 1525),
+            "FT4 is in scope: the clamp applies there too"
+        );
+        // The other native tiers this same code path builds jobs for are OUT:
+        // 50 Hz is narrower than one JT65 signal (~178 Hz), so clamping there
+        // would decode nothing rather than isolate a station.
+        e.set_tier(Tier::Jt65);
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert_eq!(
+            (job.nfa, job.nfb),
+            (200, 2900),
+            "JT65 is out of scope: full passband even with single_decode on"
+        );
+        e.set_tier(Tier::Ft8);
+
+        // RX offset parked outside the decode passband (offset ceiling is
+        // 4000 Hz, passband high default 2900): the clamp must NOT produce an
+        // empty band — full passband rides through instead.
+        e.set_rx_offset(3500.0);
+        let job = e.build_decode_job(frame, 1, DecodePass::Boundary);
+        assert_eq!(
+            (job.nfa, job.nfb),
+            (200, 2900),
+            "out-of-passband RX offset must fall back to the full passband"
         );
     }
 

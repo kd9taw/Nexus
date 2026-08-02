@@ -79,14 +79,14 @@ fn ap_recovers_frames_the_no_context_path_cannot() {
     for seed in 0..seeds {
         let iwave = noisy_frame(msg, -22.0, seed);
         // AP context: responder awaiting RR73 → nQSOProgress = 3; nfqso on carrier.
-        let decs = decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500);
+        let decs = decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, false);
         if let Some(d) = decs.iter().find(|d| d.message == msg) {
             ap += 1;
             if d.nap > 0 {
                 ap_via_ap_pass += 1; // recovery explicitly credited to an AP pass
             }
         }
-        if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0)
+        if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false)
             .iter()
             .any(|d| d.message == msg)
         {
@@ -107,6 +107,54 @@ fn ap_recovers_frames_the_no_context_path_cannot() {
     );
 }
 
+/// The operator AP controls provably reach ft8b — the honest-knob proof for the
+/// decode-config surface. Same operating point as
+/// [`ap_recovers_frames_the_no_context_path_cannot`]: a −22 dB RR73 addressed to
+/// me, recoverable ONLY by the deep AP passes (iaptype ≥ 3). Therefore:
+/// - `ap = false` (WSJT-X "Enable AP" off, ft8b `lft8apon`): AP passes 5-8 never
+///   run — the frame must NOT decode even with full MyCall/DxCall context.
+/// - `ap_cq_only = true` (ft8b `lapcqonly`): AP is restricted to the CQ
+///   hypothesis (iaptype 1), and an RR73 is not a CQ — the frame must NOT
+///   decode either.
+///
+/// If either assertion fails, the flag renders in the UI but never reaches the
+/// decoder — the placebo-knob failure mode this surface forbids.
+#[test]
+fn ap_off_and_cq_only_provably_gate_the_ap_passes() {
+    let msg = "KD9TAW W1AW RR73"; // needs iaptype 6 — deepest AP
+    let seeds = 12u64;
+    let (mut ap_off_hits, mut cq_only_hits) = (0u32, 0u32);
+    for seed in 0..seeds {
+        let iwave = noisy_frame(msg, -22.0, seed);
+        // Full AP context supplied but AP switched OFF.
+        if decode_frame(
+            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, false, false,
+        )
+        .iter()
+        .any(|d| d.message == msg)
+        {
+            ap_off_hits += 1;
+        }
+        // AP on but restricted to the CQ hypothesis only.
+        if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, true)
+            .iter()
+            .any(|d| d.message == msg)
+        {
+            cq_only_hits += 1;
+        }
+    }
+    assert_eq!(
+        ap_off_hits, 0,
+        "ap = false must suppress every deep-AP recovery (got {ap_off_hits}/{seeds}) — \
+         the flag is not reaching ft8b's lft8apon"
+    );
+    assert_eq!(
+        cq_only_hits, 0,
+        "ap_cq_only = true must suppress non-CQ AP recovery (got {cq_only_hits}/{seeds}) — \
+         the flag is not reaching ft8b's lapcqonly"
+    );
+}
+
 /// The deep AP passes (iaptype>=3 — the MyCall+DxCall masks that give the big
 /// gain) only fire within ~napwid (75 Hz) of nfqso. So nfqso MUST track the
 /// worked station's carrier, or the gain is stuck at band-center. Proof at a
@@ -121,15 +169,17 @@ fn nfqso_steers_deep_ap_to_an_off_center_carrier() {
     for seed in 0..seeds {
         let iwave = noisy_frame_at(msg, -22.0, seed, f0);
         // nfqso ON the carrier → deep AP fires there.
-        if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32)
-            .iter()
-            .any(|d| d.message == msg)
+        if decode_frame(
+            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32, true, false,
+        )
+        .iter()
+        .any(|d| d.message == msg)
         {
             steered += 1;
         }
         // nfqso = 0 → C-ABI falls back to band center; the off-center station is
         // outside the deep-AP window, so iaptype>=3 never fires for it.
-        if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0)
+        if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0, true, false)
             .iter()
             .any(|d| d.message == msg)
         {
@@ -163,15 +213,17 @@ fn explore_ap_vs_frequency() {
         let (mut centered, mut steered) = (0u32, 0u32);
         for seed in 0..seeds {
             let iwave = noisy_frame_at(msg, -22.0, seed, f0);
-            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0)
+            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0, true, false)
                 .iter()
                 .any(|d| d.message == msg)
             {
                 centered += 1;
             }
-            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32)
-                .iter()
-                .any(|d| d.message == msg)
+            if decode_frame(
+                &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32, true, false,
+            )
+            .iter()
+            .any(|d| d.message == msg)
             {
                 steered += 1;
             }
@@ -192,13 +244,13 @@ fn explore_ap_margin() {
         let seeds = 12u64;
         for seed in 0..seeds {
             let iwave = noisy_frame(msg, snr, seed);
-            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500)
+            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, false)
                 .iter()
                 .any(|d| d.message == msg)
             {
                 ap += 1;
             }
-            if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0)
+            if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false)
                 .iter()
                 .any(|d| d.message == msg)
             {

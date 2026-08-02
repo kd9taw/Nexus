@@ -4293,6 +4293,8 @@ export function SettingsPanel({
                   </div>
                   <span className="settings-hint">
                     Deep finds the most signals (WSJT-X default); Fast saves CPU on old hardware.
+                    All Decoder settings drive the native decoder — on a WSJT-X UDP source
+                    (companion mode) decodes arrive already made and none of them apply.
                   </span>
                 </div>
 
@@ -4372,6 +4374,71 @@ export function SettingsPanel({
                     The decoder&apos;s search range. Default 200–2900 Hz. Raise F high toward 4000 Hz
                     to decode stations calling above ~2.9 kHz (common on crowded FT8 bands); lower the
                     range to focus on a narrow filter or dodge strong close-in QRM.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">A-priori (AP) decoding — FT8</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.apDecode !== false}
+                      className={`toggle${form.apDecode !== false ? ' on' : ''}`}
+                      onClick={() => updateBool('apDecode', form.apDecode === false)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Retry marginal signals against hypotheses built from your call, the DX call and
+                    the QSO state (WSJT-X &quot;Enable AP&quot;, on by default) — including the
+                    cross-cycle replay of last cycle&apos;s QSOs. FT8 only: FT4&apos;s AP is part of
+                    its Normal/Deep depth and has no separate switch.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">AP: CQ hypothesis only</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.apCqOnly}
+                      className={`toggle${form.apCqOnly ? ' on' : ''}`}
+                      onClick={() => updateBool('apCqOnly', !form.apCqOnly)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Limit AP to the &quot;CQ&quot; guess — no MyCall/DxCall hypotheses (FT8 and
+                    FT4). WSJT-X switches to this by itself after 5 minutes without transmitting,
+                    as a guard against stale-context false decodes; here it is your explicit
+                    choice. Off = full AP, the stock behavior.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">Single decode</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.singleDecode}
+                      className={`toggle${form.singleDecode ? ' on' : ''}`}
+                      onClick={() => updateBool('singleDecode', !form.singleDecode)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Decode only within ±25 Hz of your green RX marker (the same one-station window
+                    WSJT-X uses for a double-click re-decode) instead of the whole passband —
+                    isolates one weak station and saves CPU. FT8 and FT4 only: 50 Hz is narrower
+                    than a single JT65, Q65 or MSK144 signal, so those modes keep the full
+                    passband. Applies while the RX marker sits inside the passband above; off =
+                    full passband, the stock behavior.
                   </span>
                 </div>
 

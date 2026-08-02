@@ -37,6 +37,14 @@ pub struct DecodeRequest<'a> {
     /// Monotonic ms timestamp for this frame (cross-frame IR-HARQ keying; FT1).
     /// 0 disables cross-frame combining.
     pub frame_time_ms: i64,
+    /// A-priori decoding enabled (WSJT-X "Enable AP"). Consumed by FT8 only
+    /// (ft8b's `lft8apon`; `false` also disables the a7 cross-cycle replay).
+    /// The vendored FT4 decoder has no AP on/off flag (AP runs whenever
+    /// `ndepth > 1`), so FT4 honestly ignores this. `true` is stock.
+    pub ap: bool,
+    /// Restrict AP to the CQ hypothesis (ft8b/ft4_decode `lapcqonly`,
+    /// iaptype 1). Consumed by FT8 AND FT4. `false` is stock.
+    pub ap_cq_only: bool,
 }
 
 impl<'a> DecodeRequest<'a> {
@@ -52,6 +60,8 @@ impl<'a> DecodeRequest<'a> {
             nqso_progress: 0,
             nfqso: 0, // band center (no QSO freq)
             frame_time_ms: 0,
+            ap: true,          // stock WSJT-X: AP on
+            ap_cq_only: false, // stock WSJT-X: all AP hypotheses
         }
     }
 }
@@ -132,6 +142,8 @@ impl SignalSource for NativeSource {
             req.nqso_progress,
             req.nfqso,
             req.frame_time_ms,
+            req.ap,
+            req.ap_cq_only,
         );
         // Tag each decode with the mode that produced it (the conversion can't
         // know; we do).
@@ -154,6 +166,8 @@ impl SignalSource for NativeSource {
             req.nfqso,
             req.frame_time_ms,
             a7_final,
+            req.ap,
+            req.ap_cq_only,
         );
         for d in &mut decs {
             d.mode = Some(kind);

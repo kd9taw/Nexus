@@ -94,6 +94,13 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
 /// `nfqso` is the QSO/RX audio frequency (Hz) being worked — WSJT-X's nfqso; the
 /// deep AP passes fire near it. Pass 0 (or out of `nfa..=nfb`) for band-center.
 ///
+/// `ap_cq_only` restricts a-priori decoding to the CQ hypothesis (the vendored
+/// decoder's `lapcqonly`: iaptype forced 1, one AP pass); `false` is stock.
+/// There is deliberately NO `ap` on/off here: the vendored FT4 decoder has no
+/// such flag — its AP passes run whenever `ndepth > 1` — so an off-switch at
+/// this level would be a placebo. CQ-only is FT4's only decoder-honest AP
+/// restriction.
+///
 /// # Panics
 /// Panics if `iwave.len() < NMAX`.
 #[allow(clippy::too_many_arguments)]
@@ -106,6 +113,7 @@ pub fn decode_frame(
     hiscall: &str,
     nqso_progress: i32,
     nfqso: i32,
+    ap_cq_only: bool,
 ) -> Vec<Decode> {
     assert!(
         iwave.len() >= NMAX,
@@ -128,6 +136,7 @@ pub fn decode_frame(
                 hisc.as_ptr(),
                 nqso_progress,
                 nfqso,
+                ap_cq_only as i32,
                 out.as_mut_ptr(),
                 out.len() as i32,
             )
@@ -177,10 +186,23 @@ mod tests {
             iwave[i] = (s * 1000.0).clamp(-32768.0, 32767.0) as i16;
         }
 
-        let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0);
+        let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, false);
         assert!(
             decs.iter().any(|d| d.message == msg),
             "FT4 must decode its own clean signal; got {decs:?}"
+        );
+
+        // With AP restricted to CQ-only the direct (non-AP) passes are
+        // untouched, so a clean signal still decodes. This pins MARSHALLING
+        // ONLY — a bug that misaligned out/max_out around the new argument
+        // fails loudly here — and would still pass if the flag were hard-wired
+        // in ft4_cabi.f90. The behavioural pin (a frame only the deep AP passes
+        // can recover, which CQ-only must NOT recover) lives in
+        // tests/ap_decode.rs, where the marginal SNR it needs belongs.
+        let decs_cq = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true);
+        assert!(
+            decs_cq.iter().any(|d| d.message == msg),
+            "CQ-only AP must not affect direct decodes; got {decs_cq:?}"
         );
     }
 }

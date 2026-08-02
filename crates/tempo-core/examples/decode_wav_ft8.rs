@@ -220,6 +220,8 @@ fn decode_file(path: &str, frontend: Frontend) -> std::io::Result<usize> {
             nfqso: 0, // band center (no worked-station bias)
             // Slot key: slot * 15000 ms, exactly engine's frame_time_ms for FT8.
             frame_time_ms: (slot as i64) * 15_000,
+            ap: true,          // stock: AP on (engine ap_decode default)
+            ap_cq_only: false, // stock: all AP hypotheses
         };
         let mut decs = src.decode_a7(&req, true); // authoritative boundary pass
         decs.sort_by(|a, b| {

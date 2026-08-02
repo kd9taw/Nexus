@@ -388,6 +388,16 @@ contains
   !   la7final      : 1 on the authoritative full-audio (boundary) pass — saves
   !                   direct decodes into the a7 table and runs the a7 replay.
   !                   0 on the early/partial pass — slot bookkeeping only.
+  !   lft8apon_in   : nonzero = a-priori decoding ON (WSJT-X "Enable AP",
+  !                   ft8b's lft8apon: AP passes 5-8 run, and the a7 replay is
+  !                   allowed). 0 = AP fully off — ft8b runs only the four
+  !                   regular passes AND the a7 cross-cycle replay is skipped
+  !                   (both consumers of the flag; a7 slot BOOKKEEPING still
+  !                   runs so re-enabling AP next slot has a live table).
+  !   lapcqonly_in  : nonzero = restrict AP to the CQ hypothesis (ft8b's
+  !                   lapcqonly: one AP pass, iaptype=1). WSJT-X sets this
+  !                   automatically after >300 s without transmitting; here the
+  !                   caller decides. Ignored when lft8apon_in = 0.
   !   out           : caller array of ft8_decode_t (capacity max_out)
   !   max_out       : capacity of out
   !
@@ -396,11 +406,13 @@ contains
   ! NOT thread-safe (the modem keeps process-global SAVE state + FFTW plans).
   !-------------------------------------------------------------------------
   function ft8_decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, &
-       nqso_progress, nfqso_in, nutc, la7final, out, max_out) result(ndec) &
+       nqso_progress, nfqso_in, nutc, la7final, lft8apon_in, lapcqonly_in, &
+       out, max_out) result(ndec) &
        bind(C, name="ft8_decode_frame")
     integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
     integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in
     integer(c_int), value,  intent(in)  :: nutc, la7final, max_out
+    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in
     character(kind=c_char), intent(in)  :: mycall(*)
     character(kind=c_char), intent(in)  :: hiscall(*)
     type(ft8_decode_t),     intent(out) :: out(*)
@@ -443,8 +455,11 @@ contains
        nfqso = (nfa + nfb) / 2
     end if
     nftx      = nfqso
-    lft8apon  = .true.
-    lapcqonly = .false.
+    ! Operator AP controls (the decode-config surface). lft8apon is consumed
+    ! twice: by ft8b (AP passes 5-8) and by the a7 replay gate below — AP off
+    ! must silence BOTH a-priori paths. lapcqonly rides into ft8b only.
+    lft8apon  = (lft8apon_in /= 0)
+    lapcqonly = (lapcqonly_in /= 0)
     nagain    = .false.
     napwid    = 75
 

@@ -97,6 +97,10 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
 /// `nfqso` is the QSO/RX audio frequency (Hz) being worked — WSJT-X's nfqso:
 /// the deep AP passes (MyCall+DxCall masks) only fire within ~75 Hz of it and
 /// sync prioritizes near it; pass 0 (or out of `nfa..=nfb`) for band-center.
+/// `ap` is WSJT-X's "Enable AP" (ft8b's `lft8apon`): `false` runs the regular
+/// passes only AND skips the a7 cross-cycle replay (both consumers of the flag).
+/// `ap_cq_only` restricts AP to the CQ hypothesis (`lapcqonly`, iaptype 1);
+/// ignored while `ap` is `false`. `(true, false)` is stock WSJT-X behaviour.
 ///
 /// This is the a7-inert legacy entry: it delegates to [`decode_frame_a7`] with a constant
 /// `nutc = 0` AND `a7_final = false`. Callers that thread real slot time (the engine) use
@@ -129,6 +133,8 @@ pub fn decode_frame(
     hiscall: &str,
     nqso_progress: i32,
     nfqso: i32,
+    ap: bool,
+    ap_cq_only: bool,
 ) -> Vec<Decode> {
     decode_frame_a7(
         iwave,
@@ -141,6 +147,8 @@ pub fn decode_frame(
         nfqso,
         0,
         true,
+        ap,
+        ap_cq_only,
     )
 }
 
@@ -158,6 +166,11 @@ pub fn decode_frame(
 /// direct decodes are saved into the a7 table and the replay runs — and
 /// `false` on an early partial pass (slot bookkeeping only).
 ///
+/// `ap` / `ap_cq_only` are the operator AP controls — see [`decode_frame`].
+/// `ap = false` also disables the a7 replay (a7 is an a-priori technique;
+/// ft8b's `lft8apon` gates both in the C-ABI wrapper), while the a7 slot
+/// BOOKKEEPING still runs so re-enabling AP next slot has a live table.
+///
 /// Call [`a7_reset`] on band/QSO change to drop stale prior-cycle pairs.
 ///
 /// # Panics
@@ -174,6 +187,8 @@ pub fn decode_frame_a7(
     nfqso: i32,
     nutc: i32,
     a7_final: bool,
+    ap: bool,
+    ap_cq_only: bool,
 ) -> Vec<Decode> {
     assert!(
         iwave.len() >= NMAX,
@@ -198,6 +213,8 @@ pub fn decode_frame_a7(
                 nfqso,
                 nutc,
                 a7_final as i32,
+                ap as i32,
+                ap_cq_only as i32,
                 out.as_mut_ptr(),
                 out.len() as i32,
             )
@@ -260,7 +277,7 @@ mod tests {
             }
         }
 
-        let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0);
+        let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false);
         assert!(
             decs.iter().any(|d| d.message == msg),
             "FT8 must decode its own clean signal; got {decs:?}"
@@ -304,7 +321,7 @@ mod tests {
         // Direct decode on the full band; the final pass seeds the a7 table.
         let msg_a = "KD9TAW W1AW FN31";
         let fa = frame_with_floor(msg_a, 1500.0, 0x2452_1057);
-        let decs_a = decode_frame_a7(&fa, 200, 2900, 3, "", "", 0, 0, 15, true);
+        let decs_a = decode_frame_a7(&fa, 200, 2900, 3, "", "", 0, 0, 15, true, true, false);
         assert!(
             decs_a.iter().any(|d| d.message == msg_a),
             "slot A must direct-decode; got {decs_a:?}"
@@ -315,7 +332,7 @@ mod tests {
         // sync8 cannot see it. Only the a7 replay reaches 1500 Hz.
         let msg_b = "KD9TAW W1AW R-10";
         let fb = frame_with_floor(msg_b, 1500.0, 0x0BAD_5EED);
-        let decs_b = decode_frame_a7(&fb, 2000, 2900, 3, "", "", 0, 0, 45, true);
+        let decs_b = decode_frame_a7(&fb, 2000, 2900, 3, "", "", 0, 0, 45, true, true, false);
         let a7 = decs_b.iter().find(|d| d.message == msg_b);
         assert!(
             a7.is_some(),
@@ -332,10 +349,28 @@ mod tests {
         // After a reset the table is empty: the same out-of-band continuation
         // at the next odd slot must NOT decode (nothing left to replay).
         a7_reset();
-        let decs_c = decode_frame_a7(&fb, 2000, 2900, 3, "", "", 0, 0, 75, true);
+        let decs_c = decode_frame_a7(&fb, 2000, 2900, 3, "", "", 0, 0, 75, true, true, false);
         assert!(
             !decs_c.iter().any(|d| d.message == msg_b),
             "a7_reset must drop the prior-slot table; got {decs_c:?}"
+        );
+
+        // AP OFF disables the replay: re-seed the table from slot A's frame
+        // (nutc=105, odd), then attempt the same out-of-band recovery at the
+        // next odd slot with `ap = false`. The a7 replay is an a-priori
+        // technique — WSJT-X's lft8apon gates it — so the continuation must
+        // NOT appear. (This phase lives inside this test, not its own #[test]:
+        // the a7 table is process-global state and a sibling test would
+        // interleave with it.)
+        let decs_d = decode_frame_a7(&fa, 200, 2900, 3, "", "", 0, 0, 105, true, true, false);
+        assert!(
+            decs_d.iter().any(|d| d.message == msg_a),
+            "re-seed slot must direct-decode; got {decs_d:?}"
+        );
+        let decs_e = decode_frame_a7(&fb, 2000, 2900, 3, "", "", 0, 0, 135, true, false, false);
+        assert!(
+            !decs_e.iter().any(|d| d.message == msg_b),
+            "ap = false must suppress the a7 cross-cycle replay; got {decs_e:?}"
         );
     }
 
@@ -368,7 +403,7 @@ mod tests {
                     iwave[noff + i] = (s * 1000.0).clamp(-32768.0, 32767.0) as i16;
                 }
             }
-            let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0);
+            let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false);
             assert!(
                 decs.iter().any(|d| d.message == msg),
                 "{msg} must round-trip intact (no prefix strip / bracket loss); got {decs:?}"
