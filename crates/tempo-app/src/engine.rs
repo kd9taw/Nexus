@@ -5716,24 +5716,58 @@ impl Engine {
         // by hand — are carried through verbatim by
         // `logbook::adif_record`/`parse_adif` and are untouched here.
         //
-        // ⚠️ THE IN-APP COST, which is not only an upload matter. Nexus decides
-        // "was this a satellite QSO?" locally, from `PROP_MODE` alone
-        // (`qso_is_sat` in src-tauri), and that answer feeds:
+        // ⚠️ AND `PROP_MODE` MAY NOT COME BACK ON ITS OWN — the obvious "half"
+        // fix, and it is a worse defect than the one above. The two fields are
+        // NOT independent: TQSL validates them as a PAIR, and it is the same
+        // hard refusal in both directions. From `tqslconvert.cpp`, alongside
+        // "Invalid SAT_NAME (%s)":
+        //     if (!strcmp(conv->rec.propmode, "SAT") && conv->rec.satname[0] == '\0')
+        //         "PROP_MODE = 'SAT' but no SAT_NAME"   → TQSL_CUSTOM_ERROR
+        //     if (strcmp(conv->rec.propmode, "SAT") && conv->rec.satname[0] != '\0')
+        //         "SAT_NAME set but PROP_MODE is not 'SAT'" → TQSL_CUSTOM_ERROR
+        // So a lone `PROP_MODE=SAT` does not "upload and simply miss satellite
+        // credit". The record never reaches LoTW at all, taking with it the
+        // DXCC/WAS credit an untagged upload WOULD have earned — and through our
+        // own funnel it poisons the batch it rides in: `tqsl_args` passes
+        // `-a compliant`, so TQSL drops the offending record and signs the rest,
+        // and `classify_tqsl_exit` maps that suppressed-record exit to
+        // `Rejected` for the WHOLE batch. `Rejected` is not `is_sent`, so
+        // `lotw_unsent_indices` re-offers every record in it — including the
+        // unsignable one — on the next attempt, and the next, for as long as it
+        // is in the log. Both fields together, or neither.
+        //
+        // ⚠️ THE IN-APP COST OF "NEITHER", which is not only an upload matter.
+        // Nexus decides "was this a satellite QSO?" locally, from `PROP_MODE`
+        // alone (`qso_is_sat` in src-tauri), and that answer feeds:
         //   · Satellite VUCC — `propagation::awards::Awards::add_qso(sat)`, the
         //     `sat_worked`/`sat_confirmed` totals on the Awards screen; and
         //   · the satellite needs board / pass-earn ranking —
         //     `propagation::dxped::LogNeeds::add_qso(sat)` → `satneeds`.
         // With no writer, a contact logged from the Satellites section reaches
         // neither. It is not merely uncredited by LoTW — it does not count
-        // toward Nexus's own satellite totals either. And because the
-        // band-independent satellite bucket is the ONLY grid bucket that accepts
-        // a 70 cm / 23 cm contact (`Band::from_label` has no cm variant), such a
-        // contact now earns no grid slot at all. Documented for the operator in
-        // docs/guide/satellites.md and the CHANGELOG.
+        // toward Nexus's own satellite totals either.
+        //
+        // And where the grid goes instead depends on the band, in two different
+        // wrong ways — `Awards::add_qso` routes on the `sat` flag FIRST:
+        //   · a CENTIMETRE downlink (70 cm, 23 cm …) falls out of the fold
+        //     entirely: the band-independent satellite set is the only bucket
+        //     that would take it, since `Band::from_label` has no cm variant. No
+        //     grid credit at all — absent credit.
+        //   · a METRE downlink lands in `worked_grid_band` for THAT BAND — the
+        //     TERRESTRIAL per-band VUCC bucket, which ARRL's rules exclude
+        //     satellite QSOs from. Not a corner: 2 m is by definition the
+        //     downlink of every U/V bird (the Fox-1 series — AO-85/91/92 — and
+        //     AO-7 mode B), and AO-7 mode A comes down on 10 m. That is WRONG
+        //     credit, not absent credit, and LoTW files the untagged upload the
+        //     same way. It is the one place this descope is worse than the
+        //     defect it replaced.
+        // Documented for the operator in docs/guide/satellites.md and the
+        // CHANGELOG, both of which tell him to add BOTH fields by hand.
         //
         // Pinned by `a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields`
         // here, and end-to-end by src-tauri's
-        // `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`.
+        // `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit` and
+        // `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`.
 
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
@@ -17883,6 +17917,48 @@ mod tests {
         assert!(!fd.running, "the master enters passive S&P, not a run");
         assert_eq!(fd.my_class, "3A");
         assert_eq!(fd.my_section, "WI");
+    }
+
+    /// ⚠️ "ADD IT TO THE FD LOG AFTERWARDS" STAMPS THE BAND YOU ARE ON THEN,
+    /// NOT THE BAND YOU WORKED — pinned because the Field Day guide sends an
+    /// operator down that path for satellite contacts (the Satellites section's
+    /// log strip is not wired to Field Day).
+    ///
+    /// `fd_log_manual` opens with `sync_fd_band()`, which is right for its own
+    /// job — a knob QSY between contacts must stamp the REAL band rather than
+    /// the one FD was entered on — but it makes the contest log a LIVE-band
+    /// recorder with no way to say "this one was on 70 cm". So a satellite QSO
+    /// caught up on after the pass files under the current dial: wrong band in
+    /// the Cabrillo, and wrong on the N1MM / N3FJP wire (`band_for_interop`
+    /// reads this same field). Documented in docs/guide/contesting-pota.md;
+    /// goes red the day a caller can name the band.
+    #[test]
+    fn a_contact_added_to_the_fd_log_later_is_stamped_with_the_current_band() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(435.640, "70cm", "USB"); // working the bird
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        assert!(e.fd_log_manual("W1AW", "1D", "IL", "PH").unwrap());
+
+        // The pass ends; back to HF. Now catch up on a contact worked on 70 cm.
+        e.set_frequency(14.250, "20m", "USB");
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "PH").unwrap());
+
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(
+            adif.contains("<BAND:4>70cm"),
+            "the contact made on the bird lost its band: {adif}"
+        );
+        assert!(
+            adif.contains("<BAND:3>20m"),
+            "the catch-up contact is filed on the dial's band, not 70 cm — \
+             if a caller can now name the band, delete the guide's caveat: {adif}"
+        );
     }
 
     /// Master ON but the exchange is incomplete: `apply_settings` must NOT enter

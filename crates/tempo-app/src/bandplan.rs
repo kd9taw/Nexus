@@ -459,9 +459,11 @@ mod tests {
         // ⚠️ THE REACHABILITY HALF of `tempo_net::band_for_interop`'s rule, and
         // the reason that rule is not speculative. The N1MM `<contactinfo>`
         // `band` and the N3FJP band report both carry a METRE count, and both
-        // get it from `settings.band` — which is a band-plan channel's own
-        // label, canonicalised (`tune_dial`/`pick_band` call `canonical_band`
-        // at the state boundary and nothing else touches it).
+        // get it from `settings.band` — a band-plan channel's own label,
+        // canonicalised (`tune_dial`/`pick_band` call `canonical_band` at the
+        // state boundary and nothing else touches it) — by way of the Field Day
+        // log, which `sync_fd_band` keeps equal to it and which stamps every
+        // contact the radio loop then pushes.
         //
         // So every label in the census below is one the wire can carry. The
         // centimetre ones are the point: the alpha-strip that used to be the
@@ -543,6 +545,53 @@ mod tests {
             );
             assert!(c.mode == "USB" || c.mode == "FM", "{} mode USB/FM", c.band);
             assert!(matches!(c.group.as_str(), "HF" | "VHF" | "UHF"));
+        }
+    }
+
+    /// ⚠️ "EVERY DIGITAL-TIER CHANNEL COMMANDS USB" IS TRUE OF THE WSJT-X TIERS
+    /// AND FALSE OF THE TEMPO ONES — pinned because the Satellites section's log
+    /// strip folds the COMMANDED SIDEBAND into the record's ADIF mode
+    /// (`adifModeFromStation`), and the CHANGELOG plus docs/guide/satellites.md
+    /// describe what that produces. On a WSJT-X tier it is `SSB`; on the three
+    /// FM simplex channels this plan ships it is `FM`. Both name an analogue
+    /// voice mode for a data-mode contact — one defect — but a doc that says
+    /// only "it records SSB" is wrong for a third of the Tempo VHF/UHF plan.
+    #[test]
+    fn the_tempo_plan_ships_fm_channels_and_the_wsjtx_tiers_do_not() {
+        use crate::dto::Tier;
+        let fm: Vec<&str> = band_plan()
+            .iter()
+            .filter(|c| c.mode == "FM")
+            .map(|c| canonical_band(&c.band))
+            .map(|b| match b.as_str() {
+                "2m" => "2m",
+                "1.25m" => "1.25m",
+                "70cm" => "70cm",
+                other => panic!("a new FM channel on {other} — check the guide's wording"),
+            })
+            .collect();
+        assert_eq!(
+            fm,
+            ["2m", "1.25m", "70cm"],
+            "the FM simplex channels the mode-fold docs name"
+        );
+        for tier in [
+            Tier::Ft8,
+            Tier::Ft4,
+            Tier::Q65,
+            Tier::Jt65,
+            Tier::Msk144,
+            Tier::Fst4,
+            Tier::Fst4w,
+            Tier::Wspr,
+        ] {
+            for c in band_plan_for(tier) {
+                assert_eq!(
+                    c.mode, "USB",
+                    "{tier:?} {} commands {} — the SSB claim needs revisiting",
+                    c.band, c.mode
+                );
+            }
         }
     }
 

@@ -331,6 +331,21 @@ describe('Satellites — logging the contact you just made', () => {
       note.textContent,
       'the note frames this as an upload-only matter — it is not',
     ).toMatch(/Nexus.s own satellite totals/i)
+    // AND the two things that make "add the fields yourself" actionable rather
+    // than a shrug. Both are pinned in Rust at their real sites — TQSL's
+    // pair validation (see `Engine::log_qso`) and the award fold
+    // (`a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`) — and
+    // this asserts the operator is actually told: adding only one field gets
+    // the record refused, and leaving both off is not a neutral omission on a
+    // metre band, it hands the grid to the wrong award.
+    expect(
+      note.textContent,
+      'the note says "add the fields" without saying it must be both — one alone is refused',
+    ).toMatch(/both/i)
+    expect(
+      note.textContent,
+      'the note calls this a missing credit; on 2 m it is a WRONG credit',
+    ).toMatch(/terrestrial VUCC/i)
   })
 
   it('logs the mode the station is on, folded to the closed ADIF enumeration', async () => {
@@ -363,14 +378,13 @@ describe('Satellites — logging the contact you just made', () => {
 
   it('records SSB on a digital tier — the disclosed mode fold, NOT YET fixed', async () => {
     // The Satellites section, unlike the Phone and CW cockpits, is reachable on
-    // a digital tier, and every band-plan channel on those tiers commands
+    // a digital tier, and every WSJT-X-tier channel the band plan ships commands
     // "USB" — the sideband a data mode is generated on, not the mode. The fold
     // has only the sideband to go on, so it answers SSB.
     //
     // Wrong on a permanent record, and documented in docs/guide/satellites.md
     // rather than guessed at (the honest value is the TIER's ADIF mode, which
-    // this function is not given). The operator's workaround today is the
-    // strip's own "Log a contact from another radio" mode picker.
+    // this function is not given).
     render(
       <SatellitesView focusSat="RS-44" snap={snap({ sideband: 'USB' }, { link: { tier: 'Q65' } })} />,
     )
@@ -379,13 +393,58 @@ describe('Satellites — logging the contact you just made', () => {
       rec.mode,
       'the tier-aware mode landed — delete the "not yet" note in the guide and the CHANGELOG',
     ).toBe('SSB')
+    cleanup()
+
+    // The Tempo plan is the exception to "commands USB": it ships three FM
+    // simplex channels (2 m / 1.25 m / 70 cm), so a TempoFast contact worked on
+    // one records FM. Still an analogue voice mode standing in for a data mode —
+    // the same defect, not a second one — but the CHANGELOG and the guide may
+    // not say "it records SSB" without this qualifier.
+    api.logQso.mockClear()
+    render(
+      <SatellitesView
+        focusSat="RS-44"
+        snap={snap({ sideband: 'FM' }, { link: { tier: 'TempoFast' } })}
+      />,
+    )
+    expect((await logCall('W1AW')).mode).toBe('FM')
+  })
+
+  it("the override's mode picker covers FT8/FT4 and no other digital tier", async () => {
+    // ⚠️ THE WORKAROUND, MEASURED. The CHANGELOG and the guide send an operator
+    // on a data mode to "Log a contact from another radio and pick the mode by
+    // hand". That advice is only as good as the picker's option list, which is
+    // LogEntry's `LOG_MODES` and nothing more — so it works on FT8 and FT4 and
+    // has no entry at all for Q65, JT65, MSK144, WSPR, FST4/FST4W or Tempo.
+    // Advice that fails when followed is worse than none, so the wording names
+    // the two tiers it covers and sends the rest to the Logbook's free-text
+    // Mode field. This test is what keeps those sentences honest: widen
+    // `LOG_MODES` and it goes red, which is the cue to widen the prose too.
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    const strip = await screen.findByPlaceholderText('Call')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /another radio/i }))
+    })
+    const picker = strip
+      .closest('.log-entry')!
+      .querySelector('.le-ov-mode') as HTMLSelectElement | null
+    expect(picker, 'the override has no mode picker at all').not.toBeNull()
+    const offered = Array.from(picker!.options).map((o) => o.value)
+    expect(offered).toEqual(['SSB', 'FM', 'AM', 'CW', 'RTTY', 'FT8', 'FT4'])
+    for (const tier of ['Q65', 'JT65', 'MSK144', 'WSPR', 'FST4', 'TempoFast', 'TempoDeep']) {
+      expect(
+        offered,
+        `${tier} is now in the picker — the guide may stop sending it to the Logbook`,
+      ).not.toContain(tier)
+    }
   })
 
   it('logs to the ORDINARY log during Field Day — the disclosed FD divergence, NOT YET fixed', async () => {
-    // App.tsx passes `fieldDay`/`fdMode` to CwCockpit and PhoneCockpit, so those
-    // strips route through `fdLogManual` into the contest log while FD runs. It
-    // does not pass them here, so a satellite contact made during Field Day
-    // lands in the general log and earns the club nothing — with FD visibly
+    // App.tsx passes `fieldDay` to CwCockpit and PhoneCockpit, each of which
+    // adds its own literal `fdMode` ("CW" / "PH") on the way down to LogEntry,
+    // so those strips route through `fdLogManual` into the contest log while FD
+    // runs. This section gets neither, so a satellite contact made during Field
+    // Day lands in the general log and earns the club nothing — with FD visibly
     // running everywhere else in the app.
     render(<SatellitesView focusSat="RS-44" snap={snap({}, { fieldDay: fieldDay() })} />)
     const rec = await logCall('W1AW')

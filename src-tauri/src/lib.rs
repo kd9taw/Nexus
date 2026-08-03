@@ -9811,13 +9811,20 @@ fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
 /// the Satellite-VUCC buckets, never the per-band ones.
 ///
 /// ⚠️ NOTHING IN NEXUS WRITES `PROP_MODE` TODAY. The tracked-pass stamp that
-/// used to set it was removed (see `Engine::log_qso`), and satellite tagging is
-/// not yet built, so the only records that answer `true` here are ones that
-/// ARRIVED with the field — a foreign ADIF import, or one the operator repaired
-/// by hand. A contact logged from the Satellites section therefore earns no
-/// in-app satellite credit either, which is a consequence for the operator and
-/// is stated as such in docs/guide/satellites.md. Pinned by
-/// `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`.
+/// used to set it was removed (see `Engine::log_qso`, which also records why the
+/// `PROP_MODE` half must not come back alone: TQSL refuses to sign a QSO that is
+/// SAT with no `SAT_NAME`), and satellite tagging is not yet built, so the only
+/// records that answer `true` here are ones that ARRIVED with the field — a
+/// foreign ADIF import, or one the operator repaired by hand.
+///
+/// A contact logged from the Satellites section therefore earns no in-app
+/// satellite credit either, and where its grid goes instead splits on the band:
+/// a centimetre downlink earns no grid slot at all, while a METRE one (2 m, the
+/// downlink of every U/V bird) is credited to the TERRESTRIAL per-band VUCC
+/// bucket ARRL excludes satellite QSOs from. Both are consequences for the
+/// operator and are stated as such in docs/guide/satellites.md. Pinned by
+/// `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit` and
+/// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`.
 fn qso_is_sat(prop_mode: Option<&str>) -> bool {
     prop_mode.is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
 }
@@ -14954,38 +14961,38 @@ mod tests {
         assert_eq!(con.offer_map, None);
     }
 
-    /// ⚠️ THE DISCLOSED COST OF DESCOPING THE SATELLITE STAMP — pinned so the
-    /// docs cannot drift away from it, and so the person who finally builds
-    /// satellite tagging is told which sentences to delete.
-    ///
-    /// The CHANGELOG and docs/guide/satellites.md both say, in as many words,
-    /// that a contact logged from the Satellites section earns no satellite
-    /// credit **inside Nexus** either — not just on LoTW. This walks the real
-    /// chain that makes that true: `Engine::log_qso` with a transponder held
-    /// writes no `PROP_MODE`, `qso_is_sat` therefore answers `false`, and the
-    /// awards fold `get_awards` performs puts the contact's grid in no bucket
-    /// at all (the band-independent satellite set is the only one that accepts
-    /// a 70 cm grid).
-    ///
-    /// Written as an assertion on the CURRENT, DEFERRED behaviour. When
-    /// satellite tagging lands, this test goes red — which is the point: the
-    /// two "not yet" paragraphs must come out in the same change.
-    #[test]
-    fn a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit() {
+    /// The engine mid-pass with a transponder HELD — the exact state the removed
+    /// "SATELLITE STAMP" fired on. `label` is the raw form the Tauri command
+    /// builds, CATALOG name and all, because that is what made the stamp
+    /// uncreditable.
+    fn engine_holding(label: &str, uplink_hz: u64, downlink_hz: u64) -> tempo_app::engine::Engine {
         use tempo_core::doppler::Transponder;
         let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
         e.set_sat_transponder(Some((
-            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            label.into(),
             0,
-            Transponder::channel(145_850_000, 436_795_000),
+            Transponder::channel(uplink_hz, downlink_hz),
         )));
-        e.log_qso(tempo_core::logbook::QsoRecord {
-            call: "W1AW".into(),
-            grid: Some("FN31".into()),
+        e
+    }
+
+    /// A contact through the bird as the Satellites section's log strip builds
+    /// it: band and dial straight off the radio snapshot (which on a satellite
+    /// pass reads the DOWNLINK), a grid, and no satellite fields — nothing in
+    /// Nexus writes those.
+    fn pass_qso(
+        call: &str,
+        grid: &str,
+        band: &str,
+        freq_mhz: f64,
+    ) -> tempo_core::logbook::QsoRecord {
+        tempo_core::logbook::QsoRecord {
+            call: call.into(),
+            grid: Some(grid.into()),
             country: None,
             state: None,
-            band: "70cm".into(),
-            freq_mhz: 436.795,
+            band: band.into(),
+            freq_mhz,
             mode: "FM".into(),
             rst_sent: None,
             rst_rcvd: None,
@@ -15011,7 +15018,55 @@ mod tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
-        });
+        }
+    }
+
+    /// The award fold `get_awards` performs, for one logged record — the same
+    /// argument list, `qso_is_sat` included, so neither test below can drift
+    /// away from what the command actually computes.
+    fn awards_fold_over(rec: &tempo_core::logbook::QsoRecord) -> propagation::AwardSummary {
+        let mut awards = propagation::Awards::new();
+        awards.set_home_call("KD9TAW");
+        awards.add_qso(
+            &rec.call,
+            &rec.band,
+            &rec.mode,
+            rec.award_confirmed,
+            false,
+            rec.state.as_deref(),
+            rec.grid.as_deref(),
+            rec.ota.iota.as_deref(),
+            qso_is_sat(rec.prop_mode.as_deref()),
+        );
+        awards.summary()
+    }
+
+    /// ⚠️ THE DISCLOSED COST OF DESCOPING THE SATELLITE STAMP — pinned so the
+    /// docs cannot drift away from it, and so the person who finally builds
+    /// satellite tagging is told which sentences to delete.
+    ///
+    /// The CHANGELOG and docs/guide/satellites.md both say, in as many words,
+    /// that a contact logged from the Satellites section earns no satellite
+    /// credit **inside Nexus** either — not just on LoTW. This walks the real
+    /// chain that makes that true: `Engine::log_qso` with a transponder held
+    /// writes no `PROP_MODE`, `qso_is_sat` therefore answers `false`, and the
+    /// awards fold `get_awards` performs puts the contact's grid in no bucket
+    /// at all (the band-independent satellite set is the only one that accepts
+    /// a 70 cm grid).
+    ///
+    /// ⚠️ THIS IS THE BENIGN HALF. On a METRE downlink the same absence puts the
+    /// grid in the WRONG bucket instead of none — see
+    /// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`.
+    ///
+    /// Written as an assertion on the CURRENT, DEFERRED behaviour. When
+    /// satellite tagging lands, this test goes red — which is the point: the
+    /// two "not yet" paragraphs must come out in the same change.
+    #[test]
+    fn a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit() {
+        // SO-50: a V/U bird, so the operator's dial — and the record's band —
+        // is the 70 cm downlink.
+        let mut e = engine_holding("SAUDISAT 1C (SO-50)|FM Voice Repeater", 145_850_000, 436_795_000);
+        e.log_qso(pass_qso("W1AW", "FN31", "70cm", 436.795));
 
         let logged = &e.get_log()[0];
         assert_eq!(logged.prop_mode, None, "a satellite stamp is back");
@@ -15021,20 +15076,7 @@ mod tests {
         );
 
         // The exact fold `get_awards` runs over the logbook.
-        let mut awards = propagation::Awards::new();
-        awards.set_home_call("KD9TAW");
-        awards.add_qso(
-            &logged.call,
-            &logged.band,
-            &logged.mode,
-            logged.award_confirmed,
-            false,
-            logged.state.as_deref(),
-            logged.grid.as_deref(),
-            logged.ota.iota.as_deref(),
-            qso_is_sat(logged.prop_mode.as_deref()),
-        );
-        let s = awards.summary();
+        let s = awards_fold_over(logged);
         assert_eq!(
             s.vucc.sat_worked, 0,
             "the Satellite-VUCC total counted a contact Nexus never tagged"
@@ -15053,6 +15095,55 @@ mod tests {
                 "{cm} gained a per-band grid slot — the guide's claim needs revisiting"
             );
         }
+    }
+
+    /// ⚠️ WRONG CREDIT, NOT ABSENT CREDIT — the sharp edge of the same descope,
+    /// and the reason the guide's "70 cm and 23 cm" wording alone was
+    /// misleading. On a CENTIMETRE downlink an untagged satellite contact
+    /// simply falls out of the grid fold (the test above). On a METRE downlink
+    /// it does not fall out: `Awards::add_qso` branches on `sat` FIRST, so with
+    /// the flag false the grid lands in `worked_grid_band` for that band — the
+    /// TERRESTRIAL per-band VUCC bucket, which ARRL's rules exclude satellite
+    /// QSOs from. LoTW files the untagged upload the same way.
+    ///
+    /// 2 m is not a corner case: it is by definition the downlink of every U/V
+    /// bird (the Fox-1 series — AO-85/91/92 — and AO-7 mode B), so this is the
+    /// ordinary outcome for a large share of amateur satellite work.
+    ///
+    /// This is why a lone `PROP_MODE=SAT` stamp is NOT the fix — TQSL refuses to
+    /// sign a SAT QSO with no `SAT_NAME` ("PROP_MODE = 'SAT' but no SAT_NAME"),
+    /// so tagging it would swap a wrong grid for a record that never lands at
+    /// all. Both fields or neither; see `Engine::log_qso`. Asserted on the
+    /// CURRENT behaviour, so whoever lands satellite tagging is handed this test
+    /// and the paragraphs that go with it.
+    #[test]
+    fn a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc() {
+        // AO-91: a U/V bird, so the dial the log strip reads — and the band it
+        // records — is the 2 m downlink. Same catalog-name label as above.
+        let mut e = engine_holding("FOX-1B (AO-91)|FM Voice Repeater", 435_250_000, 145_960_000);
+        e.log_qso(pass_qso("W1AW", "FN31", "2m", 145.960));
+
+        let logged = &e.get_log()[0];
+        assert_eq!(logged.prop_mode, None, "a satellite stamp is back");
+
+        let s = awards_fold_over(logged);
+        assert_eq!(
+            s.vucc.sat_worked, 0,
+            "the Satellite-VUCC total counted a contact Nexus never tagged"
+        );
+        // THE DEFECT. Not "no bucket" — the terrestrial one.
+        assert_eq!(
+            s.vucc.worked, 1,
+            "the 2 m satellite grid stopped reaching the terrestrial fold — \
+             if satellite tagging landed, delete the wrong-credit paragraphs"
+        );
+        let two_m = s
+            .vucc
+            .bands
+            .iter()
+            .find(|b| b.band == "2m")
+            .expect("the grid is credited to the terrestrial 2 m VUCC slot");
+        assert_eq!(two_m.worked, 1, "terrestrial 2 m VUCC gained the grid");
     }
 
     /// ROUND 3, DEFECT 4. With a mapping IN FORCE that drives the uplink but

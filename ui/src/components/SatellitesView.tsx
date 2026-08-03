@@ -107,18 +107,28 @@ const SCHEDULE_HOURS = 48
  * ⚠️ KNOWN WRONG ON A DIGITAL TIER — NOT YET FIXED. The four arms above are the
  * complete set only where the Phone and CW cockpits are: those sections are
  * reachable only in their own operating mode. This section is not — it is
- * reachable on FT8/FT4/Q65/JT65/MSK144/WSPR/FST4/Tempo too, and every band-plan
- * channel on those tiers commands "USB", the sideband a data mode is generated
- * on. So an operator working a data mode from here records `MODE=SSB`, which is
- * wrong on a permanent record.
+ * reachable on FT8/FT4/Q65/JT65/MSK144/WSPR/FST4/Tempo too, and this function
+ * is handed the SIDEBAND those tiers are generated on, never the tier. Every
+ * WSJT-X-tier channel `tempo_app::bandplan` ships commands "USB", so those
+ * record `MODE=SSB`; the Tempo plan additionally ships three FM simplex
+ * channels (2 m / 1.25 m / 70 cm), which record `MODE=FM`. Either way the
+ * record names an analogue voice mode for a contact worked on a data mode —
+ * wrong, and permanent.
  *
  * It is disclosed rather than guessed at: the honest value is the TIER's own
- * ADIF mode, this function is handed only the sideband, and a wrong MODE is
- * exactly the class of error this whole strip is being careful about. Until it
- * is wired, the strip's own "Log a contact from another radio" override carries
- * a mode picker (LogEntry's `LOG_MODES`) that sets the record's mode by hand.
- * Stated in docs/guide/satellites.md and the CHANGELOG; pinned by
- * `records SSB on a digital tier` in SatellitesView.logentry.test.tsx. */
+ * ADIF mode, and a wrong MODE is exactly the class of error this whole strip is
+ * being careful about.
+ *
+ * ⚠️ THE WORKAROUND IS PARTIAL — say so rather than over-promise. The strip's
+ * own "Log a contact from another radio" override has a mode picker, but it
+ * offers LogEntry's `LOG_MODES` list and no more: SSB / FM / AM / CW / RTTY /
+ * FT8 / FT4. So it covers the FT8 and FT4 tiers and NOT Q65, JT65, MSK144,
+ * WSPR, FST4, FST4W or Tempo. On those the only route today is the Logbook's
+ * edit form, whose Mode field is free text. Stated the same way in
+ * docs/guide/satellites.md and the CHANGELOG; pinned by
+ * `records SSB on a digital tier` and
+ * `the override's mode picker covers FT8/FT4 and no other digital tier` in
+ * SatellitesView.logentry.test.tsx. */
 function adifModeFromStation(sideband: string | null | undefined): string {
   const m = (sideband ?? '').trim().toUpperCase()
   if (m === 'FM') return 'FM'
@@ -3312,14 +3322,19 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 it logs the SAME ORDINARY CONTACT they log. It is NOT a
                 satellite-aware log — nothing about the bird reaches the record.
                 Satellite tagging (ADIF PROP_MODE/SAT_NAME, which LoTW needs for
-                satellite credit) is NOT YET BUILT — deferred, not designed away;
-                see the note line below, docs/guide/satellites.md and the
-                CHANGELOG, all of which say so plainly so nobody waits on credit
-                that isn't coming. Two further consequences of dropping in the
-                shared strip UNCHANGED are documented in the guide rather than
-                fixed here: during Field Day this strip logs to the ordinary log
-                while the Phone and CW strips route to the contest log (App.tsx
-                passes them `fieldDay`/`fdMode` and does not pass it here), and
+                satellite credit — BOTH: TQSL refuses to sign a record carrying
+                only one of the pair, in either direction, so a half-tag costs
+                the whole QSO, see `Engine::log_qso`) is NOT YET BUILT —
+                deferred, not designed away; see the note line
+                below, docs/guide/satellites.md and the CHANGELOG, all of which
+                say so plainly so nobody waits on credit that isn't coming. Two
+                further consequences of dropping in the shared strip UNCHANGED
+                are documented in the guide rather than fixed here: during Field
+                Day this strip logs to the ordinary log while the Phone and CW
+                strips route to the contest log (App.tsx passes those two
+                `fieldDay`; each cockpit then supplies its own literal `fdMode` —
+                "PH" in PhoneCockpit, "CW" in CwCockpit — so wiring this section
+                up means BOTH, and there is no third mode literal to reuse), and
                 the recorded MODE is folded from the sideband, which is wrong on
                 a digital tier (see `adifModeFromStation`).
 
@@ -3350,7 +3365,9 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                   panels do. It is <b>not</b> tagged as a satellite QSO: Nexus does not write
                   the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward
                   neither LoTW satellite credit <b>nor Nexus&rsquo;s own satellite totals</b>.
-                  Add the two fields yourself if you want that credit.
+                  Add <b>both</b> fields yourself if you want that credit — one without the
+                  other is refused at signing, and on 2 m the grid otherwise counts toward
+                  your terrestrial VUCC, which a satellite contact does not earn.
                 </p>
               </div>
             )}

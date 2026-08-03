@@ -25,25 +25,33 @@ contact once your hands are free.
 exactly what the Phone strip logs from the same state. It does **not** tag the contact as a
 satellite QSO: LoTW wants the ADIF `PROP_MODE` and `SAT_NAME` fields for that, and Nexus does not
 write them. The strip says so under the fields, so nobody waits on satellite credit that isn't
-coming. If you want it, add those two fields yourself in whatever you upload from.
+coming. If you want it, add **both** fields yourself in whatever you upload from — LoTW turns away
+a contact carrying only one of the pair, so half the tag is worse than none.
 
 **Three things it does not do yet.** None of them is a decision that satellite work should stay
 this way — they are the price of dropping the existing strip in unchanged instead of building a
 satellite-aware one, and each is meant to be closed.
 
-- **Nexus's own satellite counters miss these contacts too**, not just LoTW. Nexus decides "was
-  this a satellite QSO?" from `PROP_MODE=SAT` in the record, exactly as LoTW does, so a contact
-  logged here counts toward neither the **Satellite VUCC** totals on the Awards screen nor the
-  satellite needs board. On 70 cm and 23 cm it lands in no grid bucket at all — those bands have
-  no per-band grid slot of their own, and the satellite one is the only home they had.
+- **Your satellite grids land in the wrong place, in Nexus and at ARRL.** Nexus decides "was this a
+  satellite QSO?" from `PROP_MODE=SAT` alone; LoTW wants that *and* the satellite's name. With
+  neither written, a contact logged here counts toward neither the **Satellite VUCC** totals on the
+  Awards screen nor the satellite needs board — and its grid does not simply go uncounted. On
+  70 cm and 23 cm it lands nowhere (those bands have no per-band grid slot of their own). On a
+  metre band — and 2 m is the downlink of every U/V bird — it lands in your **terrestrial** VUCC
+  count for that band, which is a grid ARRL's rules say a satellite QSO does not earn. LoTW files
+  the upload the same way. If you chase VUCC, add both fields by hand before you sign.
 - **During Field Day it logs to the general log, not the contest log.** The Phone and CW strips
   switch to the Field Day log while a session runs; this one is not wired to Field Day yet, so a
   satellite contact made during FD scores the club nothing. Log those from the Phone or CW
-  cockpit for the duration.
-- **The recorded mode comes from your sideband**, so it says `SSB` when you are on a data mode.
-  Right for voice and CW; wrong on the digital tiers (FT8, Q65, JT65 …), where every channel
-  commands USB and the strip has nothing else to go on. Use **Log a contact from another radio**
-  and pick the mode by hand until the strip is tier-aware.
+  cockpit for the duration — adding them to the FD log later files them on the band you are on
+  then, not the band you worked.
+- **The recorded mode comes from your sideband**, so it names a voice mode when you are on a data
+  mode: `SSB` on the WSJT-X tiers (every channel there commands USB), `FM` on Tempo's three FM
+  simplex channels. Right for voice and CW, wrong on a data mode. **Log a contact from another
+  radio** lets you set the mode by hand, but its picker offers SSB / FM / AM / CW / RTTY / FT8 /
+  FT4 and nothing else — so of the data tiers it covers FT8 and FT4 only. On Q65, JT65, MSK144,
+  WSPR, FST4 or Tempo, log the contact and then correct its **Mode** in the Logbook, whose mode
+  field takes any text.
 
 All three are written up in the guide's [satellite chapter](docs/guide/satellites.md).
 
@@ -53,8 +61,8 @@ This one is in the version you are running now. Since 0.24.0, any contact logged
 transponder held was written with `PROP_MODE=SAT` and a `SAT_NAME` — and the name was the bird's
 *catalog* name, "SAUDISAT 1C (SO-50)" rather than "SO-50". LoTW rejects a record naming a
 satellite it doesn't recognise (ARRL: "if you enter the satellite name as AO7 instead of AO-7 the
-data will be rejected"), so those contacts could never earn satellite credit, and every upload
-carrying one was at risk of coming back rejected.
+data will be rejected") — the signing tool won't even sign it — so those contacts could never earn
+satellite credit, and the batch each one rode in came back marked **Rejected**.
 
 It also caught contacts that had nothing to do with a satellite. The hold is only handed back when
 the pass ends — and a transponder you pick without arming a pass is never handed back at all — so
@@ -68,10 +76,20 @@ logbook.
 **That has a cost inside Nexus too, and it is not permanent.** The same `PROP_MODE=SAT` field is
 what Nexus reads to decide a contact was a satellite QSO, so with nothing writing it your
 **Satellite VUCC** totals and the satellite needs board no longer see contacts Nexus logs for you
-either. Writing a satellite name Nexus can stand behind is work that has not been done yet, not
-work that was ruled out. Until it is done, adding the two fields by hand restores both: the LoTW
-credit on your next upload, and the in-app totals the next time Nexus starts and re-reads the
-log file.
+either — and on a metre band (2 m, most commonly) the grid is counted toward your terrestrial VUCC
+for that band instead, which is not a grid a satellite QSO earns. Writing a satellite name Nexus
+can stand behind is work that has not been done yet, not work that was ruled out.
+
+**Writing just `PROP_MODE=SAT` is not a shortcut** — that was looked at and rejected, not
+overlooked. TQSL refuses to sign a contact whose propagation mode is `SAT` when it names no
+satellite ("PROP_MODE = 'SAT' but no SAT_NAME"), exactly as it refuses a name it doesn't
+recognise. Half the tag costs you the whole QSO at LoTW — including the DXCC and WAS credit an
+untagged upload *does* earn — and it takes the upload with it: Nexus asks TQSL to skip bad records
+rather than abort, so the batch signs without that one and comes back marked **Rejected**, and it
+will keep coming back that way every time you upload while the record is in your log. Until Nexus
+can write a name it can stand behind it writes neither, and adding **both** fields by hand restores
+everything: the LoTW credit on your next upload, and the in-app totals the next time Nexus starts
+and re-reads the log file.
 
 **Contacts already logged that way are left alone**, and deliberately: some of them were real
 satellite QSOs that want the name corrected, some were ordinary contacts that want the tag gone,

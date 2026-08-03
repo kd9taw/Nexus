@@ -40,8 +40,10 @@ checking** — one laptop covers the whole operation.
 The one strip that does **not** switch is the log strip in the
 [Satellites](satellites.md) section: it is not wired to Field Day yet, so a
 contact typed there during FD goes into your general log and scores the club
-nothing. Log satellite contacts from the CW or Phone cockpit for the duration,
-or add them to the FD log afterwards.
+nothing. Log satellite contacts from the CW or Phone cockpit **while you are
+still on the bird** — the FD log stamps each contact with the band the radio is
+on at the moment you type it, so one entered after you have QSY'd away files on
+the wrong band, both in the Cabrillo and on the N1MM / N3FJP wire.
 
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 15-item ARRL bonus checklist = total. **Winter Field Day
@@ -112,6 +114,8 @@ they're heard on the air.
 - **The Satellites section's log strip doesn't join Field Day yet** — unlike the
   CW and Phone strips it stays on the general log while a session runs. Not a
   design choice; not wired up yet.
+- **The Field Day log has no per-contact band field** — every entry takes the
+  band the radio is on when you type it. Log as you work, not afterwards.
 
 ## Related guides
 

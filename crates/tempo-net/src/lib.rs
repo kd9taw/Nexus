@@ -66,11 +66,16 @@ pub use wsjtx::{Decode, Inbound, QsoLogged, Status};
 ///
 /// That was reachable, not hypothetical: `tempo_app::bandplan`'s Q65 plan ships
 /// 13 cm, 9 cm, 5 cm, 3 cm and 1.2 cm channels (JT65 the first three), and
-/// picking one stores that label as `settings.band`, which becomes
-/// `QsoRecord.band` and arrives here on the N1MM `<contactinfo>` and the N3FJP
-/// band report. A 13 cm contact went out as `"13"` — thirteen metres — when the
-/// value the wire wants is `"0.13"`. No claim is made that this reached anyone's
-/// club log; what is on record is that Nexus could emit it.
+/// picking one stores that label as `settings.band`. THE ONLY PATH FROM THERE TO
+/// THIS FUNCTION IS THE FIELD DAY LOG — `QsoRecord` never reaches here, the
+/// general logbook has no club-network push. `Engine::fd_log_manual` (and every
+/// QSY) calls `sync_fd_band`, which copies `settings.band` onto
+/// `FieldDayLog::band`; each contact is stamped with it; and `tempo_audio`'s
+/// radio-loop Field-Day emitter passes that stamp through here into the N1MM
+/// `<contactinfo>` `band` and the N3FJP `fldBand`. A 13 cm contact went out as
+/// `"13"` — thirteen metres — when the value the wire wants is `"0.13"`. No
+/// claim is made that this reached anyone's club log; what is on record is that
+/// Nexus could emit it.
 ///
 /// The three hand-written arms all encoded ONE rule (centimetres ÷ 100), so the
 /// rule stands in for them. This adds no band to any vocabulary — the labels
