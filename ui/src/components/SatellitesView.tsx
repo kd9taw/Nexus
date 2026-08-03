@@ -1327,9 +1327,11 @@ function TrackRail({
   onRefreshElements: () => void
   scrollRef: React.RefObject<HTMLDivElement>
 }) {
-  // The rotor half of the track is fixed at arm time (DTO `mode`); the Doppler
-  // row below reports the two legs the engine re-reads each tick — so a change
-  // here moves both the behaviour and the row together.
+  // The rotor half of the track is fixed at arm time (DTO `mode`) except for a
+  // rotator that stops answering, which demotes it mid-pass (`rotorLost` — the
+  // track keeps the dial and runs to LOS); the Doppler row below reports the
+  // two legs the engine re-reads each tick — so a change here moves both the
+  // behaviour and the row together.
   const rotorInTrack = track.mode === 'rotor+doppler' || track.mode === 'rotor-only'
   const dopplerLive = track.dopplerDownlink || track.dopplerUplink
   const minsToAos = Math.max(1, Math.round((track.aosUnix - nowSecs) / 60))
@@ -1409,7 +1411,12 @@ function TrackRail({
             : track.dopplerUplink && !switchMapping
               ? 'correcting the uplink — the dial stays yours'
               : `uplink-only mapping, nothing is being tuned. ${uplinkNext}`
-  const rotorText = !rotorInTrack
+  const rotorText = track.rotorLost
+    ? // It QUIT — a different fact from "not in this track", and the row must
+      // not let the demoted mode blur the two. Says what the operator now owns
+      // (the pointing) and what he still does not have to think about.
+      'stopped answering — pointing is yours; the pass, Doppler and your transponder keep running'
+    : !rotorInTrack
     ? rotorOn
       ? 'not in this track — re-arm to take the rotor'
       : 'no rotator configured — Settings ▸ Rig Control'
@@ -1431,7 +1438,7 @@ function TrackRail({
         </button>
       </div>
       <div className="sat-rail-row">
-        {railDot(rotorInTrack, !rotorInTrack && !rotorOn)}
+        {railDot(rotorInTrack, !track.rotorLost && !rotorInTrack && !rotorOn)}
         <span className="sat-rail-name">Rotor</span>
         <span className="sat-rail-state">{rotorText}</span>
       </div>
@@ -2578,8 +2585,12 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             className="sats-tracking-badge"
             title={
               // The claim must match the DTO's `mode` — a rotor-less track
-              // never borrows the rotor wording.
-              track.mode === 'pass-only'
+              // never borrows the rotor wording. A rotator that QUIT is asked
+              // first: its mode is demoted, so nothing below can tell it apart
+              // from a track that never had one.
+              track.rotorLost
+                ? 'The rotator stopped answering, so this track let it go — point the antenna yourself. The pass clock, the transponder and Doppler carry on to LOS.'
+                : track.mode === 'pass-only'
                 ? 'Pass timing only — nothing is driven: no rotor in this track, and Doppler is not driving the dial (correction switched off, no transponder held, or an uplink-only mapping that is not driving this pass). The pass clock and geometry still run.'
                 : track.mode === 'doppler-only'
                   ? // Dial ownership keys on the DOWNLINK leg — the leg that
@@ -2628,14 +2639,18 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               ⟳ {track.state === 'armed' ? 'armed' : 'tracking'} {track.name}
               {/* The MODE word, only when a surface is missing: the full
                   rotor+doppler track is the unmarked case; every partial one
-                  names what it actually drives. */}
-              {track.mode === 'doppler-only'
-                ? ' · Doppler only'
-                : track.mode === 'pass-only'
-                  ? ' · pass timing only'
-                  : track.mode === 'rotor-only'
-                    ? ' · rotor only'
-                    : ''}{' '}
+                  names what it actually drives. A rotator that QUIT says so
+                  instead — the operator armed a track with a mast, and the
+                  demoted mode alone would read as though he never had one. */}
+              {track.rotorLost
+                ? ' · rotor stopped answering'
+                : track.mode === 'doppler-only'
+                  ? ' · Doppler only'
+                  : track.mode === 'pass-only'
+                    ? ' · pass timing only'
+                    : track.mode === 'rotor-only'
+                      ? ' · rotor only'
+                      : ''}{' '}
               ·{' '}
               {track.azDeg == null
                 ? `rises az ${Math.round(track.aosAzDeg)}°`

@@ -72,6 +72,14 @@ middle of the passband again.
 The section is read-only until you arm a track — it won't touch your rotator on
 its own.
 
+**If the rotator stops answering mid-pass**, Nexus gives up on it rather than
+hammering it for the rest of the pass — and gives up on *only* it. The pass
+carries on: your transponder stays picked, Doppler keeps correcting the radio,
+and the sky dome keeps showing where the bird is so you can turn the antenna
+yourself. The track says so plainly (the badge and the readiness rail both read
+"rotor stopped answering") and stops showing commanded angles, because it has
+stopped commanding anything.
+
 ## Honest limits
 
 - Passes are computed for your grid — **set your Maidenhead locator** first or

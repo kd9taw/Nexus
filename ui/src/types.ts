@@ -597,6 +597,16 @@ export interface SatTrackStatus {
    * where it matters: CW/data downlinks, downlink-only mappings, an operator
    * mode take-back). */
   txMode?: string | null
+  /** Did a rotator this track WAS driving stop answering mid-pass? The track
+   * carries on — the pass clock, Doppler and the transponder hold are a
+   * different surface from the mast — but it stops claiming an antenna, so
+   * `mode` demotes and azDeg/elDeg go null.
+   *
+   * Its own field because 'no rotator in this track' and 'the rotator quit'
+   * are different facts that the demoted `mode` cannot tell apart: one is how
+   * the operator armed the pass, the other is something that happened to him,
+   * and only the second is worth a toast. */
+  rotorLost?: boolean
   /** Where the ANTENNA was last actually COMMANDED — after the flip, the
    * calibration trim and the deadband. NOT a read-back: it is what the rotator
    * was told. Null until a command has genuinely been sent (the armed phase
