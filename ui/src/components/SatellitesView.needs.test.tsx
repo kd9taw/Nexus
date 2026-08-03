@@ -323,7 +323,7 @@ describe('the uplink sideband display', () => {
 
   it('never claims a command the engine is not sending — record swap, engine silent', async () => {
     // The record's legs DIFFER (LSB up / USB down) but the engine's answer is
-    // null — a downlink-only mapping, an RTTY pass, or the operator took the
+    // null — a downlink-only mapping, Doppler off, or the operator took the
     // mode back. The readout must not show a TX mode, and the chooser note
     // must not read as a command ("is set to") — this display re-deriving the
     // command from the record is exactly how the UI claimed a write the radio
@@ -355,6 +355,29 @@ describe('the uplink sideband display', () => {
     const line = await screen.findByTestId('sat-tp-txmode')
     expect(line.textContent).toMatch(/is set to/)
     expect(line.textContent).toMatch(/FM/)
+  })
+
+  it('never renders a sentence with a hole when the record declares no downlink mode', async () => {
+    // The gate on this note used to be `txSwapMode != null`, which is only
+    // non-null when the record's `downlinkMode` is — so the "the downlink
+    // stays X" clause could not render empty. Gating on the ENGINE's answer
+    // instead (the fix for birds whose legs MATCH) dropped that guarantee: a
+    // transmitter with no declared downlink mode is ordinary, the engine still
+    // commands an uplink mode for it, and the note read "the downlink stays
+    // while Doppler runs this pass."
+    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(liveStatus()))
+    const d = detail()
+    d.transmitters[2] = { ...d.transmitters[2], downlinkMode: null }
+    api.getSatDetail.mockImplementation(() => Promise.resolve(d))
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await screen.findByLabelText('Work SSB/CW linear transponder'))
+    const line = await screen.findByTestId('sat-tp-txmode')
+    // The command is still stated — that is the whole point of the new gate…
+    expect(line.textContent).toMatch(/is set to/)
+    expect(line.textContent).toMatch(/LSB/)
+    // …and the clause that has nothing to say simply is not there.
+    expect(line.textContent).not.toMatch(/stays\s+while/)
+    expect(line.textContent).not.toMatch(/downlink stays/)
   })
 
   it('the transponder chooser says what the TX sideband will be set to', async () => {

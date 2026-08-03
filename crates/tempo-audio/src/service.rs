@@ -11099,6 +11099,67 @@ mod tests {
     }
 
     #[test]
+    fn an_fm_bird_states_fm_on_the_uplink_vfo_in_every_operating_section() {
+        // ⭐ THE REPORT, EVERYWHERE. `Engine::rig_mode_effective` answers FM for
+        // a held FM bird from whichever section the operator is standing in —
+        // the class is the bird's, not the section's — so the uplink VFO must
+        // be told FM from every one of them. The report is not "the Phone
+        // cockpit forgot the uplink"; it is "the uplink VFO was never written",
+        // and the section the operator happens to be in cannot be what decides
+        // whether it is.
+        //
+        // This row set is the regression guard the branch needed and did not
+        // have: a guard asking whether the SECTION's mode answer names a side
+        // (`rig_mode_on_sideband(false) == rig_mode_on_sideband(true)`) reads
+        // TRUE in RTTY whatever bird is held — so an FM bird worked from the
+        // RTTY section went back to commanding NOTHING, which is exactly the
+        // AO-123 defect, restored.
+        use tempo_app::settings::{CwKeyerBackend, OperatingMode};
+        type Setup = fn(&mut tempo_app::settings::Settings);
+        let sections: [(&str, Setup); 7] = [
+            ("Phone", |s| s.operating_mode = OperatingMode::Phone),
+            ("CW (rig keyer)", |s| {
+                s.operating_mode = OperatingMode::Cw;
+                s.cw_keyer = CwKeyerBackend::Cat;
+            }),
+            ("CW (soundcard keyer)", |s| {
+                s.operating_mode = OperatingMode::Cw;
+                s.cw_keyer = CwKeyerBackend::Soundcard;
+            }),
+            ("RTTY (AFSK)", |s| {
+                s.operating_mode = OperatingMode::Rtty;
+                s.rtty_backend = "afsk".into();
+            }),
+            ("RTTY (FSK)", |s| {
+                s.operating_mode = OperatingMode::Rtty;
+                s.rtty_backend = "fsk".into();
+            }),
+            ("Digital", |s| s.operating_mode = OperatingMode::Digital),
+            ("Digital (plain SSB for data)", |s| {
+                s.operating_mode = OperatingMode::Digital;
+                s.data_modes_plain_ssb = true;
+            }),
+        ];
+        for (label, setup) in sections {
+            let mut p = SatPass::configured(true, setup);
+            p.pick("AO-123|V/U FM", AO123, FM_BIRD);
+            assert_eq!(
+                commanded_modes(&p.log).last().map(String::as_str),
+                Some("FM"),
+                "{label}: scene — an FM bird puts the DIAL in FM from every section: {:?}",
+                commanded_modes(&p.log)
+            );
+            assert_eq!(
+                split_modes(&p.log),
+                vec!["FM".to_string()],
+                "{label}: the transmit VFO is told FM too — the operator's 145 MHz side \
+                 sat in a leftover LSB because nothing was ever sent: {:?}",
+                split_verbs(&p.log)
+            );
+        }
+    }
+
+    #[test]
     fn a_non_inverting_linear_bird_states_its_sideband_on_the_uplink_vfo() {
         // The same defect, one bird-shape over: both legs want USB, so the two
         // matched and nothing was said. A transmit VFO left in FM from the
@@ -11285,195 +11346,191 @@ mod tests {
     }
 
     #[test]
-    fn every_operating_section_states_the_side_its_uplink_belongs_on() {
-        // FINDING 1, at the wire. The mirror knew `USB`↔`LSB` and nothing else,
-        // and every other token fell through UNCHANGED. That was invisible
-        // while a matching-legs answer was suppressed; stating the uplink for
-        // every held bird made it reachable, and worse than the stale mode it
-        // replaced — we now AUTHOR the wrong side instead of leaving one there.
+    fn the_uplink_mode_matrix_at_the_wire() {
+        // ⭐ THE WHOLE ANSWER, IN LITERAL TOKENS, ON THE WIRE. Every operating
+        // section (both keying backends where a section has two, and the
+        // per-radio `data_modes_plain_ssb` opt-out both ways) × both transponder
+        // senses × all three downlink classes the record can declare. What is
+        // asserted is the exact token in the `X` frame that reaches the transmit
+        // VFO — an operator can read this table against their rig's front panel.
         //
-        // A DATA submode still NAMES a sideband (PKTUSB is USB-side, PKTLSB
-        // LSB-side). An inverting transponder mirrors the passband, so it
-        // mirrors those too: the right uplink frequency on the wrong side is
-        // silence at the far end.
+        // Read it as the product of two authorities and nothing else: the
+        // SECTION decides the FORM (plain SSB, a DATA submode, the rig's CW or
+        // RTTY mode) and the BIRD decides the SIDE — where the form's token
+        // names one. There is no third rule, and in particular no section is
+        // special-cased. A section-shaped guard shipped here for one commit and
+        // restored the AO-123 defect; the FM columns below are what caught it.
         //
-        // BOTH transponder senses across ALL FOUR sections, asserting the SIDE
-        // — membership in a section's vocabulary is exactly what a wrong-side
-        // answer satisfies. CW is here from the other direction: a keyed
-        // carrier has no side, so the rig's CW mode is stated unchanged.
+        // ⚠️ THE FM COLUMNS ARE THE FIELD REPORT and they are constant down the
+        // whole table: `Engine::rig_mode_effective`'s FM arm answers for the
+        // BIRD's class before any section policy runs, so an FM bird's uplink
+        // is told FM from wherever the operator happens to be standing.
         //
-        // …and RTTY from a third: NOT ONE `X` FRAME, either sense, either
-        // backend. Which side an inverting bird's RTTY uplink belongs on is an
-        // OPEN QUESTION (`Engine::sat_tx_mode` carries what is known), so the
-        // transmit VFO is left exactly as 0.27.0 left it — carrying whatever it
-        // already had. This row goes red the moment anything starts answering
-        // for RTTY, mirrored or not.
+        // ⚠️ THE LSB COLUMNS ARE NOT DECORATION. Every other satellite fixture
+        // in this file is USB — the VHF/UHF convention, and where
+        // `downlink_class` puts every mode it does not recognise — so without
+        // them the two-leg mode chain is only ever driven from ONE side. A
+        // record that says LSB is ordinary: SatNOGS lists the inverting linears'
+        // two legs on opposite sides, and which of them is the DOWNLINK is the
+        // record's to say, not the band convention's. `PKTLSB` mirroring UP to
+        // `PKTUSB` reaches a radio nowhere else.
+        //
+        // ⚠️ AND THE TWO RTTY BACKENDS PART COMPANY HERE, which is a
+        // CONSEQUENCE, not a ruling. `doppler::uplink_mode_for` mirrors what the
+        // TOKEN names, and the RTTY section reaches it with two different
+        // tokens: AFSK's `PKTLSB` (a DATA submode, because the soundcard needs
+        // one) names the lower side and mirrors; FSK's `RTTY` names none and
+        // passes through. Which side an inverting bird's RTTY uplink SHOULD be
+        // on is still an open question — what is known about it is written out
+        // on `Engine::sat_tx_mode`, and nothing here settles it.
         use tempo_app::settings::{CwKeyerBackend, OperatingMode};
         type Setup = fn(&mut tempo_app::settings::Settings);
-        // (label, station setup, dial mode, uplink straight through, uplink
-        // inverted) — the uplink columns are `Option`: `None` is "no `X` frame
-        // at all", which is a different claim from "an `X` frame repeating the
-        // dial's mode".
-        type Row = (
-            &'static str,
-            Setup,
-            &'static str,
-            Option<&'static str>,
-            Option<&'static str>,
-        );
-        let rows: [Row; 6] = [
+        /// (downlink token, uplink through a straight-through bird, uplink
+        /// through an INVERTING bird) for one declared downlink class.
+        type Leg = (&'static str, &'static str, &'static str);
+        // (label, station setup, USB-declared, LSB-declared). The FM-declared
+        // column is `("FM", "FM", "FM")` for every row and is asserted from the
+        // constant rather than repeated fifteen times.
+        let rows: [(&str, Setup, Leg, Leg); 8] = [
             (
                 "Phone",
                 |s| s.operating_mode = OperatingMode::Phone,
-                "USB",
-                Some("USB"),
-                Some("LSB"),
+                ("USB", "USB", "LSB"),
+                ("LSB", "LSB", "USB"),
             ),
             // The rig-side keyers command the rig's CW mode, and `CW`/`CWR` is
             // which side of the carrier the rig takes its BEAT NOTE from — both
             // key one carrier at the dial, and this VFO only ever transmits. So
-            // it does NOT mirror, deliberately (see `doppler::uplink_mode_for`).
+            // it does NOT mirror (see `doppler::uplink_mode_for`) — but note the
+            // columns: the token IS sent, unmirrored. "Does not mirror" is not
+            // "is left alone", and the transmit VFO has to be told something or
+            // it keeps the last pass's mode.
             (
                 "CW (rig keyer)",
                 |s| {
                     s.operating_mode = OperatingMode::Cw;
                     s.cw_keyer = CwKeyerBackend::Cat;
                 },
-                "CW",
-                Some("CW"),
-                Some("CW"),
+                ("CW", "CW", "CW"),
+                ("CWR", "CWR", "CWR"),
             ),
             // …and the CW arm that DOES carry a side: the soundcard keyer puts
-            // the rig in plain SSB and keys an audio TONE inside the passband.
+            // the rig in plain SSB and keys an audio TONE inside the passband,
+            // where getting the side wrong lands the tone ~2× the pitch away.
             (
                 "CW (soundcard keyer)",
                 |s| {
                     s.operating_mode = OperatingMode::Cw;
                     s.cw_keyer = CwKeyerBackend::Soundcard;
                 },
-                "USB",
-                Some("USB"),
-                Some("LSB"),
+                ("USB", "USB", "LSB"),
+                ("LSB", "LSB", "USB"),
             ),
-            // ⚠️ RTTY, both backends: NOTHING is sent. The mode answer is the
-            // LSB-side CONVENTION (amateur RTTY is LSB-side on every band), not
-            // a side derived from the bird, so there is nothing in it to mirror
-            // — and no evidence yet for what the right uplink token would be.
-            // The transmit VFO keeps whatever it had, which is the pre-existing
-            // behaviour rather than a new defect.
+            // RTTY-AFSK answers `PKTLSB` for BOTH declared sides — amateur RTTY
+            // is LSB-side on 80 m and 20 m alike, so the record's side gets no
+            // say in the FORM. The token it lands on is a DATA submode all the
+            // same, so an inverting bird mirrors it.
             (
                 "RTTY (AFSK)",
                 |s| {
                     s.operating_mode = OperatingMode::Rtty;
                     s.rtty_backend = "afsk".into();
                 },
-                "PKTLSB",
-                None,
-                None,
+                ("PKTLSB", "PKTLSB", "PKTUSB"),
+                ("PKTLSB", "PKTLSB", "PKTUSB"),
             ),
+            // ⚠️ THE ROW THAT REFUTES "RTTY IS LEFT EXACTLY AS 0.27.0 SHIPPED
+            // IT". On a mic-jack interface the AFSK arm answers plain `LSB`, and
+            // 0.27.0's rule — send it only when the legs DIFFER — mirrored that
+            // to `USB` and really did put an `X USB` frame on this wire. So the
+            // INVERTING column here is 0.27.0's own behaviour, unchanged; what
+            // is new for this station is the straight-through column, which
+            // 0.27.0 left unwritten.
+            (
+                "RTTY (AFSK, plain SSB for data)",
+                |s| {
+                    s.operating_mode = OperatingMode::Rtty;
+                    s.rtty_backend = "afsk".into();
+                    s.data_modes_plain_ssb = true;
+                },
+                ("LSB", "LSB", "USB"),
+                ("LSB", "LSB", "USB"),
+            ),
+            // …and the FSK backend, which commands the rig's own RTTY mode to
+            // unlock the narrow filters and key the shift. `RTTY` names no
+            // radiated side, so nothing mirrors it — and `RTTYR`, which would,
+            // has never been shown to be right.
             (
                 "RTTY (FSK)",
                 |s| {
                     s.operating_mode = OperatingMode::Rtty;
                     s.rtty_backend = "fsk".into();
                 },
-                "RTTY",
-                None,
-                None,
+                ("RTTY", "RTTY", "RTTY"),
+                ("RTTY", "RTTY", "RTTY"),
             ),
             (
                 "Digital",
                 |s| s.operating_mode = OperatingMode::Digital,
-                "PKTUSB",
-                Some("PKTUSB"),
-                Some("PKTLSB"),
+                ("PKTUSB", "PKTUSB", "PKTLSB"),
+                ("PKTLSB", "PKTLSB", "PKTUSB"),
+            ),
+            // The mic-jack opt-out on the section it was written for. The two
+            // steps have to COMMUTE: the downlink answer is de-DATA'd before the
+            // mirror sees it, and the plain pair mirrors to the same side the
+            // DATA pair would have.
+            (
+                "Digital (plain SSB for data)",
+                |s| {
+                    s.operating_mode = OperatingMode::Digital;
+                    s.data_modes_plain_ssb = true;
+                },
+                ("USB", "USB", "LSB"),
+                ("LSB", "LSB", "USB"),
             ),
         ];
-        for (label, setup, down, up_straight, up_inverted) in rows {
-            for (sense, tp, want_up) in [
-                ("straight-through", STRAIGHT_LINEAR, up_straight),
-                ("INVERTING", RS44, up_inverted),
-            ] {
-                let mut p = SatPass::configured(true, setup);
-                p.pick("linear transponder", tp, SSB_BIRD);
-                assert_eq!(
-                    commanded_modes(&p.log).last().map(String::as_str),
-                    Some(down),
-                    "{label}: scene — the DIAL is commanded {down}: {:?}",
-                    commanded_modes(&p.log)
-                );
-                assert_eq!(
-                    split_modes(&p.log),
-                    want_up.into_iter().map(str::to_string).collect::<Vec<_>>(),
-                    "{label}, {sense}: the transmit VFO belongs on {want_up:?}, and only \
-                     an `X` frame can put it there — or, where the answer is None, no \
-                     `X` frame at all: {:?}",
-                    split_verbs(&p.log)
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn an_lsb_declared_downlink_drives_both_legs_from_the_records_own_side() {
-        // ⚠️ EVERY OTHER FIXTURE ON THIS PATH IS USB — the satellite convention
-        // on VHF/UHF, and where `downlink_class` puts every mode it does not
-        // recognise. So the whole two-leg mode chain was only ever driven from
-        // ONE side, and the arm that reads the BIRD's declared side
-        // (`DownlinkClass::Lsb` → `Settings::rig_mode_on_sideband(true)`) was
-        // never exercised end to end. A record that says LSB is ordinary: the
-        // SatNOGS entries for the inverting linears list the two legs on
-        // opposite sides, and which of them is the DOWNLINK is the record's to
-        // say, not the band convention's.
-        //
-        // Both sections whose form carries a side, both transponder senses. The
-        // Digital row is the one that matters most here: `PKTLSB` mirroring UP
-        // to `PKTUSB` is the only place that direction of the DATA pair reaches
-        // a radio at all.
-        use tempo_app::settings::OperatingMode;
-        type Setup = fn(&mut tempo_app::settings::Settings);
-        // (label, station setup, dial mode, uplink straight through, uplink inverted)
-        let rows: [(&str, Setup, &str, &str, &str); 2] = [
-            (
-                "Phone",
-                |s| s.operating_mode = OperatingMode::Phone,
-                "LSB",
-                "LSB",
-                "USB",
-            ),
-            (
-                "Digital",
-                |s| s.operating_mode = OperatingMode::Digital,
-                "PKTLSB",
-                "PKTLSB",
-                "PKTUSB",
-            ),
-        ];
-        for (label, setup, down, up_straight, up_inverted) in rows {
-            for (sense, tp, want_up) in [
-                ("straight-through", STRAIGHT_LINEAR, up_straight),
-                ("INVERTING", RS44, up_inverted),
-            ] {
-                let mut p = SatPass::configured(true, setup);
-                p.pick(
-                    "linear transponder",
-                    tp,
+        const FM_LEG: Leg = ("FM", "FM", "FM");
+        for (label, setup, usb_leg, lsb_leg) in rows {
+            for (class_name, class, leg) in [
+                ("FM-declared", FM_BIRD, FM_LEG),
+                ("USB-declared", SSB_BIRD, usb_leg),
+                (
+                    "LSB-declared",
                     tempo_core::doppler::DownlinkClass::Lsb,
-                );
-                assert_eq!(
-                    commanded_modes(&p.log).last().map(String::as_str),
-                    Some(down),
-                    "{label}: the DIAL follows the RECORD's declared side, not the USB \
-                     default: {:?}",
-                    commanded_modes(&p.log)
-                );
-                assert_eq!(
-                    split_modes(&p.log),
-                    vec![want_up.to_string()],
-                    "{label}, {sense}: an LSB-declared downlink puts the transmit VFO on \
-                     {want_up}: {:?}",
-                    split_verbs(&p.log)
-                );
+                    lsb_leg,
+                ),
+            ] {
+                let (down, up_straight, up_inverted) = leg;
+                for (sense, invert, want_up) in [
+                    ("straight-through", false, up_straight),
+                    ("INVERTING", true, up_inverted),
+                ] {
+                    // One transponder shape per class, with only `invert`
+                    // moving between the two senses — so a difference in the
+                    // answer can only have come from the sense.
+                    let tp = if class.is_fm() {
+                        tempo_core::doppler::Transponder { invert, ..AO123 }
+                    } else {
+                        tempo_core::doppler::Transponder { invert, ..RS44 }
+                    };
+                    let mut p = SatPass::configured(true, setup);
+                    p.pick("transponder", tp, class);
+                    let scene = format!("{label}, {class_name}, {sense}");
+                    assert_eq!(
+                        commanded_modes(&p.log).last().map(String::as_str),
+                        Some(down),
+                        "{scene}: scene — the DIAL is commanded {down} (the record's own \
+                         declared side, not the band convention's): {:?}",
+                        commanded_modes(&p.log)
+                    );
+                    assert_eq!(
+                        split_modes(&p.log),
+                        vec![want_up.to_string()],
+                        "{scene}: the transmit VFO belongs on {want_up}, and only an `X` \
+                         frame can put it there: {:?}",
+                        split_verbs(&p.log)
+                    );
+                }
             }
         }
     }

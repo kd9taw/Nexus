@@ -7851,11 +7851,60 @@ impl Engine {
     /// dial's own `M` verb is not given on some pass anyway — pinned by
     /// `the_uplink_mode_never_leaves_the_vocabulary_the_dial_is_commanded_from`.
     ///
-    /// ⚠️ **RTTY IS AN OPEN QUESTION, AND SO IT IS LEFT ALONE — see the guard
-    /// in the body.** Which side an inverting bird's RTTY uplink belongs on has
-    /// been ruled on twice here and got it wrong twice, so this states nothing
-    /// rather than stating a guess; the consequence is spelled out at the
-    /// guard.
+    /// ⚠️ AND NO SECTION IS SPECIAL-CASED HERE — not one, and RTTY least of
+    /// all. A guard asking whether the SECTION's mode answer names a side
+    /// (`rig_mode_on_sideband(false) == rig_mode_on_sideband(true)`) shipped
+    /// here for one commit and RESTORED the AO-123 defect: that test reads
+    /// TRUE in the RTTY section whatever bird is held, so an FM bird worked
+    /// from RTTY went back to commanding nothing at all onto the transmit VFO
+    /// — pinned at the wire by
+    /// `an_fm_bird_states_fm_on_the_uplink_vfo_in_every_operating_section`.
+    /// The section decides the FORM of the answer, never whether there IS one.
+    ///
+    /// So, stated plainly, section by section — every one of these is a
+    /// CONSEQUENCE of the two rules above, not a decision taken about that
+    /// section:
+    ///
+    /// - **FM bird** — the uplink is told `FM`, from EVERY section, because
+    ///   [`Self::rig_mode_effective`]'s FM arm answers for the BIRD's class
+    ///   before any section policy runs. That is the report.
+    /// - **Non-inverting linear** — the uplink is told the same token the dial
+    ///   is. Nothing was written at all before this branch.
+    /// - **Inverting linear** — the uplink is told the mirrored SIDE in Phone,
+    ///   in Digital and in RTTY-AFSK (`PKTLSB` ⇄ `PKTUSB`), and with a
+    ///   soundcard CW keyer (plain `USB`/`LSB`). Those are the tokens that name
+    ///   a radiated side.
+    /// - **CW with a rig-side keyer** — `CW`/`CWR` passes through, so an
+    ///   inverting bird's uplink is told the same CW-class token the dial got.
+    ///   Not "left alone": a frame IS sent, carrying the unmirrored token. The
+    ///   ruling behind the pass-through is on [`tempo_core::doppler::uplink_mode_for`].
+    /// - **RTTY-FSK** — `RTTY` passes through the same way, so an inverting
+    ///   bird's uplink is told `RTTY`, unmirrored. Also a frame that IS sent.
+    ///
+    /// ⚠️ **RTTY THROUGH AN INVERTING BIRD REMAINS AN OPEN QUESTION, and the
+    /// two backends now answer differently *because the mirror is a property of
+    /// the TOKEN, not of the section*.** AFSK commands `PKTLSB` — a DATA
+    /// submode that names the lower side — so it mirrors; FSK commands the
+    /// rig's own `RTTY`, which names no side, so it does not. Neither is a
+    /// ruling: the map mirrors what names a side and this layer does not
+    /// intervene. WHAT IS KNOWN, and it still does not add up to an answer:
+    ///
+    /// - standard amateur RTTY is LSB-side (mark = the higher RF) on 80 m and
+    ///   on 20 m alike, which is why `Settings::rig_mode_on_sideband`'s RTTY
+    ///   arm answers ONE token whichever side it is handed;
+    /// - an inverting transponder swaps the RF sides, so what the far end hears
+    ///   IS reversed — the effect is real, whatever we command;
+    /// - `Settings::rtty_reverse` reaches the AFSK transmit tone pair
+    ///   (`rtty_afsk::AfskConfig::reverse`) and the receive demod
+    ///   (`rtty::tone_pair`) — but NOT the FSK keyer, which keys the raw bit
+    ///   stream and has no reverse of its own. So "one switch spanning both
+    ///   legs" is true on AFSK and false on FSK;
+    /// - `RTTYR` exists in the CAT mode vocabulary, so a mirrored FSK uplink is
+    ///   at least expressible — it has simply never been shown to be right.
+    ///
+    /// It has been ruled on three times and been wrong three times. It is not
+    /// ruled on here: resolving it needs a real inverting pass in RTTY, on both
+    /// backends, with the far end reporting back.
     ///
     /// Nothing is "restored" when the pass ends — the answer simply becomes
     /// `None` and the loop stops writing, which is exactly what releasing the
@@ -7874,44 +7923,11 @@ impl Engine {
         // read from the one write-side canon rather than a second guess at it,
         // so the two legs can never be derived from different beliefs.
         let down = self.rig_mode_effective();
-        // ⚠️ OPEN QUESTION, DELIBERATELY UNANSWERED: a section whose mode
-        // answer carries NO SIDE. The test is the answer itself — if this
-        // section commands ONE token whichever side it is handed, nothing in
-        // the value encodes a side, so neither mirroring it nor repeating it
-        // is derived from anything. RTTY is that section today
-        // (`Settings::rig_mode_on_sideband`'s RTTY arm ignores `lsb`).
-        //
-        // WHAT IS ACTUALLY KNOWN, and it does not add up to an answer:
-        //
-        // - standard amateur RTTY is LSB-side (mark = the higher RF) on 80 m
-        //   and on 20 m alike, which is why that arm answers one token;
-        // - an inverting transponder swaps the RF sides, so what the far end
-        //   hears IS reversed — the effect is real, whatever we command;
-        // - `Settings::rtty_reverse` reaches the AFSK transmit tone pair
-        //   (`rtty_afsk::AfskConfig::reverse`) and the receive demod
-        //   (`rtty::tone_pair`) — but NOT the FSK keyer, which keys the raw bit
-        //   stream and has no reverse of its own. So "one switch spanning both
-        //   legs" is true on AFSK and false on FSK, and a ruling that leaned on
-        //   it was wrong for half the operators it applied to;
-        // - `RTTYR` exists in the CAT mode vocabulary, so a mirrored RTTY
-        //   uplink is at least expressible — it has simply never been shown to
-        //   be right.
-        //
-        // So this says NOTHING for RTTY, exactly as 0.27.0 did. The honest
-        // consequence, stated rather than hidden: an inverting bird worked in
-        // RTTY keeps whatever mode its transmit VFO already had, including one
-        // an earlier pass left there. That is the PRE-EXISTING behaviour, not a
-        // new defect — and a stated open question beats a shipped ruling built
-        // on a premise that does not hold. Resolving it needs a real inverting
-        // pass in RTTY, on both backends, with the far end reporting back.
-        //
-        // ASKED HERE rather than in `uplink_mode_for` because only this layer
-        // still knows the SECTION: RTTY on the AFSK backend commands `PKTLSB`,
-        // the same token the Digital section commands for an LSB-declared bird,
-        // and those two are not the same question.
-        if self.settings.rig_mode_on_sideband(false) == self.settings.rig_mode_on_sideband(true) {
-            return None;
-        }
+        // …and the uplink is that answer with the SIDE mirrored where the
+        // token names one. No suppression when the two agree (that was the
+        // AO-123 defect) and no section branch on top (that was the
+        // regression of it): whether a token mirrors is
+        // `uplink_mode_for`'s single question, asked of the token alone.
         Some(tempo_core::doppler::uplink_mode_for(
             &down,
             st.transponder.invert,
@@ -22294,38 +22310,33 @@ mod tests {
         // worked in all of them.
         use crate::settings::{CwKeyerBackend, OperatingMode};
         // (label, section, section setup, downlink, uplink straight, uplink
-        // inverted) — the uplink columns are `Option`, because one section
-        // answers NOTHING at all (see the RTTY rows).
+        // inverted). EVERY row answers — no section is special-cased, and a
+        // section that answered `None` is how the AO-123 defect came back.
         type Setup = fn(&mut crate::settings::Settings);
         type Row = (
             &'static str,
             OperatingMode,
             Setup,
             &'static str,
-            Option<&'static str>,
-            Option<&'static str>,
+            &'static str,
+            &'static str,
         );
-        let rows: [Row; 6] = [
-            (
-                "Phone",
-                OperatingMode::Phone,
-                |_s| {},
-                "USB",
-                Some("USB"),
-                Some("LSB"),
-            ),
+        let rows: [Row; 7] = [
+            ("Phone", OperatingMode::Phone, |_s| {}, "USB", "USB", "LSB"),
             // CW with a rig-side keyer: `CW`/`CWR` is which side of the carrier
             // the rig takes its BEAT NOTE from, and both key one carrier at the
             // dial. Nothing is transmitted on a side, so nothing mirrors — the
             // ruling on `doppler::uplink_mode_for`, pinned here where an
-            // operator would meet it.
+            // operator would meet it. NOTE THE COLUMN: `CW` is still SENT to
+            // the transmit VFO, unmirrored. "Does not mirror" is not "is left
+            // alone".
             (
                 "CW (rig keyer)",
                 OperatingMode::Cw,
                 |s| s.cw_keyer = CwKeyerBackend::Cat,
                 "CW",
-                Some("CW"),
-                Some("CW"),
+                "CW",
+                "CW",
             ),
             // …and the CW arm that DOES carry a side: the soundcard keyer puts
             // the rig in plain SSB and keys an audio TONE inside the passband.
@@ -22334,41 +22345,58 @@ mod tests {
                 OperatingMode::Cw,
                 |s| s.cw_keyer = CwKeyerBackend::Soundcard,
                 "USB",
-                Some("USB"),
-                Some("LSB"),
+                "USB",
+                "LSB",
             ),
-            // ⚠️ RTTY ANSWERS NOTHING, on EITHER backend, and that is an OPEN
-            // QUESTION rather than a ruling — the transmit VFO keeps whatever
-            // mode it already had, exactly as it did in 0.27.0. The RTTY arm of
-            // `rig_mode_on_sideband` answers one token whichever side it is
-            // handed (amateur RTTY is LSB-side on every band), so nothing in
-            // the downlink answer says which side an inverting bird's uplink
-            // belongs on, and this branch will not invent one. What is known
-            // and why it does not settle it is written out at the guard in
-            // `Engine::sat_tx_mode`.
+            // ⚠️ THE TWO RTTY BACKENDS ANSWER DIFFERENTLY, and neither answer
+            // is a ruling on RTTY. `uplink_mode_for` mirrors what the TOKEN
+            // names, and the RTTY section reaches it with two tokens: AFSK's
+            // `PKTLSB` is a DATA submode naming the lower side, so it mirrors;
+            // FSK's `RTTY` names no side, so it passes through. Whether RTTY
+            // through an inverting bird SHOULD be mirrored is an open question
+            // — what is known about it is written out on `Engine::sat_tx_mode`
+            // and `doppler::uplink_mode_for`, and it is not settled here.
             (
                 "RTTY (AFSK)",
                 OperatingMode::Rtty,
                 |s| s.rtty_backend = "afsk".into(),
                 "PKTLSB",
-                None,
-                None,
+                "PKTLSB",
+                "PKTUSB",
+            ),
+            // ⚠️ AND THE ROW THAT REFUTES "RTTY IS LEFT EXACTLY AS 0.27.0
+            // SHIPPED IT". On a mic-jack interface the AFSK arm answers plain
+            // `LSB`, and 0.27.0's rule ("send it only when the legs differ")
+            // mirrored that to `USB` and really did put an `X USB` frame on the
+            // wire for an inverting bird. This station's INVERTING behaviour is
+            // therefore unchanged from 0.27.0; what is new for it is the
+            // straight-through column, which 0.27.0 left unwritten.
+            (
+                "RTTY (AFSK, plain SSB for data)",
+                OperatingMode::Rtty,
+                |s| {
+                    s.rtty_backend = "afsk".into();
+                    s.data_modes_plain_ssb = true;
+                },
+                "LSB",
+                "LSB",
+                "USB",
             ),
             (
                 "RTTY (FSK)",
                 OperatingMode::Rtty,
                 |s| s.rtty_backend = "fsk".into(),
                 "RTTY",
-                None,
-                None,
+                "RTTY",
+                "RTTY",
             ),
             (
                 "Digital",
                 OperatingMode::Digital,
                 |_s| {},
                 "PKTUSB",
-                Some("PKTUSB"),
-                Some("PKTLSB"),
+                "PKTUSB",
+                "PKTLSB",
             ),
         ];
         for (label, section, setup, down, up_straight, up_inverted) in rows {
@@ -22388,8 +22416,8 @@ mod tests {
                 );
                 assert_eq!(
                     e.sat_tx_mode().as_deref(),
-                    want_up,
-                    "{label}, invert={invert}: the transmit VFO belongs on {want_up:?}"
+                    Some(want_up),
+                    "{label}, invert={invert}: the transmit VFO belongs on {want_up}"
                 );
             }
         }
@@ -22419,18 +22447,23 @@ mod tests {
         // itself rather than literals — the point is that the uplink is drawn
         // from the DIAL's range, not that it happens to spell "LSB".
         //
-        // A section that answers NOTHING (RTTY — an open question, see
-        // `Engine::sat_tx_mode`) has no token to check and is asserted as
-        // silence instead, which is the same invariant read from the other
-        // side: a token that is not in the dial's range is never sent, and the
-        // way not to send one is not to answer.
+        // ⚠️ THE VOCABULARY IS THE STATION'S, NOT THE SECTION'S — widened here,
+        // and the widening is a finding rather than a convenience. RTTY-AFSK
+        // commands `PKTLSB` for BOTH values of `lsb`, so its own section's pair
+        // is `[PKTLSB, PKTLSB]` — and an inverting bird's uplink is `PKTUSB`,
+        // which that pair does not contain. `PKTUSB` is nonetheless a token the
+        // mode plumbing handles on every FT8 pass (the Digital section commands
+        // this same dial into it), so the risk this invariant exists to catch —
+        // burning the loop's one bounded attempt on a token no backend knows —
+        // is not present. Narrowing it back to the section would only be
+        // satisfiable by NOT answering for RTTY, which is the guard that
+        // restored the AO-123 defect.
         use crate::settings::{CwKeyerBackend, OperatingMode};
         type Setup = fn(&mut crate::settings::Settings);
-        // (label, section, setup, what inversion does: Some(true) = moves the
-        // uplink to the section's other side, Some(false) = answers the same
-        // token either way, None = the section answers nothing at all)
-        let rows: [(&str, OperatingMode, Setup, Option<bool>); 6] = [
-            ("Phone", OperatingMode::Phone, |_s| {}, Some(true)),
+        // (label, section, setup, does an inverting bird MOVE the uplink off
+        // the token the dial got?)
+        let rows: [(&str, OperatingMode, Setup, bool); 6] = [
+            ("Phone", OperatingMode::Phone, |_s| {}, true),
             // `CW`/`CWR` is which side of the carrier the rig takes its BEAT
             // NOTE from; both key one carrier at the dial, and this VFO only
             // ever transmits. A real pair, no radiated side — so it does not
@@ -22440,32 +22473,32 @@ mod tests {
                 "CW (rig keyer)",
                 OperatingMode::Cw,
                 |s| s.cw_keyer = CwKeyerBackend::Cat,
-                Some(false),
+                false,
             ),
             (
                 "CW (soundcard keyer)",
                 OperatingMode::Cw,
                 |s| s.cw_keyer = CwKeyerBackend::Soundcard,
-                Some(true),
+                true,
             ),
-            // The two sections whose mode answer carries no side at all. They
-            // are not ruled on: nothing is stated for the uplink, so nothing
-            // can leave the vocabulary.
+            // The RTTY pair, whose two backends part company: AFSK's token is a
+            // DATA submode and mirrors, FSK's `RTTY` names no side and does
+            // not. An open question left open — see `Engine::sat_tx_mode`.
             (
                 "RTTY (AFSK)",
                 OperatingMode::Rtty,
                 |s| s.rtty_backend = "afsk".into(),
-                None,
+                true,
             ),
             (
                 "RTTY (FSK)",
                 OperatingMode::Rtty,
                 |s| s.rtty_backend = "fsk".into(),
-                None,
+                false,
             ),
-            ("Digital", OperatingMode::Digital, |_s| {}, Some(true)),
+            ("Digital", OperatingMode::Digital, |_s| {}, true),
         ];
-        for (label, section, setup, moves) in rows {
+        for (label, section, setup, mirrors) in rows {
             for invert in [false, true] {
                 let (mut e, tp) = sat_mode_engine(invert, 145_965_000);
                 {
@@ -22475,47 +22508,106 @@ mod tests {
                     e.apply_settings(s);
                 }
                 e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
-                let Some(mirrors) = moves else {
-                    assert_eq!(
-                        e.sat_tx_mode(),
-                        None,
-                        "{label} invert={invert}: this section's mode answer names no \
-                         side, so the uplink is told nothing — the open question stays \
-                         open rather than being answered by a guess"
-                    );
-                    continue;
-                };
                 let up = e
                     .sat_tx_mode()
                     .expect("a held, consented uplink always has a mode to state");
                 let down = e.rig_mode_effective();
 
-                // The dial's OWN range for this section: the two sideband sides
-                // it can be commanded on, which is every token it produces
-                // short of the FM arm (asserted separately above).
-                let dial_range = [
+                // Every token this station's dial is EVER commanded, drawn from
+                // `rig_mode_on_sideband` across the sections and backends rather
+                // than spelled out — the point is that the uplink is drawn from
+                // the dial's range, not that it happens to spell "LSB".
+                let station_range = dial_vocabulary(&e);
+                assert!(
+                    station_range.contains(&up),
+                    "{label} invert={invert}: the uplink was told {up:?}, which this \
+                     station's dial is never commanded ({station_range:?}) — a token the \
+                     mode plumbing has never had to handle"
+                );
+
+                // A straight-through bird is always the dial's own token: there
+                // is no side to swap, in any section, ever.
+                if !invert {
+                    assert_eq!(
+                        up, down,
+                        "{label}: a non-inverting transponder puts the transmit VFO in \
+                         the mode the dial got — and SAYS so, rather than assuming the \
+                         VFO inherited it"
+                    );
+                    continue;
+                }
+
+                // …and an inverting one moves it exactly where the token names
+                // a radiated side.
+                assert_eq!(
+                    up != down,
+                    mirrors,
+                    "{label}: the dial is on {down:?} and the uplink was told {up:?} \
+                     — inversion is expected to move it: {mirrors}"
+                );
+
+                // Where the section carries two sides AND the token names one,
+                // say WHICH — membership alone cannot see a wrong side, since
+                // both sides are members. (The CW rig-keyer row is why this is
+                // gated on `mirrors` as well: `CW`/`CWR` is a real pair of
+                // tokens with no radiated side behind it, so "the other one" is
+                // the wrong answer there and the row above already pinned that
+                // the uplink does not move.)
+                let sides = [
                     e.settings.rig_mode_on_sideband(false),
                     e.settings.rig_mode_on_sideband(true),
                 ];
-                assert!(
-                    dial_range.contains(&up),
-                    "{label} invert={invert}: the uplink was told {up:?}, which the dial \
-                     is never commanded ({dial_range:?}) — a token the mode plumbing has \
-                     never had to handle"
-                );
-
-                // …and WHICH of the two. `down` is one of the pair by
-                // construction; the uplink is the OTHER one exactly when this
-                // section's form carries a side and the bird inverts.
-                let down_is_lsb = down == dial_range[1];
-                let want = &dial_range[usize::from(down_is_lsb != (mirrors && invert))];
-                assert_eq!(
-                    &up, want,
-                    "{label} invert={invert}: the dial is on {down:?}, so the transmit \
-                     VFO belongs on {want:?} — mirrors={mirrors}"
-                );
+                if mirrors && sides[0] != sides[1] {
+                    let down_is_lsb = down == sides[1];
+                    let want = &sides[usize::from(!down_is_lsb)];
+                    assert_eq!(
+                        &up, want,
+                        "{label}: the dial is on {down:?}, so the transmit VFO belongs on \
+                         the section's OTHER side {want:?}"
+                    );
+                }
             }
         }
+    }
+
+    /// Every mode token this station's DIAL can be commanded into — the union
+    /// over the operating sections and their keying backends, plus the FM arm
+    /// that is a class rather than a side.
+    ///
+    /// Union, not per-section, deliberately: an inverting bird's uplink can
+    /// legitimately land on a token the CURRENT section never commands (RTTY on
+    /// the AFSK backend answers `PKTLSB` for both sides and mirrors to
+    /// `PKTUSB`, which the Digital section commands on every FT8 pass). What
+    /// the invariant is really about is that the token is one the CAT mode
+    /// plumbing already handles — a token outside it burns the loop's one
+    /// bounded split-mode attempt, silently, because that VFO cannot be read
+    /// back.
+    fn dial_vocabulary(e: &Engine) -> Vec<String> {
+        use crate::settings::{CwKeyerBackend, OperatingMode};
+        type Setup = fn(&mut crate::settings::Settings);
+        // Every (section, keying backend) pair the dial's mode policy has an
+        // arm for — Digital included, which is where `PKTUSB` enters.
+        let sections: [(OperatingMode, Setup); 6] = [
+            (OperatingMode::Phone, |_s| {}),
+            (OperatingMode::Cw, |s| s.cw_keyer = CwKeyerBackend::Cat),
+            (OperatingMode::Cw, |s| {
+                s.cw_keyer = CwKeyerBackend::Soundcard
+            }),
+            (OperatingMode::Rtty, |s| s.rtty_backend = "afsk".into()),
+            (OperatingMode::Rtty, |s| s.rtty_backend = "fsk".into()),
+            (OperatingMode::Digital, |_s| {}),
+        ];
+        // …plus the FM arm, which is a class rather than a side and so is not
+        // reachable through `rig_mode_on_sideband` at all.
+        let mut out = vec!["FM".to_string()];
+        for (section, setup) in sections {
+            let mut s = e.settings().clone();
+            s.operating_mode = section;
+            setup(&mut s);
+            out.push(s.rig_mode_on_sideband(false));
+            out.push(s.rig_mode_on_sideband(true));
+        }
+        out
     }
 
     #[test]

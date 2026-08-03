@@ -593,12 +593,14 @@ export interface SatTrackStatus {
   /** The MODE the engine will command the TX (split) VFO into while this pass
    * owns the uplink — the inverting bird's mirrored sideband, and equally the
    * FM of an FM bird or the plain sideband of a non-inverting one, because the
-   * transmit VFO carries its own mode. Null when nothing is commanded. THE
-   * display source for the TX-mode claim — never re-derive it from the SatNOGS
-   * record (the record and the command disagree exactly where it matters: a
-   * downlink-only mapping, an RTTY pass — where which side an inverting bird's
-   * uplink belongs on is an open question and nothing is stated — Doppler off,
-   * or an operator mode take-back). */
+   * transmit VFO carries its own mode. Answered for every held bird from every
+   * operating section — the section decides the FORM of the answer, never
+   * whether there is one. Null when nothing is commanded. THE display source
+   * for the TX-mode claim — never re-derive it from the SatNOGS record (the
+   * record and the command disagree exactly where it matters: a downlink-only
+   * mapping, Doppler off, an operator mode take-back — and, the other way, any
+   * section whose form is a DATA submode or the rig's CW/RTTY mode, which the
+   * record never names). */
   txMode?: string | null
   /** Did a rotator this track WAS driving stop answering mid-pass? The track
    * carries on — the pass clock, Doppler and the transponder hold are a

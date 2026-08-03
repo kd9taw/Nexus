@@ -425,12 +425,25 @@ pub fn downlink_class(mode: Option<&str>) -> DownlinkClass {
 /// # ⚠️ `RTTY`/`RTTYR` — AN OPEN QUESTION, NOT A RULING
 ///
 /// Which side an inverting bird's RTTY uplink belongs on is NOT settled, here
-/// or anywhere. This map never sees the question: `Engine::sat_tx_mode` — the
-/// one caller that still knows the operating SECTION, which a mode token has
-/// lost by the time it reaches here — states nothing at all for RTTY and never
-/// calls in. That is deliberate, and the open question with what is actually
-/// known is written out at that guard. The `RTTY` fall-through below is
-/// therefore unreached in practice and settles nothing.
+/// or anywhere. `RTTY` and `RTTYR` are therefore NOT in the mirror list, for
+/// the plain reason that nothing has shown they belong there — the same
+/// treatment every unrecognised token gets, not a decision about RTTY.
+///
+/// ⚠️ **THE CONSEQUENCE, AND IT IS NOT SYMMETRIC BETWEEN THE TWO RTTY
+/// BACKENDS.** This map asks one question — does the TOKEN name a radiated
+/// side — and the RTTY section reaches it with two different tokens:
+///
+/// | RTTY backend | `Settings::rig_mode_on_sideband` answers | inverting uplink |
+/// |---|---|---|
+/// | AFSK (soundcard) | `PKTLSB` (or plain `LSB` under `data_modes_plain_ssb`) | MIRRORED — `PKTUSB` / `USB` |
+/// | FSK (the rig's own RTTY mode) | `RTTY` | `RTTY`, unmirrored |
+///
+/// That difference is not a ruling on RTTY either. It falls out of the tokens:
+/// a DATA submode names the lower side and an inverting transponder mirrors
+/// what names a side, while `RTTY` names none. `Engine::sat_tx_mode` states
+/// whichever answer follows and takes no view — the alternative, a section
+/// branch, was tried and RESTORED the AO-123 defect (see the ⚠️ on that
+/// function, which also carries what IS known about the RTTY question).
 pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     let m = downlink_mode.trim().to_ascii_uppercase();
     if !invert {
@@ -440,9 +453,9 @@ pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
         "USB" => "LSB".to_string(),
         "LSB" => "USB".to_string(),
         // The DATA submodes carry the same two sides — FT8/FT4 and SSTV
-        // through a transponder are worked here. (RTTY-AFSK commands `PKTLSB`
-        // too, and the two are not the same question — which is why its caller
-        // never reaches this map at all; see the open question above.)
+        // through a transponder are worked here, and so does RTTY on the AFSK
+        // backend, which commands `PKTLSB` for the same soundcard reason. The
+        // token is the whole question; the SECTION behind it is not asked.
         "PKTUSB" => "PKTLSB".to_string(),
         "PKTLSB" => "PKTUSB".to_string(),
         // FM is a class, not a side, and `CW`/`CWR` are a receive-side BFO
@@ -751,19 +764,35 @@ mod tests {
     }
 
     #[test]
-    fn the_data_pair_mirrors_here_because_a_token_has_lost_its_section() {
-        // RTTY on the AFSK backend commands `PKTLSB` — the SAME token the
-        // Digital section commands for an LSB-declared bird. By the time a mode
-        // reaches this map the SECTION is gone, so this map cannot tell the two
-        // apart and does not try: it mirrors the DATA pair, and RTTY is kept
-        // away from it by the one caller that still knows which section asked
-        // (`Engine::sat_tx_mode`, which answers nothing at all for RTTY — an
-        // open question, not a ruling).
+    fn the_rtty_tokens_pass_through_and_the_two_backends_therefore_differ() {
+        // ⭐ THE OPEN QUESTION, PINNED AS THE CONSEQUENCE IT IS. Which side an
+        // inverting bird's RTTY uplink belongs on is not settled, so `RTTY` and
+        // `RTTYR` are simply not in the mirror list — the same treatment every
+        // unrecognised token gets.
+        //
+        // That leaves the RTTY SECTION answering differently per backend, and
+        // the asymmetry is real rather than an accident to be papered over:
+        // AFSK commands `PKTLSB` (a DATA submode, because the soundcard needs
+        // one) and FSK commands the rig's own `RTTY`. This map asks ONE
+        // question — does the token name a radiated side — and gets two
+        // different answers because it is handed two different tokens.
+        //
+        // The alternative, a SECTION branch upstream, was tried: it restored
+        // the AO-123 defect (an FM bird worked from RTTY commanded nothing at
+        // all). See `Engine::sat_tx_mode`.
+        for m in ["RTTY", "RTTYR"] {
+            assert_eq!(
+                uplink_mode_for(m, true),
+                m,
+                "{m} names no radiated side, so nothing is mirrored — and nothing is ruled"
+            );
+            assert_eq!(uplink_mode_for(m, false), m);
+        }
         assert_eq!(
             uplink_mode_for("PKTLSB", true),
             "PKTUSB",
-            "the DATA pair mirrors here — the section, not the token, is what tells \
-             RTTY-AFSK apart from an LSB-declared Digital bird"
+            "RTTY-AFSK's token IS a DATA submode, so it mirrors like any other — the \
+             token is the question, never the section behind it"
         );
     }
 

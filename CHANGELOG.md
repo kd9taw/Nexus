@@ -31,8 +31,13 @@ wideband FM carrier into a linear transponder's 30 kHz passband is the loudest p
 wrong. Either one sounds, from your seat, exactly like nobody answering.
 
 Now the uplink mode is stated for every transponder you hold — FM for an FM bird, the downlink's
-own sideband for a straight linear one, the mirrored sideband for an inverting one — in every
-operating section but RTTY, which is left alone for the reason below. It is still sent only when
+own sideband for a straight linear one, the mirrored sideband for an inverting one — from **every**
+operating section, with no exceptions. The section you are standing in decides what *form* the
+answer takes (plain sideband, a DATA submode, your rig's CW or RTTY mode); it never decides whether
+there is one. That matters more than it sounds: a first attempt at this excused RTTY, and because
+the excuse asked about the *section* rather than the bird, an FM bird worked from the RTTY section
+went straight back to being told nothing at all — the AO-123 report, restored by the code meant to
+be careful about it. It is still sent only when
 the answer *changes*, so it does not chatter on the bus and does not fight you if you reach for
 the rig's own mode knob. Everything that already refused to touch your transmit VFO still refuses:
 a beacon, a one-channel simplex bird, an uplink mapping you have not confirmed for that radio,
@@ -50,23 +55,40 @@ Nexus would now be *authoring* DATA-U where DATA-L belongs, which is worse than 
 replaced: the frequency right, the side wrong, and from your seat indistinguishable from nobody
 hearing you. Both pairs mirror: USB/LSB, and the DATA submodes.
 
-**CW is deliberately left alone, and it is worth saying why so you are not left wondering.** CW and
-CW-R pick which side of the carrier your *receiver* listens on, and both transmit the same carrier
-on the dial, so there is no side for an inverting bird to swap. (Keying CW through the soundcard
-puts the rig in plain SSB, and that one does mirror.)
+**CW does not get mirrored — but it does get sent.** A CW pass now puts `CW` (or `CW-R` on the low
+bands) on your transmit VFO, the same token your dial got, on an inverting bird as much as a
+straight one. What does *not* happen is a swap: CW and CW-R pick which side of the carrier your
+*receiver* listens on, and both transmit the identical carrier on the dial, so there is no side for
+an inverting bird to flip. (Keying CW through the soundcard puts the rig in plain SSB instead, and
+that one does mirror.) "Not mirrored" is not "left alone" — leaving it alone is what left stale
+modes on your uplink in the first place.
 
-**RTTY is an open question, and Nexus does not answer it.** Your RTTY mode is the LSB-side
-convention on every band, not a side worked out per bird, so there is nothing in the mode itself
-for an inverting transponder to swap. But an inverting transponder really does flip the RF sides,
-so something out there *is* reversed. The obvious answer — "your REV switch already covers both
-legs, so leave the mode alone" — is only half true: REV flips the tone sense on what you copy on
-either backend, and on what you *send* only on AFSK. The FSK keyer never sees it. That is not
-enough to rule on, and it has now been ruled on twice and been wrong twice. So Nexus says nothing
-to the transmit VFO for an RTTY pass, exactly as it did before this release: an inverting bird
-worked in RTTY keeps whatever mode that VFO already had. `RTTY-R` exists in the CAT vocabulary, so
-the mirror is at least expressible if it turns out to be right. If you work an inverting bird in
-RTTY, note what actually got through — which backend, REV where — and this can be settled with
-evidence instead of argument.
+**RTTY: an open question, and it is still open — but here is exactly what your rig will be told.**
+An inverting transponder really does flip the RF sides, so something out there *is* reversed on an
+inverting RTTY pass. Whether the answer is to command a reversed mode has been ruled on three times
+and been wrong three times, so it is not ruled on again here. What happens instead is that RTTY gets
+no special treatment at all — and because the two RTTY backends command *different modes*, they come
+out differently:
+
+- **AFSK (soundcard)** puts your rig in the DATA submode DATA-L, exactly as FT8 does, because the
+  soundcard's audio has to reach the modulator. DATA-L *names* the lower side, so an inverting bird
+  mirrors it to DATA-U on your transmit VFO — the same rule that moves your FT8 uplink. On a
+  mic-jack interface ("plain SSB for data modes") the same pass reads plain LSB down and USB up.
+- **FSK** puts your rig in its own RTTY mode, which names no side at all, so nothing is mirrored:
+  your transmit VFO is told RTTY.
+
+Neither is a verdict on RTTY. Nexus mirrors what names a sideband and passes through what does not,
+and the two backends simply hand it different things. `RTTY-R` exists in the CAT vocabulary, so a
+reversed FSK uplink is expressible the day there is evidence for it — and the REV switch is not that
+evidence: REV flips the tone sense on what you *copy* on either backend, and on what you *send* only
+on AFSK. The FSK keyer never sees it. If you work an inverting bird in RTTY, note what actually got
+through — which backend, REV where — and this can be settled with evidence instead of argument.
+
+**One thing this changes that the old wording claimed it did not.** "RTTY is left exactly as it was"
+was not true for one station: with **plain SSB for data modes** switched on, the AFSK arm answers
+plain LSB, and the *previous* release already mirrored that to USB and really did send the frame.
+So for that station an inverting RTTY pass is unchanged from 0.27.0 — what is new is the
+straight-through case, where 0.27.0 sent nothing and now your transmit VFO is told LSB.
 
 **FT8 through a linear bird lands in DATA where the uplink rides the Sub band.** Stating a mode for
 every held bird means a Digital-section pass now asks the rig for one — and on native CI-V the
@@ -86,7 +108,16 @@ inverting bird met it, and now every held bird asks. (On the Main/Sub satellite 
 mapping is only allowed to carry a same-band pass in the first place, so that is where it shows
 up there.) It stays a refusal on purpose: it is true, it names the fix, and it takes ten seconds at
 the front panel — where the alternative is firing a CAT command nobody has verified at a VFO whose
-mode cannot be read back. Hamlib-driven rigs are unaffected.
+mode cannot be read back.
+
+**And it is not only the CI-V driver — Hamlib rigs can meet it too.** Setting the *transmit* VFO's
+mode is a separate Hamlib call from setting the dial's, and plenty of backends do not implement it;
+when yours does not, you get the same "rig would not set the TX mode — put VFO B in *mode* by hand".
+That was already true, but almost nobody met it, because only an inverting bird ever asked. Now
+every held bird asks from every section, so if your rig is one of those you will see it on FM birds,
+on non-inverting linears, and on CW and RTTY passes where nothing used to be asked for at all. The
+message is per pass, not per correction, and your uplink *frequency* is unaffected — only the mode
+your transmit VFO is in, which is a ten-second fix at the front panel.
 
 **Still open, so you know to watch for it:** a split you program on the ground after a pass — a 20 m
 pile-up "UP 5" — is not told a mode at all. It rides the same transmit VFO the satellite used, and
