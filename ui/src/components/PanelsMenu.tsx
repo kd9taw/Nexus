@@ -16,6 +16,13 @@
 // would make it appear) and `note` (it works, but its panel only has something to show
 // at certain times). Same rule DSP_FUNCS already follows in the cockpits: never offer a
 // dead control.
+//
+// An unavailable entry is `aria-disabled`, NEVER the `disabled` attribute. A disabled
+// control is removed from the tab order, so an operator driving the menu from the
+// keyboard or a screen reader would never land on the one entry whose whole purpose is to
+// explain itself — the reason exists for them first. aria-disabled keeps it focusable and
+// announces "dimmed/unavailable" with its description; the toggle is suppressed in the
+// handler instead, so it is reachable AND cannot act.
 import { useEffect, useId, useRef, useState } from 'react'
 import type { PanelState } from '../features/panelState'
 
@@ -100,9 +107,21 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props)
                   <input
                     type="checkbox"
                     checked={it.state !== 'removed'}
-                    disabled={!!it.unavailable}
+                    aria-disabled={it.unavailable ? true : undefined}
                     aria-describedby={whyId}
-                    onChange={(e) => onToggle(it.id, e.target.checked)}
+                    onChange={(e) => {
+                      // Reachable, but not actionable. `disabled` would have done this
+                      // for us — at the cost of the tab stop, which is the one thing this
+                      // entry cannot afford to lose. So refuse here instead: the browser
+                      // has already flipped the box by the time a change event exists, so
+                      // put it back to what the layout says and never call onToggle.
+                      // Pointer and keyboard both arrive through this one path.
+                      if (it.unavailable) {
+                        e.currentTarget.checked = it.state !== 'removed'
+                        return
+                      }
+                      onToggle(it.id, e.target.checked)
+                    }}
                   />
                   <span>{it.label}</span>
                   {it.state === 'popped' && <span className="panels-menu-tag">popped out</span>}

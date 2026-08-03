@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
-import { panelHost } from '../features/panelHost'
+import { panelHost, NO_DSP_FUNCS_REASON, NO_DSP_LEVELS_REASON } from '../features/panelHost'
 import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
@@ -231,24 +231,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const civScope = scopeFeed?.source === 'civ'
   // FlexRadio SmartSDR panadapter — its own span/ref command path (display pan set …).
   const flexScope = scopeFeed?.source === 'flex'
-  // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
-  // host is only supplying `shown` + the menu items.
-  //
-  // The rig-scope pane exists only while the RADIO's own panadapter streams, so on the
-  // audio bandscope its entry could never render anything however it was ticked — the
-  // dead-checkbox the operator hit on 2026-08-03. It is offered UNAVAILABLE there, with
-  // the reason, and comes back checkable by itself when a native scope arrives.
-  const host = panels
-    ? panelHost(panels, {
-        menu: PHONE_PANEL_IDS,
-        side: [],
-        main: 'bandActivity',
-        labels: PHONE_PANEL_LABELS,
-        unavailable: { rigscope: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON },
-        notes: { txmeters: TX_METERS_WHEN },
-      })
-    : null
-  const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
     setFlexRefDbm(dbm)
@@ -478,6 +460,39 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // (that is the pre-rebuild behaviour: re-showing a hidden pane renders what it knew
   // when it was hidden, and nothing else silently widens the column budget meanwhile).
   const liveDspFuncs = DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
+  // Whether each rig-gated pane CAN render at all on this station, independent of the ⊞
+  // tick. Computed here, above the menu, so the entry and the pane read ONE boolean each
+  // and cannot drift apart — which is the whole failure the affordance exists to answer.
+  // CAPABILITY, not the learned flag: the sticky learns just below only run while the pane
+  // is SHOWN, so keying availability off the ref alone would leave an operator who unticked
+  // before the rig first reported stuck with a dead entry once it does.
+  const canDsp = liveDspFuncs.length > 0 || seenDspFuncs.current.length > 0
+  const canDspLevels =
+    seenDspLevels.current || snap.radio.nrLevel != null || snap.radio.agc != null
+  // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
+  // host is only supplying `shown` + the menu items.
+  //
+  // Three entries here are conditional on the STATION, so their checkbox could be ticked
+  // while the pane could never mount — the dead-checkbox the operator hit on 2026-08-03.
+  // Each is offered UNAVAILABLE with the reason, and each goes live by itself the moment
+  // the rig can feed it: the rig-scope pane needs the RADIO's own panadapter streaming,
+  // and the two DSP panes need the rig to report those fields over CAT (the same
+  // capability gate the DSP row itself has always applied to its buttons).
+  const host = panels
+    ? panelHost(panels, {
+        menu: PHONE_PANEL_IDS,
+        side: [],
+        main: 'bandActivity',
+        labels: PHONE_PANEL_LABELS,
+        unavailable: {
+          rigscope: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
+          dsp: canDsp ? undefined : NO_DSP_FUNCS_REASON,
+          dspLevels: canDspLevels ? undefined : NO_DSP_LEVELS_REASON,
+        },
+        notes: { txmeters: TX_METERS_WHEN },
+      })
+    : null
+  const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)
   if (shown('dsp') && liveDspFuncs.length > 0) seenDspFuncs.current = liveDspFuncs.map((f) => f.key)
   const dspFuncs =
     liveDspFuncs.length > 0
@@ -492,8 +507,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // hoisted because the region's column budget (maxCols) depends on them.
   const hasBandPane = onWorkSpot != null && shown('bandActivity')
   const hasRigScopePane = shown('rigscope') && (civScope || flexScope)
-  const hasDspPane = shown('dsp') && dspFuncs.length > 0
-  const hasDspLevelsPane = shown('dspLevels') && seenDspLevels.current
+  const hasDspPane = shown('dsp') && canDsp
+  const hasDspLevelsPane = shown('dspLevels') && canDspLevels
   const auxPresent = hasRigScopePane || hasDspPane || hasDspLevelsPane
   // Three columns are band | keyer+rig/dsp | log, so the tier is only offered when the
   // leading column (Band Activity) AND at least one aux pane exist — otherwise a track

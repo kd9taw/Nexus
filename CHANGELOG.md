@@ -28,6 +28,20 @@ mount, and the entry goes live by itself the moment a native scope streams. TX M
 tickable and carry the note "readings appear on transmit" in Phone, CW and Operate alike. Nothing
 is removed from the menu: a greyed entry with a reason tells you more than a missing one.
 
+The same two questions turned out to have five more answers in the same menus, and they read the
+same way now. In Phone and CW, **DSP Functions / DSP Toggles** and **RX DSP Levels** depend on
+what your radio reports over CAT — on a rig that reports neither, those panes could never appear
+and the boxes did nothing. In CW, **Sent Echo** holds what you have transmitted this session, so
+at every start-up it is empty and its box moved nothing at all until your first over; it now says
+so, and goes live when you send. Everything else in the menu is unchanged and still tickable.
+
+Reaching all of this from the keyboard works the way the rest of Nexus does: an entry that cannot
+appear is still a tab stop, still takes focus, and reads its reason aloud with the panel name —
+the operator who cannot see the greying is the one the reason was written for. And the menu itself
+no longer runs off a short screen: with eight entries and their reasons it scrolls inside its own
+box, so **Undo last change** and **Reset layout** stay where you can reach them at any window size
+or UI zoom.
+
 ### Fixed: a rotator that stops answering no longer takes the dial with it
 
 Reported from a live pass: "I saw a first Doppler shift, then it snapped back to the none

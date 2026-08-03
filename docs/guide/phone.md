@@ -37,8 +37,16 @@ on it — it goes live by itself when your station can render it:
   while an Icom CI-V or FlexRadio scope is streaming. On the audio bandscope
   there is nothing to command, and the entry says so. The span chips over the
   scope are a different thing: they zoom what is already on screen.
+- **DSP Functions** (NB / NR / Notch / COMP / VOX) and **RX DSP Levels** (NR
+  level, AGC) only ever offer what your radio reports over CAT. A rig that
+  reports none of them has nothing for those panes to hold, and the entries say
+  so rather than hiding an empty pane behind a live checkbox.
 - **TX Meters** (SWR / ALC / PO / COMP) read on transmit, so the panel is empty
   while you listen. The entry stays tickable and says when it reads.
+
+A greyed entry is still a tab stop: it takes keyboard focus and reads its reason
+with the panel name. If the list outgrows your window it scrolls inside the menu,
+so **Undo last change** and **Reset layout** stay reachable.
 
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->
 

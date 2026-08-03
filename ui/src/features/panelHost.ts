@@ -9,6 +9,25 @@
 // one. This is what makes "panels everywhere" a small per-cockpit spec, not a copy of Operate.
 import type { PanelLayoutApi, PanelState } from './panelState'
 
+// ── The ⊞ menu's `unavailable` reasons that more than one cockpit needs ────────────────
+// Copy for a menu entry lives with its SUBJECT when the subject renders it too
+// (NO_NATIVE_SCOPE_REASON in waterfall.ts, TX_METERS_WHEN in TxMeters.tsx, which prints it
+// as its own idle hint). These three exist only for the menu and are worded once here so
+// Phone and CW cannot describe the same dead entry two different ways.
+
+/** DSP function toggles (NB/NR/Notch, plus COMP/VOX on Phone) — capability-gated on what
+ *  the rig reports over CAT, exactly as the DSP row itself has always been. */
+export const NO_DSP_FUNCS_REASON =
+  'your radio is not reporting DSP functions over CAT — these appear on a rig that does'
+
+/** The NR-level / AGC sliders — the same CAT-capability gate, different fields. */
+export const NO_DSP_LEVELS_REASON =
+  'your radio is not reporting an NR level or AGC over CAT — these appear on a rig that does'
+
+/** CW's Sent Echo: empty at every session start, so its entry is dead until the first over. */
+export const NOTHING_SENT_REASON =
+  'nothing has been sent this session — the echo appears with your first transmission'
+
 export interface PanelHostSpec<P extends string> {
   /** Menu order = the panels THIS layout can show. A panel with no place in the current
    *  layout isn't listed, so it can't be ticked into nowhere. */

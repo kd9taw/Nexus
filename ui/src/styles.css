@@ -11528,6 +11528,13 @@ select.settings-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--elev-3);
+  /* CW lists eight entries, four of which can carry a reason line — enough to push the
+     Undo / Reset footer off the bottom of a short window, and at a pinned 175% zoom that
+     happens on an ordinary one. Cap against the EFFECTIVE viewport (--vh-eff =
+     innerHeight/zoom; raw vh is blind to `.app { zoom }`) and let the list scroll inside
+     itself, so the footer the operator needs after a mis-tick is always reachable. */
+  max-height: calc(0.7 * var(--vh-eff, 100vh));
+  overflow-y: auto;
 }
 .panels-menu-item {
   display: flex;
@@ -11542,10 +11549,17 @@ select.settings-input {
 }
 /* An entry whose panel cannot render anything in the current station state: still listed
    (so the operator learns WHY, and it returns by itself when the rig can show it), but
-   not checkable. The reason/note sits under the box, indented past it. */
+   not checkable. The reason/note sits under the box, indented past it.
+   The box is aria-disabled, NOT `disabled` — it must keep its focus ring and its place in
+   the tab order — so the greyed look has to be painted here rather than inherited from the
+   UA's disabled styling. */
 .panels-menu-item.unavailable .panels-menu-check {
   color: var(--text-dim);
   cursor: default;
+}
+.panels-menu-check input[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.5;
 }
 .panels-menu-why {
   padding-left: calc(var(--space-2) + 1em);

@@ -270,6 +270,33 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
   })
 })
 
+describe('⊞ Panels popover: Undo / Reset stay reachable however long the list gets', () => {
+  // The popover has always been an unbounded absolutely-positioned column, and the
+  // unavailable/note affordance added a wrapped reason line under as many as four of CW's
+  // eight entries (~238 → ~304 px). Its footer holds Undo and Reset — the two controls an
+  // operator reaches for right after a mis-tick — so it is the last thing that may fall off
+  // the bottom. At a pinned 175% UI zoom on an ordinary window it already did.
+  it('.panels-menu-pop is height-capped against the EFFECTIVE viewport', () => {
+    const v = winner('.panels-menu-pop', 'max-height')
+    expect(v, '.panels-menu-pop declares no max-height — an unbounded overlay column').not.toBeNull()
+    expect(
+      v!,
+      `max-height is \`${v}\` — it must reference var(--vh-eff): a raw vh unit is blind to ` +
+        '`.app { zoom }`, which is precisely the pinned-zoom case that pushes the footer off.',
+    ).toContain('var(--vh-eff')
+  })
+
+  it('.panels-menu-pop scrolls its own overflow (a cap without one just clips the footer)', () => {
+    const v = winner('.panels-menu-pop', 'overflow-y') ?? winner('.panels-menu-pop', 'overflow')
+    expect(
+      v,
+      'capping the popover without a scroller moves the problem rather than fixing it: the ' +
+        'entries past the cap, and Undo / Reset below them, would be painted outside the clip ' +
+        'with no path to them at all.',
+    ).toBe('auto')
+  })
+})
+
 // ── The log form wraps DOWN, never overflows RIGHT ────────────────────────────────────
 // Inside the pane grid the log column can be as narrow as 24em; without wrap the .le-row
 // min-content (sum of intrinsic input widths) overflowed the pane sideways and half the

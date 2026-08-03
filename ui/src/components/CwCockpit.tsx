@@ -13,7 +13,12 @@ import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { Splitter } from './Splitter'
 import { PanelsMenu } from './PanelsMenu'
-import { panelHost } from '../features/panelHost'
+import {
+  panelHost,
+  NO_DSP_FUNCS_REASON,
+  NO_DSP_LEVELS_REASON,
+  NOTHING_SENT_REASON,
+} from '../features/panelHost'
 import { CW_PANEL_IDS, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
 import { AssistanceNote } from './AssistanceNote'
 import { LogEntry } from './LogEntry'
@@ -327,24 +332,6 @@ export function CwCockpit({
   const decodePin = usePinnedScroll<HTMLDivElement>()
   // Cockpit root: the scope-height splitter measures + writes its CSS var here.
   const cockpitRef = useRef<HTMLElement>(null)
-  // Panels (Phase 3): scope + keyer/macros/send/log stay pinned; the panes under the scope are
-  // removable, and the four content panes (Band Activity / Copilot / Decode / Sent) seam-resize.
-  // Scope Controls command the RADIO's panadapter, so on the audio bandscope that pane
-  // can never mount however its box is ticked (Phone's twin of this entry is what the
-  // operator caught on 2026-08-03): offer it unavailable, with what would bring it back.
-  // TX meters here are the unpinned variant — nothing at all on receive — so the entry
-  // says when it has something to show rather than looking dead between overs.
-  const host = panels
-    ? panelHost(panels, {
-        menu: CW_PANEL_IDS,
-        side: [],
-        main: 'decode',
-        labels: CW_PANEL_LABELS,
-        unavailable: { scopeCtl: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON },
-        notes: { txmeters: TX_METERS_WHEN },
-      })
-    : null
-  const shown = (id: CwPanelId) => (host ? host.shown(id) : true)
   // Decode sensitivity for the internal pitch decoder (now WPM-estimation + AI-off
   // fallback only — the slider left with the classic pane; the stored value still applies).
   const sensitivityRef = useRef<number>(
@@ -379,6 +366,40 @@ export function CwCockpit({
   // scroll back and verify what was actually keyed (the whole point of the echo).
   const [sent, setSent] = useState<string[]>([])
   const sentPin = usePinnedScroll<HTMLDivElement>()
+  // Panels (Phase 3): scope + keyer/macros/send/log stay pinned; the panes under the scope are
+  // removable, and the four content panes (Band Activity / Copilot / Decode / Sent) seam-resize.
+  //
+  // Whether each conditional pane CAN render at all right now, independent of the ⊞ tick —
+  // computed HERE, above the menu, so the entry and the pane read ONE boolean each and
+  // cannot drift apart. Four CW entries are conditional and each is offered UNAVAILABLE
+  // with its reason, going live by itself the moment the station can feed it:
+  //   - Scope Controls command the RADIO's panadapter, so on the audio bandscope that pane
+  //     can never mount however its box is ticked (Phone's twin of this entry is what the
+  //     operator caught on 2026-08-03).
+  //   - DSP Toggles / RX DSP Levels are capability-gated on what the rig reports over CAT,
+  //     the same rule the DSP row applies to its own buttons.
+  //   - Sent Echo holds this session's transmissions, so at EVERY session start it is empty
+  //     and its tick moves nothing — the operator's exact complaint, in another cockpit.
+  // TX meters here are the unpinned variant — nothing at all on receive — so that entry
+  // stays checkable and says when it has something to show, rather than looking dead.
+  const cwDspFuncs = CW_DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
+  const canRxDsp = snap.radio.nrLevel != null || snap.radio.agc != null
+  const host = panels
+    ? panelHost(panels, {
+        menu: CW_PANEL_IDS,
+        side: [],
+        main: 'decode',
+        labels: CW_PANEL_LABELS,
+        unavailable: {
+          scopeCtl: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
+          dsp: cwDspFuncs.length > 0 ? undefined : NO_DSP_FUNCS_REASON,
+          rxdsp: canRxDsp ? undefined : NO_DSP_LEVELS_REASON,
+          sent: sent.length > 0 ? undefined : NOTHING_SENT_REASON,
+        },
+        notes: { txmeters: TX_METERS_WHEN },
+      })
+    : null
+  const shown = (id: CwPanelId) => (host ? host.shown(id) : true)
   // A CW-keyer failure surfaced by the radio loop (e.g. the rig rejected CAT send_morse).
   const [keyerError, setKeyerError] = useState<string | null>(null)
   // --- CW copilot: decoded-call chips only (Expert). The Guided/Expert selector + its bar were
@@ -628,12 +649,13 @@ export function CwCockpit({
   //
   // Which panes CAN render right now — the exact conditions that gated them in the old
   // `.cw-lower` JSX, hoisted because the region's column budget (maxCols) depends on them.
-  const cwDspFuncs = CW_DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
+  // The four station-conditional ones read the SAME booleans the ⊞ menu was built from
+  // (up at the panelHost spec), so the menu cannot claim one thing and the region another.
   const hasDecodePane = shown('decode')
   const hasSentPane = shown('sent') && sent.length > 0
   const hasScopeCtlPane = shown('scopeCtl') && (civScope || flexScope)
   const hasDspPane = shown('dsp') && cwDspFuncs.length > 0
-  const hasRxDspPane = shown('rxdsp') && (snap.radio.nrLevel != null || snap.radio.agc != null)
+  const hasRxDspPane = shown('rxdsp') && canRxDsp
   const hasBandPane = shown('bandActivity') && onWorkSpot != null
   const hasCopilotPane = shown('copilot')
   const mainPresent = hasDecodePane || hasSentPane
