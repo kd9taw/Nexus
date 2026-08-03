@@ -32,6 +32,34 @@ This covers every way the active radio can change — band routing, satellite ro
 coverage, and the radio button in the top left — plus a band change with no switch at all, and
 spinning the rig's own VFO across a band edge.
 
+Keeping the microphone across a switch means the radio loop can now be asked to transmit during
+the moment a two-radio handoff is still in flight — the fraction of a second where the app is
+holding the radio you just switched *away* from. It will not: a key pressed in that window waits
+and goes out on the radio you switched *to*, and the same rule covers a tune carrier, a queued CW
+word, an RTTY over, an APRS beacon, a voice message, an SSTV image and an FT8 slot. Nothing is
+thrown away — it is held and sent a moment later, on the right radio. Testing CAT works the same
+way: while the port is handed to the baud-ladder probe, the app will not report a key it cannot
+actually send.
+
+One thing deliberately does not follow you: another program sharing the radio through the CAT
+broker. Your own microphone stays live across a band change because you made it; a shared client
+cannot see that you moved until its next poll, so its key is refused until you arm transmit
+again — exactly as before.
+
+### Fixed: picking 160, 80 or 40 m in Phone no longer lands on a locked-out frequency
+
+Pick 40 m from the Phone band list as an Extra and the radio landed on 7.1250 — the exact bottom
+of the Extra phone band. On the low bands you transmit below the dial, so a signal there runs
+2.8 kHz *under* the band edge: the app locked transmit out, the PTT button came up 🔒 TX LOCKED,
+and it did it on a band you are fully licensed for. The same thing happened on 160 and 80 m, at
+every license class.
+
+The band list now parks you a full sideband clear of the edge — 7.1278 for that Extra, 7.1778 for
+a General — which is the first frequency you can legally key on that band. It is the same place
+switching *into* Phone has always landed; the band list was the one path that had its own idea.
+The high bands are unchanged: there you transmit above the dial, so the segment start was already
+clear.
+
 ### Fixed: a Doppler correction no longer rewrites the mode every three seconds
 
 From an operator's CI-V trace of a live pass: 110 seconds carried 38 mode commands and 38

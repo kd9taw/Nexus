@@ -2022,6 +2022,9 @@ impl RadioLoop {
     /// steady-state retune ladder retries with its full give-up/fallback machinery.
     /// Failing OPEN (keying anyway) is the status quo — today's open-time commands are
     /// also `let _ =` best-effort.
+    ///
+    /// See [`Self::may_key`] for the sibling rule that stops the KEY itself in the same
+    /// windows — a refusal to command is worthless if the key goes out anyway.
     fn ensure_commanded(&mut self, rig: &mut Rig) {
         if self.rig_asserted {
             return;
@@ -2048,6 +2051,39 @@ impl RadioLoop {
         } else {
             // No mode policy yet (first tick hasn't derived one) — nothing to assert.
         }
+    }
+
+    /// May the loop START a transmission on the active `rig` this tick?
+    ///
+    /// `false` in the two windows where the `Rig` handle the loop is holding is NOT the
+    /// radio the engine's TX intent is about. This is [`Self::ensure_commanded`]'s guard
+    /// carried the last three lines to the key itself:
+    ///
+    /// - **a DEFERRED dual-radio switch** (`handoff_deferred`): the handoff could not take
+    ///   the pool lock this tick, so `rig` is still the OUTGOING radio while the engine's
+    ///   dial, mode and TX intent are already the INCOMING one's. Keying here puts RF on
+    ///   the radio the operator just switched away from — worse than not keying at all.
+    /// - **the Test-CAT port hold** (`cat_hold_active`): the loop has dropped the daemon
+    ///   and installed a `Rig::vox()` so an external prober can open the serial port.
+    ///   `Rig::ptt` on a Vox rig sets `keyed` and returns `Ok` — so keying here would light
+    ///   the TX indicator, clear the PTT error banner and report a successful key with
+    ///   NOTHING on the wire. No emission, but the app would be lying about the radio.
+    ///
+    /// ⚠️ THIS GUARD BECAME LOAD-BEARING with `Engine::halt_tx_for_context_change`. Before
+    /// it, a radio switch left `tx_enabled` down, so the engine refused every key for the
+    /// whole deferral and the loop was never asked to do the wrong thing. Now that the
+    /// operator keeps the mic across a switch, the engine says "key" while the loop still
+    /// holds the wrong rig, and only this stops it.
+    ///
+    /// Both windows are transient and self-clearing (the handoff retries every tick; the
+    /// hold self-expires engine-side), and every gated site HOLDS its work rather than
+    /// dropping it: a queued CW word, an APRS beacon, a voice message, a tune or a mic
+    /// press is left where the engine put it, so whatever the engine still wants goes out
+    /// on the first tick the loop owns the right radio again.
+    ///
+    /// UNKEYING is never gated. Dropping a key is safe on either radio and must always run.
+    fn may_key(&self) -> bool {
+        !self.handoff_deferred && !self.cat_hold_active
     }
 
     /// Push a dial frequency to the rig, honouring a REFUSAL.
@@ -2345,7 +2381,12 @@ impl RadioLoop {
                     {
                         let mut eng = engine_lock(engine);
                         // A CONTEXT halt: the loop is dropping the transport under the
-                        // operator, who asked to test CAT — not to disarm their mic.
+                        // operator, who asked to test CAT — not to disarm their mic. The mic
+                        // stays armed across the probe, but it must not APPEAR to key while
+                        // the port is handed away: `*rig = Rig::vox()` below has no control
+                        // channel, and `Rig::ptt` on a Vox rig sets `keyed` and answers Ok.
+                        // `cat_hold_active` is therefore part of `may_key`, so no key-up runs
+                        // until the transport is rebuilt.
                         eng.halt_tx_for_context_change();
                     }
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
@@ -3542,7 +3583,10 @@ impl RadioLoop {
         // (a whole-macro `send_morse` blob would keep keying out of the rig's buffer past the
         // one `\stop_morse`). Operator-initiated; the engine gates on tx_enabled + privileges.
         {
-            let ready = now >= self.cw_busy_until;
+            // …and not while the loop doesn't own the operator's radio ([`Self::may_key`]):
+            // not polling HOLDS the word in the engine's queue, so the macro resumes on the
+            // radio it was typed for instead of keying the one being switched away from.
+            let ready = now >= self.cw_busy_until && self.may_key();
             let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key) = {
                 let mut eng = engine_lock(engine);
                 (
@@ -3736,7 +3780,10 @@ impl RadioLoop {
         // below), on the watchdog trip (poll_rtty_one arms the abort), and at app
         // exit (the SHUTDOWN flush).
         {
-            let ready = now >= self.rtty_busy_until;
+            // Same hold as the CW keyer: while the loop doesn't own the operator's radio
+            // ([`Self::may_key`]) the queue is not polled, so the over waits instead of
+            // going out on the outgoing rig.
+            let ready = now >= self.rtty_busy_until && self.may_key();
             let (abort, msg, baud, shift, reverse, fsk_port_line) = {
                 let mut eng = engine_lock(engine);
                 // Keep the cockpit's sending indicator honest each tick: an over is
@@ -3920,7 +3967,9 @@ impl RadioLoop {
         // one-shot overs, `!manual_ptt_applied` covers a PHYSICALLY held mic (whose unkey path
         // deliberately refuses to drop PTT under a held key — an injected packet would ride the
         // live over), and poll_aprs_tx's tx_owner() gate covers everything the engine can see.
-        if self.tx_until_ms.is_none() && !self.manual_ptt_applied {
+        // …and `may_key()` covers the loop not owning the operator's radio: `poll_aprs_tx`
+        // HOLDS the queue when it isn't called, so the beacon rides the right rig.
+        if self.tx_until_ms.is_none() && !self.manual_ptt_applied && self.may_key() {
             let beacon = Some(engine_lock(engine)).and_then(|mut e| e.poll_aprs_tx());
             if let Some(buf) = beacon.filter(|b| !b.is_empty()) {
                 self.ensure_commanded(rig); // read-only launch: assert before key
@@ -4016,7 +4065,14 @@ impl RadioLoop {
                 }
                 (
                     eng.take_voice_abort(),
-                    eng.poll_voice(),
+                    // Held, not dropped, while the loop doesn't own the operator's radio
+                    // ([`Self::may_key`]) — `poll_voice` TAKES the message, so skipping the
+                    // call is what keeps it for the rig it was recorded to go out on.
+                    if self.may_key() {
+                        eng.poll_voice()
+                    } else {
+                        None
+                    },
                     eng.is_qso_recording(),
                     eng.qso_record_path(),
                 )
@@ -4130,10 +4186,13 @@ impl RadioLoop {
             // the mutual exclusion RTTY gets for free from mode-exclusivity. Polling only
             // when idle also HOLDS the engine's job (poll_sstv_tx takes it) instead of
             // dropping it, so a busy tick can't lose the image.
+            // `may_key()` joins that idle backstop for the same reason it holds the job:
+            // the loop must not start an image on a rig it doesn't own.
             if self.sstv_feed.is_none()
                 && self.tx_until_ms.is_none()
                 && !self.tuning_keyed
                 && !self.manual_ptt_applied
+                && self.may_key()
             {
                 let job = {
                     let mut eng = engine_lock(engine);
@@ -4203,7 +4262,13 @@ impl RadioLoop {
                 let ptt = eng.manual_ptt();
                 (ptt, eng.rf_power_to_command())
             };
-            if ptt != self.manual_ptt_applied {
+            // A KEY is refused while the loop doesn't own the operator's radio
+            // ([`Self::may_key`]) — during a deferred switch `rig` is the OUTGOING radio, and
+            // under the Test-CAT hold it is a control-less `Rig::vox()` that would report a
+            // successful key with nothing on the wire. `manual_ptt_applied` stays false, so a
+            // held mic keys FOR REAL on the first tick the loop owns the right rig. An UNKEY
+            // is never gated — it must always reach the radio.
+            if ptt != self.manual_ptt_applied && (!ptt || self.may_key()) {
                 if ptt {
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
@@ -4403,6 +4468,13 @@ impl RadioLoop {
                     is_tuning = false;
                 }
             }
+        }
+        // A tune carrier must not START on a rig the loop doesn't own ([`Self::may_key`]).
+        // The operator's Tune stays held engine-side and keys the moment it does. An
+        // ALREADY-keyed tune is deliberately left alone: it falls through to the release
+        // branch below, whose unkey must always run.
+        if is_tuning && !self.tuning_keyed && !self.may_key() {
+            is_tuning = false;
         }
         if is_tuning {
             let keying = !self.tuning_keyed;
@@ -4613,7 +4685,12 @@ impl RadioLoop {
         // before the next boundary — instead of waiting a full T/R cycle for the
         // next boundary (the "a few cycles go by" lag). If it doesn't fit / wrong
         // parity, the normal boundary path transmits at the next valid period.
-        if self.tx_until_ms.is_none() && eng.peek_immediate_tx() {
+        // `may_key()`: not onto a rig the loop doesn't own. This path only ever `peek_`s, so
+        // skipping it CONSUMES nothing — the request is still there for the next tick, and
+        // whichever comes first (a later tick with the rig owned, or the slot boundary, which
+        // drains it exactly as it always has) decides. The one outcome this rules out is the
+        // over going up on the radio the operator switched away from.
+        if self.tx_until_ms.is_none() && eng.peek_immediate_tx() && self.may_key() {
             let slot_now = self.clock.slot_index(now);
             let on_our_parity = slot_now.is_multiple_of(2) == eng.tx_even();
             let room_ms = self.clock.ms_to_next_slot(now);
@@ -5081,6 +5158,17 @@ impl RadioLoop {
         if eng.tx_enabled() {
             self.ensure_commanded(rig);
         }
+        // A slot over must not key on a rig the loop doesn't own ([`Self::may_key`]) — during
+        // a deferred switch that is the OUTGOING radio, and under the Test-CAT port hold
+        // there is no transport at all. Hand the TX phase an EMPTY build, which is exactly
+        // the shape `finish_boundary` already passes for "planned to nothing": the boundary's
+        // RX, sequencer bookkeeping and `boundary_keyed` record run untouched, and nothing
+        // keys. `poll_tx` is then never called either, so an unplanned over stays queued.
+        let prebuilt = if self.may_key() {
+            prebuilt
+        } else {
+            Some(Vec::new())
+        };
         let action = crate::slot::slot_tx_phase(
             eng,
             rig,
@@ -7967,6 +8055,398 @@ mod tests {
              transmit in Phone, where the operator has no control to re-arm it"
         );
         assert!(rig.keyed, "…and Rig::ptt(true) actually ran");
+    }
+
+    /// A rigctld that answers everything `RPRT 0` (and `f` with a plausible dial) while
+    /// LOGGING every command line it was sent. The log LATCHES — which is what a PTT test
+    /// needs and `Rig::keyed` cannot give it, because the handoff's own unkey clears
+    /// `keyed` again a tick later and would hide a key that really did go out.
+    fn mock_logging_rigctld() -> (String, u16, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let addr = format!("127.0.0.1:{port}");
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let reply = if l == "f" { "14250000\n" } else { "RPRT 0\n" };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, port, log)
+    }
+
+    #[test]
+    fn a_contended_switch_never_keys_the_outgoing_radio() {
+        // THE TX-SAFETY COST OF KEEPING THE MIC ACROSS A SWITCH. `halt_tx_for_context_change`
+        // leaves Phone/CW/RTTY armed through a radio handoff — which is the whole point — but
+        // the handoff itself can be DEFERRED: `handoff_if_switched` bails on `pool.try_lock`
+        // (the monitor thread mid-read-burst, the steady state on a two-Icom station) and
+        // returns with `rig` still pointing at the OUTGOING radio. The engine's dial, mode and
+        // TX intent are already the INCOMING radio's.
+        //
+        // `ensure_commanded` has always refused to COMMAND in that window ("exactly the
+        // cross-radio contamination the contended-switch test pins"). The manual-PTT applier
+        // had no such guard — it did not need one while the cleared latch made `manual_ptt()`
+        // false for the whole deferral. With the latch restored, a thumb on PTT during the
+        // deferral put RF on the radio the operator had just switched AWAY from. Keying the
+        // wrong radio is worse than not keying.
+        //
+        // Asserted at the WIRE, on BOTH radios: the outgoing rigctld must never see `T 1`, and
+        // the incoming one must — the guard is a hold, not a kill.
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_logging_rigctld();
+        let (icom_addr, icom_port, icom_log) = mock_logging_rigctld();
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let (icom, icom_profile, yaesu_transport) = {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            // Radio 0 — the Yaesu, keyed over CAT so every key-up is a line on its own wire.
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 1042; // FTDX10
+            s.serial_port = "/dev/tempo-test-cat-a".to_string();
+            s.rigctld_port = yaesu_port;
+            s.audio_in = "FTDX10 codec".to_string();
+            s.audio_out = "FTDX10 codec".to_string();
+            e.apply_settings(s);
+            // Radio 1 — the Icom, likewise. `add_radio` makes it active, so the flat form
+            // below edits ITS profile.
+            let icom = e.add_radio();
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 3081; // IC-9700
+            s.serial_port = "/dev/tempo-test-cat-b".to_string();
+            s.rigctld_port = icom_port;
+            s.audio_in = "IC-9700 codec".to_string();
+            s.audio_out = "IC-9700 codec".to_string();
+            e.apply_settings(s);
+            let icom_profile = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.id == icom)
+                .unwrap()
+                .clone();
+            // Start on the Yaesu, in Phone, armed, on a dial an Extra may key.
+            e.set_active_radio(0);
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+            let yaesu_transport = Transport::from_settings(e.settings());
+            (icom, icom_profile, yaesu_transport)
+        };
+
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::with_control(Some(yaesu_addr), PttMode::Cat);
+        let mut state = loop_state();
+        state.applied = yaesu_transport;
+        let mut last_active = 0u32;
+        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+            id: icom,
+            transport: Transport::from_profile(&icom_profile),
+            // Opened READ-ONLY by the monitor thread; the adopt gives it the real PTT mode.
+            rig: Rig::with_control(Some(icom_addr), PttMode::Vox),
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        }]));
+
+        // The monitor thread is mid-poll: the pool is HELD, so the handoff can only defer.
+        let guard = pool.lock().unwrap();
+        engine.lock().unwrap().set_active_radio(icom);
+        assert!(
+            engine.lock().unwrap().tx_enabled(),
+            "scene guard: the switch left Phone armed (that is the fix this test guards)"
+        );
+
+        // The switch restored the Icom's own per-radio dial (14.074, its digital home) —
+        // park on a phone frequency so the privilege gate is not what refuses the key. Same
+        // band, so this is a plain dial move and not a second context halt.
+        engine.lock().unwrap().set_frequency(14.250, "20m", "USB");
+
+        // The operator's thumb lands on PTT while the switch is still in flight.
+        engine.lock().unwrap().set_ptt(true);
+        assert!(
+            engine.lock().unwrap().manual_ptt(),
+            "scene guard: the ENGINE says key — only the loop can refuse now"
+        );
+
+        for tick in 1..=4 {
+            loop_tick(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &mut backend,
+                f64::from(tick) * 20.0,
+            );
+            assert!(
+                state.handoff_deferred,
+                "scene guard: the contended pool keeps the handoff deferred"
+            );
+            assert!(
+                !rig.keyed,
+                "tick {tick}: the loop keyed the OUTGOING radio during a deferred switch"
+            );
+            assert!(
+                !state.manual_ptt_applied,
+                "tick {tick}: …and it recorded the key as applied"
+            );
+        }
+        assert!(
+            !yaesu_log.lock().unwrap().iter().any(|l| l == "T 1"),
+            "no key may reach the radio the operator switched AWAY from — saw {:?}",
+            yaesu_log.lock().unwrap()
+        );
+
+        // The monitor's burst ends: the handoff lands and the loop owns the Icom.
+        drop(guard);
+        for tick in 5..=9 {
+            loop_tick(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &mut backend,
+                f64::from(tick) * 20.0,
+            );
+        }
+        assert_eq!(last_active, icom, "the deferred handoff completed");
+        assert!(!state.handoff_deferred, "…and cleared its deferral");
+
+        // A HOLD, not a kill: the operator presses again and it goes out — on the Icom.
+        engine.lock().unwrap().set_ptt(true);
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            200.0,
+        );
+        assert!(
+            icom_log.lock().unwrap().iter().any(|l| l == "T 1"),
+            "the mic must key the INCOMING radio once the loop owns it — saw {:?}",
+            icom_log.lock().unwrap()
+        );
+        assert!(
+            !yaesu_log.lock().unwrap().iter().any(|l| l == "T 1"),
+            "…and the outgoing radio was never keyed at any point — saw {:?}",
+            yaesu_log.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_deferred_switch_stops_the_tune_carrier_and_the_slot_over_too() {
+        // The mic is not the only thing the loop can key while `rig` is still the OUTGOING
+        // radio. The other two appliers that put RF up on their own:
+        //
+        //  • the TUNE carrier — `Engine::set_tune` never consulted the Enable-TX latch at all
+        //    (only `tx_allowed`), so this one could always start on the wrong radio;
+        //  • the SLOT over — reachable whenever TX is armed at a boundary.
+        //
+        // Both now go through `may_key`, and both HOLD: the operator's Tune stays held and
+        // the sequencer's over stays queued until the loop owns the right radio.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        let mut state = loop_state();
+        let mut rig = Rig::vox();
+        let mut backend = MockBackend::new();
+
+        // --- Tune carrier, through step(), with the handoff deferred. ---
+        state.handoff_deferred = true;
+        engine.lock().unwrap().set_tune(true);
+        assert!(
+            engine.lock().unwrap().tuning(),
+            "scene guard: the engine holds a tune"
+        );
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            !state.tuning_keyed,
+            "a tune must not key the radio the operator switched away from"
+        );
+        assert!(!rig.keyed, "…and Rig::ptt(true) must not have run");
+
+        // Held, not dropped: the handoff lands and the same tune keys.
+        state.handoff_deferred = false;
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                40.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            state.tuning_keyed,
+            "the tune the operator was still holding keys once the loop owns the rig"
+        );
+        engine.lock().unwrap().set_tune(false);
+
+        // --- Slot over, at `key_boundary_tx` — the single door every boundary key goes
+        //     through (both the key-at-boundary path and `finish_boundary`). A non-empty
+        //     prebuilt waveform IS an over the sequencer already committed. ---
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let over = vec![vec![0.1f32; 4096]];
+        state.handoff_deferred = true;
+        let action = {
+            let mut eng = engine.lock().unwrap();
+            state.key_boundary_tx(
+                &mut eng,
+                &mut rig,
+                &mut backend,
+                60.0,
+                7,
+                false,
+                None,
+                Some(over.clone()),
+            )
+        };
+        assert!(
+            !action.tx_this_slot,
+            "a committed slot over must not key the outgoing radio"
+        );
+        assert!(!rig.keyed, "…and nothing reached the rig");
+        assert!(action.tx_until_ms.is_none(), "…so there is no PTT hold");
+
+        // Same over, handoff landed → it keys, so the guard is a hold and not a mute.
+        state.handoff_deferred = false;
+        let action = {
+            let mut eng = engine.lock().unwrap();
+            state.key_boundary_tx(
+                &mut eng,
+                &mut rig,
+                &mut backend,
+                80.0,
+                8,
+                false,
+                None,
+                Some(over),
+            )
+        };
+        assert!(
+            action.tx_this_slot,
+            "the same over keys once the loop owns the rig"
+        );
+        assert!(rig.keyed, "…and Rig::ptt(true) ran");
+    }
+
+    #[test]
+    fn the_test_cat_port_hold_never_claims_a_key_it_cannot_send() {
+        // Test CAT's baud-ladder probe needs the serial port itself, so the loop drops its
+        // daemon and installs `*rig = Rig::vox()`. That halt is a CONTEXT halt — the operator
+        // asked to test CAT, not to disarm their mic — so Phone stays armed across the probe.
+        //
+        // But `Rig::ptt(true)` on a Vox rig sets `keyed` and returns Ok. Without a guard the
+        // loop would record the key as applied, clear the PTT error banner and report success
+        // while `PttMode::Vox` commanded NOTHING. No emission — an honest-state violation:
+        // the app claiming to key a radio it has handed away.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+            e.hold_cat_port(); // Test CAT asks for the port
+        }
+        let mut state = loop_state();
+        let mut rig = Rig::vox();
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = |state: &mut RadioLoop, rig: &mut Rig, now: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+
+        tick(&mut state, &mut rig, 20.0); // the loop hands the port over
+        assert!(
+            state.cat_hold_active,
+            "scene guard: the port hold is in force"
+        );
+        assert!(
+            engine.lock().unwrap().tx_enabled(),
+            "the probe is a context change — it must not take the operator's mic"
+        );
+
+        engine.lock().unwrap().set_ptt(true);
+        tick(&mut state, &mut rig, 40.0);
+        assert!(
+            !state.manual_ptt_applied,
+            "the loop must not record a key it handed the port away to make"
+        );
+        assert!(
+            !rig.keyed,
+            "…and must not mark a control-less Vox rig as keyed"
+        );
+
+        // Probe done: the port comes back and the mic works again — a hold, not a kill.
+        engine.lock().unwrap().release_cat_port();
+        tick(&mut state, &mut rig, 60.0); // rebuild tick
+        assert!(!state.cat_hold_active, "the hold released");
+        engine.lock().unwrap().set_ptt(true);
+        tick(&mut state, &mut rig, 80.0);
+        assert!(
+            state.manual_ptt_applied,
+            "once the transport is back, PTT reaches the radio again"
+        );
     }
 
     #[test]

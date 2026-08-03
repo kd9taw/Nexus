@@ -163,6 +163,40 @@ pub fn segment_start(class: LicenseClass, band: &str, mode: OperatingMode) -> Op
         .fold(None, |acc, lo| Some(acc.map_or(lo, |a: f64| a.min(lo))))
 }
 
+/// An SSB signal occupies ~2.8 kHz beside the carrier. THE passband width the whole app
+/// judges phone by: the transmit gate measures the emission with it (`Engine::emission_allowed`)
+/// and [`phone_home`] parks clear of a segment edge by it. ONE constant, because a home dial
+/// computed against a narrower belief than the gate measures with is a dial the gate then
+/// refuses — which is precisely the bug [`phone_home`] exists to end.
+pub const SSB_BW_MHZ: f64 = 0.0028;
+
+/// Where a PHONE band pick should park the dial for `class` on `band` — with the sideband
+/// that band's convention uses. `None` = no phone privilege there (the band is omitted from
+/// the dropdown).
+///
+/// ⚠️ NOT [`segment_start`], which is the EDGE. On the LSB bands (<10 MHz) the passband hangs
+/// BELOW the dial, so parking ON the edge puts the lower 2.8 kHz outside the segment and the
+/// transmit gate then refuses the very dial the band picker chose. Lifting the LSB home by one
+/// passband is what makes the pick keyable. USB extends upward from `lo`, so the edge is
+/// already clear there.
+///
+/// WHY IT IS A FUNCTION AND NOT THREE COPIES (repair, 2026-08): the lift lived in
+/// `Engine::mode_home` only. `Engine::band_pick_default` (the band dropdown's pick — the
+/// `pick_band` path) and the `get_licensed_band_plan` command each recomputed the same home
+/// from the bare `segment_start` and got an unkeyable dial: picking 40 m in Phone as an Extra
+/// landed on 7.1250 LSB, whose passband starts at 7.1222 — below the 7.125 phone floor — so
+/// the cockpit showed 🔒 TX LOCKED on a band the operator is fully licensed for. 160/80/40 m
+/// are the LSB phone bands this bit. Every phone home in the app now comes from here.
+pub fn phone_home(class: LicenseClass, band: &str) -> Option<(f64, &'static str)> {
+    segment_start(class, band, OperatingMode::Phone).map(|lo| {
+        if lo < 10.0 {
+            (lo + SSB_BW_MHZ, "LSB")
+        } else {
+            (lo, "USB")
+        }
+    })
+}
+
 /// The PHONE (SSB/image) sub-band the operator may use on `band`, as an inclusive/exclusive
 /// `[lo, hi)` MHz span for the band-strip's "where you may talk" shading. `None` when the class
 /// has no phone privilege there, or for `Open` (non-US — no US sub-band model) and 60 m
@@ -287,6 +321,58 @@ mod tests {
         // Just below the upper edge is allowed; the upper edge itself is not.
         assert!(tx_allowed(General, 14.349, Phone));
         assert!(!tx_allowed(General, 14.350, Phone));
+    }
+
+    #[test]
+    fn every_phone_home_is_a_dial_its_class_may_actually_key() {
+        // THE contract that binds every phone band picker in the app. A picker parks the dial;
+        // the transmit gate then judges the EMISSION — the whole passband, both edges, LSB
+        // hanging below the dial. A home the gate refuses is a band the operator is licensed
+        // for and cannot key, which is what shipped while two of the three pickers recomputed
+        // the home from the bare `segment_start` (Extra picking 40 m → 7.1250, whose passband
+        // opens at 7.1222, under the 7.125 phone floor → 🔒 TX LOCKED).
+        const BANDS: &[&str] = &[
+            "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m", "1.25m",
+            "70cm", "23cm",
+        ];
+        let mut homes = 0;
+        for class in [Technician, General, Extra, Open] {
+            for band in BANDS {
+                let Some((dial, sb)) = phone_home(class, band) else {
+                    continue;
+                };
+                homes += 1;
+                assert_eq!(
+                    sb,
+                    if dial < 10.0 { "LSB" } else { "USB" },
+                    "{class:?} {band}: the home's sideband must follow the band's convention"
+                );
+                // The same span `Engine::emission_allowed` measures for Phone.
+                let (lo, hi) = if dial < 10.0 {
+                    (dial - SSB_BW_MHZ, dial)
+                } else {
+                    (dial, dial + SSB_BW_MHZ)
+                };
+                assert!(
+                    tx_allowed(class, lo, Phone) && tx_allowed(class, hi, Phone),
+                    "{class:?} {band}: the phone home {dial:.4} emits over [{lo:.4}, {hi:.4}], \
+                     which leaves the phone segment"
+                );
+            }
+        }
+        assert!(
+            homes > 20,
+            "the sweep must actually have found homes to check"
+        );
+        // …and the LSB lift is a real move, not a rounding: 160/80/40 m are the bands where
+        // the passband hangs below the dial.
+        assert_eq!(phone_home(Extra, "40m"), Some((7.125 + SSB_BW_MHZ, "LSB")));
+        assert_eq!(
+            phone_home(General, "40m"),
+            Some((7.175 + SSB_BW_MHZ, "LSB"))
+        );
+        assert_eq!(phone_home(Extra, "20m"), Some((14.150, "USB"))); // USB: already clear
+        assert_eq!(phone_home(Technician, "20m"), None); // no privilege, no home
     }
 
     #[test]
