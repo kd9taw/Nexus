@@ -3262,11 +3262,12 @@ impl Settings {
     /// ⚠️ **A SECTION MAY IGNORE `lsb` ENTIRELY, AND ONE DOES.** The RTTY arm
     /// answers LSB-side for both values, because amateur RTTY is LSB-side on
     /// every band (see it below). So the answer for that section encodes NO
-    /// side, and no caller may derive one from it — in particular the satellite
-    /// uplink must not "mirror" it, because there is nothing there to mirror
-    /// (`Engine::sat_tx_mode`, which tests `rig_mode_on_sideband(false) ==
-    /// rig_mode_on_sideband(true)` rather than naming sections, so a future
-    /// side-blind arm is covered the day it is written).
+    /// side, and a caller that needs one cannot get it from here.
+    /// `Engine::sat_tx_mode` detects exactly that by asking this function twice
+    /// (`rig_mode_on_sideband(false) == rig_mode_on_sideband(true)`) rather
+    /// than naming sections, and then states nothing at all for the uplink —
+    /// an open question left open, not a ruling. A future side-blind arm is
+    /// covered the day it is written.
     pub(crate) fn rig_mode_on_sideband(&self, lsb: bool) -> String {
         match self.operating_mode {
             // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
@@ -3306,12 +3307,12 @@ impl Settings {
             // shift. "Plain SSB" has no meaning there — only the AFSK (soundcard) path, which
             // is a DATA submode for the same reason FT8 is, can be switched.
             //
-            // ⚠️ THIS ARM IGNORES `lsb`, and that is the ruling, not an
-            // oversight: the RTTY convention is LSB-side on 80 m and on 20 m
-            // alike, so the band rule does not get a say here and neither does
-            // a satellite's declared downlink. The consequence is stated on
-            // this function's doc — the answer carries no side, so nothing
-            // downstream may mirror it.
+            // ⚠️ THIS ARM IGNORES `lsb`, deliberately: the RTTY convention is
+            // LSB-side on 80 m and on 20 m alike, so the band rule does not get
+            // a say here and neither does a satellite's declared downlink. The
+            // consequence is stated on this function's doc — the answer carries
+            // no side, so a caller needing one has to get it elsewhere or, like
+            // the satellite uplink, do nothing.
             OperatingMode::Rtty => {
                 if self.rtty_backend.eq_ignore_ascii_case("fsk") {
                     "RTTY".to_string()

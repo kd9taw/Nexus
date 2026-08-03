@@ -5393,7 +5393,9 @@ struct SatTrackDto {
     /// USB of a non-inverting linear, because the transmit VFO carries its own
     /// mode and has to be told. `None` only when nothing is commanded at all:
     /// a mapping that does not drive the uplink, a transponder with no uplink
-    /// leg, Doppler off, or the operator took the mode back. The UI displays
+    /// leg, an RTTY pass (which side an inverting bird's RTTY uplink belongs on
+    /// is an open question — `Engine::sat_tx_mode` states nothing rather than
+    /// guess), Doppler off, or the operator took the mode back. The UI displays
     /// THIS, never a second derivation from the SatNOGS record — two
     /// derivations of one command is how a display claims a write the radio
     /// never gets.

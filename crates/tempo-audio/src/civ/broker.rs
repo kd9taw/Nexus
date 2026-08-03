@@ -581,6 +581,23 @@ impl RigBackend for CivBackend {
             // A/B split has no native mode verb wired yet (`26 01` is a
             // follow-up once verified against the manual) — `RPRT -11`, the
             // honest "not implemented", exactly as before.
+            //
+            // ⚠️ AND IT IS REACHED MORE OFTEN NOW, on purpose. This backend
+            // engages satellite mode only for a Main/Sub mapping; an A/B
+            // mapping (`Engine::sat_split_tx_vfo` → `VFOB`) leaves `engaged`
+            // false, so every uplink mode a pass states on THAT layout lands
+            // here and the loop surfaces "rig would not set the TX mode — put
+            // VFO B in <mode> by hand". Before every held bird stated a mode
+            // that only happened on an inverting bird; now it happens on any
+            // bird an A/B mapping can carry — which on the Main/Sub satellite
+            // Icoms means a SAME-BAND pass, the only kind
+            // `Engine::ab_cross_band_refusal` lets through.
+            //
+            // Left as a refusal rather than papered over: the note is true (the
+            // mode really was not set) and actionable in seconds at the front
+            // panel, and the alternative — firing an unverified `26 01` — is
+            // the "believed but not landed" write this whole path exists to
+            // refuse. Pinned by `an_ab_split_refuses_the_tx_mode_verb_honestly`.
             return None;
         }
         if !self.ensure_main(&mut g) {
@@ -593,13 +610,19 @@ impl RigBackend for CivBackend {
         // PKT*/DATA-* decompose into base sideband + the DATA flag, byte for
         // byte as `set_mode` does for the dial — one decomposition, so the two
         // VFOs cannot end up with different ideas of what "PKTUSB" means.
-        // Without it this resolved through `Mode::from_name` alone, `PKTUSB`
-        // was not a name it knows, and a Digital-section pass through a linear
-        // bird answered "rig would not set the TX mode — put Sub in PKTUSB by
-        // hand". FT8 through a transponder is real operating and plain SSB on a
-        // normally-wired rig radiates ZERO RF, so that refusal is a dead
-        // transmit leg rather than caution (operator ruling, 2026-08-03: "if I
-        // am doing FT over sat, it should put it in data").
+        //
+        // ⚠️ NOT A FIELD REPORT, and no operator has seen this refusal: nothing
+        // ever asked. Shipped 0.27.0 answered a TX mode only when the two legs
+        // DIFFERED, and a Digital-section bird's never did (`PKTUSB` fell
+        // through the mirror to itself), so no `X` frame was sent for one at
+        // all. Stating the uplink for EVERY held bird is what makes the
+        // question reachable — and resolved through `Mode::from_name` alone,
+        // which does not know `PKTUSB`, the answer WOULD be RPRT -1 and "rig
+        // would not set the TX mode — put Sub in PKTUSB by hand". FT8 through a
+        // transponder is real operating and plain SSB on a normally-wired rig
+        // radiates ZERO RF, so that would be a dead transmit leg rather than
+        // caution (operator ruling, 2026-08-03: "if I am doing FT over sat, it
+        // should put it in data").
         //
         // ⚠️ UNVERIFIED ON HARDWARE. `1A 06` against a SELECTED Sub band is
         // what the rig should be told; nobody has watched an IC-9700 take it.
@@ -1009,14 +1032,65 @@ mod tests {
     }
 
     #[test]
+    fn an_ab_split_refuses_the_tx_mode_verb_honestly() {
+        // DISCLOSED, NOT FIXED. An A/B mapping never engages satellite mode, so
+        // `X` has no wired verb on this backend (`26 01` unverified) and
+        // answers `RPRT -11`. That is unchanged; what changed is how OFTEN an
+        // operator meets it — a pass used to state a TX mode only when the legs
+        // differed, so only an inverting bird could reach this, and now every
+        // held bird states one. On the Main/Sub satellite Icoms an A/B mapping
+        // survives `Engine::ab_cross_band_refusal` only for a SAME-BAND pass,
+        // so that is the pass that newly surfaces "rig would not set the TX
+        // mode — put VFO B in <mode> by hand".
+        //
+        // The refusal is the right answer while `26 01` is unverified: it is
+        // true, it names the fix, and it costs one status line — where an
+        // unverified write costs a transmit VFO nobody can read back.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 145960000\n"), "RPRT 0\n");
+
+        // The A/B split path: `0F`, no satellite mode.
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 VFOB\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert!(r.split, "0F split engaged — the ordinary A/B path");
+            assert!(
+                !r.satmode,
+                "satellite mode is NOT engaged for an A/B mapping"
+            );
+        }
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 145990000\n"), "RPRT 0\n");
+
+        // …and the mode verb says "not implemented" rather than guessing.
+        assert_eq!(
+            roundtrip(&mut c, &mut rd, "X FM 0\n"),
+            "RPRT -11\n",
+            "no wired A/B mode verb — an honest refusal, never an unverified 26 01"
+        );
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(
+                r.main_mode, 0x01,
+                "and nothing was written to a mode register"
+            );
+            assert!(!r.main_data);
+            assert_eq!(r.sub_mode, 0x05);
+            assert!(!r.sub_data);
+        }
+    }
+
+    #[test]
     fn an_ft_uplink_gets_the_data_submode_on_sub_not_a_refusal() {
         // OPERATOR RULING (2026-08-03): "if I am doing FT over sat, it should
         // put it in data." This resolved through `Mode::from_name` alone, which
-        // does not know `PKTUSB`, so a Digital-section pass through a linear
-        // bird answered RPRT -1 and the loop told the operator to "put Sub in
+        // does not know `PKTUSB` — so once a Digital-section pass states an
+        // uplink mode at all (which shipped 0.27.0 never did: matching legs
+        // were suppressed, and a DATA bird's legs always match), the answer
+        // would be RPRT -1 and the loop would tell the operator to "put Sub in
         // PKTUSB by hand". FT8 through a transponder is real operating and
-        // plain SSB on a normally-wired rig radiates ZERO RF, so the refusal is
-        // a dead transmit leg — not caution.
+        // plain SSB on a normally-wired rig radiates ZERO RF, so that refusal
+        // would be a dead transmit leg — not caution.
         //
         // ⚠️ The `1A 06` sequence against a selected Sub band is UNVERIFIED ON
         // HARDWARE. This pins what the rig is TOLD, which is the part software
