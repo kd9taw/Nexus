@@ -3,7 +3,7 @@ import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../feat
 import { panelHost } from '../features/panelHost'
 import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
-import { TxMeters } from './TxMeters'
+import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
 import { PanelsMenu } from './PanelsMenu'
 import { SpotDialog } from './SpotDialog'
@@ -37,7 +37,7 @@ import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { setFrequency, setSplit, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
 import { bandLabelForMhz } from '../band'
-import { isRfScopeSource } from '../waterfall'
+import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
@@ -228,20 +228,27 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
   // True only when the rig's own Icom scope is streaming (span/ref are Icom CI-V commands; the
   // Flex panadapter has a different control path, so gate on 'civ' specifically, not any RF feed).
+  const civScope = scopeFeed?.source === 'civ'
+  // FlexRadio SmartSDR panadapter — its own span/ref command path (display pan set …).
+  const flexScope = scopeFeed?.source === 'flex'
   // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
   // host is only supplying `shown` + the menu items.
+  //
+  // The rig-scope pane exists only while the RADIO's own panadapter streams, so on the
+  // audio bandscope its entry could never render anything however it was ticked — the
+  // dead-checkbox the operator hit on 2026-08-03. It is offered UNAVAILABLE there, with
+  // the reason, and comes back checkable by itself when a native scope arrives.
   const host = panels
     ? panelHost(panels, {
         menu: PHONE_PANEL_IDS,
         side: [],
         main: 'bandActivity',
         labels: PHONE_PANEL_LABELS,
+        unavailable: { rigscope: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON },
+        notes: { txmeters: TX_METERS_WHEN },
       })
     : null
   const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)
-  const civScope = scopeFeed?.source === 'civ'
-  // FlexRadio SmartSDR panadapter — its own span/ref command path (display pan set …).
-  const flexScope = scopeFeed?.source === 'flex'
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
     setFlexRefDbm(dbm)

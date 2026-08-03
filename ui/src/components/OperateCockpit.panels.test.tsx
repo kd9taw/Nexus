@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
+import { TX_METERS_WHEN } from './TxMeters'
 import type { AppSnapshot } from '../types'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
@@ -210,6 +211,18 @@ describe('⊞ Panels menu', () => {
     expect(box.checked).toBe(false)
     fireEvent.click(box)
     expect(panels.setPanelState).toHaveBeenCalledWith('waterfall', 'docked')
+  })
+
+  it('TX Meters stay checkable, with the note that says when they read', () => {
+    // Operate carries the same `txmeters` id as Phone and CW, so it gets the same
+    // honesty: the gate works (the strip is there to hide), and the entry says WHEN the
+    // meters have readings instead of leaving the operator to guess mid-menu. Nothing
+    // here may become UNAVAILABLE — that is reserved for a pane that cannot mount at all.
+    renderCockpit({}, 'classic')
+    fireEvent.click(screen.getByRole('button', { name: /panels/i }))
+    const box = screen.getByLabelText('TX Meters') as HTMLInputElement
+    expect(box.disabled).toBe(false)
+    expect(box.getAttribute('aria-describedby')).toBe(screen.getByText(TX_METERS_WHEN).id)
   })
 
   it('always offers Undo and Reset, so a mis-tick can never strand the operator', () => {

@@ -13,6 +13,12 @@ import type { RadioStatus } from '../types'
  *  between overs. FT cycles key every other slot, and a strip that mounts/unmounts every
  *  15 s made the whole cockpit jump — the operator's "too much movement on screen". */
 
+/** WHEN these meters have anything to show. The panel's own idle line and every ⊞ Panels
+ *  entry that offers this panel read this one string, so the menu cannot drift from what
+ *  the panel does — and the default (unpinned) variant, which renders nothing at all on
+ *  receive, stops looking like a checkbox that does nothing. */
+export const TX_METERS_WHEN = 'readings appear on transmit'
+
 type Zone = 'ok' | 'warn' | 'hot'
 
 const ZONE_COLOR: Record<Zone, string> = {
@@ -96,7 +102,7 @@ export function TxMeters({
     // a fixed-height hint keeps the panel discoverable without inventing numbers.
     return (
       <div className={`ph-txmeters${variant} idle`} role="group" aria-label="Transmit meters">
-        <span className="ph-txmeters-hint">TX meters — readings appear on transmit</span>
+        <span className="ph-txmeters-hint">TX meters — {TX_METERS_WHEN}</span>
       </div>
     )
   }

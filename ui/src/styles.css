@@ -11531,10 +11531,27 @@ select.settings-input {
 }
 .panels-menu-item {
   display: flex;
+  flex-direction: column;
+}
+.panels-menu-check {
+  display: flex;
   align-items: center;
   gap: var(--space-2);
   font-size: var(--fs-label);
   cursor: pointer;
+}
+/* An entry whose panel cannot render anything in the current station state: still listed
+   (so the operator learns WHY, and it returns by itself when the rig can show it), but
+   not checkable. The reason/note sits under the box, indented past it. */
+.panels-menu-item.unavailable .panels-menu-check {
+  color: var(--text-dim);
+  cursor: default;
+}
+.panels-menu-why {
+  padding-left: calc(var(--space-2) + 1em);
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-tight);
 }
 .panels-menu-tag {
   margin-left: auto;

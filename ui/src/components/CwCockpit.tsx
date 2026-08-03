@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
-import { TxMeters } from './TxMeters'
+import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
@@ -51,7 +51,7 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
-import { isRfScopeSource, sidebandSign } from '../waterfall'
+import { isRfScopeSource, sidebandSign, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 
 /** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit). */
 const RF_SPANS = [
@@ -329,8 +329,20 @@ export function CwCockpit({
   const cockpitRef = useRef<HTMLElement>(null)
   // Panels (Phase 3): scope + keyer/macros/send/log stay pinned; the panes under the scope are
   // removable, and the four content panes (Band Activity / Copilot / Decode / Sent) seam-resize.
+  // Scope Controls command the RADIO's panadapter, so on the audio bandscope that pane
+  // can never mount however its box is ticked (Phone's twin of this entry is what the
+  // operator caught on 2026-08-03): offer it unavailable, with what would bring it back.
+  // TX meters here are the unpinned variant — nothing at all on receive — so the entry
+  // says when it has something to show rather than looking dead between overs.
   const host = panels
-    ? panelHost(panels, { menu: CW_PANEL_IDS, side: [], main: 'decode', labels: CW_PANEL_LABELS })
+    ? panelHost(panels, {
+        menu: CW_PANEL_IDS,
+        side: [],
+        main: 'decode',
+        labels: CW_PANEL_LABELS,
+        unavailable: { scopeCtl: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON },
+        notes: { txmeters: TX_METERS_WHEN },
+      })
     : null
   const shown = (id: CwPanelId) => (host ? host.shown(id) : true)
   // Decode sensitivity for the internal pitch decoder (now WPM-estimation + AI-off

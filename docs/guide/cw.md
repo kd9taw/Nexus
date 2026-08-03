@@ -46,6 +46,12 @@ chips.
 **The AF scope** is a narrow 300–1100 Hz display with a hairline drawn at your
 sidetone pitch, so you can zero-beat a station by ear and eye.
 
+**⊞ Panels** in the header shows and hides the panes under the scope, and an
+entry that cannot show you anything on your setup is greyed with the reason on
+it. **Scope Controls** command the radio's own panadapter, so they appear only
+while an Icom CI-V or FlexRadio scope is streaming; **TX Meters** read on
+transmit. See [Phone](phone.md) for the same menu on the voice side.
+
 <!-- TODO: capture screenshot — the eight F-key macro buttons with the recommended-next highlight -->
 
 ## Macros

@@ -28,6 +28,18 @@ zoom the view to the part of the passband you care about.
 knob and the slider tracks it (it won't sit lying at 100%). Your drags win while
 you're dragging.
 
+**⊞ Panels** in the header shows and hides the panes under the scope. An entry
+that cannot show you anything on your setup is listed but greyed, with the reason
+on it — it goes live by itself when your station can render it:
+
+- **Rig Scope Controls** command the *radio's own* panadapter (span sets the
+  hardware sweep width, ref sets weak-signal visibility), so they appear only
+  while an Icom CI-V or FlexRadio scope is streaming. On the audio bandscope
+  there is nothing to command, and the entry says so. The span chips over the
+  scope are a different thing: they zoom what is already on screen.
+- **TX Meters** (SWR / ALC / PO / COMP) read on transmit, so the panel is empty
+  while you listen. The entry stays tickable and says when it reads.
+
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->
 
 ## Core workflows
