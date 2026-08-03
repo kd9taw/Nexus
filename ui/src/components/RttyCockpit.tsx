@@ -402,7 +402,20 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           thin scrollbar) but deliberately NO .cockpit-panes region: with a single content
           block every column template leaves a track empty, which is the dead space this
           rebuild deletes rather than relocates. The frame is the shell's grower
-          (`.rtty-cockpit > .pane-frame`, styles.css) and the transcript scrolls inside it. */}
+          (`.rtty-cockpit > .pane-frame`, styles.css) and the transcript scrolls inside it.
+
+          THIS PANE HOSTS A STOP CONTROL, and that is allowed. The "Auto on" toggle below,
+          clicked off, is rttySetAuto(false) → seq.abort() + Engine::rtty_stop(): the queue is
+          cleared and rtty_abort + slot_tx_abort unkey the rig. Hiding `stream` takes it away —
+          fine under THE STOP LINE (features/panelState.ts), because Stop TX and the TX-enable
+          latch are in the header and the Esc/Stop macro and the sequencer's Abort are in the
+          dock, none of them with a ⊞ id. A pane's own stop is a convenience; those four are
+          what hold the guarantee up. This pane is the second of exactly two like it in the app
+          (Phone's voice keyer is the other) and the reason the FOURTH wording of the rule was
+          falsified. Its hide ENDS nothing — unmounting calls no wire — so it correctly carries
+          no ⊞ note, and it is not a sender: Arm RX is RX-only and Auto ON never keys by
+          itself. Do NOT add the Auto toggle to stop-line.test.tsx's RTTY stopControls; that
+          would demand this cockpit's only ⊞ entry be unhideable. */}
       {shown('stream') && (
       <CockpitPaneFrame title="Decoded text" paneId="stream">
       <div
@@ -499,9 +512,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), Stop
           and the compose bar, pinned OUTSIDE any pane so nothing can scroll them out of
           reach. None of these has an id in the RTTY panel vocabulary ('stream' is the only
-          entry). For the auto-sequencer's Stop and the header's Stop TX / TX-arm that is
-          THE STOP LINE — hiding a way to stop is unrepresentable. For the macros and the
-          compose bar it is this cockpit's own choice: the rule is indifferent to senders. */}
+          entry). For the sequencer's Abort, the Esc/Stop macro and the header's Stop TX /
+          TX-arm that is THE STOP LINE — those four render outside every ⊞-removable pane, so
+          unticking 'stream' (which takes its own Auto-toggle stop with it) still leaves the
+          operator four ways to stop. For the macros and the compose bar it is this cockpit's
+          own choice: the rule is indifferent to senders. */}
       <div className="cockpit-txdock">
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">

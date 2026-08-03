@@ -4,6 +4,9 @@
 //
 //   THE OPERATOR MUST NEVER BE UNABLE TO STOP A TRANSMISSION.
 //
+// Mechanically: in every cockpit, at least one control that stops a transmission renders
+// OUTSIDE every ⊞-removable pane. This file is what computes that half of it.
+//
 // panelState.test.ts holds the NAME half: no vocabulary may contain an id named for a stop
 // control. That half reads names and nothing else, so it walks straight past a stop control
 // gated on an id called `dsp` — which is exactly the hole the old rule's "enforced by
@@ -15,6 +18,18 @@
 // ACCESSIBLE NAME. If any panel id gates any of them, in any combination, this goes red and
 // says which id took which control.
 //
+// WHAT BELONGS IN A CASE'S `stopControls`, AND WHAT MUST NOT. The list is the
+// OUTSIDE-EVERY-PANE set: the controls the guarantee rests on. A stop control that lives
+// INSIDE a ⊞-removable pane is deliberately absent, and there are two of them in the app —
+// Phone's voice keyer hosts ■ Stop (→ stopVoice → Engine::stop_voice, which flushes the
+// output ring and unkeys), and RTTY's `stream` pane hosts the "Auto on" toggle (off-click →
+// seq.abort() + Engine::rtty_stop(): queue cleared, rig unkeyed). Both go away with their
+// pane, and that is allowed: a pane's own stop is a CONVENIENCE built on the guarantee, never
+// what holds it up. Adding either one below would make this sweep demand its pane be
+// unhideable — which is exactly how the FIRST wording of the rule excluded the voice keyer,
+// the pane it was written to admit. Do not "fix" a red by unhiding a pane; check first
+// whether the control you added belongs on the list at all.
+//
 // EACH COCKPIT IS RENDERED WITH THE PROPS APP GIVES IT, and that is load-bearing rather than
 // tidiness: CockpitHeader draws the TX-enable latch (▼ TX On / ■ TX Off) only when it is
 // handed `onSetTxEnabled`, which App passes to RTTY and SSTV and to nothing else — those two
@@ -24,10 +39,10 @@
 // BY NAME (gating it on a panel id in either cockpit was green). Phone and CW arm elsewhere
 // and legitimately have no latch on screen; their `stopControls` say so by not listing one.
 //
-// WHAT THIS FILE DOES NOT CARE ABOUT: whether a pane can START a transmission. Several can —
-// Operate's Tx messages, its decode panes and its rosters, Phone's voice keyer — and all of
-// them are hideable, correctly. The rule is about the STOP controls and nothing else, so the
-// only lists here are `stopControls`.
+// WHAT THIS FILE DOES NOT CARE ABOUT: whether a pane can START a transmission. Six can —
+// Operate's Tx messages, its two decode panes and its two rosters, Phone's voice keyer — and
+// all of them are hideable, correctly. The rule is about what is left ON SCREEN and nothing
+// else, so the only lists here are `stopControls`.
 //
 // WHY THE HEADER IS NOT STUBBED HERE. Every *.structure.test.tsx mocks CockpitHeader down
 // to an empty <header>, which is right for a shell census and useless for this: Stop TX and
@@ -267,8 +282,10 @@ const radio = {
 const snap = { mycall: 'KD9TAW', radio } as unknown as AppSnapshot
 
 /**
- * One cockpit's stop-line case. `stopControls` are accessible-name matchers for every
- * control on that screen that can END a transmission — the list the rule protects.
+ * One cockpit's stop-line case. `stopControls` are accessible-name matchers for the controls
+ * that END a transmission AND RENDER OUTSIDE EVERY ⊞-REMOVABLE PANE — the set the guarantee
+ * rests on, not every stop control on the screen. See the file header: a pane-resident stop
+ * (Phone's ■ Stop, RTTY's Auto toggle) must stay off these lists.
  */
 interface Case<P extends string> {
   cockpit: string
@@ -284,6 +301,10 @@ const phone: Case<(typeof PHONE_PANEL_IDS)[number]> = {
   cockpit: 'Phone',
   view: 'phone',
   ids: PHONE_PANEL_IDS,
+  // NOT LISTED, DELIBERATELY: the voice keyer's ■ Stop (→ stopVoice → Engine::stop_voice,
+  // which flushes the output ring and unkeys). It lives inside the `voiceKeyer` pane and goes
+  // away with it — a convenience, not what the guarantee rests on. Listing it here would make
+  // this sweep forbid the very ⊞ entry this batch was about.
   stopControls: [
     ['PTT', /push to talk|on air — release to stop|tx locked/i],
     ['Stop TX', /^stop tx$/i],
@@ -318,6 +339,12 @@ const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
   ids: RTTY_PANEL_IDS,
   // The dock's abort is labelled by its CONTENT, not its title, and the two spans abut with
   // no whitespace, so the accessible name is "EscStop" — hence \s* rather than a space.
+  //
+  // NOT LISTED, DELIBERATELY: the "Auto on" toggle, which lives INSIDE the `stream` pane and
+  // whose off-click is rttySetAuto(false) → seq.abort() + Engine::rtty_stop() (queue cleared,
+  // rig unkeyed). It is a real stop control and it goes away when `stream` is hidden — the
+  // second of the app's two pane-resident stops, and the reason the fourth wording of the rule
+  // was falsified. Listing it here would demand that RTTY's ONLY ⊞ entry be unhideable.
   stopControls: [
     ['Stop TX', /^stop tx$/i],
     ['Stop (RTTY abort)', /^esc\s*stop$/i],

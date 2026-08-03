@@ -66,35 +66,58 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   `fit="content"` for control strips (exactly content height — a strip cannot use surplus),
   fill + `weight` for feeds and the log column. A pane never sizes itself; structural size
   lives in `cockpit-panes.css` (flat selectors, fenced) and only there.
-- **The stop line** (2026-08-03, fourth wording). **The rule, and it is safety:** *the operator must
-  never be unable to stop a transmission.* Therefore every control that **stops** one — PTT, Stop TX,
-  Tune, the TX-enable latch, abort — has **no id in any pane vocabulary**, in any cockpit; hiding one
-  is unrepresentable rather than guarded. **Whether a pane can *start* a transmission has no bearing
-  on whether it may be hidden.** Phone's voice keyer, Operate's Tx messages (Tx6 = Call CQ) and
-  Operate's decode panes and rosters (double-click works a station, which arms TX) are all senders,
-  all hideable, and the operator can still stop any of them from the dock or the QSO strip.
+- **The stop line** (2026-08-03, fifth wording). **The rule, and it is safety:** *the operator must
+  never be unable to stop a transmission.* Mechanically, and this is the whole of it: **in every
+  cockpit, at least one control that stops a transmission renders OUTSIDE every ⊞-removable pane.**
+  Hide every id in that cockpit's vocabulary, singly and all at once, and those controls are still on
+  screen and no more disabled than they were — no vocabulary id reaches them, so hiding one is
+  unrepresentable rather than guarded. **The controls that hold it up:** Phone — PTT (dock), Stop TX
+  + Tune (header); CW — Stop TX + Tune (header), Esc; Operate — TX On/Off, Tune, Stop TX, S&P (all in
+  `.cockpit-qso`), Esc; RTTY — Stop TX + the TX-enable latch (header), the dock's Esc/Stop macro and
+  the sequencer's Abort; SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch. APRS is a sixth cockpit
+  with no vocabulary at all. The TopBar's TX cluster backstops none of them — App hides it in Operate
+  and in Phone/CW/RTTY/SSTV/APRS — so each cockpit stands on its own. Each cockpit's sweep list is
+  exactly this set, which is what makes the rule checkable in minutes.
+  **Nothing else about a pane bears on whether it may be hidden.** A pane *may* host a stop control
+  of its own, and it goes away with the pane: **two do** — Phone's `voiceKeyer` (■ Stop → `stopVoice`
+  → `Engine::stop_voice`, which flushes the output ring and unkeys) and RTTY's `stream` (the "Auto on"
+  toggle: off-click → `seq.abort()` + `Engine::rtty_stop()`, queue cleared and unkeyed). Those are
+  **conveniences built on the guarantee, never what holds it up.** A pane *may* start a transmission:
+  **six do** — the voice keyer, Operate's Tx messages (Tx6 = Call CQ → `startCq`) and its two decode
+  panes and two rosters (double-click → `call_station_ctx`, which enables TX and keys the period);
+  all hideable, correctly. A pane's hide *may* end something in flight: **one does** (the voice
+  keyer), and that earns a note, not a refusal.
+  **What is forbidden — four things, read off that census:** (1) giving a listed control an id, or
+  moving one *into* a ⊞-removable pane, which is how it would get one; (2) gating one on a pane id
+  without moving it (`disabled={!shown('dsp')}`) — mounted and dead is the same loss as gone;
+  (3) shipping a cockpit whose *only* stop control is inside a removable pane (none does; RTTY is
+  closest and survives on four outside `stream`); (4) adding a **pane-resident** stop control to a
+  sweep's `stopControls`, which would make the sweep demand its pane be unhideable.
   **The practice, and it is courtesy, not safety:** if hiding a pane *ends* something in flight, its
   ⊞ entry should say so before the tick — a stop the operator did not ask for reads as a dropout.
   That is why the voice keyer's entry warns (its unmount aborts a message and discards a recording);
   a pane whose hide ends nothing must carry no warning. Nothing is admitted or refused on it.
-  *Three earlier wordings were falsified, and the record is kept in `panelState.ts` and
-  `cockpit-panes.css` because it is what stops a fourth proxy:* "a pane that can only start a
+  *Four earlier wordings were falsified, and the record is kept in `panelState.ts` and
+  `cockpit-panes.css` because it is what stops a fifth proxy:* "a pane that can only start a
   transmission may be hidden" excluded the pane it was written to admit (the keyer has a Stop
   button); "a pane that *may be hidden* has a hide path that is itself a stop" bound every hideable
   pane, forbidding 23 of the 24 entries in `ALL_PANEL_VOCABULARIES`; "a pane that *can start* a
   transmission may be hidden only if its hide is a stop" was violated by shipped code — Operate's
-  `txmsgs` starts a CQ, is hideable, and its hide stops nothing and says nothing. Each was a proxy
-  for the guarantee; the guarantee only needs a stop control to be **reachable**.
+  `txmsgs` starts a CQ, is hideable, and its hide stops nothing and says nothing; and "every control
+  that *stops* a transmission has no id in any pane vocabulary" was falsified twice over by the
+  keyer's own ■ Stop and by RTTY's Auto toggle, both stop controls living inside panes that *have*
+  ids. All four named a property of a pane or of a control; the guarantee is a property of **the
+  screen that remains**.
   Two guards, and neither is the rule alone: `panelState.test.ts` checks **names** across every
   vocabulary (`ALL_PANEL_VOCABULARIES`, itself checked against every vocabulary the module
   exports); `components/stop-line.test.tsx` checks **wiring** for Phone/CW/RTTY/SSTV — with every id
-  in a cockpit's vocabulary removed, singly and all at once, every stop control must still be in the
-  document, found by accessible name, and no more disabled than it was. Operate is swept in
-  `OperateCockpit.structure.test.tsx`, and that sweep is **presence-only** (see the next bullet) —
-  not the same check. A stop control gated on an id called `dsp` is caught only by the wiring
-  sweeps; a dead `ptt` entry only by the name guard. Render each cockpit with **the props App gives
-  it** — the TX-enable latch only exists when `onSetTxEnabled` is passed, and omitting it made the
-  RTTY/SSTV sweeps blind to the one control the rule names by name.
+  in a cockpit's vocabulary removed, singly and all at once, every stop control **on that cockpit's
+  list** must still be in the document, found by accessible name, and no more disabled than it was.
+  Operate is swept in `OperateCockpit.structure.test.tsx`, and that sweep is **presence-only** (see
+  the next bullet) — not the same check. A stop control gated on an id called `dsp` is caught only by
+  the wiring sweeps; a dead `ptt` entry only by the name guard. Render each cockpit with **the props
+  App gives it** — the TX-enable latch only exists when `onSetTxEnabled` is passed, and omitting it
+  made the RTTY/SSTV sweeps blind to a control on both their lists.
 - **What the stop-line guards do NOT prove.** Written down rather than chased with more guards:
   neither sweep can see a stop control that is **present, enabled and inert** (an
   `onClick={() => {}}` on Stop TX passed the whole suite — 2106 tests at the time); the name backstop

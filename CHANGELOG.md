@@ -47,10 +47,20 @@ The menu also gains one entry it never had: **Voice Keyer** in Phone. If you wor
 never touch the F-key slots, you can now put that pane away and the panes around it take the room.
 It was held out until now by a blunt rule — nothing that transmits gets a checkbox — and the rule
 is narrower now, because what it was really protecting is one thing: **you must never be unable to
-stop a transmission.** PTT, Stop TX, Tune and the TX-enable latch are not panels, have no entry,
-and no saved layout can put them out of reach. Whether a pane can *start* a transmission has
-nothing to do with whether you can put it away — the Operating screen's Tx messages and its decode
-lists have always been yours to hide, and Stop TX sits in the operating strip either way.
+stop a transmission.** That is held by the controls that sit outside the panes entirely: on Phone,
+PTT in the transmit bar and Stop TX and Tune in the header; on CW, Stop TX and Tune; on the
+Operating screen, TX On/Off, Tune, Stop TX and S&P in the operating strip; on RTTY, Stop TX, the
+TX-enable button and both aborts in the transmit bar; on SSTV, Stop and the TX-enable button. None
+of them is in a Panels menu, so no combination of ticks and no saved layout can put them out of
+reach — that is the guarantee, and it is the only thing the rule protects.
+
+Everything else follows from it. Whether a pane can *start* a transmission has nothing to do with
+whether you can put it away — the Operating screen's Tx messages and its decode lists have always
+been yours to hide, and Stop TX sits in the operating strip either way. And a pane may carry a stop
+button of its own, which goes away with the pane: the voice keyer's **■ Stop** is one, and RTTY's
+**Auto on** toggle is another. Those are conveniences sitting on top of the guarantee, not the
+thing holding it up. Put the voice keyer away mid-message and you lose its ■ Stop — and Stop TX,
+Tune and PTT are all still exactly where they were.
 
 Separately, and because it is worth telling you rather than because anything requires it: unticking
 Voice Keyer while a message is playing stops the message rather than leaving it transmitting behind

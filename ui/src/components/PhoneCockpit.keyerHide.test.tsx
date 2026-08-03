@@ -3,12 +3,14 @@
 // HIDING THE VOICE KEYER IS A STOP, AND THE OPERATOR IS TOLD BOTH HALVES OF IT FIRST.
 //
 // THIS FILE COMPUTES THE PRACTICE, NOT THE RULE. THE STOP LINE (features/panelState.ts) is
-// the rule and it is one sentence: the operator must never be unable to stop a transmission,
-// so no control that STOPS one has an id in any vocabulary. That rule says nothing about
-// this pane — the voice keyer transmits, and under the rule that has no bearing on whether
-// it may be hidden, because Stop TX and PTT are not panels and the menu cannot reach them.
-// Three earlier wordings tried to make "hiding it is itself a stop" the price of its ⊞
-// entry; all three were falsified (see panelState.ts for each and why).
+// the rule and it is one sentence: the operator must never be unable to stop a transmission —
+// mechanically, in every cockpit at least one control that stops one renders OUTSIDE every
+// ⊞-removable pane. That rule says nothing about this pane. The voice keyer transmits AND
+// hosts a ■ Stop of its own, and neither fact bears on whether it may be hidden: Stop TX,
+// Tune and PTT are not panels, so the menu cannot reach the operator's last resort whatever
+// he ticks, and the keyer's own Stop is a convenience that may go away with it. FOUR earlier
+// wordings turned on one of those two facts; all four were falsified (see panelState.ts for
+// each and the shipped code that killed it).
 //
 // What IS true, and what this file pins, is THE PRACTICE: a hide that ENDS something already
 // in flight should say so before the tick, because a stop the operator did not ask for reads

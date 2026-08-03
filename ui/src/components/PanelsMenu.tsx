@@ -5,11 +5,15 @@
 // reachable, and never more than one click from Undo / Reset — both ship here, before
 // the operator can make a mess.
 //
-// Only the panels the CURRENT layout renders are listed. The operator's way to STOP a
-// transmission is not a panel at all, so it has no entry here by construction (see
-// features/panelState, THE STOP LINE) — an entry can cost you a sender, never the way to
-// shut one up. Senders ARE listed, several of them: Operate's Tx messages, its decode panes
-// and rosters, Phone's voice keyer. That is the rule holding, not a hole in it.
+// Only the panels the CURRENT layout renders are listed. Every cockpit keeps at least one
+// control that STOPS a transmission outside every pane this menu can reach — Stop TX, Tune,
+// PTT, the TX-enable latch, the dock aborts — so none of them has an entry here by
+// construction (see features/panelState, THE STOP LINE). An entry can cost you a sender, and
+// it can cost you a stop control a PANE happens to host (Phone's voice keyer holds a ■ Stop,
+// RTTY's decode pane holds the Auto toggle) — what it can never cost you is the way to shut a
+// transmission up, because that lives where no tick reaches. Senders ARE listed, six of them:
+// Operate's Tx messages, its two decode panes and two rosters, Phone's voice keyer. That is
+// the rule holding, not a hole in it.
 //
 // A listed pane whose hide ENDS something in flight carries a `note` saying what the tick
 // ends. That is courtesy rather than the safety rule (a stop the operator did not ask for

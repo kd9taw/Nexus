@@ -240,10 +240,16 @@ describe('share (seam resize)', () => {
 
 describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
   // THE RULE (panelState.ts header): the operator must never be unable to stop a
-  // transmission, and the whole of it is that no control which STOPS one has an id in any
-  // vocabulary — there is then no menu entry, no stored value and no coercion rule that
-  // can reach it. Whether a pane can START one is not this guard's business, nor the
-  // rule's: six of the entries below are senders and every one of them is hideable.
+  // transmission — mechanically, in every cockpit at least one control that stops one renders
+  // OUTSIDE every ⊞-removable pane, so no menu entry, stored value or coercion rule can reach
+  // it. Whether a pane can START one is not this guard's business, nor the rule's: six of the
+  // entries below are senders and every one of them is hideable.
+  //
+  // NOR IS THIS GUARD ABOUT PANE-RESIDENT STOPS. Two panes host a stop control of their own
+  // (`voiceKeyer`'s ■ Stop, `stream`'s "Auto on" toggle) and both are legitimate entries —
+  // the control goes away with the pane, which is allowed because the ones outside every pane
+  // do not. This guard only refuses an id NAMED for a stop control, which is a different and
+  // much smaller claim.
   //
   // THIS IS THE NAME HALF OF THE ENFORCEMENT, AND IT IS ONLY THE NAME HALF. It reads ids.
   // It cannot see that a control is WIRED to an id, so a vocabulary id called `dsp` gating

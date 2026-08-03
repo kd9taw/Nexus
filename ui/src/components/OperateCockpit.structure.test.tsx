@@ -180,10 +180,16 @@ const ALL_REMOVED: Partial<Record<OperatePanelId, PanelState>> = Object.fromEntr
 
 describe('the merged operating strip is the un-removable TX surface', () => {
   // This is Operate's half of THE STOP LINE (features/panelState.ts): the wiring check that
-  // no panel id gates a control which stops a transmission. The other four cockpits are
-  // swept in components/stop-line.test.tsx; Operate is here because its stop controls live
-  // in the merged QSO strip rather than a CockpitHeader, and this suite already owns the
-  // mock surface for them.
+  // at least one control which stops a transmission renders OUTSIDE every ⊞-removable pane,
+  // so no panel id can gate it. The other four cockpits are swept in
+  // components/stop-line.test.tsx; Operate is here because its stop controls live in the
+  // merged QSO strip rather than a CockpitHeader, and this suite already owns the mock
+  // surface for them. Asserting they render inside `.cockpit-qso` is the direct form of
+  // "outside every pane" — the strip is not a CockpitPaneFrame and has no vocabulary id.
+  //
+  // No Operate pane hosts a stop control of its own (the two that do in the app are Phone's
+  // `voiceKeyer` and RTTY's `stream`), so PROTECTED below is simply the whole set. Five of
+  // Operate's seven panes are SENDERS and all five are hideable — the rule is indifferent.
   //
   // IT IS WEAKER THAN THAT FILE'S SWEEP AND IS NOT ITS EQUIVALENT. This is PRESENCE-ONLY:
   // every id removed at once, no baseline capture, no `disabled` comparison, no one-id-at-a-

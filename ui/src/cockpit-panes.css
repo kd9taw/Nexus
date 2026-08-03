@@ -20,22 +20,49 @@
    (another column). Nothing clips.
 
    THE STOP LINE — what may and may not have a ⊞ Panels id (2026-08-03 operator ruling;
-   FOURTH wording, the three it replaces recorded below).
+   FIFTH wording, the four it replaces recorded below).
 
    THE RULE (safety, enforced):
 
      THE OPERATOR MUST NEVER BE UNABLE TO STOP A TRANSMISSION.
 
-     Therefore every control that STOPS one — PTT, Stop TX, Tune, the TX-enable latch,
-     abort — has NO id in any pane vocabulary (features/panelState.ts), in any cockpit, so
-     moving or hiding it is unrepresentable rather than merely guarded. A `removable: false`
+     Mechanically, and this is the whole of it: IN EVERY COCKPIT, AT LEAST ONE CONTROL THAT
+     STOPS A TRANSMISSION RENDERS OUTSIDE EVERY ⊞-REMOVABLE PANE. Hide every id in that
+     cockpit's vocabulary (features/panelState.ts), singly and all at once, and those
+     controls are still on screen and no more disabled than they were, because no vocabulary
+     id can reach them — unrepresentable rather than merely guarded. A `removable: false`
      flag is something a bad code path or a hand-edited storage blob can bypass; a missing
      id is not.
 
-     Whether a pane can START a transmission has NO BEARING on whether it may be hidden.
-     Phone's voice keyer, Operate's Tx messages (Tx6 = Call CQ) and Operate's decode panes
-     and rosters (double-click works a station, arming TX) are all senders, all hideable,
-     and the operator can still stop any of them from the dock or the QSO strip.
+     THE CONTROLS THAT HOLD IT UP: Phone — PTT (dock), Stop TX + Tune (header). CW — Stop TX
+     + Tune (header), Esc. Operate — TX On/Off, Tune, Stop TX, S&P, all in the merged
+     .cockpit-qso strip, plus Esc. RTTY — Stop TX + the TX-enable latch (header), the dock's
+     Esc/Stop macro and the sequencer's Abort. SSTV — Stop (.sstv-tx-bar) + the TX-enable
+     latch. APRS has no vocabulary at all. The TopBar's TX cluster backstops none of them:
+     App hides it in Operate and in Phone/CW/RTTY/SSTV/APRS, so every cockpit stands on its
+     own controls. Each cockpit's sweep list is exactly this set — which is what makes the
+     rule checkable in minutes.
+
+     NOTHING ELSE ABOUT A PANE BEARS ON WHETHER IT MAY BE HIDDEN:
+       · A pane MAY host a stop control of its own, and it goes away with the pane. TWO DO —
+         Phone's voiceKeyer (■ Stop → stopVoice → Engine::stop_voice, which flushes the
+         output ring and unkeys) and RTTY's stream (the "Auto on" toggle: off-click →
+         seq.abort() + Engine::rtty_stop(), queue cleared and unkeyed). CONVENIENCES built on
+         the guarantee, never what holds it up.
+       · A pane MAY start a transmission. SIX DO: Phone's voice keyer, Operate's Tx messages
+         (Tx6 = Call CQ → startCq) and its two decode panes and two rosters (double-click →
+         call_station_ctx, which enables TX and keys the period). All hideable, correctly.
+       · A pane's hide MAY end something in flight. ONE DOES (the voice keyer) — and that
+         earns a note, not a refusal. See THE PRACTICE.
+
+     WHAT IS FORBIDDEN — four things, all read off the census above: (1) giving a listed
+     control an id, or moving one INTO a ⊞-removable pane, which is how it would get one;
+     (2) gating one on a pane id without moving it (a `disabled` bound to `!shown('dsp')`) —
+     mounted and dead is the same loss as gone; (3) shipping a cockpit whose ONLY stop control
+     is inside a removable pane (none does; RTTY is closest, surviving on four outside `stream`);
+     (4) adding a PANE-RESIDENT stop control to a sweep's `stopControls`, which would make the
+     sweep demand its pane be unhideable — exactly how wording 1 excluded the pane it was
+     written to admit.
 
    THE PRACTICE (courtesy, NOT safety — and it must be read as courtesy):
 
@@ -49,10 +76,11 @@
      keyer mounted, asks the WIRE which hides stopped something, and requires exactly those
      entries to carry a note. Nothing is admitted or refused on this.
 
-   THREE EARLIER WORDINGS, ALL FALSIFIED, KEPT AS THE REASON FOR THE SHAPE ABOVE — this is
+   FOUR EARLIER WORDINGS, ALL FALSIFIED, KEPT AS THE REASON FOR THE SHAPE ABOVE — this is
    the most useful thing in this comment, because each was a PROXY for the guarantee rather
    than the guarantee, and a proxy has to be re-argued every time something new turns up at
-   the line:
+   the line. All four named a property of a PANE or of a CONTROL; the guarantee is a property
+   of THE SCREEN THAT REMAINS:
      1. "A pane that can only START a transmission may be hidden; anything that can STOP one
         may never be." — by its own words it EXCLUDED the pane it was written to admit,
         because Phone's voice keyer hosts a ■ Stop of its own. A pane's own Stop is a
@@ -66,10 +94,22 @@
         Tx1–Tx6 and Tx6 is "Call CQ (Alt+6)" → startCq: it starts transmissions, it is
         hideable, its hide stops nothing and says nothing, and it has shipped that way for
         months. Operate's bandActivity, rxfreq, callRoster and stations are four more.
-     THE DIAGNOSIS: "the hide is itself a stop" was never a safety requirement. It is a
-     property the voice keyer HAPPENS to have, generalised into a rule. Hide Operate's Tx
-     messages mid-CQ and the over continues; Stop TX is still in the QSO strip. THE GUARANTEE
-     HOLDS WITHOUT IT. All it needs is that a stop control can always be REACHED.
+     4. "Every control that STOPS a transmission — PTT, Stop TX, Tune, the TX-enable latch,
+        abort — has NO id in any pane vocabulary." — FALSIFIED BY SHIPPED CODE TWICE, the
+        first time by wording 1's own counter-example. The voice keyer's ■ Stop → stopVoice →
+        Engine::stop_voice (flush the output ring, unkey) stops a transmission and sits inside
+        `voiceKeyer`, a pane that HAS an id: ticking that entry hides a stop control. RTTY's
+        `stream` hosts a second, unnoticed until this pass — the "Auto on" toggle, off-click →
+        rttySetAuto(false) → seq.abort() + Engine::rtty_stop() — and `stream` is the entire
+        RTTY vocabulary. Read strictly the wording forbids both entries; read loosely ("no id
+        is NAMED for a stop control") it is only the name backstop, a guard rather than a rule.
+     THE DIAGNOSIS BEHIND 1–3: "the hide is itself a stop" was never a safety requirement. It
+     is a property the voice keyer HAPPENS to have, generalised into a rule. Hide Operate's Tx
+     messages mid-CQ and the over continues; Stop TX is still in the QSO strip.
+     THE DIAGNOSIS BEHIND 4: it protected CONTROLS one at a time, when the guarantee is about
+     THE OPERATOR HAVING ONE LEFT. A pane's own stop may go with the pane; the ones outside
+     every pane may not. THE GUARANTEE HOLDS EITHER WAY. All it needs is that a stop control
+     can always be REACHED with everything hidden.
 
    ENFORCEMENT — two guards, and neither is the rule on its own:
      · NAMES: panelState.test.ts, over ALL_PANEL_VOCABULARIES (which is itself checked
@@ -77,10 +117,12 @@
        exported). No id may be NAMED for a stop control. It cannot see wiring.
      · WIRING: components/stop-line.test.tsx renders Phone/CW/RTTY/SSTV with the REAL
        header, with the props App passes them, and drives every vocabulary id — singly and
-       all at once — through the real hide path, requiring every stop control to still be
-       in the document BY ACCESSIBLE NAME and no more disabled than it was with nothing
-       hidden. Operate is swept in OperateCockpit.structure.test.tsx, presence-only (see
-       below). Neither can see names.
+       all at once — through the real hide path, requiring every stop control ON THAT
+       COCKPIT'S LIST to still be in the document BY ACCESSIBLE NAME and no more disabled than
+       it was with nothing hidden. The list is the outside-every-pane set and only that: the
+       keyer's ■ Stop and RTTY's Auto toggle are deliberately absent (forbidden item 4).
+       Operate is swept in OperateCockpit.structure.test.tsx, presence-only (see below).
+       Neither can see names.
 
    WHAT THESE GUARDS DO NOT PROVE. Written down rather than chased with more guards, because
    a guard that overclaims is worse than a gap somebody can see:

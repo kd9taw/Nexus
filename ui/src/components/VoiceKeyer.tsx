@@ -34,12 +34,15 @@ interface Props {
  * Click a slot or press its F-key to play; ● records from the input device; ⤓ imports a
  * `.wav`; ✕ clears; Esc / ■ Stop aborts.
  *
- * The ■ Stop here is a convenience, not the operator's last resort — Stop TX in the header
- * and PTT in the dock are, and neither is hideable. That is why this pane carries a ⊞ Panels
- * entry despite transmitting, and the whole of why: under THE STOP LINE
- * (features/panelState.ts) a pane's ability to START a transmission has no bearing on
- * whether it may be hidden. The unmount cleanup below is not what buys the entry — it is
- * what the entry's note has to WARN ABOUT.
+ * The ■ Stop here IS a control that stops a transmission (stopVoice → Engine::stop_voice: the
+ * radio loop flushes the output ring and unkeys) and it GOES AWAY WITH THIS PANE. That is
+ * allowed and is not a loophole: it is a convenience, not the operator's last resort. Stop TX
+ * and Tune in the header and PTT in the dock are the last resort, they render outside every
+ * ⊞-removable pane, and none of them is hideable — which is THE STOP LINE
+ * (features/panelState.ts) and the whole of why this pane carries a ⊞ Panels entry. Nothing
+ * else about it bears on that: not that it transmits (six panes do), not that it hosts this
+ * button (two do), not that its unmount cleanup is itself a stop. The cleanup below is not
+ * what buys the entry — it is what the entry's note has to WARN ABOUT.
  */
 export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props) {
   const [msgs, setMsgs] = useState<VoiceMessage[]>([])

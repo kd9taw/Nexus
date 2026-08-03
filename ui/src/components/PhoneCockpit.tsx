@@ -85,9 +85,13 @@ interface Props {
  * audio bridge + voice keyer land in P3-b/c). Entering forces USB/LSB by band (the
  * rig-mode keystone, wired in App).
  */
-/** ⊞ Panels menu labels. The vocabulary itself lives in panelState — note what is NOT
- *  in it: the CockpitHeader (Tune / Stop TX), the PTT row and the log strip are pinned by
- *  construction, so no menu entry can ever hide a way to STOP a transmission, or the log. */
+/** ⊞ Panels menu labels. The vocabulary itself lives in panelState — note what is NOT in it:
+ *  the CockpitHeader (Tune / Stop TX), the PTT row and the log strip are pinned by
+ *  construction, so Phone's three stop controls render outside every ⊞-removable pane and no
+ *  menu entry can put the operator out of reach of one. Not "no entry hides a stop control":
+ *  unticking Voice Keyer hides its ■ Stop, which is allowed — a pane's own stop is a
+ *  convenience, and PTT / Stop TX / Tune are what hold the guarantee up. THE STOP LINE lives
+ *  in features/panelState.ts. */
 const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
   rigscope: 'Rig Scope Controls',
   txmeters: 'TX Meters',
@@ -99,12 +103,19 @@ const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
 
 /** The one ⊞ entry whose tick has consequences beyond the pane going away, so the entry
  *  carries them BEFORE the tick rather than apologising after. Hiding the keyer unmounts
- *  it, and its cleanup does two things: stopVoice (a stop — that is the point, and it is
- *  what admits this pane to the vocabulary at all) and cancelVoiceRecording, which throws
- *  away a capture in progress. The second one is destructive and is not implied by "hide a
- *  pane", so it is named here in the same breath. Both also announce themselves when they
- *  happen (VoiceKeyer's cleanup), for the operator who walked off the Phone screen and never
- *  opened a menu. PanelsMenu hangs this off aria-describedby, so it reaches a screen reader.
+ *  it, and its cleanup does two things: stopVoice, which ends a message on the air, and
+ *  cancelVoiceRecording, which throws away a capture in progress. The second one is
+ *  destructive and is not implied by "hide a pane", so it is named here in the same breath.
+ *
+ *  NEITHER IS WHAT ADMITS THIS PANE TO THE VOCABULARY — nothing had to admit it. Under THE
+ *  STOP LINE (features/panelState.ts) a pane is hideable unless it holds up the guarantee,
+ *  and this one does not: Stop TX, Tune and PTT render outside every ⊞-removable pane. A
+ *  falsified wording claimed the cleanup bought the entry; it bound every hideable pane in
+ *  the app and forbade 23 of the 24. What the cleanup buys is THIS NOTE, and only it.
+ *
+ *  Both also announce themselves when they happen (VoiceKeyer's cleanup), for the operator
+ *  who walked off the Phone screen and never opened a menu. PanelsMenu hangs this off
+ *  aria-describedby, so it reaches a screen reader.
  */
 export const VOICE_KEYER_STOPS_ON_HIDE =
   'hiding this stops a voice message that is playing and throws away a recording in ' +
@@ -518,8 +529,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   //
   // THE FIFTH IS A CONSEQUENCE. Unticking Voice Keyer ends a message and discards a
   // recording. Not the price of its being hideable — nothing had to buy that (THE STOP LINE:
-  // being a sender has no bearing on it) — but a stop the operator did not ask for reads as
-  // a dropout, so it is said before the tick. That note is required, not decorative:
+  // neither being a sender nor hosting a ■ Stop of its own has any bearing on it) — but a
+  // stop the operator did not ask for reads as a dropout, so it is said before the tick.
+  // That note is required, not decorative:
   // PhoneCockpit.keyerHide.test.tsx hides every id here, asks the wire which hides stopped
   // something, and requires exactly those entries to carry one. The menu's Undo button
   // reaches the same hide and carries the same consequence (VOICE_KEYER_UNDO_ENDS); Reset
@@ -601,10 +613,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   //
   // It IS in the panel vocabulary, and THE STOP LINE (features/panelState.ts) is why nothing
   // stood in the way: the operator must never be unable to stop a transmission, so PTT, Tune
-  // and Stop TX stay in the dock/header with no id at all — and whether a pane can START one
-  // has no bearing on whether it may be hidden. The keyer's own ■ Stop is a convenience and
-  // settles nothing either way; an earlier wording turned on it and thereby forbade the pane
-  // it was written to admit.
+  // and Stop TX render OUTSIDE every ⊞-removable pane with no id at all — and nothing else
+  // about a pane bears on whether it may be hidden. That it can START one does not (six panes
+  // can). That it hosts a ■ Stop of its own does not either: that button goes away with the
+  // pane, a convenience built on the guarantee rather than what holds it up. Two wordings
+  // turned on that button, from opposite sides — the first forbade this pane for having one,
+  // the fourth forbade the entry for hiding one — and both were wrong the same way.
   // Separately, and as courtesy rather than safety: unmounting the keyer calls stopVoice, so
   // the tick really does end an over. That is why the ⊞ entry carries
   // VOICE_KEYER_STOPS_ON_HIDE — the stopped message AND the discarded recording — before the

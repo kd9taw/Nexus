@@ -647,10 +647,17 @@ export function CwCockpit({
   // Every operator-content block under the scope renders through a CockpitPaneFrame in ONE
   // .cockpit-panes grid; the ⊞ Panels 'removed' gating is unchanged (shown()). TX chrome
   // never enters the region — the F-key macros and the type-ahead send bar live in the
-  // pinned .cockpit-txdock, and with them Tune and Stop TX up in the header. None of those
-  // has an id in the pane vocabulary, which is THE STOP LINE: hiding a way to stop is
-  // unrepresentable. (The TX meters ALSO render in the dock but DO have a ⊞ id — a readout,
-  // not a control, and nothing about the rule turns on where a readout sits.)
+  // pinned .cockpit-txdock, and Tune and Stop TX up in the header.
+  //
+  // ONLY THE HEADER PAIR IS THE STOP LINE. Stop TX (→ stopCw + haltTx) and Tune render
+  // OUTSIDE every ⊞-removable pane and have no id, so no tick can take CW's way to stop off
+  // the screen; that is the rule (features/panelState.ts), and Esc reaches the same abort.
+  // The macros and the send bar have no id EITHER, and that is this cockpit's own choice
+  // rather than a safety constraint — they are SENDERS, and the rule is indifferent to
+  // senders (Operate's Tx messages is a hideable one). Said the same way at the dock below.
+  //
+  // The TX meters ALSO render in the dock and DO have a ⊞ id (`txmeters` is in CW_PANEL_IDS):
+  // a readout, not a control, and nothing about the rule turns on where a readout sits.
   //
   // Which panes CAN render right now — the exact conditions that gated them in the old
   // `.cw-lower` JSX, hoisted because the region's column budget (maxCols) depends on them.
@@ -1311,9 +1318,10 @@ export function CwCockpit({
           the rule requires. The F-key macros and the send bar have no id either — they are
           SENDERS, which the rule is indifferent to (Operate's Tx messages is a hideable one),
           so that is this cockpit keeping its one-click transmits where the operator put them,
-          not a safety constraint. The TX meters keep their ⊞ id (a readout, not a control)
-          and render at the TOP of the dock — they mount only while keyed, and growing the
-          dock downward would shift the Send button under the operator's pointer mid-QSO. */}
+          not a safety constraint. Same reading as the pane-region comment above. The TX meters
+          keep their ⊞ id (`txmeters` in CW_PANEL_IDS — a readout, not a control) and render at
+          the TOP of the dock: they mount only while keyed, and growing the dock downward would
+          shift the Send button under the operator's pointer mid-QSO. */}
       <div className="cockpit-txdock">
         {/* Live transmit meters (SWR / ALC / Po / COMP) — self-gating: shown only while keyed,
             and only the meters the rig reports. A CW op wants SWR + Po as they send. */}
