@@ -9,19 +9,47 @@
 // rather than guarded — and the Classic/Roster presets stop fighting the operator for
 // the same reason.
 //
-// TX-safety — THE STOP LINE (narrowed 2026-08-03, operator ruling). A pane that can only
-// START a transmission may be hidden; anything that can STOP one may never be. So the
-// dial, the band/mode pickers, the Rx/Tx offset spinners and the QSO strip's TX On / Tune
-// / Stop TX / Hold Tx still have no id in any vocabulary here — there is no menu entry, no
-// stored value and no coercion rule that can reach them, which is strictly stronger than a
+// TX-safety — THE STOP LINE (2026-08-03 operator ruling, restated later the same day after
+// the first wording contradicted itself). THE RULE IS:
+//
+//   THE OPERATOR MUST NEVER BE UNABLE TO STOP A TRANSMISSION.
+//
+//   Two things hold that, and a hideable pane needs both:
+//     (a) every control that STOPS one — PTT, Stop TX, Tune, the TX-enable latch, abort —
+//         has no id in any pane vocabulary, so hiding it is UNREPRESENTABLE, not guarded;
+//     (b) a pane that may be hidden has a HIDE PATH THAT IS ITSELF A STOP: unmounting it
+//         ends whatever that pane started.
+//   Hosting a ■ Stop of its own neither admits nor excludes a pane. (b) is the test.
+//
+// The first wording was "a pane that can only START a transmission may be hidden; anything
+// that can STOP one may never be", and it excluded the one pane it was written to admit:
+// the voice keyer hosts a ■ Stop button. That sentence was a proxy for the property above,
+// and it was the wrong proxy — a pane's own Stop button is not the operator's last resort,
+// the dock is. Name the property, not a symptom of it.
+//
+// Under (a): the dial, the band/mode pickers, the Rx/Tx offset spinners and the QSO strip's
+// TX On / Tune / Stop TX / Hold Tx have no id here — there is no menu entry, no stored
+// value and no coercion rule that can reach them, which is strictly stronger than a
 // `removable: false` flag a bad code path or a hand-edited blob could bypass.
 //
-// What the narrowing admits: a sender whose HIDE PATH IS ITSELF THE STOP. Phone's voice
-// keyer is the first — its unmount cleanup calls stopVoice, so unticking it aborts the
-// message rather than leaving it playing with the abort scrolled away. The rule protects
-// the operator's ability to shut the transmitter up, and hiding a pane that shuts itself
-// up cannot take that away. A pane whose own ■ Stop is the ONLY way to end something it
-// did not start is still out.
+// Under (b): Phone's voice keyer is the first pane admitted. Its unmount cleanup calls
+// stopVoice, so unticking it aborts the message rather than leaving it playing with the
+// abort scrolled away — and the ⊞ entry says so before the tick, because a stop the
+// operator did not ask for is indistinguishable from a dropout. A pane that would keep
+// transmitting after its own unmount fails (b) and stays out, ■ Stop button or not.
+//
+// ENFORCEMENT — two guards, and neither is the rule on its own:
+//   · the NAME backstop (panelState.test.ts, driven by ALL_PANEL_VOCABULARIES at the foot
+//     of this file) — no vocabulary may contain an id NAMED for a stop control. It reads
+//     names, never wiring: a stop control gated on an id called `dsp` walks past it.
+//   · the RENDERED sweep in components/stop-line.test.tsx (Phone/CW/RTTY/SSTV, with the
+//     REAL CockpitHeader) and in OperateCockpit.structure.test.tsx (Operate, whose stop
+//     controls are in the merged QSO strip) — with EVERY id in that cockpit's vocabulary
+//     removed, singly and all at once, every stop control must still be in the document,
+//     found by its accessible name. It reads wiring, never names: a dead `ptt` id that
+//     gates nothing walks past IT.
+// What neither computes: that a NEWLY ADDED stop control was added to its cockpit's sweep
+// list. That is a human step, and it is named in each sweep.
 import { useCallback, useMemo, useState } from 'react'
 import { windowInstance } from './windowScope'
 
@@ -337,13 +365,17 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
 }
 
 /** Phone cockpit's removable panels (Phase 3) — the panes UNDER the scope. The scope, the
- *  whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW), the PTT row and the
- *  log strip are NOT panels: each is, or hosts, a way to STOP a transmission.
+ *  whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW) and the PTT row are
+ *  NOT panels: each hosts a way to STOP a transmission, which is clause (a). The log strip
+ *  is not one either, for a different reason — it holds a QSO the operator is part-way
+ *  through typing, and a tick that drops unsaved work is its own kind of harm.
  *
- *  `voiceKeyer` IS one, since 2026-08-03. It transmits, but it only ever STARTS an over —
- *  and hiding it stops that over (VoiceKeyer's unmount cleanup calls stopVoice), so no tick
- *  here can leave the operator keyed with the abort scrolled away. The ⊞ entry says so
- *  before the tick. */
+ *  `voiceKeyer` IS one, since 2026-08-03 — the first pane admitted under clause (b) of the
+ *  stop line at the top of this file. It transmits, and it hosts a ■ Stop of its own; what
+ *  admits it is neither of those, it is that HIDING IT IS A STOP (VoiceKeyer's unmount
+ *  cleanup calls stopVoice), so no tick here can leave the operator keyed with the abort
+ *  scrolled away. The ⊞ entry says so before the tick — including that the same cleanup
+ *  discards a recording in progress. */
 export const PHONE_PANEL_IDS = [
   'rigscope',
   'txmeters',
@@ -388,3 +420,52 @@ export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
   view: 'rtty',
   panelIds: RTTY_PANEL_IDS,
 }
+
+/**
+ * EVERY vocabulary in the app, so the stop-line name backstop cannot silently miss one.
+ * It missed the Operate cockpit for the whole life of the rule — the guard listed the four
+ * cockpits added in Phase 3 and never the first consumer — which meant `'ptt'` could be
+ * added to OPERATE_PANEL_IDS and the full suite stayed green (proven by mutation,
+ * 2026-08-03).
+ *
+ * A list can go stale the same way, so panelState.test.ts does not trust this one: it scans
+ * the module's own exports for anything shaped like a PanelVocabulary and fails if this
+ * array does not contain it. Adding a sixth cockpit therefore cannot ship unguarded — the
+ * export itself is the trigger, not somebody remembering this line.
+ */
+export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
+  OPERATE_PANELS,
+  SSTV_PANELS,
+  PHONE_PANELS,
+  CW_PANELS,
+  RTTY_PANELS,
+]
+
+/**
+ * The stop-line NAME backstop's word list — an id whose name means "this stops a
+ * transmission" may not appear in any vocabulary. Compared after normalising to lower-case
+ * letters only, so `stopTx`, `stop_tx` and `STOPTX` are all the same word.
+ *
+ * Its LIMIT, stated plainly because the rule was once claimed to be "enforced by
+ * computation" when this list was all there was: it reads NAMES. It cannot see that a
+ * control is wired to an id, so an id called `dsp` gating the PTT row passes it.
+ * components/stop-line.test.tsx is what reads wiring. Keep both.
+ */
+export const STOP_CONTROL_WORDS = [
+  'stop',
+  'stoptx',
+  'halt',
+  'halttx',
+  'abort',
+  'ptt',
+  'tune',
+  'arm',
+  'enabletx',
+  'txenable',
+  'txbar',
+  'header',
+  'keyer',
+  'unkey',
+  'kill',
+  'panic',
+] as const

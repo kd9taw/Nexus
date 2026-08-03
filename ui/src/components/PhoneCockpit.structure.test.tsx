@@ -216,12 +216,15 @@ describe('PhoneCockpit pane-grid shell', () => {
     expect(document.querySelector('.cockpit-txdock .ph-ptt')).not.toBeNull()
   })
 
-  // ── THE STOP LINE (operator ruling, 2026-08-03) ────────────────────────────────────
-  // A pane that can only START a transmission may be hidden; anything that can STOP one
-  // may never be. This is the guard that COMPUTES it: it drives every id in the real
-  // vocabulary through the real hide path and looks at what is left standing. A name list
-  // (features/panelState.test.ts) cannot see a vocabulary id wired to the PTT row; this
-  // can. Run RED by gating the PTT row on `shown('txmeters')` — one line at the real site.
+  // ── THE STOP LINE, structural half (features/panelState.ts) ────────────────────────
+  // The operator must never be unable to stop a transmission. This asserts the SHELL side
+  // of that here — the PTT row and the header survive every hide — and it is only half a
+  // guard, because this file stubs CockpitHeader down to an empty element, so it can prove
+  // the header rendered and nothing about the Stop TX button inside it.
+  // components/stop-line.test.tsx renders the REAL header and looks for the actual controls
+  // by accessible name, across Phone, CW, RTTY and SSTV. Keep this one anyway: it is the
+  // one that catches the PTT row itself, which lives in this cockpit's dock.
+  // Run RED by gating the PTT row on `shown('txmeters')` — one line at the real site.
   it('hiding ANY panel in the vocabulary leaves every stop-a-transmission control mounted', () => {
     for (const id of PHONE_PANEL_IDS) {
       renderCockpit({ panels: fakePanels([id]) })
@@ -229,8 +232,6 @@ describe('PhoneCockpit pane-grid shell', () => {
         document.querySelector('.cockpit-txdock .ph-ptt'),
         `hiding "${id}" took the PTT button with it`,
       ).not.toBeNull()
-      // Stop TX lives in the CockpitHeader (stubbed here down to its element): the
-      // assertion is that no panel id gates the header's render.
       expect(document.querySelector('.cockpit-header'), `hiding "${id}" took the header (Stop TX) with it`).not.toBeNull()
       cleanup()
     }

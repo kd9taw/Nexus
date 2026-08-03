@@ -38,25 +38,41 @@ so, and the line clears when you send.
 The line explains the screen; the tick is still yours. Every box in the menu can be ticked and
 unticked whenever you like, whatever your rig is doing, and what you choose applies the moment
 that panel has something to show — untick **Sent Echo** at start-up and it stays away after your
-first over, instead of making you transmit before you can hide a panel you do not want.
+first over, instead of making you transmit before you can hide a panel you do not want. Once you
+have unticked one, its line goes: the panel is off your screen because you said so, and a note
+still claiming your rig is the reason would be telling you something that is no longer true. Tick
+it back and the line is there again in the same instant, if it still applies.
 
 The menu also gains one entry it never had: **Voice Keyer** in Phone. If you work with a mic and
 never touch the F-key slots, you can now put that pane away and the panes around it take the room.
 It was held out until now by a blunt rule — nothing that transmits gets a checkbox — and the rule
-is narrower now, because what it was really protecting is one thing: you must never be unable to
-stop a transmission. PTT, Stop TX and Tune are still not panels, have no entry, and no saved
-layout can put them out of reach; and a pane may only be hidden if closing it ends what it
-started. Unticking Voice Keyer while a message is playing stops the message rather than leaving it
-transmitting behind a pane you just closed. Mid-recording, the untick is refused instead — the
-menu says the recording is running and the box stays ticked, so closing a pane can never bin work
-you are part-way through. Both are written on the entry before you tick it.
+is narrower now, because what it was really protecting is one thing: **you must never be unable to
+stop a transmission.** PTT, Stop TX and Tune are still not panels, have no entry, and no saved
+layout can put them out of reach; and beyond that, a pane may only be hidden if closing it ends
+what it started. Unticking Voice Keyer while a message is playing stops the message rather than
+leaving it transmitting behind a pane you just closed. It also throws away a recording you are
+part-way through making — that one is not what "hide a pane" sounds like, so the entry says it
+before you tick, and Nexus says it again when it happens, which covers **Reset layout** and simply
+walking off the Phone screen as well.
 
 Reaching all of this from the keyboard works the way the rest of Nexus does: every entry is a tab
 stop, takes focus with an undimmed focus ring, and reads its reason aloud with the panel name —
-the operator who cannot see the line under it is the one it was written for. And the menu itself
+the operator who cannot see the line under it is the one it was written for. **Esc** closes the
+menu and puts focus back on the ⊞ button you opened it with, instead of dropping you at the top of
+the app to tab your way back down. A panel you have torn off still reads as "popped out", but the
+words no longer run into the panel's own name when a screen reader speaks it. And the menu itself
 no longer runs off a short screen: with eight entries and their reasons it scrolls inside its own
 box, so **Undo last change** and **Reset layout** stay where you can reach them at any window size
 or UI zoom.
+
+### Fixed: the focus outline in light mode was a hair under the readable minimum
+
+The ring Nexus draws around whatever has keyboard focus is one colour used everywhere. In light
+mode it measured 2.999:1 against the page background, where the accessibility standard for a focus
+indicator asks for 3:1 — not enough to look broken, and enough to be genuinely hard to follow on a
+bright screen or a laptop panel at an angle. It is the same blue, one shade darker, and it clears
+the bar on the page, on panels and inside the ⊞ Panels popover. Contrast for the ring is measured
+in the test suite now rather than inferred, in both themes.
 
 ### Fixed: a rotator that stops answering no longer takes the dial with it
 

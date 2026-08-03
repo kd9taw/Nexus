@@ -55,8 +55,10 @@ Levels** offer only what your radio reports over CAT; **Sent Echo** holds what
 you have transmitted this session, so it is empty until your first over; **TX
 Meters** read on transmit. The line explains the screen; the tick is still
 yours — untick Sent Echo at start-up and it stays away after your first over,
-rather than making you transmit before you can hide it. See [Phone](phone.md)
-for the same menu on the voice side.
+rather than making you transmit before you can hide it. Once you have unticked an
+entry its line goes with it: the pane is off your screen because you said so, not
+because of anything the rig is doing. **Esc** closes the menu and puts focus back
+on the ⊞ button. See [Phone](phone.md) for the same menu on the voice side.
 
 <!-- TODO: capture screenshot — the eight F-key macro buttons with the recommended-next highlight -->
 

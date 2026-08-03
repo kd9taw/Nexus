@@ -97,13 +97,18 @@ const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
   voiceKeyer: 'Voice Keyer',
 }
 
-/** The one ⊞ entry whose tick has a TRANSMIT consequence, so the entry carries it before
- *  the tick rather than after. Hiding the keyer unmounts it, and its cleanup calls
- *  stopVoice — defensible (that is a stop, not a strand) but not something to do to an
- *  operator silently mid-message. `note`, not `unavailable`: the entry stays checkable,
- *  and PanelsMenu hangs this off aria-describedby, so it reaches a screen reader too. */
+/** The one ⊞ entry whose tick has consequences beyond the pane going away, so the entry
+ *  carries them BEFORE the tick rather than apologising after. Hiding the keyer unmounts
+ *  it, and its cleanup does two things: stopVoice (a stop — that is the point, and it is
+ *  what admits this pane to the vocabulary at all) and cancelVoiceRecording, which throws
+ *  away a capture in progress. The second one is destructive and is not implied by "hide a
+ *  pane", so it is named here in the same breath. The discard also announces itself when it
+ *  happens (VoiceKeyer's cleanup), for the operator who arrives via ⊞ Reset layout and never
+ *  reads this line. PanelsMenu hangs it off aria-describedby, so it reaches a screen reader.
+ */
 export const VOICE_KEYER_STOPS_ON_HIDE =
-  'hiding this stops a voice message that is playing — the F-keys go with it'
+  'hiding this stops a voice message that is playing and throws away a recording in ' +
+  'progress — the F-keys go with it'
 
 /** Expert DSP-function toggles. `key` matches the RadioStatus field + the set_rig_func name; the
  * cockpit only renders those the rig reports as supported (field non-null), so no dead buttons. */
@@ -481,13 +486,23 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
   // host is only supplying `shown` + the menu items.
   //
-  // Four entries can be ticked with nothing on screen behind them — the dead-checkbox the
-  // operator hit on 2026-08-03 — so each carries a NOTE saying why and what would change
-  // it. Three are conditional on the STATION and clear by themselves the moment the rig
-  // can feed them: the rig-scope pane needs the RADIO's own panadapter streaming, and the
-  // two DSP panes need the rig to report those fields over CAT (the same capability gate
-  // the DSP row itself has always applied to its buttons). The fourth, TX Meters, mounts
-  // fine and reads only while keyed. The notes explain; every box stays the operator's.
+  // Five notes, of two different kinds — see panelHost's `notes` doc, which is why they
+  // share one field.
+  //
+  // FOUR ARE "nothing on screen behind this box" — the dead-checkbox the operator hit on
+  // 2026-08-03. Three of those are conditional on the STATION and clear by themselves the
+  // moment the rig can feed them: the rig-scope pane needs the RADIO's own panadapter
+  // streaming, and the two DSP panes need the rig to report those fields over CAT (the same
+  // capability gate the DSP row itself has always applied to its buttons). The fourth, TX
+  // Meters, mounts fine and reads only while keyed.
+  //
+  // THE FIFTH IS A CONSEQUENCE. Voice Keyer transmits; unticking it ends a message and
+  // discards a recording, which is the price of its being hideable at all (THE STOP LINE,
+  // clause (b)). That note is required, not decorative — PhoneCockpit.keyerHide.test.tsx
+  // hides every id here, asks the wire which hides stopped something, and requires exactly
+  // those entries to carry one.
+  //
+  // The notes explain; every box stays the operator's.
   const host = panels
     ? panelHost(panels, {
         menu: PHONE_PANEL_IDS,
@@ -561,14 +576,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // visible, record controls may sit behind the pane scroll): its F-key sends are
   // guarded inside the component (txEnabled/keyed/licence via the engine).
   //
-  // It IS in the panel vocabulary, since the 2026-08-03 narrowing of the TX rule: a pane
-  // that can only START a transmission may be hidden, anything that can STOP one may not.
-  // The keyer only starts overs — and the hide is itself the stop, because unmounting it
-  // calls stopVoice. So no tick here can leave the operator keyed with the abort scrolled
-  // away, which is the risk the blunt "no TX id in any vocabulary" rule was proxying for.
-  // PTT, Tune and Stop TX stay in the dock/header with no id at all. Because the abort is
-  // real, the ⊞ entry carries VOICE_KEYER_STOPS_ON_HIDE — the operator is told before the
-  // tick, not surprised by a dropped message after it.
+  // It IS in the panel vocabulary, under clause (b) of THE STOP LINE (features/panelState.ts):
+  // the operator must never be unable to stop a transmission, and a pane may be hidden when
+  // its HIDE PATH IS ITSELF THE STOP. Unmounting the keyer calls stopVoice, so no tick here
+  // can leave him keyed with the abort scrolled away — and PTT, Tune and Stop TX stay in the
+  // dock/header with no id at all (clause (a)), which is where his last resort actually
+  // lives. The keyer's own ■ Stop is a convenience and has no bearing either way; an earlier
+  // wording of this rule turned on it and thereby forbade the pane it was written to admit.
+  // Because the hide really does end things, the ⊞ entry carries VOICE_KEYER_STOPS_ON_HIDE —
+  // the stopped message AND the discarded recording — before the tick rather than after.
   //
   // Because it transmits, this pane must NEVER remount for any reason but its OWN entry:
   // the same cleanup that makes hiding it safe is data loss when the region merely

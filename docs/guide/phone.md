@@ -28,8 +28,9 @@ zoom the view to the part of the passband you care about.
 knob and the slider tracks it (it won't sit lying at 100%). Your drags win while
 you're dragging.
 
-**⊞ Panels** in the header shows and hides the panes under the scope. An entry
-with nothing on screen behind it right now says why, in a line under it:
+**⊞ Panels** in the header shows and hides the panes under the scope. Where there
+is something you would want to know before you tick — nothing on screen behind
+the box, or a consequence to unticking it — the entry says so in a line under it:
 
 - **Rig Scope Controls** command the *radio's own* panadapter (span sets the
   hardware sweep width, ref sets weak-signal visibility), so they appear only
@@ -51,8 +52,12 @@ with nothing on screen behind it right now says why, in a line under it:
 The line explains the screen; the tick is still yours. Every box in the menu can
 be ticked and unticked whenever you like, and what you choose applies the moment
 that panel has something to show — untick one now and it stays away when your rig
-starts feeding it. Each entry is a keyboard tab stop and reads its reason with the
-panel name. If the list outgrows your window it scrolls inside the menu, so **Undo
+starts feeding it. Once you have unticked an entry, its line goes with it: the
+pane is off your screen because you said so, and a note still blaming the rig
+would no longer be true. Tick it back and the line returns if it still applies.
+Each entry is a keyboard tab stop and reads its reason with the panel name;
+**Esc** closes the menu and puts focus back on the ⊞ button rather than at the top
+of the app. If the list outgrows your window it scrolls inside the menu, so **Undo
 last change** and **Reset layout** stay reachable.
 
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->

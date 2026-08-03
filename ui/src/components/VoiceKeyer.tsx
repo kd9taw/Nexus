@@ -28,6 +28,11 @@ interface Props {
  * to the rig with PTT keyed for the message (the same TX path the soundcard CW keyer uses).
  * Click a slot or press its F-key to play; ● records from the input device; ⤓ imports a
  * `.wav`; ✕ clears; Esc / ■ Stop aborts.
+ *
+ * The ■ Stop here is a convenience, not the operator's last resort — Stop TX in the header
+ * and PTT in the dock are, and neither is hideable. That is what lets this pane carry a ⊞
+ * Panels entry despite transmitting: see the unmount cleanup below and THE STOP LINE in
+ * features/panelState.ts.
  */
 export function VoiceKeyer({ txEnabled, keyed, fdExchange }: Props) {
   const [msgs, setMsgs] = useState<VoiceMessage[]>([])
@@ -46,12 +51,29 @@ export function VoiceKeyer({ txEnabled, keyed, fdExchange }: Props) {
       .catch(() => {})
   }, [])
 
-  // Leaving the Phone section must not leave a message transmitting off-screen (no abort
-  // UI there) or a recording running forever — tear both down on unmount.
+  // Unmount tears down BOTH transmit paths. This runs when the operator leaves the Phone
+  // section and, since 2026-08-03, when he unticks Voice Keyer in ⊞ Panels — which is the
+  // whole reason the pane is allowed a menu entry at all (features/panelState.ts, clause
+  // (b) of THE STOP LINE: a hideable pane's hide path must itself be the stop).
+  //
+  // The two teardowns are not the same act, and the second one is DESTRUCTIVE:
+  //   · stopVoice ends a message that is playing. That is a stop, and stopping is the point.
+  //   · cancelVoiceRecording DISCARDS an in-progress capture (lib.rs: take + drop the
+  //     buffer). Nothing about hiding a pane implies "throw away the recording I am making",
+  //     so it may not happen silently. It still has to happen — leaving the recorder running
+  //     puts its only Stop & save button off-screen, and saving instead would overwrite the
+  //     slot's existing message with a truncated one, destroying something else.
+  // So: the ⊞ entry names it before the tick (VOICE_KEYER_STOPS_ON_HIDE), and this names it
+  // after, for the operator who got here by Reset layout or by walking off the screen and
+  // never read a menu at all.
   useEffect(() => {
     return () => {
       void stopVoice().catch(() => {})
-      if (recordingRef.current !== null) void cancelVoiceRecording().catch(() => {})
+      const slot = recordingRef.current
+      if (slot !== null) {
+        void cancelVoiceRecording().catch(() => {})
+        pushToast(`Recording for F${slot} discarded — the voice keyer closed`, 'info', 6000)
+      }
     }
   }, [])
 

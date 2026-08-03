@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
+// Namespace import as well as the named ones: the stop-line guard below scans the module's
+// own exports for vocabularies, so it cannot be narrowed by editing an import list.
+import * as panelState from './panelState'
 import {
+  ALL_PANEL_VOCABULARIES,
+  STOP_CONTROL_WORDS,
   MIN_SHARE,
   OPERATE_PANELS,
   WATERFALL_DETACHED_KEY,
@@ -211,38 +216,75 @@ describe('share (seam resize)', () => {
 })
 
 describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
-  // THE RULE, narrowed 2026-08-03 (operator ruling): a pane that can only START a
-  // transmission may be hidden; anything that can STOP one may never be. What is protected
-  // is the operator's ability to shut the transmitter up, not the ability to reach a
-  // sender — so the ids below are the STOP-capable ones, and only those:
-  //   ptt/tune/arm/enableTx  — each stops what it started (release, untune, drop the latch)
-  //   stop/stopTx/halt/haltTx/abort — the last resort itself
-  //   txbar/header/keyer     — the composite strips that HOST one of the above (CW's keyer
-  //                            strip carries Tune + Stop TX; the CockpitHeader carries
-  //                            Stop TX in every cockpit)
-  // Deliberately NOT here any more: send, compose, macro(s), wpm, band, mode. They start a
-  // transmission (or nothing at all) and the narrowed rule permits hiding them.
-  // 'voiceKeyer' is the first id taken up under the narrowing.
+  // THE RULE (panelState.ts header): the operator must never be unable to stop a
+  // transmission. Clause (a) is that no control which STOPS one has an id in any
+  // vocabulary — there is then no menu entry, no stored value and no coercion rule that
+  // can reach it.
   //
-  // HONESTY NOTE — this is a NAME backstop and nothing more. It cannot see whether an id is
-  // wired to a stop control, so it never really enforced the old rule either: it would have
-  // waved through a vocabulary id called `dsp` that gated the PTT row. What COMPUTES the
-  // rule is PhoneCockpit.structure.test.tsx's "hiding ANY panel in the vocabulary leaves
-  // every stop control mounted" — it renders the real cockpit once per id and looks.
-  const stopCapable = [
-    'stop', 'stopTx', 'halt', 'haltTx', 'abort',
-    'ptt', 'tune', 'arm', 'enableTx',
-    'txbar', 'header', 'keyer',
-  ]
-  const cases: Array<[string, readonly string[]]> = [
-    ['SSTV', SSTV_PANELS.panelIds],
-    ['Phone', PHONE_PANELS.panelIds],
-    ['CW', CW_PANELS.panelIds],
-    ['RTTY', RTTY_PANELS.panelIds],
-  ]
-  it.each(cases)('%s vocabulary excludes every control that can STOP a transmission', (_name, ids) => {
-    for (const id of stopCapable) {
-      expect((ids as readonly string[]).includes(id)).toBe(false)
+  // THIS IS THE NAME HALF OF THE ENFORCEMENT, AND IT IS ONLY THE NAME HALF. It reads ids.
+  // It cannot see that a control is WIRED to an id, so a vocabulary id called `dsp` gating
+  // the PTT row passes it untouched. The wiring half is components/stop-line.test.tsx
+  // (Phone/CW/RTTY/SSTV, real headers, every id hidden) plus the same sweep for Operate in
+  // OperateCockpit.structure.test.tsx. Both halves are required and neither is the rule.
+  //
+  // It also has to cover EVERY vocabulary, which is exactly what it did not do: the list of
+  // cases named the four Phase-3 cockpits and never Operate, the first consumer — so
+  // `'ptt'` in OPERATE_PANEL_IDS kept the whole 2081-test suite green (mutation, 2026-08-03)
+  // while CLAUDE.md claimed the rule was "enforced by computation". Driving off
+  // ALL_PANEL_VOCABULARIES fixes that case; the next test makes the ARRAY itself honest.
+  it.each(ALL_PANEL_VOCABULARIES.map((v) => [v.view, v] as const))(
+    '%s vocabulary has no id NAMED for a control that stops a transmission',
+    (_view, vocab) => {
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '')
+      for (const id of vocab.panelIds) {
+        expect(
+          (STOP_CONTROL_WORDS as readonly string[]).includes(norm(id)),
+          `"${id}" is in the ${vocab.view} vocabulary — a stop control with a ⊞ entry is a ` +
+            'stop control the operator can hide',
+        ).toBe(false)
+      }
+    },
+  )
+
+  it('ALL_PANEL_VOCABULARIES holds every vocabulary this module exports', () => {
+    // The backstop above is only as wide as this array, and an array is a thing somebody
+    // forgets. So do not trust it: find every export that IS a vocabulary and require it to
+    // be in there. A sixth cockpit is name-guarded the moment it is exported, not when
+    // somebody remembers to come back here.
+    type Vocab = { view: string; panelIds: readonly string[] }
+    const isVocab = (v: unknown): v is Vocab =>
+      !!v &&
+      typeof v === 'object' &&
+      typeof (v as { view?: unknown }).view === 'string' &&
+      Array.isArray((v as { panelIds?: unknown }).panelIds)
+    // Collected with an `if` rather than `.filter(isVocab)`: the module namespace is a
+    // union of every export (numbers, functions, consts), and `filter`'s narrowing overload
+    // needs the guarded type to extend the element type, which it does not — so `filter`
+    // silently returns the un-narrowed union and `v.view` below stops type-checking.
+    const exported: Vocab[] = []
+    for (const v of Object.values(panelState)) if (isVocab(v)) exported.push(v)
+    // A floor, not an equality: the point is that a NEW vocabulary is caught by the loop
+    // below with a message that names it, not by a count that says only "6 ≠ 5".
+    expect(
+      exported.length,
+      'fewer vocabularies found than the five that exist — the scan itself has gone blind, ' +
+        'and a blind scan passes every check under it',
+    ).toBeGreaterThanOrEqual(5)
+    for (const v of exported) {
+      expect(
+        ALL_PANEL_VOCABULARIES.includes(v as never),
+        `the "${v.view}" vocabulary is exported but missing from ALL_PANEL_VOCABULARIES — ` +
+          'the stop-line name backstop never looks at it',
+      ).toBe(true)
+    }
+  })
+
+  it('every stop control the cockpits actually render is in STOP_CONTROL_WORDS', () => {
+    // The word list is the backstop's whole reach, so pin the names that exist today: PTT,
+    // Stop TX, Tune, the TX-enable latch and the abort verbs. If a control is renamed in a
+    // cockpit and not renamed here, the backstop quietly narrows — this fails first.
+    for (const w of ['ptt', 'stoptx', 'stop', 'tune', 'halt', 'halttx', 'abort', 'enabletx']) {
+      expect((STOP_CONTROL_WORDS as readonly string[]).includes(w), `${w} dropped`).toBe(true)
     }
   })
 

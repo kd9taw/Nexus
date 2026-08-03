@@ -5,9 +5,11 @@
 // reachable, and never more than one click from Undo / Reset — both ship here, before
 // the operator can make a mess.
 //
-// Only the panels the CURRENT layout renders are listed. Anything that can STOP a
+// Only the panels the CURRENT layout renders are listed. The operator's way to STOP a
 // transmission is not a panel at all, so it has no entry here by construction (see
-// features/panelState) — an entry can cost you a sender, never the way to shut one up.
+// features/panelState, THE STOP LINE) — an entry can cost you a sender, never the way to
+// shut one up. A sender that stops itself when hidden may be listed, and then its entry
+// must carry a `note` saying what the tick ends.
 //
 // Some panels are conditional on the station (rig-scope controls need the radio's own
 // panadapter streaming; the DSP panes need the rig to report those fields over CAT; CW's
@@ -32,10 +34,16 @@ export interface PanelsMenuItem {
   id: string
   label: string
   state: PanelState
-  /** Why this panel has nothing on screen right now, and what would change that (no
-   *  native scope streaming; TX meters read on transmit). Shown under the entry and
-   *  attached to the checkbox as its accessible description. The entry stays a plain,
-   *  operable checkbox — this annotates it, it does not disable it. */
+  /** What the operator needs to know about this entry before he touches it. Two kinds,
+   *  one field, because both answer at the same moment and in the same place:
+   *    · why this panel has nothing on screen right now, and what would change that (no
+   *      native scope streaming; TX meters read on transmit);
+   *    · what unticking it will END (Phone's Voice Keyer stops a message and discards a
+   *      recording — the price of its being hideable at all; see THE STOP LINE).
+   *  Shown under the entry and attached to the checkbox as its accessible description.
+   *  The entry stays a plain, operable checkbox — this annotates it, never disables it.
+   *  Not shown once the panel IS removed: by then the first kind is no longer why the
+   *  screen looks as it does, and the second warns about an act already taken. */
   note?: string
 }
 
@@ -54,9 +62,12 @@ interface Props {
 export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-  // Reason/note ids for aria-describedby. The reason sits OUTSIDE the <label> on
-  // purpose: inside it, it would join the checkbox's accessible NAME, so a screen
-  // reader would read the whole sentence every time focus lands on the box.
+  const btnRef = useRef<HTMLButtonElement>(null)
+  // Note / state-tag ids for aria-describedby. BOTH sit OUTSIDE the <label>: text inside a
+  // label joins the checkbox's accessible NAME, so the note would be read as part of the
+  // name on every focus, and the "popped out" tag made the name read "Voice Keyerpopped
+  // out" (no separator — the spans abut). Outside and described-by, they annotate the
+  // control instead of renaming it.
   const uid = useId()
   // The menu overlays the header, so a click anywhere else closes it rather than
   // leaving it sitting on top of the controls beneath.
@@ -74,6 +85,7 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props)
     <div className="panels-menu" ref={rootRef}>
       <button
         type="button"
+        ref={btnRef}
         className={`panels-menu-btn${open || hidden > 0 ? ' active' : ''}`}
         aria-haspopup="true"
         aria-expanded={open}
@@ -90,28 +102,56 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props)
           // Escape closes the menu. It deliberately does NOT stop propagating: Escape
           // is the abort key and must still reach the cockpit's halt handler.
           onKeyDown={(e) => {
-            if (e.key === 'Escape') setOpen(false)
+            if (e.key === 'Escape') {
+              setOpen(false)
+              // …and focus goes back to the ⊞ button that opened it. Closing the popover
+              // destroys the focused element, and the browser's fallback is <body> — a
+              // keyboard operator would restart his tab traversal at the top of the
+              // document, dozens of stops from the cockpit he was working. preventScroll
+              // per the layout contract: the trigger is on screen already (the popover
+              // hangs off it), so a reveal here could only jolt the shell.
+              btnRef.current?.focus({ preventScroll: true })
+            }
           }}
         >
           {items.map((it) => {
+            // A note explains why this panel has NOTHING ON SCREEN right now. Once the
+            // operator has unticked the entry, that question has a different answer —
+            // "because you unticked it" — and the line stops being true of what he is
+            // looking at: CW's Sent Echo sat unchecked at session start still describing
+            // itself as empty until the first over, as though the station were the reason.
+            // A consequence note ("hiding this stops…") is worse when removed: it warns
+            // about an act already taken. Either way it is dropped while the panel is gone
+            // and is back in the same render as the re-tick.
+            const note = it.state === 'removed' ? undefined : it.note
             // Truthiness, not `!= null`: an empty note carries no id, so a blank string
             // cannot leave a checkbox pointing at an empty description.
-            const whyId = it.note ? `${uid}-${it.id}` : undefined
+            const whyId = note ? `${uid}-${it.id}-why` : undefined
+            const tagId = it.state === 'popped' ? `${uid}-${it.id}-tag` : undefined
+            const describedBy = [tagId, whyId].filter(Boolean).join(' ') || undefined
             return (
               <div key={it.id} className="panels-menu-item">
-                <label className="panels-menu-check">
-                  <input
-                    type="checkbox"
-                    checked={it.state !== 'removed'}
-                    aria-describedby={whyId}
-                    onChange={(e) => onToggle(it.id, e.target.checked)}
-                  />
-                  <span>{it.label}</span>
-                  {it.state === 'popped' && <span className="panels-menu-tag">popped out</span>}
-                </label>
-                {it.note && (
+                {/* The label holds the box and its NAME, and nothing else. Anything more
+                    it contained would be read as part of that name. */}
+                <div className="panels-menu-row">
+                  <label className="panels-menu-check">
+                    <input
+                      type="checkbox"
+                      checked={it.state !== 'removed'}
+                      aria-describedby={describedBy}
+                      onChange={(e) => onToggle(it.id, e.target.checked)}
+                    />
+                    <span>{it.label}</span>
+                  </label>
+                  {tagId && (
+                    <span className="panels-menu-tag" id={tagId}>
+                      popped out
+                    </span>
+                  )}
+                </div>
+                {note && (
                   <span className="panels-menu-why" id={whyId}>
-                    {it.note}
+                    {note}
                   </span>
                 )}
               </div>

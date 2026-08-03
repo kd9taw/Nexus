@@ -104,3 +104,37 @@ describe('light theme readability', () => {
     expect(undefd, `undefined palette tokens referenced: ${undefd.join(', ')}`).toHaveLength(0)
   })
 })
+
+describe('the focus ring is visible on every surface it lands on', () => {
+  // WCAG 1.4.11 (non-text contrast): a focus indicator needs 3:1 against what is behind
+  // it. Nexus paints ONE ring token everywhere (`:focus-visible { outline: 2px solid
+  // var(--focus-ring) }`, styles.css ~102), so it has to clear that bar on every surface a
+  // focusable control sits on — the page, a panel, and the elevated overlays (the ⊞ Panels
+  // popover is `--bg-elev-2`).
+  //
+  // Pinned DIRECTLY, because up to now it was held only by an absence guard in
+  // panel-overflow.test.ts: "no rule may fade an entry in the ⊞ popover, because opacity
+  // composites the outline too". That guard is worth keeping and it is not this — it stops
+  // the ring being HALVED, and says nothing about whether the ring passes at full strength.
+  // It did not: the first run of this test failed, because light-mode `--focus-ring` was
+  // 2.999:1 on `--bg`. The token moved one shade darker (styles.css, light block) rather
+  // than the bar moving. Margins in light mode are the tight ones, so this is the guard
+  // that catches a nudge to the ring OR to a surface token.
+  const SURFACES = ['--bg', '--bg-elev', '--bg-elev-2'] as const
+  const root = rootBlock()
+  it.each([
+    ['dark', { ...root, ...themeBlock('dark') }],
+    ['light', { ...root, ...themeBlock('light') }],
+  ])('%s: --focus-ring clears 3:1 on every surface token', (_theme, tokens) => {
+    const ring = tokens['--focus-ring']
+    expect(ring, '--focus-ring is not theme-defined').toMatch(/^#[0-9a-fA-F]{3,6}$/)
+    for (const s of SURFACES) {
+      expect(tokens[s], `${s} is not theme-defined`).toMatch(/^#[0-9a-fA-F]{3,6}$/)
+      expect(
+        contrast(ring, tokens[s]),
+        `--focus-ring (${ring}) on ${s} (${tokens[s]}) — WCAG 1.4.11 needs 3:1 for a focus ` +
+          'indicator, and this is the ring for EVERY focusable control in the app',
+      ).toBeGreaterThanOrEqual(3)
+    }
+  })
+})

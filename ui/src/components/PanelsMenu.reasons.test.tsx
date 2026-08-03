@@ -479,3 +479,81 @@ describe('⊞ Panels — the reason explains the screen; the tick stays the oper
     expect(panels.setPanelState).toHaveBeenCalledWith('bandActivity', 'removed')
   })
 })
+
+describe('⊞ Panels — a line the operator has already answered is not left standing', () => {
+  it('an UNTICKED entry drops its reason, which has stopped being why the screen is empty', async () => {
+    // CW's Sent Echo, unticked, at session start: the station reason ("nothing has been
+    // sent this session") is still TRUE of the station and no longer the explanation of
+    // anything he is looking at — he hid the pane, that is why it is not there. Leaving the
+    // line under an unchecked box reads as though the station were keeping his panel away.
+    cwSentLines = []
+    await openCw({}, { sent: 'removed' })
+    const box = expectOperable('Sent Echo')
+    expect(box.checked).toBe(false)
+    expect(
+      box.getAttribute('aria-describedby'),
+      'an unticked entry still explains the screen with a station reason that is not why ' +
+        'the pane is gone',
+    ).toBeNull()
+    expect(
+      screen.queryByText(NOTHING_SENT_REASON),
+      'the reason line is still rendered under an entry the operator already answered',
+    ).toBeNull()
+  })
+
+  it('…and it is back in the same render as the re-tick', async () => {
+    // The suppression must be a function of the current state, not a latch: re-ticking has
+    // to bring the explanation back, or an operator who restores a panel that still cannot
+    // show anything is back to the dead-checkbox complaint this whole affordance answers.
+    cwSentLines = []
+    await openCw()
+    expectExplained('Sent Echo', NOTHING_SENT_REASON)
+  })
+
+  it('a consequence note goes too — it warns about an act already taken', async () => {
+    // Phone's Voice Keyer note reads "hiding this stops a voice message that is playing…".
+    // On an entry that IS hidden there is nothing left to stop; the sentence describes the
+    // past. Ticking it back is not a hide, so nothing there needs a warning either.
+    await openPhone({}, { voiceKeyer: 'removed' })
+    const box = expectOperable('Voice Keyer')
+    expect(box.checked).toBe(false)
+    expect(
+      box.getAttribute('aria-describedby'),
+      'a hidden Voice Keyer still warns that hiding it will stop a message',
+    ).toBeNull()
+  })
+})
+
+describe('⊞ Panels — keyboard and screen-reader mechanics', () => {
+  it('the "popped out" tag annotates the entry instead of renaming it', async () => {
+    // The tag used to sit INSIDE the <label>, so it joined the checkbox's accessible NAME
+    // with no separator: "Voice Keyerpopped out". Outside the label and hung off
+    // aria-describedby, the name is the panel's name and the state still reaches a screen
+    // reader — which is what the operator needs from it.
+    await openPhone({}, { voiceKeyer: 'popped' })
+    const box = screen.getByLabelText('Voice Keyer') as HTMLInputElement
+    expect(
+      box.getAttribute('aria-label') ?? box.labels?.[0]?.textContent,
+      'the state tag is glued into the checkbox name',
+    ).toBe('Voice Keyer')
+    const ids = (box.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+    const described = ids.map((i) => document.getElementById(i)?.textContent ?? '').join(' ')
+    expect(described, 'a popped-out panel does not say so to a screen reader').toMatch(/popped out/)
+  })
+
+  it('Escape hands focus back to the ⊞ button, not to the document body', async () => {
+    // Closing the popover destroys the focused element. The browser's fallback owner is
+    // <body>, which restarts a keyboard operator's tab traversal at the top of the app —
+    // dozens of stops from the cockpit he was working. Focus belongs on the control that
+    // opened the thing he just closed.
+    await openPhone()
+    const box = entry('Band Activity')
+    box.focus()
+    fireEvent.keyDown(box, { key: 'Escape' })
+    expect(screen.queryByLabelText('Band Activity'), 'Escape did not close the menu').toBeNull()
+    expect(
+      document.activeElement,
+      'Escape dropped focus to the body instead of returning it to ⊞ Panels',
+    ).toBe(screen.getByRole('button', { name: /panels/i }))
+  })
+})

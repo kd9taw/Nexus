@@ -19,23 +19,48 @@
    with the dock parked sticky at the bottom. Horizontal surplus has exactly one fate
    (another column). Nothing clips.
 
-   THE STOP LINE — what may and may not have a ⊞ Panels id (narrowed 2026-08-03, operator
-   ruling). A PANE THAT CAN ONLY START A TRANSMISSION MAY BE HIDDEN. ANYTHING THAT CAN STOP
-   ONE MAY NEVER BE. PTT, Stop TX, Tune and the TX-enable latch live in the dock or the
-   header with no id in any pane vocabulary (features/panelState.ts), so moving or hiding
-   them stays unrepresentable rather than merely guarded — a `removable: false` flag is
-   something a bad code path or a hand-edited storage blob can bypass; a missing id is not.
-   This replaces the blunt "TX chrome has no id" rule, which was a proxy: what it was
-   really protecting is the operator's ability to shut the transmitter up, and it paid for
-   that by forbidding senders that carry no such risk. The narrow rule names the risk, so
-   it can be applied instead of recited. Phone's voice keyer is the first pane admitted
-   under it — it only starts overs, and hiding it IS a stop (its unmount cleanup calls
-   stopVoice), so the entry cannot strand an operator keyed with the abort scrolled away.
-   A pane admitted this way owes two things: its hide path must genuinely stop what it
-   started, and its ⊞ entry must SAY so before the tick (PanelsMenu `note`). Enforcement is
-   computed, not recited: PhoneCockpit.structure.test.tsx drives every id in the real
-   vocabulary through the real hide path and asserts the stop controls are still standing;
-   PhoneCockpit.keyerHide.test.tsx renders the real keyer and watches the abort fire.
+   THE STOP LINE — what may and may not have a ⊞ Panels id (2026-08-03 operator ruling).
+
+     THE OPERATOR MUST NEVER BE UNABLE TO STOP A TRANSMISSION.
+
+   Two things hold that, and a hideable pane needs BOTH:
+     (a) every control that STOPS one — PTT, Stop TX, Tune, the TX-enable latch, abort —
+         has no id in any pane vocabulary (features/panelState.ts), so moving or hiding it
+         is unrepresentable rather than merely guarded. A `removable: false` flag is
+         something a bad code path or a hand-edited storage blob can bypass; a missing id
+         is not.
+     (b) a pane that MAY be hidden has a hide path that is ITSELF A STOP — unmounting it
+         ends whatever it started — and its ⊞ entry SAYS SO before the tick (PanelsMenu
+         `note`), because a stop the operator did not ask for reads as a dropout.
+   Hosting a ■ Stop button of its own neither admits nor excludes a pane. (b) is the test.
+
+   THE FIRST WORDING OF THIS RULE WAS WRONG AND IS KEPT HERE AS THE REASON FOR THE SHAPE
+   ABOVE. It read "a pane that can only START a transmission may be hidden; anything that
+   can STOP one may never be" — and by its own words it excluded the one pane it was
+   written to admit, because Phone's voice keyer hosts a ■ Stop. Both that sentence and the
+   blunt "TX chrome has no id" rule it replaced were PROXIES for the property, and both
+   priced in panes that carry no risk at all. Name the property; a proxy has to be re-argued
+   every time something new shows up at the line.
+
+   Phone's voice keyer is the first pane admitted under (b). Hiding it IS a stop — its
+   unmount cleanup calls stopVoice — so the entry cannot strand an operator keyed with the
+   abort scrolled away. The same cleanup also DISCARDS a recording in progress, which is
+   destruction rather than safety, so the ⊞ note names that too and the discard announces
+   itself when it happens.
+
+   ENFORCEMENT — two guards, and neither is the rule on its own:
+     · NAMES: panelState.test.ts, over ALL_PANEL_VOCABULARIES (which is itself checked
+       against every vocabulary the module exports, so a sixth cockpit is covered by being
+       exported). No id may be NAMED for a stop control. It cannot see wiring.
+     · WIRING: components/stop-line.test.tsx renders Phone/CW/RTTY/SSTV with the REAL
+       header and drives every vocabulary id — singly and all at once — through the real
+       hide path, requiring every stop control to still be in the document BY ACCESSIBLE
+       NAME. Operate's equivalent is in OperateCockpit.structure.test.tsx (its stop
+       controls are in the merged QSO strip). It cannot see names.
+   Clause (b) is computed in PhoneCockpit.keyerHide.test.tsx: it hides every Phone id with
+   the real keyer mounted, asks the WIRE which hides stopped something, and requires exactly
+   those entries to carry a note. What NOTHING computes: that a newly added stop control was
+   added to its cockpit's sweep list. That step is human, and it is named in each sweep.
 
    WHY COLUMNS ARE FLEX STACKS AND NOT grid-template-areas. Areas were the first choice —
    they keep panes as direct grid children. They lose to the ⊞ Panels menu: a hidden panel
@@ -145,9 +170,10 @@
    controls must stay hit-able at their full size). `position: sticky` is the belt to that
    braces — if the shell's own deficit valve ever engages, the dock stays parked at the
    bottom of the scrollport instead of scrolling out of reach. It is pinned OUTSIDE the
-   pane region, so no pane layout, stored or hand-edited, can move or hide it — the
-   dock side of the STOP LINE above. A sender may live in a pane; the way to end an over
-   may not. */
+   pane region, so no pane layout, stored or hand-edited, can move or hide it — this and
+   the header are clause (a) of THE STOP LINE above, the surfaces that make "the operator
+   must never be unable to stop a transmission" true no matter what the ⊞ menu is set to.
+   A sender may live in a pane (clause (b)); the operator's last resort may not. */
 .cockpit-txdock {
   flex: 0 0 auto;
   position: sticky;

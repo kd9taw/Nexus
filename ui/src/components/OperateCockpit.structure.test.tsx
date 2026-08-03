@@ -14,6 +14,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
+import { OPERATE_PANEL_IDS } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 import * as OD from './OperateDecodes'
 
@@ -168,17 +169,22 @@ const PROTECTED = [
   /skip tx1/i,
 ]
 
+/** Every id in the REAL vocabulary, removed. Built from OPERATE_PANEL_IDS rather than
+ *  written out, so an id added to the vocabulary is swept by this guard the moment it
+ *  exists — the hand-written object this replaces would have left a new id untested and
+ *  still looked exhaustive. */
+const ALL_REMOVED: Partial<Record<OperatePanelId, PanelState>> = Object.fromEntries(
+  OPERATE_PANEL_IDS.map((id) => [id, 'removed' as PanelState]),
+)
+
 describe('the merged operating strip is the un-removable TX surface', () => {
+  // This is Operate's half of THE STOP LINE (features/panelState.ts): the wiring check that
+  // no panel id gates a control which stops a transmission. The other four cockpits are
+  // swept in components/stop-line.test.tsx; Operate is here because its stop controls live
+  // in the merged QSO strip rather than a CockpitHeader, and this suite already owns the
+  // mock surface for them.
   it('every protected control renders INSIDE .cockpit-qso with every panel id removed', () => {
-    const { container } = renderCockpit({
-      waterfall: 'removed',
-      bandActivity: 'removed',
-      callRoster: 'removed',
-      rxfreq: 'removed',
-      txmsgs: 'removed',
-      stations: 'removed',
-      txmeters: 'removed',
-    })
+    const { container } = renderCockpit(ALL_REMOVED)
     for (const name of PROTECTED) {
       const btn = screen.getByRole('button', { name })
       expect(btn, String(name)).toBeTruthy()

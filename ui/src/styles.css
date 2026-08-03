@@ -3079,7 +3079,13 @@ button.nb-chip:hover {
   --alert-critical: #9c0000;
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
-  --focus-ring: #0d8ecf;
+  /* One shade darker than the #0d8ecf this shipped as. That value measured 2.999:1 against
+     --bg (#e5eaf0) — WCAG 1.4.11 wants 3:1 for a focus indicator, so the app-wide ring
+     failed on the page background by a rounding error, on every focusable control in light
+     mode. Nothing looked broken, which is why it took a direct contrast assertion
+     (styles-contrast.test.ts) to find it. #0b83c0 is the same hue and clears 3.4:1 on --bg,
+     3.9:1 on --bg-elev-2 (the ⊞ popover) and 4.1:1 on --bg-elev. */
+  --focus-ring: #0b83c0;
   /* DXpedition identity palette, light inks — the same ten hues as dark, taken
      darker and more saturated so the solid spine reads against the off-white
      panel and the low-alpha tint does not wash out to nothing. */
@@ -11539,6 +11545,16 @@ select.settings-input {
 .panels-menu-item {
   display: flex;
   flex-direction: column;
+}
+/* The entry's first line: the checkbox label, plus any state tag pushed to the right.
+   The tag is a SIBLING of the label, never a child — text inside a <label> joins the
+   checkbox's accessible NAME, and the tag inside it made that name read "Voice
+   Keyerpopped out". This row is what keeps them on one line with the tag out of the
+   name; it reaches the operator through aria-describedby instead. */
+.panels-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 .panels-menu-check {
   display: flex;

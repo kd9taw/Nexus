@@ -43,13 +43,19 @@ export interface PanelHostSpec<P extends string> {
    *  count — survivors flow into the smaller generic template exactly as the old
    *  two→one collapse did. */
   readonly columns?: readonly (readonly P[])[]
-  /** Per-panel reason its pane has nothing on screen right now — because the station
-   *  cannot render it at all (no native scope streaming, say) or because it is only
-   *  populated at certain times (TX meters read on transmit). ONE field for both: the
-   *  operator's question is the same either way, and the entry stays operable in both
-   *  cases, because the tick is his preference rather than a claim about the station.
-   *  Recompute it from the same condition the JSX gates on, or the menu drifts from
-   *  the cockpit — `undefined` when the pane does have something to show. */
+  /** Per-panel line the entry carries. Usually the reason its pane has nothing on screen
+   *  right now — because the station cannot render it at all (no native scope streaming,
+   *  say) or because it is only populated at certain times (TX meters read on transmit).
+   *  ONE field for both: the operator's question is the same either way, and the entry
+   *  stays operable in both cases, because the tick is his preference rather than a claim
+   *  about the station. Recompute it from the same condition the JSX gates on, or the menu
+   *  drifts from the cockpit — `undefined` when the pane does have something to show.
+   *
+   *  The other use is a CONSEQUENCE: a pane admitted to the vocabulary under clause (b) of
+   *  THE STOP LINE (features/panelState.ts) transmits, and unticking it ENDS something.
+   *  Its note is what makes that informed rather than surprising, and it is not optional —
+   *  PhoneCockpit.keyerHide.test.tsx computes the pairing by hiding every id and asking the
+   *  wire which hides stopped anything. */
   readonly notes?: Partial<Record<P, string | undefined>>
 }
 

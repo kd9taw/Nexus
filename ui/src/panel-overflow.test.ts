@@ -304,18 +304,44 @@ describe('⊞ Panels popover: Undo / Reset stay reachable however long the list 
   // made to keep the entry keyboard-reachable is what made its focus indicator hard to see.
   // Grey with colour/background, never by fading the focusable element.
   //
-  // Unlike the cascade-computed guards above this is an ABSENCE check, which is the one CSS
-  // assertion that cannot ship dead: if no rule declares the property, none can win it. The
-  // walk descends into @media, so a conditional dim is caught too.
-  const RING_CHAIN = new Set(['.panels-menu', '.panels-menu-pop', '.panels-menu-item', '.panels-menu-check'])
+  // Unlike the cascade-computed guards above this is an ABSENCE check: no rule may declare
+  // the property on the chain, and if none declares it none can win it. The walk descends
+  // into @media, so a conditional dim is caught too.
+  //
+  // WHAT IT PROVES, EXACTLY — an earlier round of this claimed to make the hazard
+  // unrepresentable, and it did not. It matched on the SUBJECT (last compound) of a
+  // selector and only when that subject carried a chain class, so `.panels-menu-check > *
+  // { opacity: .5 }` walked straight past it and faded the ring exactly as the deleted rule
+  // had. The subject test below is therefore in two parts: a subject that NAMES a chain
+  // class, and a subject with NO class of its own (`*`, or a bare `input`/`span`/`label`),
+  // which can match the checkbox or one of its wrappers — those are flagged whenever the
+  // selector is inside the ⊞ popover at all.
+  //
+  // The residual limit, which is real: a subject bearing some OTHER class
+  // (`.panels-menu-pop .new-wrapper { opacity }`) is not flagged, because a class the guard
+  // has never heard of cannot be placed on the chain by reading the sheet. RING_CHAIN is
+  // the answer to that and it is a list a human keeps — ADD ANY NEW ELEMENT BETWEEN THE
+  // POPOVER AND THE CHECKBOX TO IT. `.panels-menu-row` was added when the popped-out tag
+  // was lifted out of the <label>.
+  const RING_CHAIN = new Set([
+    '.panels-menu',
+    '.panels-menu-pop',
+    '.panels-menu-item',
+    '.panels-menu-row',
+    '.panels-menu-check',
+  ])
   it('nothing on the chain down to the entry fades it — the focus ring keeps its contrast', () => {
     const dimmed = RULES.filter((r) => {
-      const subject = r.selector.split(/\s|>|\+|~/).filter(Boolean).pop() ?? ''
-      const classes = subject.match(/\.[a-z][a-zA-Z0-9-]*/g) ?? []
-      const onChain = classes.length
-        ? classes.some((c) => RING_CHAIN.has(c))
-        : /^input\b/.test(subject) && r.selector.includes('.panels-menu')
-      return onChain && /(?:^|;)\s*opacity\s*:/.test(r.body)
+      if (!/(?:^|;)\s*opacity\s*:/.test(r.body)) return false
+      const compounds = r.selector.split(/\s|>|\+|~/).filter(Boolean)
+      const subject = compounds[compounds.length - 1] ?? ''
+      const classesOf = (s: string) => s.match(/\.[a-z][a-zA-Z0-9-]*/g) ?? []
+      const subjectClasses = classesOf(subject)
+      if (subjectClasses.length) return subjectClasses.some((c) => RING_CHAIN.has(c))
+      // Class-less subject: `*`, `input`, `span`, `label`… any of which can BE the
+      // checkbox or wrap it. Flagged if anything else in the selector puts it in the
+      // popover — which is the case the old shape test missed.
+      return compounds.some((c) => classesOf(c).some((cls) => RING_CHAIN.has(cls)))
     })
     expect(
       dimmed.map((r) => r.selector),

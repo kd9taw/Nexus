@@ -66,13 +66,22 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   `fit="content"` for control strips (exactly content height — a strip cannot use surplus),
   fill + `weight` for feeds and the log column. A pane never sizes itself; structural size
   lives in `cockpit-panes.css` (flat selectors, fenced) and only there.
-- **The stop line** (narrowed 2026-08-03): a pane that can only **start** a transmission may be
-  hidden; anything that can **stop** one may never be. PTT, Stop TX, Tune and the TX-enable latch
-  live in the dock/header with **no id in any pane vocabulary** — moving or hiding them stays
-  unrepresentable, not merely guarded. A sender is admissible only if its hide path is itself the
-  stop (Phone's voice keyer: unmounting it calls `stopVoice`) *and* its ⊞ entry says so before the
-  tick. Enforced by computation, not by a name list: `PhoneCockpit.structure.test.tsx` drives every
-  id in the real vocabulary through the real hide path and checks the stop controls survive.
+- **The stop line** (2026-08-03): **the operator must never be unable to stop a transmission.**
+  Two things hold that, and a hideable pane needs both: **(a)** every control that *stops* one —
+  PTT, Stop TX, Tune, the TX-enable latch, abort — has **no id in any pane vocabulary**, so hiding
+  it is unrepresentable rather than guarded; **(b)** a pane that may be hidden has a **hide path
+  that is itself a stop** — unmounting it ends what it started — and its ⊞ entry says so before
+  the tick. Hosting a ■ Stop of its own neither admits nor excludes a pane; (b) is the test.
+  (Phone's voice keyer is admitted under (b): unmounting it calls `stopVoice`. The earlier wording
+  — "a pane that can only start a transmission may be hidden" — excluded the very pane it was
+  written to admit, because the keyer has a Stop button.)
+  Two guards, and neither is the rule alone: `panelState.test.ts` checks **names** across every
+  vocabulary (`ALL_PANEL_VOCABULARIES`, itself checked against every vocabulary the module
+  exports); `components/stop-line.test.tsx` (+ `OperateCockpit.structure.test.tsx` for Operate)
+  checks **wiring** — with every id in a cockpit's vocabulary removed, every stop control must
+  still be in the document, found by accessible name. A stop control gated on an id called `dsp`
+  is caught only by the second; a dead `ptt` entry only by the first. Neither computes that a
+  *newly added* stop control was added to its cockpit's sweep list — that step is human.
 - Responsive behavior: `[data-viewport='xs|sm|md|lg|xl']` + `--vh-eff`/`--vw-eff` only. Never a
   size-based `@media`, never raw `vh/vw` inside `.app` (zoom-blind) — the portaled
   `.ui-dialog`/`.ui-tooltip` are the one permanent exception (their content re-applies
