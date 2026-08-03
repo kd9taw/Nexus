@@ -5748,26 +5748,33 @@ impl Engine {
         // toward Nexus's own satellite totals either.
         //
         // And where the grid goes instead depends on the band, in two different
-        // wrong ways — `Awards::add_qso` routes on the `sat` flag FIRST:
-        //   · a CENTIMETRE downlink (70 cm, 23 cm …) falls out of the fold
-        //     entirely: the band-independent satellite set is the only bucket
-        //     that would take it, since `Band::from_label` has no cm variant. No
-        //     grid credit at all — absent credit.
-        //   · a METRE downlink lands in `worked_grid_band` for THAT BAND — the
-        //     TERRESTRIAL per-band VUCC bucket, which ARRL's rules exclude
-        //     satellite QSOs from. Not a corner: 2 m is by definition the
-        //     downlink of every U/V bird (the Fox-1 series — AO-85/91/92 — and
-        //     AO-7 mode B), and AO-7 mode A comes down on 10 m. That is WRONG
-        //     credit, not absent credit, and LoTW files the untagged upload the
-        //     same way. It is the one place this descope is worse than the
-        //     defect it replaced.
+        // wrong ways — `Awards::add_qso` routes on the `sat` flag FIRST, then on
+        // `Band::from_label`, whose variants run 160 m … 2 m and stop there.
+        // That list, NOT the metre/centimetre spelling, is the whole gate:
+        //   · a downlink on a band with no variant — 1.25 m, 70 cm, 23 cm, the
+        //     only three labels `bandplan::band_for_dial` can produce that
+        //     `from_label` refuses — falls out of the fold entirely: the
+        //     band-independent satellite set is the only bucket that would have
+        //     taken it. No grid credit at all — absent credit. (1.25 m is a
+        //     METRE label on this side, which is why the earlier
+        //     metre-vs-centimetre wording was wrong.)
+        //   · a downlink on 160 m … 2 m lands in `worked_grid_band` for THAT
+        //     BAND — the TERRESTRIAL per-band VUCC bucket, which ARRL's rules
+        //     exclude satellite QSOs from. Not a corner: 2 m is by definition
+        //     the downlink of every U/V bird (the Fox-1 series — AO-85/91/92 —
+        //     and AO-7 mode B), and AO-7 mode A comes down on 10 m. That is
+        //     WRONG credit, not absent credit, and LoTW files the untagged
+        //     upload the same way. It is the one place this descope is worse
+        //     than the defect it replaced.
         // Documented for the operator in docs/guide/satellites.md and the
         // CHANGELOG, both of which tell him to add BOTH fields by hand.
         //
         // Pinned by `a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields`
         // here, and end-to-end by src-tauri's
-        // `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit` and
-        // `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`.
+        // `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`,
+        // `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc` and
+        // `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`
+        // (which walks every band label the app can produce).
 
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
@@ -17660,6 +17667,82 @@ mod tests {
         );
     }
 
+    /// ⚠️ THE GENERAL LOGBOOK DOES HAVE A CLUB-NETWORK PUSH, and a `QsoRecord`
+    /// DOES reach `tempo_net::band_for_interop` through it. Pinned because that
+    /// function's doc once said the opposite — "the only path from there to this
+    /// function is the Field Day log" — which would make the centimetre rule
+    /// dead for every contact outside an FD session, and would send a future
+    /// fixer looking for the bug in the wrong crate.
+    ///
+    /// Nothing is stubbed and no contest is running: `log_qso` → `push_to_n1mm`
+    /// → `n1mm_contact_for` → `band_for_interop(&rec.band)`, out of the socket
+    /// the operator configured. 23 cm is the case the rule exists for — the
+    /// alpha-strip it replaced would put `23` in a field that means METRES, so
+    /// a microwave contact would land on the club map as a 23 metre one.
+    #[test]
+    fn an_ordinary_23cm_qso_reaches_the_club_wire_in_metres() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            s.n1mm_addr = listener.local_addr().unwrap().to_string();
+            s.n1mm_upload = true;
+            e.apply_settings(s);
+        }
+        // The general logbook, not the contest log — the whole point.
+        assert!(e.snapshot().field_day.is_none());
+        e.log_qso(QsoRecord {
+            freq_mhz: 1296.2,
+            ..qrec("W1AW", "23cm")
+        });
+
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener
+            .recv_from(&mut buf)
+            .expect("an ordinary logged QSO broadcasts a contactinfo datagram");
+        let xml = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(
+            xml.contains("<band>0.23</band>"),
+            "23 cm left the general-log push without the centimetre conversion — \
+             `band_for_interop` is reachable from here, whatever its doc says: {xml}"
+        );
+        assert!(
+            !xml.contains("<band>23</band>"),
+            "a 23 cm contact went out as 23 METRES on the general-log push: {xml}"
+        );
+    }
+
+    /// The OTHER non-Field-Day path into `tempo_net::band_for_interop`, and the
+    /// half this crate can pin: the N3FJP band report (Network Status Display,
+    /// `n3fjp_report_band`) hands it `snap.radio.band` — `tempo_audio`'s radio
+    /// loop reads it straight off the snapshot with no log of any kind in the
+    /// way. This asserts what that field IS: `settings.band`, mirrored by
+    /// `App::set_radio` in the same statement `set_frequency` writes it, so a
+    /// centimetre QSY is on the wire's input the moment the operator makes it —
+    /// no contact needs to be logged at all.
+    ///
+    /// Red if the mirror is dropped, which is what would make the band report
+    /// carry a stale band.
+    #[test]
+    fn the_band_the_club_band_report_reads_is_the_dial_the_operator_is_on() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(1296.2, "23cm", "USB");
+        let band = e.snapshot().radio.band;
+        assert_eq!(
+            band,
+            e.settings().band,
+            "the snapshot band the N3FJP report reads drifted from settings.band"
+        );
+        assert_eq!(
+            tempo_net::band_for_interop(&band),
+            "0.23",
+            "the band report would tell the club we are on 23 METRES"
+        );
+    }
+
     /// The switch OFF is silence — not "sends to a default", not "sends anyway".
     #[test]
     fn the_broadcast_is_silent_while_the_toggle_is_off() {
@@ -17932,6 +18015,13 @@ mod tests {
     /// the Cabrillo, and wrong on the N1MM / N3FJP wire (`band_for_interop`
     /// reads this same field). Documented in docs/guide/contesting-pota.md;
     /// goes red the day a caller can name the band.
+    ///
+    /// The band field itself is NOT missing — `LoggedQso::band` is real and is
+    /// written per contact, which is how the ADIF below carries two of them.
+    /// What is missing is any way for a caller to supply one: every entry point
+    /// funnels into `log_submode_at`, which stamps `self.band`. Pinned at that
+    /// site by tempo-core's
+    /// `every_contact_carries_a_band_and_it_is_always_the_logs_own`.
     #[test]
     fn a_contact_added_to_the_fd_log_later_is_stamped_with_the_current_band() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);

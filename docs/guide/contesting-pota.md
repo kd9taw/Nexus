@@ -114,8 +114,10 @@ they're heard on the air.
 - **The Satellites section's log strip doesn't join Field Day yet** — unlike the
   CW and Phone strips it stays on the general log while a session runs. Not a
   design choice; not wired up yet.
-- **The Field Day log has no per-contact band field** — every entry takes the
-  band the radio is on when you type it. Log as you work, not afterwards.
+- **You can't tell the Field Day log which band a contact was on** — it records
+  a band per contact, but always the one the radio is on at the moment you type
+  the entry; nothing lets you name a different one. Log as you work, not
+  afterwards.
 
 ## Related guides
 

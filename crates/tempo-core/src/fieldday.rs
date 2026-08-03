@@ -762,6 +762,45 @@ pub fn run_loopback_fieldday(
 
 #[cfg(test)]
 mod tests {
+    /// ⚠️ THE CONTEST LOG *HAS* A PER-CONTACT BAND — what it has no way to do
+    /// is let a CALLER name it. Pinned because the Field Day guide said "the
+    /// Field Day log has no per-contact band field", which is false and sends
+    /// a future fixer looking for a field to add rather than a parameter.
+    ///
+    /// `LoggedQso::band` is real and is written per contact, so one log can
+    /// hold two bands and the exports get them right. But every entry point —
+    /// `log`, `log_at`, `log_mode_at`, `log_submode_at` — funnels into
+    /// `log_submode_at`, which stamps `self.band`, the log's ONE current band.
+    /// No signature takes a band. That is why `Engine::fd_log_manual` opening
+    /// with `sync_fd_band()` makes a catch-up entry file on the dial you are on
+    /// NOW: not a missing field, an unreachable one.
+    ///
+    /// Goes red the day a caller can name the band — which is the cue to delete
+    /// the "log as you work" caveat from docs/guide/contesting-pota.md and
+    /// docs/guide/satellites.md.
+    #[test]
+    fn every_contact_carries_a_band_and_it_is_always_the_logs_own() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            Exchange {
+                class: "3A".into(),
+                section: "WI".into(),
+            },
+            "70cm",
+        );
+        assert!(log.log_mode_at("W1AW", "1D", "IL", "PH", 0, 100));
+        // The only way the band moves: the LOG's band, not an argument.
+        log.band = "20m".into();
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "PH", 0, 200));
+
+        let bands: Vec<&str> = log.qsos().iter().map(|q| q.band.as_str()).collect();
+        assert_eq!(
+            bands,
+            ["70cm", "20m"],
+            "the per-contact band field stopped recording the log's band at log time"
+        );
+    }
+
     #[test]
     fn arrl_scoring_per_mode_and_band_mode_dupes() {
         // ARRL FD: phone 1 pt, CW/digital 2 pts; a station counts once per

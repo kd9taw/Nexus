@@ -66,24 +66,42 @@ pub use wsjtx::{Decode, Inbound, QsoLogged, Status};
 ///
 /// That was reachable, not hypothetical: `tempo_app::bandplan`'s Q65 plan ships
 /// 13 cm, 9 cm, 5 cm, 3 cm and 1.2 cm channels (JT65 the first three), and
-/// picking one stores that label as `settings.band`. THE ONLY PATH FROM THERE TO
-/// THIS FUNCTION IS THE FIELD DAY LOG — `QsoRecord` never reaches here, the
-/// general logbook has no club-network push. `Engine::fd_log_manual` (and every
-/// QSY) calls `sync_fd_band`, which copies `settings.band` onto
-/// `FieldDayLog::band`; each contact is stamped with it; and `tempo_audio`'s
-/// radio-loop Field-Day emitter passes that stamp through here into the N1MM
-/// `<contactinfo>` `band` and the N3FJP `fldBand`. A 13 cm contact went out as
-/// `"13"` — thirteen metres — when the value the wire wants is `"0.13"`. No
-/// claim is made that this reached anyone's club log; what is on record is that
-/// Nexus could emit it.
+/// picking one stores that label as `settings.band`. FOUR CALL SITES CARRY IT
+/// FROM THERE TO HERE, and only two of them are Field Day:
+///
+/// * `tempo_app::engine::n1mm_contact_for` — the STANDING N1MM broadcast, one
+///   `<contactinfo>` per logged contact from `Engine::log_qso` → `push_to_n1mm`
+///   whenever `n1mm_broadcast_target` resolves. Its argument is a `QsoRecord`,
+///   so `QsoRecord.band` DOES reach this function and the GENERAL logbook DOES
+///   have a club-network push — outside any contest, on every QSO.
+/// * `tempo_audio`'s radio-loop Field-Day emitter, twice: the N3FJP `fldBand`
+///   and the N1MM `<contactinfo>` `band`. Both read `fieldday::LoggedQso::band`,
+///   which `log_submode_at` stamps from `FieldDayLog::band`, which
+///   `sync_fd_band` keeps equal to `settings.band` on every QSY and at
+///   `Engine::fd_log_manual`.
+/// * the N3FJP band report (Network Status Display, opt-in
+///   `n3fjp_report_band`) — `snap.radio.band`, read straight off the snapshot
+///   with no log of any kind in the way. That field IS `settings.band`:
+///   `Engine::set_frequency` mirrors it through `App::set_radio` in the same
+///   statement that writes it, so a centimetre QSY is on this function's input
+///   the moment the operator makes it, whether or not anything is logged.
+///
+/// So the value arrives either as a `QsoRecord.band` or as `settings.band`
+/// itself, and on any of the four a 13 cm contact went out as `"13"` — thirteen
+/// metres — when the value the wire wants is `"0.13"`. No claim is made that
+/// this reached anyone's club log; what is on record is that Nexus could emit
+/// it.
 ///
 /// The three hand-written arms all encoded ONE rule (centimetres ÷ 100), so the
 /// rule stands in for them. This adds no band to any vocabulary — the labels
 /// Nexus emits are unchanged, and the three values that have always gone out are
 /// byte-identical — it only guarantees that a centimetre label keeps the band it
-/// was made on. Pinned here by `every_centimetre_band_converts_to_metres`, and
+/// was made on. Pinned here by `every_centimetre_band_converts_to_metres`,
 /// against the channels actually shipped by `tempo_app::bandplan`'s
-/// `no_shipped_channel_reaches_the_interop_wire_as_a_band_it_is_not_on`.
+/// `no_shipped_channel_reaches_the_interop_wire_as_a_band_it_is_not_on`, and at
+/// the two non-Field-Day call sites by `tempo_app::engine`'s
+/// `an_ordinary_23cm_qso_reaches_the_club_wire_in_metres` and
+/// `the_band_the_club_band_report_reads_is_the_dial_the_operator_is_on`.
 pub fn band_for_interop(label: &str) -> String {
     if let Some(cm) = label.strip_suffix("cm") {
         if let Ok(n) = cm.parse::<f64>() {

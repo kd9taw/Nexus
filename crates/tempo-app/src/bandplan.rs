@@ -458,12 +458,17 @@ mod tests {
     fn no_shipped_channel_reaches_the_interop_wire_as_a_band_it_is_not_on() {
         // ⚠️ THE REACHABILITY HALF of `tempo_net::band_for_interop`'s rule, and
         // the reason that rule is not speculative. The N1MM `<contactinfo>`
-        // `band` and the N3FJP band report both carry a METRE count, and both
-        // get it from `settings.band` — a band-plan channel's own label,
-        // canonicalised (`tune_dial`/`pick_band` call `canonical_band` at the
-        // state boundary and nothing else touches it) — by way of the Field Day
-        // log, which `sync_fd_band` keeps equal to it and which stamps every
-        // contact the radio loop then pushes.
+        // `band`, the N3FJP `fldBand` and the N3FJP band report all carry a
+        // METRE count, and every one of them gets it from `settings.band` — a
+        // band-plan channel's own label, canonicalised (`tune_dial`/`pick_band`
+        // call `canonical_band` at the state boundary and nothing else touches
+        // it). By THREE routes, not one: the band report reads it straight off
+        // the snapshot (`snap.radio.band`, which `set_radio` mirrors); the
+        // Field Day emitter reads it by way of `FieldDayLog::band`, which
+        // `sync_fd_band` keeps equal to it and which stamps every contact; and
+        // the STANDING N1MM broadcast reads the `QsoRecord` the cockpit log
+        // strips build from that same band. Full census in `band_for_interop`'s
+        // own doc.
         //
         // So every label in the census below is one the wire can carry. The
         // centimetre ones are the point: the alpha-strip that used to be the

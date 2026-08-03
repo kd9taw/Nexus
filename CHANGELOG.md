@@ -35,11 +35,13 @@ satellite-aware one, and each is meant to be closed.
 - **Your satellite grids land in the wrong place, in Nexus and at ARRL.** Nexus decides "was this a
   satellite QSO?" from `PROP_MODE=SAT` alone; LoTW wants that *and* the satellite's name. With
   neither written, a contact logged here counts toward neither the **Satellite VUCC** totals on the
-  Awards screen nor the satellite needs board — and its grid does not simply go uncounted. On
-  70 cm and 23 cm it lands nowhere (those bands have no per-band grid slot of their own). On a
-  metre band — and 2 m is the downlink of every U/V bird — it lands in your **terrestrial** VUCC
-  count for that band, which is a grid ARRL's rules say a satellite QSO does not earn. LoTW files
-  the upload the same way. If you chase VUCC, add both fields by hand before you sign.
+  Awards screen nor the satellite needs board — and its grid does not simply go uncounted. Nexus
+  keeps per-band grid counts for 160 m through 2 m and no higher, so on **1.25 m, 70 cm and 23 cm**
+  the grid lands nowhere at all. On the bands that do have a slot — for satellite work that means
+  **2 m**, the downlink of every U/V bird, and **10 m**, where AO-7's mode A comes down — it lands
+  in your **terrestrial** VUCC count for that band, which is a grid ARRL's rules say a satellite QSO
+  does not earn. LoTW files the upload the same way. If you chase VUCC, add both fields by hand
+  before you sign.
 - **During Field Day it logs to the general log, not the contest log.** The Phone and CW strips
   switch to the Field Day log while a session runs; this one is not wired to Field Day yet, so a
   satellite contact made during FD scores the club nothing. Log those from the Phone or CW
@@ -76,9 +78,10 @@ logbook.
 **That has a cost inside Nexus too, and it is not permanent.** The same `PROP_MODE=SAT` field is
 what Nexus reads to decide a contact was a satellite QSO, so with nothing writing it your
 **Satellite VUCC** totals and the satellite needs board no longer see contacts Nexus logs for you
-either — and on a metre band (2 m, most commonly) the grid is counted toward your terrestrial VUCC
-for that band instead, which is not a grid a satellite QSO earns. Writing a satellite name Nexus
-can stand behind is work that has not been done yet, not work that was ruled out.
+either — and on a band Nexus keeps a per-band grid count for (2 m most commonly, since it is every
+U/V bird's downlink) the grid is counted toward your terrestrial VUCC for that band instead, which
+is not a grid a satellite QSO earns. Writing a satellite name Nexus can stand behind is work that
+has not been done yet, not work that was ruled out.
 
 **Writing just `PROP_MODE=SAT` is not a shortcut** — that was looked at and rejected, not
 overlooked. TQSL refuses to sign a contact whose propagation mode is `SAT` when it names no

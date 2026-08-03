@@ -9818,13 +9818,18 @@ fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
 /// foreign ADIF import, or one the operator repaired by hand.
 ///
 /// A contact logged from the Satellites section therefore earns no in-app
-/// satellite credit either, and where its grid goes instead splits on the band:
-/// a centimetre downlink earns no grid slot at all, while a METRE one (2 m, the
-/// downlink of every U/V bird) is credited to the TERRESTRIAL per-band VUCC
-/// bucket ARRL excludes satellite QSOs from. Both are consequences for the
-/// operator and are stated as such in docs/guide/satellites.md. Pinned by
-/// `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit` and
-/// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`.
+/// satellite credit either, and where its grid goes instead splits on
+/// `Band::from_label` — variants 160 m … 2 m — and NOT on whether the band is
+/// spelled in metres. A downlink on 1.25 m, 70 cm or 23 cm (the only labels
+/// `bandplan::band_for_dial` produces that `from_label` refuses, and 1.25 m is
+/// a metre one) earns no grid slot at all; a downlink on 160 m … 2 m — for
+/// satellite work 2 m, every U/V bird's, and 10 m, AO-7 mode A's — is credited
+/// to the TERRESTRIAL per-band VUCC bucket ARRL excludes satellite QSOs from.
+/// Both are consequences for the operator and are stated as such in
+/// docs/guide/satellites.md. Pinned by
+/// `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`,
+/// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc` and
+/// `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`.
 fn qso_is_sat(prop_mode: Option<&str>) -> bool {
     prop_mode.is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
 }
@@ -15054,9 +15059,12 @@ mod tests {
     /// at all (the band-independent satellite set is the only one that accepts
     /// a 70 cm grid).
     ///
-    /// ⚠️ THIS IS THE BENIGN HALF. On a METRE downlink the same absence puts the
-    /// grid in the WRONG bucket instead of none — see
-    /// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`.
+    /// ⚠️ THIS IS THE BENIGN HALF, and only on the three bands that have no
+    /// `Band::from_label` variant (1.25 m, 70 cm, 23 cm). On 160 m … 2 m the
+    /// same absence puts the grid in the WRONG bucket instead of none — see
+    /// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`, and
+    /// `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`
+    /// for the whole partition.
     ///
     /// Written as an assertion on the CURRENT, DEFERRED behaviour. When
     /// satellite tagging lands, this test goes red — which is the point: the
@@ -15088,7 +15096,10 @@ mod tests {
             "70 cm has no per-band grid slot — the grid is credited nowhere"
         );
         // The mechanism, for every centimetre band and not just the one logged
-        // above — this is what makes the guide's "70 cm and 23 cm" true.
+        // above. NOTE this is the centimetre half only — 1.25 m has no variant
+        // either, which is why the guide names three bands and not two; the
+        // full partition is
+        // `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`.
         for cm in ["70cm", "33cm", "23cm", "13cm", "9cm", "5cm", "3cm", "1.2cm"] {
             assert!(
                 propagation::model::Band::from_label(cm).is_none(),
@@ -15099,12 +15110,12 @@ mod tests {
 
     /// ⚠️ WRONG CREDIT, NOT ABSENT CREDIT — the sharp edge of the same descope,
     /// and the reason the guide's "70 cm and 23 cm" wording alone was
-    /// misleading. On a CENTIMETRE downlink an untagged satellite contact
-    /// simply falls out of the grid fold (the test above). On a METRE downlink
-    /// it does not fall out: `Awards::add_qso` branches on `sat` FIRST, so with
-    /// the flag false the grid lands in `worked_grid_band` for that band — the
-    /// TERRESTRIAL per-band VUCC bucket, which ARRL's rules exclude satellite
-    /// QSOs from. LoTW files the untagged upload the same way.
+    /// misleading. On a band with no `Band::from_label` variant an untagged
+    /// satellite contact simply falls out of the grid fold (the test above). On
+    /// 160 m … 2 m it does not fall out: `Awards::add_qso` branches on `sat`
+    /// FIRST, so with the flag false the grid lands in `worked_grid_band` for
+    /// that band — the TERRESTRIAL per-band VUCC bucket, which ARRL's rules
+    /// exclude satellite QSOs from. LoTW files the untagged upload the same way.
     ///
     /// 2 m is not a corner case: it is by definition the downlink of every U/V
     /// bird (the Fox-1 series — AO-85/91/92 — and AO-7 mode B), so this is the
@@ -15144,6 +15155,103 @@ mod tests {
             .find(|b| b.band == "2m")
             .expect("the grid is credited to the terrestrial 2 m VUCC slot");
         assert_eq!(two_m.worked, 1, "terrestrial 2 m VUCC gained the grid");
+    }
+
+    /// ⚠️ THE LINE IS NOT METRES-VS-CENTIMETRES — `1.25m` is a metre label on
+    /// the falls-out side, and the guide said "on a metre band it lands in the
+    /// wrong bucket" until this test named the real set.
+    ///
+    /// The fold's only gate is `Band::from_label`, whose variants stop at 2 m.
+    /// Of the sixteen labels `tempo_app::bandplan::band_for_dial` can put on a
+    /// record, thirteen (160 m … 2 m) have a per-band grid slot and take an
+    /// untagged satellite grid as TERRESTRIAL VUCC — wrong credit — while
+    /// **1.25 m, 70 cm and 23 cm** have no variant and fall out of the fold —
+    /// absent credit. A metre label proves nothing on its own; membership of
+    /// that list is the whole rule.
+    ///
+    /// The census is closed against `band_for_dial` itself, so a new band
+    /// reaches this test the day it reaches the app, and it goes red the day
+    /// `Band::from_label` gains a variant — which is the cue to rewrite the
+    /// guide's two bullets rather than let them drift.
+    #[test]
+    fn the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres() {
+        // (label, a dial inside it, does the TERRESTRIAL per-band slot take it?)
+        const CENSUS: &[(&str, f64, bool)] = &[
+            ("160m", 1.840, true),
+            ("80m", 3.573, true),
+            ("60m", 5.357, true),
+            ("40m", 7.074, true),
+            ("30m", 10.136, true),
+            ("20m", 14.074, true),
+            ("17m", 18.100, true),
+            ("15m", 21.074, true),
+            ("12m", 24.915, true),
+            // AO-7 mode A comes down here — a metre band that DOES take it.
+            ("10m", 29.450, true),
+            ("6m", 50.313, true),
+            ("4m", 70.154, true),
+            // Every U/V bird's downlink — the ordinary wrong-credit case.
+            ("2m", 145.960, true),
+            // ⚠️ THE COUNTEREXAMPLE. A metre label with no `Band` variant, so
+            // the grid falls out exactly as 70 cm does.
+            ("1.25m", 222.130, false),
+            ("70cm", 436.795, false),
+            ("23cm", 1296.200, false),
+        ];
+
+        // The census is every label the app can produce, not a hand-picked
+        // sample: sweep the dial and let `band_for_dial` name the set.
+        let mut produced: Vec<&'static str> = Vec::new();
+        let mut mhz = 1.0;
+        while mhz < 1400.0 {
+            if let Some(b) = tempo_app::bandplan::band_for_dial(mhz) {
+                if !produced.contains(&b) {
+                    produced.push(b);
+                }
+            }
+            mhz += 0.01;
+        }
+        let censused: Vec<&str> = CENSUS.iter().map(|(b, _, _)| *b).collect();
+        assert_eq!(
+            produced, censused,
+            "a band reached `band_for_dial` without reaching this census — \
+             decide which side of the grid fold it lands on and say so in \
+             docs/guide/satellites.md"
+        );
+
+        for &(band, mhz, terrestrial) in CENSUS {
+            assert_eq!(
+                tempo_app::bandplan::band_for_dial(mhz),
+                Some(band),
+                "{mhz} MHz is no longer {band}"
+            );
+            assert_eq!(
+                propagation::model::Band::from_label(band).is_some(),
+                terrestrial,
+                "{band}: `Band::from_label` changed sides — the guide's two \
+                 bullets name the bands explicitly and must be rewritten"
+            );
+
+            // The real fold, over a real logged contact, through the real
+            // engine — as the Satellites strip builds it, mid-pass, untagged.
+            let mut e = engine_holding("FOX-1B (AO-91)|FM Voice Repeater", 435_250_000, 145_960_000);
+            e.log_qso(pass_qso("W1AW", "FN31", band, mhz));
+            let s = awards_fold_over(&e.get_log()[0]);
+            assert_eq!(
+                s.vucc.sat_worked, 0,
+                "{band}: the Satellite-VUCC total counted a contact Nexus never tagged"
+            );
+            assert_eq!(
+                s.vucc.worked,
+                usize::from(terrestrial),
+                "{band}: the grid landed on the wrong side of the fold"
+            );
+            assert_eq!(
+                s.vucc.bands.iter().any(|b| b.band == band && b.worked == 1),
+                terrestrial,
+                "{band}: the per-band terrestrial VUCC slot disagrees with the total"
+            );
+        }
     }
 
     /// ROUND 3, DEFECT 4. With a mapping IN FORCE that drives the uplink but

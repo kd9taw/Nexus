@@ -124,15 +124,19 @@ that ranks which pass is worth chasing.
 Where the grid goes instead depends on the band you were listening on, and
 neither answer is right:
 
-- **On 70 cm and 23 cm it lands nowhere.** Those bands have no per-band grid
-  slot of their own, and the satellite bucket is the only home they had.
-- **On a metre band it lands in the wrong bucket.** 2 m is the downlink of every
-  U/V bird — the Fox-1 satellites (AO-85, AO-91, AO-92) and AO-7 on mode B — and
-  AO-7's mode A comes down on 10 m, so this is the ordinary case, not a corner.
-  The grid is counted toward your **terrestrial** VUCC for that band, which is a
-  grid ARRL's rules say a satellite contact does not earn, and LoTW files the
-  untagged upload the same way. If you chase VUCC, this one matters: add both
-  fields before you sign.
+- **On 1.25 m, 70 cm and 23 cm it lands nowhere.** Nexus keeps per-band grid
+  counts for 160 m through 2 m and no higher, so those three bands have no slot
+  of their own and the satellite bucket was the only home they had.
+- **On 160 m through 2 m it lands in the wrong bucket.** For satellite work that
+  means **2 m** — the downlink of every U/V bird, the Fox-1 satellites (AO-85,
+  AO-91, AO-92) and AO-7 on mode B — and **10 m**, where AO-7's mode A comes
+  down. So this is the ordinary case, not a corner. The grid is counted toward
+  your **terrestrial** VUCC for that band, which is a grid ARRL's rules say a
+  satellite contact does not earn, and LoTW files the untagged upload the same
+  way. If you chase VUCC, this one matters: add both fields before you sign.
+
+The split is by band, not by whether the band is named in metres: 1.25 m is a
+metre band and it falls out with the centimetre ones.
 
 Adding the two fields by hand puts the contact where it belongs in both counts:
 edit the ADIF with Nexus closed, exactly as below, and the totals pick it up the
