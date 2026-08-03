@@ -293,22 +293,49 @@ pub enum SatCatBackend {
 /// without telling this code. `cat_backend_label` is the one place that holds
 /// the distinction ("native CI-V" / "Hamlib rigctld" / "Hamlib rigctld — the
 /// native CI-V daemon didn't start" / "a shared external rigctld"), and Test
-/// CAT is where the operator reads it, so the refusal points there instead of
-/// asserting a fourth answer of its own.
+/// CAT is where the operator reads it — which is why the cure clause for a
+/// radio the native backend CAN serve points there rather than asserting a
+/// fourth answer of its own, and why the dead-end clause, on a radio no switch
+/// can help, does not send anyone to read it.
 ///
-/// It names no cure ON PURPOSE. Any "turn on X" is wrong for some station that
-/// can reach this line (an IC-910 has no Native CI-V path to switch on), and a
-/// refusal that misdescribes the operator's radio is no better than the bare
-/// "the rig refused the split" the field report arrived as. Pointing at where a
-/// FACT is displayed is not a cure — it prescribes no change to the radio.
-/// `pub` so the radio loop's end-to-end scene can pin the EXACT string the
-/// engine produced (its proof that the step reached the split apply and refused
-/// there) instead of matching a phrase that could drift out from under it.
+/// These sentences name no cure, because none of them can: THE CURE CLAUSE IS
+/// APPENDED PER RIG by [`Engine::main_sub_hamlib_refusal`], which is the only
+/// way this message reaches an operator. Earlier rounds picked one cure for
+/// everybody and each pick was wrong for somebody — "turn on Native CI-V"
+/// pointed an IC-910 at a switch its radio has no path to, and "Test CAT names
+/// the backend that is" pointed every station at a FACT while prescribing no
+/// change at all, which is how the original "the rig refused the split" field
+/// report reached us. `pub` so the radio loop's end-to-end scene can assert
+/// against these invariant facts, and so this file's own tests can hold them.
 pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
     "Main = downlink / Sub = uplink was not driven — Nexus drives that layout only through its \
      own native CI-V backend, and that backend is not what is serving this radio. Nothing was \
      written to the radio and nothing was transmitted; your receive dial is still being \
-     corrected. Test CAT names the backend that is.";
+     corrected.";
+
+/// The cure, for a radio the native CI-V daemon COULD serve
+/// ([`crate::settings::Settings::sat_native_civ_reachable`] — an IC-9700 or
+/// IC-905 on a serial port). Both clauses are facts about that predicate: the
+/// backend has a path here, and the switch that puts it on this radio is the
+/// one Settings renders for exactly these models on exactly this transport.
+///
+/// It names the switch rather than commanding it, because the opt-in may
+/// already be ON and the daemon have failed to start (`spawn_cat_daemon` falls
+/// back silently) or something else may own the port — the three stations
+/// [`SatCatBackend::Hamlib`] cannot tell apart. "Here is the control, and here
+/// is where its live state is read" is true in all three; "turn it on" is not.
+const MAIN_SUB_NATIVE_CIV_SWITCH: &str =
+    "This radio can run that backend: Settings ▸ Radio ▸ Rig Control ▸ Native Icom CI-V is its \
+     switch, and Test CAT names what is serving now.";
+
+/// …and the honest DEAD END for every other radio that reaches the same
+/// refusal: the IC-910/IC-9100 (no `0x27` scope, so the daemon can never start
+/// for them), a network-wired IC-9700/IC-905 (the daemon refuses that
+/// transport), and every non-Icom rig the mapping can be picked on. Naming a
+/// switch to any of them would be the round-1..3 defect in the other
+/// direction, so this says the layout is unreachable here and stops.
+const MAIN_SUB_NO_NATIVE_CIV_PATH: &str =
+    "It has no path to this radio, so that layout cannot be driven here.";
 
 /// …and when a mapping that rides VFO A/B cannot be shown to keep both legs of
 /// the pass on one band, on one of the four Main/Sub satellite Icoms
@@ -336,10 +363,38 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// the dial is the operator's and no Doppler correction is running on it. So
 /// the closing clause says what is true of every mapping that gets here:
 /// nothing else about the pass moved.
+///
+/// Like its sibling it carries only the facts; the cure clause is appended per
+/// rig by [`Engine::ab_cross_band_refusal`], the only producer of this message.
 const AB_CROSS_BAND_REFUSAL: &str =
     "This uplink was not driven — Nexus has no verified cross-band VFO A/B satellite split for \
      this radio, and it could not confirm both legs of this pass are on one band. Nothing was \
      written to the radio and nothing was transmitted; nothing else about this pass changed.";
+
+/// The cure, on the two rigs of the four that have one — the IC-9700 and
+/// IC-905 the native CI-V daemon can serve. The mapping the operator is
+/// holding rides VFO A/B; the one that carries a cross-band uplink on these
+/// radios is Main = downlink / Sub = uplink, and both places it can be picked
+/// are named because the pass rail is where they already are.
+///
+/// "CAN drive", not "will": [`Engine::ab_cross_band_refusal`] is reached under
+/// either backend, and on this rig served by anything but the native daemon
+/// the new mapping meets [`MAIN_SUB_HAMLIB_REFUSAL`] — which then names the
+/// switch. Two honest steps, neither of them a promise the station cannot keep.
+const AB_PICK_MAIN_SUB: &str =
+    "Main = downlink / Sub = uplink is the layout Nexus can drive on this radio — pick it in \
+     Settings ▸ Radio ▸ Satellite Doppler, or from the mapping selector on the pass rail.";
+
+/// …and the dead end on the other two (and on a network-wired IC-9700/IC-905):
+/// the ONE mapping that could carry this pass's uplink on a Main/Sub Icom is
+/// driven only through the native backend, which cannot reach this radio. So
+/// the operator is told there is nothing to pick rather than left to try the
+/// remaining entries in the selector one by one — every one of which refuses:
+/// A/B and uplink-only land back on this same rule, Main/Sub has no backend,
+/// and Main = uplink / Sub = downlink is refused by the rig's own contract.
+const AB_NO_DRIVABLE_MAPPING: &str =
+    "Nexus drives Main = downlink / Sub = uplink only through its own native CI-V backend, and \
+     that backend has no path to this radio — so no VFO mapping carries this pass's uplink here.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -7559,16 +7614,17 @@ impl Engine {
     /// transponder's downlink passband. An honest refusal is the correct
     /// answer until it can be verified on real hardware.
     ///
-    /// ⚠️ ONE REFUSAL, TRUE FOR EVERY RIG THAT CAN REACH IT. The operator can
-    /// pick this mapping on any radio, so the message states only what NEXUS
-    /// knows — which backend drives the layout, which one is serving, that
-    /// nothing was written, and that the receive dial is still corrected. It
-    /// deliberately prescribes no cure: earlier drafts branched on the rig and
-    /// each branch was wrong for some station (an IC-910 has no Native CI-V
-    /// toggle to be sent to; an FT-847 must not be told to give its uplink back
-    /// to the radio). A refusal an operator cannot act on is how the original
-    /// field report reached us, and a refusal that misdescribes their radio is
-    /// no better.
+    /// ⚠️ EVERY SENTENCE TRUE FOR EVERY RIG THAT CAN REACH IT. The operator can
+    /// pick this mapping on any radio, so the FACTS state only what NEXUS knows
+    /// — which backend drives the layout, which one is serving, that nothing
+    /// was written, and that the receive dial is still corrected — and the CURE
+    /// is chosen by [`Self::sat_native_civ_cure`], the one question that
+    /// decides whether a cure exists at all. Earlier drafts prescribed one cure
+    /// for everybody and each pick was wrong for somebody (an IC-910 has no
+    /// Native CI-V toggle to be sent to; an FT-847 must not be told to give its
+    /// uplink back to the radio), then swung to prescribing nothing — and a
+    /// refusal an operator cannot act on is how the original field report
+    /// reached us in the first place.
     ///
     /// Gated by the identical "this split IS my uplink" identity check as
     /// [`Self::sat_tx_mode_for_split`], so a terrestrial "UP 5" worked while a
@@ -7594,7 +7650,7 @@ impl Engine {
         match self.settings.sat_vfo_map {
             crate::settings::SatVfoMap::MainDownSubUp => match cat {
                 SatCatBackend::NativeCiv => Ok("Sub"),
-                SatCatBackend::Hamlib => Err(MAIN_SUB_HAMLIB_REFUSAL.to_string()),
+                SatCatBackend::Hamlib => Err(self.main_sub_hamlib_refusal()),
             },
             _ => Err(
                 "Main = uplink / Sub = downlink can't be driven — satellite mode always \
@@ -7637,6 +7693,10 @@ impl Engine {
     /// mapping is refused for the whole pass, cross-band or not. That is the
     /// honest reading of the same rule — Nexus cannot prove one band — and it
     /// is what [`AB_CROSS_BAND_REFUSAL`] says.
+    ///
+    /// The cure clause is per rig ([`Self::sat_native_civ_cure`]) and only two
+    /// of the four have one, so the message that reaches the operator is
+    /// composed here rather than being a const.
     fn ab_cross_band_refusal(&self, tx_hz: u64) -> Option<String> {
         if !self.settings.sat_vfo_map.drives_uplink() || !self.settings.sat_main_sub_rig() {
             return None;
@@ -7647,7 +7707,102 @@ impl Engine {
         if down.is_some() && down == up {
             return None;
         }
-        Some(AB_CROSS_BAND_REFUSAL.to_string())
+        Some(format!(
+            "{AB_CROSS_BAND_REFUSAL} {}",
+            self.sat_native_civ_cure(AB_PICK_MAIN_SUB, AB_NO_DRIVABLE_MAPPING)
+        ))
+    }
+
+    /// The exact refusal THIS station gets when `Main = downlink / Sub = uplink`
+    /// is asked of a backend that is not the native CI-V daemon: the invariant
+    /// facts ([`MAIN_SUB_HAMLIB_REFUSAL`]) plus the cure clause for the radio
+    /// in play.
+    ///
+    /// `pub` for the same reason the const used to be: the radio loop's
+    /// end-to-end scenes pin the CAT status against the string the engine
+    /// actually produced — their proof that the step reached the split apply
+    /// and refused THERE — and a phrase match drifts silently out from under
+    /// the message it guards.
+    pub fn main_sub_hamlib_refusal(&self) -> String {
+        format!(
+            "{MAIN_SUB_HAMLIB_REFUSAL} {}",
+            self.sat_native_civ_cure(MAIN_SUB_NATIVE_CIV_SWITCH, MAIN_SUB_NO_NATIVE_CIV_PATH)
+        )
+    }
+
+    /// The mapping in force CANNOT carry this pass's uplink on the radio in
+    /// play, and a mapping that CAN is known for that rig — the mapping to
+    /// propose, or `None` when there is nothing honest to propose.
+    ///
+    /// ⭐ OFFERING A CORRECTION TO A CHOICE THAT CANNOT WORK IS NOT OVERWRITING
+    /// THE OPERATOR'S CHOICE. The consent DTO otherwise suppresses every offer
+    /// once a mapping is chosen and confirmed — the right rule, and the reason
+    /// the field-report operator sat on an A/B mapping his IC-9700 could not
+    /// drive for that bird with nothing on screen proposing the one it could.
+    /// This re-opens the question in exactly one state, and nothing here
+    /// changes anything: the operator still clicks
+    /// ([`Self::confirm_sat_uplink`] is the only writer, as it has always
+    /// been).
+    ///
+    /// The four gates, each keeping a promise the click has to be able to
+    /// keep:
+    /// - NOT already Main/Sub — this answers only for the mappings that ride
+    ///   VFO A/B, the same split [`Self::sat_split_tx_vfo`] makes before
+    ///   consulting [`Self::ab_cross_band_refusal`]. (`Main = uplink / Sub =
+    ///   downlink` is refused by the rig's own contract, and its refusal names
+    ///   the same cure in its own words.)
+    /// - AN UPLINK WAS ACTUALLY WRITTEN (`sent.uplink_hz != 0`), so the verdict
+    ///   rests on two real frequencies rather than on the fail-closed reading
+    ///   of a leg that was never sent. Without it, a bird whose uplink Doppler
+    ///   never drove — a beacon, a simplex channel, an unconfirmed mapping —
+    ///   compares against 0, lands off the band plan and "proves" a dead end
+    ///   that is nothing of the sort: on a V/V pass that A/B mapping works,
+    ///   and second-guessing it is the defect in the other direction.
+    /// - THE PASS IS GENUINELY REFUSED (`ab_cross_band_refusal`), the same
+    ///   answer the split apply acts on — never a second derivation of it.
+    /// - A CURE IS KNOWN, via [`crate::settings::Settings::sat_uplink_offer`],
+    ///   which is `Confirm` only where the native backend can serve this radio
+    ///   AND is switched on for it. Where switching the mapping would merely
+    ///   buy a different refusal, nothing is offered and the refusal text is
+    ///   what carries the operator.
+    pub fn sat_uplink_mapping_dead_end(&self) -> Option<crate::settings::SatVfoMap> {
+        if self.settings.sat_vfo_map.is_main_sub() {
+            return None;
+        }
+        let st = self.sat_tune.as_ref()?;
+        if !st.sent.sent || st.sent.uplink_hz == 0 {
+            return None;
+        }
+        self.ab_cross_band_refusal(st.sent.uplink_hz)?;
+        match self.settings.sat_uplink_offer() {
+            crate::settings::SatUplinkOffer::Confirm(m) if m != self.settings.sat_vfo_map => {
+                Some(m)
+            }
+            _ => None,
+        }
+    }
+
+    /// Which cure clause a satellite refusal ends with — ONE question, asked in
+    /// one place for both of them.
+    ///
+    /// That question is the DAEMON's own reachability rule
+    /// ([`crate::settings::Settings::sat_native_civ_reachable`]: a model the
+    /// CI-V engine knows, on a non-network transport), and it is the right one
+    /// because both refusals have the same cure or no cure at all — the
+    /// Main/Sub layout is the only one that carries a cross-band satellite
+    /// uplink on these radios, and the native backend is the only thing that
+    /// drives it. Where the predicate is false there is no switch, no mapping
+    /// and nothing to suggest; where it is true, both exist and are named.
+    ///
+    /// It answers about the ACTIVE radio, re-asked at every refusal rather than
+    /// latched: a handoff can put a different rig under the split mid-pass, and
+    /// a cure named for the IC-9700 is a dead end on the FTdx10 beside it.
+    fn sat_native_civ_cure(&self, drivable: &'static str, dead_end: &'static str) -> &'static str {
+        if self.settings.sat_native_civ_reachable() {
+            drivable
+        } else {
+            dead_end
+        }
     }
 
     /// The transponder hold, for UI read-back: the "BIRD|description" label
@@ -21574,10 +21729,12 @@ mod tests {
 
         // The SAME mapping served by Hamlib rigctld is refused: this build has
         // no verified satellite split there, so nothing goes to the wire.
-        assert_eq!(
-            e.sat_split_tx_vfo(145_965_000, HAMLIB),
-            Err(MAIN_SUB_HAMLIB_REFUSAL.to_string())
-        );
+        // (Matched on the FACTS the message opens with — the cure clause that
+        // follows them is per rig, and has its own test.)
+        assert!(e
+            .sat_split_tx_vfo(145_965_000, HAMLIB)
+            .unwrap_err()
+            .starts_with(MAIN_SUB_HAMLIB_REFUSAL));
         // …and it costs a Hamlib rig NOTHING terrestrial: the pile-up split is
         // untouched on either backend.
         assert_eq!(e.sat_split_tx_vfo(14_235_000, HAMLIB), Ok("VFOB"));
@@ -21591,10 +21748,10 @@ mod tests {
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         e.sat_tune_nominal(false, 2_000_000);
         for cat in [NATIVE, HAMLIB] {
-            assert_eq!(
-                e.sat_split_tx_vfo(145_965_000, cat),
-                Err(AB_CROSS_BAND_REFUSAL.to_string())
-            );
+            assert!(e
+                .sat_split_tx_vfo(145_965_000, cat)
+                .unwrap_err()
+                .starts_with(AB_CROSS_BAND_REFUSAL));
         }
         // …and the terrestrial pile-up split is still untouched under it.
         assert_eq!(e.sat_split_tx_vfo(14_235_000, HAMLIB), Ok("VFOB"));
@@ -21654,55 +21811,259 @@ mod tests {
 
     #[test]
     fn the_hamlib_main_sub_refusal_is_one_sentence_true_for_every_rig_that_reaches_it() {
-        // ⭐ THE ROUND-4 REDUCTION. Three earlier rounds branched this message
-        // on the rig and each branch was wrong for somebody: "turn on Native
-        // CI-V" pointed an IC-910/IC-9100 operator at a switch their radio has
-        // no path to; the dead-end variant told an FT-847 to give back an
-        // uplink Nexus drives for it. The mapping can be picked on ANY radio,
-        // so there is exactly one message and every clause in it is a fact
-        // about Nexus.
+        // ⭐ THE ROUND-4 REDUCTION, still the rule for the FACTS half of this
+        // message: three earlier rounds branched the WHOLE message on the rig
+        // and each branch was wrong for somebody — "turn on Native CI-V"
+        // pointed an IC-910/IC-9100 operator at a switch their radio has no
+        // path to; the dead-end variant told an FT-847 to give back an uplink
+        // Nexus drives for it. The mapping can be picked on ANY radio, so every
+        // clause of the opening is a fact about Nexus and holds for all of
+        // them. (What the rig DOES change is the cure clause appended after it,
+        // which is chosen by the daemon's own reachability rule and pinned by
+        // `the_satellite_refusals_name_the_cure_on_the_rigs_that_have_one`.)
         //
         // Every rig class that can reach the refusal, in one table: the two
         // Main/Sub Icoms the native daemon CAN serve, the two it can NEVER
         // serve, the full-duplex A/B class, and an ordinary HF rig.
         for model in [3081u32, 3090, 3044, 3068, 1001, 1010, 2014, 2007, 1042] {
             let e = main_sub_station(model);
-            assert_eq!(
-                e.sat_split_tx_vfo(145_965_000, HAMLIB),
-                Err(MAIN_SUB_HAMLIB_REFUSAL.to_string()),
-                "model {model}"
-            );
+            let msg = e.sat_split_tx_vfo(145_965_000, HAMLIB).unwrap_err();
+            assert!(msg.starts_with(MAIN_SUB_HAMLIB_REFUSAL), "model {model}");
+            // ⭐ AND IT MAY NOT NAME THE BACKEND THAT IS SERVING — asserted over
+            // the WHOLE message the operator reads, cure clause included. It
+            // said "Hamlib rigctld is serving this radio", which Nexus does not
+            // know: `SatCatBackend::Hamlib` is `CatDaemon::native()` returning
+            // `None`, and that is THREE stations — the rigctld Nexus spawned,
+            // the one it silently fell back to when its own daemon failed to
+            // start, and one someone else launched that Nexus only attached to,
+            // whose model it has never read. The negative is the assertion:
+            // what Nexus holds is that its OWN backend is not serving, and
+            // `cat_backend_label` (via Test CAT) is the one place the four-way
+            // answer lives.
+            for claim in ["Hamlib", "rigctld"] {
+                assert!(
+                    !msg.contains(claim),
+                    "model {model}: must not assert which backend is serving — found {claim:?}"
+                );
+            }
         }
         // The two safety facts, spelled out so a future reword cannot drop
         // them: nothing reached the radio, and the leg that IS still driven
         // is named.
         assert!(MAIN_SUB_HAMLIB_REFUSAL.contains("Nothing was written to the radio"));
         assert!(MAIN_SUB_HAMLIB_REFUSAL.contains("receive dial is still being corrected"));
-        // …and it prescribes nothing. A "turn on"/"set"/"pick" here is the
-        // defect class this test exists to keep out: it cannot be true for
-        // every rig above.
+        // …and the FACTS half prescribes nothing. A "turn on"/"set"/"pick"
+        // among them is the defect class this test exists to keep out: these
+        // sentences reach every rig above, so a cure written into them cannot
+        // be true for all of them.
         for imperative in ["Turn on", "Set the uplink", "Set PTT", "pick "] {
             assert!(
                 !MAIN_SUB_HAMLIB_REFUSAL.contains(imperative),
-                "the one refusal must name no cure — found {imperative:?}"
-            );
-        }
-        // ⭐ AND IT MAY NOT NAME THE BACKEND THAT IS SERVING. It said "Hamlib
-        // rigctld is serving this radio", which Nexus does not know:
-        // `SatCatBackend::Hamlib` is `CatDaemon::native()` returning `None`,
-        // and that is THREE stations — the rigctld Nexus spawned, the one it
-        // silently fell back to when its own daemon failed to start, and one
-        // someone else launched that Nexus only attached to, whose model it has
-        // never read. The negative is the assertion: what Nexus holds is that
-        // its OWN backend is not serving, and `cat_backend_label` (via Test
-        // CAT) is the one place the four-way answer lives.
-        for claim in ["Hamlib", "rigctld"] {
-            assert!(
-                !MAIN_SUB_HAMLIB_REFUSAL.contains(claim),
-                "the refusal must not assert which backend is serving — found {claim:?}"
+                "the shared facts must name no cure — found {imperative:?}"
             );
         }
         assert!(MAIN_SUB_HAMLIB_REFUSAL.contains("that backend is not what is serving this radio"));
+    }
+
+    /// A cross-band pass on `e`, under an A/B mapping — the state
+    /// [`Engine::ab_cross_band_refusal`] fires on — and the message it produced.
+    fn ab_refusal_text(e: &mut Engine, cat: SatCatBackend) -> String {
+        confirm_map_for_all(e, crate::settings::SatVfoMap::ADownBUp);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(false, 2_000_000);
+        e.sat_split_tx_vfo(145_965_000, cat)
+            .expect_err("a cross-band A/B uplink on a Main/Sub Icom is refused")
+    }
+
+    #[test]
+    fn the_satellite_refusals_name_the_cure_on_the_rigs_that_have_one() {
+        // ⭐ THE FIELD REPORT'S SECOND HALF (IC-9700, 0.27.0, native CI-V
+        // serving): the refusal was CORRECT and the operator still could not
+        // act on it. Every clause was a true fact about Nexus and none of them
+        // said what to change — which is how the original "the rig refused the
+        // split" report reached us in the first place.
+        //
+        // The cure is named where Nexus can show one EXISTS, and nowhere else.
+        // The question that decides it is the daemon's own reachability rule
+        // (`Settings::sat_native_civ_reachable` — the model table ∩ a
+        // non-network transport), because the Main/Sub layout is drivable only
+        // through the native CI-V backend and that predicate is exactly "could
+        // that backend ever serve this radio".
+
+        // ── THE RIGS WITH A CURE: IC-9700 and IC-905 on a serial port. ──
+        for model in [3081u32, 3090] {
+            // (a) The A/B refusal the field report hit. The layout that DOES
+            //     carry a cross-band uplink here is Main = downlink / Sub =
+            //     uplink, and both places it can be picked are named.
+            let msg = ab_refusal_text(&mut main_sub_station(model), HAMLIB);
+            assert!(
+                msg.contains("Main = downlink / Sub = uplink"),
+                "model {model}: the A/B refusal must name the layout that works: {msg}"
+            );
+            assert!(
+                msg.contains("Settings ▸ Radio ▸ Satellite Doppler") && msg.contains("pass rail"),
+                "model {model}: …and where to pick it: {msg}"
+            );
+
+            // (b) Its sibling, reached once the operator HAS picked Main/Sub
+            //     while something other than the native daemon is serving. The
+            //     switch that puts Nexus's own backend on this radio exists
+            //     here, so it is named.
+            let msg = main_sub_station(model)
+                .sat_split_tx_vfo(145_965_000, HAMLIB)
+                .expect_err("Main/Sub is refused off the native backend");
+            assert!(
+                msg.contains("Native Icom CI-V"),
+                "model {model}: this radio can run the native backend — name its switch: {msg}"
+            );
+        }
+
+        // ── THE RIGS WITH NO CURE. The IC-910 (3044) and IC-9100 (3068) have
+        //    no `0x27` scope, so the native daemon can NEVER serve them; a
+        //    NETWORK-wired IC-9700 is refused by the same daemon gate on the
+        //    transport axis. Sending any of them to a switch would be the
+        //    round-1..3 defect all over again, in the other direction.
+        let mut dead_ends: Vec<String> = Vec::new();
+        for model in [3044u32, 3068] {
+            dead_ends.push(ab_refusal_text(&mut main_sub_station(model), HAMLIB));
+            dead_ends.push(
+                main_sub_station(model)
+                    .sat_split_tx_vfo(145_965_000, HAMLIB)
+                    .expect_err("Main/Sub is refused off the native backend"),
+            );
+        }
+        let net = || main_sub_station_wired(3081, "network", "192.168.1.50:4992", true);
+        dead_ends.push(ab_refusal_text(&mut net(), HAMLIB));
+        dead_ends.push(
+            net()
+                .sat_split_tx_vfo(145_965_000, HAMLIB)
+                .expect_err("Main/Sub is refused off the native backend"),
+        );
+        // …and every OTHER rig that can reach the Main/Sub refusal: the
+        // mapping can be picked on any radio at all.
+        for model in [1001u32, 1010, 2014, 2007, 1042] {
+            dead_ends.push(
+                main_sub_station(model)
+                    .sat_split_tx_vfo(145_965_000, HAMLIB)
+                    .expect_err("Main/Sub is refused off the native backend"),
+            );
+        }
+        for msg in dead_ends {
+            for control in ["Native Icom CI-V", "Settings ▸", "pass rail"] {
+                assert!(
+                    !msg.contains(control),
+                    "no control may be named where none of them can help — found \
+                     {control:?} in: {msg}"
+                );
+            }
+            assert!(
+                msg.contains("no path to this radio"),
+                "a dead end must SAY it is one, not leave the operator hunting: {msg}"
+            );
+        }
+    }
+
+    /// A cross-band pass held on `e` under `map`, tuned — i.e. the uplink was
+    /// computed and written, which is the evidence
+    /// [`Engine::sat_uplink_mapping_dead_end`] judges on.
+    fn cross_band_pass_under(
+        model: u32,
+        native_on: bool,
+        map: crate::settings::SatVfoMap,
+    ) -> Engine {
+        let mut e = main_sub_station_wired(model, "serial", "", native_on);
+        confirm_map_for_all(&mut e, map);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(false, 2_000_000);
+        e
+    }
+
+    #[test]
+    fn a_mapping_that_cannot_carry_the_pass_is_offered_a_correction_never_given_one() {
+        use crate::settings::SatVfoMap;
+        // ⭐ OFFERING A CORRECTION TO A CHOICE THAT CANNOT WORK IS NOT
+        // OVERWRITING THE OPERATOR'S CHOICE. The field-report station one step
+        // on: he switched to Main = downlink / Sub = uplink by hand and the
+        // pass worked — and Nexus knew the whole time both that his A/B
+        // mapping could not carry this bird and which mapping could. The offer
+        // was suppressed only because he had already chosen, a rule that is
+        // right everywhere except here.
+        //
+        // What must stay true: the mapping is never CHANGED here (the operator
+        // still clicks), and a mapping that CAN work is never second-guessed.
+        let e = cross_band_pass_under(3081, true, SatVfoMap::ADownBUp);
+        assert!(
+            e.sat_split_tx_vfo(145_965_000, NATIVE).is_err(),
+            "precondition: this pass's uplink is refused under the mapping in force"
+        );
+        assert_eq!(
+            e.sat_uplink_mapping_dead_end(),
+            Some(SatVfoMap::MainDownSubUp),
+            "the mapping that CAN carry it is known — offer it"
+        );
+        assert_eq!(
+            e.settings().sat_vfo_map,
+            SatVfoMap::ADownBUp,
+            "…and asking changed nothing: the operator's mapping stands until they click"
+        );
+
+        // A MAPPING THAT WORKS IS NEVER SECOND-GUESSED. Same rig, same A/B
+        // mapping, a V/V bird — A/B is how that pass is worked, and the split
+        // lands. Nothing to correct.
+        let mut ok = main_sub_station_wired(3081, "serial", "", true);
+        confirm_map_for_all(&mut ok, SatVfoMap::ADownBUp);
+        ok.set_sat_transponder(Some(("SO-50|V/V".into(), 0, SAME_BAND)));
+        ok.sat_tune_nominal(false, 2_000_000);
+        assert_eq!(ok.sat_split_tx_vfo(145_990_000, NATIVE), Ok("VFOB"));
+        assert_eq!(ok.sat_uplink_mapping_dead_end(), None);
+
+        // NO CORRECTION WHERE NONE IS KNOWN. The IC-910/IC-9100 have no native
+        // path ever, and a 9700 with the native backend switched off would buy
+        // a different refusal, not an uplink — `sat_uplink_offer` is the gate
+        // for exactly that reason, so this reuses it rather than re-deciding.
+        // Their refusal text is what carries them (it names no cure either).
+        for (model, native_on) in [(3044u32, true), (3068, true), (3081, false)] {
+            let e = cross_band_pass_under(model, native_on, SatVfoMap::ADownBUp);
+            assert!(
+                e.sat_split_tx_vfo(145_965_000, NATIVE).is_err(),
+                "model {model}, native {native_on}: still refused"
+            );
+            assert_eq!(
+                e.sat_uplink_mapping_dead_end(),
+                None,
+                "model {model}, native {native_on}: nothing to offer"
+            );
+        }
+
+        // Transmit-only rides the same A/B wire and takes the same refusal on
+        // these rigs, so it gets the same correction…
+        let e = cross_band_pass_under(3081, true, SatVfoMap::UplinkOnly);
+        assert_eq!(
+            e.sat_uplink_mapping_dead_end(),
+            Some(SatVfoMap::MainDownSubUp)
+        );
+        // …while the mapping that IS the cure is never offered to itself.
+        let e = cross_band_pass_under(3081, true, SatVfoMap::MainDownSubUp);
+        assert_eq!(e.sat_uplink_mapping_dead_end(), None);
+
+        // NO UPLINK WRITTEN, NO VERDICT. A beacon drives no uplink leg, so
+        // there is no refused write to correct — and the pre-existing
+        // "confirm the mapping in force" offer must not be hijacked by a
+        // fail-closed reading of a leg that was never sent.
+        let mut beacon = main_sub_station_wired(3081, "serial", "", true);
+        confirm_map_for_all(&mut beacon, SatVfoMap::ADownBUp);
+        beacon.set_sat_transponder(Some((
+            "RS-44|CW beacon".into(),
+            1,
+            tempo_core::doppler::Transponder {
+                uplink_centre_hz: 0,
+                downlink_centre_hz: 435_605_000,
+                invert: false,
+                half_width_hz: 0,
+            },
+        )));
+        beacon.sat_tune_nominal(false, 2_000_000);
+        assert_eq!(beacon.sat_uplink_mapping_dead_end(), None);
     }
 
     #[test]
@@ -21819,9 +22180,10 @@ mod tests {
             e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
             e.sat_tune_nominal(false, 2_000_000);
             for cat in [NATIVE, HAMLIB] {
-                assert_eq!(
-                    e.sat_split_tx_vfo(145_965_000, cat),
-                    Err(AB_CROSS_BAND_REFUSAL.to_string()),
+                assert!(
+                    e.sat_split_tx_vfo(145_965_000, cat)
+                        .unwrap_err()
+                        .starts_with(AB_CROSS_BAND_REFUSAL),
                     "model {model}"
                 );
             }
@@ -21856,9 +22218,10 @@ mod tests {
         e.set_sat_transponder(Some(("L/X|linear".into(), 0, SHF_UP))); // 5.67 GHz up, 23 cm down
         e.sat_tune_nominal(false, 4_000_000);
         for cat in [NATIVE, HAMLIB] {
-            assert_eq!(
-                e.sat_split_tx_vfo(5_670_000_000, cat),
-                Err(AB_CROSS_BAND_REFUSAL.to_string()),
+            assert!(
+                e.sat_split_tx_vfo(5_670_000_000, cat)
+                    .unwrap_err()
+                    .starts_with(AB_CROSS_BAND_REFUSAL),
                 "an uplink off the band table is refused, never written"
             );
         }
@@ -21891,9 +22254,10 @@ mod tests {
             None,
             "both legs are off the table — the premise of this case"
         );
-        assert_eq!(
-            e.sat_split_tx_vfo(up, HAMLIB),
-            Err(AB_CROSS_BAND_REFUSAL.to_string()),
+        assert!(
+            e.sat_split_tx_vfo(up, HAMLIB)
+                .unwrap_err()
+                .starts_with(AB_CROSS_BAND_REFUSAL),
             "an unclassifiable pass is refused, never written"
         );
         assert!(
@@ -21934,9 +22298,10 @@ mod tests {
             e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
             e.sat_tune_nominal(false, 2_000_000);
             for cat in [NATIVE, HAMLIB] {
-                assert_eq!(
-                    e.sat_split_tx_vfo(145_965_000, cat),
-                    Err(AB_CROSS_BAND_REFUSAL.to_string()),
+                assert!(
+                    e.sat_split_tx_vfo(145_965_000, cat)
+                        .unwrap_err()
+                        .starts_with(AB_CROSS_BAND_REFUSAL),
                     "model {model}"
                 );
             }
@@ -21964,8 +22329,12 @@ mod tests {
             Some(0),
             "precondition: no downlink was written, so none was recorded"
         );
+        // Asserted over the WHOLE message the operator reads — facts and cure
+        // clause both — since the cure is now composed onto the end of it.
         assert!(
-            !AB_CROSS_BAND_REFUSAL.contains("receive dial is still being corrected"),
+            !e.sat_split_tx_vfo(145_965_000, HAMLIB)
+                .unwrap_err()
+                .contains("receive dial is still being corrected"),
             "a mapping that drives no receive dial can reach this line"
         );
 

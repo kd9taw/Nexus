@@ -1315,24 +1315,36 @@ function TrackRail({
   // take, in the words of the radio the split would actually land on.
   const offerRig = track.uplinkRadio.trim() || 'your radio'
   const offerPair = track.uplinkOfferMap ? satVfoPair(track.uplinkOfferMap) : null
-  // Two confirmable offers, and the copy must not conflate them: 'confirm' is
-  // a mapping DERIVED from the rig model; 'confirm-mapping' is the mapping
+  // Three confirmable offers, and the copy must not conflate them: 'confirm'
+  // is a mapping DERIVED from the rig model; 'confirm-mapping' is the mapping
   // ALREADY IN FORCE, unconfirmed for this radio (a second rig, a reused id,
   // or an upgraded uplink-only file) — confirming keeps the operator's
   // choice. Without its own affordance that state was unrecoverable: the
   // select already shows the mapping, and a same-value re-pick fires no
   // change event (round 3, defect 4).
+  //
+  // 'switch-mapping' is the third and the only one that appears over a mapping
+  // the operator already chose AND confirmed: the backend says it cannot carry
+  // this pass on this radio while a mapping that can is known. Offering a
+  // correction to a choice that cannot work is not overwriting that choice —
+  // the click is still the operator's, and a mapping that works is never
+  // proposed against (the backend answers 'none' there).
+  const switchMapping = track.uplinkOffer === 'switch-mapping'
   const canConfirm =
-    (track.uplinkOffer === 'confirm' || track.uplinkOffer === 'confirm-mapping') &&
+    (track.uplinkOffer === 'confirm' ||
+      track.uplinkOffer === 'confirm-mapping' ||
+      switchMapping) &&
     offerPair != null
   const uplinkNext =
     track.uplinkOffer === 'confirm' && offerPair != null
       ? `Confirm the uplink and Doppler drives ${offerRig} as ${offerPair}.`
       : track.uplinkOffer === 'confirm-mapping' && track.uplinkOfferMap != null
         ? `Confirm ${satVfoLabel(track.uplinkOfferMap)} for ${offerRig} and Doppler drives its uplink.`
-        : track.uplinkOffer === 'ask'
-          ? 'Pick which VFO carries your uplink to have Doppler tune that too.'
-          : 'The transmit VFO stays yours.'
+        : switchMapping && offerPair != null
+          ? `Your mapping cannot carry this pass on ${offerRig} — switch it to ${offerPair} and Doppler drives the uplink.`
+          : track.uplinkOffer === 'ask'
+            ? 'Pick which VFO carries your uplink to have Doppler tune that too.'
+            : 'The transmit VFO stays yours.'
   // SIMPLEX before the leg pairs: a one-channel bird has no uplink leg, so the
   // honest wire reports dopplerUplink false there even under a confirmed
   // mapping — and the offer sentence must never render (confirming would
@@ -1352,11 +1364,16 @@ function TrackRail({
         ? track.dopplerDownlink
           ? 'on — one channel: both legs ride the same dial'
           : 'one channel and an uplink-only mapping — nothing is being tuned; the dial stays yours'
-        : track.dopplerDownlink && track.dopplerUplink
+        : // `dopplerUplink` says the engine is CORRECTING the uplink, which it
+          // is — and under 'switch-mapping' the split apply then refuses to
+          // write it, every tick. The row reports what is DONE, so the uplink
+          // is not claimed here; the pass rail's note and the CAT status carry
+          // the refusal itself.
+          track.dopplerDownlink && track.dopplerUplink && !switchMapping
           ? 'correcting the downlink and the uplink'
           : track.dopplerDownlink
             ? `correcting the downlink. ${uplinkNext}`
-            : track.dopplerUplink
+            : track.dopplerUplink && !switchMapping
               ? 'correcting the uplink — the dial stays yours'
               : `uplink-only mapping, nothing is being tuned. ${uplinkNext}`
   const rotorText = !rotorInTrack
@@ -1445,8 +1462,17 @@ function TrackRail({
             at all — the DTO's copy of it is poll-time state, and the backend
             resolves "the mapping in force" at write time exactly as it
             resolves the radio (round 4). The derived offer ('confirm') must
-            still send its map: that mapping is NOT in force yet. */}
-        {dopplerOn && !track.dopplerUplink && canConfirm && !simplex && (
+            still send its map: that mapping is NOT in force yet — and neither
+            is the correction ('switch-mapping'), which sends its map for the
+            same reason.
+
+            'switch-mapping' is also the one offer rendered while the uplink IS
+            ours: the operator consented to a mapping whose split the engine
+            refuses for this pass, so `!dopplerUplink` — "not already ours" —
+            is exactly the wrong question there. It is the only exception, and
+            the backend gates it on a REFUSED write plus a mapping that can be
+            driven, so the button never appears over a mapping that works. */}
+        {dopplerOn && (!track.dopplerUplink || switchMapping) && canConfirm && !simplex && (
           <button
             className="sat-rail-fix"
             onClick={() =>
@@ -1458,12 +1484,14 @@ function TrackRail({
               )
             }
             title={
-              track.uplinkOffer === 'confirm'
-                ? `Confirm ${offerPair} for ${offerRig}. Nexus read this from your radio model; nothing reaches your transmit VFO until you confirm it, and a wrong mapping transmits on your own downlink.`
-                : `Confirm ${satVfoLabel(track.uplinkOfferMap ?? 'off')} — your chosen mapping — for ${offerRig}. Nothing reaches its transmit VFO until you confirm it for this radio, and a wrong mapping transmits on your own downlink.`
+              switchMapping
+                ? `Switch ${offerRig} to ${offerPair}. Your mapping cannot carry this pass on this radio — nothing was written to it — and this is the layout Nexus drives here. Nothing changes until you click, and a wrong mapping transmits on your own downlink.`
+                : track.uplinkOffer === 'confirm'
+                  ? `Confirm ${offerPair} for ${offerRig}. Nexus read this from your radio model; nothing reaches your transmit VFO until you confirm it, and a wrong mapping transmits on your own downlink.`
+                  : `Confirm ${satVfoLabel(track.uplinkOfferMap ?? 'off')} — your chosen mapping — for ${offerRig}. Nothing reaches its transmit VFO until you confirm it for this radio, and a wrong mapping transmits on your own downlink.`
             }
           >
-            confirm uplink
+            {switchMapping ? 'switch mapping' : 'confirm uplink'}
           </button>
         )}
         <select

@@ -864,6 +864,84 @@ describe('round 3: the consent verb and the mapping-in-force offer', () => {
   })
 })
 
+// THE FIELD REPORT (0.27.0, IC-9700, native CI-V serving): the operator held a
+// cross-band bird under a VFO A/B mapping he had chosen and confirmed, the
+// split was refused every tick, and the rail proposed nothing — because every
+// offer is suppressed once a mapping is consented to. Offering a correction to
+// a choice that CANNOT WORK is not overwriting the operator's choice: the
+// backend re-opens the question in that one state ("switch-mapping"), and this
+// is the affordance it lands on — the SAME rail button, never a second one.
+describe('a mapping that cannot carry the pass', () => {
+  it('offers the mapping that can, on the existing rail button, and applies nothing until clicked', async () => {
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(mkSettings({ satVfoMap: 'a-down-b-up' })),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'doppler-only',
+          transponder: 'RS-44|SSB/CW linear transponder',
+          // The uplink is CONSENTED to and computed every tick — and the split
+          // apply refuses to write it, which is why the correction is offered
+          // over a live uplink leg rather than in place of one.
+          dopplerDownlink: true,
+          dopplerUplink: true,
+          uplinkOffer: 'switch-mapping',
+          uplinkOfferMap: 'main-down-sub-up',
+          uplinkRadio: 'IC-9700',
+          uplinkRadioId: 3,
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const row = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /Doppler/.test(r.textContent ?? ''),
+    )!
+    const state = row.querySelector('.sat-rail-state')!.textContent ?? ''
+    // The row may NOT claim the uplink as driven — it is computed and thrown
+    // away — and it names the mapping that would carry it, on this radio.
+    expect(state).not.toMatch(/correcting the downlink and the uplink/)
+    expect(state).toMatch(/Main = downlink, Sub = uplink/)
+    expect(state).toMatch(/IC-9700/)
+    // One click, the same verb, the radio the copy named — and nothing is
+    // written until that click happens.
+    expect(api.confirmSatUplink).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /switch mapping/i }))
+    await waitFor(() => expect(api.confirmSatUplink).toHaveBeenCalledWith('main-down-sub-up', 3))
+    expect(api.setSettings).not.toHaveBeenCalled()
+  })
+
+  it('never second-guesses a mapping that works: no offer while the split lands', async () => {
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve(mkSettings({ satVfoMap: 'a-down-b-up' })),
+    )
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        trackStatus({
+          state: 'tracking',
+          mode: 'doppler-only',
+          transponder: 'SO-50|V/V FM repeater',
+          dopplerDownlink: true,
+          dopplerUplink: true,
+          uplinkOffer: 'none',
+          uplinkOfferMap: null,
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const row = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /Doppler/.test(r.textContent ?? ''),
+    )!
+    expect(row.querySelector('.sat-rail-state')!.textContent).toMatch(
+      /correcting the downlink and the uplink/,
+    )
+    expect(screen.queryByRole('button', { name: /switch mapping/i })).toBeNull()
+  })
+})
+
 // The LOS handback notice moved to the app-wide armed-track watcher
 // (features/satPassAlert.ts, tested there): fired from a view-scoped poll it
 // only ever landed with this section open, and the operator may be anywhere

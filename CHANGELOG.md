@@ -5,6 +5,63 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed: a refused satellite uplink now says what to change
+
+Both satellite split refusals were true and neither told the operator what to do about it. On
+an IC-9700 holding a cross-band bird under a VFO A/B mapping, the CAT status explained that
+Nexus has no verified cross-band A/B split for that radio and that nothing was written — and
+stopped there, with the working layout one selector away and unnamed.
+
+Each refusal now ends with a cure clause chosen by the radio in play, using the same rule the
+CI-V daemon itself uses to decide whether it can serve a rig:
+
+- **An IC-9700 or IC-905 on a serial/USB port.** The A/B refusal names the layout that does
+  carry a cross-band uplink there — Main = downlink / Sub = uplink — and both places it can
+  be picked (Settings ▸ Radio ▸ Satellite Doppler, or the mapping selector on the pass rail).
+  Ask for that layout while something other than Nexus's own CI-V backend is serving the
+  radio and the refusal names the switch that changes it (Settings ▸ Radio ▸ Rig Control ▸
+  Native Icom CI-V), plus Test CAT for what is serving right now. It names the switch rather
+  than telling you to turn it on, because it may already be on.
+- **An IC-910 or IC-9100, and any radio reached over the network rather than a serial port.**
+  There is no cure to name, so none is invented: the refusal says the native CI-V backend has
+  no path to that radio, so no VFO mapping carries that pass's uplink there. No switch to
+  hunt for, and no selector to work through one entry at a time.
+- **Every other radio that can reach the Main/Sub refusal** — the mapping can be picked on
+  any rig — gets the same honest dead end.
+
+What is refused has not changed, and neither has the transmit path: these refusals still
+write nothing to the radio, still transmit nothing, and still leave the receive dial being
+corrected wherever it already was.
+
+### Added: the pass rail offers the mapping that can carry the pass
+
+Naming the working layout in the CAT status is one thing; you still had to go and set it. The
+pass rail now offers it — one click, on the button that is already there.
+
+Nexus suppresses every uplink offer once you have chosen and confirmed a mapping, so it can
+never nag you into replacing your own choice. That rule is right everywhere except one place:
+when the mapping you chose **provably cannot carry the pass you are on**. Then the rail shows
+**switch mapping**, naming the layout that can and the radio it applies to, and the Doppler
+row stops reporting an uplink it is computing and having refused every tick.
+
+Offering a correction to a choice that cannot work is not overwriting your choice. Nothing
+changes until you click:
+
+- The offer appears **only** when the uplink was genuinely written and genuinely refused for
+  this pass, on a radio where Nexus's own CI-V backend is switched on and can serve it — i.e.
+  only when switching actually gets you an uplink.
+- A mapping that works is **never** second-guessed. Work a V/V bird on VFO A/B on the same
+  IC-9700 and the rail says nothing: that is how that pass is worked, and the split lands.
+- Where no working mapping is known — an IC-910, an IC-9100, a network-connected rig, or an
+  Icom whose native CI-V is switched off — nothing is offered, because there is nothing that
+  one click could fix. Those stations get the refusal text above instead.
+
+The click goes through the same confirmation path as every other mapping change, records it
+for the radio the button names, and still means Nexus writes nothing to the transmit VFO you
+have not consented to.
+
 ## [0.27.0] — 2026-08-02
 
 ### Fixed: the log strip no longer invites an accidental log entry

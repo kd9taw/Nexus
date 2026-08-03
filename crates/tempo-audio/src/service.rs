@@ -9225,10 +9225,13 @@ mod tests {
         // …AND THE OPERATOR IS TOLD. The refusal reason is what the loop puts on the
         // CAT status line, so the field report's "the rig refused the split" with no
         // explanation is replaced by the engine's own sentence — pinned by identity
-        // against the const, not by a phrase that could drift.
+        // against what the engine produces for THIS station, not by a phrase that
+        // could drift. (The message ends with a per-rig cure clause, so the engine
+        // is the only thing that can state it: on this 9700 it names the Native
+        // Icom CI-V switch; on an IC-910 it would say there is no path at all.)
         assert_eq!(
             eng.snapshot().radio.cat_detail,
-            tempo_app::engine::MAIN_SUB_HAMLIB_REFUSAL,
+            eng.main_sub_hamlib_refusal(),
             "the CAT status carries the engine's refusal verbatim"
         );
     }
@@ -9326,12 +9329,13 @@ mod tests {
         // pass while exercising nothing. The refusal text can only come from
         // the split apply's Err arm, so its presence is the positive proof the
         // decision was made and the decision was "write nothing". Pinned by
-        // IDENTITY against the const, never by a phrase: a phrase match drifts
-        // silently out from under the message it is guarding (round 4 — this
-        // line matched "Native CI-V" against a sentence that says "native").
+        // IDENTITY against what the engine produces, never by a phrase: a
+        // phrase match drifts silently out from under the message it is
+        // guarding (round 4 — this line matched "Native CI-V" against a
+        // sentence that says "native").
         assert_eq!(
             eng.snapshot().radio.cat_detail,
-            tempo_app::engine::MAIN_SUB_HAMLIB_REFUSAL,
+            eng.main_sub_hamlib_refusal(),
             "the step reached the split apply and refused there"
         );
     }

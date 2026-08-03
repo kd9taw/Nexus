@@ -569,12 +569,17 @@ export interface SatTrackStatus {
    * connected rig and needs one confirmation; 'confirm-mapping' =
    * uplinkOfferMap is the mapping ALREADY IN FORCE, unconfirmed for this
    * radio (a second rig, a reused id, or an upgraded uplink-only file) —
-   * confirming keeps the operator's choice, never replaces it; 'ask' = full
-   * duplex, but the wiring is the operator's to state (no pre-fill); 'none' =
-   * one VFO, or a rig we cannot identify — nothing to propose. */
-  uplinkOffer: 'confirm' | 'confirm-mapping' | 'ask' | 'none'
-  /** The mapping for 'confirm'/'confirm-mapping'; null otherwise — a guess
-   * here is the wrong-uplink generator the enumeration exists to prevent. */
+   * confirming keeps the operator's choice, never replaces it;
+   * 'switch-mapping' = the mapping in force is confirmed and CANNOT carry this
+   * pass on this radio, while uplinkOfferMap can — the one offer that appears
+   * over a settled choice, because a choice that cannot work is not one this
+   * correction overwrites (the operator still clicks); 'ask' = full duplex, but
+   * the wiring is the operator's to state (no pre-fill); 'none' = one VFO, or a
+   * rig we cannot identify — nothing to propose. */
+  uplinkOffer: 'confirm' | 'confirm-mapping' | 'switch-mapping' | 'ask' | 'none'
+  /** The mapping for 'confirm'/'confirm-mapping'/'switch-mapping'; null
+   * otherwise — a guess here is the wrong-uplink generator the enumeration
+   * exists to prevent. */
   uplinkOfferMap: SatVfoMap | null
   /** The radio the offer (and any uplink write) is about, by name. Routing and
    * peg-lock can change it mid-pass. '' when no profile names it. */

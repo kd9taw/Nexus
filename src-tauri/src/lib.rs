@@ -5350,15 +5350,23 @@ struct SatTrackDto {
     /// connected rig, in `uplink_offer_map`, awaiting one confirmation),
     /// "confirm-mapping" (the mapping ALREADY IN FORCE, unconfirmed for this
     /// radio — a second rig, a reused id, or an upgraded uplink-only file;
-    /// confirming keeps the operator's choice, it never replaces it), "ask"
-    /// (full duplex, but the wiring is the operator's to state) or "none"
-    /// (one VFO, or a rig we cannot identify — nothing to propose).
+    /// confirming keeps the operator's choice, it never replaces it),
+    /// "switch-mapping" (the mapping in force is confirmed and CANNOT carry
+    /// this pass on this radio, while one that can is known — the correction
+    /// in `uplink_offer_map`), "ask" (full duplex, but the wiring is the
+    /// operator's to state) or "none" (one VFO, or a rig we cannot identify —
+    /// nothing to propose).
     /// Derived, never applied: only the operator's click writes a mapping.
+    ///
+    /// "switch-mapping" is the ONE word that appears over a settled choice,
+    /// and it is not second-guessing one: `Engine::sat_uplink_mapping_dead_end`
+    /// answers only where the uplink was really written and really refused,
+    /// and where the mapping proposed can actually be driven on this rig.
     uplink_offer: String,
-    /// The mapping for "confirm"/"confirm-mapping", as the wire value the
-    /// settings VFO map uses (`main-down-sub-up`). Absent for "ask"/"none" —
-    /// there is nothing to pre-fill, and a guess here is the wrong-uplink
-    /// generator the whole enumeration exists to prevent.
+    /// The mapping for "confirm"/"confirm-mapping"/"switch-mapping", as the
+    /// wire value the settings VFO map uses (`main-down-sub-up`). Absent for
+    /// "ask"/"none" — there is nothing to pre-fill, and a guess here is the
+    /// wrong-uplink generator the whole enumeration exists to prevent.
     uplink_offer_map: Option<String>,
     /// The radio the offer (and any uplink write) is about, by name — the rig
     /// that would receive the split, which routing and peg-lock can change
@@ -5546,7 +5554,20 @@ impl SatDopplerConsent {
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_string))
         };
-        let (offer, offer_map) = if consented || answered || undrivable {
+        // ⭐ THE ONE STATE THAT RE-OPENS A SETTLED QUESTION, asked FIRST because
+        // every gate below it would suppress the offer — `consented` above all,
+        // which is precisely the field-report station: a mapping chosen,
+        // confirmed, and unable to carry the bird in front of him, with the
+        // mapping that could one click away and nothing on screen saying so.
+        // Offering a correction to a choice that CANNOT WORK is not overwriting
+        // the operator's choice; the engine answers only where the uplink was
+        // really written and really refused, and a mapping that can work is
+        // never second-guessed. Nothing is applied here — `confirm_sat_uplink`,
+        // the operator's click, remains the only writer.
+        let dead_end = eng.sat_uplink_mapping_dead_end();
+        let (offer, offer_map) = if let Some(m) = dead_end {
+            ("switch-mapping", wire(m))
+        } else if consented || answered || undrivable {
             ("none", None)
         } else if st.sat_vfo_map.drives_uplink() {
             // A mapping IN FORCE, unconfirmed for the radio in play — a
@@ -14786,6 +14807,68 @@ mod tests {
         assert!(!con.downlink && !con.uplink);
         assert_eq!(con.offer, "confirm");
         assert_eq!(con.radio_id, e.settings().active_radio);
+    }
+
+    /// THE FIELD-REPORT STATE (0.27.0, IC-9700, native CI-V serving): a
+    /// mapping chosen, confirmed, and unable to carry the bird in front of
+    /// him. Every offer is suppressed once a mapping is consented to — right
+    /// everywhere except here, where the consent is to something this radio
+    /// provably cannot drive for this pass, so the rail said nothing at all.
+    ///
+    /// The correction is OFFERED, never applied: this reader is a reader, and
+    /// `confirm_sat_uplink` (the operator's click) stays the only writer.
+    #[test]
+    fn a_mapping_that_cannot_drive_the_pass_re_opens_the_offer() {
+        use tempo_app::settings::SatVfoMap;
+        use tempo_core::doppler::Transponder;
+        // RS-44: 2 m up, 70 cm down — the cross-band pass A/B cannot carry on
+        // this rig (the 0.24.2 register bug).
+        let rs44 = Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let station = |map: SatVfoMap, tp: Transponder| {
+            let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+            let mut s = e.settings().clone();
+            s.rig_model = 3081; // IC-9700
+            s.icom_native_cat = true; // …with Nexus's own CI-V backend on
+            s.sync_active_from_flat();
+            e.apply_settings(s);
+            e.confirm_sat_uplink(None, Some(map));
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+            e.sat_tune_nominal(false, 1_000_000);
+            e
+        };
+
+        let e = station(SatVfoMap::ADownBUp, rs44);
+        let con = super::SatDopplerConsent::read(&e);
+        assert_eq!(
+            con.offer, "switch-mapping",
+            "the mapping in force cannot carry this pass — propose the one that can"
+        );
+        assert_eq!(con.offer_map.as_deref(), Some("main-down-sub-up"));
+        assert_eq!(
+            e.settings().sat_vfo_map,
+            SatVfoMap::ADownBUp,
+            "reading the offer changed nothing — the click is still the only writer"
+        );
+
+        // A V/V bird on the SAME rig and mapping: A/B is exactly how that pass
+        // is worked, the split lands, and a mapping that works is never
+        // second-guessed.
+        let e = station(
+            SatVfoMap::ADownBUp,
+            Transponder {
+                uplink_centre_hz: 145_990_000,
+                downlink_centre_hz: 145_950_000,
+                invert: false,
+                half_width_hz: 15_000,
+            },
+        );
+        let con = super::SatDopplerConsent::read(&e);
+        assert_eq!(con.offer, "none", "nothing is wrong with this mapping");
     }
 
     /// A written snapshot round-trips through its own serde (camelCase keys on
