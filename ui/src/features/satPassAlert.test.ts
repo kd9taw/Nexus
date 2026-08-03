@@ -212,6 +212,44 @@ describe('LOS', () => {
   })
 })
 
+describe('a rotator that quits mid-pass', () => {
+  // The backend deliberately keeps the track alive here — the mast and the
+  // dial are independent surfaces — so nothing about the pass ending tells the
+  // operator his antenna stopped following the bird. This is the only thing
+  // that does.
+  it('says so once, and does not end the pass', () => {
+    tickSatPassAlert(track({ mode: 'rotor+doppler' }), AOS)
+    toasts.mockClear()
+    tickSatPassAlert(
+      track({ mode: 'doppler-only', rotorLost: true }),
+      AOS + 120,
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+    const [msg, kind, ttl, opts] = toasts.mock.calls[0]
+    expect(String(msg)).toContain('RS-44')
+    expect(String(msg)).toMatch(/rotator stopped answering/i)
+    // What the operator now owns, and what he still does not have to think
+    // about — the whole reason the track is allowed to outlive the mast.
+    expect(String(msg)).toMatch(/point it yourself/i)
+    expect(String(msg)).toMatch(/Doppler keep(s)? running/i)
+    expect(kind).toBe('error')
+    expect(ttl).toBe(30_000)
+    expect(opts).toMatchObject({ prominent: true })
+    // Every later poll of the same live track carries the same flag: one mast,
+    // one announcement.
+    tickSatPassAlert(track({ mode: 'doppler-only', rotorLost: true }), AOS + 123)
+    tickSatPassAlert(track({ mode: 'doppler-only', rotorLost: true }), AOS + 126)
+    expect(toasts).toHaveBeenCalledTimes(1)
+  })
+
+  it('a track that never had a rotator announces nothing', () => {
+    tickSatPassAlert(track({ mode: 'doppler-only' }), AOS)
+    toasts.mockClear()
+    tickSatPassAlert(track({ mode: 'doppler-only' }), AOS + 120)
+    expect(toasts).not.toHaveBeenCalled()
+  })
+})
+
 describe('the sound setting', () => {
   it('soundOff silences the tones, never the popups', () => {
     tickSatPassAlert(track(), AOS, { soundOff: true })

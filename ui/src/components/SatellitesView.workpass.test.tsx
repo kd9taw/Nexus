@@ -705,6 +705,27 @@ describe('the Rotor gate for a rotor-less station', () => {
     expect(rotorRow).toBeTruthy()
     expect(rotorRow?.querySelector('.sat-rail-dot')?.textContent).toBe('○')
   })
+
+  // A rotator that QUIT arrives demoted to the same mode as a track that never
+  // had one, and the two must not read alike: one is how the operator armed
+  // the pass, the other is something that happened to him mid-pass and hands
+  // him the pointing. The rail says which, and — the point of the whole fix —
+  // says the dial is still being driven.
+  it('names a rotator that stopped answering, and keeps the track alive around it', async () => {
+    api.getSettings.mockImplementation(() => Promise.resolve(mkSettings({ rotatorModel: 2 })))
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(trackStatus({ mode: 'doppler-only', rotorLost: true })),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const rail = await screen.findByTestId('sat-rail')
+    const rotorRow = Array.from(rail.querySelectorAll('.sat-rail-row')).find((r) =>
+      /^Rotor/.test(r.querySelector('.sat-rail-name')?.textContent ?? ''),
+    )
+    const state = rotorRow?.querySelector('.sat-rail-state')?.textContent ?? ''
+    expect(state).toMatch(/stopped answering/)
+    expect(state).not.toMatch(/re-arm to take the rotor/)
+    expect(state).toMatch(/Doppler and your transponder keep running/)
+  })
 })
 
 // ROUND 3. The consent write goes through the ONE backend verb

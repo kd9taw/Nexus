@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: a rotator that stops answering no longer takes the dial with it
+
+Reported from a live pass: "I saw a first Doppler shift, then it snapped back to the none
+statement", and "after 5 seconds it snaps back to 'None — leave the dial to me', even though I
+didn't change it."
+
+One cause behind both. When rotor commands stopped getting answers, the track gave up on the
+rotator — correctly, rather than hammering it for the rest of the pass — but it ended the whole
+pass on the way out. That ran the end-of-pass handback: your transponder went back to none,
+Doppler stopped, and the picker in the Satellites section reset itself a couple of seconds later.
+A track that never had a rotator was fine; a track whose rotator quit lost the radio too.
+
+The mast and the dial are separate things now, and losing one does not surrender the other. A
+rotator that stops answering is let go and nothing else changes: the pass clock, the Doppler
+correction and the transponder you picked all run to a real LOS. The track stops claiming an
+antenna — it drops to Doppler only and shows no commanded angles, because it is not commanding
+anything — and it tells you, once, that the rotator went quiet and the pointing is yours. The sky
+dome keeps showing where the bird actually is, which is what you need to turn the antenna by hand.
+
+Losing the pass itself is unchanged: the bird setting hands your dial back, and so does the rare
+case of orbital elements the propagator can no longer follow — there, the same model computes both
+the pointing and the Doppler shift, so there is no correction left to make and holding your radio
+would be a lie.
+
+The rotor readout in a cockpit header keeps up with it. That strip shows a dim "ROTOR —" when a
+rotator is configured but silent, and it used to show only that — so a pass that had just lost its
+rotator, and was still steering your radio, went nameless everywhere outside the Satellites
+section. It now shows both: the honest dash for the mast, and beside it the bird, what Doppler is
+holding, and the ■ that stops the track.
+
+At the end of a pass whose rotator went quiet, Nexus still sends one stop — the controller may be
+back by then, and a stop can only ever take motion away. It does **not** run "park" or "go to
+ready" for that pass: you were told the pointing was yours, so the antenna stays where you left it.
+A pass that kept its rotator parks as configured, unchanged.
+
 ### Fixed: changing band or radio no longer kills your PTT
 
 Reported from the bench: work a satellite on the Icom, come back to Phone, pick 20 m — which

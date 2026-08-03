@@ -94,77 +94,100 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
   // "the dial stays yours" (round 3, defect 5).
   const dopplerOwnsDial = satTrack != null && dopplerInTrack && satTrack.dopplerDownlink
 
-  // No rotor configured at all → nothing to show (most stations) — UNLESS a
-  // rotor-less Doppler track holds a VFO, which must never be invisible.
-  if (az == null && !configured) {
-    if (!dopplerInTrack || satTrack == null) return null
-    const steering = satTrack.downlinkHz != null || satTrack.uplinkHz != null
-    return (
-      <span
-        role="group"
-        aria-label={
-          dopplerOwnsDial ? 'Satellite Doppler owns the dial' : 'Satellite Doppler owns the TX VFO'
-        }
-        title={
-          dopplerOwnsDial
-            ? `Satellite Doppler is ${steering ? 'steering the radio dial' : 'armed to take the radio dial at AOS'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and hands the dial back`
-            : `Satellite Doppler is ${steering ? 'steering the TX (split) VFO — the dial stays yours' : 'armed to take the TX (split) VFO at AOS — the dial stays yours'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and releases the split`
-        }
-        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
-      >
-        <span
-          style={{ fontSize: '0.65em', letterSpacing: '0.08em', opacity: 0.55, fontWeight: 600 }}
-          aria-hidden
-        >
-          SAT
-        </span>
-        <span className="mono" style={{ fontSize: '0.9em', fontWeight: 600, whiteSpace: 'nowrap' }}>
-          ⟳ {satTrack.name} ·{' '}
-          {dopplerOwnsDial
-            ? steering
-              ? 'Doppler holds the dial'
-              : 'dial at AOS'
-            : steering
-              ? 'Doppler holds the TX VFO'
-              : 'TX VFO at AOS'}
-        </span>
-        <button
-          type="button"
-          style={chipStyle}
-          aria-label="Stop the satellite track"
-          onClick={() => {
-            stopSatTrack()
-              .then(() => setSatTrack(null))
-              .catch((e) =>
-                pushToast(`Track stop: ${e instanceof Error ? e.message : e}`, 'error'),
-              )
-          }}
-          title="Stop the satellite track NOW — Doppler releases the dial"
-        >
-          ■
-        </button>
-      </span>
-    )
-  }
-  // Configured but silent → an honest dim placeholder, never a fake readout.
+  // NO LIVE AZIMUTH. Two different stations land here — one with no rotator at
+  // all (render nothing, most stations), one with a rotator configured that is
+  // not answering (an honest dim placeholder, never a fake readout) — and they
+  // share the thing that must never be invisible: a satellite track holding a
+  // VFO, and the ■ that stops it.
+  //
+  // ⭐ "Configured but silent" is EXACTLY the state a mid-pass rotor give-up
+  // leaves behind: the track lets the mast go and keeps the dial, running
+  // Doppler to a real LOS. The ownership chip used to live only in the
+  // no-rotator branch, so the operator whose rotator quit kept the moving
+  // frequency and lost the app-wide sign of who owned it — the one failure the
+  // chip exists to prevent — along with the only ■ outside the Satellites
+  // section that could stop it.
   if (az == null) {
-    return (
-      <span
-        aria-label="Rotator not answering"
-        title="A rotator is configured but not answering — check Settings ▸ Rig Control ▸ Rotator (model/port) or the external rotctld, and the Connections log"
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '0.3rem',
-          opacity: 0.45,
-          color: 'inherit',
-        }}
-      >
-        <span style={{ fontSize: '0.65em', letterSpacing: '0.08em', fontWeight: 600 }} aria-hidden>
-          ROTOR
+    const steering = satTrack != null && (satTrack.downlinkHz != null || satTrack.uplinkHz != null)
+    const satChip =
+      satTrack == null || !dopplerInTrack ? null : (
+        <span
+          role="group"
+          aria-label={
+            dopplerOwnsDial ? 'Satellite Doppler owns the dial' : 'Satellite Doppler owns the TX VFO'
+          }
+          title={
+            dopplerOwnsDial
+              ? `Satellite Doppler is ${steering ? 'steering the radio dial' : 'armed to take the radio dial at AOS'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and hands the dial back`
+              : `Satellite Doppler is ${steering ? 'steering the TX (split) VFO — the dial stays yours' : 'armed to take the TX (split) VFO at AOS — the dial stays yours'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and releases the split`
+          }
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
+        >
+          <span
+            style={{ fontSize: '0.65em', letterSpacing: '0.08em', opacity: 0.55, fontWeight: 600 }}
+            aria-hidden
+          >
+            SAT
+          </span>
+          <span
+            className="mono"
+            style={{ fontSize: '0.9em', fontWeight: 600, whiteSpace: 'nowrap' }}
+          >
+            ⟳ {satTrack.name} ·{' '}
+            {dopplerOwnsDial
+              ? steering
+                ? 'Doppler holds the dial'
+                : 'dial at AOS'
+              : steering
+                ? 'Doppler holds the TX VFO'
+                : 'TX VFO at AOS'}
+          </span>
+          <button
+            type="button"
+            style={chipStyle}
+            aria-label="Stop the satellite track"
+            onClick={() => {
+              stopSatTrack()
+                .then(() => setSatTrack(null))
+                .catch((e) =>
+                  pushToast(`Track stop: ${e instanceof Error ? e.message : e}`, 'error'),
+                )
+            }}
+            title="Stop the satellite track NOW — Doppler releases the dial"
+          >
+            ■
+          </button>
         </span>
-        <span className="mono" style={{ fontSize: '0.9em' }}>—</span>
-      </span>
+      )
+    if (!configured) return satChip
+    return (
+      <>
+        <span
+          aria-label={
+            satTrack?.rotorLost === true
+              ? 'Rotator stopped answering'
+              : 'Rotator not answering'
+          }
+          title={
+            satTrack?.rotorLost === true
+              ? 'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check Settings ▸ Rig Control ▸ Rotator (model/port) or the external rotctld, and the Connections log'
+              : 'A rotator is configured but not answering — check Settings ▸ Rig Control ▸ Rotator (model/port) or the external rotctld, and the Connections log'
+          }
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.3rem',
+            opacity: 0.45,
+            color: 'inherit',
+          }}
+        >
+          <span style={{ fontSize: '0.65em', letterSpacing: '0.08em', fontWeight: 600 }} aria-hidden>
+            ROTOR
+          </span>
+          <span className="mono" style={{ fontSize: '0.9em' }}>—</span>
+        </span>
+        {satChip}
+      </>
     )
   }
 

@@ -65,9 +65,34 @@ export function resetSatPassAlerts(): void {
   fired.clear()
 }
 
-/** One pass, one moment: `aos:` / `los:` per (bird, exact frozen AOS). */
-function passMoment(t: SatTrackStatus, phase: 'aos' | 'los'): string {
+/** One pass, one moment: `aos:` / `los:` / `rotor:` per (bird, exact frozen
+ * AOS). */
+function passMoment(t: SatTrackStatus, phase: 'aos' | 'los' | 'rotor'): string {
   return `${phase}:${t.name}|${t.aosUnix}`
+}
+
+/**
+ * The rotator quit mid-pass. The track deliberately does NOT end — it drops to
+ * driving the radio alone and runs to a real LOS — so without a word the
+ * operator's only clue is the badge quietly losing its commanded angles, and
+ * an antenna that has silently stopped following the bird is the difference
+ * between a worked pass and a lost one.
+ *
+ * Reports, acts on nothing: the demotion already happened backend-side. Once
+ * per pass, and only for a rotator that WAS being driven — a track armed
+ * without one never had a mast to lose.
+ */
+function fireRotorLost(t: SatTrackStatus): void {
+  const key = passMoment(t, 'rotor')
+  if (fired.has(key)) return
+  fired.add(key)
+  pushToast(
+    `🛰 ${t.name}: the rotator stopped answering — point it yourself. ` +
+      `The pass, the transponder and Doppler keep running.`,
+    'error',
+    30_000,
+    { prominent: true },
+  )
 }
 
 function fireAos(t: SatTrackStatus, nowSecs: number, opts: SatPassAlertOpts): void {
@@ -118,8 +143,9 @@ function fireLos(ended: SatTrackStatus, opts: SatPassAlertOpts): void {
 /**
  * The edge-detecting tick — call with each get_sat_track_status answer.
  * Fires exactly one alert+tone at AOS (or one "pass in progress" on a
- * mid-pass wake), and one at LOS carrying the handback facts. Everything
- * else — armed waits, manual stops, stale wakes, repeated polls — is silence.
+ * mid-pass wake), one if the rotator quits mid-pass, and one at LOS carrying
+ * the handback facts. Everything else — armed waits, manual stops, stale
+ * wakes, repeated polls — is silence.
  */
 export function tickSatPassAlert(
   track: SatTrackStatus | null,
@@ -140,6 +166,10 @@ export function tickSatPassAlert(
       // repeated polls and re-arms of the same pass silent.
       fireAos(track, nowSecs, opts)
     }
+    // A rotator that quit is a SECOND moment inside the same live track, so it
+    // is its own key rather than a state transition: the track's `state` keeps
+    // running through it, which is the point.
+    if (track.rotorLost === true) fireRotorLost(track)
     return
   }
 

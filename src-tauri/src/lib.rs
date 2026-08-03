@@ -5326,7 +5326,9 @@ struct SatTrackDto {
     /// Which steering surfaces this track is allowed to drive —
     /// "rotor+doppler", "rotor-only", "doppler-only" or "pass-only" (see
     /// `tempo_app::settings::sat_track_mode`). The rotor half is fixed at arm
-    /// time; the Doppler half follows the live consents (EITHER leg driven,
+    /// time except for the one thing that can take a mast away mid-pass — a
+    /// rotator that stops answering demotes it (see `rotor_lost`); the Doppler
+    /// half follows the live consents (EITHER leg driven,
     /// plus a HELD transponder — without one the tick tunes nothing, and the
     /// label must not claim a dial the operator kept), so a mid-pass Settings
     /// change or transponder release moves the label exactly when it moves the
@@ -5393,6 +5395,16 @@ struct SatTrackDto {
     /// from the SatNOGS record — two derivations of one command is how a
     /// display claims a write the radio never gets.
     tx_mode: Option<String>,
+    /// Did a rotator this track WAS driving stop answering mid-pass
+    /// (`SatTrackLoss::RotorGaveUp`)? The track carries on — pass clock,
+    /// Doppler and the transponder hold are a different surface — but it stops
+    /// claiming an antenna, so `mode` demotes and `az_deg`/`el_deg` go absent.
+    ///
+    /// Its own field because "no rotator in this track" and "the rotator quit"
+    /// are different facts and the demoted `mode` cannot tell them apart: one
+    /// is how the operator armed the pass, the other is something that happened
+    /// to him, and only the second is worth interrupting him about.
+    rotor_lost: bool,
     /// Where the ANTENNA was last actually COMMANDED — after flip, calibration
     /// trim and the deadband. `None` until a command has genuinely been sent:
     /// the armed phase deliberately drives nothing, and reporting the AOS
@@ -5501,6 +5513,63 @@ fn send_rot_step(addr: &str, step: tempo_core::rotator::RotStep) -> tempo_core::
                 RotOutcome::Failed
             }
         }
+    }
+}
+
+/// Something a live track can LOSE mid-pass — and, for each, whether the PASS
+/// is over.
+///
+/// ⭐ THE RULE this enum exists to make unmissable: the MAST and the DIAL are
+/// INDEPENDENT surfaces, and losing one may not surrender the other. The dial
+/// belongs to the pass, so it is handed back exactly when the pass ends — and
+/// a rotator that stopped answering does not end a pass. It used to: the
+/// give-up `break` left the loop, which ran the LOS handback on the way out,
+/// released the transponder hold, stopped Doppler dead and snapped the
+/// section's picker back to "None — leave the dial to me" about five seconds
+/// after the operator had chosen otherwise. The operator who is worst served by
+/// that is the one turning his rotator BY HAND — for whom no answer from the
+/// mast is the normal state, and a radio that keeps itself on the bird while he
+/// does the pointing is the whole point.
+///
+/// The generation exit (a newer track, or Stop) is deliberately NOT a variant:
+/// it `return`s out of the loop before any of this, both because the newer
+/// track's badge and mast must not be yanked by the older loop's exit path and
+/// because `stop_sat_track` does that handback itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SatTrackLoss {
+    /// The bird set. A genuine end of pass.
+    BirdSet,
+    /// `propagation::sat::look_at` stopped answering — the propagation diverged
+    /// on the element set this pass froze at arm time.
+    ///
+    /// This ENDS THE PASS, and unlike a rotor failure it should: it is not the
+    /// bird setting, it is the model failing, and BOTH surfaces are computed
+    /// from that one model — `look_at` and `range_rate` share `prepare` and the
+    /// same SGP4 propagate, so the tick that cannot state where the bird is
+    /// cannot state its range-rate either and Doppler has nothing to compute.
+    /// The elements are frozen for the whole pass, so this is a property of
+    /// that element set at this epoch rather than a transient of the instant —
+    /// it will not come back before LOS. Holding the radio under the LAST
+    /// correction for a bird we can no longer locate would be exactly the
+    /// silent lie the handback exists to prevent, so the dial goes back.
+    PropagationDiverged,
+    /// `TrackDriver::gave_up` — the rotator missed its limit of consecutive
+    /// writes and is treated as gone.
+    ///
+    /// The ONE loss that does not end the pass. The track stops claiming an
+    /// antenna (the badge demotes to the Doppler-only role, and reports no
+    /// commanded position — see `SatTrackDto::rotor_lost`) and NOTHING ELSE
+    /// changes: the pass clock, the Doppler tick and the transponder hold all
+    /// run to a real LOS.
+    RotorGaveUp,
+}
+
+impl SatTrackLoss {
+    /// Is the PASS over — and, with it, the dial handed back to the operator?
+    /// One question, because they are one fact: the pass is what owns the dial,
+    /// so the loop's handback is guarded by exactly this.
+    const fn ends_pass(self) -> bool {
+        !matches!(self, SatTrackLoss::RotorGaveUp)
     }
 }
 
@@ -5695,6 +5764,7 @@ async fn start_sat_track(
         uplink_radio: consent0.radio.clone(),
         uplink_radio_id: consent0.radio_id,
         tx_mode: sat_tx_mode0,
+        rotor_lost: false,
         az_deg: None,
         el_deg: None,
         aos_az_deg: pass.aos_az_deg,
@@ -5726,331 +5796,510 @@ async fn start_sat_track(
             *g = Some(initial.clone());
         }
     }
+    // The loop itself is `run_sat_track` below — a NAMED function rather than
+    // this closure's body, because what a track keeps and what it lets go when
+    // something fails mid-pass (see `SatTrackLoss`) is behaviour a test has to
+    // be able to watch. It can, now: a simulated clock over a real pass against
+    // a rotctld that stops answering. Here the clock is the wall clock and a
+    // tick is a 3 s sleep.
     tauri::async_runtime::spawn_blocking(move || {
-        use propagation::sat;
-        use std::sync::atomic::Ordering;
-        use tempo_core::rotator::{RotOutcome, RotStep};
-        // Deadband, calibration trim, the az-only fallback and its recovery
-        // probe, and the miss counter all live in the driver.
-        let mut driver = tempo_core::rotator::TrackDriver::new(rot_cfg);
-        let update_badge = |dto: SatTrackDto| {
-            if let Ok(mut g) = SAT_TRACK.lock() {
-                if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
-                    *g = Some(dto);
-                }
-            }
-        };
-        // ONE place that assembles the badge. The call sites below differ only
-        // in what has actually been COMMANDED and whether the bird is up yet;
-        // while they were three hand-copied literals the deadband branch drifted
-        // into reporting the target it had just suppressed, which silently
-        // zeroed the very tracking error the sky dome exists to show.
-        //
-        // `cmd` is the last pair genuinely SENT, `el_sent` is false on an
-        // az-only rotator (elevation is then reported as absent, never 0), and
-        // `sat` is the look angle only once there is one — below the horizon
-        // there isn't. `mode` is the per-tick honesty label and `con` the
-        // per-tick Doppler consent it was computed from (both follow the live
-        // settings and the radio actually in play). `range`/`rate`/`alt` are
-        // the live geometry of the same tick: all three absent until the bird
-        // is up.
-        let badge = |mode: &str,
-                     con: &SatDopplerConsent,
-                     held: bool,
-                     tx_mode: Option<String>,
-                     state: &str,
-                     cmd: Option<(f64, f64)>,
-                     el_sent: bool,
-                     sat: Option<(f64, f64)>,
-                     range: Option<f64>,
-                     rate: Option<f64>,
-                     alt: Option<f64>,
-                     dop: Option<&tempo_app::engine::SatTuningNow>| SatTrackDto {
-            name: name.clone(),
-            state: state.to_string(),
-            mode: mode.to_string(),
-            // A leg is only being DRIVEN while a transponder is held: without
-            // one the tick has nothing to tune and returns before either leg.
-            doppler_downlink: con.downlink && held,
-            doppler_uplink: con.uplink && held,
-            uplink_offer: con.offer.to_string(),
-            uplink_offer_map: con.offer_map.clone(),
-            uplink_radio: con.radio.clone(),
-            uplink_radio_id: con.radio_id,
-            tx_mode,
-            az_deg: cmd.map(|c| c.0),
-            el_deg: cmd.and_then(|c| el_sent.then_some(c.1)),
-            aos_az_deg: pass.aos_az_deg,
-            max_el_deg: pass.max_el_deg,
-            sat_az_deg: sat.map(|s| s.0),
-            sat_el_deg: sat.map(|s| s.1),
-            range_km: range,
-            range_rate_km_s: rate,
-            alt_km: alt,
-            downlink_hz: dop.and_then(|d| d.downlink_hz),
-            uplink_hz: dop.and_then(|d| d.uplink_hz),
-            downlink_shift_hz: dop.and_then(|d| d.downlink_shift_hz),
-            uplink_shift_hz: dop.and_then(|d| d.uplink_shift_hz),
-            transponder: dop.map(|d| d.label.clone()),
-            transponder_index: dop.and_then(|d| d.index),
-            inverting: dop.is_some_and(|d| d.inverting),
-            offset_hz: dop.map(|d| d.offset_hz),
-            half_width_hz: dop.map(|d| d.half_width_hz),
-            // Frozen at arm — the whole pass runs on that one element set.
-            element_age_days,
-            element_epoch_unix,
-            aos_unix: pass.aos_unix,
-            los_unix: pass.los_unix,
-        };
-        loop {
-            if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
-                return; // replaced or stopped — the newer owner drives the rotor
-            }
-            let t = now_unix();
-            if t > pass.los_unix {
-                break;
-            }
-            // The per-tick honesty label (+ the declared TX-leg sideband).
-            // The rotor half was fixed at arm time; the Doppler half re-reads
-            // the SAME consents `sat_doppler_tick` needs — both legs, resolved
-            // against the radio that is active RIGHT NOW, plus a held
-            // transponder — so a mid-pass Settings change, a handoff to
-            // another rig or a transponder release moves the label exactly
-            // when it moves the behaviour.
-            let (mode, consent, held, tx_mode) = {
-                let eng = engine_lock(&dop_engine);
-                let con = SatDopplerConsent::read(&eng);
-                let held = eng.sat_transponder_held().is_some();
-                (
-                    tempo_app::settings::sat_track_mode(
-                        addr.is_some(),
-                        con.downlink || con.uplink,
-                        held,
-                    ),
-                    con,
-                    held,
-                    eng.sat_tx_mode(),
-                )
-            };
-            // Far from AOS: ARMED — hold fire entirely (the operator keeps the
-            // rotor for HF until 5 min before the bird rises). Rotor-less has
-            // no slew to stage, so armed runs all the way to AOS and the
-            // prepositioning phase below is never entered — the badge must not
-            // claim a slew that cannot be sent.
-            let hold_until = if addr.is_some() {
-                pass.aos_unix - 300
-            } else {
-                pass.aos_unix
-            };
-            if t < hold_until {
-                // Armed sends NOTHING to the rotor, so there is no commanded
-                // position and no look angle — only the rise azimuth the badge
-                // carries under its own name.
-                update_badge(badge(
-                    mode,
-                    &consent,
-                    held,
-                    tx_mode.clone(),
-                    "armed",
-                    None,
-                    false,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ));
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
-            let (az, el, phase) = if t < pass.aos_unix {
-                (pass.aos_az_deg, 0.0, "prepositioning")
-            } else {
-                match sat::look_at(&tle, obs, t) {
-                    Some((az, el)) => (az, el.max(0.0), "tracking"),
-                    None => break, // propagation diverged — stop honestly
-                }
-            };
-            // The TRUE look angle, before rotator policy rewrites it below. The
-            // badge carries both: the gap between where the bird is and where
-            // the antenna was commanded IS the tracking error, and with a
-            // deadband in play they legitimately differ.
-            let (sat_az, sat_el) = (az, el);
-            // Only once the bird is UP is that pair a real look angle. While
-            // prepositioning it is the AOS azimuth pinned at the horizon —
-            // where the antenna is waiting, not where the satellite is.
-            let rep_sat = (phase == "tracking").then_some((sat_az, sat_el));
-            // DOPPLER. Only once the bird is actually up: correcting during the
-            // armed/prepositioning phases would move the operator's dial before
-            // there is anything to hear. Everything else — the rate limits, the
-            // freeze-during-over policy, the VFO mapping, whether the operator
-            // opted in at all — is decided inside `sat_doppler_tick`, so this
-            // stays a loop rather than growing satellite policy.
-            let mut live_range: Option<f64> = None;
-            let mut live_rate: Option<f64> = None;
-            // How high the bird is, from the same tick's propagation — the
-            // subpoint's third component. On the same "only once it is up"
-            // terms as the range beside it: reporting a height while the badge
-            // deliberately reports no position at all would be a lone number
-            // out of a state that has nothing else to say.
-            let mut live_alt: Option<f64> = None;
-            if phase == "tracking" {
-                live_alt = sat::subpoint(&tle, t).map(|(_, _, alt_km)| alt_km);
-                if let Some((range, rate)) = sat::range_rate(&tle, obs, t) {
-                    live_range = Some(range);
-                    live_rate = Some(rate);
-                    let keyed = {
-                        let eng = engine_lock(&dop_engine);
-                        eng.snapshot().radio.transmitting
-                    };
-                    let now_ms = (t as u64).saturating_mul(1_000);
-                    let mut eng = engine_lock(&dop_engine);
-                    let _ = eng.sat_doppler_tick(rate, now_ms, keyed);
-                }
-            }
-            // What the radio is ACTUALLY tuned to under Doppler, straight from
-            // the engine — never inferred from the dial, which is the uplink
-            // under an uplink-only mapping and ordinary split otherwise.
-            let dop = live_rate.and_then(|rate| engine_lock(&dop_engine).sat_tuning_now(rate));
-            // ROTOR-LESS: the pass clock, geometry and the Doppler tick above
-            // are the entire job — there is no antenna to command, so the
-            // driver/wire half is skipped rather than faked. `cmd` stays None
-            // for the whole pass (nothing was ever commanded; the badge must
-            // not invent a pointing), while the true look angle still tells
-            // the operator where to swing the handheld antenna.
-            let Some(addr) = addr.as_deref() else {
-                update_badge(badge(
-                    mode,
-                    &consent,
-                    held,
-                    tx_mode.clone(),
-                    phase,
-                    None,
-                    false,
-                    rep_sat,
-                    live_range,
-                    live_rate,
-                    live_alt,
-                    dop.as_ref(),
-                ));
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            };
-            // The mechanical policy — flip, calibration trim, deadband, the
-            // az-only fallback and its recovery probe — lives in tempo-core so
-            // it can be exercised over a whole simulated pass without a mast.
-            // This loop is the I/O half: ask what to do, do it, report back.
-            let step = driver.step(sat_az, sat_el);
-            if step == RotStep::Hold {
-                // SUPPRESSED by the deadband, so the antenna is still where it
-                // was last told to go. The badge keeps the last aim rather than
-                // the fresh target: reporting the target would erase the gap,
-                // which is exactly the tracking error the sky dome exists to
-                // show.
-                update_badge(badge(
-                    mode,
-                    &consent,
-                    held,
-                    tx_mode.clone(),
-                    phase,
-                    driver.last_aim(),
-                    driver.azel_ok(),
-                    rep_sat,
-                    live_range,
-                    live_rate,
-                    live_alt,
-                    dop.as_ref(),
-                ));
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
-            // Stop pressed while we computed? Re-check right before the wire
-            // write — narrows the one-command-after-halt window to microseconds.
-            if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
-                return;
-            }
-            let outcome = send_rot_step(addr, step);
-            driver.record(step, outcome, sat_az, sat_el);
-            if outcome != RotOutcome::Failed {
-                // Report the BORESIGHT aim the driver recorded, never the
-                // controller command: the latter carries the calibration trim,
-                // whose whole definition is that the controller's numbers are
-                // offset from where the boom points, so a sky dome drawn from
-                // it would show a permanent error on a correctly trimmed
-                // station. An az-only rotator reports no elevation at all —
-                // absent, not a 0 the UI would have to decode.
-                update_badge(badge(
-                    mode,
-                    &consent,
-                    held,
-                    tx_mode.clone(),
-                    phase,
-                    driver.last_aim(),
-                    driver.azel_ok(),
-                    rep_sat,
-                    live_range,
-                    live_rate,
-                    live_alt,
-                    dop.as_ref(),
-                ));
-            } else {
-                if driver.gave_up() {
-                    break; // rotor stopped answering — clear the badge, don't lie
-                }
-                // The write failed, so nothing about the ANTENNA changed — but
-                // the pass did. Keep publishing (last aim unchanged, position
-                // and Doppler current) rather than leaving a frozen badge: a
-                // display that stops updating is indistinguishable from one
-                // that has nothing to say, and the four ticks before we give up
-                // are ~15 s of the operator wondering.
-                update_badge(badge(
-                    mode,
-                    &consent,
-                    held,
-                    tx_mode.clone(),
-                    phase,
-                    driver.last_aim(),
-                    driver.azel_ok(),
-                    rep_sat,
-                    live_range,
-                    live_rate,
-                    live_alt,
-                    dop.as_ref(),
-                ));
-            }
-            std::thread::sleep(std::time::Duration::from_secs(3));
-        }
-        // LOS / rotor lost: halt the rotor (when this track owns one) and
-        // clear the badge if still ours (gen check INSIDE the lock — a newer
-        // track's badge must survive). A rotor-less track has no mast to halt
-        // or park; only the dial handback below applies.
-        if let Some(addr) = addr.as_deref() {
-            let _ = tempo_audio::rotator::stop(addr);
-            // Post-pass: park or go to ready ONLY if the operator asked for it —
-            // the default leaves the mast exactly where the pass finished, because
-            // moving a mast nobody asked to move is the one unrecoverable
-            // surprise here. Guarded by the generation: a newer track already owns
-            // the rotor and must not have its pointing yanked to a park position.
-            if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
-                if let Some((paz, pel)) = tempo_core::rotator::post_pass_target(&rot_cfg) {
-                    let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg);
-                    if tempo_audio::rotator::point_azel(addr, paz, pel).is_err() {
-                        let _ = tempo_audio::rotator::point(addr, paz);
-                    }
-                }
-            }
-        }
-        // The pass no longer owns the dial: hand the radio back to the operator
-        // rather than holding it under a Doppler correction for a bird that has
-        // set (also clears the TX gate's satellite tuning identity).
-        engine_lock(&dop_engine).set_sat_transponder(None);
-        if let Ok(mut g) = SAT_TRACK.lock() {
-            if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
-                *g = None;
-            }
-        }
+        run_sat_track(
+            SatTrackRun {
+                name,
+                tle,
+                obs,
+                pass,
+                addr,
+                rot_cfg,
+                engine: dop_engine,
+                gen,
+                element_age_days,
+                element_epoch_unix,
+            },
+            &now_unix,
+            &|| std::thread::sleep(std::time::Duration::from_secs(3)),
+        );
     });
     Ok(Some(initial))
+}
+
+/// Everything ONE armed track runs on, frozen at arm time — the inputs
+/// [`run_sat_track`] needs, and nothing else.
+///
+/// A struct rather than a spawned closure's captures because the loop had to
+/// become a named function. What a track surrenders when something fails
+/// mid-pass is the whole subject of [`SatTrackLoss`], and the only way to hold
+/// that still is to drive the loop itself: a simulated clock over a real pass,
+/// against a rotctld that stops answering, with no mast on the bench.
+///
+/// Everything here was resolved by `start_sat_track` before the spawn. The
+/// loop re-reads exactly one thing from settings — the per-tick Doppler
+/// consent — and that is deliberate: a mid-pass Settings change or a handoff
+/// to another rig has to move the behaviour and the badge together.
+struct SatTrackRun {
+    /// The REQUESTED bird name, echoed by every badge this track publishes —
+    /// the UI matches its schedule row against the string it asked for.
+    name: String,
+    /// The element set frozen for the whole pass.
+    tle: propagation::sat::Tle,
+    /// Observer latitude/longitude (degrees).
+    obs: (f64, f64),
+    /// The pass being tracked — its AOS/LOS are this loop's clock.
+    pass: propagation::sat::Pass,
+    /// The rotator CONFIGURED at arm time; `None` on a rotor-less station.
+    /// What the track still OWNS is a different question, re-answered every
+    /// tick — see `SatTrackLoss::RotorGaveUp`.
+    addr: Option<String>,
+    rot_cfg: tempo_core::rotator::RotatorConfig,
+    /// The engine this pass drives Doppler on — and hands the dial back to.
+    engine: SharedEngine,
+    /// This track's badge generation: a newer track wins every write.
+    gen: u64,
+    element_age_days: f64,
+    element_epoch_unix: i64,
+}
+
+/// THE TRACK LOOP — pass clock, geometry, Doppler and the rotator until the
+/// bird sets, then whatever the pass still owes the operator on its way out.
+///
+/// `clock` reads unix seconds and `tick_wait` waits one tick: the wall clock
+/// and a 3 s sleep in production, a simulated pass in a test.
+fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()) {
+    let SatTrackRun {
+        name,
+        tle,
+        obs,
+        pass,
+        addr,
+        rot_cfg,
+        engine: dop_engine,
+        gen,
+        element_age_days,
+        element_epoch_unix,
+    } = run;
+    use propagation::sat;
+    use std::sync::atomic::Ordering;
+    use tempo_core::rotator::{RotOutcome, RotStep};
+    // Deadband, calibration trim, the az-only fallback and its recovery
+    // probe, and the miss counter all live in the driver.
+    let mut driver = tempo_core::rotator::TrackDriver::new(rot_cfg);
+    let update_badge = |dto: SatTrackDto| {
+        if let Ok(mut g) = SAT_TRACK.lock() {
+            if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+                *g = Some(dto);
+            }
+        }
+    };
+    // ONE place that assembles the badge. The call sites below differ only
+    // in what has actually been COMMANDED and whether the bird is up yet;
+    // while they were three hand-copied literals the deadband branch drifted
+    // into reporting the target it had just suppressed, which silently
+    // zeroed the very tracking error the sky dome exists to show.
+    //
+    // `cmd` is the last pair genuinely SENT, `el_sent` is false on an
+    // az-only rotator (elevation is then reported as absent, never 0), and
+    // `sat` is the look angle only once there is one — below the horizon
+    // there isn't. `mode` is the per-tick honesty label and `con` the
+    // per-tick Doppler consent it was computed from (both follow the live
+    // settings and the radio actually in play). `range`/`rate`/`alt` are
+    // the live geometry of the same tick: all three absent until the bird
+    // is up.
+    let badge = |mode: &str,
+                 con: &SatDopplerConsent,
+                 held: bool,
+                 tx_mode: Option<String>,
+                 rotor_lost: bool,
+                 state: &str,
+                 cmd: Option<(f64, f64)>,
+                 el_sent: bool,
+                 sat: Option<(f64, f64)>,
+                 range: Option<f64>,
+                 rate: Option<f64>,
+                 alt: Option<f64>,
+                 dop: Option<&tempo_app::engine::SatTuningNow>| SatTrackDto {
+        name: name.clone(),
+        state: state.to_string(),
+        mode: mode.to_string(),
+        // A leg is only being DRIVEN while a transponder is held: without
+        // one the tick has nothing to tune and returns before either leg.
+        doppler_downlink: con.downlink && held,
+        doppler_uplink: con.uplink && held,
+        uplink_offer: con.offer.to_string(),
+        uplink_offer_map: con.offer_map.clone(),
+        uplink_radio: con.radio.clone(),
+        uplink_radio_id: con.radio_id,
+        tx_mode,
+        rotor_lost,
+        az_deg: cmd.map(|c| c.0),
+        el_deg: cmd.and_then(|c| el_sent.then_some(c.1)),
+        aos_az_deg: pass.aos_az_deg,
+        max_el_deg: pass.max_el_deg,
+        sat_az_deg: sat.map(|s| s.0),
+        sat_el_deg: sat.map(|s| s.1),
+        range_km: range,
+        range_rate_km_s: rate,
+        alt_km: alt,
+        downlink_hz: dop.and_then(|d| d.downlink_hz),
+        uplink_hz: dop.and_then(|d| d.uplink_hz),
+        downlink_shift_hz: dop.and_then(|d| d.downlink_shift_hz),
+        uplink_shift_hz: dop.and_then(|d| d.uplink_shift_hz),
+        transponder: dop.map(|d| d.label.clone()),
+        transponder_index: dop.and_then(|d| d.index),
+        inverting: dop.is_some_and(|d| d.inverting),
+        offset_hz: dop.map(|d| d.offset_hz),
+        half_width_hz: dop.map(|d| d.half_width_hz),
+        // Frozen at arm — the whole pass runs on that one element set.
+        element_age_days,
+        element_epoch_unix,
+        aos_unix: pass.aos_unix,
+        los_unix: pass.los_unix,
+    };
+    // Has the rotator stopped answering? The ONE thing a tick can take away
+    // from a live track without ending it (`SatTrackLoss::RotorGaveUp`).
+    // `addr` — what was configured at arm time — never changes; `mast`
+    // below is what this track still OWNS, which is what every consumer of
+    // "is there an antenna to command" has to read.
+    let mut rotor_lost = false;
+    // WHY this loop stopped, and the only input to the dial handback below.
+    // Deliberately uninitialised: every exit that leaves the loop by
+    // breaking has to classify itself or this will not compile, and the
+    // generation exit `return`s past it on purpose (see `SatTrackLoss`).
+    let ending: SatTrackLoss;
+    loop {
+        if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
+            return; // replaced or stopped — the newer owner drives the rotor
+        }
+        let t = clock();
+        if t > pass.los_unix {
+            ending = SatTrackLoss::BirdSet;
+            break;
+        }
+        let mast = if rotor_lost { None } else { addr.as_deref() };
+        // The per-tick honesty label (+ the declared TX-leg sideband).
+        // The rotor half is the live mast above — fixed at arm time except
+        // for a rotator that stops answering, which takes it away for the
+        // rest of the pass; the Doppler half re-reads
+        // the SAME consents `sat_doppler_tick` needs — both legs, resolved
+        // against the radio that is active RIGHT NOW, plus a held
+        // transponder — so a mid-pass Settings change, a handoff to
+        // another rig or a transponder release moves the label exactly
+        // when it moves the behaviour.
+        let (mode, consent, held, tx_mode) = {
+            let eng = engine_lock(&dop_engine);
+            let con = SatDopplerConsent::read(&eng);
+            let held = eng.sat_transponder_held().is_some();
+            (
+                tempo_app::settings::sat_track_mode(
+                    mast.is_some(),
+                    con.downlink || con.uplink,
+                    held,
+                ),
+                con,
+                held,
+                eng.sat_tx_mode(),
+            )
+        };
+        // Far from AOS: ARMED — hold fire entirely (the operator keeps the
+        // rotor for HF until 5 min before the bird rises). Rotor-less has
+        // no slew to stage, so armed runs all the way to AOS and the
+        // prepositioning phase below is never entered — the badge must not
+        // claim a slew that cannot be sent. A rotator that quit during the
+        // slew leaves the track in exactly that shape, which is why this
+        // reads the live mast rather than the arm-time address.
+        let hold_until = if mast.is_some() {
+            pass.aos_unix - 300
+        } else {
+            pass.aos_unix
+        };
+        if t < hold_until {
+            // Armed sends NOTHING to the rotor, so there is no commanded
+            // position and no look angle — only the rise azimuth the badge
+            // carries under its own name.
+            update_badge(badge(
+                mode,
+                &consent,
+                held,
+                tx_mode.clone(),
+                rotor_lost,
+                "armed",
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ));
+            tick_wait();
+            continue;
+        }
+        let (az, el, phase) = if t < pass.aos_unix {
+            (pass.aos_az_deg, 0.0, "prepositioning")
+        } else {
+            match sat::look_at(&tle, obs, t) {
+                Some((az, el)) => (az, el.max(0.0), "tracking"),
+                // The MODEL failed, not the bird. Both surfaces are computed
+                // from it, so there is no honest correction left to make:
+                // stop, and hand the dial back with the pass.
+                None => {
+                    ending = SatTrackLoss::PropagationDiverged;
+                    break;
+                }
+            }
+        };
+        // The TRUE look angle, before rotator policy rewrites it below. The
+        // badge carries both: the gap between where the bird is and where
+        // the antenna was commanded IS the tracking error, and with a
+        // deadband in play they legitimately differ.
+        let (sat_az, sat_el) = (az, el);
+        // Only once the bird is UP is that pair a real look angle. While
+        // prepositioning it is the AOS azimuth pinned at the horizon —
+        // where the antenna is waiting, not where the satellite is.
+        let rep_sat = (phase == "tracking").then_some((sat_az, sat_el));
+        // DOPPLER. Only once the bird is actually up: correcting during the
+        // armed/prepositioning phases would move the operator's dial before
+        // there is anything to hear. Everything else — the rate limits, the
+        // freeze-during-over policy, the VFO mapping, whether the operator
+        // opted in at all — is decided inside `sat_doppler_tick`, so this
+        // stays a loop rather than growing satellite policy.
+        let mut live_range: Option<f64> = None;
+        let mut live_rate: Option<f64> = None;
+        // How high the bird is, from the same tick's propagation — the
+        // subpoint's third component. On the same "only once it is up"
+        // terms as the range beside it: reporting a height while the badge
+        // deliberately reports no position at all would be a lone number
+        // out of a state that has nothing else to say.
+        let mut live_alt: Option<f64> = None;
+        if phase == "tracking" {
+            live_alt = sat::subpoint(&tle, t).map(|(_, _, alt_km)| alt_km);
+            if let Some((range, rate)) = sat::range_rate(&tle, obs, t) {
+                live_range = Some(range);
+                live_rate = Some(rate);
+                let keyed = {
+                    let eng = engine_lock(&dop_engine);
+                    eng.snapshot().radio.transmitting
+                };
+                let now_ms = (t as u64).saturating_mul(1_000);
+                let mut eng = engine_lock(&dop_engine);
+                let _ = eng.sat_doppler_tick(rate, now_ms, keyed);
+            }
+        }
+        // What the radio is ACTUALLY tuned to under Doppler, straight from
+        // the engine — never inferred from the dial, which is the uplink
+        // under an uplink-only mapping and ordinary split otherwise.
+        let dop = live_rate.and_then(|rate| engine_lock(&dop_engine).sat_tuning_now(rate));
+        // NO MAST: the pass clock, geometry and the Doppler tick above are
+        // the entire job — there is no antenna to command, so the
+        // driver/wire half is skipped rather than faked. `cmd` stays None
+        // (nothing is being commanded; the badge must not invent a
+        // pointing), while the true look angle still tells the operator
+        // where to swing the handheld antenna — or where to turn the mast
+        // by hand, which is the state a rotator that stopped answering
+        // leaves the operator in.
+        let Some(addr) = mast else {
+            update_badge(badge(
+                mode,
+                &consent,
+                held,
+                tx_mode.clone(),
+                rotor_lost,
+                phase,
+                None,
+                false,
+                rep_sat,
+                live_range,
+                live_rate,
+                live_alt,
+                dop.as_ref(),
+            ));
+            tick_wait();
+            continue;
+        };
+        // The mechanical policy — flip, calibration trim, deadband, the
+        // az-only fallback and its recovery probe — lives in tempo-core so
+        // it can be exercised over a whole simulated pass without a mast.
+        // This loop is the I/O half: ask what to do, do it, report back.
+        let step = driver.step(sat_az, sat_el);
+        if step == RotStep::Hold {
+            // SUPPRESSED by the deadband, so the antenna is still where it
+            // was last told to go. The badge keeps the last aim rather than
+            // the fresh target: reporting the target would erase the gap,
+            // which is exactly the tracking error the sky dome exists to
+            // show.
+            update_badge(badge(
+                mode,
+                &consent,
+                held,
+                tx_mode.clone(),
+                rotor_lost,
+                phase,
+                driver.last_aim(),
+                driver.azel_ok(),
+                rep_sat,
+                live_range,
+                live_rate,
+                live_alt,
+                dop.as_ref(),
+            ));
+            tick_wait();
+            continue;
+        }
+        // Stop pressed while we computed? Re-check right before the wire
+        // write — narrows the one-command-after-halt window to microseconds.
+        if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
+            return;
+        }
+        let outcome = send_rot_step(addr, step);
+        driver.record(step, outcome, sat_az, sat_el);
+        if outcome != RotOutcome::Failed {
+            // Report the BORESIGHT aim the driver recorded, never the
+            // controller command: the latter carries the calibration trim,
+            // whose whole definition is that the controller's numbers are
+            // offset from where the boom points, so a sky dome drawn from
+            // it would show a permanent error on a correctly trimmed
+            // station. An az-only rotator reports no elevation at all —
+            // absent, not a 0 the UI would have to decode.
+            update_badge(badge(
+                mode,
+                &consent,
+                held,
+                tx_mode.clone(),
+                rotor_lost,
+                phase,
+                driver.last_aim(),
+                driver.azel_ok(),
+                rep_sat,
+                live_range,
+                live_rate,
+                live_alt,
+                dop.as_ref(),
+            ));
+        } else {
+            // ⭐ THE ROTATOR STOPPED ANSWERING — and that is ALL that has
+            // happened. `SatTrackLoss::RotorGaveUp` does not end the pass:
+            // this track gives up the MAST and keeps everything the dial
+            // needs, so the pass clock, the Doppler tick and the
+            // transponder hold run on to a real LOS. (Leaving the loop here
+            // ran the LOS handback, which released the hold and snapped the
+            // operator's transponder pick back to "None" mid-pass.)
+            //
+            // ⚠️ THIS is where the classification actually FIRES — the epilogue's
+            // `ending.ends_pass()` is the same rule restated where the handback
+            // is, and today it can only ever be true there, because a loss that
+            // does not end the pass never leaves the loop. Put the old
+            // behaviour back either here (a bare `break`) or in
+            // `SatTrackLoss::ends_pass`, and the whole defect returns; the
+            // epilogue guard alone has nothing of its own to protect.
+            if driver.gave_up() {
+                let loss = SatTrackLoss::RotorGaveUp;
+                if loss.ends_pass() {
+                    ending = loss;
+                    break;
+                }
+                rotor_lost = true;
+            }
+            // The write failed, so nothing about the ANTENNA changed — but
+            // the pass did. Keep publishing (last aim unchanged, position
+            // and Doppler current) rather than leaving a frozen badge: a
+            // display that stops updating is indistinguishable from one
+            // that has nothing to say, and the four ticks before we give up
+            // are ~15 s of the operator wondering.
+            //
+            // Once the mast IS gone the badge stops claiming one on the
+            // same tick: no commanded position (so no phantom tracking
+            // error against the look angle), no elevation, and the label
+            // demoted to what is still actually being driven.
+            let (mode, cmd, el_sent) = if rotor_lost {
+                (
+                    tempo_app::settings::sat_track_mode(
+                        false,
+                        consent.downlink || consent.uplink,
+                        held,
+                    ),
+                    None,
+                    false,
+                )
+            } else {
+                (mode, driver.last_aim(), driver.azel_ok())
+            };
+            update_badge(badge(
+                mode,
+                &consent,
+                held,
+                tx_mode.clone(),
+                rotor_lost,
+                phase,
+                cmd,
+                el_sent,
+                rep_sat,
+                live_range,
+                live_rate,
+                live_alt,
+                dop.as_ref(),
+            ));
+        }
+        tick_wait();
+    }
+    // END OF PASS (`SatTrackLoss::ends_pass` — the bird set, or the
+    // propagation diverged; a rotor give-up never reaches here): put the mast
+    // down, then clear the badge if still ours (gen check INSIDE the lock — a
+    // newer track's badge must survive). A rotor-less track has no mast at
+    // all; only the dial handback below applies to it.
+    //
+    // ⭐ THE HALT IS ATTEMPTED ON A ROTATOR THAT GAVE UP — the PARK IS NOT, and
+    // the split is the difference between subtracting motion and adding it.
+    // A give-up is `MISS_LIMIT` unanswered writes, not proof the controller is
+    // gone: it may well be answering again by LOS. Weigh each half against
+    // that.
+    //  - `stop` can only ever REMOVE motion, so being wrong about the mast
+    //    costs nothing, and there is one real case for it — a give-up on the
+    //    last ticks before LOS, where the last command the rotator did accept
+    //    may still be in flight (a G-5500 takes ~30 s to swing 180°). Skipping
+    //    it left that slew running.
+    //  - `park`/`ready` MOVES the mast, and this track spent the rest of the
+    //    pass telling the operator the rotator stopped answering and the
+    //    pointing was his — which on a hand-turned station means he has been
+    //    aiming it himself. Driving it somewhere off a controller we declared
+    //    dead, for a pass we did not actually steer, is exactly the
+    //    unrecoverable surprise the post-pass default exists to avoid. His own
+    //    "point it yourself" stands until he asks for something else.
+    if let Some(addr) = addr.as_deref() {
+        let _ = tempo_audio::rotator::stop(addr);
+        // Post-pass: park or go to ready ONLY if the operator asked for it —
+        // the default leaves the mast exactly where the pass finished, because
+        // moving a mast nobody asked to move is the one unrecoverable
+        // surprise here. Guarded by the generation: a newer track already owns
+        // the rotor and must not have its pointing yanked to a park position.
+        if !rotor_lost && SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+            if let Some((paz, pel)) = tempo_core::rotator::post_pass_target(&rot_cfg) {
+                let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg);
+                if tempo_audio::rotator::point_azel(addr, paz, pel).is_err() {
+                    let _ = tempo_audio::rotator::point(addr, paz);
+                }
+            }
+        }
+    }
+    // The PASS is what owned the dial, and it is over: hand the radio back
+    // to the operator rather than holding it under a Doppler correction for
+    // a bird that has set (also clears the TX gate's satellite tuning
+    // identity). Guarded by WHY the loop ended — which is the whole of this
+    // defect, since a rotor give-up used to break straight through here and
+    // surrender a dial the rotor never owned.
+    //
+    // ⚠️ The guard is the DOWNSTREAM half of one decision, kept here so the
+    // rule reads where the handback is and the two can never drift. It is
+    // true on every path that reaches it today, and deliberately so: the give-
+    // up asks the same question first and does not break. The behaviour lives
+    // at that ask and in `SatTrackLoss::ends_pass` — changing this line alone
+    // changes nothing.
+    if ending.ends_pass() {
+        engine_lock(&dop_engine).set_sat_transponder(None);
+    }
+    if let Ok(mut g) = SAT_TRACK.lock() {
+        if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+            *g = None;
+        }
+    }
 }
 
 /// Disarm auto-track: the loop exits on its next tick; halt the rotor now.
@@ -14544,14 +14793,15 @@ pub fn run() {
 mod tests {
     use super::{
        assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
-        install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
+        engine_lock, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
         load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, rect_lands_on_work_area,
-        resolve_bird, resolve_birds, sanitize_profile, sat_excluded, tle_absorb_foreign,
-        tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
-        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, tle_set_currency,
-        view_passes, write_json_atomic, AssistanceEvent, AssistanceSourceState, SatBird,
-        SatTrackDto, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS, TleFlightGuard,
-        TleSnapshot
+        resolve_bird, resolve_birds, run_sat_track, sanitize_profile, sat_excluded,
+        tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
+        tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path,
+        tle_set_currency, view_passes, write_json_atomic, AssistanceEvent,
+        AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SharedEngine,
+        SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        TleFlightGuard, TleSnapshot
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -14882,6 +15132,329 @@ mod tests {
         );
         let con = super::SatDopplerConsent::read(&e);
         assert_eq!(con.offer, "none", "nothing is wrong with this mapping");
+    }
+
+    /// A rotctld that goes bad, on a real loopback socket: `RPRT 0` to the
+    /// first `ok_points` pointing commands, then `RPRT -6` (the daemon's I/O
+    /// error) to every one after — which is what a controller that has lost
+    /// its serial link looks like from `tempo_audio::rotator::point_azel`.
+    ///
+    /// A real socket rather than an injected wire trait because the track loop
+    /// talks to its mast the way the shipped binary does, `send_rot_step`'s
+    /// az/el → azimuth-only fallback included; a stub of that seam would be one
+    /// more hand-copy of the thing under test. Every command line is recorded
+    /// in order, so a test can say exactly what did and did not reach the wire.
+    struct FakeRotctld {
+        addr: String,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl FakeRotctld {
+        fn start(ok_points: usize) -> FakeRotctld {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port for rotctld");
+            let addr = listener.local_addr().expect("bound address").to_string();
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (log, halt) = (seen.clone(), stop.clone());
+            let thread = std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader, Write};
+                let mut points = 0usize;
+                for conn in listener.incoming() {
+                    if halt.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(mut sock) = conn else { break };
+                    let Ok(peek) = sock.try_clone() else { continue };
+                    let mut line = String::new();
+                    if BufReader::new(peek).read_line(&mut line).is_err() {
+                        continue;
+                    }
+                    let cmd = line.trim().to_string();
+                    if cmd.is_empty() {
+                        continue;
+                    }
+                    // `P` is a pointing command; `S` is the halt.
+                    let pointing = cmd.starts_with('P');
+                    if pointing {
+                        points += 1;
+                    }
+                    log.lock().expect("rotctld log").push(cmd);
+                    let reply = if pointing && points > ok_points {
+                        "RPRT -6\n"
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    let _ = sock.write_all(reply.as_bytes());
+                }
+            });
+            FakeRotctld {
+                addr,
+                seen,
+                stop,
+                thread: Some(thread),
+            }
+        }
+
+        fn commands(&self) -> Vec<String> {
+            self.seen.lock().expect("rotctld log").clone()
+        }
+    }
+
+    impl Drop for FakeRotctld {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            // Wake the accept loop so it sees the flag rather than blocking
+            // forever on a port nobody will call again.
+            let _ = std::net::TcpStream::connect(&self.addr);
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+
+    /// SO-50 armed for real: an FM bird worked with a handheld beam or a
+    /// hand-turned mast, transponder picked, Doppler correcting the downlink.
+    fn sat_station() -> SharedEngine {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        assert!(
+            e.sat_doppler_legs().downlink,
+            "the pass owns the dial to begin with"
+        );
+        std::sync::Arc::new(std::sync::Mutex::new(e))
+    }
+
+    /// One WHOLE simulated pass through the shipped track loop: real ISS
+    /// geometry over EN52, a real rotctld socket, and the wall clock and 3 s
+    /// sleep replaced by a counter that walks AOS → LOS in one tick steps.
+    /// Returns every badge the loop actually published, in order.
+    ///
+    /// Serialized by its caller on the process-wide `SAT_TRACK`/`SAT_TRACK_GEN`
+    /// the loop publishes through — a second concurrent track would (correctly)
+    /// stop this one's badge writes dead.
+    fn run_simulated_pass(
+        engine: &SharedEngine,
+        rot_addr: Option<String>,
+        rot_cfg: tempo_core::rotator::RotatorConfig,
+    ) -> Vec<SatTrackDto> {
+        let tle = iss_tle();
+        let pass = propagation::sat::passes(&tle, EN52, ISS_EPOCH_UNIX, 24)
+            .into_iter()
+            .next()
+            .expect("at least one ISS pass in 24 h");
+        let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        // Start the clock at AOS: past the armed hold and the prepositioning
+        // window, so every tick of this run is a real tracking tick.
+        let now = std::cell::Cell::new(pass.aos_unix);
+        let badges = std::cell::RefCell::new(Vec::<SatTrackDto>::new());
+        run_sat_track(
+            SatTrackRun {
+                name: ISS_NAME.to_string(),
+                tle,
+                obs: EN52,
+                pass,
+                addr: rot_addr,
+                rot_cfg,
+                engine: engine.clone(),
+                gen,
+                element_age_days: 0.0,
+                element_epoch_unix: ISS_EPOCH_UNIX,
+            },
+            &|| now.get(),
+            // One tick: advance the simulated clock, and take down whatever
+            // the tick just published (the loop publishes, then waits).
+            &|| {
+                now.set(now.get() + 3);
+                if let Ok(g) = SAT_TRACK.lock() {
+                    if let Some(dto) = g.as_ref() {
+                        badges.borrow_mut().push(dto.clone());
+                    }
+                }
+            },
+        );
+        badges.into_inner()
+    }
+
+    /// ⭐ THE ROTOR GIVE-UP DEFECT (0.27.2 bench reports): "I saw a first
+    /// Doppler shift, then it snapped back to the none statement", and "after 5
+    /// seconds it snaps back to 'None — leave the dial to me', even though I
+    /// didn't change it".
+    ///
+    /// One mechanism behind both. A rotor write that missed its limit `break`
+    /// out of the track loop, and everything AFTER the loop then ran —
+    /// including the LOS handback, `set_sat_transponder(None)`. Releasing the
+    /// hold makes `sat_doppler_legs` report both legs false, which makes
+    /// `sat_doppler_tick` a no-op, and the section's 2 s poll of
+    /// `get_sat_transponder` then reset the picker. A 3 s loop tick plus a 2 s
+    /// poll is the operator's "after 5 seconds".
+    ///
+    /// ⚠️ THIS TEST DRIVES THE LOOP, and it has to. Its first version asserted
+    /// on `SatTrackLoss::ends_pass` and then re-applied the loop's guard by
+    /// hand, which is a test of a copy: the defect was put back at the real
+    /// handback site and the suite stayed green. So this runs the shipped
+    /// `run_sat_track` over a real ISS pass against a real rotctld socket that
+    /// stops answering mid-pass, and asks the engine and the wire what
+    /// happened. Both scenarios share the process-wide badge statics, so they
+    /// live in ONE test rather than racing each other.
+    #[test]
+    fn a_rotor_that_stops_answering_keeps_the_dial_and_a_real_los_hands_it_back() {
+        use tempo_core::rotator::{PostPass, RotatorConfig, MISS_LIMIT};
+        // No deadband, so every tracking tick genuinely reaches the wire (the
+        // miss counter only advances on ticks that do), and PARK requested —
+        // the post-pass policy this pass is entitled to only if it kept its
+        // mast.
+        let cfg = RotatorConfig {
+            post_pass: PostPass::Park,
+            park_az: 180.0,
+            park_el: 0.0,
+            tol_az_deg: 0.0,
+            tol_el_deg: 0.0,
+            ..RotatorConfig::default()
+        };
+
+        // ── THE ROTATOR DIES MID-PASS ────────────────────────────────────────
+        // Three good commands, then a controller that answers nothing but
+        // errors. The loop gives up on the mast — and must give up NOTHING
+        // else.
+        const GOOD: usize = 3;
+        let rot = FakeRotctld::start(GOOD);
+        let eng = sat_station();
+        let badges = run_simulated_pass(&eng, Some(rot.addr.clone()), cfg);
+
+        // Before the give-up the track claims the mast it is really driving.
+        let first = badges.first().expect("the loop published every tick");
+        assert_eq!(first.mode, "rotor+doppler");
+        assert!(
+            first.az_deg.is_some(),
+            "a commanded position, because we commanded one"
+        );
+        assert!(!first.rotor_lost);
+
+        // THE GIVE-UP TICK ITSELF: the badge stops claiming an antenna on the
+        // same tick it stops having one — demoted role, no commanded position
+        // (a stale one would draw a phantom tracking error against the look
+        // angle on the sky dome) and no elevation.
+        let lost = badges
+            .iter()
+            .position(|b| b.rotor_lost)
+            .expect("the loop announced the give-up");
+        let quit = &badges[lost];
+        assert_eq!(
+            quit.mode, "doppler-only",
+            "demoted the moment the mast went"
+        );
+        assert_eq!(quit.az_deg, None);
+        assert_eq!(quit.el_deg, None);
+
+        // ⭐ THE DEFECT, and the operator's own words for it: "after 5 seconds
+        // it snaps back to 'None — leave the dial to me'". Five seconds is one
+        // 3 s loop tick plus the section's 2 s poll. The give-up used to leave
+        // the loop, and leaving the loop ran the LOS handback — so the tick
+        // that lost the mast lost the radio with it, and every tick after it
+        // stopped existing.
+        //
+        // Read off the badge because the badge is what the section polls, and
+        // it carries the hold: `doppler_downlink` is the consented leg AND a
+        // held transponder, and `transponder` is the label the picker shows.
+        // The whole rest of the pass has to keep saying so.
+        assert!(
+            badges.len() > lost + 20,
+            "the pass ran on well past the give-up ({} ticks, gave up at {lost})",
+            badges.len()
+        );
+        for (i, b) in badges.iter().enumerate().skip(lost) {
+            assert!(
+                b.rotor_lost,
+                "tick {i}: the give-up holds for the rest of the pass"
+            );
+            assert_eq!(b.mode, "doppler-only", "tick {i}");
+            assert_eq!(b.az_deg, None, "tick {i}: nothing is being commanded");
+            assert!(
+                b.doppler_downlink,
+                "tick {i}: a dead rotator must not release the transponder hold"
+            );
+            assert_eq!(
+                b.transponder.as_deref(),
+                Some("SO-50|FM repeater"),
+                "tick {i}: …so the operator's pick is still the operator's pick"
+            );
+            assert!(
+                b.downlink_hz.is_some(),
+                "tick {i}: …and Doppler is still correcting the dial"
+            );
+            assert!(
+                b.sat_az_deg.is_some(),
+                "tick {i}: the sky dome still shows where the bird is"
+            );
+        }
+
+        // Only the LOS at the far end of that hands the dial back.
+        assert!(
+            engine_lock(&eng).sat_transponder_held().is_none(),
+            "the pass ended — the dial is the operator's again"
+        );
+
+        // THE WIRE. Every failed pointing command costs two connections
+        // (`send_rot_step` retries azimuth-only), and after the give-up the
+        // loop stops writing to the mast entirely — no hammering a dead
+        // controller for the rest of the pass.
+        let cmds = rot.commands();
+        let points = cmds.iter().filter(|c| c.starts_with('P')).count();
+        assert_eq!(
+            points,
+            GOOD + 2 * MISS_LIMIT as usize,
+            "the loop stopped commanding once it gave up: {cmds:?}"
+        );
+        // The halt IS attempted on a rotator that gave up — it can only remove
+        // motion, and a give-up on the last ticks before LOS can leave the last
+        // accepted slew still running. The PARK is not: it would move a mast
+        // whose pointing this track handed back to the operator, off a
+        // controller it declared dead.
+        assert_eq!(cmds.last().map(String::as_str), Some("S"), "{cmds:?}");
+        assert_eq!(cmds.iter().filter(|c| *c == "S").count(), 1);
+
+        // ── A REAL LOS, ON A ROTATOR THAT ANSWERED ALL PASS ──────────────────
+        let rot = FakeRotctld::start(usize::MAX);
+        let eng = sat_station();
+        let badges = run_simulated_pass(&eng, Some(rot.addr.clone()), cfg);
+        assert!(
+            engine_lock(&eng).sat_transponder_held().is_none(),
+            "the pass ended — the dial is the operator's again"
+        );
+        assert!(!engine_lock(&eng).sat_doppler_legs().downlink);
+        assert!(
+            badges.iter().all(|b| !b.rotor_lost),
+            "nothing was lost on this pass"
+        );
+        assert!(badges.iter().all(|b| b.mode == "rotor+doppler"));
+        // …and THIS pass gets its park, which is what makes the skip above a
+        // decision about a dead controller rather than a policy that never runs.
+        let cmds = rot.commands();
+        let tail: Vec<&str> = cmds
+            .iter()
+            .rev()
+            .take(2)
+            .rev()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(tail, vec!["S", "P 180.0 0.0"], "{cmds:?}");
+
+        // EVERY EXIT, CLASSIFIED. Only the two that end the PASS release the
+        // dial: the bird setting (above), and a propagation that diverged — the
+        // MODEL failing rather than the bird, and both surfaces are computed
+        // from that one model, so there is no honest correction left to make
+        // either. The generation exit is not here on purpose: it returns before
+        // the handback, because `stop_sat_track` and the newer track own that.
+        assert!(SatTrackLoss::BirdSet.ends_pass());
+        assert!(SatTrackLoss::PropagationDiverged.ends_pass());
+        assert!(!SatTrackLoss::RotorGaveUp.ends_pass());
     }
 
     /// A written snapshot round-trips through its own serde (camelCase keys on
@@ -16045,6 +16618,7 @@ mod tests {
             uplink_radio: String::new(),
             uplink_radio_id: 0,
             tx_mode: None,
+            rotor_lost: false,
             az_deg: None,
             el_deg: None,
             aos_az_deg: 100.0,
