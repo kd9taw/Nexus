@@ -18,6 +18,7 @@
 // moves a rotor or takes a dial on its own.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  AppSnapshot,
   NeedTag,
   SatBinding,
   SatDetail,
@@ -70,16 +71,71 @@ import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
 import { pushToast } from '../toast'
 import { MapView } from './MapView'
+import { LogEntry } from './LogEntry'
 import { Dialog } from './ui/Dialog'
 import { useTheme } from '../useTheme'
 
 interface Props {
   /** Bird to select (map click hand-off). The section follows changes. */
   focusSat?: string | null
+  /** The live engine snapshot — the log strip's dial/band/mode source, exactly
+   * as the Phone and CW cockpits feed it. Nullable (and absent in the older
+   * section tests) because the pop-out window polls it on its own 300 ms
+   * cadence and has none for the first tick; the strip simply doesn't render
+   * until it lands. */
+  snap?: AppSnapshot | null
   onPopOut?: () => void
 }
 
 const SCHEDULE_HOURS = 48
+
+/** The station's COMMANDED mode, folded to the closed ADIF Mode enumeration.
+ *
+ * Same rule and same field the Phone cockpit logs on (`FM ? 'FM' : 'SSB'` over
+ * the commanded sideband), widened only by the two other ADIF Modes that field
+ * can legitimately hold outside a phone cockpit — the Satellites section is
+ * reachable with the rig on CW (linear-transponder CW is ordinary satellite
+ * work) or AM. `snap.radio.sideband` is the mode the app COMMANDED, not the
+ * display-only `rigMode` read-back (which some Hamlib backends answer from
+ * cache, and which is `None` until the rig reports).
+ *
+ * USB/LSB deliberately fold to SSB: they are ADIF SUBMODEs, and `<MODE>USB`
+ * gets the whole record rejected on LoTW upload — the same closed-enumeration
+ * trap LogEntry's LOG_MODES table documents. Nothing about the satellite feeds
+ * this: not the bird, not the transponder, not the downlink.
+ *
+ * ⚠️ KNOWN WRONG ON A DIGITAL TIER — NOT YET FIXED. The four arms above are the
+ * complete set only where the Phone and CW cockpits are: those sections are
+ * reachable only in their own operating mode. This section is not — it is
+ * reachable on FT8/FT4/Q65/JT65/MSK144/WSPR/FST4/Tempo too, and this function
+ * is handed the SIDEBAND those tiers are generated on, never the tier. Every
+ * WSJT-X-tier channel `tempo_app::bandplan` ships commands "USB", so those
+ * record `MODE=SSB`; the Tempo plan additionally ships three FM simplex
+ * channels (2 m / 1.25 m / 70 cm), which record `MODE=FM`. Either way the
+ * record names an analogue voice mode for a contact worked on a data mode —
+ * wrong, and permanent.
+ *
+ * It is disclosed rather than guessed at: the honest value is the TIER's own
+ * ADIF mode, and a wrong MODE is exactly the class of error this whole strip is
+ * being careful about.
+ *
+ * ⚠️ THE WORKAROUND IS PARTIAL — say so rather than over-promise. The strip's
+ * own "Log a contact from another radio" override has a mode picker, but it
+ * offers LogEntry's `LOG_MODES` list and no more: SSB / FM / AM / CW / RTTY /
+ * FT8 / FT4. So it covers the FT8 and FT4 tiers and NOT Q65, JT65, MSK144,
+ * WSPR, FST4, FST4W or Tempo. On those the only route today is the Logbook's
+ * edit form, whose Mode field is free text. Stated the same way in
+ * docs/guide/satellites.md and the CHANGELOG; pinned by
+ * `records SSB on a digital tier` and
+ * `the override's mode picker covers FT8/FT4 and no other digital tier` in
+ * SatellitesView.logentry.test.tsx. */
+function adifModeFromStation(sideband: string | null | undefined): string {
+  const m = (sideband ?? '').trim().toUpperCase()
+  if (m === 'FM') return 'FM'
+  if (m === 'CW') return 'CW'
+  if (m === 'AM') return 'AM'
+  return 'SSB'
+}
 
 /** 8-wind compass label for a pass direction ("NW→SE"). */
 function wind8(az: number): string {
@@ -1712,7 +1768,7 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
   )
 }
 
-export function SatellitesView({ focusSat, onPopOut }: Props) {
+export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
   const [view, setView] = useState<SatView | null>(null)
   const [favs, setFavs] = useState<Set<string>>(() => satChasingSet())
   const [schedule, setSchedule] = useState<SatPass[]>([])
@@ -2302,6 +2358,9 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   // decides where the radio transmits is a wrong-uplink generator. Feeds the
   // chooser state line and the Doppler readout's reason.
   const heldSimplex = !!(detail != null && binding?.simplex && tuned?.name === detail.name)
+  // The ADIF mode the section's log strip records a contact as, and the report
+  // format that follows from it. Station state only — see adifModeFromStation.
+  const logMode = adifModeFromStation(snap?.radio.sideband)
   // The RECORD's per-leg sidebands differing (SatNOGS data) — used only for
   // the pre-arm FORECAST wording and for the "not being commanded" sentence,
   // both of which quote the record because there is no engine answer to quote.
@@ -3266,6 +3325,65 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               </div>
             ) : (
               <div className="sat-passline">no pass over you in the next 24 h</div>
+            )}
+            {/* LOG THIS QSO — the section's missing half (operator, 0.27.3: "I
+                dont have a spot to log within the satellites section to log my
+                sat qso's. Lets not reinvent anything, logging sections exist in
+                the phone area, can we drop that in?").
+
+                Dropped in, not rebuilt: this is the SAME shared LogEntry the
+                Phone and CW cockpits render, with the same props they pass, and
+                it logs the SAME ORDINARY CONTACT they log. It is NOT a
+                satellite-aware log — nothing about the bird reaches the record.
+                Satellite tagging (ADIF PROP_MODE/SAT_NAME, which LoTW needs for
+                satellite credit — BOTH: TQSL refuses to sign a record carrying
+                only one of the pair, in either direction, so a half-tag costs
+                the whole QSO, see `Engine::log_qso`) is NOT YET BUILT —
+                deferred, not designed away; see the note line
+                below, docs/guide/satellites.md and the CHANGELOG, all of which
+                say so plainly so nobody waits on credit that isn't coming. Two
+                further consequences of dropping in the shared strip UNCHANGED
+                are documented in the guide rather than fixed here: during Field
+                Day this strip logs to the ordinary log while the Phone and CW
+                strips route to the contest log (App.tsx passes those two
+                `fieldDay`; each cockpit then supplies its own literal `fdMode` —
+                "PH" in PhoneCockpit, "CW" in CwCockpit — so wiring this section
+                up means BOTH, and there is no third mode literal to reuse), and
+                the recorded MODE is folded from the sideband, which is wrong on
+                a digital tier (see `adifModeFromStation`).
+
+                WHY HERE, and not above the dome or below the globe. The column
+                is one scroller and its two square graphics — the sky dome
+                (0.7·vh live) and the globe — are together taller than it at
+                every window size (the reason the ✕ above is sticky). So:
+                  · BELOW the globe would put the log a full column-scroll past
+                    the transponder cards. An operator turning a manual rotor
+                    with both hands, with seconds between overs, will not make
+                    that trip; he would log on paper instead, which is exactly
+                    what he already does.
+                  · ABOVE the dome would push the pass instrument he steers by
+                    off the first screen for the whole pass, to buy nothing —
+                    the log is used in bursts between overs, not continuously.
+                Directly under the pass block puts it hard against the Doppler
+                readout — the readout stays on screen while he types, the dome's
+                lower half with it — and ahead of the transponder chooser and
+                the globe, which are pre-pass planning surfaces he is done with
+                by the time anyone answers. No new scroller, no sticky, no fixed
+                positioning: a plain in-flow block in the column that already
+                owns the overflow. Document order is pinned by a test. */}
+            {snap && (
+              <div className="sats-log">
+                <LogEntry snap={snap} mode={logMode} defaultRst={logMode === 'CW' ? '599' : '59'} />
+                <p className="sats-log-note">
+                  Logs an ordinary contact from your dial, exactly as the Phone and CW log
+                  panels do. It is <b>not</b> tagged as a satellite QSO: Nexus does not write
+                  the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward
+                  neither LoTW satellite credit <b>nor Nexus&rsquo;s own satellite totals</b>.
+                  Add <b>both</b> fields yourself if you want that credit — one without the
+                  other is refused at signing, and on 2 m the grid otherwise counts toward
+                  your terrestrial VUCC, which a satellite contact does not earn.
+                </p>
+              </div>
             )}
             {detail.transmitters.length > 0 ? (
               <>

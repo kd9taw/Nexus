@@ -5690,24 +5690,92 @@ impl Engine {
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
     /// memory and appends to the ADIF file if a log path is set.
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
-        // SATELLITE STAMP. A contact made while a pass owns the radio is a
-        // satellite QSO, and LoTW will not credit one without BOTH fields — so
-        // they are stamped here, at the single funnel every log path goes
-        // through, rather than at each caller. Never overwrites what a caller
-        // (or an import) already supplied.
-        if let Some(st) = &self.sat_tune {
-            if rec.prop_mode.is_none() {
-                rec.prop_mode = Some("SAT".to_string());
-            }
-            if rec.sat_name.is_none() {
-                // The label is "SAT|transponder" — the satellite half is the
-                // name LoTW matches on.
-                let name = st.label.split('|').next().unwrap_or_default().trim();
-                if !name.is_empty() {
-                    rec.sat_name = Some(name.to_string());
-                }
-            }
-        }
+        // ⚠️ NO SATELLITE STAMP HERE. A "SATELLITE STAMP" block used to fill
+        // `prop_mode`/`sat_name` from `self.sat_tune` whenever a transponder was
+        // held (0.24.0–0.27.x). It was removed because it could not write a
+        // creditable record and it tagged contacts that were not satellite QSOs:
+        //
+        //  · WRONG NAME, ALWAYS. It took `SatTune::label`'s satellite half, and
+        //    that label is built in the Tauri command from the CATALOG name the
+        //    section is showing — "SAUDISAT 1C (SO-50)", "ISS (ZARYA)" — never
+        //    the designator LoTW matches on. ARRL is explicit that a name LoTW
+        //    does not recognise gets the data rejected ("if you enter the
+        //    satellite name as AO7 instead of AO-7 the data will be rejected"),
+        //    so it never once produced satellite credit, and every upload
+        //    carrying one was at risk.
+        //  · WRONG CONTACTS. The hold is released only at the LOS handback (or
+        //    an explicit clear), and a transponder picked with no track armed is
+        //    never released at all — so ordinary terrestrial contacts made long
+        //    after the pass were stamped as satellite QSOs too.
+        //
+        // Writing satellite fields at all is NOT YET DONE — deferred, not
+        // decided against: `SAT_NAME` needs a resolved designator LoTW accepts,
+        // and a QSO record is permanent, so a guessed value is worse than none.
+        // Nothing in Nexus writes these two fields today. Records that ARRIVE
+        // with them — a foreign ADIF import, or a record the operator repaired
+        // by hand — are carried through verbatim by
+        // `logbook::adif_record`/`parse_adif` and are untouched here.
+        //
+        // ⚠️ AND `PROP_MODE` MAY NOT COME BACK ON ITS OWN — the obvious "half"
+        // fix, and it is a worse defect than the one above. The two fields are
+        // NOT independent: TQSL validates them as a PAIR, and it is the same
+        // hard refusal in both directions. From `tqslconvert.cpp`, alongside
+        // "Invalid SAT_NAME (%s)":
+        //     if (!strcmp(conv->rec.propmode, "SAT") && conv->rec.satname[0] == '\0')
+        //         "PROP_MODE = 'SAT' but no SAT_NAME"   → TQSL_CUSTOM_ERROR
+        //     if (strcmp(conv->rec.propmode, "SAT") && conv->rec.satname[0] != '\0')
+        //         "SAT_NAME set but PROP_MODE is not 'SAT'" → TQSL_CUSTOM_ERROR
+        // So a lone `PROP_MODE=SAT` does not "upload and simply miss satellite
+        // credit". The record never reaches LoTW at all, taking with it the
+        // DXCC/WAS credit an untagged upload WOULD have earned — and through our
+        // own funnel it poisons the batch it rides in: `tqsl_args` passes
+        // `-a compliant`, so TQSL drops the offending record and signs the rest,
+        // and `classify_tqsl_exit` maps that suppressed-record exit to
+        // `Rejected` for the WHOLE batch. `Rejected` is not `is_sent`, so
+        // `lotw_unsent_indices` re-offers every record in it — including the
+        // unsignable one — on the next attempt, and the next, for as long as it
+        // is in the log. Both fields together, or neither.
+        //
+        // ⚠️ THE IN-APP COST OF "NEITHER", which is not only an upload matter.
+        // Nexus decides "was this a satellite QSO?" locally, from `PROP_MODE`
+        // alone (`qso_is_sat` in src-tauri), and that answer feeds:
+        //   · Satellite VUCC — `propagation::awards::Awards::add_qso(sat)`, the
+        //     `sat_worked`/`sat_confirmed` totals on the Awards screen; and
+        //   · the satellite needs board / pass-earn ranking —
+        //     `propagation::dxped::LogNeeds::add_qso(sat)` → `satneeds`.
+        // With no writer, a contact logged from the Satellites section reaches
+        // neither. It is not merely uncredited by LoTW — it does not count
+        // toward Nexus's own satellite totals either.
+        //
+        // And where the grid goes instead depends on the band, in two different
+        // wrong ways — `Awards::add_qso` routes on the `sat` flag FIRST, then on
+        // `Band::from_label`, whose variants run 160 m … 2 m and stop there.
+        // That list, NOT the metre/centimetre spelling, is the whole gate:
+        //   · a downlink on a band with no variant — 1.25 m, 70 cm, 23 cm, the
+        //     only three labels `bandplan::band_for_dial` can produce that
+        //     `from_label` refuses — falls out of the fold entirely: the
+        //     band-independent satellite set is the only bucket that would have
+        //     taken it. No grid credit at all — absent credit. (1.25 m is a
+        //     METRE label on this side, which is why the earlier
+        //     metre-vs-centimetre wording was wrong.)
+        //   · a downlink on 160 m … 2 m lands in `worked_grid_band` for THAT
+        //     BAND — the TERRESTRIAL per-band VUCC bucket, which ARRL's rules
+        //     exclude satellite QSOs from. Not a corner: 2 m is by definition
+        //     the downlink of every U/V bird (the Fox-1 series — AO-85/91/92 —
+        //     and AO-7 mode B), and AO-7 mode A comes down on 10 m. That is
+        //     WRONG credit, not absent credit, and LoTW files the untagged
+        //     upload the same way. It is the one place this descope is worse
+        //     than the defect it replaced.
+        // Documented for the operator in docs/guide/satellites.md and the
+        // CHANGELOG, both of which tell him to add BOTH fields by hand.
+        //
+        // Pinned by `a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields`
+        // here, and end-to-end by src-tauri's
+        // `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`,
+        // `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc` and
+        // `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`
+        // (which walks every band label the app can produce).
+
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
         // Station, and `call_station_ctx` resets it on every invocation, so one contact
@@ -17715,6 +17783,82 @@ mod tests {
         );
     }
 
+    /// ⚠️ THE GENERAL LOGBOOK DOES HAVE A CLUB-NETWORK PUSH, and a `QsoRecord`
+    /// DOES reach `tempo_net::band_for_interop` through it. Pinned because that
+    /// function's doc once said the opposite — "the only path from there to this
+    /// function is the Field Day log" — which would make the centimetre rule
+    /// dead for every contact outside an FD session, and would send a future
+    /// fixer looking for the bug in the wrong crate.
+    ///
+    /// Nothing is stubbed and no contest is running: `log_qso` → `push_to_n1mm`
+    /// → `n1mm_contact_for` → `band_for_interop(&rec.band)`, out of the socket
+    /// the operator configured. 23 cm is the case the rule exists for — the
+    /// alpha-strip it replaced would put `23` in a field that means METRES, so
+    /// a microwave contact would land on the club map as a 23 metre one.
+    #[test]
+    fn an_ordinary_23cm_qso_reaches_the_club_wire_in_metres() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            s.n1mm_addr = listener.local_addr().unwrap().to_string();
+            s.n1mm_upload = true;
+            e.apply_settings(s);
+        }
+        // The general logbook, not the contest log — the whole point.
+        assert!(e.snapshot().field_day.is_none());
+        e.log_qso(QsoRecord {
+            freq_mhz: 1296.2,
+            ..qrec("W1AW", "23cm")
+        });
+
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener
+            .recv_from(&mut buf)
+            .expect("an ordinary logged QSO broadcasts a contactinfo datagram");
+        let xml = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(
+            xml.contains("<band>0.23</band>"),
+            "23 cm left the general-log push without the centimetre conversion — \
+             `band_for_interop` is reachable from here, whatever its doc says: {xml}"
+        );
+        assert!(
+            !xml.contains("<band>23</band>"),
+            "a 23 cm contact went out as 23 METRES on the general-log push: {xml}"
+        );
+    }
+
+    /// The OTHER non-Field-Day path into `tempo_net::band_for_interop`, and the
+    /// half this crate can pin: the N3FJP band report (Network Status Display,
+    /// `n3fjp_report_band`) hands it `snap.radio.band` — `tempo_audio`'s radio
+    /// loop reads it straight off the snapshot with no log of any kind in the
+    /// way. This asserts what that field IS: `settings.band`, mirrored by
+    /// `App::set_radio` in the same statement `set_frequency` writes it, so a
+    /// centimetre QSY is on the wire's input the moment the operator makes it —
+    /// no contact needs to be logged at all.
+    ///
+    /// Red if the mirror is dropped, which is what would make the band report
+    /// carry a stale band.
+    #[test]
+    fn the_band_the_club_band_report_reads_is_the_dial_the_operator_is_on() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(1296.2, "23cm", "USB");
+        let band = e.snapshot().radio.band;
+        assert_eq!(
+            band,
+            e.settings().band,
+            "the snapshot band the N3FJP report reads drifted from settings.band"
+        );
+        assert_eq!(
+            tempo_net::band_for_interop(&band),
+            "0.23",
+            "the band report would tell the club we are on 23 METRES"
+        );
+    }
+
     /// The switch OFF is silence — not "sends to a default", not "sends anyway".
     #[test]
     fn the_broadcast_is_silent_while_the_toggle_is_off() {
@@ -17972,6 +18116,55 @@ mod tests {
         assert!(!fd.running, "the master enters passive S&P, not a run");
         assert_eq!(fd.my_class, "3A");
         assert_eq!(fd.my_section, "WI");
+    }
+
+    /// ⚠️ "ADD IT TO THE FD LOG AFTERWARDS" STAMPS THE BAND YOU ARE ON THEN,
+    /// NOT THE BAND YOU WORKED — pinned because the Field Day guide sends an
+    /// operator down that path for satellite contacts (the Satellites section's
+    /// log strip is not wired to Field Day).
+    ///
+    /// `fd_log_manual` opens with `sync_fd_band()`, which is right for its own
+    /// job — a knob QSY between contacts must stamp the REAL band rather than
+    /// the one FD was entered on — but it makes the contest log a LIVE-band
+    /// recorder with no way to say "this one was on 70 cm". So a satellite QSO
+    /// caught up on after the pass files under the current dial: wrong band in
+    /// the Cabrillo, and wrong on the N1MM / N3FJP wire (`band_for_interop`
+    /// reads this same field). Documented in docs/guide/contesting-pota.md;
+    /// goes red the day a caller can name the band.
+    ///
+    /// The band field itself is NOT missing — `LoggedQso::band` is real and is
+    /// written per contact, which is how the ADIF below carries two of them.
+    /// What is missing is any way for a caller to supply one: every entry point
+    /// funnels into `log_submode_at`, which stamps `self.band`. Pinned at that
+    /// site by tempo-core's
+    /// `every_contact_carries_a_band_and_it_is_always_the_logs_own`.
+    #[test]
+    fn a_contact_added_to_the_fd_log_later_is_stamped_with_the_current_band() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(435.640, "70cm", "USB"); // working the bird
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        assert!(e.fd_log_manual("W1AW", "1D", "IL", "PH").unwrap());
+
+        // The pass ends; back to HF. Now catch up on a contact worked on 70 cm.
+        e.set_frequency(14.250, "20m", "USB");
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "PH").unwrap());
+
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(
+            adif.contains("<BAND:4>70cm"),
+            "the contact made on the bird lost its band: {adif}"
+        );
+        assert!(
+            adif.contains("<BAND:3>20m"),
+            "the catch-up contact is filed on the dial's band, not 70 cm — \
+             if a caller can now name the band, delete the guide's caveat: {adif}"
+        );
     }
 
     /// Master ON but the exchange is incomplete: `apply_settings` must NOT enter
@@ -21816,49 +22009,55 @@ mod tests {
     }
 
     #[test]
-    fn a_qso_made_during_a_pass_is_stamped_for_lotw_satellite_credit() {
-        // LoTW credits a satellite contact only with BOTH fields present; the
-        // stamp lives at the log funnel so every path (auto, cockpit, manual)
-        // gets it, and never overwrites what a caller already supplied.
+    fn a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields() {
+        // THE REGRESSION FIX, and the one someone will accidentally revert.
+        //
+        // `log_qso` used to stamp PROP_MODE/SAT_NAME from the held transponder.
+        // The name came from `SatTune::label`, which the Tauri command builds
+        // from the CATALOG name the section is showing — the real strings are
+        // "SAUDISAT 1C (SO-50)" and "ISS (ZARYA)", never the designator LoTW
+        // matches on, so the stamp never produced a creditable record and put
+        // every upload carrying one at risk. And because the hold is released
+        // only at the LOS handback (a transponder picked with no track armed is
+        // never released), it tagged terrestrial contacts made long afterwards.
+        //
+        // The label below is deliberately the WORST case and the REAL one: a
+        // catalog name. Nothing derived from it may reach the record.
         use tempo_core::doppler::Transponder;
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_sat_transponder(Some((
-            "RS-44|Linear Transponder".into(),
-            0,
-            Transponder {
-                uplink_centre_hz: 145_965_000,
-                downlink_centre_hz: 435_640_000,
-                invert: true,
-                half_width_hz: 30_000,
-            },
-        )));
-        e.log_qso(qrec("W1AW", "70cm"));
-        let r = &e.get_log()[0];
-        assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
-        assert_eq!(
-            r.sat_name.as_deref(),
-            Some("RS-44"),
-            "the satellite half of the label, not the transponder"
-        );
-
-        // A terrestrial contact with no pass in force is untouched.
-        let mut e2 = Engine::new("KD9TAW", "EN52", 0);
-        e2.log_qso(qrec("K1ABC", "20m"));
-        let r2 = &e2.get_log()[0];
-        assert_eq!(r2.prop_mode, None);
-        assert_eq!(r2.sat_name, None);
-
-        // An explicit value from the caller/import wins over the stamp.
-        let mut e3 = Engine::new("KD9TAW", "EN52", 0);
-        e3.set_sat_transponder(Some((
-            "SO-50|FM".into(),
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
             0,
             Transponder::channel(145_850_000, 436_795_000),
         )));
+        // On the downlink, mid-pass — a contact that genuinely WAS through the
+        // bird. It is still logged as an ordinary contact: satellite tagging is
+        // not done yet, and a name LoTW rejects is worse than no name.
+        e.log_qso(qrec("W1AW", "70cm"));
+        let r = &e.get_log()[0];
+        assert_eq!(r.prop_mode, None, "a satellite stamp is back at the funnel");
+        assert_eq!(r.sat_name, None, "a satellite name is back at the funnel");
+
+        // And the silent half: the hold outlives the pass, so an ordinary HF
+        // contact made with a bird still held must not be tagged either.
+        e.log_qso(qrec("K1ABC", "20m"));
+        let hf = &e.get_log()[1];
+        assert_eq!(
+            hf.prop_mode, None,
+            "a 20 m contact tagged as a satellite QSO"
+        );
+        assert_eq!(hf.sat_name, None, "a 20 m contact tagged with a bird");
+
+        // What the operator (or a foreign ADIF import) supplies is still
+        // carried verbatim — removing the stamp removed a WRITER, not the
+        // fields. This is the only way a record gets them now.
+        let mut e2 = Engine::new("KD9TAW", "EN52", 0);
         let mut given = qrec("N0CALL", "70cm");
+        given.prop_mode = Some("SAT".into());
         given.sat_name = Some("AO-91".into());
-        e3.log_qso(given);
-        assert_eq!(e3.get_log()[0].sat_name.as_deref(), Some("AO-91"));
+        e2.log_qso(given);
+        assert_eq!(e2.get_log()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(e2.get_log()[0].sat_name.as_deref(), Some("AO-91"));
     }
 
     #[test]

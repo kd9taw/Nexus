@@ -15083,9 +15083,15 @@ button.cq-skiptx1.on {
   flex-direction: column;
   gap: var(--space-1);
 }
+/* The section's card headings. `.sats-detail` is a DIRECT-CHILD selector, not a
+   descendant: that card now hosts the shared LogEntry strip, whose own <h2>
+   ("Log this QSO") is a heading of a different species. As a descendant this
+   rule out-cascaded `.log-entry h2` (identical specificity, later in the sheet)
+   and shrank/uppercased it — and the sticky rule further down did worse. It was
+   always about the CARD's heading. */
 .sats-best h2,
 .sats-sched h2,
-.sats-detail h2,
+.sats-detail > h2,
 .sats-favmgr h2 {
   font-size: var(--fs-label);
   text-transform: uppercase;
@@ -15462,8 +15468,10 @@ button.sat-chip:disabled {
    exist. Opaque background (the contract's rule for sticky surfaces) and
    negative inline margins spanning .sats-detail's padding gutters so content
    never scrolls visibly beside it. Wins over the shared sats h2 rule by
-   source order (same specificity, later). */
-.sats-detail h2 {
+   source order (same specificity, later). DIRECT CHILD for the same reason as
+   that rule: the log strip nested in this card has its own <h2>, and a second
+   sticky heading inside one scroller pins the wrong thing to the top. */
+.sats-detail > h2 {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -15474,6 +15482,21 @@ button.sat-chip:disabled {
   background: var(--bg);
   margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) var(--space-1);
   padding: var(--space-2) var(--space-2) var(--space-1);
+}
+/* The shared log strip inside the detail card. Spacing only — .log-entry brings
+   its own frame, and structural size for this column belongs to the .sats-side
+   scroller, not to a wrapper. */
+.sats-log {
+  margin: var(--space-2) 0;
+}
+/* The honesty line under the strip: this logs an ORDINARY contact, with no
+   satellite tagging. Same micro type as the strip's own hints, but lifted out
+   of --text-faint because it is a credit consequence the operator has to act
+   on. Both variables exist in both themes (:root and [data-theme='light']). */
+.sats-log-note {
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
 }
 .sats-detail-close {
   margin-left: auto;

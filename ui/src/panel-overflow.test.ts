@@ -264,9 +264,34 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
     ).toBe('0')
   })
   it('the sticky detail heading (the ✕ home) has an opaque background', () => {
-    expect(winner('.sats-detail h2', 'position')).toBe('sticky')
-    const bg = winner('.sats-detail h2', 'background')
+    // DIRECT CHILD. The detail card hosts the shared LogEntry strip, which has
+    // its own <h2>; as a DESCENDANT rule this one out-cascaded `.log-entry h2`
+    // (identical specificity, later in the sheet) and made a second sticky
+    // heading inside the same scroller. The guard asks for the scoped form so
+    // the descendant version cannot come back.
+    //
+    // ⚠️ EXACTLY WHAT THESE THREE LINES PROVE, and nothing beyond it. `winner`
+    // matches rules by SELECTOR TEXT (`r.selector !== selector`), so this is a
+    // cascade computed WITHIN one selector string, not across the selectors that
+    // would match a given element:
+    //   · line 1/2 — among rules literally written `.sats-detail > h2`, the
+    //     winning `position` is `sticky` and the winning `background` is a
+    //     `--bg*` variable. It does NOT prove that rule wins over anything else.
+    //   · line 3 — NO rule in the sheet is literally written `.sats-detail h2`
+    //     with a `position`. It does NOT rule out another descendant form that
+    //     would also capture the strip's heading (`.sats-side h2`,
+    //     `.sats-detail div h2`, …).
+    // What is therefore NOT computed here is the thing the bug was: the cascade
+    // between this rule and `.log-entry h2` against the real heading element.
+    // That needs a matcher over a rendered DOM, which this CSS-text file has no
+    // way to build — carried, not claimed.
+    expect(winner('.sats-detail > h2', 'position')).toBe('sticky')
+    const bg = winner('.sats-detail > h2', 'background')
     expect(bg, 'sticky surfaces need an opaque background (contract rule)').toContain('var(--bg')
+    expect(
+      winner('.sats-detail h2', 'position'),
+      'the exact selector `.sats-detail h2` declares position again — it captures the log strip’s own heading',
+    ).toBeNull()
   })
 })
 

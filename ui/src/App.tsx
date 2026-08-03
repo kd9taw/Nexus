@@ -2290,7 +2290,11 @@ export default function App() {
     case 'sats':
       workspace = (
         <main className="layout single">
-          <SatellitesView focusSat={satFocus} onPopOut={() => void openPanelWindow('sats')} />
+          <SatellitesView
+            focusSat={satFocus}
+            snap={snap}
+            onPopOut={() => void openPanelWindow('sats')}
+          />
         </main>
       )
       break

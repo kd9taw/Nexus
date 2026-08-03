@@ -1934,6 +1934,31 @@ mod tests {
     }
 
     #[test]
+    fn a_qso_nexus_logged_writes_neither_satellite_field() {
+        // The ADIF half of the removed engine stamp. Nexus writes PROP_MODE /
+        // SAT_NAME for no contact it logs itself — satellite tagging is not
+        // done yet, and every push path (LoTW/eQSL/ClubLog/QRZ/Cloudlog)
+        // serializes through this function, so a leak here tags an operator's
+        // whole upload with a bird that was never in the sky. Records that
+        // ARRIVE with the pair still carry it: that is the next assertion pair.
+        let r = rec("W1AW", "20m", 1_700_000_000);
+        assert_eq!(r.prop_mode, None, "a fresh record carries a prop mode");
+        assert_eq!(r.sat_name, None, "a fresh record carries a satellite");
+        let adif = adif_record(&r);
+        assert!(!adif.contains("PROP_MODE"), "PROP_MODE on the wire: {adif}");
+        assert!(!adif.contains("SAT_NAME"), "SAT_NAME on the wire: {adif}");
+
+        // An operator-supplied / imported pair is written, so a record repaired
+        // by hand round-trips and can still be uploaded for satellite credit.
+        let mut sat = rec("W1AW", "70cm", 1_700_000_000);
+        sat.prop_mode = Some("SAT".into());
+        sat.sat_name = Some("RS-44".into());
+        let adif = adif_record(&sat);
+        assert!(adif.contains("<PROP_MODE:3>SAT"), "no PROP_MODE in {adif}");
+        assert!(adif.contains("<SAT_NAME:5>RS-44"), "no SAT_NAME in {adif}");
+    }
+
+    #[test]
     fn foreign_adif_fields_survive_a_round_trip_verbatim() {
         // A third-party master log carries decades of fields this parser does
         // not model. They must ride through import → save → re-read untouched —

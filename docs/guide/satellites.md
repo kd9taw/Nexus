@@ -66,6 +66,132 @@ state it is absent in is the one where it would have to guess: with no
 transponder picked there is nothing to put you back onto, and choosing one for
 you would be choosing your uplink.
 
+### Log the contact without leaving the pass
+
+The log strip sits in the bird's detail column, directly under the Doppler
+readout — the same log strip the Phone and CW cockpits use, with the same
+callbook lookup, the same recall card and the same prior-contact history. It is
+there whether or not a pass is armed, and it stays there after the bird sets, so
+you can catch up on a contact once your hands are free.
+
+Type the call and press Enter **twice**. On a call the strip hasn't seen yet the
+first Enter runs the callbook lookup and fills the name and QTH; the second one
+logs. (Once the name is filled, one Enter logs.) The band, frequency, mode and
+time come from where you already are, and the report defaults to the one for
+that mode. Working a bird from a rig Nexus isn't connected to? Open **Log a
+contact from another radio** in the strip and set the band, frequency, mode and
+UTC time by hand.
+
+**It logs an ordinary contact, not a satellite contact.** This is worth being
+plain about, because it decides whether a contact can ever earn satellite
+credit. LoTW recognises a satellite QSO by two ADIF fields:
+
+- `PROP_MODE=SAT` — the propagation mode.
+- `SAT_NAME` — the satellite, spelled the way LoTW spells it (`AO-7`, not
+  `AO7`).
+
+**Nexus writes neither, for any contact it logs.** Getting `SAT_NAME` right
+means resolving the bird's designator, and ARRL is explicit that a name LoTW
+does not recognise gets the data rejected — so a guess is worse than nothing,
+and a logged QSO is permanent. That resolution is not built yet. Until it is, if
+you want satellite credit you have to add the two fields yourself: set them in
+whatever logger you upload from, or add them to the ADIF before you sign it. Any
+record that already carries them — a foreign import, or one you repaired — keeps
+them: Nexus writes them out on export and reads them back on import untouched.
+
+**It has to be both fields, and that is why Nexus writes neither rather than the
+easy one.** `PROP_MODE=SAT` on its own would be trivial to write and it would be
+true — but TQSL will not sign a contact whose propagation mode is `SAT` when it
+names no satellite ("PROP_MODE = 'SAT' but no SAT_NAME"), just as it will not
+sign one naming a satellite it doesn't know. Either way the contact never
+reaches LoTW, so it earns nothing at all: not the satellite credit you were
+after, and not the DXCC or WAS credit an ordinary untagged upload does earn. A
+half-tag costs you the whole QSO. When you add the fields by hand, add both.
+
+#### Three things this strip does not do yet
+
+None of the three is a decision that satellite work should stay this way. They
+are the price of dropping the Phone/CW log strip in unchanged rather than
+building a satellite-aware one, and each is meant to be closed.
+
+**Your satellite grids land in the wrong place — in Nexus and at ARRL.**
+Nexus decides "was this a satellite QSO?" from `PROP_MODE=SAT` in the record.
+(LoTW asks for more than Nexus does: it wants that field *and* the satellite's
+name.) With nothing writing it, a contact logged here counts toward neither the
+**Satellite VUCC** totals on the Awards screen nor the satellite needs board
+that ranks which pass is worth chasing.
+
+Where the grid goes instead depends on the band you were listening on, and
+neither answer is right:
+
+- **On 1.25 m, 70 cm and 23 cm it lands nowhere.** Nexus keeps per-band grid
+  counts for 160 m through 2 m and no higher, so those three bands have no slot
+  of their own and the satellite bucket was the only home they had.
+- **On 160 m through 2 m it lands in the wrong bucket.** For satellite work that
+  means **2 m** — the downlink of every U/V bird, the Fox-1 satellites (AO-85,
+  AO-91, AO-92) and AO-7 on mode B — and **10 m**, where AO-7's mode A comes
+  down. So this is the ordinary case, not a corner. The grid is counted toward
+  your **terrestrial** VUCC for that band, which is a grid ARRL's rules say a
+  satellite contact does not earn, and LoTW files the untagged upload the same
+  way. If you chase VUCC, this one matters: add both fields before you sign.
+
+The split is by band, not by whether the band is named in metres: 1.25 m is a
+metre band and it falls out with the centimetre ones.
+
+Adding the two fields by hand puts the contact where it belongs in both counts:
+edit the ADIF with Nexus closed, exactly as below, and the totals pick it up the
+next time Nexus starts.
+
+**During Field Day, this strip logs to the ordinary log, not the contest log.**
+The Phone and CW strips switch to the Field Day log while a session is running;
+this one is not wired to Field Day yet, so a satellite contact made during FD
+goes into your general log and scores the club nothing. Until it is wired, log
+satellite contacts made during Field Day from the Phone or CW cockpit *while you
+are still on the bird*. Catching up afterwards does not work cleanly: the FD log
+stamps every contact with the band the radio is on at the moment you type it, so
+a 70 cm pass entered later goes into the contest log — and out to N1MM or
+N3FJP — on whatever band you have since moved to.
+
+**The recorded MODE comes from your sideband, so it is wrong on a data mode.**
+The strip writes `FM`, `CW`, `AM` or `SSB`, chosen from the mode the rig is
+commanded to. That is right for voice and CW work. But the Satellites section is
+also reachable on the digital tiers, and there the sideband is not the mode: on
+FT8, FT4, Q65, JT65, MSK144, WSPR and FST4 every channel commands USB, so the
+contact records `MODE=SSB`; on Tempo's three FM simplex channels (2 m, 1.25 m,
+70 cm) it records `MODE=FM`. Either way the record names a voice mode for a
+contact you made on a data mode.
+
+Until the strip is tier-aware there are two fixes, and only one of them covers
+your tier:
+
+- **On FT8 or FT4**, open **Log a contact from another radio** in the strip and
+  pick the mode there before you log.
+- **On Q65, JT65, MSK144, WSPR, FST4 or Tempo**, that picker has no entry for
+  your mode — it offers SSB, FM, AM, CW, RTTY, FT8 and FT4 and nothing else. Log
+  the contact, then open the **Logbook**, edit the record and type the mode into
+  its **Mode** field, which takes any text.
+
+**If you ran 0.24.0 through 0.27.x, check your log.** In those versions a
+contact logged while a transponder was held picked up `PROP_MODE=SAT` and a
+`SAT_NAME` taken from the *catalog* name of the bird — "SAUDISAT 1C (SO-50)",
+not "SO-50". LoTW does not recognise those, and the hold is only handed back
+when the pass ends (a transponder picked without arming a pass is never handed
+back at all), so ordinary contacts made afterwards were tagged too. Nexus no
+longer writes any of it.
+
+Existing records are left exactly as they are. Nexus will not rewrite contacts
+you already logged: some of them really were satellite QSOs that want the name
+corrected, and some were terrestrial contacts that want the tag gone, and
+nothing in the record tells the two apart — only you know which pass you were
+actually on. To find them, your general log is a plain ADIF file
+(`~/.config/tempo/log.adi`, or `%APPDATA%\tempo\log.adi` on Windows): search it
+for `SAT_NAME`. Fix them there, with Nexus closed — correct the name, or delete
+both fields from the record. There is no way to do it from inside Nexus: the
+logbook's edit form does not carry these two fields, and an edit that leaves
+them blank deliberately *preserves* what is stored, so that an ordinary
+busted-call fix cannot silently strip a satellite tag off a record that earned
+it.
+
 ### Pin the radio a pass uses
 
 On a multi-radio station the readiness rail names the rig a pick routed to, and

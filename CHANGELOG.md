@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: log a contact from the Satellites section
+
+Reported after a clean pass: "the doppler shift change are working amazing, I was following the
+bird with my manual rotor and it was perfect. The problem came when I tried to log someone, as I
+dont have a spot to log within the satellites section to log my sat qso's."
+
+There is now a log strip in the bird's detail column, directly under the Doppler readout. It is
+not a new form — it is the same log strip the Phone and CW cockpits use, with the same callbook
+lookup, the same recall card and the same prior-contact history, put where you are working the
+pass. It sits above the transponder cards and the globe on purpose: with both hands on a rotator
+and seconds between overs, a form at the bottom of the column is a form you don't use. It is
+there whether or not a pass is armed, and it stays after the bird sets, so you can catch up on a
+contact once your hands are free.
+
+**It logs an ordinary contact.** The call, your dial, your band, the mode you are on, the time —
+exactly what the Phone strip logs from the same state. It does **not** tag the contact as a
+satellite QSO: LoTW wants the ADIF `PROP_MODE` and `SAT_NAME` fields for that, and Nexus does not
+write them. The strip says so under the fields, so nobody waits on satellite credit that isn't
+coming. If you want it, add **both** fields yourself in whatever you upload from — LoTW turns away
+a contact carrying only one of the pair, so half the tag is worse than none.
+
+**Three things it does not do yet.** None of them is a decision that satellite work should stay
+this way — they are the price of dropping the existing strip in unchanged instead of building a
+satellite-aware one, and each is meant to be closed.
+
+- **Your satellite grids land in the wrong place, in Nexus and at ARRL.** Nexus decides "was this a
+  satellite QSO?" from `PROP_MODE=SAT` alone; LoTW wants that *and* the satellite's name. With
+  neither written, a contact logged here counts toward neither the **Satellite VUCC** totals on the
+  Awards screen nor the satellite needs board — and its grid does not simply go uncounted. Nexus
+  keeps per-band grid counts for 160 m through 2 m and no higher, so on **1.25 m, 70 cm and 23 cm**
+  the grid lands nowhere at all. On the bands that do have a slot — for satellite work that means
+  **2 m**, the downlink of every U/V bird, and **10 m**, where AO-7's mode A comes down — it lands
+  in your **terrestrial** VUCC count for that band, which is a grid ARRL's rules say a satellite QSO
+  does not earn. LoTW files the upload the same way. If you chase VUCC, add both fields by hand
+  before you sign.
+- **During Field Day it logs to the general log, not the contest log.** The Phone and CW strips
+  switch to the Field Day log while a session runs; this one is not wired to Field Day yet, so a
+  satellite contact made during FD scores the club nothing. Log those from the Phone or CW
+  cockpit for the duration — adding them to the FD log later files them on the band you are on
+  then, not the band you worked.
+- **The recorded mode comes from your sideband**, so it names a voice mode when you are on a data
+  mode: `SSB` on the WSJT-X tiers (every channel there commands USB), `FM` on Tempo's three FM
+  simplex channels. Right for voice and CW, wrong on a data mode. **Log a contact from another
+  radio** lets you set the mode by hand, but its picker offers SSB / FM / AM / CW / RTTY / FT8 /
+  FT4 and nothing else — so of the data tiers it covers FT8 and FT4 only. On Q65, JT65, MSK144,
+  WSPR, FST4 or Tempo, log the contact and then correct its **Mode** in the Logbook, whose mode
+  field takes any text.
+
+All three are written up in the guide's [satellite chapter](docs/guide/satellites.md).
+
+### Fixed: contacts logged during a pass no longer carry a satellite name LoTW rejects
+
+This one is in the version you are running now. Since 0.24.0, any contact logged while you had a
+transponder held was written with `PROP_MODE=SAT` and a `SAT_NAME` — and the name was the bird's
+*catalog* name, "SAUDISAT 1C (SO-50)" rather than "SO-50". LoTW rejects a record naming a
+satellite it doesn't recognise (ARRL: "if you enter the satellite name as AO7 instead of AO-7 the
+data will be rejected") — the signing tool won't even sign it — so those contacts could never earn
+satellite credit, and the batch each one rode in came back marked **Rejected**.
+
+It also caught contacts that had nothing to do with a satellite. The hold is only handed back when
+the pass ends — and a transponder you pick without arming a pass is never handed back at all — so
+an HF contact made an hour later got tagged as a satellite QSO too, and went out that way to LoTW,
+eQSL, ClubLog, QRZ Logbook and Cloudlog.
+
+Nexus no longer writes either field for any contact it logs. Records that arrive carrying them —
+a foreign ADIF import, or one you fixed by hand — are untouched, on import, on export and in the
+logbook.
+
+**That has a cost inside Nexus too, and it is not permanent.** The same `PROP_MODE=SAT` field is
+what Nexus reads to decide a contact was a satellite QSO, so with nothing writing it your
+**Satellite VUCC** totals and the satellite needs board no longer see contacts Nexus logs for you
+either — and on a band Nexus keeps a per-band grid count for (2 m most commonly, since it is every
+U/V bird's downlink) the grid is counted toward your terrestrial VUCC for that band instead, which
+is not a grid a satellite QSO earns. Writing a satellite name Nexus can stand behind is work that
+has not been done yet, not work that was ruled out.
+
+**Writing just `PROP_MODE=SAT` is not a shortcut** — that was looked at and rejected, not
+overlooked. TQSL refuses to sign a contact whose propagation mode is `SAT` when it names no
+satellite ("PROP_MODE = 'SAT' but no SAT_NAME"), exactly as it refuses a name it doesn't
+recognise. Half the tag costs you the whole QSO at LoTW — including the DXCC and WAS credit an
+untagged upload *does* earn — and it takes the upload with it: Nexus asks TQSL to skip bad records
+rather than abort, so the batch signs without that one and comes back marked **Rejected**, and it
+will keep coming back that way every time you upload while the record is in your log. Until Nexus
+can write a name it can stand behind it writes neither, and adding **both** fields by hand restores
+everything: the LoTW credit on your next upload, and the in-app totals the next time Nexus starts
+and re-reads the log file.
+
+**Contacts already logged that way are left alone**, and deliberately: some of them were real
+satellite QSOs that want the name corrected, some were ordinary contacts that want the tag gone,
+and nothing in the record tells them apart — that call is yours. To find them, search your log
+file (`~/.config/tempo/log.adi`, or `%APPDATA%\tempo\log.adi` on Windows) for `SAT_NAME`, and edit
+it there with Nexus closed. The guide's [satellite chapter](docs/guide/satellites.md) walks
+through it.
+
+### Fixed: the microwave bands go out to N1MM / N3FJP in metres
+
+The `band` field on the club-log wire is a **metre count** — "20", "0.7". Nexus converted 70 cm,
+33 cm and 23 cm by hand and guessed at everything else by chopping the letters off the end, which
+cannot tell centimetres from metres. So every other centimetre band left as a bare number: a
+13 cm contact was broadcast as "13", a 3 cm contact as "3".
+
+Those are not hypothetical bands. The Q65 band plan ships 13 cm, 9 cm, 5 cm, 3 cm and 1.2 cm
+channels (JT65 the first three), and the band you pick is the band that goes on the wire. Nobody
+is known to have been caught by this — what is on record is that Nexus could send it.
+
+Centimetre bands are now converted by the same rule the three hand-written ones already followed,
+so 13 cm goes out as "0.13". **The three values that have always gone out are unchanged**, no band
+was added to any list, and nothing else about what Nexus broadcasts moved.
+
+### Fixed: the ⊞ Panels menu no longer offers a checkbox that changes nothing
+
 ### Fixed: your uplink VFO now gets told what mode to be in
 
 Reported from a live AO-123 pass on the IC-9700: "it recomended the mode v/u fm transiver, it sets

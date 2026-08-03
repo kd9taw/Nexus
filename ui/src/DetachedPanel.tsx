@@ -418,7 +418,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
   if (panel === 'sats') {
     return (
       <div className="app detached">
-        <SatellitesView />
+        <SatellitesView snap={snap} />
         {/* This panel's Track/alarm actions report via toasts — unlike the older
             detached panels (silent by design), it needs a host in this window. */}
         <Toasts />
