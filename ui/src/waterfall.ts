@@ -145,6 +145,13 @@ export function isRfScopeSource(source: string): boolean {
   return source === 'flex' || source === 'civ'
 }
 
+/** Why a rig-scope control pane cannot appear when no native panadapter is streaming —
+ *  the operator-facing form of the line above, shown on the ⊞ Panels entry that offers
+ *  that pane (Phone's Rig Scope Controls, CW's Scope Controls). Lives here so the reason
+ *  and the rule it explains cannot drift apart. */
+export const NO_NATIVE_SCOPE_REASON =
+  'your radio is not streaming its own scope — these appear with an Icom CI-V or FlexRadio panadapter'
+
 /** Carrier-symmetric modes (FM/AM): the signal straddles the carrier, so an RF scope
  * window should CENTER on the dial rather than hang off one side of it. */
 export function isSymmetricMode(mode: string): boolean {

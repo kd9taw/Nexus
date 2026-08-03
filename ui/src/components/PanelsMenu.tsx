@@ -7,13 +7,29 @@
 //
 // Only the panels the CURRENT layout renders are listed; TX controls are not panels at
 // all, so they have no entry here by construction (see features/panelState).
-import { useEffect, useRef, useState } from 'react'
+//
+// A listed entry must be able to CHANGE something. Some panels are conditional on the
+// station (rig-scope controls need the radio's own panadapter streaming), so ticking
+// them can be a no-op — the operator unticks, nothing falls away, and the menu has lied.
+// Two affordances answer that, and both carry their reason in the entry: `unavailable`
+// (the panel cannot render at all right now — not checkable, and the reason says what
+// would make it appear) and `note` (it works, but its panel only has something to show
+// at certain times). Same rule DSP_FUNCS already follows in the cockpits: never offer a
+// dead control.
+import { useEffect, useId, useRef, useState } from 'react'
 import type { PanelState } from '../features/panelState'
 
 export interface PanelsMenuItem {
   id: string
   label: string
   state: PanelState
+  /** Why checking this entry would change nothing right now. Present ⇒ the entry is
+   *  listed but NOT checkable, with this reason under it. The reason IS the disable
+   *  signal, so a disabled entry without one is unrepresentable. */
+  unavailable?: string
+  /** Standing note for an entry that works but whose panel is only populated sometimes
+   *  (TX meters read on transmit). Shown the same way; the entry stays checkable. */
+  note?: string
 }
 
 interface Props {
@@ -31,6 +47,10 @@ interface Props {
 export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  // Reason/note ids for aria-describedby. The reason sits OUTSIDE the <label> on
+  // purpose: inside it, it would join the checkbox's accessible NAME, so a screen
+  // reader would read the whole sentence every time focus lands on the box.
+  const uid = useId()
   // The menu overlays the header, so a click anywhere else closes it rather than
   // leaving it sitting on top of the controls beneath.
   useEffect(() => {
@@ -66,17 +86,35 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props)
             if (e.key === 'Escape') setOpen(false)
           }}
         >
-          {items.map((it) => (
-            <label key={it.id} className="panels-menu-item">
-              <input
-                type="checkbox"
-                checked={it.state !== 'removed'}
-                onChange={(e) => onToggle(it.id, e.target.checked)}
-              />
-              <span>{it.label}</span>
-              {it.state === 'popped' && <span className="panels-menu-tag">popped out</span>}
-            </label>
-          ))}
+          {items.map((it) => {
+            // An unavailable entry stays TICKED while it is docked — it is switched on,
+            // there is just nothing streaming for it to show — and it becomes checkable
+            // again by itself the moment the station can render it.
+            // Truthiness, not `!= null`: an empty reason must read as "available", or a
+            // blank string would disable an entry with nothing on it to explain why.
+            const why = it.unavailable || it.note
+            const whyId = why ? `${uid}-${it.id}` : undefined
+            return (
+              <div key={it.id} className={`panels-menu-item${it.unavailable ? ' unavailable' : ''}`}>
+                <label className="panels-menu-check">
+                  <input
+                    type="checkbox"
+                    checked={it.state !== 'removed'}
+                    disabled={!!it.unavailable}
+                    aria-describedby={whyId}
+                    onChange={(e) => onToggle(it.id, e.target.checked)}
+                  />
+                  <span>{it.label}</span>
+                  {it.state === 'popped' && <span className="panels-menu-tag">popped out</span>}
+                </label>
+                {why && (
+                  <span className="panels-menu-why" id={whyId}>
+                    {why}
+                  </span>
+                )}
+              </div>
+            )
+          })}
           <div className="panels-menu-actions">
             <button
               type="button"

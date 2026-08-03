@@ -24,6 +24,15 @@ export interface PanelHostSpec<P extends string> {
    *  count — survivors flow into the smaller generic template exactly as the old
    *  two→one collapse did. */
   readonly columns?: readonly (readonly P[])[]
+  /** Per-panel reason its pane cannot render at all in the CURRENT station state (no
+   *  native scope streaming, say). The entry is listed but not checkable — ticking it
+   *  would change nothing — and the reason rides along, so the operator learns what
+   *  would bring it back instead of finding a checkbox that does nothing. Recompute it
+   *  from the same condition the JSX gates on, or the menu drifts from the cockpit. */
+  readonly unavailable?: Partial<Record<P, string | undefined>>
+  /** Per-panel standing note for a pane that works but is only populated at certain
+   *  times (TX meters read on transmit). Checkable, just annotated. */
+  readonly notes?: Partial<Record<P, string | undefined>>
 }
 
 export interface PanelHost<P extends string> {
@@ -38,8 +47,14 @@ export interface PanelHost<P extends string> {
    *  when both the main cell and the rail hold content, else 'one'. With one: the
    *  populated-column count ('one' | 'two' | 'three'), floored at 'one'. */
   dataCols: 'one' | 'two' | 'three'
-  /** Ready-made PanelsMenu items for this layout. */
-  menuItems: Array<{ id: P; label: string; state: PanelState }>
+  /** Ready-made PanelsMenu items for this layout (structurally a PanelsMenuItem). */
+  menuItems: Array<{
+    id: P
+    label: string
+    state: PanelState
+    unavailable?: string
+    note?: string
+  }>
 }
 
 /**
@@ -64,6 +79,12 @@ export function panelHost<P extends string>(
     sideShown,
     mainShown,
     dataCols,
-    menuItems: spec.menu.map((id) => ({ id, label: spec.labels[id], state: api.stateOf(id) })),
+    menuItems: spec.menu.map((id) => ({
+      id,
+      label: spec.labels[id],
+      state: api.stateOf(id),
+      unavailable: spec.unavailable?.[id],
+      note: spec.notes?.[id],
+    })),
   }
 }

@@ -31,7 +31,7 @@ import { SplitterSeam } from './SplitterSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
-import { TxMeters } from './TxMeters'
+import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { OperateRoster } from './OperateRoster'
 import { TxPanel } from './TxPanel'
@@ -416,6 +416,10 @@ export function OperateCockpit({
     side: SIDE_PANELS[layoutMode],
     main: layoutMode === 'roster' ? 'callRoster' : 'bandActivity',
     labels: PANEL_LABELS,
+    // The meters read on transmit — here as the pinned strip, which holds the last
+    // readings dimmed between overs, so the entry says WHEN it is populated rather than
+    // leaving an operator to guess mid-menu (the same words the strip shows when idle).
+    notes: { txmeters: TX_METERS_WHEN },
     ...(layoutMode === 'classic' ? { columns: CLASSIC_COLUMNS } : {}),
   }
   const { shown, sideShown, dataCols, menuItems } = panelHost(panels, panelSpec)

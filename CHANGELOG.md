@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: the ⊞ Panels menu no longer offers a checkbox that changes nothing
+
+From the bench: "what do the Panels selection / deselection of Rig Scope Controls and TX meters
+do on the Phone tab? I don't see them anywhere on my screen whether enabled or disabled. Nothing
+falls away when I uncheck either of them."
+
+Both entries were live checkboxes with nothing behind them on that station. **Rig Scope Controls**
+— and its twin, **Scope Controls** in CW — drive the radio's *own* panadapter: the span you set
+there changes the hardware sweep, not the on-screen zoom. On the audio bandscope there is no rig
+scope to command, so the pane cannot appear however the box is ticked. **TX Meters** work, but in
+Phone and CW the meters read only while you are keyed, so on receive there is nothing on screen
+either way — and the one moment the tick shows is mid-over, when you are not in a menu.
+
+The menu now says which is which, the same way the DSP row has always only offered the functions
+your rig reports. A panel that cannot appear at all right now is listed but not tickable, with the
+reason on it — "your radio is not streaming its own scope — these appear with an Icom CI-V or
+FlexRadio panadapter" — so you learn why instead of hunting for a pane that was never going to
+mount, and the entry goes live by itself the moment a native scope streams. TX Meters stay
+tickable and carry the note "readings appear on transmit" in Phone, CW and Operate alike. Nothing
+is removed from the menu: a greyed entry with a reason tells you more than a missing one.
+
 ### Fixed: a rotator that stops answering no longer takes the dial with it
 
 Reported from a live pass: "I saw a first Doppler shift, then it snapped back to the none
