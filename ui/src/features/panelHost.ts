@@ -51,11 +51,13 @@ export interface PanelHostSpec<P extends string> {
    *  about the station. Recompute it from the same condition the JSX gates on, or the menu
    *  drifts from the cockpit — `undefined` when the pane does have something to show.
    *
-   *  The other use is a CONSEQUENCE: a pane admitted to the vocabulary under clause (b) of
-   *  THE STOP LINE (features/panelState.ts) transmits, and unticking it ENDS something.
-   *  Its note is what makes that informed rather than surprising, and it is not optional —
+   *  The other use is a CONSEQUENCE: unticking some panes ENDS something already in flight
+   *  (Phone's voice keyer stops a message and discards a recording). Its note is what makes
+   *  that informed rather than surprising — THE PRACTICE half of THE STOP LINE
+   *  (features/panelState.ts), courtesy rather than the safety rule, and still not optional:
    *  PhoneCockpit.keyerHide.test.tsx computes the pairing by hiding every id and asking the
-   *  wire which hides stopped anything. */
+   *  wire which hides stopped anything. A pane that merely TRANSMITS needs no note — hiding
+   *  Operate's Tx messages ends nothing, and a warning there would be noise. */
   readonly notes?: Partial<Record<P, string | undefined>>
 }
 

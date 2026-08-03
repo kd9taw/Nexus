@@ -516,12 +516,14 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // capability gate the DSP row itself has always applied to its buttons). The fourth, TX
   // Meters, mounts fine and reads only while keyed.
   //
-  // THE FIFTH IS A CONSEQUENCE. Voice Keyer transmits; unticking it ends a message and
-  // discards a recording, which is the price of its being hideable at all (THE STOP LINE,
-  // clause (b)). That note is required, not decorative — PhoneCockpit.keyerHide.test.tsx
-  // hides every id here, asks the wire which hides stopped something, and requires exactly
-  // those entries to carry one. The menu's Undo button reaches the same hide and carries the
-  // same consequence (VOICE_KEYER_UNDO_ENDS); Reset cannot reach it at all.
+  // THE FIFTH IS A CONSEQUENCE. Unticking Voice Keyer ends a message and discards a
+  // recording. Not the price of its being hideable — nothing had to buy that (THE STOP LINE:
+  // being a sender has no bearing on it) — but a stop the operator did not ask for reads as
+  // a dropout, so it is said before the tick. That note is required, not decorative:
+  // PhoneCockpit.keyerHide.test.tsx hides every id here, asks the wire which hides stopped
+  // something, and requires exactly those entries to carry one. The menu's Undo button
+  // reaches the same hide and carries the same consequence (VOICE_KEYER_UNDO_ENDS); Reset
+  // cannot reach it at all.
   //
   // The notes explain; every box stays the operator's.
   const host = panels
@@ -597,16 +599,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // visible, record controls may sit behind the pane scroll): its F-key sends are
   // guarded inside the component (txEnabled/keyed/licence via the engine).
   //
-  // It IS in the panel vocabulary, under clause (b) of THE STOP LINE (features/panelState.ts):
-  // the operator must never be unable to stop a transmission, and a pane may be hidden when
-  // its HIDE PATH IS ITSELF THE STOP. Unmounting the keyer calls stopVoice, so no tick here
-  // can leave him keyed with the abort scrolled away — and PTT, Tune and Stop TX stay in the
-  // dock/header with no id at all (clause (a)), which is where his last resort actually
-  // lives. The keyer's own ■ Stop is a convenience and has no bearing either way; an earlier
-  // wording of this rule turned on it and thereby forbade the pane it was written to admit.
-  // Because the hide really does end things, the ⊞ entry carries VOICE_KEYER_STOPS_ON_HIDE —
-  // the stopped message AND the discarded recording — before the tick rather than after, and
-  // ⊞ Undo, which reaches the same unmount, carries VOICE_KEYER_UNDO_ENDS.
+  // It IS in the panel vocabulary, and THE STOP LINE (features/panelState.ts) is why nothing
+  // stood in the way: the operator must never be unable to stop a transmission, so PTT, Tune
+  // and Stop TX stay in the dock/header with no id at all — and whether a pane can START one
+  // has no bearing on whether it may be hidden. The keyer's own ■ Stop is a convenience and
+  // settles nothing either way; an earlier wording turned on it and thereby forbade the pane
+  // it was written to admit.
+  // Separately, and as courtesy rather than safety: unmounting the keyer calls stopVoice, so
+  // the tick really does end an over. That is why the ⊞ entry carries
+  // VOICE_KEYER_STOPS_ON_HIDE — the stopped message AND the discarded recording — before the
+  // tick rather than after, and ⊞ Undo, which reaches the same unmount, carries
+  // VOICE_KEYER_UNDO_ENDS.
   //
   // Because it transmits, this pane must NEVER remount for any reason but its OWN entry:
   // the same cleanup that makes hiding it safe is data loss when the region merely

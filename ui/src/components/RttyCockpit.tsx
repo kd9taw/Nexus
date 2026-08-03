@@ -499,7 +499,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), Stop
           and the compose bar, pinned OUTSIDE any pane so nothing can scroll them out of
           reach. None of these has an id in the RTTY panel vocabulary ('stream' is the only
-          entry), so hiding or moving the controls that key the rig is unrepresentable. */}
+          entry). For the auto-sequencer's Stop and the header's Stop TX / TX-arm that is
+          THE STOP LINE — hiding a way to stop is unrepresentable. For the macros and the
+          compose bar it is this cockpit's own choice: the rule is indifferent to senders. */}
       <div className="cockpit-txdock">
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">

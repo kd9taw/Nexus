@@ -20,9 +20,14 @@
 // handed `onSetTxEnabled`, which App passes to RTTY and SSTV and to nothing else — those two
 // cockpits have no other Enable-Tx affordance, the TopBar's being hidden with the digital
 // chrome. The first version of this file omitted the prop, so for RTTY and SSTV the latch was
-// never in the document and the sweep proved nothing about the one control clause (a) names
+// never in the document and the sweep proved nothing about the one control the rule names
 // BY NAME (gating it on a panel id in either cockpit was green). Phone and CW arm elsewhere
 // and legitimately have no latch on screen; their `stopControls` say so by not listing one.
+//
+// WHAT THIS FILE DOES NOT CARE ABOUT: whether a pane can START a transmission. Several can —
+// Operate's Tx messages, its decode panes and its rosters, Phone's voice keyer — and all of
+// them are hideable, correctly. The rule is about the STOP controls and nothing else, so the
+// only lists here are `stopControls`.
 //
 // WHY THE HEADER IS NOT STUBBED HERE. Every *.structure.test.tsx mocks CockpitHeader down
 // to an empty <header>, which is right for a shell census and useless for this: Stop TX and

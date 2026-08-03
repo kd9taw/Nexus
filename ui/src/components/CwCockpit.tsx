@@ -646,9 +646,11 @@ export function CwCockpit({
   // ── THE PANE REGION (2026-07-30 layout assessment, design3 §3) ───────────────────────
   // Every operator-content block under the scope renders through a CockpitPaneFrame in ONE
   // .cockpit-panes grid; the ⊞ Panels 'removed' gating is unchanged (shown()). TX chrome
-  // never enters the region — macros, the type-ahead send bar and the TX meters live in the
-  // pinned .cockpit-txdock and have no id in the pane vocabulary, so moving or hiding the
-  // things that key the rig is unrepresentable.
+  // never enters the region — the F-key macros and the type-ahead send bar live in the
+  // pinned .cockpit-txdock, and with them Tune and Stop TX up in the header. None of those
+  // has an id in the pane vocabulary, which is THE STOP LINE: hiding a way to stop is
+  // unrepresentable. (The TX meters ALSO render in the dock but DO have a ⊞ id — a readout,
+  // not a control, and nothing about the rule turns on where a readout sits.)
   //
   // Which panes CAN render right now — the exact conditions that gated them in the old
   // `.cw-lower` JSX, hoisted because the region's column budget (maxCols) depends on them.
@@ -1304,12 +1306,14 @@ export function CwCockpit({
       </div>
 
       {/* TX DOCK — the transmit chrome, pinned OUTSIDE the pane region so no pane layout,
-          stored or hand-edited, can move, hide or scroll it away. An F-key macro is a
-          ONE-CLICK transmit, so it obeys the same reachability rule as the send bar and
-          PTT: none of them has an id in the panel vocabulary. The TX meters keep their ⊞ id
-          (a readout, not a control) and render at the TOP of the dock — they mount only
-          while keyed, and growing the dock downward would shift the Send button under the
-          operator's pointer mid-QSO. */}
+          stored or hand-edited, can move, hide or scroll it away. Tune and Stop TX are up in
+          the header and have no ⊞ id: that is THE STOP LINE, and it is the only part of this
+          the rule requires. The F-key macros and the send bar have no id either — they are
+          SENDERS, which the rule is indifferent to (Operate's Tx messages is a hideable one),
+          so that is this cockpit keeping its one-click transmits where the operator put them,
+          not a safety constraint. The TX meters keep their ⊞ id (a readout, not a control)
+          and render at the TOP of the dock — they mount only while keyed, and growing the
+          dock downward would shift the Send button under the operator's pointer mid-QSO. */}
       <div className="cockpit-txdock">
         {/* Live transmit meters (SWR / ALC / Po / COMP) — self-gating: shown only while keyed,
             and only the meters the rig reports. A CW op wants SWR + Po as they send. */}

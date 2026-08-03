@@ -2,28 +2,37 @@
 //
 // HIDING THE VOICE KEYER IS A STOP, AND THE OPERATOR IS TOLD BOTH HALVES OF IT FIRST.
 //
-// THE STOP LINE (features/panelState.ts), clause (b): a pane THAT CAN START A TRANSMISSION
-// may be hidden only on two conditions, and this file computes both at the real site:
-//   (b1) the pane's HIDE PATH IS ITSELF A STOP — unmounting it ends what it started;
-//   (b2) its ⊞ entry SAYS SO before the tick.
-// A pane that starts nothing is bound by neither, which is why the sweep at the foot of this
-// file asks the WIRE what each hide did rather than requiring a note from every entry: the
-// seventeen panes that start nothing must carry NO warning, and that is asserted too.
+// THIS FILE COMPUTES THE PRACTICE, NOT THE RULE. THE STOP LINE (features/panelState.ts) is
+// the rule and it is one sentence: the operator must never be unable to stop a transmission,
+// so no control that STOPS one has an id in any vocabulary. That rule says nothing about
+// this pane — the voice keyer transmits, and under the rule that has no bearing on whether
+// it may be hidden, because Stop TX and PTT are not panels and the menu cannot reach them.
+// Three earlier wordings tried to make "hiding it is itself a stop" the price of its ⊞
+// entry; all three were falsified (see panelState.ts for each and why).
 //
-// (b1) is why the suite renders the REAL VoiceKeyer (every other Phone suite stubs it)
+// What IS true, and what this file pins, is THE PRACTICE: a hide that ENDS something already
+// in flight should say so before the tick, because a stop the operator did not ask for reads
+// as a dropout. Courtesy, not safety — but courtesy worth computing, because a warning that
+// goes missing is invisible and one that cries wolf trains the operator to ignore the next.
+// Two properties at the real site:
+//   (1) the keyer's hide really does end things — unmounting it calls stopVoice, and also
+//       cancels a recording in progress;
+//   (2) its ⊞ entry says so before the tick, and an entry whose hide ends nothing does not.
+//
+// (1) is why the suite renders the REAL VoiceKeyer (every other Phone suite stubs it)
 // inside the REAL cockpit and hides it through the panel record the ⊞ menu writes. A test
 // against a stub would prove the pane disappears and nothing about the transmitter.
 //
-// (b2) used to be an assertion about ONE id, which is recitation dressed as enforcement: a
-// second pane admitted the same way would have shipped noteless. It is computed here
-// instead, and the two clauses are wired to each other — the suite drives EVERY id in the
-// Phone vocabulary through the hide path, watches which ones fire a stop at the wire, and
-// requires exactly those to carry a note. No declaration list to keep in step: an id that
-// stops something on hide and says nothing fails, and so does a scare note on an id that
-// stops nothing.
+// (2) used to be an assertion about ONE id, which is recitation dressed as enforcement: a
+// second such pane would have shipped noteless. It is computed here instead, and the two
+// properties are wired to each other — the suite drives EVERY id in the Phone vocabulary
+// through the hide path, watches which ones fire a stop at the wire, and requires exactly
+// those to carry a note. No declaration list to keep in step: an id that stops something on
+// hide and says nothing fails, and so does a scare note on an id that stops nothing. The
+// five Phone panes whose hides end nothing must carry no warning, and that is asserted too.
 //
-// The keyer's hide fires TWO stops, and they are different acts. stopVoice ends a message —
-// that is the stop the pane was admitted for. cancelVoiceRecording DISCARDS a capture in
+// The keyer's hide fires TWO teardowns, and they are different acts. stopVoice ends a
+// message — the one the note was written for. cancelVoiceRecording DISCARDS a capture in
 // progress, which is destruction, not safety, and is not implied by "hide a pane". It is
 // named in the note before the tick and announced by a toast when it happens; both are
 // pinned below.
@@ -215,8 +224,9 @@ describe('hiding the Phone voice keyer', () => {
     expect(document.querySelector('[data-pane="voiceKeyer"] .vk')).not.toBeNull()
     expect(stopVoice).not.toHaveBeenCalled()
 
-    // The operator unticks Voice Keyer. This is the whole safety argument: the pane goes,
-    // and the transmission goes with it.
+    // The operator unticks Voice Keyer: the pane goes, and the transmission goes with it.
+    // Not the safety argument — Stop TX and PTT are still there either way — but the
+    // behaviour the ⊞ note promises, and the reason the note has to exist at all.
     r.rerender(view(['voiceKeyer']))
     await act(async () => {})
     expect(document.querySelector('[data-pane="voiceKeyer"]')).toBeNull()
@@ -253,7 +263,7 @@ describe('hiding the Phone voice keyer', () => {
 
   it('the note names the RECORDING it destroys, not only the message it stops', async () => {
     // Two different acts ride on one tick and the note has to carry both. Stopping a
-    // message is the stop the pane was admitted for; discarding a capture in progress is
+    // message is the one the note was written for; discarding a capture in progress is
     // destruction, and it was not part of that argument. Word-level, because "it says
     // something" is not the property — the operator has to be able to learn THIS from it.
     expect(VOICE_KEYER_STOPS_ON_HIDE).toMatch(/stops? a voice message/i)
@@ -372,7 +382,7 @@ describe('hiding the Phone voice keyer', () => {
   it('an Undo that ends nothing carries no warning', async () => {
     // The converse, same reason as the entry notes: a warning the operator cannot act on
     // teaches him to ignore the next one. Undoing a re-tick of DSP Functions hides a pane
-    // that starts nothing, which is every pane in the app but one.
+    // whose hide ends nothing — which is every entry in every vocabulary but the keyer's.
     render(<LivePanels />)
     await act(async () => {})
     toggle(/DSP Functions/, false)
@@ -410,10 +420,12 @@ describe('hiding the Phone voice keyer', () => {
   })
 
   it('an id whose hide has a consequence at the WIRE carries a note; one that has none does not', async () => {
-    // Clause (b2) of the stop line, computed rather than recited. Drive every id in the
-    // real vocabulary through the real hide path, ask the WIRE what happened, and require
-    // the ⊞ note to agree with it. A second sender admitted tomorrow is covered by this the
-    // day it is added — no list to update, and no way to ship it silent.
+    // THE PRACTICE, computed rather than recited. Drive every id in the real vocabulary
+    // through the real hide path, ask the WIRE what happened, and require the ⊞ note to
+    // agree with it. A second pane whose hide ends something is covered by this the day it
+    // is added — no list to update, and no way to ship it silent. (A sender whose hide ends
+    // NOTHING is not this test's business, and is not the rule's either: it is hideable and
+    // it warns about nothing, which is what Operate's Tx messages already do.)
     //
     // Red both ways at the real site: delete voiceKeyer from `notes` in PhoneCockpit and it
     // fails "stops something on hide and its ⊞ entry says nothing"; add a note to `dsp` and

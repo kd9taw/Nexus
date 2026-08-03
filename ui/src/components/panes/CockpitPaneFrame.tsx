@@ -18,9 +18,10 @@
 // TX-safety: this is a layout wrapper and nothing more. The operator must never be unable
 // to stop a transmission, so his last resort (PTT, abort, Tune, Stop TX) does not render
 // through it — it lives in the shell's pinned .cockpit-txdock or the header, with no id in
-// any pane vocabulary. A TRANSMITTING pane may still sit in a frame (Phone's voice keyer)
-// when hiding that frame is itself the stop: the unmount runs the pane's own cleanup, which
-// ends what it started. See cockpit-panes.css, "THE STOP LINE", for both clauses.
+// any pane vocabulary. A TRANSMITTING pane may sit in a frame and several do (Phone's voice
+// keyer; Operate's Tx messages and its decode/roster panes, which use raw .panel divs but
+// answer to the same rule): being a sender has no bearing on whether a pane may be hidden.
+// See cockpit-panes.css, "THE STOP LINE".
 import type { ReactNode } from 'react'
 
 export function CockpitPaneFrame({

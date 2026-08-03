@@ -35,9 +35,11 @@ interface Props {
  * `.wav`; ✕ clears; Esc / ■ Stop aborts.
  *
  * The ■ Stop here is a convenience, not the operator's last resort — Stop TX in the header
- * and PTT in the dock are, and neither is hideable. That is what lets this pane carry a ⊞
- * Panels entry despite transmitting: see the unmount cleanup below and THE STOP LINE in
- * features/panelState.ts.
+ * and PTT in the dock are, and neither is hideable. That is why this pane carries a ⊞ Panels
+ * entry despite transmitting, and the whole of why: under THE STOP LINE
+ * (features/panelState.ts) a pane's ability to START a transmission has no bearing on
+ * whether it may be hidden. The unmount cleanup below is not what buys the entry — it is
+ * what the entry's note has to WARN ABOUT.
  */
 export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props) {
   const [msgs, setMsgs] = useState<VoiceMessage[]>([])
@@ -70,12 +72,14 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
   }, [])
 
   // Unmount tears down BOTH transmit paths. This runs when the operator leaves the Phone
-  // section and, since 2026-08-03, when he unticks Voice Keyer in ⊞ Panels — which is the
-  // whole reason the pane is allowed a menu entry at all (features/panelState.ts, clause
-  // (b) of THE STOP LINE: a hideable pane's hide path must itself be the stop).
+  // section and, since 2026-08-03, when he unticks Voice Keyer in ⊞ Panels. It is not what
+  // permits the menu entry — nothing had to permit it (features/panelState.ts, THE STOP
+  // LINE) — it is why the entry carries a warning: a stop the operator did not ask for is
+  // indistinguishable from a dropout.
   //
   // The two teardowns are not the same act, and the second one is DESTRUCTIVE:
-  //   · stopVoice ends a message that is playing. That is a stop, and stopping is the point.
+  //   · stopVoice ends a message that is playing. Cleanup, not safety — the operator could
+  //     have stopped it from the dock either way — but it is an over cut short, so it speaks.
   //   · cancelVoiceRecording DISCARDS an in-progress capture (lib.rs: take + drop the
   //     buffer). Nothing about hiding a pane implies "throw away the recording I am making",
   //     so it may not happen silently. It still has to happen — leaving the recorder running

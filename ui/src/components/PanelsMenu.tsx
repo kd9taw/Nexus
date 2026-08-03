@@ -8,12 +8,17 @@
 // Only the panels the CURRENT layout renders are listed. The operator's way to STOP a
 // transmission is not a panel at all, so it has no entry here by construction (see
 // features/panelState, THE STOP LINE) — an entry can cost you a sender, never the way to
-// shut one up. A sender that stops itself when hidden may be listed, and then its entry
-// must carry a `note` saying what the tick ends.
+// shut one up. Senders ARE listed, several of them: Operate's Tx messages, its decode panes
+// and rosters, Phone's voice keyer. That is the rule holding, not a hole in it.
+//
+// A listed pane whose hide ENDS something in flight carries a `note` saying what the tick
+// ends. That is courtesy rather than the safety rule (a stop the operator did not ask for
+// reads as a dropout), and it is required of exactly those panes — a note on an entry whose
+// hide ends nothing teaches him to ignore the next one.
 //
 // THE TICK IS NOT THE ONLY BUTTON IN THIS MENU THAT HIDES A PANE. "Undo last change"
-// restores the layout as it was before the last change, and when that layout had a sender
-// unticked, pressing it unmounts the sender exactly as a tick does — so it carries the same
+// restores the layout as it was before the last change, and when that layout had such a pane
+// unticked, pressing it unmounts it exactly as a tick does — so it carries the same
 // consequence line, in the same words, before the press (`undoNote`). "Reset layout" does
 // not need one: it applies the empty record, and an absent state means 'docked', so reset
 // can only ever put panes back.
@@ -46,7 +51,8 @@ export interface PanelsMenuItem {
    *    · why this panel has nothing on screen right now, and what would change that (no
    *      native scope streaming; TX meters read on transmit);
    *    · what unticking it will END (Phone's Voice Keyer stops a message and discards a
-   *      recording — the price of its being hideable at all; see THE STOP LINE).
+   *      recording — courtesy before the act, not the price of a menu entry; see THE STOP
+   *      LINE, "the practice").
    *  Shown under the entry and attached to the checkbox as its accessible description.
    *  The entry stays a plain, operable checkbox — this annotates it, never disables it.
    *  Not shown once the panel IS removed: by then the first kind is no longer why the
@@ -62,11 +68,12 @@ interface Props {
   /** Restore the layout as it was before the last change. */
   onUndo: () => void
   canUndo: boolean
-  /** What THIS undo will END, when the layout it restores had a transmitting pane unticked.
-   *  Clause (b) of THE STOP LINE puts the consequence before the act, and Undo is a second
-   *  button that reaches the same teardown as the tick — untick the voice keyer, tick it
-   *  back, start a recording, press Undo, and the take is binned. Undefined when the undo
-   *  ends nothing, which is every undo in every cockpit but Phone's keyer today.
+  /** What THIS undo will END, when the layout it restores had a pane unticked whose hide
+   *  ends something. THE PRACTICE half of THE STOP LINE puts the consequence before the act,
+   *  and Undo is a second button that reaches the same teardown as the tick — untick the
+   *  voice keyer, tick it back, start a recording, press Undo, and the take is binned.
+   *  Undefined when the undo ends nothing, which is every undo in every cockpit but Phone's
+   *  keyer today.
    *
    *  Reset needs no twin of this: it applies the empty record and an absent state means
    *  'docked', so Reset can only ever put panes BACK. */

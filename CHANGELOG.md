@@ -47,12 +47,15 @@ The menu also gains one entry it never had: **Voice Keyer** in Phone. If you wor
 never touch the F-key slots, you can now put that pane away and the panes around it take the room.
 It was held out until now by a blunt rule — nothing that transmits gets a checkbox — and the rule
 is narrower now, because what it was really protecting is one thing: **you must never be unable to
-stop a transmission.** PTT, Stop TX and Tune are still not panels, have no entry, and no saved
-layout can put them out of reach; and beyond that, a pane that can *start* a transmission may only
-be hidden if closing it ends what it started. Unticking Voice Keyer while a message is playing
-stops the message rather than leaving it transmitting behind a pane you just closed. It also
-throws away a recording you are part-way through making — that one is not what "hide a pane"
-sounds like, so the entry says it before you tick.
+stop a transmission.** PTT, Stop TX, Tune and the TX-enable latch are not panels, have no entry,
+and no saved layout can put them out of reach. Whether a pane can *start* a transmission has
+nothing to do with whether you can put it away — the Operating screen's Tx messages and its decode
+lists have always been yours to hide, and Stop TX sits in the operating strip either way.
+
+Separately, and because it is worth telling you rather than because anything requires it: unticking
+Voice Keyer while a message is playing stops the message rather than leaving it transmitting behind
+a pane you just closed, and it throws away a recording you are part-way through making. Neither is
+what "hide a pane" sounds like, so the entry says both before you tick.
 
 **Undo last change** puts the keyer away by the same door, so it now says the same thing before
 you press it. (Untick the keyer, tick it back, start a recording, press Undo — the recording used

@@ -66,36 +66,45 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   `fit="content"` for control strips (exactly content height — a strip cannot use surplus),
   fill + `weight` for feeds and the log column. A pane never sizes itself; structural size
   lives in `cockpit-panes.css` (flat selectors, fenced) and only there.
-- **The stop line** (2026-08-03): **the operator must never be unable to stop a transmission.**
-  Two things hold that: **(a)** every control that *stops* one — PTT, Stop TX, Tune, the TX-enable
-  latch, abort — has **no id in any pane vocabulary**, so hiding it is unrepresentable rather than
-  guarded; **(b)** a pane **that can start a transmission** may be hidden only if its **hide path
-  is itself a stop** — unmounting it ends what it started — **and** its ⊞ entry says so before the
-  tick. A pane that starts nothing is bound by neither half. Hosting a ■ Stop of its own neither
-  admits nor excludes a pane; (b) is the test. (Phone's voice keyer is the only pane (b) has ever
-  had to bind: unmounting it calls `stopVoice`. Two earlier wordings were wrong in opposite
-  directions — "a pane that can only start a transmission may be hidden" excluded the pane it was
-  written to admit, because the keyer has a Stop button; "a pane that *may be hidden* has a hide
-  path that is itself a stop" bound all 18 hideable panes, forbidding the seventeen that start
-  nothing.)
+- **The stop line** (2026-08-03, fourth wording). **The rule, and it is safety:** *the operator must
+  never be unable to stop a transmission.* Therefore every control that **stops** one — PTT, Stop TX,
+  Tune, the TX-enable latch, abort — has **no id in any pane vocabulary**, in any cockpit; hiding one
+  is unrepresentable rather than guarded. **Whether a pane can *start* a transmission has no bearing
+  on whether it may be hidden.** Phone's voice keyer, Operate's Tx messages (Tx6 = Call CQ) and
+  Operate's decode panes and rosters (double-click works a station, which arms TX) are all senders,
+  all hideable, and the operator can still stop any of them from the dock or the QSO strip.
+  **The practice, and it is courtesy, not safety:** if hiding a pane *ends* something in flight, its
+  ⊞ entry should say so before the tick — a stop the operator did not ask for reads as a dropout.
+  That is why the voice keyer's entry warns (its unmount aborts a message and discards a recording);
+  a pane whose hide ends nothing must carry no warning. Nothing is admitted or refused on it.
+  *Three earlier wordings were falsified, and the record is kept in `panelState.ts` and
+  `cockpit-panes.css` because it is what stops a fourth proxy:* "a pane that can only start a
+  transmission may be hidden" excluded the pane it was written to admit (the keyer has a Stop
+  button); "a pane that *may be hidden* has a hide path that is itself a stop" bound every hideable
+  pane, forbidding 23 of the 24 entries in `ALL_PANEL_VOCABULARIES`; "a pane that *can start* a
+  transmission may be hidden only if its hide is a stop" was violated by shipped code — Operate's
+  `txmsgs` starts a CQ, is hideable, and its hide stops nothing and says nothing. Each was a proxy
+  for the guarantee; the guarantee only needs a stop control to be **reachable**.
   Two guards, and neither is the rule alone: `panelState.test.ts` checks **names** across every
   vocabulary (`ALL_PANEL_VOCABULARIES`, itself checked against every vocabulary the module
-  exports); `components/stop-line.test.tsx` (+ `OperateCockpit.structure.test.tsx` for Operate)
-  checks **wiring** — with every id in a cockpit's vocabulary removed, every stop control must
-  still be in the document, found by accessible name, and no more disabled than it was. A stop
-  control gated on an id called `dsp` is caught only by the second; a dead `ptt` entry only by
-  the first. Render each cockpit with **the props App gives it** — the TX-enable latch only exists
-  when `onSetTxEnabled` is passed, and omitting it made the RTTY/SSTV sweeps blind to the one
-  control (a) names by name.
+  exports); `components/stop-line.test.tsx` checks **wiring** for Phone/CW/RTTY/SSTV — with every id
+  in a cockpit's vocabulary removed, singly and all at once, every stop control must still be in the
+  document, found by accessible name, and no more disabled than it was. Operate is swept in
+  `OperateCockpit.structure.test.tsx`, and that sweep is **presence-only** (see the next bullet) —
+  not the same check. A stop control gated on an id called `dsp` is caught only by the wiring
+  sweeps; a dead `ptt` entry only by the name guard. Render each cockpit with **the props App gives
+  it** — the TX-enable latch only exists when `onSetTxEnabled` is passed, and omitting it made the
+  RTTY/SSTV sweeps blind to the one control the rule names by name.
 - **What the stop-line guards do NOT prove.** Written down rather than chased with more guards:
   neither sweep can see a stop control that is **present, enabled and inert** (an
-  `onClick={() => {}}` on Stop TX passes all 2106 tests); the name backstop is **exact-word** on whole
-  normalised ids, so `txStop`/`pttRow`/`killTx` pass it — substring matching is not an option,
-  it rejects `voiceKeyer` for containing `keyer`; **clause (b) is computed for Phone only**, with
-  no coverage test across vocabularies of the kind the name guard has; **Operate's sweep is
-  presence-only** (no baseline, no `disabled` comparison, no one-id-at-a-time pass) and is not
-  the equivalent of the four-cockpit sweep; and that a *newly added* stop control reached its
-  cockpit's sweep list is a human step.
+  `onClick={() => {}}` on Stop TX passed the whole suite — 2106 tests at the time); the name backstop
+  is **exact-word** on whole normalised ids, so `txStop`/`pttRow`/`killTx` pass it — substring
+  matching is not an option, it rejects `voiceKeyer` for containing `keyer`; the **practice
+  note-pairing is computed for Phone only**, with no coverage test across vocabularies of the kind
+  the name guard has (that costs courtesy, not the guarantee); **Operate's sweep is presence-only**
+  (no baseline, no `disabled` comparison, no one-id-at-a-time pass) and is not the equivalent of the
+  four-cockpit sweep; and that a *newly added* stop control reached its cockpit's sweep list is a
+  human step.
 - Responsive behavior: `[data-viewport='xs|sm|md|lg|xl']` + `--vh-eff`/`--vw-eff` only. Never a
   size-based `@media`, never raw `vh/vw` inside `.app` (zoom-blind) — the portaled
   `.ui-dialog`/`.ui-tooltip` are the one permanent exception (their content re-applies

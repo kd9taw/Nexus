@@ -9,61 +9,89 @@
 // rather than guarded — and the Classic/Roster presets stop fighting the operator for
 // the same reason.
 //
-// TX-safety — THE STOP LINE (2026-08-03 operator ruling, restated later the same day after
-// the first wording contradicted itself). THE RULE IS:
+// TX-safety — THE STOP LINE (2026-08-03 operator ruling). This is the FOURTH wording; the
+// three it replaces are kept below, each with the reason it failed, because that record is
+// what stops a fifth attempt at a proxy.
+//
+// THE RULE (safety, enforced):
 //
 //   THE OPERATOR MUST NEVER BE UNABLE TO STOP A TRANSMISSION.
 //
-//   Two things hold that:
-//     (a) every control that STOPS one — PTT, Stop TX, Tune, the TX-enable latch, abort —
-//         has no id in any pane vocabulary, so hiding it is UNREPRESENTABLE, not guarded;
-//     (b) a pane THAT CAN START A TRANSMISSION may be hidden only if its HIDE PATH IS
-//         ITSELF A STOP — unmounting it ends what it started — AND its ⊞ entry says so
-//         before the tick. A pane that starts nothing is bound by neither half: there is
-//         nothing for its hide to end, and nothing to warn about.
-//   Hosting a ■ Stop of its own neither admits nor excludes a pane. (b) is the test.
+//   Therefore every control that STOPS one — PTT, Stop TX, Tune, the TX-enable latch,
+//   abort — has NO id in any pane vocabulary, in any cockpit. Hiding one is
+//   UNREPRESENTABLE rather than guarded: there is no menu entry, no stored value and no
+//   coercion rule that can reach it, which is strictly stronger than a `removable: false`
+//   flag a bad code path or a hand-edited blob could bypass.
 //
-// TWO EARLIER WORDINGS, both kept here as the reason for this shape. The first read "a pane
-// that can only START a transmission may be hidden; anything that can STOP one may never
-// be", and it excluded the one pane it was written to admit: the voice keyer hosts a ■ Stop
-// button. A pane's own Stop button is not the operator's last resort — the dock is.
-// The second opened (b) with "a pane that MAY BE HIDDEN has a hide path that is itself a
-// stop", which by its own words bound every hideable pane — and Band Activity, DSP, the
-// waterfall, the SSTV gallery and thirteen others start nothing and stop nothing, so the
-// rule forbade the panes it admits. Same defect as the first, pointing the other way. (b)
-// therefore names its subject: a pane that CAN START one.
+//   Whether a pane can START a transmission has NO BEARING on whether it may be hidden.
+//   Phone's voice keyer, Operate's Tx messages (Tx6 = Call CQ → startCq) and Operate's two
+//   decode panes and two rosters (double-click works a station — the engine arms TX and
+//   keys the current period) are all senders, all hideable, and the operator can still
+//   stop any of them from the dock or the QSO strip.
 //
-// Under (a): the dial, the band/mode pickers, the Rx/Tx offset spinners and the QSO strip's
-// TX On / Tune / Stop TX / Hold Tx have no id here — there is no menu entry, no stored
-// value and no coercion rule that can reach them, which is strictly stronger than a
-// `removable: false` flag a bad code path or a hand-edited blob could bypass.
+// THE PRACTICE (courtesy, not safety — and it must be read as courtesy):
 //
-// Under (b): Phone's voice keyer is the first pane the clause has ever had to bind, because
-// it is the first hideable pane that can start a transmission. Its unmount cleanup calls
-// stopVoice, so unticking it aborts the message rather than leaving it playing with the
-// abort scrolled away — and the ⊞ entry says so before the tick, because a stop the
-// operator did not ask for is indistinguishable from a dropout. A pane that would keep
-// transmitting after its own unmount fails (b) and stays out, ■ Stop button or not. Every
-// other pane in every vocabulary here starts nothing, so (b) has nothing to say about it.
+//   If hiding a pane ENDS something already in flight, its ⊞ entry should say so before the
+//   tick, because a stop the operator did not ask for reads as a dropout. That is why the
+//   voice keyer's entry warns: its unmount aborts a message and discards a recording (the
+//   second is destruction rather than safety, so it is named separately). A pane whose hide
+//   ends nothing needs no warning — one the operator cannot act on teaches him to ignore
+//   the next one. Computed in PhoneCockpit.keyerHide.test.tsx, which asks the WIRE which
+//   hides stopped something and requires exactly those entries to carry a note. Courtesy is
+//   worth computing; it is still not the safety rule, and nothing may be admitted or
+//   refused on it.
+//
+// THREE EARLIER WORDINGS, ALL FALSIFIED. Each was a PROXY for the guarantee rather than the
+// guarantee, and a proxy has to be re-argued the moment something new turns up at the line:
+//   1. "A pane that can only START a transmission may be hidden; anything that can STOP one
+//      may never be." — EXCLUDED THE VOICE KEYER, the pane it was written to admit, because
+//      the keyer hosts a ■ Stop button of its own. A pane's own Stop is a convenience; the
+//      operator's last resort is the dock.
+//   2. "A pane that MAY BE HIDDEN has a hide path that is itself a stop — unmounting it ends
+//      what it started — and its ⊞ entry says so." — By its own words it bound EVERY
+//      hideable pane, and only the voice keyer's hide is a stop, so it forbade 23 of the 24
+//      entries in ALL_PANEL_VOCABULARIES: every pane that ships except the one it was
+//      written for. The first defect, pointing the other way.
+//   3. "A pane THAT CAN START A TRANSMISSION may be hidden only if its hide path is itself a
+//      stop AND its ⊞ entry says so." — VIOLATED BY SHIPPED CODE. Operate's `txmsgs` hosts
+//      Tx1–Tx6, and Tx6 is "Call CQ (Alt+6)" → `startCq`: it can start a transmission, it is
+//      hideable, its hide stops nothing and says nothing, and it has shipped that way for
+//      months. Operate's bandActivity/rxfreq/callRoster/stations are four more of the same.
+//   THE DIAGNOSIS behind all three: "the hide is itself a stop" was never a safety
+//   requirement. It is a property the voice keyer HAPPENS to have — its unmount cleanup
+//   calls stopVoice — generalised into a rule. Hide Operate's Tx messages mid-CQ and the
+//   over continues; Stop TX is still in the QSO strip, so the operator can still stop it.
+//   THE GUARANTEE HOLDS WITHOUT IT. What the guarantee actually needs is only that a stop
+//   control can always be REACHED, which is the rule above and nothing more.
+//
+// WHAT HAS NO ID HERE, and therefore cannot be hidden: the dial, the band/mode pickers, the
+// Rx/Tx offset spinners, the QSO strip's TX On / Tune / Stop TX / Hold Tx, Phone's PTT row,
+// CW's F-key macros and send bar, RTTY's TX-arm and auto-sequencer abort, SSTV's Send/Stop
+// bar. Counted 2026-08-03: 24 entries across five vocabularies (19 distinct ids), of which
+// six can start a transmission and exactly one — voiceKeyer — has a hide that stops
+// anything. Recount from ALL_PANEL_VOCABULARIES at the foot of this file; do not trust the
+// numbers, they are here to be checked.
 //
 // ENFORCEMENT — two guards, and neither is the rule on its own:
 //   · the NAME backstop (panelState.test.ts, driven by ALL_PANEL_VOCABULARIES at the foot
 //     of this file) — no vocabulary may contain an id NAMED for a stop control. It reads
 //     names, never wiring: a stop control gated on an id called `dsp` walks past it.
 //   · the RENDERED sweep in components/stop-line.test.tsx (Phone/CW/RTTY/SSTV, with the
-//     REAL CockpitHeader and the props App passes) and in OperateCockpit.structure.test.tsx
-//     (Operate, whose stop controls are in the merged QSO strip) — with EVERY id in that
-//     cockpit's vocabulary removed, singly and all at once, every stop control must still be
-//     in the document, found by its accessible name. It reads wiring, never names: a dead
-//     `ptt` id that gates nothing walks past IT.
+//     REAL CockpitHeader and the props App passes) — with EVERY id in that cockpit's
+//     vocabulary removed, singly and all at once, every stop control must still be in the
+//     document, found by its accessible name and no more disabled than it was. Operate is
+//     swept in OperateCockpit.structure.test.tsx, and that one is PRESENCE-ONLY: every id
+//     removed at once, no baseline, no `disabled` comparison, no one-id-at-a-time pass. It
+//     is NOT the four-cockpit sweep's equivalent. Both read wiring, never names: a dead
+//     `ptt` id that gates nothing walks past THEM.
 //
 // WHAT THE GUARDS DO NOT PROVE — the full list is in the cockpit-panes.css header and
 // CLAUDE.md, and it is short enough to carry the headline here: NEITHER SWEEP CAN SEE A STOP
 // CONTROL THAT IS PRESENT, ENABLED AND INERT (an `onClick={() => {}}` on Stop TX passes the
 // whole suite); the name backstop is EXACT-WORD, so `txStop`/`pttRow`/`killTx` walk past it;
-// clause (b) is computed for Phone only; Operate's sweep is presence-only and is not the
-// equivalent of the four-cockpit one; and that a NEWLY ADDED stop control reached its
-// cockpit's sweep list is a human step, named in each sweep.
+// the PRACTICE note-pairing is computed for Phone only; Operate's sweep is presence-only and
+// is not the equivalent of the four-cockpit one; and that a NEWLY ADDED stop control reached
+// its cockpit's sweep list is a human step, named in each sweep.
 import { useCallback, useMemo, useState } from 'react'
 import { windowInstance } from './windowScope'
 
@@ -270,11 +298,12 @@ export interface PanelLayoutApi<P extends string> {
   /** The ids the next `undo()` would REMOVE — the panes that call would unmount. Empty when
    *  there is nothing to undo, or when the undo only puts panes back.
    *
-   *  It exists for clause (b) of THE STOP LINE: a pane that can start a transmission has to
-   *  say what its hide ends BEFORE the act, and ⊞ Undo is a second button that reaches the
-   *  same teardown as the tick (untick the keyer, tick it back, record, Undo — the take was
-   *  binned with no warning). ⊞ Reset needs no such list: it applies `emptyPanelLayout()`
-   *  and `stateOf` defaults to 'docked', so reset can only ever MOUNT a pane. */
+   *  It exists for THE PRACTICE half of THE STOP LINE: a hide that ENDS something in flight
+   *  should say so BEFORE the act, and ⊞ Undo is a second button that reaches the same
+   *  teardown as the tick (untick the keyer, tick it back, record, Undo — the take was
+   *  binned with no warning). Courtesy, not safety: the operator's way to stop is in the
+   *  dock either way. ⊞ Reset needs no such list — it applies `emptyPanelLayout()` and
+   *  `stateOf` defaults to 'docked', so reset can only ever MOUNT a pane. */
   undoRemoves: readonly P[]
   /** Back to stock — every panel docked, every share reset. Undoable like any change. */
   reset: () => void
@@ -373,7 +402,15 @@ export function usePanelLayout<P extends string>(
   }
 }
 
-/** The Operate cockpit's removable panels — the first consumer's vocabulary. */
+/** The Operate cockpit's removable panels — the first consumer's vocabulary.
+ *
+ *  FIVE OF THESE SEVEN ARE SENDERS, and they are the shipped counter-example that falsified
+ *  the third wording of THE STOP LINE (see the header). `txmsgs` hosts Tx1–Tx6, Tx6 being
+ *  "Call CQ (Alt+6)" → `startCq`; `bandActivity`, `rxfreq`, `callRoster` and `stations` all
+ *  work a station on double-click, which arms TX and keys the current period. Every one is
+ *  hideable, none of their hides stops anything, and none of them warns — correctly. Hide
+ *  Tx messages mid-CQ and the over continues, with TX On / Tune / Stop TX / Hold Tx still
+ *  in the merged QSO strip, where no ⊞ id can reach them. That is the rule holding. */
 export const OPERATE_PANEL_IDS = [
   'waterfall',
   'bandActivity',
@@ -402,16 +439,22 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
 
 /** Phone cockpit's removable panels (Phase 3) — the panes UNDER the scope. The scope, the
  *  whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW) and the PTT row are
- *  NOT panels: each hosts a way to STOP a transmission, which is clause (a). The log strip
- *  is not one either, for a different reason — it holds a QSO the operator is part-way
- *  through typing, and a tick that drops unsaved work is its own kind of harm.
+ *  NOT panels: each hosts a way to STOP a transmission, which is THE RULE. The log strip is
+ *  not one either, for a different reason — it holds a QSO the operator is part-way through
+ *  typing, and a tick that drops unsaved work is its own kind of harm.
  *
- *  `voiceKeyer` IS one, since 2026-08-03 — the first pane admitted under clause (b) of the
- *  stop line at the top of this file. It transmits, and it hosts a ■ Stop of its own; what
- *  admits it is neither of those, it is that HIDING IT IS A STOP (VoiceKeyer's unmount
- *  cleanup calls stopVoice), so no tick here can leave the operator keyed with the abort
- *  scrolled away. The ⊞ entry says so before the tick — including that the same cleanup
- *  discards a recording in progress. */
+ *  `voiceKeyer` IS one, since 2026-08-03. Nothing about it needed admitting: it transmits,
+ *  and under the rule that has no bearing on whether it may be hidden — Stop TX and PTT are
+ *  not panels, so the operator's last resort is out of the menu's reach whatever he ticks.
+ *  Its own ■ Stop is a convenience and settles nothing either way; an earlier wording turned
+ *  on it and thereby forbade the pane it was written to admit.
+ *
+ *  Its entry DOES carry a warning, and that is THE PRACTICE, not the rule: VoiceKeyer's
+ *  unmount cleanup calls stopVoice, so unticking it ends a message in flight, and the same
+ *  cleanup discards a recording in progress. Both are named before the tick because a stop
+ *  the operator did not ask for reads as a dropout. A hideable sender whose hide ends
+ *  nothing — Operate's Tx messages, its decode panes, its rosters — warns about nothing,
+ *  and must not. */
 export const PHONE_PANEL_IDS = [
   'rigscope',
   'txmeters',
@@ -503,8 +546,9 @@ export function redockAllStalePopouts(): void {
  *     gating the PTT row passes it. components/stop-line.test.tsx is what reads wiring.
  *   · the comparison is WHOLE-WORD, not substring, so `txStop`, `pttRow`, `stopButton` and
  *     `killTx` all pass. Substring matching is not the fix: it rejects `voiceKeyer` on the
- *     spot for containing `keyer` — the very pane the rule was rewritten to admit. This is a
- *     backstop against the obvious, and it is worth exactly that.
+ *     spot for containing `keyer` — the pane this whole round of rewrites was about, and one
+ *     the rule has no quarrel with. This is a backstop against the obvious, and it is worth
+ *     exactly that.
  * Keep both guards.
  */
 export const STOP_CONTROL_WORDS = [
