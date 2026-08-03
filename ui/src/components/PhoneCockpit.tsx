@@ -102,13 +102,33 @@ const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
  *  it, and its cleanup does two things: stopVoice (a stop — that is the point, and it is
  *  what admits this pane to the vocabulary at all) and cancelVoiceRecording, which throws
  *  away a capture in progress. The second one is destructive and is not implied by "hide a
- *  pane", so it is named here in the same breath. The discard also announces itself when it
- *  happens (VoiceKeyer's cleanup), for the operator who arrives via ⊞ Reset layout and never
- *  reads this line. PanelsMenu hangs it off aria-describedby, so it reaches a screen reader.
+ *  pane", so it is named here in the same breath. Both also announce themselves when they
+ *  happen (VoiceKeyer's cleanup), for the operator who walked off the Phone screen and never
+ *  opened a menu. PanelsMenu hangs this off aria-describedby, so it reaches a screen reader.
  */
 export const VOICE_KEYER_STOPS_ON_HIDE =
   'hiding this stops a voice message that is playing and throws away a recording in ' +
   'progress — the F-keys go with it'
+
+/** The same consequence for the OTHER button in the ⊞ menu that reaches the same teardown.
+ *  ⊞ Undo restores the layout as it was before the last change, so when that layout had the
+ *  keyer unticked, pressing Undo unmounts the keyer exactly as a tick does — reproduced:
+ *  untick, tick back, start a recording, press Undo, and the take is binned. The tick warns
+ *  first; so does this.
+ *
+ *  ⊞ RESET LAYOUT DOES NOT REACH IT, and three places used to say it did. `reset` applies
+ *  `emptyPanelLayout()` and `stateOf` reads an absent state as 'docked', so Reset can only
+ *  ever MOUNT the keyer — it is Undo that is the second hide path, and it is the one that
+ *  needed covering.
+ *
+ *  Hand-paired with `voiceKeyer` here rather than generalised through panelHost: there is
+ *  exactly one pane in the app whose hide ends anything. The PAIRING is what is computed —
+ *  PhoneCockpit.keyerHide.test.tsx drives every id through the undo path and asks the wire —
+ *  so a second such pane fails the day it is added, and that is the day this moves into the
+ *  spec beside `notes`. */
+export const VOICE_KEYER_UNDO_ENDS =
+  'undo hides Voice Keyer again — that stops a voice message that is playing and throws ' +
+  'away a recording in progress'
 
 /** Expert DSP-function toggles. `key` matches the RadioStatus field + the set_rig_func name; the
  * cockpit only renders those the rig reports as supported (field non-null), so no dead buttons. */
@@ -500,7 +520,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // discards a recording, which is the price of its being hideable at all (THE STOP LINE,
   // clause (b)). That note is required, not decorative — PhoneCockpit.keyerHide.test.tsx
   // hides every id here, asks the wire which hides stopped something, and requires exactly
-  // those entries to carry one.
+  // those entries to carry one. The menu's Undo button reaches the same hide and carries the
+  // same consequence (VOICE_KEYER_UNDO_ENDS); Reset cannot reach it at all.
   //
   // The notes explain; every box stays the operator's.
   const host = panels
@@ -584,7 +605,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // lives. The keyer's own ■ Stop is a convenience and has no bearing either way; an earlier
   // wording of this rule turned on it and thereby forbade the pane it was written to admit.
   // Because the hide really does end things, the ⊞ entry carries VOICE_KEYER_STOPS_ON_HIDE —
-  // the stopped message AND the discarded recording — before the tick rather than after.
+  // the stopped message AND the discarded recording — before the tick rather than after, and
+  // ⊞ Undo, which reaches the same unmount, carries VOICE_KEYER_UNDO_ENDS.
   //
   // Because it transmits, this pane must NEVER remount for any reason but its OWN entry:
   // the same cleanup that makes hiding it safe is data loss when the region merely
@@ -595,7 +617,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // of other panels, and the restore back to stock).
   const keyerPane = hasKeyerPane ? (
     <CockpitPaneFrame title="Voice keyer" paneId="voiceKeyer" fit="content">
-      <VoiceKeyer txEnabled={snap.radio.txEnabled} keyed={keyed} fdExchange={fdExchange} />
+      <VoiceKeyer
+        txEnabled={snap.radio.txEnabled}
+        keyed={keyed}
+        transmitting={snap.radio.transmitting}
+        fdExchange={fdExchange}
+      />
     </CockpitPaneFrame>
   ) : null
 
@@ -817,6 +844,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               }
               onUndo={panels.undo}
               canUndo={panels.canUndo}
+              // Undo is the ⊞ menu's second hide path — see VOICE_KEYER_UNDO_ENDS.
+              undoNote={
+                panels.undoRemoves.includes('voiceKeyer') ? VOICE_KEYER_UNDO_ENDS : undefined
+              }
               onReset={panels.reset}
             />
           ) : undefined

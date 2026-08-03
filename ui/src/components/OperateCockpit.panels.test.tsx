@@ -86,6 +86,7 @@ function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLay
     setShares: vi.fn(),
     undo: vi.fn(),
     canUndo: false,
+    undoRemoves: [],
     reset: vi.fn(),
   }
 }

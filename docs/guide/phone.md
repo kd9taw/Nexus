@@ -46,8 +46,11 @@ the box, or a consequence to unticking it — the entry says so in a line under 
 - **Voice Keyer** puts the F-key message pane away if you work with a mic and
   never use it. Unticking it stops a message that is playing and throws away a
   recording you are part-way through making; the entry says both before you tick
-  it. Nothing else changes: PTT, Tune and Stop TX are not panels and have no
-  entry, so no layout you save can put them out of reach.
+  it, and **Undo last change** — which can put the pane away again — carries the
+  same line before you press it. Whichever way the pane closes, including simply
+  leaving the Phone screen, Nexus tells you what it ended: the over it cut short,
+  or the recording it discarded. Nothing else changes: PTT, Tune and Stop TX are
+  not panels and have no entry, so no layout you save can put them out of reach.
 
 The line explains the screen; the tick is still yours. Every box in the menu can
 be ticked and unticked whenever you like, and what you choose applies the moment

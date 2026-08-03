@@ -97,6 +97,7 @@ function fakePanels(removed: SstvPanelId[] = []): PanelLayoutApi<SstvPanelId> {
     setShares: () => {},
     undo: () => {},
     canUndo: false,
+    undoRemoves: [],
     reset: () => {},
   }
 }

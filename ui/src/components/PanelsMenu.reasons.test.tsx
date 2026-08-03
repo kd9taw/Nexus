@@ -204,6 +204,7 @@ function fakePanels<P extends string>(state: Partial<Record<P, PanelState>> = {}
     setShares: vi.fn(),
     undo: vi.fn(),
     canUndo: false,
+    undoRemoves: [],
     reset: vi.fn(),
   }
 }

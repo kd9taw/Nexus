@@ -14,42 +14,56 @@
 //
 //   THE OPERATOR MUST NEVER BE UNABLE TO STOP A TRANSMISSION.
 //
-//   Two things hold that, and a hideable pane needs both:
+//   Two things hold that:
 //     (a) every control that STOPS one — PTT, Stop TX, Tune, the TX-enable latch, abort —
 //         has no id in any pane vocabulary, so hiding it is UNREPRESENTABLE, not guarded;
-//     (b) a pane that may be hidden has a HIDE PATH THAT IS ITSELF A STOP: unmounting it
-//         ends whatever that pane started.
+//     (b) a pane THAT CAN START A TRANSMISSION may be hidden only if its HIDE PATH IS
+//         ITSELF A STOP — unmounting it ends what it started — AND its ⊞ entry says so
+//         before the tick. A pane that starts nothing is bound by neither half: there is
+//         nothing for its hide to end, and nothing to warn about.
 //   Hosting a ■ Stop of its own neither admits nor excludes a pane. (b) is the test.
 //
-// The first wording was "a pane that can only START a transmission may be hidden; anything
-// that can STOP one may never be", and it excluded the one pane it was written to admit:
-// the voice keyer hosts a ■ Stop button. That sentence was a proxy for the property above,
-// and it was the wrong proxy — a pane's own Stop button is not the operator's last resort,
-// the dock is. Name the property, not a symptom of it.
+// TWO EARLIER WORDINGS, both kept here as the reason for this shape. The first read "a pane
+// that can only START a transmission may be hidden; anything that can STOP one may never
+// be", and it excluded the one pane it was written to admit: the voice keyer hosts a ■ Stop
+// button. A pane's own Stop button is not the operator's last resort — the dock is.
+// The second opened (b) with "a pane that MAY BE HIDDEN has a hide path that is itself a
+// stop", which by its own words bound every hideable pane — and Band Activity, DSP, the
+// waterfall, the SSTV gallery and thirteen others start nothing and stop nothing, so the
+// rule forbade the panes it admits. Same defect as the first, pointing the other way. (b)
+// therefore names its subject: a pane that CAN START one.
 //
 // Under (a): the dial, the band/mode pickers, the Rx/Tx offset spinners and the QSO strip's
 // TX On / Tune / Stop TX / Hold Tx have no id here — there is no menu entry, no stored
 // value and no coercion rule that can reach them, which is strictly stronger than a
 // `removable: false` flag a bad code path or a hand-edited blob could bypass.
 //
-// Under (b): Phone's voice keyer is the first pane admitted. Its unmount cleanup calls
+// Under (b): Phone's voice keyer is the first pane the clause has ever had to bind, because
+// it is the first hideable pane that can start a transmission. Its unmount cleanup calls
 // stopVoice, so unticking it aborts the message rather than leaving it playing with the
 // abort scrolled away — and the ⊞ entry says so before the tick, because a stop the
 // operator did not ask for is indistinguishable from a dropout. A pane that would keep
-// transmitting after its own unmount fails (b) and stays out, ■ Stop button or not.
+// transmitting after its own unmount fails (b) and stays out, ■ Stop button or not. Every
+// other pane in every vocabulary here starts nothing, so (b) has nothing to say about it.
 //
 // ENFORCEMENT — two guards, and neither is the rule on its own:
 //   · the NAME backstop (panelState.test.ts, driven by ALL_PANEL_VOCABULARIES at the foot
 //     of this file) — no vocabulary may contain an id NAMED for a stop control. It reads
 //     names, never wiring: a stop control gated on an id called `dsp` walks past it.
 //   · the RENDERED sweep in components/stop-line.test.tsx (Phone/CW/RTTY/SSTV, with the
-//     REAL CockpitHeader) and in OperateCockpit.structure.test.tsx (Operate, whose stop
-//     controls are in the merged QSO strip) — with EVERY id in that cockpit's vocabulary
-//     removed, singly and all at once, every stop control must still be in the document,
-//     found by its accessible name. It reads wiring, never names: a dead `ptt` id that
-//     gates nothing walks past IT.
-// What neither computes: that a NEWLY ADDED stop control was added to its cockpit's sweep
-// list. That is a human step, and it is named in each sweep.
+//     REAL CockpitHeader and the props App passes) and in OperateCockpit.structure.test.tsx
+//     (Operate, whose stop controls are in the merged QSO strip) — with EVERY id in that
+//     cockpit's vocabulary removed, singly and all at once, every stop control must still be
+//     in the document, found by its accessible name. It reads wiring, never names: a dead
+//     `ptt` id that gates nothing walks past IT.
+//
+// WHAT THE GUARDS DO NOT PROVE — the full list is in the cockpit-panes.css header and
+// CLAUDE.md, and it is short enough to carry the headline here: NEITHER SWEEP CAN SEE A STOP
+// CONTROL THAT IS PRESENT, ENABLED AND INERT (an `onClick={() => {}}` on Stop TX passes the
+// whole suite); the name backstop is EXACT-WORD, so `txStop`/`pttRow`/`killTx` walk past it;
+// clause (b) is computed for Phone only; Operate's sweep is presence-only and is not the
+// equivalent of the four-cockpit one; and that a NEWLY ADDED stop control reached its
+// cockpit's sweep list is a human step, named in each sweep.
 import { useCallback, useMemo, useState } from 'react'
 import { windowInstance } from './windowScope'
 
@@ -196,6 +210,8 @@ export function loadPanelLayout<P extends string>(
  * operator relaunches to a re-dock bar and no window to re-dock from. This is the
  * record-level version of the boot-clear the app-global flag already had. A 'removed'
  * panel is an explicit choice and is left exactly as it is.
+ *
+ * Call it through `redockAllStalePopouts` below rather than per-vocabulary — see there.
  */
 export function redockStalePopouts<P extends string>(
   spec: PanelVocabulary<P>,
@@ -251,6 +267,15 @@ export interface PanelLayoutApi<P extends string> {
   /** Restore the layout as it was before the last change (one level deep). */
   undo: () => void
   canUndo: boolean
+  /** The ids the next `undo()` would REMOVE — the panes that call would unmount. Empty when
+   *  there is nothing to undo, or when the undo only puts panes back.
+   *
+   *  It exists for clause (b) of THE STOP LINE: a pane that can start a transmission has to
+   *  say what its hide ends BEFORE the act, and ⊞ Undo is a second button that reaches the
+   *  same teardown as the tick (untick the keyer, tick it back, record, Undo — the take was
+   *  binned with no warning). ⊞ Reset needs no such list: it applies `emptyPanelLayout()`
+   *  and `stateOf` defaults to 'docked', so reset can only ever MOUNT a pane. */
+  undoRemoves: readonly P[]
   /** Back to stock — every panel docked, every share reset. Undoable like any change. */
   reset: () => void
 }
@@ -324,6 +349,16 @@ export function usePanelLayout<P extends string>(
     [key],
   )
   const reset = useCallback(() => apply(() => emptyPanelLayout<P>()), [apply])
+  // Which panes the pending undo would UNMOUNT: removed in the snapshot, present now.
+  // Computed from the same history the undo restores, so it cannot describe a different
+  // click than the one the button makes.
+  const undoRemoves = useMemo(() => {
+    const prev = hist.prev
+    if (!prev) return [] as P[]
+    return spec.panelIds.filter(
+      (id) => (prev.state[id] ?? 'docked') === 'removed' && (hist.cur.state[id] ?? 'docked') !== 'removed',
+    )
+  }, [hist, spec.panelIds])
   return {
     layout: hist.cur,
     stateOf,
@@ -333,6 +368,7 @@ export function usePanelLayout<P extends string>(
     setShares,
     undo,
     canUndo: hist.prev != null,
+    undoRemoves,
     reset,
   }
 }
@@ -442,14 +478,34 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
 ]
 
 /**
+ * The boot clear, over EVERY vocabulary. main.tsx calls exactly this on a fresh main-window
+ * boot; it must not call `redockStalePopouts` per-record, because that is how the bug it
+ * fixes got in — it ran on OPERATE_PANELS alone.
+ *
+ * Operate is the only cockpit with both a pop-out affordance and a re-dock bar. In the other
+ * four a stored 'popped' renders the pane DOCKED while its ⊞ entry reads "popped out", with
+ * no window to re-dock from and nothing that ever clears it, so the record said it at every
+ * launch, forever. Driving the loop off ALL_PANEL_VOCABULARIES covers a sixth cockpit by its
+ * being exported, the same way the stop-line name backstop does.
+ */
+export function redockAllStalePopouts(): void {
+  for (const vocab of ALL_PANEL_VOCABULARIES) redockStalePopouts(vocab)
+}
+
+/**
  * The stop-line NAME backstop's word list — an id whose name means "this stops a
  * transmission" may not appear in any vocabulary. Compared after normalising to lower-case
  * letters only, so `stopTx`, `stop_tx` and `STOPTX` are all the same word.
  *
- * Its LIMIT, stated plainly because the rule was once claimed to be "enforced by
- * computation" when this list was all there was: it reads NAMES. It cannot see that a
- * control is wired to an id, so an id called `dsp` gating the PTT row passes it.
- * components/stop-line.test.tsx is what reads wiring. Keep both.
+ * ITS LIMITS, stated plainly because the rule was once claimed to be "enforced by
+ * computation" when this list was all there was:
+ *   · it reads NAMES. It cannot see that a control is wired to an id, so an id called `dsp`
+ *     gating the PTT row passes it. components/stop-line.test.tsx is what reads wiring.
+ *   · the comparison is WHOLE-WORD, not substring, so `txStop`, `pttRow`, `stopButton` and
+ *     `killTx` all pass. Substring matching is not the fix: it rejects `voiceKeyer` on the
+ *     spot for containing `keyer` — the very pane the rule was rewritten to admit. This is a
+ *     backstop against the obvious, and it is worth exactly that.
+ * Keep both guards.
  */
 export const STOP_CONTROL_WORDS = [
   'stop',

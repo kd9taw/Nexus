@@ -110,6 +110,7 @@ function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLay
     setShares: vi.fn(),
     undo: vi.fn(),
     canUndo: false,
+    undoRemoves: [],
     reset: vi.fn(),
   }
 }
@@ -183,6 +184,13 @@ describe('the merged operating strip is the un-removable TX surface', () => {
   // swept in components/stop-line.test.tsx; Operate is here because its stop controls live
   // in the merged QSO strip rather than a CockpitHeader, and this suite already owns the
   // mock surface for them.
+  //
+  // IT IS WEAKER THAN THAT FILE'S SWEEP AND IS NOT ITS EQUIVALENT. This is PRESENCE-ONLY:
+  // every id removed at once, no baseline capture, no `disabled` comparison, no one-id-at-a-
+  // time pass. It catches a control that VANISHES with a hide; it would not catch one left
+  // mounted and disabled, nor one taken out by a single id while surviving the full sweep.
+  // Bringing it up to the four-cockpit shape means rendering Operate's real strip against a
+  // nothing-hidden baseline — worth doing, not done here, and not claimed.
   it('every protected control renders INSIDE .cockpit-qso with every panel id removed', () => {
     const { container } = renderCockpit(ALL_REMOVED)
     for (const name of PROTECTED) {

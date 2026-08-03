@@ -67,21 +67,35 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   fill + `weight` for feeds and the log column. A pane never sizes itself; structural size
   lives in `cockpit-panes.css` (flat selectors, fenced) and only there.
 - **The stop line** (2026-08-03): **the operator must never be unable to stop a transmission.**
-  Two things hold that, and a hideable pane needs both: **(a)** every control that *stops* one —
-  PTT, Stop TX, Tune, the TX-enable latch, abort — has **no id in any pane vocabulary**, so hiding
-  it is unrepresentable rather than guarded; **(b)** a pane that may be hidden has a **hide path
-  that is itself a stop** — unmounting it ends what it started — and its ⊞ entry says so before
-  the tick. Hosting a ■ Stop of its own neither admits nor excludes a pane; (b) is the test.
-  (Phone's voice keyer is admitted under (b): unmounting it calls `stopVoice`. The earlier wording
-  — "a pane that can only start a transmission may be hidden" — excluded the very pane it was
-  written to admit, because the keyer has a Stop button.)
+  Two things hold that: **(a)** every control that *stops* one — PTT, Stop TX, Tune, the TX-enable
+  latch, abort — has **no id in any pane vocabulary**, so hiding it is unrepresentable rather than
+  guarded; **(b)** a pane **that can start a transmission** may be hidden only if its **hide path
+  is itself a stop** — unmounting it ends what it started — **and** its ⊞ entry says so before the
+  tick. A pane that starts nothing is bound by neither half. Hosting a ■ Stop of its own neither
+  admits nor excludes a pane; (b) is the test. (Phone's voice keyer is the only pane (b) has ever
+  had to bind: unmounting it calls `stopVoice`. Two earlier wordings were wrong in opposite
+  directions — "a pane that can only start a transmission may be hidden" excluded the pane it was
+  written to admit, because the keyer has a Stop button; "a pane that *may be hidden* has a hide
+  path that is itself a stop" bound all 18 hideable panes, forbidding the seventeen that start
+  nothing.)
   Two guards, and neither is the rule alone: `panelState.test.ts` checks **names** across every
   vocabulary (`ALL_PANEL_VOCABULARIES`, itself checked against every vocabulary the module
   exports); `components/stop-line.test.tsx` (+ `OperateCockpit.structure.test.tsx` for Operate)
   checks **wiring** — with every id in a cockpit's vocabulary removed, every stop control must
-  still be in the document, found by accessible name. A stop control gated on an id called `dsp`
-  is caught only by the second; a dead `ptt` entry only by the first. Neither computes that a
-  *newly added* stop control was added to its cockpit's sweep list — that step is human.
+  still be in the document, found by accessible name, and no more disabled than it was. A stop
+  control gated on an id called `dsp` is caught only by the second; a dead `ptt` entry only by
+  the first. Render each cockpit with **the props App gives it** — the TX-enable latch only exists
+  when `onSetTxEnabled` is passed, and omitting it made the RTTY/SSTV sweeps blind to the one
+  control (a) names by name.
+- **What the stop-line guards do NOT prove.** Written down rather than chased with more guards:
+  neither sweep can see a stop control that is **present, enabled and inert** (an
+  `onClick={() => {}}` on Stop TX passes all 2106 tests); the name backstop is **exact-word** on whole
+  normalised ids, so `txStop`/`pttRow`/`killTx` pass it — substring matching is not an option,
+  it rejects `voiceKeyer` for containing `keyer`; **clause (b) is computed for Phone only**, with
+  no coverage test across vocabularies of the kind the name guard has; **Operate's sweep is
+  presence-only** (no baseline, no `disabled` comparison, no one-id-at-a-time pass) and is not
+  the equivalent of the four-cockpit sweep; and that a *newly added* stop control reached its
+  cockpit's sweep list is a human step.
 - Responsive behavior: `[data-viewport='xs|sm|md|lg|xl']` + `--vh-eff`/`--vw-eff` only. Never a
   size-based `@media`, never raw `vh/vw` inside `.app` (zoom-blind) — the portaled
   `.ui-dialog`/`.ui-tooltip` are the one permanent exception (their content re-applies

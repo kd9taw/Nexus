@@ -92,6 +92,7 @@ function fakePanels(removed: RttyPanelId[] = []): PanelLayoutApi<RttyPanelId> {
     setShares: () => {},
     undo: () => {},
     canUndo: false,
+    undoRemoves: [],
     reset: () => {},
   }
 }

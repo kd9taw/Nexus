@@ -15,6 +15,15 @@
 // ACCESSIBLE NAME. If any panel id gates any of them, in any combination, this goes red and
 // says which id took which control.
 //
+// EACH COCKPIT IS RENDERED WITH THE PROPS APP GIVES IT, and that is load-bearing rather than
+// tidiness: CockpitHeader draws the TX-enable latch (▼ TX On / ■ TX Off) only when it is
+// handed `onSetTxEnabled`, which App passes to RTTY and SSTV and to nothing else — those two
+// cockpits have no other Enable-Tx affordance, the TopBar's being hidden with the digital
+// chrome. The first version of this file omitted the prop, so for RTTY and SSTV the latch was
+// never in the document and the sweep proved nothing about the one control clause (a) names
+// BY NAME (gating it on a panel id in either cockpit was green). Phone and CW arm elsewhere
+// and legitimately have no latch on screen; their `stopControls` say so by not listing one.
+//
 // WHY THE HEADER IS NOT STUBBED HERE. Every *.structure.test.tsx mocks CockpitHeader down
 // to an empty <header>, which is right for a shell census and useless for this: Stop TX and
 // Tune live INSIDE that header in Phone, CW and RTTY, so a stubbed header can only prove a
@@ -25,12 +34,20 @@
 // renders INSIDE .cockpit-qso with every panel id removed") — its stop controls are in the
 // merged QSO strip rather than a CockpitHeader, and that suite already owns the mock
 // surface for them. It is driven off OPERATE_PANEL_IDS for the same reason as here.
+// IT IS NOT THIS SWEEP'S EQUIVALENT, and it is not described as one: it takes no baseline,
+// compares no `disabled` state and hides every id at once rather than one at a time. It
+// catches a control that VANISHES; it would not catch one left mounted-and-disabled.
 //
-// WHAT THIS DOES NOT COMPUTE: that a NEWLY ADDED stop control was added to the list below.
-// Adding one is a human step. Each cockpit's list is its case's `stopControls`, so the next
-// person editing a dock finds it beside the cockpit it guards. What IS computed is that
-// every vocabulary in the app has a sweep at all — the last test in the file, driven off
-// ALL_PANEL_VOCABULARIES, so a sixth cockpit cannot ship without one.
+// WHAT THIS DOES NOT COMPUTE, stated rather than guarded:
+//   · A STOP CONTROL THAT IS PRESENT, ENABLED AND INERT. Every assertion here is about the
+//     button being in the document and operable — never about what pressing it does.
+//     Verified: `onClick={() => {}}` on CockpitHeader's Stop TX passes this file and the
+//     whole suite. Nothing below would go red.
+//   · That a NEWLY ADDED stop control was added to the list below. Adding one is a human
+//     step. Each cockpit's list is its case's `stopControls`, so the next person editing a
+//     dock finds it beside the cockpit it guards.
+// What IS computed is that every vocabulary in the app has a sweep at all — the last test
+// in the file, driven off ALL_PANEL_VOCABULARIES, so a sixth cockpit cannot ship without one.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
@@ -208,6 +225,7 @@ function panelsWith<P extends string>(removed: readonly P[]): PanelLayoutApi<P> 
     setShares: () => {},
     undo: () => {},
     canUndo: false,
+    undoRemoves: [],
     reset: () => {},
   }
 }
@@ -284,6 +302,11 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
     render(<CwCockpit snap={snap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} />),
 }
 
+/** The TX-enable latch as CockpitHeader labels it. `radio.txEnabled` is true and
+ *  `transmitting` false in this fixture, so it reads "▼ TX On"; the disarmed face is matched
+ *  too, so a fixture flip cannot make the sweep silently stop finding the control. */
+const TX_LATCH: [string, RegExp] = ['TX-enable latch', /^▼ tx on$|^■ tx off$/i]
+
 const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
   cockpit: 'RTTY',
   view: 'rtty',
@@ -293,16 +316,20 @@ const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
   stopControls: [
     ['Stop TX', /^stop tx$/i],
     ['Stop (RTTY abort)', /^esc\s*stop$/i],
+    TX_LATCH,
   ],
-  render: (panels) => render(<RttyCockpit snap={snap} panels={panels} />),
+  // onSetTxEnabled exactly as App passes it (the .rtty-host block). Without it CockpitHeader
+  // renders a display-only pill and the latch is not on screen to sweep.
+  render: (panels) => render(<RttyCockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
 }
 
 const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
   cockpit: 'SSTV',
   view: 'sstv',
   ids: SSTV_PANEL_IDS,
-  stopControls: [['Stop', /^stop$/i]],
-  render: (panels) => render(<SstvView snap={snap} panels={panels} />),
+  stopControls: [['Stop', /^stop$/i], TX_LATCH],
+  // Same as App's .sstv-host block.
+  render: (panels) => render(<SstvView snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -376,8 +403,14 @@ describe('the stop line, computed against the real cockpits', () => {
     //
     // ELSEWHERE is the honest part — one vocabulary is swept in another file, and it has
     // to be declared here to count.
+    // The declared sweep for `operate` is PRESENCE-ONLY (no baseline, no disabled
+    // comparison, no one-id-at-a-time pass) — weaker than the cases above, and named that
+    // way here so nobody reads this map as "every cockpit gets the same sweep".
     const ELSEWHERE: Record<string, string> = {
-      operate: 'OperateCockpit.structure.test.tsx — "every protected control renders INSIDE .cockpit-qso with every panel id removed"',
+      operate:
+        'OperateCockpit.structure.test.tsx — "every protected control renders INSIDE ' +
+        '.cockpit-qso with every panel id removed" (PRESENCE-ONLY: all ids at once, no ' +
+        'baseline, no disabled comparison)',
     }
     const here = new Set(CASES.map((c) => c.view))
     for (const vocab of ALL_PANEL_VOCABULARIES) {

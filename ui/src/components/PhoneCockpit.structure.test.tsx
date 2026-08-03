@@ -131,6 +131,7 @@ function fakePanels(removed: PhonePanelId[] = []): PanelLayoutApi<PhonePanelId> 
     setShares: () => {},
     undo: () => {},
     canUndo: false,
+    undoRemoves: [],
     reset: () => {},
   }
 }

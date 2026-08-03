@@ -143,6 +143,7 @@ function fakePanels(removed: CwPanelId[] = []): PanelLayoutApi<CwPanelId> {
     setShares: () => {},
     undo: () => {},
     canUndo: false,
+    undoRemoves: [],
     reset: () => {},
   }
 }

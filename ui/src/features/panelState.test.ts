@@ -13,6 +13,7 @@ import {
   coercePanelLayout,
   loadPanelLayout,
   panelStorageKey,
+  redockAllStalePopouts,
   redockStalePopouts,
   savePanelLayout,
   seamShares,
@@ -142,6 +143,28 @@ describe('redockStalePopouts (fresh main-window boot)', () => {
   it('does not write when there is nothing stale', () => {
     redockStalePopouts(OPERATE_PANELS)
     expect(localStorage.getItem(KEY)).toBeNull()
+  })
+
+  it('the boot clear covers EVERY vocabulary, not just the one with a re-dock bar', () => {
+    // main.tsx used to run this on OPERATE_PANELS alone. Operate is the only cockpit with a
+    // pop-out affordance AND a re-dock bar; in the other four a stored 'popped' renders the
+    // pane DOCKED while its ⊞ entry reads "popped out", with no window to re-dock from and
+    // nothing that ever clears it — so the record said it at every launch, forever.
+    // Driven off ALL_PANEL_VOCABULARIES so a sixth cockpit is covered by being exported.
+    for (const vocab of ALL_PANEL_VOCABULARIES) {
+      const key = panelStorageKey(vocab.view)
+      const id = vocab.panelIds[0]
+      savePanelLayout(key, { v: 1, state: { [id]: 'popped' }, share: {} } as PanelLayout<string>)
+    }
+    redockAllStalePopouts()
+    for (const vocab of ALL_PANEL_VOCABULARIES) {
+      const id = vocab.panelIds[0]
+      expect(
+        loadPanelLayout(vocab).state[id],
+        `"${vocab.view}" kept a stale pop-out across a boot — its ⊞ entry will read ` +
+          '"popped out" over a pane rendering docked, at every launch',
+      ).toBe('docked')
+    }
   })
 })
 

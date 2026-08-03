@@ -11,6 +11,13 @@
 // shut one up. A sender that stops itself when hidden may be listed, and then its entry
 // must carry a `note` saying what the tick ends.
 //
+// THE TICK IS NOT THE ONLY BUTTON IN THIS MENU THAT HIDES A PANE. "Undo last change"
+// restores the layout as it was before the last change, and when that layout had a sender
+// unticked, pressing it unmounts the sender exactly as a tick does — so it carries the same
+// consequence line, in the same words, before the press (`undoNote`). "Reset layout" does
+// not need one: it applies the empty record, and an absent state means 'docked', so reset
+// can only ever put panes back.
+//
 // Some panels are conditional on the station (rig-scope controls need the radio's own
 // panadapter streaming; the DSP panes need the rig to report those fields over CAT; CW's
 // Sent Echo is empty until the first over), so an operator can tick one and see nothing
@@ -55,11 +62,20 @@ interface Props {
   /** Restore the layout as it was before the last change. */
   onUndo: () => void
   canUndo: boolean
+  /** What THIS undo will END, when the layout it restores had a transmitting pane unticked.
+   *  Clause (b) of THE STOP LINE puts the consequence before the act, and Undo is a second
+   *  button that reaches the same teardown as the tick — untick the voice keyer, tick it
+   *  back, start a recording, press Undo, and the take is binned. Undefined when the undo
+   *  ends nothing, which is every undo in every cockpit but Phone's keyer today.
+   *
+   *  Reset needs no twin of this: it applies the empty record and an absent state means
+   *  'docked', so Reset can only ever put panes BACK. */
+  undoNote?: string
   /** Put every panel back (stock layout). */
   onReset: () => void
 }
 
-export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props) {
+export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset }: Props) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -157,11 +173,20 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props)
               </div>
             )
           })}
+          {/* Above the button row, not inside it: .panels-menu-actions is a two-button flex
+              row and a third child would sit beside them. Same class as an entry's line, so
+              a consequence reads the same wherever it appears. */}
+          {canUndo && undoNote && (
+            <span className="panels-menu-why" id={`${uid}-undo-why`}>
+              {undoNote}
+            </span>
+          )}
           <div className="panels-menu-actions">
             <button
               type="button"
               onClick={onUndo}
               disabled={!canUndo}
+              aria-describedby={canUndo && undoNote ? `${uid}-undo-why` : undefined}
               title="Put the layout back the way it was before the last change"
             >
               Undo last change

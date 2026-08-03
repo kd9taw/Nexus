@@ -48,20 +48,30 @@ never touch the F-key slots, you can now put that pane away and the panes around
 It was held out until now by a blunt rule — nothing that transmits gets a checkbox — and the rule
 is narrower now, because what it was really protecting is one thing: **you must never be unable to
 stop a transmission.** PTT, Stop TX and Tune are still not panels, have no entry, and no saved
-layout can put them out of reach; and beyond that, a pane may only be hidden if closing it ends
-what it started. Unticking Voice Keyer while a message is playing stops the message rather than
-leaving it transmitting behind a pane you just closed. It also throws away a recording you are
-part-way through making — that one is not what "hide a pane" sounds like, so the entry says it
-before you tick, and Nexus says it again when it happens, which covers **Reset layout** and simply
-walking off the Phone screen as well.
+layout can put them out of reach; and beyond that, a pane that can *start* a transmission may only
+be hidden if closing it ends what it started. Unticking Voice Keyer while a message is playing
+stops the message rather than leaving it transmitting behind a pane you just closed. It also
+throws away a recording you are part-way through making — that one is not what "hide a pane"
+sounds like, so the entry says it before you tick.
+
+**Undo last change** puts the keyer away by the same door, so it now says the same thing before
+you press it. (Untick the keyer, tick it back, start a recording, press Undo — the recording used
+to go with no word at all.) And whichever door you came through, Nexus says what it did when it
+did it: an over it cut short, or a recording it binned — so walking off the Phone screen without
+opening a menu tells you too. Stopping an over used to be the silent one of the two, which was
+backwards. If the recorder cannot be stopped, that is what it says, instead of reporting a discard
+that did not happen.
 
 Reaching all of this from the keyboard works the way the rest of Nexus does: every entry is a tab
 stop, takes focus with an undimmed focus ring, and reads its reason aloud with the panel name —
 the operator who cannot see the line under it is the one it was written for. **Esc** closes the
 menu and puts focus back on the ⊞ button you opened it with, instead of dropping you at the top of
 the app to tab your way back down. A panel you have torn off still reads as "popped out", but the
-words no longer run into the panel's own name when a screen reader speaks it. And the menu itself
-no longer runs off a short screen: with eight entries and their reasons it scrolls inside its own
+words no longer run into the panel's own name when a screen reader speaks it — and that tag no
+longer sticks. Only the Operating screen's panels were being un-popped at start-up, so a "popped
+out" recorded anywhere else stayed on the entry for good, over a panel that was in fact sitting
+docked in front of you. Every screen's panels are checked at start-up now. And the menu itself no
+longer runs off a short screen: with eight entries and their reasons it scrolls inside its own
 box, so **Undo last change** and **Reset layout** stay where you can reach them at any window size
 or UI zoom.
 

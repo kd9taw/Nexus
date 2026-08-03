@@ -2,10 +2,13 @@
 //
 // HIDING THE VOICE KEYER IS A STOP, AND THE OPERATOR IS TOLD BOTH HALVES OF IT FIRST.
 //
-// THE STOP LINE (features/panelState.ts) admits a transmitting pane to a ⊞ vocabulary on
-// two conditions, and this file computes both at the real site:
+// THE STOP LINE (features/panelState.ts), clause (b): a pane THAT CAN START A TRANSMISSION
+// may be hidden only on two conditions, and this file computes both at the real site:
 //   (b1) the pane's HIDE PATH IS ITSELF A STOP — unmounting it ends what it started;
 //   (b2) its ⊞ entry SAYS SO before the tick.
+// A pane that starts nothing is bound by neither, which is why the sweep at the foot of this
+// file asks the WIRE what each hide did rather than requiring a note from every entry: the
+// seventeen panes that start nothing must carry NO warning, and that is asserted too.
 //
 // (b1) is why the suite renders the REAL VoiceKeyer (every other Phone suite stubs it)
 // inside the REAL cockpit and hides it through the panel record the ⊞ menu writes. A test
@@ -26,9 +29,9 @@
 // pinned below.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act, within } from '@testing-library/react'
-import { PhoneCockpit, VOICE_KEYER_STOPS_ON_HIDE } from './PhoneCockpit'
+import { PhoneCockpit, VOICE_KEYER_STOPS_ON_HIDE, VOICE_KEYER_UNDO_ENDS } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
-import { PHONE_PANEL_IDS } from '../features/panelState'
+import { PHONE_PANELS, PHONE_PANEL_IDS, usePanelLayout } from '../features/panelState'
 import type { PanelLayoutApi, PhonePanelId } from '../features/panelState'
 
 // vi.hoisted, not a bare const: the vi.mock factory below is hoisted above every
@@ -92,14 +95,22 @@ vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 // VoiceKeyer is deliberately NOT mocked — its unmount cleanup is the behaviour under test.
 
 afterEach(() => {
+  // cleanup() BEFORE the clears, and that ordering is load-bearing: unmounting the tree runs
+  // the keyer's own teardown, so clearing first left a stopVoice call from THIS test sitting
+  // in the counter for the next one. Any case that ended with the keyer still mounted was
+  // handing its successor a phantom stop.
+  cleanup()
   stopVoice.mockClear()
   cancelVoiceRecording.mockClear()
+  cancelVoiceRecording.mockImplementation(async () => ({}))
   startVoiceRecording.mockClear()
   pushToast.mockClear()
-  cleanup()
+  // The cases driven by the real panel record persist through localStorage; without this
+  // each one would start from the previous one's layout.
+  localStorage.clear()
 })
 
-function makeSnap(): AppSnapshot {
+function makeSnap(transmitting = false): AppSnapshot {
   return {
     mycall: 'KD9TAW',
     radio: {
@@ -109,7 +120,7 @@ function makeSnap(): AppSnapshot {
       sideband: 'USB',
       sidebandOverride: null,
       rigMode: 'USB',
-      transmitting: false,
+      transmitting,
       txEnabled: true,
       txAllowed: true,
       qsoRecording: false,
@@ -142,19 +153,59 @@ function fakePanels(removed: PhonePanelId[] = []): PanelLayoutApi<PhonePanelId> 
     setShares: () => {},
     undo: () => {},
     canUndo: false,
+    undoRemoves: [],
     reset: () => {},
   }
 }
 
-const view = (removed: PhonePanelId[] = []) => (
+const view = (removed: PhonePanelId[] = [], transmitting = false) => (
   <PhoneCockpit
-    snap={makeSnap()}
+    snap={makeSnap(transmitting)}
     theme="dark"
     onWorkSpot={() => {}}
     spots={[]}
     panels={fakePanels(removed)}
   />
 )
+
+/**
+ * The cockpit driven by the REAL panel record — `usePanelLayout(PHONE_PANELS)`, exactly as
+ * App builds it. The fake above cannot serve for the ⊞ menu's own buttons: Undo and Reset
+ * are history operations, and a stub with `undo: () => {}` makes every claim about them
+ * vacuous. Storage is per-test (cleared in afterEach), so each case starts at stock.
+ */
+function LivePanels({ transmitting = false }: { transmitting?: boolean }) {
+  const panels = usePanelLayout(PHONE_PANELS)
+  return (
+    <PhoneCockpit
+      snap={makeSnap(transmitting)}
+      theme="dark"
+      onWorkSpot={() => {}}
+      spots={[]}
+      panels={panels}
+    />
+  )
+}
+
+/** Open ⊞ Panels (idempotent — the trigger TOGGLES) and return the popover. */
+function openMenu() {
+  const btn = screen.getByRole('button', { name: /Panels/ })
+  if (btn.getAttribute('aria-expanded') !== 'true') fireEvent.click(btn)
+  return screen.getByRole('group', { name: /panels on this screen/i })
+}
+
+/** The text a control's aria-describedby resolves to, or '' when it has none. */
+function descriptionOf(el: Element): string {
+  const id = el.getAttribute('aria-describedby')
+  return id ? (document.getElementById(id)?.textContent ?? '') : ''
+}
+
+/** Tick or untick one entry by its label, through the real checkbox. */
+function toggle(label: RegExp, on: boolean) {
+  const box = within(openMenu()).getByRole('checkbox', { name: label }) as HTMLInputElement
+  fireEvent.click(box)
+  expect(box.checked).toBe(on)
+}
 
 describe('hiding the Phone voice keyer', () => {
   it('aborts the message in flight — the hide calls stopVoice, it does not leave you keyed', async () => {
@@ -213,10 +264,10 @@ describe('hiding the Phone voice keyer', () => {
   })
 
   it('says so when it actually discards the recording, not only in a menu he may never open', async () => {
-    // The note is consent at the point of decision, and ⊞ Reset layout / walking off the
-    // Phone screen reach the same teardown without passing a menu at all. So the discard
-    // announces itself too. Red at the real site by dropping the pushToast from
-    // VoiceKeyer's cleanup: "the recording was binned in silence".
+    // The note is consent at the point of decision, and walking off the Phone screen reaches
+    // the same teardown without passing a menu at all. So the discard announces itself too.
+    // Red at the real site by dropping the pushToast from VoiceKeyer's cleanup: "the
+    // recording was binned in silence".
     const r = render(view())
     await act(async () => {})
     // Start a recording in slot 1 the way the operator does — the ● button on the slot.
@@ -230,6 +281,132 @@ describe('hiding the Phone voice keyer', () => {
     const said = pushToast.mock.calls.map((c) => String(c[0])).join(' | ')
     expect(said, 'the recording was binned in silence').toMatch(/discard/i)
     expect(said).toMatch(/F1/)
+  })
+
+  it('the over it aborts is announced too, not only the recording it bins', async () => {
+    // The argument that made the discard speak up ("a stop the operator did not ask for is
+    // indistinguishable from a dropout") applies at least as hard to a transmission cut
+    // short, and that one used to end in silence. The keyer knows a message is on the air
+    // from two things at once: it started one, and the rig is keyed — so drive both.
+    // Red at the real site by deleting the pushToast from VoiceKeyer's cleanup.
+    const r = render(<LivePanels />)
+    await act(async () => {})
+    fireEvent.click(screen.getByTitle('Play F1 (CQ)'))
+    await act(async () => {})
+    // The rig keys — the snapshot lags the send by a poll, which is why the pane waits for it.
+    r.rerender(<LivePanels transmitting />)
+    await act(async () => {})
+
+    toggle(/Voice Keyer/, false)
+    await act(async () => {})
+    expect(document.querySelector('[data-pane="voiceKeyer"]')).toBeNull()
+    const said = pushToast.mock.calls.map((c) => String(c[0])).join(' | ')
+    expect(said, 'the over was cut off in silence').toMatch(/on the air/i)
+    expect(said).toMatch(/F1/)
+  })
+
+  it('says nothing about an over when the rig was never keyed', async () => {
+    // The converse, and the reason the toast reads two signals rather than one: a message
+    // the engine refused (no privileges, TX not allowed) leaves the pane's own "I started
+    // one" flag set with nothing ever on the air. A notice about a transmission that never
+    // happened teaches the operator to ignore the next one.
+    render(<LivePanels />)
+    await act(async () => {})
+    fireEvent.click(screen.getByTitle('Play F1 (CQ)'))
+    await act(async () => {})
+    toggle(/Voice Keyer/, false)
+    await act(async () => {})
+    const said = pushToast.mock.calls.map((c) => String(c[0])).join(' | ')
+    expect(said, 'claimed to have stopped an over that never keyed').not.toMatch(/on the air/i)
+  })
+
+  it('a cancel the backend REFUSED does not report the take as discarded', async () => {
+    // The discard toast was unconditional while cancelVoiceRecording's rejection was
+    // swallowed, so an IPC failure told the operator his recording was gone while the
+    // backend recorder ran on — the one direction a safety notice must never be wrong in.
+    cancelVoiceRecording.mockImplementation(async () => {
+      throw new Error('ipc down')
+    })
+    render(<LivePanels />)
+    await act(async () => {})
+    fireEvent.click(screen.getByTitle('Record from your input device'))
+    await act(async () => {})
+    toggle(/Voice Keyer/, false)
+    await act(async () => {})
+    const said = pushToast.mock.calls.map((c) => String(c[0])).join(' | ')
+    expect(said, 'reported a discard that did not happen').not.toMatch(/discarded/i)
+    expect(said, 'the recorder may still be running and nothing said so').toMatch(/still be running/i)
+  })
+
+  it('⊞ Undo is a SECOND hide path, and it says what it will end before the press', async () => {
+    // Reproduced before it was covered: untick the keyer, tick it back, start a recording,
+    // press ⊞ Undo — the keyer unmounts, cancelVoiceRecording bins the take, and the only
+    // word about it arrived after the fact. The tick warns first; so must this. The real
+    // panel record is required here — a stubbed `undo: () => {}` proves nothing about it.
+    render(<LivePanels />)
+    await act(async () => {})
+    toggle(/Voice Keyer/, false)
+    await act(async () => {})
+    toggle(/Voice Keyer/, true)
+    await act(async () => {})
+    expect(document.querySelector('[data-pane="voiceKeyer"] .vk')).not.toBeNull()
+
+    // BEFORE the press: the consequence is on the button the operator is about to click.
+    const undo = within(openMenu()).getByRole('button', { name: /undo last change/i })
+    expect((undo as HTMLButtonElement).disabled, 'nothing to undo — the case is vacuous').toBe(false)
+    expect(
+      descriptionOf(undo),
+      'the ⊞ Undo that will unmount the voice keyer says nothing about it',
+    ).toBe(VOICE_KEYER_UNDO_ENDS)
+
+    // …and the press really does reach the same teardown the tick does.
+    fireEvent.click(screen.getByTitle('Record from your input device'))
+    await act(async () => {})
+    cancelVoiceRecording.mockClear()
+    fireEvent.click(within(openMenu()).getByRole('button', { name: /undo last change/i }))
+    await act(async () => {})
+    expect(document.querySelector('[data-pane="voiceKeyer"]'), 'Undo did not hide the keyer — this case proves nothing').toBeNull()
+    expect(cancelVoiceRecording, 'the recorder was left running behind a closed pane').toHaveBeenCalled()
+  })
+
+  it('an Undo that ends nothing carries no warning', async () => {
+    // The converse, same reason as the entry notes: a warning the operator cannot act on
+    // teaches him to ignore the next one. Undoing a re-tick of DSP Functions hides a pane
+    // that starts nothing, which is every pane in the app but one.
+    render(<LivePanels />)
+    await act(async () => {})
+    toggle(/DSP Functions/, false)
+    await act(async () => {})
+    toggle(/DSP Functions/, true)
+    await act(async () => {})
+    const undo = within(openMenu()).getByRole('button', { name: /undo last change/i })
+    expect((undo as HTMLButtonElement).disabled).toBe(false)
+    expect(
+      descriptionOf(undo),
+      'Undo warns about ending a transmission when the pane it hides starts none',
+    ).toBe('')
+  })
+
+  it('⊞ Reset layout can only MOUNT the keyer — it is not a teardown path', async () => {
+    // Three places said the discard notice "covers Reset layout". It cannot: reset applies
+    // `emptyPanelLayout()` and `stateOf` reads an absent state as 'docked', so the one thing
+    // reset can never do is remove a pane. Driven rather than argued, because the claim was
+    // printed in the CHANGELOG for operators to rely on.
+    render(<LivePanels />)
+    await act(async () => {})
+    expect(document.querySelector('[data-pane="voiceKeyer"] .vk')).not.toBeNull()
+    fireEvent.click(within(openMenu()).getByRole('button', { name: /reset layout/i }))
+    await act(async () => {})
+    expect(document.querySelector('[data-pane="voiceKeyer"] .vk'), 'Reset unmounted the keyer').not.toBeNull()
+    expect(stopVoice, 'Reset tore down the keyer').not.toHaveBeenCalled()
+
+    // And from the hidden state it puts the pane BACK — the only direction it moves.
+    toggle(/Voice Keyer/, false)
+    await act(async () => {})
+    expect(document.querySelector('[data-pane="voiceKeyer"]')).toBeNull()
+    fireEvent.click(within(openMenu()).getByRole('button', { name: /reset layout/i }))
+    await act(async () => {})
+    expect(document.querySelector('[data-pane="voiceKeyer"] .vk'), 'Reset did not restore the keyer').not.toBeNull()
   })
 
   it('an id whose hide has a consequence at the WIRE carries a note; one that has none does not', async () => {

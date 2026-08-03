@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { DetachedPanel } from './DetachedPanel'
-import { OPERATE_PANELS, redockStalePopouts } from './features/panelState'
+import { redockAllStalePopouts } from './features/panelState'
 import './styles.css'
 // AFTER styles.css, deliberately: the cockpit pane grid's structural rules are all flat
 // single-class selectors, so an equal-specificity tie with anything in styles.css must
@@ -26,8 +26,11 @@ if (panel) document.documentElement.dataset.panel = panel
 // survives an app restart (only the main window is restored), so a leftover pop-out — e.g. from
 // a crash while popped out — would otherwise hide the docked panel with no window to re-dock it.
 // Panels the operator explicitly REMOVED are untouched; those are meant to stay gone.
+//
+// EVERY vocabulary, not just Operate's — this ran on OPERATE_PANELS alone, which left a stored
+// 'popped' in any other cockpit's record to persist across launches. See redockAllStalePopouts.
 if (!panel) {
-  redockStalePopouts(OPERATE_PANELS)
+  redockAllStalePopouts()
   try {
     localStorage.removeItem('nexus.waterfall.detached')
   } catch {

@@ -18,6 +18,11 @@ interface Props {
   /** Whether the operator is holding live PTT — playing a canned message then would fight
    * the live over, so we block it and say so. */
   keyed: boolean
+  /** The rig's real keyed state (snapshot). The engine has no "voice message finished"
+   * event — the radio loop simply drops PTT when the samples run out — so the rig UNKEYING
+   * is the only signal that a message this pane started is over. Used for one thing: to know
+   * whether the unmount teardown actually ENDED an over, so it can say so. */
+  transmitting: boolean
   /** Field Day exchange to read ("3A WI") — when set (FD mode), hint that a slot can be
    * recorded with it for one-key sends. Empty/undefined outside FD. */
   fdExchange?: string | null
@@ -34,7 +39,7 @@ interface Props {
  * Panels entry despite transmitting: see the unmount cleanup below and THE STOP LINE in
  * features/panelState.ts.
  */
-export function VoiceKeyer({ txEnabled, keyed, fdExchange }: Props) {
+export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props) {
   const [msgs, setMsgs] = useState<VoiceMessage[]>([])
   const [recording, setRecording] = useState<number | null>(null)
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({})
@@ -44,6 +49,19 @@ export function VoiceKeyer({ txEnabled, keyed, fdExchange }: Props) {
   useEffect(() => {
     recordingRef.current = recording
   }, [recording])
+
+  // The slot whose message this pane put on the air, or null. Set when the operator sends
+  // one, cleared by ■ Stop / Esc and by the rig UNKEYING — the falling edge of `transmitting`
+  // is how a message ending on its own is observed, there being no completion event. A bare
+  // `if (!transmitting) clear` would not do: the snapshot lags the send by a poll, so it
+  // would wipe the slot before the rig ever keyed.
+  const playingRef = useRef<number | null>(null)
+  // The same flag the cleanup can read — it captures [] deps and cannot see the prop.
+  const onAirRef = useRef(false)
+  useEffect(() => {
+    if (onAirRef.current && !transmitting) playingRef.current = null
+    onAirRef.current = transmitting
+  }, [transmitting])
 
   useEffect(() => {
     void getVoiceMessages()
@@ -63,16 +81,42 @@ export function VoiceKeyer({ txEnabled, keyed, fdExchange }: Props) {
   //     so it may not happen silently. It still has to happen — leaving the recorder running
   //     puts its only Stop & save button off-screen, and saving instead would overwrite the
   //     slot's existing message with a truncated one, destroying something else.
-  // So: the ⊞ entry names it before the tick (VOICE_KEYER_STOPS_ON_HIDE), and this names it
-  // after, for the operator who got here by Reset layout or by walking off the screen and
-  // never read a menu at all.
+  // The ⊞ entry names both before the tick (VOICE_KEYER_STOPS_ON_HIDE, and
+  // VOICE_KEYER_UNDO_ENDS on the menu's other hide path), and this names them after, for the
+  // operator who walked off the Phone screen and never opened a menu at all.
+  //
+  // BOTH announcements are CONDITIONAL ON WHAT ACTUALLY HAPPENED, in opposite directions
+  // from where they started. The over used to end in silence — the same argument that says a
+  // binned recording must be announced says an aborted transmission must be, and it is the
+  // louder of the two. And the discard used to be announced unconditionally while
+  // cancelVoiceRecording's rejection was swallowed, which told the operator his take was
+  // gone while the backend recorder ran on; a failure now says so instead.
   useEffect(() => {
     return () => {
+      // BOTH conditions, and only these two: this pane started a message it has not seen end,
+      // AND the rig is keyed right now. Either alone would lie — a message the engine refused
+      // (no privileges) leaves the first set with nothing ever on the air, and live mic PTT
+      // satisfies the second with no keyer message involved. The cost is the ~1 poll between
+      // pressing an F-key and the snapshot showing TX: a hide inside that window says nothing.
+      // A missed notice beats a false one.
+      const over = onAirRef.current ? playingRef.current : null
       void stopVoice().catch(() => {})
+      if (over !== null) {
+        pushToast(`F${over} was on the air — the voice keyer closed and stopped it`, 'info', 6000)
+      }
       const slot = recordingRef.current
       if (slot !== null) {
-        void cancelVoiceRecording().catch(() => {})
-        pushToast(`Recording for F${slot} discarded — the voice keyer closed`, 'info', 6000)
+        void cancelVoiceRecording()
+          .then(() =>
+            pushToast(`Recording for F${slot} discarded — the voice keyer closed`, 'info', 6000),
+          )
+          .catch(() =>
+            pushToast(
+              `Could not stop the recorder for F${slot} — it may still be running. Reopen the voice keyer.`,
+              'error',
+              8000,
+            ),
+          )
       }
     }
   }, [])
@@ -95,10 +139,15 @@ export function VoiceKeyer({ txEnabled, keyed, fdExchange }: Props) {
       pushToast('TX is off (Monitor) — enable transmit to play a message', 'info', 3000)
       return
     }
-    void playVoiceMessage(slot).catch(() => pushToast(`Could not play F${slot}`, 'error'))
+    playingRef.current = slot
+    void playVoiceMessage(slot).catch(() => {
+      playingRef.current = null
+      pushToast(`Could not play F${slot}`, 'error')
+    })
   }
 
   const stop = () => {
+    playingRef.current = null
     void stopVoice().catch(() => {})
   }
 

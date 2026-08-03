@@ -304,6 +304,13 @@ describe('⊞ Panels popover: Undo / Reset stay reachable however long the list 
   // made to keep the entry keyboard-reachable is what made its focus indicator hard to see.
   // Grey with colour/background, never by fading the focusable element.
   //
+  // `filter` is matched as well as `opacity`, and not as a courtesy: `filter: opacity(.5)`
+  // fades identically, and EVERY filter function makes the element a composited group whose
+  // outline goes through the filter with it. Matching the property outright (rather than
+  // sniffing for the opacity() function) costs nothing here — nothing on this five-class
+  // chain has any business carrying a filter — and it closes the "scans opacity only" hole
+  // instead of leaving it written down.
+  //
   // Unlike the cascade-computed guards above this is an ABSENCE check: no rule may declare
   // the property on the chain, and if none declares it none can win it. The walk descends
   // into @media, so a conditional dim is caught too.
@@ -332,7 +339,7 @@ describe('⊞ Panels popover: Undo / Reset stay reachable however long the list 
   ])
   it('nothing on the chain down to the entry fades it — the focus ring keeps its contrast', () => {
     const dimmed = RULES.filter((r) => {
-      if (!/(?:^|;)\s*opacity\s*:/.test(r.body)) return false
+      if (!/(?:^|;)\s*(?:opacity|filter)\s*:/.test(r.body)) return false
       const compounds = r.selector.split(/\s|>|\+|~/).filter(Boolean)
       const subject = compounds[compounds.length - 1] ?? ''
       const classesOf = (s: string) => s.match(/\.[a-z][a-zA-Z0-9-]*/g) ?? []
@@ -345,9 +352,9 @@ describe('⊞ Panels popover: Undo / Reset stay reachable however long the list 
     })
     expect(
       dimmed.map((r) => r.selector),
-      'these rules fade an entry or one of its ancestors in the ⊞ popover, which fades the ' +
-        "focus ring with it. Use `color` / `background` for the greyed look — see " +
-        '`.panels-menu-actions button:disabled`, which greys by colour alone.',
+      'these rules fade or filter an entry or one of its ancestors in the ⊞ popover, which ' +
+        'composites the focus ring with it. Use `color` / `background` for the greyed look — ' +
+        'see `.panels-menu-actions button:disabled`, which greys by colour alone.',
     ).toEqual([])
   })
 })
