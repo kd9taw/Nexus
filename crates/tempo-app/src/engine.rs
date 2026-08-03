@@ -5690,24 +5690,34 @@ impl Engine {
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
     /// memory and appends to the ADIF file if a log path is set.
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
-        // SATELLITE STAMP. A contact made while a pass owns the radio is a
-        // satellite QSO, and LoTW will not credit one without BOTH fields — so
-        // they are stamped here, at the single funnel every log path goes
-        // through, rather than at each caller. Never overwrites what a caller
-        // (or an import) already supplied.
-        if let Some(st) = &self.sat_tune {
-            if rec.prop_mode.is_none() {
-                rec.prop_mode = Some("SAT".to_string());
-            }
-            if rec.sat_name.is_none() {
-                // The label is "SAT|transponder" — the satellite half is the
-                // name LoTW matches on.
-                let name = st.label.split('|').next().unwrap_or_default().trim();
-                if !name.is_empty() {
-                    rec.sat_name = Some(name.to_string());
-                }
-            }
-        }
+        // ⚠️ NO SATELLITE STAMP HERE. A "SATELLITE STAMP" block used to fill
+        // `prop_mode`/`sat_name` from `self.sat_tune` whenever a transponder was
+        // held (0.24.0–0.27.x). It was removed because it could not write a
+        // creditable record and it tagged contacts that were not satellite QSOs:
+        //
+        //  · WRONG NAME, ALWAYS. It took `SatTune::label`'s satellite half, and
+        //    that label is built in the Tauri command from the CATALOG name the
+        //    section is showing — "SAUDISAT 1C (SO-50)", "ISS (ZARYA)" — never
+        //    the designator LoTW matches on. ARRL is explicit that a name LoTW
+        //    does not recognise gets the data rejected ("if you enter the
+        //    satellite name as AO7 instead of AO-7 the data will be rejected"),
+        //    so it never once produced satellite credit, and every upload
+        //    carrying one was at risk.
+        //  · WRONG CONTACTS. The hold is released only at the LOS handback (or
+        //    an explicit clear), and a transponder picked with no track armed is
+        //    never released at all — so ordinary terrestrial contacts made long
+        //    after the pass were stamped as satellite QSOs too.
+        //
+        // Writing satellite fields at all is TABLED work: `SAT_NAME` needs a
+        // resolved designator LoTW accepts, and a QSO record is permanent, so a
+        // guessed value is worse than none. Nothing in Nexus writes these two
+        // fields today. Records that ARRIVE with them — a foreign ADIF import,
+        // or a record the operator repaired by hand — are carried through
+        // verbatim by `logbook::adif_record`/`parse_adif` and are untouched
+        // here; the awards side still reads them (`qso_is_sat`).
+        //
+        // Pinned by `a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields`.
+
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
         // Station, and `call_station_ctx` resets it on every invocation, so one contact
@@ -21700,49 +21710,55 @@ mod tests {
     }
 
     #[test]
-    fn a_qso_made_during_a_pass_is_stamped_for_lotw_satellite_credit() {
-        // LoTW credits a satellite contact only with BOTH fields present; the
-        // stamp lives at the log funnel so every path (auto, cockpit, manual)
-        // gets it, and never overwrites what a caller already supplied.
+    fn a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields() {
+        // THE REGRESSION FIX, and the one someone will accidentally revert.
+        //
+        // `log_qso` used to stamp PROP_MODE/SAT_NAME from the held transponder.
+        // The name came from `SatTune::label`, which the Tauri command builds
+        // from the CATALOG name the section is showing — the real strings are
+        // "SAUDISAT 1C (SO-50)" and "ISS (ZARYA)", never the designator LoTW
+        // matches on, so the stamp never produced a creditable record and put
+        // every upload carrying one at risk. And because the hold is released
+        // only at the LOS handback (a transponder picked with no track armed is
+        // never released), it tagged terrestrial contacts made long afterwards.
+        //
+        // The label below is deliberately the WORST case and the REAL one: a
+        // catalog name. Nothing derived from it may reach the record.
         use tempo_core::doppler::Transponder;
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_sat_transponder(Some((
-            "RS-44|Linear Transponder".into(),
-            0,
-            Transponder {
-                uplink_centre_hz: 145_965_000,
-                downlink_centre_hz: 435_640_000,
-                invert: true,
-                half_width_hz: 30_000,
-            },
-        )));
-        e.log_qso(qrec("W1AW", "70cm"));
-        let r = &e.get_log()[0];
-        assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
-        assert_eq!(
-            r.sat_name.as_deref(),
-            Some("RS-44"),
-            "the satellite half of the label, not the transponder"
-        );
-
-        // A terrestrial contact with no pass in force is untouched.
-        let mut e2 = Engine::new("KD9TAW", "EN52", 0);
-        e2.log_qso(qrec("K1ABC", "20m"));
-        let r2 = &e2.get_log()[0];
-        assert_eq!(r2.prop_mode, None);
-        assert_eq!(r2.sat_name, None);
-
-        // An explicit value from the caller/import wins over the stamp.
-        let mut e3 = Engine::new("KD9TAW", "EN52", 0);
-        e3.set_sat_transponder(Some((
-            "SO-50|FM".into(),
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
             0,
             Transponder::channel(145_850_000, 436_795_000),
         )));
+        // On the downlink, mid-pass — a contact that genuinely WAS through the
+        // bird. It is still logged as an ordinary contact: satellite tagging is
+        // not done yet, and a name LoTW rejects is worse than no name.
+        e.log_qso(qrec("W1AW", "70cm"));
+        let r = &e.get_log()[0];
+        assert_eq!(r.prop_mode, None, "a satellite stamp is back at the funnel");
+        assert_eq!(r.sat_name, None, "a satellite name is back at the funnel");
+
+        // And the silent half: the hold outlives the pass, so an ordinary HF
+        // contact made with a bird still held must not be tagged either.
+        e.log_qso(qrec("K1ABC", "20m"));
+        let hf = &e.get_log()[1];
+        assert_eq!(
+            hf.prop_mode, None,
+            "a 20 m contact tagged as a satellite QSO"
+        );
+        assert_eq!(hf.sat_name, None, "a 20 m contact tagged with a bird");
+
+        // What the operator (or a foreign ADIF import) supplies is still
+        // carried verbatim — removing the stamp removed a WRITER, not the
+        // fields. This is the only way a record gets them now.
+        let mut e2 = Engine::new("KD9TAW", "EN52", 0);
         let mut given = qrec("N0CALL", "70cm");
+        given.prop_mode = Some("SAT".into());
         given.sat_name = Some("AO-91".into());
-        e3.log_qso(given);
-        assert_eq!(e3.get_log()[0].sat_name.as_deref(), Some("AO-91"));
+        e2.log_qso(given);
+        assert_eq!(e2.get_log()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(e2.get_log()[0].sat_name.as_deref(), Some("AO-91"));
     }
 
     #[test]

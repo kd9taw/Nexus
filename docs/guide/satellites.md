@@ -66,6 +66,57 @@ state it is absent in is the one where it would have to guess: with no
 transponder picked there is nothing to put you back onto, and choosing one for
 you would be choosing your uplink.
 
+### Log the contact without leaving the pass
+
+The log strip sits in the bird's detail column, directly under the Doppler
+readout — the same log strip the Phone and CW cockpits use, with the same
+callbook lookup, the same recall card and the same prior-contact history. It is
+there whether or not a pass is armed, and it stays there after the bird sets, so
+you can catch up on a contact once your hands are free.
+
+Type the call, press Enter. The band, frequency, mode and time come from where
+you already are, and the report defaults to the one for that mode. Working a
+bird from a rig Nexus isn't connected to? Open **Log a contact from another
+radio** in the strip and set the band, frequency, mode and UTC time by hand.
+
+**It logs an ordinary contact, not a satellite contact.** This is worth being
+plain about, because it decides whether a contact can ever earn satellite
+credit. LoTW recognises a satellite QSO by two ADIF fields:
+
+- `PROP_MODE=SAT` — the propagation mode.
+- `SAT_NAME` — the satellite, spelled the way LoTW spells it (`AO-7`, not
+  `AO7`).
+
+**Nexus writes neither, for any contact it logs.** Getting `SAT_NAME` right
+means resolving the bird's designator, and ARRL is explicit that a name LoTW
+does not recognise gets the data rejected — so a guess is worse than nothing,
+and a logged QSO is permanent. That resolution is not built yet. Until it is, if
+you want satellite credit you have to add the two fields yourself: set them in
+whatever logger you upload from, or add them to the ADIF before you sign it. Any
+record that already carries them — a foreign import, or one you repaired — keeps
+them: Nexus writes them out on export and reads them back on import untouched.
+
+**If you ran 0.24.0 through 0.27.x, check your log.** In those versions a
+contact logged while a transponder was held picked up `PROP_MODE=SAT` and a
+`SAT_NAME` taken from the *catalog* name of the bird — "SAUDISAT 1C (SO-50)",
+not "SO-50". LoTW does not recognise those, and the hold is only handed back
+when the pass ends (a transponder picked without arming a pass is never handed
+back at all), so ordinary contacts made afterwards were tagged too. Nexus no
+longer writes any of it.
+
+Existing records are left exactly as they are. Nexus will not rewrite contacts
+you already logged: some of them really were satellite QSOs that want the name
+corrected, and some were terrestrial contacts that want the tag gone, and
+nothing in the record tells the two apart — only you know which pass you were
+actually on. To find them, your general log is a plain ADIF file
+(`~/.config/tempo/log.adi`, or `%APPDATA%\tempo\log.adi` on Windows): search it
+for `SAT_NAME`. Fix them there, with Nexus closed — correct the name, or delete
+both fields from the record. There is no way to do it from inside Nexus: the
+logbook's edit form does not carry these two fields, and an edit that leaves
+them blank deliberately *preserves* what is stored, so that an ordinary
+busted-call fix cannot silently strip a satellite tag off a record that earned
+it.
+
 ### Pin the radio a pass uses
 
 On a multi-radio station the readiness rail names the rig a pick routed to, and

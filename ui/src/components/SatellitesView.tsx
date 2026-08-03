@@ -18,6 +18,7 @@
 // moves a rotor or takes a dial on its own.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  AppSnapshot,
   NeedTag,
   SatBinding,
   SatDetail,
@@ -70,16 +71,45 @@ import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
 import { pushToast } from '../toast'
 import { MapView } from './MapView'
+import { LogEntry } from './LogEntry'
 import { Dialog } from './ui/Dialog'
 import { useTheme } from '../useTheme'
 
 interface Props {
   /** Bird to select (map click hand-off). The section follows changes. */
   focusSat?: string | null
+  /** The live engine snapshot — the log strip's dial/band/mode source, exactly
+   * as the Phone and CW cockpits feed it. Nullable (and absent in the older
+   * section tests) because the pop-out window polls it on its own 300 ms
+   * cadence and has none for the first tick; the strip simply doesn't render
+   * until it lands. */
+  snap?: AppSnapshot | null
   onPopOut?: () => void
 }
 
 const SCHEDULE_HOURS = 48
+
+/** The station's COMMANDED mode, folded to the closed ADIF Mode enumeration.
+ *
+ * Same rule and same field the Phone cockpit logs on (`FM ? 'FM' : 'SSB'` over
+ * the commanded sideband), widened only by the two other ADIF Modes that field
+ * can legitimately hold outside a phone cockpit — the Satellites section is
+ * reachable with the rig on CW (linear-transponder CW is ordinary satellite
+ * work) or AM. `snap.radio.sideband` is the mode the app COMMANDED, not the
+ * display-only `rigMode` read-back (which some Hamlib backends answer from
+ * cache, and which is `None` until the rig reports).
+ *
+ * USB/LSB deliberately fold to SSB: they are ADIF SUBMODEs, and `<MODE>USB`
+ * gets the whole record rejected on LoTW upload — the same closed-enumeration
+ * trap LogEntry's LOG_MODES table documents. Nothing about the satellite feeds
+ * this: not the bird, not the transponder, not the downlink. */
+function adifModeFromStation(sideband: string | null | undefined): string {
+  const m = (sideband ?? '').trim().toUpperCase()
+  if (m === 'FM') return 'FM'
+  if (m === 'CW') return 'CW'
+  if (m === 'AM') return 'AM'
+  return 'SSB'
+}
 
 /** 8-wind compass label for a pass direction ("NW→SE"). */
 function wind8(az: number): string {
@@ -1704,7 +1734,7 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
   )
 }
 
-export function SatellitesView({ focusSat, onPopOut }: Props) {
+export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
   const [view, setView] = useState<SatView | null>(null)
   const [favs, setFavs] = useState<Set<string>>(() => satChasingSet())
   const [schedule, setSchedule] = useState<SatPass[]>([])
@@ -2294,6 +2324,9 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
   // decides where the radio transmits is a wrong-uplink generator. Feeds the
   // chooser state line and the Doppler readout's reason.
   const heldSimplex = !!(detail != null && binding?.simplex && tuned?.name === detail.name)
+  // The ADIF mode the section's log strip records a contact as, and the report
+  // format that follows from it. Station state only — see adifModeFromStation.
+  const logMode = adifModeFromStation(snap?.radio.sideband)
   // The RECORD's per-leg sidebands differing (SatNOGS data) — used only to
   // decide whether the chooser's TX-sideband note renders at all, and for the
   // pre-arm FORECAST wording. What the engine actually commands is the DTO's
@@ -3252,6 +3285,50 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
               </div>
             ) : (
               <div className="sat-passline">no pass over you in the next 24 h</div>
+            )}
+            {/* LOG THIS QSO — the section's missing half (operator, 0.27.3: "I
+                dont have a spot to log within the satellites section to log my
+                sat qso's. Lets not reinvent anything, logging sections exist in
+                the phone area, can we drop that in?").
+
+                Dropped in, not rebuilt: this is the SAME shared LogEntry the
+                Phone and CW cockpits render, with the same props they pass, and
+                it logs the SAME ORDINARY CONTACT they log. It is NOT a
+                satellite-aware log — nothing about the bird reaches the record.
+                Satellite tagging (ADIF PROP_MODE/SAT_NAME, which LoTW needs for
+                satellite credit) is deliberately not done here; see the note
+                line below, docs/guide/satellites.md and the CHANGELOG, all of
+                which say so plainly so nobody waits on credit that isn't coming.
+
+                WHY HERE, and not above the dome or below the globe. The column
+                is one scroller and its two square graphics — the sky dome
+                (0.7·vh live) and the globe — are together taller than it at
+                every window size (the reason the ✕ above is sticky). So:
+                  · BELOW the globe would put the log a full column-scroll past
+                    the transponder cards. An operator turning a manual rotor
+                    with both hands, with seconds between overs, will not make
+                    that trip; he would log on paper instead, which is exactly
+                    what he already does.
+                  · ABOVE the dome would push the pass instrument he steers by
+                    off the first screen for the whole pass, to buy nothing —
+                    the log is used in bursts between overs, not continuously.
+                Directly under the pass block puts it hard against the Doppler
+                readout — the readout stays on screen while he types, the dome's
+                lower half with it — and ahead of the transponder chooser and
+                the globe, which are pre-pass planning surfaces he is done with
+                by the time anyone answers. No new scroller, no sticky, no fixed
+                positioning: a plain in-flow block in the column that already
+                owns the overflow. Document order is pinned by a test. */}
+            {snap && (
+              <div className="sats-log">
+                <LogEntry snap={snap} mode={logMode} defaultRst={logMode === 'CW' ? '599' : '59'} />
+                <p className="sats-log-note">
+                  Logs an ordinary contact from your dial, exactly as the Phone and CW log
+                  panels do. It is <b>not</b> tagged as a satellite QSO: Nexus does not write
+                  the ADIF PROP_MODE and SAT_NAME fields LoTW needs for satellite credit. Add
+                  them yourself if you want that credit.
+                </p>
+              </div>
             )}
             {detail.transmitters.length > 0 ? (
               <>

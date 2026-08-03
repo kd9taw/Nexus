@@ -264,9 +264,18 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
     ).toBe('0')
   })
   it('the sticky detail heading (the ✕ home) has an opaque background', () => {
-    expect(winner('.sats-detail h2', 'position')).toBe('sticky')
-    const bg = winner('.sats-detail h2', 'background')
+    // DIRECT CHILD. The detail card hosts the shared LogEntry strip, which has
+    // its own <h2>; as a DESCENDANT rule this one out-cascaded `.log-entry h2`
+    // (identical specificity, later in the sheet) and made a second sticky
+    // heading inside the same scroller. The guard asks for the scoped form so
+    // the descendant version cannot come back.
+    expect(winner('.sats-detail > h2', 'position')).toBe('sticky')
+    const bg = winner('.sats-detail > h2', 'background')
     expect(bg, 'sticky surfaces need an opaque background (contract rule)').toContain('var(--bg')
+    expect(
+      winner('.sats-detail h2', 'position'),
+      'a descendant `.sats-detail h2` rule is back — it captures the log strip’s own heading',
+    ).toBeNull()
   })
 })
 

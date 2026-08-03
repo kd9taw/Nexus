@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: log a contact from the Satellites section
+
+Reported after a clean pass: "the doppler shift change are working amazing, I was following the
+bird with my manual rotor and it was perfect. The problem came when I tried to log someone, as I
+dont have a spot to log within the satellites section to log my sat qso's."
+
+There is now a log strip in the bird's detail column, directly under the Doppler readout. It is
+not a new form — it is the same log strip the Phone and CW cockpits use, with the same callbook
+lookup, the same recall card and the same prior-contact history, put where you are working the
+pass. It sits above the transponder cards and the globe on purpose: with both hands on a rotator
+and seconds between overs, a form at the bottom of the column is a form you don't use. It is
+there whether or not a pass is armed, and it stays after the bird sets, so you can catch up on a
+contact once your hands are free.
+
+**It logs an ordinary contact.** The call, your dial, your band, the mode you are on, the time —
+exactly what the Phone strip logs from the same state. It does **not** tag the contact as a
+satellite QSO: LoTW wants the ADIF `PROP_MODE` and `SAT_NAME` fields for that, and Nexus does not
+write them. The strip says so under the fields, so nobody waits on satellite credit that isn't
+coming. If you want it, add those two fields yourself in whatever you upload from.
+
+### Fixed: contacts logged during a pass no longer carry a satellite name LoTW rejects
+
+This one is in the version you are running now. Since 0.24.0, any contact logged while you had a
+transponder held was written with `PROP_MODE=SAT` and a `SAT_NAME` — and the name was the bird's
+*catalog* name, "SAUDISAT 1C (SO-50)" rather than "SO-50". LoTW rejects a record naming a
+satellite it doesn't recognise (ARRL: "if you enter the satellite name as AO7 instead of AO-7 the
+data will be rejected"), so those contacts could never earn satellite credit, and every upload
+carrying one was at risk of coming back rejected.
+
+It also caught contacts that had nothing to do with a satellite. The hold is only handed back when
+the pass ends — and a transponder you pick without arming a pass is never handed back at all — so
+an HF contact made an hour later got tagged as a satellite QSO too, and went out that way to LoTW,
+eQSL, ClubLog, QRZ Logbook and Cloudlog.
+
+Nexus no longer writes either field for any contact it logs. Records that arrive carrying them —
+a foreign ADIF import, or one you fixed by hand — are untouched, on import, on export and in the
+logbook.
+
+**Contacts already logged that way are left alone**, and deliberately: some of them were real
+satellite QSOs that want the name corrected, some were ordinary contacts that want the tag gone,
+and nothing in the record tells them apart — that call is yours. To find them, search your log
+file (`~/.config/tempo/log.adi`, or `%APPDATA%\tempo\log.adi` on Windows) for `SAT_NAME`, and edit
+it there with Nexus closed. The guide's [satellite chapter](docs/guide/satellites.md) walks
+through it.
+
+### Fixed: a microwave contact is no longer broadcast to N1MM / N3FJP as a metre-band contact
+
+The band label Nexus puts on the club-log wire converted 70 cm, 33 cm and 23 cm by hand and
+guessed at everything else by chopping the letters off the end — which cannot tell centimetres
+from metres. Any other centimetre band came out as a bare number: a 6 cm contact was broadcast as
+"6", identical to 6 metres, and the club log filed it on the wrong band with nothing on screen to
+show it had happened. Centimetre bands are now converted by the rule the three hand-written ones
+already followed, so a centimetre band can never read as a metre band. The three values that have
+always gone out are unchanged.
+
 ### Fixed: the ⊞ Panels menu no longer offers a checkbox that changes nothing
 
 From the bench: "what do the Panels selection / deselection of Rig Scope Controls and TX meters
