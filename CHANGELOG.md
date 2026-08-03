@@ -31,6 +31,17 @@ case of orbital elements the propagator can no longer follow — there, the same
 the pointing and the Doppler shift, so there is no correction left to make and holding your radio
 would be a lie.
 
+The rotor readout in a cockpit header keeps up with it. That strip shows a dim "ROTOR —" when a
+rotator is configured but silent, and it used to show only that — so a pass that had just lost its
+rotator, and was still steering your radio, went nameless everywhere outside the Satellites
+section. It now shows both: the honest dash for the mast, and beside it the bird, what Doppler is
+holding, and the ■ that stops the track.
+
+At the end of a pass whose rotator went quiet, Nexus still sends one stop — the controller may be
+back by then, and a stop can only ever take motion away. It does **not** run "park" or "go to
+ready" for that pass: you were told the pointing was yours, so the antenna stays where you left it.
+A pass that kept its rotator parks as configured, unchanged.
+
 ### Fixed: a Doppler correction no longer rewrites the mode every three seconds
 
 From an operator's CI-V trace of a live pass: 110 seconds carried 38 mode commands and 38

@@ -70,6 +70,11 @@ beforeEach(() => {
   api.readRotator.mockImplementation(() => Promise.reject(new Error('no rotor')))
   api.getSatTrackStatus.mockReset()
   api.getSatTrackStatus.mockImplementation(() => Promise.resolve(null))
+  // Rotor-less by default; the "configured but silent" cases opt in.
+  api.getSettings.mockReset()
+  api.getSettings.mockImplementation(() =>
+    Promise.resolve({ rotatorModel: 0, rotatorHost: '' } as never),
+  )
   api.stopSatTrack.mockClear()
 })
 afterEach(cleanup)
@@ -123,5 +128,43 @@ describe('the dial-ownership marker (no rotor configured)', () => {
     expect(chip.textContent).not.toMatch(/holds the dial/i)
     expect(chip.textContent).toMatch(/TX VFO/)
     expect(screen.queryByRole('group', { name: /doppler owns the dial/i })).toBeNull()
+  })
+})
+
+// ⭐ THE STATE THE ROTOR GIVE-UP FIX CREATES, and the one this strip used to go
+// blind in. A rotator that stopped answering is, by definition, CONFIGURED and
+// silent — and the ownership chip lived only in the "no rotator configured"
+// branch, so it fell through to the dim placeholder, which carries no track
+// information at all. The track is still alive (that is the whole point of the
+// fix: it keeps the dial and runs Doppler to LOS), so the operator kept a
+// frequency moving by itself and lost both the app-wide sign of who owned it
+// and the ■ that stops it.
+describe('a rotator configured but not answering', () => {
+  const configured = () =>
+    api.getSettings.mockImplementation(() =>
+      Promise.resolve({ rotatorModel: 2, rotatorHost: '' } as never),
+    )
+
+  it('still names the bird and the dial, and still offers the ■', async () => {
+    configured()
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(track({ mode: 'doppler-only', rotorLost: true })),
+    )
+    render(<RotorStrip />)
+    const chip = await screen.findByRole('group', { name: /doppler owns the dial/i })
+    expect(chip.textContent).toMatch(/RS-44/)
+    expect(chip.textContent).toMatch(/holds the dial/i)
+    // The honest "no answer from the mast" placeholder is still there beside it.
+    expect(screen.getByLabelText(/rotator stopped answering/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /stop the satellite track/i }))
+    await waitFor(() => expect(api.stopSatTrack).toHaveBeenCalled())
+  })
+
+  it('claims nothing when no track is driving — just the honest placeholder', async () => {
+    configured()
+    render(<RotorStrip />)
+    const dim = await screen.findByLabelText(/rotator not answering/i)
+    expect(dim.textContent).toMatch(/ROTOR/)
+    expect(screen.queryByRole('group', { name: /doppler owns/i })).toBeNull()
   })
 })
