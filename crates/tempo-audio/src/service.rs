@@ -1465,16 +1465,15 @@ struct RadioLoop {
     last_dial: u64,
     last_mode: String,
     /// The mode last commanded onto the SPLIT (TX) VFO, mirroring `last_mode` for
-    /// the RX side. EVERY split that is programmed states its own mode
-    /// (`Engine::split_tx_mode`): a satellite's corrected uplink gets the
-    /// downlink's mode mirrored through the transponder — an inverting bird
-    /// transmits on the opposite side to the one it is heard on — and a
-    /// terrestrial pile-up split gets the mode the dial is being commanded, so
-    /// it cannot inherit whatever the last pass left on that VFO. Tracked so the
-    /// mode is written when the ANSWER changes and never re-asserted every cycle
-    /// — the split VFO's mode cannot be read back, so re-asserting would
-    /// silently fight an operator using the rig's own mode knob. `None` = we are
-    /// not holding the TX VFO's mode.
+    /// the RX side. Only a satellite pass sets one today: the uplink leg carries
+    /// its own mode, and on an inverting linear transponder that is the opposite
+    /// sideband to the one the bird is heard on (`Engine::sat_tx_mode_for_split`
+    /// — answered only when the split being applied is the sat's own corrected
+    /// uplink, never for a terrestrial pile-up split). Tracked so the mode is
+    /// written when the ANSWER changes and never re-asserted every cycle — the
+    /// split VFO's mode cannot be read back, so re-asserting would silently
+    /// fight an operator using the rig's own mode knob. `None` = we are not
+    /// holding the TX VFO's mode.
     last_split_mode: Option<String>,
     /// The applied split rides the SUB BAND (the engine answered "Sub" and the
     /// rig took it — the IC-9700's satellite mode, engaged by the native
@@ -3465,28 +3464,32 @@ impl RadioLoop {
                                         }
                                         "rig rejected split — work the pile-up manually".to_string()
                                     });
-                                    // The TX VFO's MODE. `M` only ever reaches the RX VFO,
-                                    // so `X` here is the one place a transmit VFO's mode
-                                    // can be commanded at all — and A SPLIT THAT IS
-                                    // PROGRAMMED STATES THE MODE THAT BELONGS TO IT. Both
-                                    // halves of the AO-123 defect were the same false
-                                    // premise, that the transmit VFO INHERITS the receive
-                                    // VFO's mode:
-                                    //   * an FM (or non-inverting) bird's uplink left
-                                    //     unspoken to kept whatever the last linear pass
-                                    //     put there — FM on 435, a stale LSB on 145;
-                                    //   * and a terrestrial pile-up "UP 5" worked after
-                                    //     that pass rode the SAME VFO B with nothing said,
-                                    //     so the bird's FM transmitted at 14.240 MHz.
+                                    // The TX VFO's MODE, while a satellite pass holds it. `M`
+                                    // only ever reaches the RX VFO, so `X` here is the one
+                                    // place the uplink's mode can be commanded at all — and
+                                    // it is sent for EVERY held bird, not just the inverting
+                                    // ones whose sidebands swap. The transmit VFO carries its
+                                    // own mode: an FM bird's uplink left unspoken to keeps
+                                    // whatever the last linear pass put there (KD9TAW's
+                                    // AO-123 report — FM on 435, a stale LSB on 145).
                                     //
-                                    // `Engine::split_tx_mode` owns both cases: the
-                                    // satellite's own corrected uplink gets the mirrored
-                                    // sideband, every other split gets the mode the DIAL is
-                                    // being commanded. The identity check inside it is what
-                                    // keeps a bird's swapped sideband off a pile-up, and
-                                    // its `None` (beacon / unconfirmed mapping / the
-                                    // operator taking the mode back) stays a refusal rather
-                                    // than falling through to the terrestrial answer.
+                                    // Consulted per SPLIT, not per hold: this one-shot also
+                                    // serves the terrestrial pile-up path ("UP 5"), and a
+                                    // transponder hold legitimately outlives its pick (a
+                                    // pre-AOS pick is the normal flow). The engine answers
+                                    // only when `tx_hz` IS its own corrected uplink, so a
+                                    // pile-up split worked while a bird is held can never
+                                    // be put in the bird's swapped sideband.
+                                    //
+                                    // ⚠️ AND A TERRESTRIAL SPLIT IS STILL NOT ANSWERED FOR
+                                    // AT ALL — it keeps whatever mode is on that VFO,
+                                    // including a mode a satellite pass put there. That is a
+                                    // live defect with its own fix (see
+                                    // `Engine::sat_tx_mode_for_split`); it is NOT this
+                                    // branch's, because the terrestrial answer has to be
+                                    // derived from the split's own dial rather than from the
+                                    // RX dial's mode, and on native CI-V the A/B `26 01`
+                                    // path it would need is deliberately unwired.
                                     //
                                     // Written only when the ANSWER changes. The split VFO's
                                     // mode cannot be read back, so re-asserting it every
@@ -3495,7 +3498,8 @@ impl RadioLoop {
                                     // don't-fight discipline the frequency side gets from
                                     // `sat_observe_operator_tune`. See `Engine::sat_tx_mode`.
                                     if ok {
-                                        let want_md = { engine_lock(engine).split_tx_mode(tx_hz) };
+                                        let want_md =
+                                            { engine_lock(engine).sat_tx_mode_for_split(tx_hz) };
                                         if want_md != self.last_split_mode {
                                             match &want_md {
                                                 Some(md) => {
@@ -11281,22 +11285,25 @@ mod tests {
     }
 
     #[test]
-    fn an_inverting_bird_states_the_mirrored_side_in_every_operating_section() {
+    fn every_operating_section_states_the_side_its_uplink_belongs_on() {
         // FINDING 1, at the wire. The mirror knew `USB`↔`LSB` and nothing else,
         // and every other token fell through UNCHANGED. That was invisible
         // while a matching-legs answer was suppressed; stating the uplink for
         // every held bird made it reachable, and worse than the stale mode it
         // replaced — we now AUTHOR the wrong side instead of leaving one there.
         //
-        // A DATA submode still has a sideband (PKTUSB is USB-side, PKTLSB
-        // LSB-side) and RTTY's reverse mode is the mirrored tone sense. An
-        // inverting transponder mirrors the passband, so it mirrors all of
-        // them: the right uplink frequency on the wrong side is silence at the
-        // far end.
+        // A DATA submode still NAMES a sideband (PKTUSB is USB-side, PKTLSB
+        // LSB-side). An inverting transponder mirrors the passband, so it
+        // mirrors those too: the right uplink frequency on the wrong side is
+        // silence at the far end.
         //
         // BOTH transponder senses across ALL FOUR sections, asserting the SIDE
         // — membership in a section's vocabulary is exactly what a wrong-side
-        // answer satisfies.
+        // answer satisfies. The two sections that do NOT mirror are here for
+        // the same reason, from the other direction: CW because a keyed carrier
+        // has no side, RTTY because its mode answer names a convention rather
+        // than a side and its tone sense is `rtty_reverse`'s to flip — on both
+        // legs at once.
         use tempo_app::settings::{CwKeyerBackend, OperatingMode};
         type Setup = fn(&mut tempo_app::settings::Settings);
         // (label, station setup, dial mode, uplink straight through, uplink inverted)
@@ -11334,6 +11341,13 @@ mod tests {
                 "USB",
                 "LSB",
             ),
+            // RTTY, both backends: the mode answer is the LSB-side CONVENTION
+            // (amateur RTTY is LSB-side on every band), not a side derived from
+            // anything, so an inverting bird has nothing there to swap. What it
+            // really does flip — the tone sense — is `Settings::rtty_reverse`,
+            // ONE switch driving the transmit tone pair and the receive demod
+            // together; mirroring the transmit VFO's mode on top of it reverses
+            // the uplink twice.
             (
                 "RTTY (AFSK)",
                 |s| {
@@ -11342,7 +11356,7 @@ mod tests {
                 },
                 "PKTLSB",
                 "PKTLSB",
-                "PKTUSB",
+                "PKTLSB",
             ),
             (
                 "RTTY (FSK)",
@@ -11352,7 +11366,7 @@ mod tests {
                 },
                 "RTTY",
                 "RTTY",
-                "RTTYR",
+                "RTTY",
             ),
             (
                 "Digital",
@@ -11387,43 +11401,54 @@ mod tests {
     }
 
     #[test]
-    fn a_pileup_split_worked_after_a_pass_states_its_own_mode() {
-        // FINDING 2, at the wire, and the SAME false premise as the AO-123
-        // report: that the transmit VFO inherits the receive VFO's mode.
+    fn a_pileup_split_worked_after_a_pass_never_gets_the_birds_sideband() {
+        // THE IDENTITY GATE AT THE WIRE, and it carries the whole load now that
+        // every held bird answers. RS-44's inverting transponder is picked
+        // before AOS (the normal flow); the operator, waiting, works a 40 m
+        // phone pile-up "UP 5", which rides the SAME VFO B — `S 1 VFOB`,
+        // `I 7155000`. The satellite engine must say NOTHING about that split.
         //
-        // An FM bird's hold writes `X FM` onto VFO B. The operator then works a
-        // 20 m pile-up "UP 5", which rides that SAME VFO B — `S 1 VFOB`, `I
-        // 14245000` — and nothing stated the pile-up's own mode. The satellite
-        // identity guard correctly refuses to put the BIRD's sideband there,
-        // but refusing is not answering: the stale FM stayed, and the rig
-        // transmitted FM at 14.245 MHz.
+        // 40 m, not 20 m, because it is the band where the leak is both visible
+        // and harmful: the bird's own answer for the operator's new dial is
+        // `uplink_mode_for("LSB", invert)` = USB, so an ungated engine emits a
+        // real `X USB` frame — the mirrored sideband of a bird, on a 40 m
+        // pile-up that belongs on LSB, authored by us. On 20 m the same mistake
+        // is invisible at the wire: the answer still spells LSB, `last_split_mode`
+        // already holds it, and write-on-change swallows the frame while the
+        // transmit VFO stays wrong.
+        //
+        // ⚠️ WHAT THIS DOES NOT SAY: that the pile-up's own mode gets stated.
+        // It does not. Nothing answers for a terrestrial split, so whatever the
+        // pass left on that VFO stays there — a real, separate defect on the
+        // TERRESTRIAL split path (see `Engine::sat_tx_mode_for_split`),
+        // deliberately not fixed on this branch. So the assertion is on the
+        // bird's mirrored sideband never appearing, not on the wire staying
+        // silent: fixing the stranding properly writes `X LSB` here (40 m phone)
+        // and must not turn this test red.
         let mut p = SatPass::new(true);
-        p.pick("AO-123|V/U FM", AO123, FM_BIRD);
+        p.pick("RS-44|linear", RS44, SSB_BIRD);
         assert_eq!(
             split_modes(&p.log),
-            vec!["FM".to_string()],
-            "scene: the bird put FM on the transmit VFO"
+            vec!["LSB".to_string()],
+            "scene: the inverting bird put its mirrored sideband on the transmit VFO"
         );
 
         // The Needed click that carries "UP 5".
         p.engine
             .lock()
             .unwrap()
-            .work_spot_split("phone", 14.240, "20m", Some(5.0));
+            .work_spot_split("phone", 7.150, "40m", Some(5.0));
         p.steps(6);
 
+        let verbs = split_verbs(&p.log);
+        let dial_at = verbs
+            .iter()
+            .position(|l| l == "I 7155000")
+            .expect("scene: the pile-up's TX dial reached the transmit VFO");
         assert!(
-            split_verbs(&p.log).iter().any(|l| l == "I 14245000"),
-            "scene: the pile-up's TX dial reached the transmit VFO: {:?}",
-            split_verbs(&p.log)
-        );
-        assert_eq!(
-            split_modes(&p.log),
-            vec!["FM".to_string(), "USB".to_string()],
-            "a split that is PROGRAMMED states the mode that belongs to it — 20 m \
-             phone is USB, and leaving the bird's FM there transmits an FM carrier \
-             into a phone pile-up: {:?}",
-            split_verbs(&p.log)
+            !verbs[dial_at..].iter().any(|l| l.starts_with("X USB")),
+            "the satellite's swapped sideband must never reach a split that is not its \
+             uplink — 40 m phone is LSB: {verbs:?}"
         );
     }
 

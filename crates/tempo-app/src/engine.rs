@@ -7845,11 +7845,13 @@ impl Engine {
     /// The answer is always [`Self::rig_mode_effective`] — what the DIAL is
     /// being commanded — put through [`tempo_core::doppler::uplink_mode_for`],
     /// which mirrors the SIDE and nothing else. The section still decides the
-    /// FORM, so a Digital pass answers a DATA submode and an RTTY-FSK pass the
-    /// rig's RTTY mode; inversion only picks which of that section's two sides
-    /// the transmit VFO lands on. The one token that is not also a dial token
-    /// is `RTTYR`, the reverse of the RTTY-FSK mode, and the CAT mode maps
-    /// already carry it.
+    /// FORM, so a Digital pass answers a DATA submode and a CW pass the rig's
+    /// CW mode; inversion only picks which of that section's two sides the
+    /// transmit VFO lands on — and where a section HAS no two sides (the RTTY
+    /// arm answers one token for both), nothing is mirrored at all, see the
+    /// guard in the body. So the uplink can never be told a token the dial's
+    /// own `M` verb is not given on some pass anyway — pinned by
+    /// `the_uplink_mode_never_leaves_the_vocabulary_the_dial_is_commanded_from`.
     ///
     /// Nothing is "restored" when the pass ends — the answer simply becomes
     /// `None` and the loop stops writing, which is exactly what releasing the
@@ -7868,6 +7870,28 @@ impl Engine {
         // read from the one write-side canon rather than a second guess at it,
         // so the two legs can never be derived from different beliefs.
         let down = self.rig_mode_effective();
+        // ⚠️ A SECTION WHOSE ANSWER CARRIES NO SIDE IS NOT MIRRORED, and the
+        // test for that is the answer itself: if this section commands ONE
+        // token whichever side it is handed, then nothing in the value encodes
+        // a side, and mirroring it does not swap a side — it invents one.
+        //
+        // RTTY is the section that is side-blind today, and deliberately so:
+        // amateur RTTY is LSB-side (mark = the higher RF) on 80 m and on 20 m
+        // alike, so neither the band convention nor a bird's declared downlink
+        // gets a say (`Settings::rig_mode_on_sideband`). Its tone sense — the
+        // thing an inverting bird really does flip — is already owned by
+        // `Settings::rtty_reverse`, ONE switch driving the transmit tone pair
+        // and the receive demod together, so an operator who turned it on to
+        // copy the downlink has already reversed the uplink with it. A mirror
+        // here would reverse it a second time.
+        //
+        // ASKED HERE rather than in `uplink_mode_for` because only this layer
+        // still knows the SECTION: RTTY on the AFSK backend commands `PKTLSB`,
+        // the same token the Digital section commands for an LSB-declared bird,
+        // and those two want opposite answers from one token.
+        if self.settings.rig_mode_on_sideband(false) == self.settings.rig_mode_on_sideband(true) {
+            return Some(down);
+        }
         Some(tempo_core::doppler::uplink_mode_for(
             &down,
             st.transponder.invert,
@@ -7887,6 +7911,29 @@ impl Engine {
     /// swap — commanding LSB onto a 20 m USB pile-up's TX VFO would be an
     /// on-air wrong-sideband transmission authored by us, on a frequency the
     /// satellite engine has no claim to.
+    ///
+    /// ⚠️ KNOWN, AND NOT FIXED HERE: refusing is not the same as answering. A
+    /// terrestrial split is left with whatever mode is on that VFO — including
+    /// one an earlier satellite pass put there (an AO-123 hold writes `X FM`
+    /// onto VFO B; a 20 m "UP 5" worked afterwards rides the same VFO B and
+    /// transmits FM). That is a real defect, and it belongs to the TERRESTRIAL
+    /// split path rather than to this one, for two reasons that any fix has to
+    /// answer:
+    ///
+    /// - **the RX dial's mode is the wrong source.** The split one-shot
+    ///   ([`Self::take_split_request`]) OUTLIVES the hold: releasing a bird
+    ///   clears `sat_tune` but leaves a Doppler correction already queued, so
+    ///   the release lands and the next apply is a 145 MHz uplink that no
+    ///   longer matches the identity gate. Answering it from
+    ///   [`Self::rig_mode_effective`] answers for the DIAL — measured on a
+    ///   70 cm downlink, or on the terrestrial frequency the handback restores.
+    ///   Observed on RS-44 (inverting, uplink 145.9635 MHz, LSB correct and
+    ///   already on that VFO): the dial's answer is `USB`, i.e. we would author
+    ///   a wrong-sideband transmit VFO where refusing left a right one;
+    /// - **and the verb is not wired for it.** On native CI-V
+    ///   `civ::broker::set_split_mode` returns `None` for the A/B (non-satellite)
+    ///   case on purpose — `26 01` is unverified against the manual — so every
+    ///   terrestrial "UP n" would surface "rig would not set the TX mode".
     pub fn sat_tx_mode_for_split(&self, tx_hz: u64) -> Option<String> {
         if !self.split_is_sat_uplink(tx_hz) {
             return None;
@@ -7897,53 +7944,17 @@ impl Engine {
     /// Is the split TX dial `tx_hz` the SATELLITE's own corrected uplink — the
     /// exact frequency the last Doppler correction actually sent?
     ///
-    /// THE identity question, asked from three places that must never disagree
-    /// about whose split they are holding ([`Self::sat_tx_mode_for_split`],
-    /// [`Self::split_tx_mode`], [`Self::sat_split_tx_vfo`]). A transponder hold
-    /// outlives the moment it was picked (a pre-AOS pick is the normal flow)
-    /// and the split one-shot serves BOTH producers — the Doppler tick and the
-    /// terrestrial pile-up path — so "a bird is held" is never the question.
+    /// THE identity question, asked from the two places that must never
+    /// disagree about whose split they are holding
+    /// ([`Self::sat_tx_mode_for_split`], [`Self::sat_split_tx_vfo`]). A
+    /// transponder hold outlives the moment it was picked (a pre-AOS pick is
+    /// the normal flow) and the split one-shot serves BOTH producers — the
+    /// Doppler tick and the terrestrial pile-up path — so "a bird is held" is
+    /// never the question.
     fn split_is_sat_uplink(&self, tx_hz: u64) -> bool {
         self.sat_tune
             .as_ref()
             .is_some_and(|st| st.sent.sent && st.sent.uplink_hz == tx_hz)
-    }
-
-    /// The mode the TRANSMIT VFO must be put in for the split the radio loop is
-    /// about to program — for EVERY split, not only a satellite's.
-    ///
-    /// Two producers share the split one-shot and each one owns its own answer:
-    ///
-    /// - the satellite's corrected uplink gets [`Self::sat_tx_mode`], the
-    ///   downlink's mode mirrored through the transponder
-    ///   ([`tempo_core::doppler::uplink_mode_for`]). `None` there is a real
-    ///   refusal — a beacon, an unconfirmed mapping, or the operator taking the
-    ///   mode back — and it must NOT fall through to the answer below, which
-    ///   would re-assert over the very choice that stood us down;
-    /// - every other split is TERRESTRIAL, and a terrestrial split transmits in
-    ///   the mode the operator is listening in. So it gets
-    ///   [`Self::rig_mode_effective`] — the same write-side canon the dial's own
-    ///   `M` verb is drawn from, which is the only way the two VFOs cannot end
-    ///   up disagreeing about one QSO.
-    ///
-    /// ⚠️ THE SECOND HALF OF THE AO-123 DEFECT. `sat_tx_mode`'s "the legs match,
-    /// so say nothing" was one instance of a false premise — that the transmit
-    /// VFO INHERITS the receive VFO's mode — and this path was the other. A
-    /// satellite hold writes `X FM` onto VFO B; the operator then works a 20 m
-    /// pile-up "UP 5", which rides that SAME VFO B, and nothing stated the
-    /// pile-up's own mode. The identity gate correctly refused to put the
-    /// BIRD's mode there, but refusing is not the same as answering: the stale
-    /// FM stayed, and the rig transmitted FM at 14.240 MHz. A split that is
-    /// programmed must state the mode that belongs to it.
-    ///
-    /// Still a write-on-CHANGE at the loop (`last_split_mode`) — this widens
-    /// WHICH splits have an answer, never how often one is sent.
-    pub fn split_tx_mode(&self, tx_hz: u64) -> Option<String> {
-        if self.split_is_sat_uplink(tx_hz) {
-            // Including its refusals — see above.
-            return self.sat_tx_mode();
-        }
-        Some(self.rig_mode_effective())
     }
 
     /// Which TX VFO the split one-shot must ride for `tx_hz` — the per-mapping
@@ -22247,20 +22258,20 @@ mod tests {
     }
 
     #[test]
-    fn an_inverting_bird_mirrors_the_side_in_every_section_not_just_phone() {
-        // THE SIDE, section by section — the only thing inversion changes, and
-        // the thing the previous form of this test could not see. It asserted
-        // that the uplink token was a MEMBER of the section's two-token
-        // vocabulary, which a wrong-SIDE answer satisfies just as well as a
-        // right one; and for the sections whose mirror was missing the answer
-        // was literally the downlink token, so "membership" passed while the
-        // rig was being told to transmit on the side it receives on. (RTTY-AFSK
-        // is the sharpest case: its whole vocabulary is `["PKTLSB","PKTLSB"]`.)
+    fn every_section_states_the_side_its_uplink_belongs_on_not_just_phone() {
+        // THE SIDE, section by section, in LITERAL tokens — an operator can
+        // read this table against their rig's front panel. Its twin,
+        // `the_uplink_mode_never_leaves_the_vocabulary_the_dial_is_commanded_from`,
+        // asserts the same answers structurally (drawn from
+        // `rig_mode_on_sideband` rather than spelled out); neither subsumes the
+        // other, because a wrong `rig_mode_on_sideband` would satisfy the
+        // structural form and this one would still catch it.
         //
         // Two authorities, and the product of the two is what reaches the wire:
         // the SECTION decides the FORM (plain SSB, a DATA submode, the rig's
-        // CW or RTTY mode) and the BIRD decides the SIDE. Every row is a real
-        // station: a linear transponder is worked in all of them.
+        // CW or RTTY mode) and the BIRD decides the SIDE — where the section's
+        // form HAS one. Every row is a real station: a linear transponder is
+        // worked in all of them.
         use crate::settings::{CwKeyerBackend, OperatingMode};
         // (label, section, section setup, downlink, uplink straight, uplink inverted)
         type Setup = fn(&mut crate::settings::Settings);
@@ -22289,23 +22300,30 @@ mod tests {
                 "USB",
                 "LSB",
             ),
+            // RTTY does not mirror, on EITHER backend, and the reason is the
+            // value rather than the token: the RTTY arm of
+            // `rig_mode_on_sideband` answers LSB-side whichever side it is
+            // handed, because amateur RTTY is LSB-side on every band. So the
+            // downlink answer encodes no side for inversion to act on — and
+            // the tone sense, which an inverting bird really does flip, is
+            // already owned by `rtty_reverse`, ONE switch driving the transmit
+            // tone pair and the receive demod together. Mirroring here would
+            // reverse the uplink a second time.
             (
                 "RTTY (AFSK)",
                 OperatingMode::Rtty,
                 |s| s.rtty_backend = "afsk".into(),
                 "PKTLSB",
                 "PKTLSB",
-                "PKTUSB",
+                "PKTLSB",
             ),
-            // True FSK commands the rig's own RTTY mode; its reverse mode IS
-            // the mirrored one, mark and space swapping RF sides.
             (
                 "RTTY (FSK)",
                 OperatingMode::Rtty,
                 |s| s.rtty_backend = "fsk".into(),
                 "RTTY",
                 "RTTY",
-                "RTTYR",
+                "RTTY",
             ),
             (
                 "Digital",
@@ -22350,6 +22368,113 @@ mod tests {
     }
 
     #[test]
+    fn the_uplink_mode_never_leaves_the_vocabulary_the_dial_is_commanded_from() {
+        // ⭐ THE INVARIANT, and it earned its place back. Widening WHEN the
+        // uplink has an answer must not widen WHAT it can say: the split-mode
+        // verb ends at a closed mode set in the CAT backends, and a token
+        // outside it burns the loop's one bounded attempt on a rejection —
+        // silently, because the split VFO's mode cannot be read back.
+        //
+        // It was deleted as "too loose" while the mirror was widened to every
+        // token that had a reverse. It is not loose; it was RIGHT, and it went
+        // red on exactly the cells that were wrong. The RTTY arm of
+        // `rig_mode_on_sideband` answers ONE token for both sides (amateur RTTY
+        // is LSB-side on every band), so its whole vocabulary is
+        // `["PKTLSB","PKTLSB"]` — or `["RTTY","RTTY"]` on FSK — and a mirrored
+        // answer of `PKTUSB`/`RTTYR` is a token the dial's own `M` verb is
+        // never given on any pass. That is what "there is no side in this
+        // value to mirror" looks like from outside the section.
+        //
+        // STRENGTHENED to name WHICH of the two the answer is, because the side
+        // is the only thing inversion changes and membership alone cannot see
+        // it: on a section whose two tokens differ, a wrong-side answer is
+        // still a member. Both are asserted against `rig_mode_on_sideband`
+        // itself rather than literals — the point is that the uplink is drawn
+        // from the DIAL's range, not that it happens to spell "LSB".
+        use crate::settings::{CwKeyerBackend, OperatingMode};
+        type Setup = fn(&mut crate::settings::Settings);
+        // (label, section, setup, does inversion move the uplink to the other side?)
+        let rows: [(&str, OperatingMode, Setup, bool); 6] = [
+            ("Phone", OperatingMode::Phone, |_s| {}, true),
+            // `CW`/`CWR` is which side of the carrier the rig takes its BEAT
+            // NOTE from; both key one carrier at the dial, and this VFO only
+            // ever transmits. A real pair, no radiated side — so it does not
+            // move, and the vocabulary half cannot catch that. This row is why
+            // the side half exists.
+            (
+                "CW (rig keyer)",
+                OperatingMode::Cw,
+                |s| s.cw_keyer = CwKeyerBackend::Cat,
+                false,
+            ),
+            (
+                "CW (soundcard keyer)",
+                OperatingMode::Cw,
+                |s| s.cw_keyer = CwKeyerBackend::Soundcard,
+                true,
+            ),
+            // The two side-blind sections. `mirrors` is false and the two dial
+            // tokens are identical, so it is the VOCABULARY half that does the
+            // work here — and it is the half that goes red the moment anything
+            // mirrors them.
+            (
+                "RTTY (AFSK)",
+                OperatingMode::Rtty,
+                |s| s.rtty_backend = "afsk".into(),
+                false,
+            ),
+            (
+                "RTTY (FSK)",
+                OperatingMode::Rtty,
+                |s| s.rtty_backend = "fsk".into(),
+                false,
+            ),
+            ("Digital", OperatingMode::Digital, |_s| {}, true),
+        ];
+        for (label, section, setup, mirrors) in rows {
+            for invert in [false, true] {
+                let (mut e, tp) = sat_mode_engine(invert, 145_965_000);
+                {
+                    let mut s = e.settings().clone();
+                    s.operating_mode = section;
+                    setup(&mut s);
+                    e.apply_settings(s);
+                }
+                e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+                let up = e
+                    .sat_tx_mode()
+                    .expect("a held, consented uplink always has a mode to state");
+                let down = e.rig_mode_effective();
+
+                // The dial's OWN range for this section: the two sideband sides
+                // it can be commanded on, which is every token it produces
+                // short of the FM arm (asserted separately above).
+                let dial_range = [
+                    e.settings.rig_mode_on_sideband(false),
+                    e.settings.rig_mode_on_sideband(true),
+                ];
+                assert!(
+                    dial_range.contains(&up),
+                    "{label} invert={invert}: the uplink was told {up:?}, which the dial \
+                     is never commanded ({dial_range:?}) — a token the mode plumbing has \
+                     never had to handle"
+                );
+
+                // …and WHICH of the two. `down` is one of the pair by
+                // construction; the uplink is the OTHER one exactly when this
+                // section's form carries a side and the bird inverts.
+                let down_is_lsb = down == dial_range[1];
+                let want = &dial_range[usize::from(down_is_lsb != (mirrors && invert))];
+                assert_eq!(
+                    &up, want,
+                    "{label} invert={invert}: the dial is on {down:?}, so the transmit \
+                     VFO belongs on {want:?} — mirrors={mirrors}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_plain_ssb_opt_out_reaches_the_uplink_on_the_mirrored_side() {
         // A MIC-JACK interface (`RadioProfile::data_modes_plain_ssb`) needs
         // plain SSB where a normally-wired rig needs the DATA submode: on that
@@ -22380,62 +22505,6 @@ mod tests {
                 "plain_ssb={plain_ssb}: the uplink is that answer on the OTHER side"
             );
         }
-    }
-
-    #[test]
-    fn a_terrestrial_split_states_its_own_mode_instead_of_inheriting_the_birds() {
-        // THE SECOND HALF of the AO-123 defect, and the identical false
-        // premise: that the transmit VFO INHERITS the receive VFO's mode.
-        //
-        // A satellite hold puts the bird's mode on VFO B. The operator then
-        // works a 20 m pile-up "UP 5" — the SAME VFO B. The identity gate
-        // correctly refuses to put the BIRD's mode there, but refusing is not
-        // answering: nothing stated the pile-up's own mode, so the bird's FM
-        // stayed on the transmit VFO and the rig transmitted FM at 14.245 MHz.
-        // A split that is programmed states the mode that belongs to it.
-        let (mut e, tp) = sat_mode_engine(false, 145_960_000);
-        let fm = tempo_core::doppler::Transponder {
-            half_width_hz: 0,
-            ..tp
-        };
-        {
-            let mut s = e.settings().clone();
-            s.phone_mode = "fm".to_string();
-            e.apply_settings(s);
-        }
-        e.set_sat_transponder(Some(("AO-123|V/U FM".into(), 0, fm)));
-        let c = e
-            .sat_doppler_tick(-3.0, 10_000, false)
-            .expect("the FM bird's uplink is driven");
-        let up = c.uplink_hz.expect("the mapping drives the uplink");
-        assert_eq!(
-            e.split_tx_mode(up).as_deref(),
-            Some("FM"),
-            "scene: the bird's own uplink is still answered with the bird's mode"
-        );
-
-        // Now the pile-up. `work_spot_split` is the Needed click that carries
-        // "UP 5" — it lands the dial on the DX and programs the TX VFO 5 kHz up.
-        e.work_spot_split("phone", 14.240, "20m", Some(5.0));
-        let tx_hz =
-            (e.split_tx_mhz().expect("the pile-up programmed a split") * 1e6).round() as u64;
-        assert_eq!(tx_hz, 14_245_000, "scene: TX dial = spot + 5 kHz");
-        assert_eq!(
-            e.sat_tx_mode_for_split(tx_hz),
-            None,
-            "the identity gate still refuses the BIRD's mode on a terrestrial split"
-        );
-        assert_eq!(
-            e.split_tx_mode(tx_hz).as_deref(),
-            Some("USB"),
-            "…and the split states the mode that IS its own — 20 m phone is USB, \
-             not the FM the satellite left on that VFO"
-        );
-        assert_eq!(
-            e.split_tx_mode(tx_hz),
-            Some(e.rig_mode_effective()),
-            "a terrestrial split transmits in the mode the operator is listening in"
-        );
     }
 
     // ===================== tune-on-pick (the S.A.T.-box behaviour) =====================

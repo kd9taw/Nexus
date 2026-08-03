@@ -369,30 +369,31 @@ pub fn downlink_class(mode: Option<&str>) -> DownlinkClass {
 /// database reports. An inverting transponder swaps the uplink sideband — the
 /// single most-missed detail in satellite operating.
 ///
-/// # EVERY sideband-bearing token, not just the plain pair
+/// # EVERY token that NAMES a radiated side, not just the plain pair
 ///
-/// A DATA submode still has a sideband: `PKTUSB` is USB-side and `PKTLSB` is
-/// LSB-side (Yaesu DATA-U/DATA-L, Icom USB-D/LSB-D). RTTY-FSK has one too —
-/// `RTTY` is the normal tone sense and `RTTYR` the reversed one, and an
-/// inverting transponder mirrors the tones exactly as it mirrors a voice
-/// passband. When the mirror knew only `USB`/`LSB` those tokens fell through
-/// the `_ => m` arm UNCHANGED, so an inverting bird worked in the Digital or
-/// RTTY section was told to transmit on the SAME side it receives on — the
-/// correct uplink frequency in the wrong sideband, which is silence at the far
-/// end, on a transmission we authored rather than one we declined. All three
-/// pairs mirror:
+/// A DATA submode still names a sideband: `PKTUSB` is USB-side and `PKTLSB` is
+/// LSB-side (Yaesu DATA-U/DATA-L, Icom USB-D/LSB-D), and the audio the sound
+/// card plays lands the opposite way up in each. When the mirror knew only
+/// `USB`/`LSB` those tokens fell through the `_ => m` arm UNCHANGED, so an
+/// inverting bird worked in the Digital section was told to transmit on the
+/// SAME side it receives on — the correct uplink frequency in the wrong
+/// sideband, which is silence at the far end, on a transmission we authored
+/// rather than one we declined. Both pairs mirror:
 ///
 /// | section | downlink | uplink through an INVERTING bird |
 /// |---|---|---|
 /// | Phone (and CW on the soundcard keyer) | `USB` / `LSB` | `LSB` / `USB` |
-/// | Digital, RTTY-AFSK, SSTV | `PKTUSB` / `PKTLSB` | `PKTLSB` / `PKTUSB` |
-/// | RTTY-FSK | `RTTY` / `RTTYR` | `RTTYR` / `RTTY` |
+/// | Digital, SSTV | `PKTUSB` / `PKTLSB` | `PKTLSB` / `PKTUSB` |
 ///
 /// A radio configured for plain SSB on the data modes
 /// (`RadioProfile::data_modes_plain_ssb` — a mic-jack interface) commands
 /// `USB`/`LSB` for those sections instead, and the two steps COMMUTE: the
 /// downlink answer is de-DATA'd before it gets here, and the plain pair mirrors
 /// to the same side the DATA pair would have.
+///
+/// The list is deliberately of tokens that NAME a side, because that is the
+/// only thing an inverting transponder changes. Two mode pairs look like sides
+/// and are not, and each is ruled on below.
 ///
 /// # ⚠️ `CW`/`CWR` DELIBERATELY DO NOT MIRROR — the argued case
 ///
@@ -418,6 +419,38 @@ pub fn downlink_class(mode: Option<&str>) -> DownlinkClass {
 ///   arrive only when the operator is standing in the CW section, which is
 ///   their deliberate pick of the rig's CW mode, and passing it through keeps
 ///   the transmit VFO in the CW-class mode the keyer needs.
+///
+/// # ⚠️ `RTTY`/`RTTYR` DO NOT MIRROR EITHER — a different argument
+///
+/// The tone sense IS mirrored by an inverting transponder; that much is true,
+/// and it is why the pair looks like a side. It is not one, for two reasons
+/// that both end at the same place — the mirror would be a SECOND reverse on a
+/// leg that is already reversed:
+///
+/// - **the tone sense is already owned, as ONE setting spanning both legs.**
+///   `Settings::rtty_reverse` drives the transmit tone pair
+///   (`rtty_afsk::AfskConfig::reverse`) and the receive demod
+///   (`rtty::tone_pair`) TOGETHER. Working an inverting bird, the operator
+///   turns it on to copy the downlink at all — and that same switch has already
+///   reversed what we transmit. Mirroring the transmit VFO's mode on top of it
+///   reverses the uplink twice, and puts the two legs on sides that one switch
+///   cannot be right for at once;
+/// - **the value handed in carries no side to mirror.** Amateur RTTY is
+///   LSB-side (mark = the higher RF) on 80 m and on 20 m alike, so
+///   `Settings::rig_mode_on_sideband`'s RTTY arm ignores the side it is given —
+///   the band convention has no say there and neither does a bird's declared
+///   downlink. Mirroring an answer that never encoded a side does not swap one;
+///   it invents one. `RTTYR` is also a token the dial's own `M` verb is never
+///   given: the FSK keyer keys the rig's `RTTY` mode and `rtty_fsk` has no
+///   reverse of its own, so a reversed transmit VFO is a state nothing else in
+///   the RTTY path — the decoder's netting, the operator's REV — knows about.
+///
+/// ⚠️ **AND THIS MAP CANNOT ENFORCE THAT RULING ALONE.** RTTY on the AFSK
+/// backend commands `PKTLSB`, the very token the Digital section commands for
+/// an LSB-declared bird, and those two want OPPOSITE answers. A mode token has
+/// lost the section it came from. So the RTTY exclusion is made by the one
+/// caller that still knows — `Engine::sat_tx_mode` — and what is settled here
+/// is only `RTTY`/`RTTYR`, which no other section produces.
 pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     let m = downlink_mode.trim().to_ascii_uppercase();
     if !invert {
@@ -426,16 +459,16 @@ pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     match m.as_str() {
         "USB" => "LSB".to_string(),
         "LSB" => "USB".to_string(),
-        // The DATA submodes carry the same two sides — FT8/FT4, RTTY-AFSK and
-        // SSTV through a transponder are all worked here.
+        // The DATA submodes carry the same two sides — FT8/FT4 and SSTV
+        // through a transponder are worked here. (RTTY-AFSK also commands
+        // `PKTLSB`, and must NOT be mirrored — see the ruling above; its
+        // caller keeps it away from this map.)
         "PKTUSB" => "PKTLSB".to_string(),
         "PKTLSB" => "PKTUSB".to_string(),
-        // RTTY-FSK: the reverse mode IS the mirrored one (mark and space swap
-        // RF sides), and the rig's own mode map already knows the token.
-        "RTTY" => "RTTYR".to_string(),
-        "RTTYR" => "RTTY".to_string(),
         // FM is a class, not a side. `CW`/`CWR` are a receive-side BFO choice
-        // with one transmitted carrier behind both — see the ruling above.
+        // with one transmitted carrier behind both, and `RTTY`/`RTTYR` a tone
+        // sense `Settings::rtty_reverse` already flips on both legs at once —
+        // see the two rulings above.
         _ => m,
     }
 }
@@ -706,19 +739,13 @@ mod tests {
     }
 
     #[test]
-    fn every_sideband_bearing_token_mirrors_not_just_the_plain_pair() {
-        // A DATA submode still has a SIDE — PKTUSB is USB-side, PKTLSB is
-        // LSB-side — and RTTY's reverse mode is the mirrored tone sense. Left
-        // out of the map they fell through `_ => m` unchanged, so an inverting
-        // bird worked in FT8 or RTTY was told to transmit on the SAME side it
-        // receives on: the right frequency, the wrong sideband, silence at the
-        // far end, on a transmission we authored rather than one we declined.
-        for (down, up) in [
-            ("PKTUSB", "PKTLSB"),
-            ("PKTLSB", "PKTUSB"),
-            ("RTTY", "RTTYR"),
-            ("RTTYR", "RTTY"),
-        ] {
+    fn every_token_that_names_a_side_mirrors_not_just_the_plain_pair() {
+        // A DATA submode still NAMES a side — PKTUSB is USB-side, PKTLSB is
+        // LSB-side. Left out of the map they fell through `_ => m` unchanged,
+        // so an inverting bird worked in FT8 was told to transmit on the SAME
+        // side it receives on: the right frequency, the wrong sideband, silence
+        // at the far end, on a transmission we authored rather than declined.
+        for (down, up) in [("PKTUSB", "PKTLSB"), ("PKTLSB", "PKTUSB")] {
             assert_eq!(
                 uplink_mode_for(down, true),
                 up,
@@ -731,13 +758,49 @@ mod tests {
             );
         }
         // Both directions of every pair, so the map cannot be one-way.
-        for m in ["USB", "LSB", "PKTUSB", "PKTLSB", "RTTY", "RTTYR"] {
+        for m in ["USB", "LSB", "PKTUSB", "PKTLSB"] {
             assert_eq!(
                 uplink_mode_for(&uplink_mode_for(m, true), true),
                 m,
                 "mirroring {m} twice is the identity — a pair, not a redirect"
             );
         }
+    }
+
+    #[test]
+    fn rtty_does_not_mirror_and_that_is_the_ruling() {
+        // The tone sense IS mirrored by an inverting transponder — which is
+        // exactly why `RTTY`/`RTTYR` looks like a side and is not one. Nexus
+        // already owns the tone sense, as ONE setting spanning both legs:
+        // `Settings::rtty_reverse` drives the TX tone pair and the RX demod
+        // together, so an operator who turned it on to copy an inverting bird's
+        // downlink has ALREADY reversed what we transmit. A mode-level mirror on
+        // the transmit VFO is a second reverse, and leaves the two legs on sides
+        // one switch cannot be right for at once.
+        //
+        // `RTTYR` is also a token the dial's own mode verb is never given (the
+        // FSK keyer keys the rig's `RTTY` mode; `rtty_fsk` has no reverse of its
+        // own), so it would be a transmit-VFO state nothing else in the RTTY
+        // path knows about.
+        for m in ["RTTY", "RTTYR"] {
+            assert_eq!(
+                uplink_mode_for(m, true),
+                m,
+                "{m} is a tone sense, not a radiated side — `rtty_reverse` owns it"
+            );
+            assert_eq!(uplink_mode_for(m, false), m);
+        }
+        // ⚠️ AND THE HALF THIS MAP CANNOT SETTLE. RTTY on the AFSK backend
+        // commands `PKTLSB` — the SAME token the Digital section commands for an
+        // LSB-declared bird, which must mirror. A mode token has lost the
+        // section, so the RTTY exclusion is made by the caller that still knows
+        // it (`Engine::sat_tx_mode`), and this map keeps mirroring the DATA pair.
+        assert_eq!(
+            uplink_mode_for("PKTLSB", true),
+            "PKTUSB",
+            "the DATA pair still mirrors here — the section, not the token, is what \
+             tells RTTY-AFSK apart from an LSB-declared Digital bird"
+        );
     }
 
     #[test]

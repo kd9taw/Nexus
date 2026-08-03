@@ -3258,6 +3258,15 @@ impl Settings {
     ///
     /// NO FM arm: this answers for the LINEAR path only. FM is a class, not a
     /// side, and its callers gate on it before they get here.
+    ///
+    /// ⚠️ **A SECTION MAY IGNORE `lsb` ENTIRELY, AND ONE DOES.** The RTTY arm
+    /// answers LSB-side for both values, because amateur RTTY is LSB-side on
+    /// every band (see it below). So the answer for that section encodes NO
+    /// side, and no caller may derive one from it — in particular the satellite
+    /// uplink must not "mirror" it, because there is nothing there to mirror
+    /// (`Engine::sat_tx_mode`, which tests `rig_mode_on_sideband(false) ==
+    /// rig_mode_on_sideband(true)` rather than naming sections, so a future
+    /// side-blind arm is covered the day it is written).
     pub(crate) fn rig_mode_on_sideband(&self, lsb: bool) -> String {
         match self.operating_mode {
             // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
@@ -3296,6 +3305,13 @@ impl Settings {
             // rig's own RTTY mode, which is what unlocks the narrow RTTY filters and keys the
             // shift. "Plain SSB" has no meaning there — only the AFSK (soundcard) path, which
             // is a DATA submode for the same reason FT8 is, can be switched.
+            //
+            // ⚠️ THIS ARM IGNORES `lsb`, and that is the ruling, not an
+            // oversight: the RTTY convention is LSB-side on 80 m and on 20 m
+            // alike, so the band rule does not get a say here and neither does
+            // a satellite's declared downlink. The consequence is stated on
+            // this function's doc — the answer carries no side, so nothing
+            // downstream may mirror it.
             OperatingMode::Rtty => {
                 if self.rtty_backend.eq_ignore_ascii_case("fsk") {
                     "RTTY".to_string()
