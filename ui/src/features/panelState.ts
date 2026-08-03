@@ -64,8 +64,9 @@
 //                flushed, rig.ptt(false) — whenever `now < rtty_busy_until`, i.e. an over is
 //                actually keying. CockpitHeader draws it as a BUTTON only while
 //                radio.transmitting is false; radio.transmitting is the SLOT-TX indicator
-//                alone (Engine::set_transmitting is called from poll_tx and halt_tx and
-//                nowhere else — RTTY reports through rtty_sending instead), so the latch stays
+//                alone (Engine::set_transmitting is written by plan_beacon_tx, plan_tx,
+//                commit_tx and halt_tx — the slot machinery and the universal kill, never the
+//                RTTY path, which reports through rtty_sending instead), so the latch stays
 //                a button through every RTTY over. · the auto-sequencer's Esc/Abort →
 //                seq.abort() + Engine::rtty_stop(), rendered only inside
 //                `{auto && seqState !== 'idle'}`.
