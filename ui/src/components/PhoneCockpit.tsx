@@ -461,8 +461,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // when it was hidden, and nothing else silently widens the column budget meanwhile).
   const liveDspFuncs = DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
   // Whether each rig-gated pane CAN render at all on this station, independent of the ⊞
-  // tick. Computed here, above the menu, so the entry and the pane read ONE boolean each
-  // and cannot drift apart — which is the whole failure the affordance exists to answer.
+  // tick. Computed here, above the menu, so the entry's note and the pane read ONE boolean
+  // each and cannot drift apart — which is the whole failure the notes exist to answer.
   // CAPABILITY, not the learned flag: the sticky learns just below only run while the pane
   // is SHOWN, so keying availability off the ref alone would leave an operator who unticked
   // before the rig first reported stuck with a dead entry once it does.
@@ -472,24 +472,25 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
   // host is only supplying `shown` + the menu items.
   //
-  // Three entries here are conditional on the STATION, so their checkbox could be ticked
-  // while the pane could never mount — the dead-checkbox the operator hit on 2026-08-03.
-  // Each is offered UNAVAILABLE with the reason, and each goes live by itself the moment
-  // the rig can feed it: the rig-scope pane needs the RADIO's own panadapter streaming,
-  // and the two DSP panes need the rig to report those fields over CAT (the same
-  // capability gate the DSP row itself has always applied to its buttons).
+  // Four entries can be ticked with nothing on screen behind them — the dead-checkbox the
+  // operator hit on 2026-08-03 — so each carries a NOTE saying why and what would change
+  // it. Three are conditional on the STATION and clear by themselves the moment the rig
+  // can feed them: the rig-scope pane needs the RADIO's own panadapter streaming, and the
+  // two DSP panes need the rig to report those fields over CAT (the same capability gate
+  // the DSP row itself has always applied to its buttons). The fourth, TX Meters, mounts
+  // fine and reads only while keyed. The notes explain; every box stays the operator's.
   const host = panels
     ? panelHost(panels, {
         menu: PHONE_PANEL_IDS,
         side: [],
         main: 'bandActivity',
         labels: PHONE_PANEL_LABELS,
-        unavailable: {
+        notes: {
           rigscope: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
           dsp: canDsp ? undefined : NO_DSP_FUNCS_REASON,
           dspLevels: canDspLevels ? undefined : NO_DSP_LEVELS_REASON,
+          txmeters: TX_METERS_WHEN,
         },
-        notes: { txmeters: TX_METERS_WHEN },
       })
     : null
   const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)

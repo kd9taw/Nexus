@@ -29,8 +29,7 @@ knob and the slider tracks it (it won't sit lying at 100%). Your drags win while
 you're dragging.
 
 **⊞ Panels** in the header shows and hides the panes under the scope. An entry
-that cannot show you anything on your setup is listed but greyed, with the reason
-on it — it goes live by itself when your station can render it:
+with nothing on screen behind it right now says why, in a line under it:
 
 - **Rig Scope Controls** command the *radio's own* panadapter (span sets the
   hardware sweep width, ref sets weak-signal visibility), so they appear only
@@ -40,13 +39,16 @@ on it — it goes live by itself when your station can render it:
 - **DSP Functions** (NB / NR / Notch / COMP / VOX) and **RX DSP Levels** (NR
   level, AGC) only ever offer what your radio reports over CAT. A rig that
   reports none of them has nothing for those panes to hold, and the entries say
-  so rather than hiding an empty pane behind a live checkbox.
+  so rather than hiding an empty pane behind a silent checkbox.
 - **TX Meters** (SWR / ALC / PO / COMP) read on transmit, so the panel is empty
-  while you listen. The entry stays tickable and says when it reads.
+  while you listen. The entry says when it reads.
 
-A greyed entry is still a tab stop: it takes keyboard focus and reads its reason
-with the panel name. If the list outgrows your window it scrolls inside the menu,
-so **Undo last change** and **Reset layout** stay reachable.
+The line explains the screen; the tick is still yours. Every box in the menu can
+be ticked and unticked whenever you like, and what you choose applies the moment
+that panel has something to show — untick one now and it stays away when your rig
+starts feeding it. Each entry is a keyboard tab stop and reads its reason with the
+panel name. If the list outgrows your window it scrolls inside the menu, so **Undo
+last change** and **Reset layout** stay reachable.
 
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->
 

@@ -47,14 +47,16 @@ chips.
 sidetone pitch, so you can zero-beat a station by ear and eye.
 
 **⊞ Panels** in the header shows and hides the panes under the scope, and an
-entry that cannot show you anything on your setup is greyed with the reason on
-it — it stays keyboard-reachable and reads that reason with the panel name.
+entry with nothing on screen behind it right now says why in a line under it —
+it stays keyboard-reachable and reads that reason with the panel name.
 **Scope Controls** command the radio's own panadapter, so they appear only while
 an Icom CI-V or FlexRadio scope is streaming; **DSP Toggles** and **RX DSP
 Levels** offer only what your radio reports over CAT; **Sent Echo** holds what
 you have transmitted this session, so it is empty until your first over; **TX
-Meters** read on transmit. See [Phone](phone.md) for the same menu on the voice
-side.
+Meters** read on transmit. The line explains the screen; the tick is still
+yours — untick Sent Echo at start-up and it stays away after your first over,
+rather than making you transmit before you can hide it. See [Phone](phone.md)
+for the same menu on the voice side.
 
 <!-- TODO: capture screenshot — the eight F-key macro buttons with the recommended-next highlight -->
 

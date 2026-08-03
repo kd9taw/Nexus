@@ -21,23 +21,28 @@ Phone and CW the meters read only while you are keyed, so on receive there is no
 either way — and the one moment the tick shows is mid-over, when you are not in a menu.
 
 The menu now says which is which, the same way the DSP row has always only offered the functions
-your rig reports. A panel that cannot appear at all right now is listed but not tickable, with the
-reason on it — "your radio is not streaming its own scope — these appear with an Icom CI-V or
+your rig reports. An entry with nothing on screen behind it right now carries the reason in a line
+under it — "your radio is not streaming its own scope — these appear with an Icom CI-V or
 FlexRadio panadapter" — so you learn why instead of hunting for a pane that was never going to
-mount, and the entry goes live by itself the moment a native scope streams. TX Meters stay
-tickable and carry the note "readings appear on transmit" in Phone, CW and Operate alike. Nothing
-is removed from the menu: a greyed entry with a reason tells you more than a missing one.
+mount, and the line clears by itself the moment a native scope streams. TX Meters carry "readings
+appear on transmit" in Phone, CW and Operate alike. Nothing is removed from the menu: an entry
+with a reason on it tells you more than a missing one.
 
 The same two questions turned out to have five more answers in the same menus, and they read the
 same way now. In Phone and CW, **DSP Functions / DSP Toggles** and **RX DSP Levels** depend on
 what your radio reports over CAT — on a rig that reports neither, those panes could never appear
 and the boxes did nothing. In CW, **Sent Echo** holds what you have transmitted this session, so
 at every start-up it is empty and its box moved nothing at all until your first over; it now says
-so, and goes live when you send. Everything else in the menu is unchanged and still tickable.
+so, and the line clears when you send.
 
-Reaching all of this from the keyboard works the way the rest of Nexus does: an entry that cannot
-appear is still a tab stop, still takes focus, and reads its reason aloud with the panel name —
-the operator who cannot see the greying is the one the reason was written for. And the menu itself
+The line explains the screen; the tick is still yours. Every box in the menu can be ticked and
+unticked whenever you like, whatever your rig is doing, and what you choose applies the moment
+that panel has something to show — untick **Sent Echo** at start-up and it stays away after your
+first over, instead of making you transmit before you can hide a panel you do not want.
+
+Reaching all of this from the keyboard works the way the rest of Nexus does: every entry is a tab
+stop, takes focus with an undimmed focus ring, and reads its reason aloud with the panel name —
+the operator who cannot see the line under it is the one it was written for. And the menu itself
 no longer runs off a short screen: with eight entries and their reasons it scrolls inside its own
 box, so **Undo last change** and **Reset layout** stay where you can reach them at any window size
 or UI zoom.

@@ -1,31 +1,32 @@
 // @vitest-environment jsdom
 //
-// ⊞ PANELS — AN ENTRY THAT CAN CHANGE NOTHING IS NOT CHECKABLE (operator, 2026-08-03:
-// "what do the Panels selection / deselection of Rig Scope Controls and TX meters do on
-// the Phone tab? I don't see them anywhere on my screen whether enabled or disabled").
+// ⊞ PANELS — AN ENTRY THAT SHOWS NOTHING SAYS WHY, AND STAYS THE OPERATOR'S (operator,
+// 2026-08-03: "what do the Panels selection / deselection of Rig Scope Controls and TX
+// meters do on the Phone tab? I don't see them anywhere on my screen whether enabled or
+// disabled").
 //
-// Both entries he named were live checkboxes that could not move anything on his station:
+// Eight entries across Phone and CW offer a pane that can be empty or absent through no
+// fault of the tick:
 //   - Rig Scope Controls / CW's Scope Controls mount ONLY while the radio's own
-//     panadapter streams (native Icom CI-V or FlexRadio). On the audio bandscope the
-//     pane cannot exist, so the tick was inert.
-//   - TX Meters gate correctly, but the unpinned variant renders nothing on receive —
-//     the only moment the box has a visible effect is mid-over, when nobody is in a menu.
+//     panadapter streams (native Icom CI-V or FlexRadio).
+//   - Phone's DSP Functions / RX DSP Levels and CW's DSP Toggles / RX DSP Levels are
+//     capability-gated on what the rig reports over CAT.
+//   - CW's Sent Echo holds this SESSION's transmissions, so it is empty at every start-up.
+//   - TX Meters gate correctly, but the unpinned variant renders nothing on receive.
 //
-// The same shape survived on five more entries in the same two cockpits, and they are
-// covered here too: Phone's DSP Functions / RX DSP Levels and CW's DSP Toggles / RX DSP
-// Levels are capability-gated on what the rig reports over CAT, and CW's Sent Echo holds
-// this SESSION's transmissions — so at every session start it is empty and its tick moves
-// nothing, which is the operator's complaint verbatim in another cockpit.
+// TWO IDEAS, NOT ONE. The REASON explains why nothing is on screen right now. The
+// CHECKBOX is the operator's PREFERENCE about that panel. Merging them — refusing the
+// tick while the station cannot feed the pane — took his control away in the state he is
+// most likely to want it: CW's Sent Echo is empty at EVERY session start, and unticking it
+// there is exactly how an operator who does not want the echo gets rid of it for the
+// session. It also dimmed the focus ring of the one entry that most needs to be reachable.
+// So every one of these entries is a plain, operable checkbox that carries its reason.
 //
-// So this suite RENDERS the real cockpits (the wiring, not a props fixture) in BOTH states
-// and asserts the affordance itself: reachable-but-inert plus the reason when the pane
-// cannot mount, checkable with no reason when it can, and the standing "when" note on TX
-// Meters. A presence test on a source string would pass against a menu that never received
-// the reason at all.
-//
-// The unavailable entry is `aria-disabled`, never `disabled`: a disabled control leaves the
-// tab order, so the operator who most needs the reason — keyboard-only, screen reader — is
-// exactly the one who would never reach it. The reachability pin is its own describe below.
+// This suite RENDERS the real cockpits (the wiring, not a props fixture) in BOTH states and
+// asserts both halves: the reason arrives as the checkbox's accessible description when the
+// pane has nothing to show, no reason when it has, and the tick RECORDS — and keeps — the
+// operator's preference across the moment the station starts feeding it. A presence test on
+// a source string would pass against a menu that never received the reason at all.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
@@ -38,7 +39,7 @@ import {
   NOTHING_SENT_REASON,
 } from '../features/panelHost'
 import type { AppSnapshot } from '../types'
-import type { CwPanelId, PanelLayoutApi, PhonePanelId } from '../features/panelState'
+import type { CwPanelId, PanelLayoutApi, PanelState, PhonePanelId } from '../features/panelState'
 
 /** What the stubbed engine reports as this session's sent CW — '' at session start is the
  *  state the Sent Echo entry is dead in, and the whole point of that entry's reason. */
@@ -191,10 +192,12 @@ function cwSnap(radio: Record<string, unknown> = {}): AppSnapshot {
   } as unknown as AppSnapshot
 }
 
-function fakePanels<P extends string>(): PanelLayoutApi<P> {
+/** @param state what the operator has already chosen for a panel ('removed' = he unticked
+ *  it). Everything else is docked, which is the stock layout. */
+function fakePanels<P extends string>(state: Partial<Record<P, PanelState>> = {}): PanelLayoutApi<P> {
   return {
-    layout: { v: 1, state: {}, share: {} },
-    stateOf: () => 'docked',
+    layout: { v: 1, state, share: {} },
+    stateOf: (id: P) => state[id] ?? 'docked',
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),
@@ -216,9 +219,9 @@ async function openMenu(node: React.ReactElement) {
   fireEvent.click(screen.getByRole('button', { name: /panels/i }))
 }
 
-/** Open Phone with its ⊞ menu up; returns the panel API so a test can prove nothing moved. */
-async function openPhone(radio: Record<string, unknown> = {}) {
-  const panels = fakePanels<PhonePanelId>()
+/** Open Phone with its ⊞ menu up; returns the panel API so a test can read what moved. */
+async function openPhone(radio: Record<string, unknown> = {}, state: Partial<Record<PhonePanelId, PanelState>> = {}) {
+  const panels = fakePanels<PhonePanelId>(state)
   await openMenu(
     <PhoneCockpit
       snap={phoneSnap(radio)}
@@ -231,8 +234,8 @@ async function openPhone(radio: Record<string, unknown> = {}) {
   return panels
 }
 
-async function openCw(radio: Record<string, unknown> = {}) {
-  const panels = fakePanels<CwPanelId>()
+async function openCw(radio: Record<string, unknown> = {}, state: Partial<Record<CwPanelId, PanelState>> = {}) {
+  const panels = fakePanels<CwPanelId>(state)
   await openMenu(
     <CwCockpit
       snap={cwSnap(radio)}
@@ -250,19 +253,35 @@ async function openCw(radio: Record<string, unknown> = {}) {
 const entry = (label: string) => screen.getByLabelText(label) as HTMLInputElement
 
 /**
- * An entry whose pane cannot mount: listed, carrying its reason as the checkbox's
- * accessible DESCRIPTION, marked unavailable — and still a real focus stop, because
- * `disabled` would delete it from the very navigation the reason is written for.
- * Returns the box so the caller can go on to prove it is inert.
+ * EVERY entry, explained or not, is a plain operable checkbox — no `disabled`, no
+ * `aria-disabled`. Both take the operator's preference away, and either one drags the
+ * greyed-out look along with it: dimming a focusable element composites its focus ring
+ * too, so the entry a keyboard operator most needs to find is the one hardest to see.
+ * Availability belongs in the reason line; the tick is his answer to a different question.
  */
-function expectUnavailable(label: string, reason: string): HTMLInputElement {
+function expectOperable(label: string): HTMLInputElement {
   const box = entry(label)
   expect(
     box.disabled,
     `${label}: the \`disabled\` ATTRIBUTE removes the entry from the tab order — a ` +
-      'keyboard or screen-reader operator would never reach the reason. Use aria-disabled.',
+      'keyboard or screen-reader operator would never reach the reason.',
   ).toBe(false)
-  expect(box.getAttribute('aria-disabled'), `${label}: not marked unavailable`).toBe('true')
+  expect(
+    box.getAttribute('aria-disabled'),
+    `${label}: aria-disabled. That refuses the operator a preference he is entitled to ` +
+      'record now (an empty Sent Echo is exactly when he wants it gone), and the dimming ' +
+      'that goes with it halves the focus ring against the popover backdrop.',
+  ).toBeNull()
+  return box
+}
+
+/**
+ * An entry whose pane has nothing to show right now: listed, fully operable, carrying its
+ * reason as the checkbox's accessible DESCRIPTION so it reaches the operator who cannot
+ * see the line under it.
+ */
+function expectExplained(label: string, reason: string): HTMLInputElement {
+  const box = expectOperable(label)
   // Resolve the description the way an assistive technology does: follow the id.
   const whyId = box.getAttribute('aria-describedby')
   expect(whyId, `${label}: no aria-describedby — the reason is loose text, not its description`)
@@ -273,35 +292,36 @@ function expectUnavailable(label: string, reason: string): HTMLInputElement {
   return box
 }
 
-/** An entry whose pane CAN mount: checkable, with no reason hung on it. */
-function expectAvailable(label: string): HTMLInputElement {
-  const box = entry(label)
-  expect(box.disabled, `${label}: disabled while its pane can mount`).toBe(false)
-  expect(box.getAttribute('aria-disabled'), `${label}: marked unavailable while it can mount`)
-    .toBeNull()
+/** An entry whose pane CAN show something: operable, with no reason hung on it. */
+function expectUnexplained(label: string): HTMLInputElement {
+  const box = expectOperable(label)
+  expect(
+    box.getAttribute('aria-describedby'),
+    `${label}: carries a reason while its pane has something to show`,
+  ).toBeNull()
   return box
 }
 
 const pane = (id: string) => document.querySelector(`[data-pane="${id}"]`)
 
 describe('⊞ Panels — the rig-scope entry follows the scope that is actually streaming', () => {
-  it('Phone, audio bandscope: listed, NOT checkable, and it says what would bring it back', async () => {
+  it('Phone, audio bandscope: listed, ticked, and it says what would bring it back', async () => {
     await openPhone()
-    const box = expectUnavailable('Rig Scope Controls', NO_NATIVE_SCOPE_REASON)
+    const box = expectExplained('Rig Scope Controls', NO_NATIVE_SCOPE_REASON)
     // Still ticked: it is switched on, there is just nothing streaming for it to show.
     expect(box.checked).toBe(true)
-    // The pane genuinely cannot render — that is what makes the tick inert.
+    // The pane genuinely cannot render — which is what the reason is there to explain.
     expect(pane('rigscope')).toBeNull()
   })
 
   // BOTH arms of `civScope || flexScope`, in BOTH cockpits. Covering one arm per cockpit
   // let a mutant that dropped the other arm live through the whole suite (Phone without
   // `flexScope`, CW without `civScope`) — a FlexRadio on Phone, or an Icom on CW, would
-  // have kept the entry greyed with its own panadapter on screen.
-  it.each(['civ', 'flex'])('Phone, %s panadapter streaming: checkable again, no reason', async (src) => {
+  // have kept the entry apologising with its own panadapter on screen.
+  it.each(['civ', 'flex'])('Phone, %s panadapter streaming: the reason is gone', async (src) => {
     feedSource = src
     await openPhone()
-    expectAvailable('Rig Scope Controls')
+    expectUnexplained('Rig Scope Controls')
     expect(screen.queryByText(NO_NATIVE_SCOPE_REASON)).toBeNull()
     // …and now the pane it names really is on screen, so the tick moves something.
     expect(pane('rigscope')).not.toBeNull()
@@ -309,48 +329,48 @@ describe('⊞ Panels — the rig-scope entry follows the scope that is actually 
 
   it('CW, audio bandscope: the same rule for its Scope Controls entry', async () => {
     await openCw()
-    expectUnavailable('Scope Controls', NO_NATIVE_SCOPE_REASON)
+    expectExplained('Scope Controls', NO_NATIVE_SCOPE_REASON)
     expect(pane('scopeCtl')).toBeNull()
   })
 
-  it.each(['civ', 'flex'])('CW, %s panadapter streaming: checkable again, no reason', async (src) => {
+  it.each(['civ', 'flex'])('CW, %s panadapter streaming: the reason is gone', async (src) => {
     feedSource = src
     await openCw()
-    expectAvailable('Scope Controls')
+    expectUnexplained('Scope Controls')
     expect(screen.queryByText(NO_NATIVE_SCOPE_REASON)).toBeNull()
     expect(pane('scopeCtl')).not.toBeNull()
   })
 })
 
 describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', () => {
-  it('Phone, a rig that reports no DSP functions: both DSP entries are unavailable', async () => {
+  it('Phone, a rig that reports no DSP functions: both DSP entries carry the reason', async () => {
     await openPhone(BARE_RIG)
-    expectUnavailable('DSP Functions', NO_DSP_FUNCS_REASON)
-    expectUnavailable('RX DSP Levels', NO_DSP_LEVELS_REASON)
+    expectExplained('DSP Functions', NO_DSP_FUNCS_REASON)
+    expectExplained('RX DSP Levels', NO_DSP_LEVELS_REASON)
     expect(pane('dsp')).toBeNull()
     expect(pane('dspLevels')).toBeNull()
   })
 
-  it('Phone, a rig that reports them: both go checkable and both panes mount', async () => {
+  it('Phone, a rig that reports them: no reason on either, and both panes mount', async () => {
     await openPhone()
-    expectAvailable('DSP Functions')
-    expectAvailable('RX DSP Levels')
+    expectUnexplained('DSP Functions')
+    expectUnexplained('RX DSP Levels')
     expect(pane('dsp')).not.toBeNull()
     expect(pane('dspLevels')).not.toBeNull()
   })
 
-  it('CW, a rig that reports no DSP functions: both DSP entries are unavailable', async () => {
+  it('CW, a rig that reports no DSP functions: both DSP entries carry the reason', async () => {
     await openCw(BARE_RIG)
-    expectUnavailable('DSP Toggles', NO_DSP_FUNCS_REASON)
-    expectUnavailable('RX DSP Levels', NO_DSP_LEVELS_REASON)
+    expectExplained('DSP Toggles', NO_DSP_FUNCS_REASON)
+    expectExplained('RX DSP Levels', NO_DSP_LEVELS_REASON)
     expect(pane('dsp')).toBeNull()
     expect(pane('rxdsp')).toBeNull()
   })
 
-  it('CW, a rig that reports them: both go checkable and both panes mount', async () => {
+  it('CW, a rig that reports them: no reason on either, and both panes mount', async () => {
     await openCw()
-    expectAvailable('DSP Toggles')
-    expectAvailable('RX DSP Levels')
+    expectUnexplained('DSP Toggles')
+    expectUnexplained('RX DSP Levels')
     expect(pane('dsp')).not.toBeNull()
     expect(pane('rxdsp')).not.toBeNull()
   })
@@ -358,37 +378,37 @@ describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', 
   it('Phone: the two DSP entries are gated INDEPENDENTLY', async () => {
     // A rig with NB/NR but no readable NR level or AGC (common over Hamlib): the toggles
     // pane mounts, the levels pane cannot. One entry each way in ONE render is what stops
-    // a future "any DSP at all" shortcut from re-greying a pane the operator can see.
+    // a future "any DSP at all" shortcut from apologising for a pane the operator can see.
     await openPhone({ nrLevel: null, agc: null })
-    expectAvailable('DSP Functions')
-    expectUnavailable('RX DSP Levels', NO_DSP_LEVELS_REASON)
+    expectUnexplained('DSP Functions')
+    expectExplained('RX DSP Levels', NO_DSP_LEVELS_REASON)
     expect(pane('dsp')).not.toBeNull()
     expect(pane('dspLevels')).toBeNull()
   })
 })
 
-describe('⊞ Panels — CW Sent Echo is dead until the first over', () => {
-  it('session start: nothing has been sent, so the entry is unavailable and says so', async () => {
+describe('⊞ Panels — CW Sent Echo is empty until the first over', () => {
+  it('session start: nothing has been sent, and the entry says so', async () => {
     // The operator's exact complaint in another cockpit: tick or untick, nothing moves,
     // because `sent` is empty on every fresh session.
     await openCw()
-    expectUnavailable('Sent Echo', NOTHING_SENT_REASON)
+    expectExplained('Sent Echo', NOTHING_SENT_REASON)
     expect(pane('sent')).toBeNull()
   })
 
-  it('after the first transmission: checkable, and the pane is really there', async () => {
+  it('after the first transmission: no reason, and the pane is really there', async () => {
     cwSentLines = ['CQ CQ DE KD9TAW K']
     await openCw()
-    expectAvailable('Sent Echo')
+    expectUnexplained('Sent Echo')
     expect(screen.queryByText(NOTHING_SENT_REASON)).toBeNull()
     expect(pane('sent')).not.toBeNull()
   })
 })
 
 describe('⊞ Panels — TX Meters say when they have anything to show', () => {
-  it('Phone: checkable (the gate works), with the standing "on transmit" note', async () => {
+  it('Phone: operable (the gate works), with the standing "on transmit" note', async () => {
     await openPhone()
-    const box = expectAvailable('TX Meters')
+    const box = expectOperable('TX Meters')
     const note = screen.getByText(TX_METERS_WHEN)
     expect(box.getAttribute('aria-describedby')).toBe(note.id)
     // On receive the panel itself renders nothing, which is exactly why the entry says so.
@@ -397,20 +417,19 @@ describe('⊞ Panels — TX Meters say when they have anything to show', () => {
 
   it('CW: the same id, the same note', async () => {
     await openCw()
-    const box = expectAvailable('TX Meters')
+    const box = expectOperable('TX Meters')
     expect(box.getAttribute('aria-describedby')).toBe(screen.getByText(TX_METERS_WHEN).id)
   })
 })
 
-describe('⊞ Panels — an unavailable entry is REACHABLE and inert, never removed', () => {
-  // The brief's own argument for keeping a dead entry listed was that a greyed entry with a
-  // reason tells the operator more than a missing one. `disabled` would have re-created
-  // "missing" on the accessibility surface: a disabled control is not a tab stop, so the
-  // keyboard/screen-reader operator would skip straight past the only thing that explains
-  // the pane they cannot find. Accessibility here is always-on, not a mode.
+describe('⊞ Panels — the reason explains the screen; the tick stays the operator\'s', () => {
+  // A reason is an EXPLANATION, never a refusal. Accessibility here is always-on, so the
+  // entry has to be a real tab stop with its reason attached — and that is the same entry
+  // whose box must still answer to him, because "I do not want this panel" is a preference
+  // he holds independently of whether his rig can feed it this minute.
   it('it is a focus stop, and focusing it carries the reason with it', async () => {
     await openPhone()
-    const box = expectUnavailable('Rig Scope Controls', NO_NATIVE_SCOPE_REASON)
+    const box = expectExplained('Rig Scope Controls', NO_NATIVE_SCOPE_REASON)
     expect(box.tabIndex, 'pulled out of the tab order by a negative tabindex').toBeGreaterThanOrEqual(0)
     box.focus()
     expect(
@@ -423,21 +442,40 @@ describe('⊞ Panels — an unavailable entry is REACHABLE and inert, never remo
     expect(document.getElementById(whyId!)?.textContent).toBe(NO_NATIVE_SCOPE_REASON)
   })
 
-  it('reachable does not mean actionable: clicking it changes nothing', async () => {
-    const panels = await openPhone()
-    const box = expectUnavailable('Rig Scope Controls', NO_NATIVE_SCOPE_REASON)
+  it('unticking an entry that has nothing to show RECORDS the preference', async () => {
+    // CW's Sent Echo at session start is the case that cost him control: it is empty at
+    // every start-up, and unticking it right there is how an operator who does not want
+    // the echo this session gets rid of it. Refusing the tick until his first over meant
+    // waiting to transmit before he could hide a panel.
+    const panels = await openCw()
+    const box = expectExplained('Sent Echo', NOTHING_SENT_REASON)
     fireEvent.click(box)
     expect(
       panels.setPanelState,
-      'the entry acted — a reachable entry must still be unable to remove a pane that ' +
-        'cannot mount, or the menu is lying in the other direction',
-    ).not.toHaveBeenCalled()
-    expect(box.checked, 'the box flipped, so it looks like it did something').toBe(true)
+      'the untick was swallowed — the operator cannot say "not this session" until the ' +
+        'station happens to be able to feed a panel he does not want',
+    ).toHaveBeenCalledWith('sent', 'removed')
   })
 
-  it('an entry that CAN act still acts (the affordance did not deaden the menu)', async () => {
+  it('…and the pane stays away once the station CAN feed it', async () => {
+    // The other half, and the reason recording it is honest: what he chose while the echo
+    // was empty still holds after his first over. Availability decides whether the pane
+    // COULD mount; his tick decides whether it does.
+    cwSentLines = ['CQ CQ DE KD9TAW K']
+    await openCw({}, { sent: 'removed' })
+    expect(expectUnexplained('Sent Echo').checked).toBe(false)
+    expect(
+      pane('sent'),
+      'the pane came back by itself — the untick he made while it was empty was thrown ' +
+        'away, and availability is overriding his preference',
+    ).toBeNull()
+    // Not a dead render: the panes he did not untick are on screen.
+    expect(pane('decode')).not.toBeNull()
+  })
+
+  it('an entry with nothing to explain acts the same way', async () => {
     const panels = await openPhone()
-    fireEvent.click(expectAvailable('Band Activity'))
+    fireEvent.click(expectUnexplained('Band Activity'))
     expect(panels.setPanelState).toHaveBeenCalledWith('bandActivity', 'removed')
   })
 })

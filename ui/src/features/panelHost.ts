@@ -9,11 +9,11 @@
 // one. This is what makes "panels everywhere" a small per-cockpit spec, not a copy of Operate.
 import type { PanelLayoutApi, PanelState } from './panelState'
 
-// ── The ⊞ menu's `unavailable` reasons that more than one cockpit needs ────────────────
+// ── The ⊞ menu's reason notes that more than one cockpit needs ─────────────────────────
 // Copy for a menu entry lives with its SUBJECT when the subject renders it too
 // (NO_NATIVE_SCOPE_REASON in waterfall.ts, TX_METERS_WHEN in TxMeters.tsx, which prints it
 // as its own idle hint). These three exist only for the menu and are worded once here so
-// Phone and CW cannot describe the same dead entry two different ways.
+// Phone and CW cannot describe the same empty entry two different ways.
 
 /** DSP function toggles (NB/NR/Notch, plus COMP/VOX on Phone) — capability-gated on what
  *  the rig reports over CAT, exactly as the DSP row itself has always been. */
@@ -43,14 +43,13 @@ export interface PanelHostSpec<P extends string> {
    *  count — survivors flow into the smaller generic template exactly as the old
    *  two→one collapse did. */
   readonly columns?: readonly (readonly P[])[]
-  /** Per-panel reason its pane cannot render at all in the CURRENT station state (no
-   *  native scope streaming, say). The entry is listed but not checkable — ticking it
-   *  would change nothing — and the reason rides along, so the operator learns what
-   *  would bring it back instead of finding a checkbox that does nothing. Recompute it
-   *  from the same condition the JSX gates on, or the menu drifts from the cockpit. */
-  readonly unavailable?: Partial<Record<P, string | undefined>>
-  /** Per-panel standing note for a pane that works but is only populated at certain
-   *  times (TX meters read on transmit). Checkable, just annotated. */
+  /** Per-panel reason its pane has nothing on screen right now — because the station
+   *  cannot render it at all (no native scope streaming, say) or because it is only
+   *  populated at certain times (TX meters read on transmit). ONE field for both: the
+   *  operator's question is the same either way, and the entry stays operable in both
+   *  cases, because the tick is his preference rather than a claim about the station.
+   *  Recompute it from the same condition the JSX gates on, or the menu drifts from
+   *  the cockpit — `undefined` when the pane does have something to show. */
   readonly notes?: Partial<Record<P, string | undefined>>
 }
 
@@ -71,7 +70,6 @@ export interface PanelHost<P extends string> {
     id: P
     label: string
     state: PanelState
-    unavailable?: string
     note?: string
   }>
 }
@@ -102,7 +100,6 @@ export function panelHost<P extends string>(
       id,
       label: spec.labels[id],
       state: api.stateOf(id),
-      unavailable: spec.unavailable?.[id],
       note: spec.notes?.[id],
     })),
   }
