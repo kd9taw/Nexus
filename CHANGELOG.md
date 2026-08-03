@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: a Doppler correction no longer rewrites the mode every three seconds
+
+From an operator's CI-V trace of a live pass: 110 seconds carried 38 mode commands and 38
+data-mode commands — one pair per Doppler correction — on a bus already busy with the dial, the
+meters and the panadapter. On an Icom a mode write can bump the filter with it.
+
+A Doppler step was arming the same "apply this now" flag an operator's own QSY uses, and that
+path re-asserts the mode deliberately: picking CW while already on a CW frequency has to command
+the radio to CW. It also clears the give-up ladders — and that was the worse half. Re-armed every
+three seconds they could never fire, so a radio that cannot reach a downlink would be asked for
+the whole pass instead of being given up on once.
+
+Corrections now move the dial and nothing else. They reach the radio on exactly the same loop
+pass they always did — the mode still follows a bird change, a section change or a re-arm, and
+the dial still gets there every few seconds.
+
 ### Added: Lock on — put the radio back on the bird
 
 Move the dial inside the transponder's passband and Nexus already follows you: that is you

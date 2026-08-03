@@ -8173,8 +8173,27 @@ impl Engine {
         // next leave-event, whenever it comes, from banking it.
         self.record_dial(DialOrigin::Machinery);
         self.app.set_radio(dial_mhz, &band, &sb);
-        // The loop must follow promptly — the correction is only useful now.
-        self.immediate_retune = true;
+        // ⚠️ NO `immediate_retune`, and this used to set one. That flag means
+        // "the operator just clicked a section / worked a spot / QSY'd" and the
+        // loop's force path answers it by doing three things a correction must
+        // not: re-asserting the MODE unconditionally, and clearing both the
+        // mode and dial GIVE-UP ladders with their fail counts.
+        //
+        // A Doppler step is none of those. The operator's own CI-V trace showed
+        // the cost: 38 `set mode` and 38 `set data-mode` frames in 110 seconds,
+        // one pair per correction, on a bus already carrying the dial, the
+        // meters and the scope — and on an Icom a mode write can bump the
+        // filter. Worse than the noise, resetting the give-up ladders every
+        // three seconds disarms them: a radio that cannot reach the downlink
+        // would be re-asked for the whole pass instead of being given up on,
+        // which is the storm those ladders exist to stop.
+        //
+        // Nothing is lost by staying off it. The loop's STEADY path runs on the
+        // same iteration as the force path — the flag picks a branch, it does
+        // not buy a tick — and that path pushes the dial whenever it differs
+        // from what the rig last took, which a correction always does. The mode
+        // goes only when the ANSWER changes, which is what re-arming a bird or
+        // changing section is for.
     }
 
     /// What Doppler currently has the radio on, for the UI — computed, never

@@ -9921,6 +9921,94 @@ mod tests {
     };
 
     #[test]
+    fn a_doppler_step_moves_the_dial_and_writes_nothing_else() {
+        // KD9TAW's CI-V trace, 110 s of a live pass: 38 `set mode` and 38
+        // `set data-mode` frames, one pair per Doppler correction, on a bus
+        // already carrying the dial, the meters and the scope.
+        //
+        // The cause was `steer_sat_dial` arming `immediate_retune` — the flag
+        // that means "the operator clicked a section / worked a spot / QSY'd".
+        // The loop's force path answers it by re-asserting the MODE
+        // unconditionally and clearing both give-up ladders. A correction is
+        // none of those, and the ladder reset is the worse half: re-armed every
+        // three seconds it can never fire, so a radio that cannot reach the
+        // downlink would be re-asked for the whole pass instead of given up on.
+        //
+        // Driven through the REAL loop, because the claim is about what reaches
+        // the RIG — engine state cannot show a frame that was or wasn't sent.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = lagging_rigctld_stub(0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+
+        // Arm the pass and let the PICK land — that one IS an operator action,
+        // and it legitimately writes the dial and the mode.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        }
+        run(&mut state, &mut rig, &mut backend, 3, &mut tick);
+        let modes_after_pick = commanded_modes(&log).len();
+        assert!(
+            modes_after_pick > 0,
+            "scene: the pick commands a mode — that is the operator's click"
+        );
+        let freqs_after_pick = commanded_freqs(&log).len();
+
+        // Now DOPPLER, the same way the track loop drives it: corrections only.
+        for n in 1..=4u64 {
+            {
+                let mut e = engine.lock().unwrap();
+                // A real range rate, stepped so each tick is a fresh frequency.
+                e.sat_doppler_tick(-5.0 + n as f64, 1_000_000 + n * 3_000, false);
+            }
+            run(&mut state, &mut rig, &mut backend, 2, &mut tick);
+        }
+
+        // The DIAL still gets there — the correction is the whole point, and
+        // the steady path pushes it on the same loop pass the force path would
+        // have. Four corrections, four new frequencies on the wire.
+        assert!(
+            commanded_freqs(&log).len() >= freqs_after_pick + 4,
+            "every correction reached the rig: {:?}",
+            commanded_freqs(&log)
+        );
+        // …and NOT ONE further mode frame.
+        assert_eq!(
+            commanded_modes(&log).len(),
+            modes_after_pick,
+            "a Doppler correction is not a QSY: it must write no mode. Modes on the wire: {:?}",
+            commanded_modes(&log)
+        );
+    }
+
+    #[test]
     fn picking_a_linear_bird_after_an_fm_one_takes_the_rig_out_of_fm() {
         let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
         let mut backend = MockBackend::new();
