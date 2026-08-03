@@ -295,6 +295,35 @@ describe('⊞ Panels popover: Undo / Reset stay reachable however long the list 
         'with no path to them at all.',
     ).toBe('auto')
   })
+
+  // The focus ring is painted OUTSIDE the box, and `opacity` composites the element's whole
+  // rendering — outline included — with everything below it. So an opacity anywhere on the
+  // chain from the popover down to the checkbox halves the ring of the entry the operator has
+  // focused, against the `--bg-elev-2` backdrop, and takes it under contrast. A greyed
+  // affordance shipped exactly that way (`input[aria-disabled] { opacity: .5 }`): the change
+  // made to keep the entry keyboard-reachable is what made its focus indicator hard to see.
+  // Grey with colour/background, never by fading the focusable element.
+  //
+  // Unlike the cascade-computed guards above this is an ABSENCE check, which is the one CSS
+  // assertion that cannot ship dead: if no rule declares the property, none can win it. The
+  // walk descends into @media, so a conditional dim is caught too.
+  const RING_CHAIN = new Set(['.panels-menu', '.panels-menu-pop', '.panels-menu-item', '.panels-menu-check'])
+  it('nothing on the chain down to the entry fades it — the focus ring keeps its contrast', () => {
+    const dimmed = RULES.filter((r) => {
+      const subject = r.selector.split(/\s|>|\+|~/).filter(Boolean).pop() ?? ''
+      const classes = subject.match(/\.[a-z][a-zA-Z0-9-]*/g) ?? []
+      const onChain = classes.length
+        ? classes.some((c) => RING_CHAIN.has(c))
+        : /^input\b/.test(subject) && r.selector.includes('.panels-menu')
+      return onChain && /(?:^|;)\s*opacity\s*:/.test(r.body)
+    })
+    expect(
+      dimmed.map((r) => r.selector),
+      'these rules fade an entry or one of its ancestors in the ⊞ popover, which fades the ' +
+        "focus ring with it. Use `color` / `background` for the greyed look — see " +
+        '`.panels-menu-actions button:disabled`, which greys by colour alone.',
+    ).toEqual([])
+  })
 })
 
 // ── The log form wraps DOWN, never overflows RIGHT ────────────────────────────────────

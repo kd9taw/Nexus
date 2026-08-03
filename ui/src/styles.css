@@ -11547,20 +11547,14 @@ select.settings-input {
   font-size: var(--fs-label);
   cursor: pointer;
 }
-/* An entry whose panel cannot render anything in the current station state: still listed
-   (so the operator learns WHY, and it returns by itself when the rig can show it), but
-   not checkable. The reason/note sits under the box, indented past it.
-   The box is aria-disabled, NOT `disabled` — it must keep its focus ring and its place in
-   the tab order — so the greyed look has to be painted here rather than inherited from the
-   UA's disabled styling. */
-.panels-menu-item.unavailable .panels-menu-check {
-  color: var(--text-dim);
-  cursor: default;
-}
-.panels-menu-check input[aria-disabled='true'] {
-  cursor: default;
-  opacity: 0.5;
-}
+/* The reason an entry has nothing on screen for it right now (no native scope streaming;
+   TX meters read on transmit). It sits under the box, indented past it, and is the
+   checkbox's accessible description.
+   NOTHING here dims the entry or its ancestors. `opacity` composites an element's whole
+   rendering, outline included, so fading the box to grey it out fades its FOCUS RING
+   against this popover's background — a greyed `input[aria-disabled] { opacity: .5 }`
+   shipped and did exactly that. An entry is never disabled anyway: the note explains the
+   screen, the tick stays the operator's. Grey with colour, as the footer buttons do. */
 .panels-menu-why {
   padding-left: calc(var(--space-2) + 1em);
   color: var(--text-dim);

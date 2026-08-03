@@ -29,8 +29,7 @@ knob and the slider tracks it (it won't sit lying at 100%). Your drags win while
 you're dragging.
 
 **⊞ Panels** in the header shows and hides the panes under the scope. An entry
-that cannot show you anything on your setup is listed but greyed, with the reason
-on it — it goes live by itself when your station can render it:
+with nothing on screen behind it right now says why, in a line under it:
 
 - **Rig Scope Controls** command the *radio's own* panadapter (span sets the
   hardware sweep width, ref sets weak-signal visibility), so they appear only
@@ -40,17 +39,21 @@ on it — it goes live by itself when your station can render it:
 - **DSP Functions** (NB / NR / Notch / COMP / VOX) and **RX DSP Levels** (NR
   level, AGC) only ever offer what your radio reports over CAT. A rig that
   reports none of them has nothing for those panes to hold, and the entries say
-  so rather than hiding an empty pane behind a live checkbox.
+  so rather than hiding an empty pane behind a silent checkbox.
 - **TX Meters** (SWR / ALC / PO / COMP) read on transmit, so the panel is empty
-  while you listen. The entry stays tickable and says when it reads.
-- **Voice Keyer** hides the F-key message pane if you work with a mic and never
-  use it. Unticking it stops a voice message that is playing — the entry says so
-  before you tick it. Nothing else changes: PTT, Tune and Stop TX are not panels
-  and have no entry, so no layout you save can put them out of reach.
+  while you listen. The entry says when it reads.
+- **Voice Keyer** puts the F-key message pane away if you work with a mic and
+  never use it. Unticking it stops a message that is playing and throws away a
+  recording you are part-way through making; the entry says both before you tick
+  it. Nothing else changes: PTT, Tune and Stop TX are not panels and have no
+  entry, so no layout you save can put them out of reach.
 
-A greyed entry is still a tab stop: it takes keyboard focus and reads its reason
-with the panel name. If the list outgrows your window it scrolls inside the menu,
-so **Undo last change** and **Reset layout** stay reachable.
+The line explains the screen; the tick is still yours. Every box in the menu can
+be ticked and unticked whenever you like, and what you choose applies the moment
+that panel has something to show — untick one now and it stays away when your rig
+starts feeding it. Each entry is a keyboard tab stop and reads its reason with the
+panel name. If the list outgrows your window it scrolls inside the menu, so **Undo
+last change** and **Reset layout** stay reachable.
 
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->
 
@@ -94,8 +97,11 @@ The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
 2. Press a slot to play it. Playback keys PTT for the duration; **Esc** aborts.
 
 If you never use it, untick **Voice Keyer** in ⊞ Panels and the pane goes away.
-Hiding it while a message is playing stops the message — that is deliberate, and
-the menu entry tells you so first.
+Closing the pane is itself a stop: a message that is playing is aborted rather
+than left transmitting behind a pane you just closed. A recording running at that
+moment is thrown away — Nexus says so when it happens, and the menu entry says so
+first. Leaving the Phone screen does the same thing, for the same reason: there is
+no abort button off-screen.
 
 ### Record a QSO
 

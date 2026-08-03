@@ -9,21 +9,22 @@
 // transmission is not a panel at all, so it has no entry here by construction (see
 // features/panelState) — an entry can cost you a sender, never the way to shut one up.
 //
-// A listed entry must be able to CHANGE something. Some panels are conditional on the
-// station (rig-scope controls need the radio's own panadapter streaming), so ticking
-// them can be a no-op — the operator unticks, nothing falls away, and the menu has lied.
-// Two affordances answer that, and both carry their reason in the entry: `unavailable`
-// (the panel cannot render at all right now — not checkable, and the reason says what
-// would make it appear) and `note` (it works, but its panel only has something to show
-// at certain times). Same rule DSP_FUNCS already follows in the cockpits: never offer a
-// dead control.
+// Some panels are conditional on the station (rig-scope controls need the radio's own
+// panadapter streaming; the DSP panes need the rig to report those fields over CAT; CW's
+// Sent Echo is empty until the first over), so an operator can tick one and see nothing
+// happen. A `note` answers that: the entry says, in its own accessible description, why
+// there is nothing on screen for it right now and what would change that.
 //
-// An unavailable entry is `aria-disabled`, NEVER the `disabled` attribute. A disabled
-// control is removed from the tab order, so an operator driving the menu from the
-// keyboard or a screen reader would never land on the one entry whose whole purpose is to
-// explain itself — the reason exists for them first. aria-disabled keeps it focusable and
-// announces "dimmed/unavailable" with its description; the toggle is suppressed in the
-// handler instead, so it is reachable AND cannot act.
+// THE NOTE EXPLAINS; IT NEVER REFUSES. Availability and preference are two questions and
+// this menu only asks one of them: "do you want this panel?" A round of this shipped with
+// unavailable entries `aria-disabled` and the toggle suppressed, which conflated them and
+// cost the operator control in the state he is most likely to exercise it — CW's Sent Echo
+// is empty at EVERY session start, so an operator who wants it gone had to wait for a
+// transmission before he could untick it. Recording the preference now is also the honest
+// answer: it takes effect the moment the pane can mount. And the greyed look that came with
+// aria-disabled was `opacity` on the focusable element, which composites its FOCUS RING too
+// — the change made to keep the entry keyboard-reachable is what made its focus indicator
+// hard to see. Both problems are deleted, not worked around, by leaving the box alone.
 import { useEffect, useId, useRef, useState } from 'react'
 import type { PanelState } from '../features/panelState'
 
@@ -31,12 +32,10 @@ export interface PanelsMenuItem {
   id: string
   label: string
   state: PanelState
-  /** Why checking this entry would change nothing right now. Present ⇒ the entry is
-   *  listed but NOT checkable, with this reason under it. The reason IS the disable
-   *  signal, so a disabled entry without one is unrepresentable. */
-  unavailable?: string
-  /** Standing note for an entry that works but whose panel is only populated sometimes
-   *  (TX meters read on transmit). Shown the same way; the entry stays checkable. */
+  /** Why this panel has nothing on screen right now, and what would change that (no
+   *  native scope streaming; TX meters read on transmit). Shown under the entry and
+   *  attached to the checkbox as its accessible description. The entry stays a plain,
+   *  operable checkbox — this annotates it, it does not disable it. */
   note?: string
 }
 
@@ -95,41 +94,24 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, onReset }: Props)
           }}
         >
           {items.map((it) => {
-            // An unavailable entry stays TICKED while it is docked — it is switched on,
-            // there is just nothing streaming for it to show — and it becomes checkable
-            // again by itself the moment the station can render it.
-            // Truthiness, not `!= null`: an empty reason must read as "available", or a
-            // blank string would disable an entry with nothing on it to explain why.
-            const why = it.unavailable || it.note
-            const whyId = why ? `${uid}-${it.id}` : undefined
+            // Truthiness, not `!= null`: an empty note carries no id, so a blank string
+            // cannot leave a checkbox pointing at an empty description.
+            const whyId = it.note ? `${uid}-${it.id}` : undefined
             return (
-              <div key={it.id} className={`panels-menu-item${it.unavailable ? ' unavailable' : ''}`}>
+              <div key={it.id} className="panels-menu-item">
                 <label className="panels-menu-check">
                   <input
                     type="checkbox"
                     checked={it.state !== 'removed'}
-                    aria-disabled={it.unavailable ? true : undefined}
                     aria-describedby={whyId}
-                    onChange={(e) => {
-                      // Reachable, but not actionable. `disabled` would have done this
-                      // for us — at the cost of the tab stop, which is the one thing this
-                      // entry cannot afford to lose. So refuse here instead: the browser
-                      // has already flipped the box by the time a change event exists, so
-                      // put it back to what the layout says and never call onToggle.
-                      // Pointer and keyboard both arrive through this one path.
-                      if (it.unavailable) {
-                        e.currentTarget.checked = it.state !== 'removed'
-                        return
-                      }
-                      onToggle(it.id, e.target.checked)
-                    }}
+                    onChange={(e) => onToggle(it.id, e.target.checked)}
                   />
                   <span>{it.label}</span>
                   {it.state === 'popped' && <span className="panels-menu-tag">popped out</span>}
                 </label>
-                {why && (
+                {it.note && (
                   <span className="panels-menu-why" id={whyId}>
-                    {why}
+                    {it.note}
                   </span>
                 )}
               </div>

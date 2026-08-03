@@ -213,15 +213,16 @@ describe('⊞ Panels menu', () => {
     expect(panels.setPanelState).toHaveBeenCalledWith('waterfall', 'docked')
   })
 
-  it('TX Meters stay checkable, with the note that says when they read', () => {
+  it('TX Meters stay operable, with the note that says when they read', () => {
     // Operate carries the same `txmeters` id as Phone and CW, so it gets the same
     // honesty: the gate works (the strip is there to hide), and the entry says WHEN the
-    // meters have readings instead of leaving the operator to guess mid-menu. Nothing
-    // here may become UNAVAILABLE — that is reserved for a pane that cannot mount at all.
+    // meters have readings instead of leaving the operator to guess mid-menu. A note
+    // annotates an entry; nothing in this menu may refuse the operator's tick.
     renderCockpit({}, 'classic')
     fireEvent.click(screen.getByRole('button', { name: /panels/i }))
     const box = screen.getByLabelText('TX Meters') as HTMLInputElement
     expect(box.disabled).toBe(false)
+    expect(box.getAttribute('aria-disabled')).toBeNull()
     expect(box.getAttribute('aria-describedby')).toBe(screen.getByText(TX_METERS_WHEN).id)
   })
 

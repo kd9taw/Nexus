@@ -370,18 +370,21 @@ export function CwCockpit({
   // removable, and the four content panes (Band Activity / Copilot / Decode / Sent) seam-resize.
   //
   // Whether each conditional pane CAN render at all right now, independent of the ⊞ tick —
-  // computed HERE, above the menu, so the entry and the pane read ONE boolean each and
-  // cannot drift apart. Four CW entries are conditional and each is offered UNAVAILABLE
-  // with its reason, going live by itself the moment the station can feed it:
+  // computed HERE, above the menu, so the entry's note and the pane read ONE boolean each
+  // and cannot drift apart. Five CW entries can be ticked with nothing on screen behind
+  // them, and each carries a NOTE saying why; the four station-conditional ones clear by
+  // themselves the moment the station can feed them:
   //   - Scope Controls command the RADIO's panadapter, so on the audio bandscope that pane
   //     can never mount however its box is ticked (Phone's twin of this entry is what the
   //     operator caught on 2026-08-03).
   //   - DSP Toggles / RX DSP Levels are capability-gated on what the rig reports over CAT,
   //     the same rule the DSP row applies to its own buttons.
   //   - Sent Echo holds this session's transmissions, so at EVERY session start it is empty
-  //     and its tick moves nothing — the operator's exact complaint, in another cockpit.
-  // TX meters here are the unpinned variant — nothing at all on receive — so that entry
-  // stays checkable and says when it has something to show, rather than looking dead.
+  //     and there is nothing to see — the operator's exact complaint, in another cockpit.
+  //     Its box still answers to him THERE, which is when he is most likely to use it: an
+  //     operator who does not want the echo should not have to transmit first to hide it.
+  //   - TX meters here are the unpinned variant — nothing at all on receive — so that entry
+  //     says when it has something to show rather than looking dead.
   const cwDspFuncs = CW_DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
   const canRxDsp = snap.radio.nrLevel != null || snap.radio.agc != null
   const host = panels
@@ -390,13 +393,13 @@ export function CwCockpit({
         side: [],
         main: 'decode',
         labels: CW_PANEL_LABELS,
-        unavailable: {
+        notes: {
           scopeCtl: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
           dsp: cwDspFuncs.length > 0 ? undefined : NO_DSP_FUNCS_REASON,
           rxdsp: canRxDsp ? undefined : NO_DSP_LEVELS_REASON,
           sent: sent.length > 0 ? undefined : NOTHING_SENT_REASON,
+          txmeters: TX_METERS_WHEN,
         },
-        notes: { txmeters: TX_METERS_WHEN },
       })
     : null
   const shown = (id: CwPanelId) => (host ? host.shown(id) : true)
