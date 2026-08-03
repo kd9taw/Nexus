@@ -53,10 +53,18 @@ Doppler keeps correcting around wherever you put yourself.
 
 Tune *outside* the passband and that stops — you've left the transponder as far
 as Nexus can tell, which is the right call, because the alternative is dragging
-somebody's uplink to a passband edge because they QSY'd to 20 m. **Lock on**, in
-the Doppler readout, puts you back: it re-runs the transponder pick you already
-made, so the radio, the band and the mode all come with it, and you land in the
-middle of the passband again.
+somebody's uplink to a passband edge because they QSY'd to 20 m. **Lock on**,
+on the **Dial** line under the bird's name, puts you back: it re-runs the
+transponder pick you already made, so the radio, the band and the mode all come
+with it, and you land in the middle of the passband again.
+
+It is there from the moment you pick a transponder — that pick tunes the radio
+straight away, so the dial is live long before you arm a pass, and the way back
+is live with it. It sits with the line that names the rig, and it is there
+whether the pass is armed or not and whether or not the bird is up. The one
+state it is absent in is the one where it would have to guess: with no
+transponder picked there is nothing to put you back onto, and choosing one for
+you would be choosing your uplink.
 
 ### Pin the radio a pass uses
 

@@ -839,7 +839,6 @@ function DopplerReadout({
   uplinkOnly,
   undrivableUplink,
   txMode,
-  onLockOn,
 }: {
   rotor: SatTrackStatus
   dopplerOn: boolean
@@ -861,9 +860,6 @@ function DopplerReadout({
    * claimed. Never derived from the SatNOGS record here: a second derivation
    * of the command is how a display claims a write the radio never gets. */
   txMode?: string | null
-  /** Put the radio back on the frequencies printed here — see the button. Absent
-   * when there is no held pick to re-assert. */
-  onLockOn?: (() => void) | null
 }) {
   const any = rotor.downlinkHz != null || rotor.uplinkHz != null
   if (!any) {
@@ -899,35 +895,9 @@ function DopplerReadout({
             INVERTING
           </span>
         )}
-        {/* LOCK ON — put the radio back on the numbers printed right here.
-            Operator report: "should we introduce a button to lock on to the
-            implied frequency if I move the dial on my own?"
-
-            Nexus already adopts a knob move made INSIDE the passband as your
-            position and mirrors the uplink to it. What had no way back was
-            leaving the passband — by hand, or because the rig came back on a
-            different frequency — after which the dial is somewhere the pass
-            does not describe. The transponder cards cannot fix that either:
-            they are radio buttons, and clicking the one already selected fires
-            no change event, so the pick that would re-assert everything was
-            literally unreachable.
-
-            This re-runs that pick — the same command the card runs — so it
-            routes, sets the band and the mode, and writes both legs, rather
-            than shoving a frequency at the rig behind the bookkeeping's back.
-            It re-centres in the passband, which is what "the implied
-            frequency" means; a position you tuned to by hand is not something
-            to preserve while asking to be put back on the bird. */}
-        {onLockOn && (
-          <button
-            type="button"
-            className="sat-dop-lock"
-            onClick={onLockOn}
-            title="Put the radio back on these frequencies — routes, sets the band and mode, and re-centres you in the passband. Use it after moving the dial off the transponder by hand."
-          >
-            Lock on
-          </button>
-        )}
+        {/* Lock on used to live here, beside these numbers. It moved out — see
+            SatLockOn: the numbers are exactly what is missing in the two states
+            where the operator needs the way back most. */}
       </div>
       <dl className="sat-dop-legs">
         {rotor.downlinkHz != null && (
@@ -1668,6 +1638,72 @@ function SatRadioBinding({
   )
 }
 
+/* ==================== lock on (the way back onto the bird) ==================
+ * Operator report: "should we introduce a button to lock on to the implied
+ * frequency if I move the dial on my own?"
+ *
+ * Nexus already adopts a knob move made INSIDE the passband as your position
+ * and mirrors the uplink to it. What had no way back was leaving the passband
+ * — by hand, or because the rig came back on a different frequency — after
+ * which the dial is somewhere the pass does not describe. The transponder
+ * cards cannot fix that either: they are radio inputs, and clicking the one
+ * already selected fires no change event, so the pick that would re-assert
+ * everything was literally unreachable while it was the pick in force.
+ *
+ * WHAT IT DOES: re-runs that pick — `setSatTransponder(name, index)`, the same
+ * command the card runs — so routing, the band, the commanded mode and both
+ * legs all come with it, rather than shoving a frequency at the rig behind the
+ * bookkeeping's back. It re-centres in the passband, which is what "the implied
+ * frequency" means; a position you tuned to by hand is not something to
+ * preserve while asking to be put back on the bird.
+ *
+ * WHY IT IS NOT IN THE DOPPLER READOUT (where it shipped first, and where it
+ * was unreachable — operator report twice). The readout is where the
+ * frequencies are, so it looked like the obvious home. But that block renders
+ * only once a pass is ARMED, and its head — the half holding the button — only
+ * once Doppler has REPORTED a tuning, which it does not do until AOS. So the
+ * recovery control did not exist in either state where the dial most often
+ * gets away from you: a transponder picked with no pass armed (the pick tunes
+ * the radio immediately — that dial is live), and an armed pass waiting for
+ * AOS. A control whose whole job is "put me back" cannot be gated on the
+ * numbers it would put you back ON; those numbers arriving is not the event
+ * that makes the dial wrong.
+ *
+ * So it sits at the RADIO BINDING's position instead — with the line that says
+ * which rig is being driven, which renders from the moment of the pick. Its
+ * subject is the dial, not the pass. ONE control, ONE place: it is rendered
+ * here and nowhere else, gated on the same hold `heldT` resolves (engine truth
+ * first, local pick second) and on nothing more.
+ *
+ * Never present without a hold: with nothing held there is no pick to re-run,
+ * and a button that picked "whatever looks right" would be choosing a
+ * transponder — a choice of uplink — for the operator.
+ *
+ * Layout: content-height row, shares the rail/binding box (ui-layout §2). */
+function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
+  return (
+    <div className="sat-lockon" data-testid="sat-lockon">
+      <div className="sat-rail-row">
+        <span className="sat-rail-name">Dial</span>
+        <span className="sat-rail-state">
+          moved off the transponder? put the radio back on the bird
+        </span>
+        {/* The rail's own fix pill — this IS a fix ("the dial is off the bird;
+            put it back"), so it wears the same affordance as the gate fixes
+            directly below it rather than inventing a second button style. */}
+        <button
+          type="button"
+          className="sat-rail-fix"
+          onClick={onLockOn}
+          title="Re-run your transponder pick — routes, sets the band and mode, writes both legs, and re-centres you in the passband. Use it after moving the dial off the transponder by hand, or when the rig came back somewhere else."
+        >
+          Lock on
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function SatellitesView({ focusSat, onPopOut }: Props) {
   const [view, setView] = useState<SatView | null>(null)
   const [favs, setFavs] = useState<Set<string>>(() => satChasingSet())
@@ -2240,16 +2276,18 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         .sort((a, b) => a.aosUnix - b.aosUnix)[0] ?? null
     )
   }, [schedule, detail, nowSecs])
-  // The held transponder RECORD — engine truth first (the DTO index is what
-  // the engine holds; the local pick covers the pre-arm window).
+  // The held transponder INDEX — engine truth first (the DTO index is what the
+  // engine holds, and it covers a pass armed before this section opened, where
+  // the local click-state never saw a click), local pick second (it covers the
+  // window between the pick and the arm). Both index the same list
+  // get_sat_detail returned, which is the list set_sat_transponder indexes, so
+  // this is also the wire index Lock on re-sends.
+  const heldPickIndex = detailTrack?.transponderIndex ?? heldIndex
+  // …and the RECORD at that index.
   const heldT =
-    detail == null
+    detail == null || heldPickIndex == null
       ? null
-      : detailTrack?.transponderIndex != null
-        ? (detail.transmitters[detailTrack.transponderIndex] ?? null)
-        : heldIndex != null
-          ? (detail.transmitters[heldIndex] ?? null)
-          : null
+      : (detail.transmitters[heldPickIndex] ?? null)
   // The held bird is a ONE-CHANNEL (simplex) transponder — from the ENGINE's
   // binding, gated on the hold being THIS bird (the binding is global), and
   // never re-derived from the SatNOGS record: two copies of a rule that
@@ -3129,6 +3167,23 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
             {binding && tuned?.name === detail.name && (
               <SatRadioBinding binding={binding} pegged={pegged} onTogglePeg={writePegged} />
             )}
+            {/* LOCK ON — at the binding's position and on the binding's terms
+                (a pick tunes immediately, long before a pass is armed), but
+                gated on the HOLD, not on the binding line above: the engine can
+                hold a transponder this section never saw picked, and the way
+                back must not disappear with the read-back that named the rig.
+                See SatLockOn for why it is not in the Doppler readout. */}
+            {heldPickIndex != null && (
+              <SatLockOn
+                onLockOn={() =>
+                  pickTransponder(
+                    detail.name,
+                    heldPickIndex,
+                    heldT?.description ?? detailTrack?.transponder ?? '',
+                  )
+                }
+              />
+            )}
             {detailTrack && (
               <TrackRail
                 track={detailTrack}
@@ -3182,32 +3237,6 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                       // held record having no uplink at all.
                       undrivableUplink={heldSimplex || (heldT != null && heldT.uplinkLowHz == null)}
                       txMode={detailTrack.txMode ?? null}
-                      // Only when there is a pick to RE-RUN. Without a held
-                      // index there is nothing to re-assert, and a button that
-                      // re-picked "whatever looks right" would be choosing a
-                      // transponder for the operator.
-                      //
-                      // ENGINE TRUTH FIRST, local pick second — the same
-                      // precedence `heldT` uses, and the reason the `held`
-                      // prop above tolerates a null `heldIndex`. This asked
-                      // `heldIndex` alone and so was ABSENT for the ordinary
-                      // case: a pass armed, then the section opened, where the
-                      // engine holds a transponder and this section's own
-                      // click-state never saw the click (operator report,
-                      // 0.27.1 — "I don't see the button"). The track DTO's
-                      // index is the engine's own answer and indexes the same
-                      // getSatDetail list.
-                      onLockOn={(() => {
-                        const idx = detailTrack.transponderIndex ?? heldIndex
-                        return idx == null
-                          ? null
-                          : () =>
-                              pickTransponder(
-                                detail.name,
-                                idx,
-                                heldT?.description ?? detailTrack.transponder ?? '',
-                              )
-                      })()}
                     />
                     {/* The strip goes under the readout: the readout says what
                         the radio is tuned to, the strip says where that puts

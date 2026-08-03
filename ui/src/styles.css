@@ -15691,9 +15691,14 @@ button.sat-chip:disabled {
    live state, and the row's own fix. Never a grower (ui-layout §2). */
 /* `.sat-bind` (the radio-binding line) shares the rail's box verbatim: it sits
    at the rail's position and reads as one instrument with it, whether or not a
-   track is armed. Same content-height contract — never a grower. */
+   track is armed. Same content-height contract — never a grower.
+   `.sat-lockon` (the way back onto the bird) joins them for the same reason:
+   it is a RADIO control, it renders from the moment of the pick like the
+   binding line does, and it must read as part of that instrument rather than
+   as a stray button. */
 .sat-rail,
-.sat-bind {
+.sat-bind,
+.sat-lockon {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -15797,23 +15802,6 @@ button.sat-chip:disabled {
 .sat-dop-tp {
   font-size: var(--fs-micro);
   color: var(--text-dim);
-}
-/* "Lock on" — pushed to the far end of the head row so it never sits between
-   the title and the transponder name it belongs to. A quiet utility: it moves
-   the dial, which the operator asked for, but it is not the pass's main verb. */
-.sat-dop-lock {
-  margin-left: auto;
-  padding: 1px var(--space-2);
-  font-size: var(--fs-micro);
-  color: var(--text-dim);
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.sat-dop-lock:hover {
-  color: var(--text);
-  border-color: var(--rx);
 }
 .sat-dop-legs {
   display: grid;

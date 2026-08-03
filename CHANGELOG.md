@@ -137,9 +137,17 @@ Move the dial inside the transponder's passband and Nexus already follows you: t
 chasing a station across the passband, and your uplink moves with you (mirrored, on an inverting
 bird). Move it *outside* — by hand, or because the rig came back somewhere else — and the dial is
 somewhere the pass does not describe, with no way back short of hunting for the transponder you
-already had selected. **Lock on**, in the Doppler readout beside the frequencies it re-asserts,
-is that way back: one click re-runs the pick you already made, so the routing, the band, the
-commanded mode and both legs all come with it, and you land back in the middle of the passband.
+already had selected. **Lock on** is that way back: one click re-runs the pick you already made,
+so the routing, the band, the commanded mode and both legs all come with it, and you land back in
+the middle of the passband.
+
+It sits on the **Dial** line under the bird's name, with the line that names the rig being driven,
+and it is there from the moment you pick a transponder. That is the point: picking one tunes the
+radio straight away, so the dial is live — and can get away from you — long before you arm a pass
+and long before the bird is up. The way back is there through all of it: pick made and nothing
+armed, a pass armed and waiting for AOS, and mid-pass with Doppler correcting. The one state it
+stays out of is the one where it would have to guess. With no transponder picked there is nothing
+to put you back onto, and picking one for you would be picking your uplink.
 
 ### Fixed: the radio mode now follows the transponder, instead of staying in FM
 

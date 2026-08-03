@@ -18,6 +18,15 @@
 //    all come along, which they would not if this shoved a dial at the rig directly.
 //  - It appears only where there is a pick to re-assert. A button that re-picked "whatever looks
 //    right" would be choosing a transponder for the operator.
+//  - REACHABILITY IS THE POINT, and it is what shipped wrong twice. The operator reported "I
+//    can't see it" against two different gates. The second was placement: the button lived in
+//    the Doppler readout's HEAD, which renders only once a track is armed AND Doppler has
+//    reported a tuning — i.e. from AOS onward. So the way back did not exist in the two states
+//    where the dial most often gets away from you: a pick made with no pass armed (that pick
+//    tunes the radio immediately), and an armed pass waiting for AOS.
+//
+// Every state below is RENDERED and asserted, not reasoned about. That is the whole reason this
+// file grew: twice the gate was argued from the source and twice the operator saw nothing.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
@@ -70,6 +79,29 @@ const detail = (): SatDetail =>
       [LOS, 260, 0],
     ],
   }) as unknown as SatDetail
+
+/** The same bird with a pass that has not risen yet — the pre-AOS state. */
+const preAosDetail = (): SatDetail => {
+  const aos = NOW + 600
+  const los = NOW + 1200
+  return {
+    ...detail(),
+    pass: {
+      name: 'RS-44',
+      aosUnix: aos,
+      losUnix: los,
+      maxElDeg: 62,
+      aosAzDeg: 100,
+      losAzDeg: 260,
+      status: 'alive',
+    },
+    passTrack: [
+      [aos, 100, 0],
+      [aos + 300, 180, 62],
+      [los, 260, 0],
+    ],
+  } as unknown as SatDetail
+}
 
 const status = (over: Partial<SatTrackStatus> = {}): SatTrackStatus =>
   ({
@@ -152,12 +184,22 @@ describe('Lock on — putting the radio back on the bird', () => {
     expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
   })
 
-  it('sits with the frequencies it re-asserts, not somewhere else on the page', async () => {
+  it('sits with the radio line, not inside the Doppler readout', async () => {
     render(<SatellitesView focusSat="RS-44" />)
     const btn = await lockOn()
-    // The Doppler readout is the block that PRINTS the numbers this button
-    // puts the radio on; a control that means "go to these" belongs with them.
-    expect(btn.closest('.sat-doppler')).toBeTruthy()
+    // PLACEMENT, and the reason it moved. The Doppler readout prints the
+    // numbers, which is why it went there first — but that block exists only
+    // from arm, and its head only from AOS. The control's subject is the DIAL,
+    // and the dial is live from the moment of the pick, which is exactly when
+    // the radio-binding line starts rendering. So it lives at that position.
+    expect(btn.closest('.sat-lockon')).toBeTruthy()
+    expect(btn.closest('.sat-doppler')).toBeNull()
+  })
+
+  it('renders exactly once — one control, one place', async () => {
+    render(<SatellitesView focusSat="RS-44" />)
+    await lockOn()
+    expect(screen.getAllByRole('button', { name: /lock on/i })).toHaveLength(1)
   })
 
   it('appears on the ENGINE’s hold, not just on a click this section saw', async () => {
@@ -200,6 +242,70 @@ describe('Lock on — putting the radio back on the bird', () => {
     render(<SatellitesView focusSat="RS-44" />)
     await screen.findByText(/No transponder selected/i)
     expect(screen.queryByRole('button', { name: /lock on/i })).toBeNull()
+    expect(api.setSatTransponder).not.toHaveBeenCalled()
+  })
+})
+
+/* ---- REACHABILITY, rendered ------------------------------------------------
+ * Four states, four renders. The gate is "is a transponder held for this bird",
+ * and nothing else: not whether a pass is armed, not whether the bird is up,
+ * not whether Doppler has written a frequency yet. Each case below drives the
+ * component into the state and looks for the button with its own eyes. */
+describe('Lock on — reachable in every state that holds a transponder', () => {
+  it('(a) a pick made, nothing armed — that pick already moved the dial', async () => {
+    // No track at all. The pick tunes the radio the moment it is made, so the
+    // dial is live and can be knocked off the bird long before "Work this
+    // pass" is ever clicked. This state had NO way back before.
+    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(null))
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await lockOn())
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+  })
+
+  it('(b) armed, before AOS, Doppler reporting no tuning', async () => {
+    // The pass is armed and the bird has not risen: the readout takes its
+    // "none" branch, which is where the button used to disappear. The hold is
+    // the ENGINE's here (the track DTO's index) — no local click at all.
+    api.getSatDetail.mockImplementation(() => Promise.resolve(preAosDetail()))
+    api.getSatTransponder.mockImplementation(() => Promise.resolve(null))
+    api.getSatTrackStatus.mockImplementation(() =>
+      Promise.resolve(
+        status({
+          state: 'armed',
+          downlinkHz: null,
+          uplinkHz: null,
+          downlinkShiftHz: null,
+          uplinkShiftHz: null,
+        }),
+      ),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    // The exact sentence the control was hidden behind.
+    await screen.findByText(/nothing to correct until the bird is up/i)
+    fireEvent.click(await lockOn())
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+  })
+
+  it('(c) tracking, with the frequencies on screen', async () => {
+    render(<SatellitesView focusSat="RS-44" />)
+    // Frequencies are printed (the readout's leg, and the passband strip's
+    // scale) — the state the button always worked in.
+    await screen.findAllByText(/435\.64332 MHz/)
+    fireEvent.click(await lockOn())
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+  })
+
+  it('(d) no hold at all, armed or not — it never picks a transponder for you', async () => {
+    // Nothing held anywhere: no local pick, no engine hold, no track. Picking
+    // a transponder is picking an UPLINK; that stays the operator's.
+    api.getSatTransponder.mockImplementation(() => Promise.resolve(null))
+    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(null))
+    render(<SatellitesView focusSat="RS-44" />)
+    // Wait for the detail card to exist, so "absent" is a real absence and not
+    // a page that has not rendered yet.
+    await screen.findByTestId('sat-tp-list')
+    expect(screen.queryByRole('button', { name: /lock on/i })).toBeNull()
+    expect(screen.queryByTestId('sat-lockon')).toBeNull()
     expect(api.setSatTransponder).not.toHaveBeenCalled()
   })
 })
