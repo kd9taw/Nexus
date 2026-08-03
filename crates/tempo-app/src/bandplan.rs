@@ -407,26 +407,59 @@ mod tests {
 
     use super::*;
 
-    /// Every channel Nexus can put an operator on: the Tempo plan plus each
-    /// per-tier plan. ONE census, so a plan added here is guarded by every test
-    /// below rather than by whichever list happened to be updated.
+    /// Every channel Nexus can put an operator on: every TIER's plan, plus the
+    /// two plans no tier dispatches to.
+    ///
+    /// ⚠️ THE TIER HALF IS CLOSED; THE OTHER TWO ARE NOT, AND THE DIFFERENCE IS
+    /// THE POINT. Driving `band_plan_for` over `Tier::ALL` means a NEW TIER
+    /// cannot slip past these tests: `band_plan_for`'s own `match` is
+    /// exhaustive, so adding a variant fails to compile until it is dispatched,
+    /// and `Tier::ALL` is asserted complete against that match below. That is a
+    /// real guarantee.
+    ///
+    /// `rtty_band_plan` and `sstv_band_plan` are appended BY NAME because no
+    /// tier reaches them — RTTY and SSTV are sections, not tiers. So a plan
+    /// added for some future section IS guarded only if somebody adds it here,
+    /// exactly as the whole list used to be. Said plainly rather than left to
+    /// be assumed: the previous version of this comment claimed one census
+    /// guarded everything, and it guarded whatever the list happened to hold.
     fn every_shipped_channel() -> Vec<BandChannel> {
-        let mut plans = vec![band_plan()];
-        for f in [
-            ft8_band_plan,
-            ft4_band_plan,
-            rtty_band_plan,
-            sstv_band_plan,
-            q65_band_plan,
-            msk144_band_plan,
-            fst4_band_plan,
-            fst4w_band_plan,
-            jt65_band_plan,
-            wspr_band_plan,
-        ] {
-            plans.push(f());
-        }
+        let mut plans: Vec<Vec<BandChannel>> = crate::dto::Tier::ALL
+            .iter()
+            .map(|t| band_plan_for(*t))
+            .collect();
+        plans.push(rtty_band_plan());
+        plans.push(sstv_band_plan());
         plans.into_iter().flatten().collect()
+    }
+
+    /// `Tier::ALL` really is every variant — the thing `every_shipped_channel`'s
+    /// closure claim rests on. The exhaustive `match` is what fails to compile
+    /// when a variant is added without being listed.
+    #[test]
+    fn tier_all_lists_every_tier() {
+        use crate::dto::Tier;
+        for t in Tier::ALL {
+            #[allow(clippy::match_single_binding)]
+            match t {
+                Tier::TempoFast
+                | Tier::TempoDeep
+                | Tier::Ft8
+                | Tier::Ft4
+                | Tier::Fst4
+                | Tier::Fst4w
+                | Tier::Q65
+                | Tier::Msk144
+                | Tier::Jt65
+                | Tier::Wspr => {}
+            }
+        }
+        assert_eq!(
+            Tier::ALL.len(),
+            10,
+            "a tier was added or removed — update Tier::ALL and the match above, \
+             then re-check every test that drives every_shipped_channel()"
+        );
     }
 
     #[test]

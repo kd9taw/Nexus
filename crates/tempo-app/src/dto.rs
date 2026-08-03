@@ -235,6 +235,24 @@ pub enum Tier {
 }
 
 impl Tier {
+    /// Every variant, in declaration order. The one place a tier list lives, so
+    /// a test can drive them all — see `bandplan::tests::tier_all_lists_every_tier`,
+    /// which fails to compile if a variant is added without being listed here.
+    pub const ALL: [Tier; 10] = [
+        Tier::TempoFast,
+        Tier::TempoDeep,
+        Tier::Ft8,
+        Tier::Ft4,
+        Tier::Fst4,
+        Tier::Fst4w,
+        Tier::Q65,
+        Tier::Msk144,
+        Tier::Jt65,
+        Tier::Wspr,
+    ];
+}
+
+impl Tier {
     /// The operator-facing name — what the top-bar pill reads. Distinct from the
     /// ADIF mode name in `Engine::qso_record`, which must stay the registered one
     /// for award credit even where the two happen to agree.

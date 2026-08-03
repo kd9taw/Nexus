@@ -36,8 +36,9 @@ satellite-aware one, and each is meant to be closed.
   satellite QSO?" from `PROP_MODE=SAT` alone; LoTW wants that *and* the satellite's name. With
   neither written, a contact logged here counts toward neither the **Satellite VUCC** totals on the
   Awards screen nor the satellite needs board — and its grid does not simply go uncounted. Nexus
-  keeps per-band grid counts for 160 m through 2 m and no higher, so on **1.25 m, 70 cm and 23 cm**
-  the grid lands nowhere at all. On the bands that do have a slot — for satellite work that means
+  keeps per-band grid counts for 160 m through 2 m only, so anywhere outside that range — 2200 m
+  and 630 m below it, and 1.25 m, 70 cm, 23 cm, 13 cm, 9 cm, 5 cm, 3 cm and 1.2 cm above it — the
+  grid lands nowhere at all. On the bands that do have a slot — for satellite work that means
   **2 m**, the downlink of every U/V bird, and **10 m**, where AO-7's mode A comes down — it lands
   in your **terrestrial** VUCC count for that band, which is a grid ARRL's rules say a satellite QSO
   does not earn. LoTW files the upload the same way. If you chase VUCC, add both fields by hand
@@ -116,8 +117,6 @@ Centimetre bands are now converted by the same rule the three hand-written ones 
 so 13 cm goes out as "0.13". **The three values that have always gone out are unchanged**, no band
 was added to any list, and nothing else about what Nexus broadcasts moved.
 
-### Fixed: the ⊞ Panels menu no longer offers a checkbox that changes nothing
-
 ### Fixed: your uplink VFO now gets told what mode to be in
 
 Reported from a live AO-123 pass on the IC-9700: "it recomended the mode v/u fm transiver, it sets
@@ -166,9 +165,10 @@ Nexus would now be *authoring* DATA-U where DATA-L belongs, which is worse than 
 replaced: the frequency right, the side wrong, and from your seat indistinguishable from nobody
 hearing you. Both pairs mirror: USB/LSB, and the DATA submodes.
 
-**CW does not get mirrored — but it does get sent.** A CW pass now puts `CW` (or `CW-R` on the low
-bands) on your transmit VFO, the same token your dial got, on an inverting bird as much as a
-straight one. What does *not* happen is a swap: CW and CW-R pick which side of the carrier your
+**CW does not get mirrored — but it does get sent.** A CW pass now puts `CW` on your transmit VFO —
+or `CW-R`, if the bird's own record declares an LSB downlink — the same token your dial got, on an
+inverting bird as much as a straight one. (The 10 MHz rule that picks CW-L on the low bands has no
+say here: during a pass the side comes from the transponder, not from where the dial sits.) What does *not* happen is a swap: CW and CW-R pick which side of the carrier your
 *receiver* listens on, and both transmit the identical carrier on the dial, so there is no side for
 an inverting bird to flip. (Keying CW through the soundcard puts the rig in plain SSB instead, and
 that one does mirror.) "Not mirrored" is not "left alone" — leaving it alone is what left stale

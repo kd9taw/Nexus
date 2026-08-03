@@ -124,9 +124,10 @@ that ranks which pass is worth chasing.
 Where the grid goes instead depends on the band you were listening on, and
 neither answer is right:
 
-- **On 1.25 m, 70 cm and 23 cm it lands nowhere.** Nexus keeps per-band grid
-  counts for 160 m through 2 m and no higher, so those three bands have no slot
-  of their own and the satellite bucket was the only home they had.
+- **Outside 160 m – 2 m it lands nowhere.** Nexus keeps per-band grid counts for
+  160 m through 2 m only — so 2200 m and 630 m below that range, and 1.25 m,
+  70 cm, 23 cm, 13 cm, 9 cm, 5 cm, 3 cm and 1.2 cm above it, have no slot of
+  their own, and the satellite bucket was the only home they had.
 - **On 160 m through 2 m it lands in the wrong bucket.** For satellite work that
   means **2 m** — the downlink of every U/V bird, the Fox-1 satellites (AO-85,
   AO-91, AO-92) and AO-7 on mode B — and **10 m**, where AO-7's mode A comes
