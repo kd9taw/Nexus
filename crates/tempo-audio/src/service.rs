@@ -2344,7 +2344,9 @@ impl RadioLoop {
                     self.tune_started_ms = None;
                     {
                         let mut eng = engine_lock(engine);
-                        eng.halt_tx();
+                        // A CONTEXT halt: the loop is dropping the transport under the
+                        // operator, who asked to test CAT — not to disarm their mic.
+                        eng.halt_tx_for_context_change();
                     }
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     *rig = Rig::vox();
@@ -2375,7 +2377,11 @@ impl RadioLoop {
                     self.tune_started_ms = None;
                     {
                         let mut eng = engine_lock(engine);
-                        eng.halt_tx();
+                        // CONTEXT halt — this teardown is the loop reacting to a radio switch
+                        // or a CAT-config save, never an operator Stop TX. A plain `halt_tx`
+                        // here silently undid the engine-side re-arm a switch had just made,
+                        // and the operator's next PTT press went nowhere.
+                        eng.halt_tx_for_context_change();
                     }
                 }
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
@@ -2449,7 +2455,9 @@ impl RadioLoop {
                     self.tune_started_ms = None;
                     {
                         let mut eng = engine_lock(engine);
-                        eng.halt_tx();
+                        // CONTEXT halt, same as the rig rebuild above: swapping the sound card
+                        // to the newly active radio must not disarm the operator's mic.
+                        eng.halt_tx_for_context_change();
                     }
                 }
                 match reopen_audio(&want) {
@@ -7763,6 +7771,202 @@ mod tests {
             &PttMode::Vox,
             "the demoted radio can never key while it's a read-only monitor"
         );
+    }
+
+    /// ONE radio-loop tick in the order `run_radio_loop` actually runs it: the dual-radio
+    /// handoff FIRST (it re-homes the active `Rig`), then the loop core (whose transport
+    /// work halts the engine's TX again). The scene below is about that ordering, so it
+    /// must not be simplified into "call step twice".
+    fn loop_tick(
+        engine: &Arc<Mutex<Engine>>,
+        pool: &MonitorPool,
+        rig: &mut Rig,
+        state: &mut RadioLoop,
+        last_active: &mut u32,
+        backend: &mut MockBackend,
+        now_ms: f64,
+    ) {
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        handoff_if_switched(engine, pool, rig, state, last_active, &pending);
+        let sinks = no_sinks();
+        let mut ra = mock_reopen_audio();
+        let mut rr = mock_reopen_rig();
+        let mut station = StationSinks::new();
+        state
+            .step(
+                engine,
+                backend,
+                rig,
+                &sinks,
+                now_ms,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_band_routed_radio_switch_leaves_phone_ptt_alive() {
+        // OPERATOR REPRO (0.27.2 bench, FTdx10 + IC-9700): Satellites → work something on the
+        // Icom (which ROUTES the active radio to it) → back to Phone → pick 20 m (band routing
+        // switches back to the Yaesu) → the PTT button presses and the rig does not key. Going
+        // to FT8 and back to Phone cured it.
+        //
+        // Cause: every path that changes the active radio, and every band change, calls
+        // `halt_tx()` — which drops the Enable-TX latch. In Phone/CW/RTTY that latch IS the PTT
+        // enable (`Engine::set_ptt` masks on it) and the Phone cockpit renders no control for
+        // it, so the key request died in the engine with no error and nothing reached the wire.
+        // Only re-entering an operating section (`set_operating_mode` → `set_tx_enabled(true)`)
+        // re-armed it.
+        //
+        // THIS PINS THE ORDERING, not the end state: the routed switch, THEN the loop ticks that
+        // re-home the Rig and rebuild the transport (halting TX again), THEN the key. A test
+        // that keyed straight after the engine call would pass on an engine-only fix that the
+        // loop then undid.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let (icom, icom_profile, yaesu_transport) = {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            // Radio 0 — the Yaesu: CAT on one port, the KEYLINE on ITS OWN (SO2R-style). The
+            // assertion at the bottom can then only pass if the key went to THIS radio's PTT
+            // method and port — not the Icom's CAT keying, not the Yaesu's CAT port.
+            let mut s = e.settings().clone();
+            s.ptt_method = "rts".to_string();
+            s.rig_model = 1042; // FTDX10
+            s.serial_port = "/dev/tempo-test-cat-a".to_string();
+            s.ptt_serial_port = "/dev/tempo-test-key-a".to_string();
+            s.rigctld_port = 4532;
+            s.audio_in = "FTDX10 codec".to_string();
+            s.audio_out = "FTDX10 codec".to_string();
+            e.apply_settings(s);
+            e.set_radio_bands(0, vec!["20m".to_string(), "40m".to_string()]);
+            // Radio 1 — the Icom: CAT keying, its own sound card, 2 m/70 cm only. `add_radio`
+            // makes it active, which is what the flat form below then edits.
+            let icom = e.add_radio();
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 3081; // IC-9700
+            s.serial_port = "/dev/tempo-test-cat-b".to_string();
+            s.ptt_serial_port = String::new();
+            s.rigctld_port = 4533;
+            s.audio_in = "IC-9700 codec".to_string();
+            s.audio_out = "IC-9700 codec".to_string();
+            e.apply_settings(s);
+            e.set_radio_bands(icom, vec!["2m".to_string(), "70cm".to_string()]);
+            // Start where the operator started: on the Yaesu, in Phone, armed.
+            e.set_active_radio(0);
+            e.set_operating_mode("phone", true);
+            let icom_profile = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.id == icom)
+                .unwrap()
+                .clone();
+            let yaesu_transport = Transport::from_settings(e.settings());
+            (icom, icom_profile, yaesu_transport)
+        };
+
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::with_control(
+            Some("127.0.0.1:4532".to_string()),
+            ptt_mode_for(&yaesu_transport),
+        );
+        let mut state = loop_state();
+        state.applied = yaesu_transport;
+        let mut last_active = 0u32;
+        // The Icom is live in the monitor pool (read-only ⇒ Vox), as the monitor thread opens it.
+        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+            id: icom,
+            transport: Transport::from_profile(&icom_profile),
+            rig: Rig::with_control(Some("127.0.0.1:4533".to_string()), PttMode::Vox),
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        }]));
+
+        // 1. Work something on the Icom. The satellite transponder pick reaches
+        //    `Engine::set_active_radio` through the same door a band pick does (route_target /
+        //    route_radio → set_active_radio), so a 70 cm pick stands in for it exactly.
+        engine.lock().unwrap().pick_band("70cm", Some("phone"));
+        assert_eq!(
+            engine.lock().unwrap().settings().active_radio,
+            icom,
+            "the pick routed the active radio to the Icom"
+        );
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            0.0,
+        );
+
+        // 2. Back to Phone — the section entry re-arms transmit (this is the operator's cure,
+        //    and here it is just the state they were in when they picked 20 m).
+        engine.lock().unwrap().set_operating_mode("phone", true);
+        assert!(
+            engine.lock().unwrap().tx_enabled(),
+            "scene guard: the operator is armed on the Icom before the band pick"
+        );
+
+        // 3. Pick 20 m. Band routing hands back to the Yaesu — the reported break.
+        engine.lock().unwrap().pick_band("20m", Some("phone"));
+        assert_eq!(
+            engine.lock().unwrap().settings().active_radio,
+            0,
+            "the 20 m pick routed back to the Yaesu"
+        );
+
+        // 4. Let the loop catch up BEFORE the thumb reaches PTT — this is the ordering that
+        //    matters: the handoff re-homes the Rig and step() rebuilds the transport, and both
+        //    halt the engine's TX again.
+        for tick in 1..=3 {
+            loop_tick(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &mut backend,
+                f64::from(tick) * 20.0,
+            );
+        }
+
+        // 5. Press PTT.
+        engine.lock().unwrap().set_ptt(true);
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            80.0,
+        );
+
+        // …and it must reach the wire, on the YAESU's keying method and its OWN keyline port.
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Serial {
+                port: "/dev/tempo-test-key-a".to_string(),
+                line: SerialLine::Rts,
+            },
+            "the active rig keys the Yaesu's RTS line on its dedicated keyline port"
+        );
+        assert!(
+            state.manual_ptt_applied,
+            "the loop issued the key — a band-routed radio switch must not silently disarm \
+             transmit in Phone, where the operator has no control to re-arm it"
+        );
+        assert!(rig.keyed, "…and Rig::ptt(true) actually ran");
     }
 
     #[test]

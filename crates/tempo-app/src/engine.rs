@@ -3320,8 +3320,12 @@ impl Engine {
         // from anything the operator just did, and its per-radio persistence already owns it.
         self.bank_dial_memory();
         // A radio swap is a hard context change (different antenna/band): stop TX + drop the decode
-        // context + roster, exactly like a band QSY.
-        self.halt_tx();
+        // context + roster, exactly like a band QSY. A CONTEXT halt, not an operator Stop TX —
+        // in the manual modes the operator keeps the mic they were holding before the handoff
+        // (see `halt_tx_for_context_change`). EVERY path that changes the active radio — band
+        // routing, satellite routing, the coverage fallback, the operator's own radio button —
+        // arrives here, so this one line covers all of them.
+        self.halt_tx_for_context_change();
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
         // A pending split was authorized against the OUTGOING radio — for the
@@ -3603,9 +3607,13 @@ impl Engine {
             // same-band channel move would cancel a live FT8 transmission the
             // loop is mid-way through sending. A queued QSY still lands the
             // moment the over completes (the loop's mid-TX retune gate).
-            // Same semantics as the Halt Tx button; working a new spot re-arms
-            // AFTER this, so the click-a-needed → QSY → call flow is unaffected.
-            self.halt_tx();
+            // Same semantics as the Halt Tx button for the sequencer; working a new
+            // spot re-arms AFTER this, so the click-a-needed → QSY → call flow is
+            // unaffected. In the MANUAL modes there is no sequencer to keep stopped
+            // and no in-section control to re-arm with, so the operator keeps the mic
+            // they were already holding (see `halt_tx_for_context_change`) — Digital
+            // is untouched, which is what the paragraph above is about.
+            self.halt_tx_for_context_change();
         }
         // A band change drops the transient mode override, so a QSY re-asserts the auto sideband
         // (LSB <10 MHz / USB above) — "manual mode, but don't impede band auto-select".
@@ -3719,7 +3727,9 @@ impl Engine {
                 // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
                 // them as AP hypotheses on the new band would seed wrong-call decodes.
                 modes::reset_ft8_a7();
-                self.halt_tx();
+                // Context halt, exactly like the app-commanded band change above: spinning
+                // the rig's own VFO across a band edge must not take the operator's mic away.
+                self.halt_tx_for_context_change();
                 self.clear_cw_decode(); // stale CW copy across a cross-band knob QSY
                                         // A knob QSY across bands drops the transient mode override too, exactly like an
                                         // app-commanded band change (set_frequency) — so the tooltip's "until you change
@@ -6839,6 +6849,55 @@ impl Engine {
         self.broadcast_queue.clear();
         self.own_tx.clear();
         self.app.set_transmitting(false);
+    }
+
+    /// Halt TX for a CONTEXT CHANGE — a band QSY, a radio handoff, a transport rebuild the
+    /// loop performs under the operator — as opposed to an operator "stop transmitting".
+    ///
+    /// The kill is [`Self::halt_tx`]'s, unweakened: the carrier is cut, the slot abort is
+    /// armed, and every latched key intent (manual PTT-lock, a broker client's `T 1`) is
+    /// dropped. What it does NOT do is take the operator's mic away.
+    ///
+    /// ⚠️ WHY THIS EXISTS (operator report, 0.27.2 bench): in Phone/CW/RTTY the Enable-TX
+    /// latch IS the PTT enable — [`Self::set_ptt`] masks on it — and the Phone cockpit
+    /// renders no control for it. So a band pick or a radio switch left the latch down with
+    /// no way back except leaving the section and returning ("go to FT8, come back, PTT
+    /// works again"): the button pressed, the engine dropped the request, and nothing said
+    /// why. `halt_tx`'s "stay stopped" was written for the FT8 auto-sequencer, which WOULD
+    /// re-arm itself on the next slot; the manual modes have no sequencer — nothing keys
+    /// without an explicit operator send — so there is nothing there to stay stopped.
+    ///
+    /// Restoring is deliberately narrow:
+    /// - **Only the manual modes.** Digital stays disarmed, which is the FT8 launch-safety
+    ///   invariant and the documented band-change behaviour (`tune_dial`).
+    /// - **Only if the operator was already armed.** A context change must not turn TX ON;
+    ///   an explicit TX Off (RTTY/Operate surface the button) survives the QSY, and so does
+    ///   a tripped watchdog (which lowers `tx_enabled` itself).
+    /// - **Through [`Self::set_tx_enabled`]**, so the receive-only-tier backstop still holds.
+    /// - **A RESTORE, not an arm.** `set_tx_enabled(true)` carries two side effects that
+    ///   belong to an operator committing to transmit — it arms an immediate retune, and it
+    ///   restarts the TX watchdog clock. Neither is true here: the operator committed a
+    ///   moment ago and nothing about that changed, so both are put back. The retune matters
+    ///   concretely — an unasked-for `immediate_retune` makes the loop take its FORCE path,
+    ///   which clears `dial_giveup`, and that is the protection that stops an HF rig being
+    ///   asked for 144.390 on every tick (`a_refused_dial_is_given_up_on…`). The paths that
+    ///   genuinely need a retune (`set_active_radio`, `tune_dial`) arm it themselves.
+    ///
+    /// Net effect versus [`Self::halt_tx`]: exactly one bit of state differs, `tx_enabled`.
+    pub fn halt_tx_for_context_change(&mut self) {
+        use crate::settings::OperatingMode;
+        let restore = self.tx_enabled
+            && matches!(
+                self.settings.operating_mode,
+                OperatingMode::Phone | OperatingMode::Cw | OperatingMode::Rtty
+            );
+        let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
+        self.halt_tx();
+        if restore {
+            self.set_tx_enabled(true);
+            self.immediate_retune = retune;
+            self.tx_watchdog_start = watchdog_start;
+        }
     }
 
     /// Enable/disable normal slot TX. `false` = Monitor-off (transmit muted):
@@ -13122,14 +13181,15 @@ mod tests {
         assert!(!e.tx_allowed());
         assert!(e.rtty_send_text("CQ TEST").unwrap_err().contains("license"));
         // ...but 10 m data (28.080–28.100 window) is the Tech HF grant → allowed.
-        // (The cross-band QSY halts TX — the standing band-change invariant — so
-        // the operator re-arms, exactly like the TopBar TX button.)
+        // (The cross-band QSY still halts the carrier, but RTTY is a MANUAL mode:
+        // there is no sequencer to keep stopped and no in-section control to re-arm
+        // with, so the operator keeps the arm they already had — see
+        // `halt_tx_for_context_change`. Digital still stands down on a band change.)
         e.set_frequency(28.083, "10m", "LSB");
         assert!(
-            !e.tx_enabled(),
-            "a band change halts TX (existing invariant)"
+            e.tx_enabled(),
+            "a band change leaves a manual mode armed (halt_tx_for_context_change)"
         );
-        e.set_tx_enabled(true);
         assert!(e.tx_allowed());
         e.rtty_send_text("CQ TEST").unwrap();
         assert_eq!(e.poll_rtty_one(), Some("CQ TEST".to_string()));
@@ -15149,6 +15209,110 @@ mod tests {
         eng.set_tx_enabled(true);
         eng.observe_rig_freq(21_074_000);
         assert!(!eng.tx_enabled, "rig-knob band switch must halt TX");
+    }
+
+    #[test]
+    fn a_context_change_keeps_the_manual_modes_armed() {
+        // Operator report (0.27.2 bench, FTdx10 + IC-9700): Satellites → work something on
+        // the Icom → back to Phone → pick 20 m (band routing hands back to the Yaesu) → the
+        // PTT button presses and the rig does not key; going to FT8 and back cured it.
+        //
+        // In Phone/CW/RTTY the Enable-TX latch IS the PTT enable (`set_ptt` masks on it) and
+        // the Phone cockpit renders no control for it — so a context halt left the operator
+        // holding a dead microphone with nothing on screen to explain it. The carrier still
+        // stops; the mic stays. (Digital is a different contract — see the test below.)
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        assert!(e.tx_enabled(), "baseline: entering Phone arms transmit");
+
+        // A band change…
+        e.set_frequency(7.200, "40m", "LSB");
+        assert!(
+            e.tx_enabled(),
+            "a band QSY must not take the operator's mic"
+        );
+
+        // …the rig's own knob across a band edge…
+        e.observe_rig_freq(21_300_000);
+        assert!(e.tx_enabled(), "nor does a knob QSY the rig reports");
+
+        // …and a radio handoff. Band routing, satellite routing, the coverage fallback and
+        // the operator's own radio button ALL arrive at `set_active_radio`, so covering it
+        // covers every path that changes the active radio.
+        e.settings.ensure_radio_profiles();
+        let r1 = e.add_radio();
+        e.set_active_radio(0);
+        assert!(e.tx_enabled(), "nor does a radio handoff");
+        e.set_active_radio(r1);
+        assert!(e.tx_enabled(), "…in either direction");
+
+        // A held key is STILL released by the switch — the restore puts the latch back, it
+        // does not carry a key across to a radio nobody keyed.
+        e.set_frequency(14.250, "20m", "USB");
+        e.set_ptt(true);
+        assert!(
+            e.manual_ptt(),
+            "the operator can key after the handoff — the report"
+        );
+        e.set_active_radio(0);
+        assert!(
+            !e.manual_ptt(),
+            "…but the held key does not follow the switch"
+        );
+        assert!(e.tx_enabled(), "…while the mic itself is still live");
+    }
+
+    #[test]
+    fn a_context_change_never_arms_transmit_by_itself() {
+        // The restore is a RESTORE: it puts the Enable-TX latch back where the operator left
+        // it and can never turn transmit ON. Two boundaries, both load-bearing.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+
+        // 1. An explicit TX Off (RTTY and Operate surface the button) survives a QSY.
+        e.set_operating_mode("rtty", false);
+        assert!(e.tx_enabled(), "baseline: entering RTTY arms transmit");
+        e.set_tx_enabled(false); // operator hits TX Off
+        e.set_frequency(7.080, "40m", "LSB");
+        assert!(
+            !e.tx_enabled(),
+            "a QSY must never silently re-arm a rig the operator disarmed"
+        );
+
+        // 2. Digital still halts on a band change — the FT8 launch-safety invariant and the
+        //    documented sequencer behaviour (a directed call must not follow you to a new band).
+        e.set_operating_mode("digital", false);
+        e.set_tx_enabled(true);
+        e.set_frequency(14.074, "20m", "USB");
+        assert!(
+            !e.tx_enabled(),
+            "Digital stays stopped across a band change — the auto-sequencer must not re-arm"
+        );
+    }
+
+    #[test]
+    fn stop_tx_still_disarms_in_the_manual_modes() {
+        // `halt_tx` itself is unchanged: the operator's Stop TX button and the WSJT-X UDP
+        // HaltTx mean STOP, in every mode. Only the CONTEXT halts restore the latch.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        e.set_ptt(true);
+        assert!(e.manual_ptt(), "baseline: keyed");
+
+        e.halt_tx(); // operator hits Stop TX
+        assert!(
+            !e.tx_enabled(),
+            "Stop TX disarms in Phone too — never weakened"
+        );
+        e.set_ptt(true);
+        assert!(
+            !e.manual_ptt(),
+            "and a fresh press stays refused until transmit is armed again"
+        );
     }
 
     #[test]

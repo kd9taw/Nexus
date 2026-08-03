@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: changing band or radio no longer kills your PTT
+
+Reported from the bench: work a satellite on the Icom, come back to Phone, pick 20 m — which
+hands the station back to the Yaesu — and the PTT button pressed but the radio would not key.
+Nothing on screen said why. The cure the operator found was leaving the section entirely: go to
+FT8, come back to Phone, and PTT worked again.
+
+Under the hood, a band change and a radio handoff both stop transmit — they have to, or the FT8
+sequencer would keep calling a station that is no longer on your band, and a switch would leave a
+carrier up on the rig you just left. Stopping transmit also drops the Enable-TX latch, which is
+right for FT8: the sequencer would otherwise re-arm itself on the very next slot. But in Phone,
+CW and RTTY that same latch *is* the microphone, and the Phone cockpit has no switch for it — so
+the latch went down and stayed down, your press was quietly discarded, and only re-entering an
+operating section (which arms transmit on the way in) put it back.
+
+Those halts now put the latch back exactly where you left it, in Phone, CW and RTTY only. The
+carrier is still cut, a held PTT is still released, and the newly selected radio still comes up
+unkeyed — the switch just does not take your microphone away with it. Everything it never should
+have touched is untouched: FT8 still stands down on a band change, TX Off still means off across
+a QSY, a tripped transmit watchdog still holds, and Stop TX still means stop in every mode.
+
+This covers every way the active radio can change — band routing, satellite routing, band
+coverage, and the radio button in the top left — plus a band change with no switch at all, and
+spinning the rig's own VFO across a band edge.
+
 ### Fixed: a Doppler correction no longer rewrites the mode every three seconds
 
 From an operator's CI-V trace of a live pass: 110 seconds carried 38 mode commands and 38
