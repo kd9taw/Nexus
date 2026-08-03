@@ -1338,6 +1338,18 @@ pub struct Engine {
     flex_pan_ref_dbm: Option<i32>,
     /// A foreign CAT-broker client is holding PTT (arbitrated in `broker_ptt`).
     broker_ptt: bool,
+    /// A CONTEXT CHANGE has happened since the last operator arm — the station moved band or
+    /// radio under a broker client that never asked for it. Refuses a FOREIGN key until the
+    /// operator arms transmit again (`set_tx_enabled(true)`); Nexus's own mic is unaffected.
+    ///
+    /// It exists because [`Engine::halt_tx_for_context_change`] keeps the Enable-TX latch up in
+    /// the manual modes, and `broker_ptt` gates on that same latch: without this, restoring the
+    /// operator's mic would ALSO hand a foreign client an immediate grant on a band it never
+    /// chose (`halt_tx` drops its held key, so its next periodic `T 1` arrives as a fresh
+    /// request against an idle transmitter). The operator is present and holding the mic; the
+    /// broker client is neither, and cannot see the QSY until its next dial poll. With this,
+    /// the foreign-key surface is exactly what it was before the latch was restored.
+    broker_context_hold: bool,
     /// Phone voice-keyer: pending 12 kHz mono samples to transmit. The radio loop drains
     /// this (gated on `tx_enabled`), keys PTT, plays it, and drops PTT when it's out — the
     /// same path the soundcard CW keyer uses. Set by `send_voice`.
@@ -2766,6 +2778,7 @@ impl Engine {
             flex_pan_ref_dbm: None,
             pending_scope_fixed: None,
             broker_ptt: false,
+            broker_context_hold: false,
             voice_tx: None,
             voice_abort: false,
             recording: false,
@@ -3320,8 +3333,12 @@ impl Engine {
         // from anything the operator just did, and its per-radio persistence already owns it.
         self.bank_dial_memory();
         // A radio swap is a hard context change (different antenna/band): stop TX + drop the decode
-        // context + roster, exactly like a band QSY.
-        self.halt_tx();
+        // context + roster, exactly like a band QSY. A CONTEXT halt, not an operator Stop TX —
+        // in the manual modes the operator keeps the mic they were holding before the handoff
+        // (see `halt_tx_for_context_change`). EVERY path that changes the active radio — band
+        // routing, satellite routing, the coverage fallback, the operator's own radio button —
+        // arrives here, so this one line covers all of them.
+        self.halt_tx_for_context_change();
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
         // A pending split was authorized against the OUTGOING radio — for the
@@ -3603,9 +3620,13 @@ impl Engine {
             // same-band channel move would cancel a live FT8 transmission the
             // loop is mid-way through sending. A queued QSY still lands the
             // moment the over completes (the loop's mid-TX retune gate).
-            // Same semantics as the Halt Tx button; working a new spot re-arms
-            // AFTER this, so the click-a-needed → QSY → call flow is unaffected.
-            self.halt_tx();
+            // Same semantics as the Halt Tx button for the sequencer; working a new
+            // spot re-arms AFTER this, so the click-a-needed → QSY → call flow is
+            // unaffected. In the MANUAL modes there is no sequencer to keep stopped
+            // and no in-section control to re-arm with, so the operator keeps the mic
+            // they were already holding (see `halt_tx_for_context_change`) — Digital
+            // is untouched, which is what the paragraph above is about.
+            self.halt_tx_for_context_change();
         }
         // A band change drops the transient mode override, so a QSY re-asserts the auto sideband
         // (LSB <10 MHz / USB above) — "manual mode, but don't impede band auto-select".
@@ -3719,7 +3740,9 @@ impl Engine {
                 // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
                 // them as AP hypotheses on the new band would seed wrong-call decodes.
                 modes::reset_ft8_a7();
-                self.halt_tx();
+                // Context halt, exactly like the app-commanded band change above: spinning
+                // the rig's own VFO across a band edge must not take the operator's mic away.
+                self.halt_tx_for_context_change();
                 self.clear_cw_decode(); // stale CW copy across a cross-band knob QSY
                                         // A knob QSY across bands drops the transient mode override too, exactly like an
                                         // app-commanded band change (set_frequency) — so the tooltip's "until you change
@@ -3883,9 +3906,6 @@ impl Engine {
     /// is checked the same way `tx_allowed` checks it.
     fn mode_home(&self, om: crate::settings::OperatingMode) -> Option<(f64, String)> {
         use crate::settings::OperatingMode;
-        // SSB occupies ~2.8 kHz beside the carrier; an FT8/FT4 signal sits at the audio offset
-        // above the dial. Keep these in step with `tx_allowed`'s passband model.
-        const SSB_BW: f64 = 0.0028;
         let class = self.settings.license_class;
         let band = self.settings.band.clone();
         match om {
@@ -3899,18 +3919,13 @@ impl Engine {
                     .filter(|c| crate::privileges::tx_allowed(class, c.dial_mhz + off, om))
                     .map(|c| (c.dial_mhz, c.mode))
             }
+            // On LSB (<10 MHz) the passband is [dial-2.8 kHz, dial], so parking the dial AT the
+            // segment edge would push the lower 2.8 kHz out of band → TX locked out at the very
+            // home freq. THE phone home ([`crate::privileges::phone_home`]) owns that lift for
+            // every picker in the app — this one, `band_pick_default`, and the licensed-band
+            // command — because two of the three used to recompute it from the bare edge.
             OperatingMode::Phone => {
-                crate::privileges::segment_start(class, &band, om).map(|lo| {
-                    // On LSB (<10 MHz) the passband is [dial-2.8 kHz, dial], so parking the dial
-                    // AT the segment edge would push the lower 2.8 kHz out of band → TX locked
-                    // out at the very home freq. Lift the LSB home so the whole passband clears
-                    // the edge. USB extends upward from `lo`, so the edge is already fine.
-                    if lo < 10.0 {
-                        (lo + SSB_BW, "LSB".to_string())
-                    } else {
-                        (lo, "USB".to_string())
-                    }
-                })
+                crate::privileges::phone_home(class, &band).map(|(dial, sb)| (dial, sb.to_string()))
             }
             OperatingMode::Cw => crate::privileges::segment_start(class, &band, om)
                 // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
@@ -4049,8 +4064,13 @@ impl Engine {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
         match om {
-            OperatingMode::Phone => crate::privileges::segment_start(class, band, om)
-                .map(|lo| (lo, if lo < 10.0 { "LSB" } else { "USB" }.to_string())),
+            // THE phone home, not the bare segment edge: on LSB the emission hangs BELOW the
+            // dial, so the edge itself is a dial the transmit gate refuses (see
+            // [`crate::privileges::phone_home`] — this arm is where an Extra picking 40 m
+            // landed on an unkeyable 7.1250).
+            OperatingMode::Phone => {
+                crate::privileges::phone_home(class, band).map(|(dial, sb)| (dial, sb.to_string()))
+            }
             // CW parks in the activity window (14.030, not the dead 14.000 edge), clamped
             // to the licensed segment start; sideband is inert for CW (the rig-mode
             // policy commands CW) — "USB" matches the dropdown it mirrors.
@@ -4914,8 +4934,15 @@ impl Engine {
         // rigctld answers RPRT 0 to a redundant key-down, and refusing it fails
         // the client mid-over while the rig stays keyed. Nexus's own mic wins.
         let re_assert = self.broker_ptt && !self.manual_ptt;
+        // …and never onto a context the client never asked for. The station may have changed
+        // band or radio under it since the last operator arm (`broker_context_hold`), in which
+        // case a fresh `T 1` is a key on a frequency the client has not seen yet. The operator's
+        // own mic rides through such a change on purpose (`halt_tx_for_context_change`) because
+        // the operator MADE it; a foreign client waits for the next arm, exactly as it did
+        // before that restore existed.
         if !self.settings.cat_broker_ptt
             || !self.tx_enabled
+            || self.broker_context_hold
             || !self.tx_allowed()
             || (!re_assert && self.tx_owner().is_some())
         {
@@ -6841,6 +6868,69 @@ impl Engine {
         self.app.set_transmitting(false);
     }
 
+    /// Halt TX for a CONTEXT CHANGE — a band QSY, a radio handoff, a transport rebuild the
+    /// loop performs under the operator — as opposed to an operator "stop transmitting".
+    ///
+    /// The kill is [`Self::halt_tx`]'s, unweakened: the carrier is cut, the slot abort is
+    /// armed, and every latched key intent (manual PTT-lock, a broker client's `T 1`) is
+    /// dropped. What it does NOT do is take the operator's mic away.
+    ///
+    /// ⚠️ WHY THIS EXISTS (operator report, 0.27.2 bench): in Phone/CW/RTTY the Enable-TX
+    /// latch IS the PTT enable — [`Self::set_ptt`] masks on it — and the Phone cockpit
+    /// renders no control for it. So a band pick or a radio switch left the latch down with
+    /// no way back except leaving the section and returning ("go to FT8, come back, PTT
+    /// works again"): the button pressed, the engine dropped the request, and nothing said
+    /// why. `halt_tx`'s "stay stopped" was written for the FT8 auto-sequencer, which WOULD
+    /// re-arm itself on the next slot; the manual modes have no sequencer — nothing keys
+    /// without an explicit operator send — so there is nothing there to stay stopped.
+    ///
+    /// Restoring is deliberately narrow:
+    /// - **Only the manual modes.** Digital stays disarmed, which is the FT8 launch-safety
+    ///   invariant and the documented band-change behaviour (`tune_dial`).
+    /// - **Only if the operator was already armed.** A context change must not turn TX ON;
+    ///   an explicit TX Off (RTTY/Operate surface the button) survives the QSY, and so does
+    ///   a tripped watchdog (which lowers `tx_enabled` itself).
+    /// - **Through [`Self::set_tx_enabled`]**, so the receive-only-tier backstop still holds.
+    /// - **A RESTORE, not an arm.** `set_tx_enabled(true)` carries two side effects that
+    ///   belong to an operator committing to transmit — it arms an immediate retune, and it
+    ///   restarts the TX watchdog clock. Neither is true here: the operator committed a
+    ///   moment ago and nothing about that changed, so both are put back. The retune matters
+    ///   concretely — an unasked-for `immediate_retune` makes the loop take its FORCE path,
+    ///   which clears `dial_giveup`, and that is the protection that stops an HF rig being
+    ///   asked for 144.390 on every tick (`a_refused_dial_is_given_up_on…`). The paths that
+    ///   genuinely need a retune (`set_active_radio`, `tune_dial`) arm it themselves.
+    ///
+    /// - **The operator's mic ONLY.** A foreign CAT-broker client's key is not restored with
+    ///   it: `broker_ptt` gates on the same latch, so leaving the latch up would hand a client
+    ///   that never asked for this band an immediate grant. `broker_context_hold` holds it to
+    ///   the next operator arm — the surface it had before this method existed.
+    ///
+    /// Net effect versus [`Self::halt_tx`]: exactly one bit of state differs, `tx_enabled`,
+    /// and it is the OPERATOR's.
+    ///
+    /// ⚠️ THE LOOP MUST STILL REFUSE TO KEY THE WRONG RADIO. Keeping the latch up means the
+    /// engine now says "key" during windows where the radio loop is holding a `Rig` that is
+    /// not the operator's radio — a deferred dual-radio handoff, the Test-CAT port hold. The
+    /// cleared latch used to mask those; `RadioLoop::may_key` is what stops them now.
+    pub fn halt_tx_for_context_change(&mut self) {
+        use crate::settings::OperatingMode;
+        let restore = self.tx_enabled
+            && matches!(
+                self.settings.operating_mode,
+                OperatingMode::Phone | OperatingMode::Cw | OperatingMode::Rtty
+            );
+        let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
+        self.halt_tx();
+        if restore {
+            self.set_tx_enabled(true);
+            self.immediate_retune = retune;
+            self.tx_watchdog_start = watchdog_start;
+            // …but the restore is the OPERATOR's mic, not a foreign client's key. Set AFTER
+            // the arm above, which clears it.
+            self.broker_context_hold = true;
+        }
+    }
+
     /// Enable/disable normal slot TX. `false` = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing and queued frames are dropped — but an
     /// over already in flight completes (operator spec 2026-07-31: "TX Off should
@@ -7000,6 +7090,11 @@ impl Engine {
         // (worst case: a CQ run started right after an S&P contact never keyed).
         if on {
             self.pending_tx_disable = false;
+            // An operator arm is the consent a foreign broker key waits for after the station
+            // moved band/radio under it (see `broker_context_hold`). Cleared HERE and only
+            // here, so every arm path — the TX button, section entry, Call CQ, a UDP Reply —
+            // releases it, and nothing else can.
+            self.broker_context_hold = false;
         }
         self.tx_enabled = on;
         if on {
@@ -7212,7 +7307,28 @@ impl Engine {
     /// The click is consent for the dial only, the same consent every
     /// click-to-tune in the app already carries. Transmitting still needs the
     /// entire unchanged chain: the Enable-TX latch, an armed pass,
-    /// `sat_dial_owner` identity, the privilege gate, `tx_allowed`. The one
+    /// `sat_dial_owner` identity, the privilege gate, `tx_allowed`.
+    ///
+    /// ⚠️ THAT CHAIN IS THE PLANNED-OVER PATH'S, NOT THE MIC'S — read it as
+    /// [`Self::commit_tx`], which re-runs the privilege gate against wherever
+    /// Doppler has since put the dial and refuses a plan whose stamp no longer
+    /// describes this engine. MANUAL PTT has never consulted `sat_dial_owner`
+    /// at all: on a station where the pick does not hand off to another radio
+    /// (one radio, or already on the right one — `set_active_radio` returns
+    /// early) nothing in this path ever lowered the Enable-TX latch, so a mic
+    /// press after a pick has always keyed the rig where the pick parked it —
+    /// the bird's DOWNLINK, unless the uplink leg landed on a split.
+    /// `a_transponder_pick_has_never_gated_the_mic` pins that as the shipped
+    /// behaviour it is. Whether the mic should instead be refused while a pass
+    /// owns the dial and no uplink is plumbed is a real question and an
+    /// OPERATOR's to answer, not a quiet change: SSB satellite work IS the mic,
+    /// worked from the Phone cockpit, and on a rig the operator put into
+    /// satellite mode by hand Nexus has written no uplink it could check for —
+    /// so a guard keyed on "did WE write the uplink" would take the mic away
+    /// mid-pass, which is the exact dead-mic symptom this file's context-halt
+    /// work exists to end.
+    ///
+    /// The one
     /// transmit-side value written here is the SPLIT TX dial — the same
     /// receive-state field `sat_doppler_tick` writes, applied by the same
     /// one-shot, and writing it is what a "Main = down / Sub = up" mapping
@@ -10108,7 +10224,9 @@ impl Engine {
                 // SSB occupies ~2.8 kHz above the carrier (USB) / below it (LSB). The WHOLE
                 // passband must be in a privileged phone segment, so a dial within a passband
                 // of a band edge can't bleed out of band. Phone sideband is band-aware (LSB <10 MHz).
-                const SSB_BW: f64 = 0.0028;
+                // The width is `privileges::SSB_BW_MHZ` — the SAME constant the phone home parks
+                // by, so a picker can never choose a dial this gate then refuses.
+                use crate::privileges::SSB_BW_MHZ as SSB_BW;
                 let (lo, hi) = if dial < 10.0 {
                     (dial - SSB_BW, dial)
                 } else {
@@ -13122,14 +13240,15 @@ mod tests {
         assert!(!e.tx_allowed());
         assert!(e.rtty_send_text("CQ TEST").unwrap_err().contains("license"));
         // ...but 10 m data (28.080–28.100 window) is the Tech HF grant → allowed.
-        // (The cross-band QSY halts TX — the standing band-change invariant — so
-        // the operator re-arms, exactly like the TopBar TX button.)
+        // (The cross-band QSY still halts the carrier, but RTTY is a MANUAL mode:
+        // there is no sequencer to keep stopped and no in-section control to re-arm
+        // with, so the operator keeps the arm they already had — see
+        // `halt_tx_for_context_change`. Digital still stands down on a band change.)
         e.set_frequency(28.083, "10m", "LSB");
         assert!(
-            !e.tx_enabled(),
-            "a band change halts TX (existing invariant)"
+            e.tx_enabled(),
+            "a band change leaves a manual mode armed (halt_tx_for_context_change)"
         );
-        e.set_tx_enabled(true);
         assert!(e.tx_allowed());
         e.rtty_send_text("CQ TEST").unwrap();
         assert_eq!(e.poll_rtty_one(), Some("CQ TEST".to_string()));
@@ -14360,6 +14479,80 @@ mod tests {
     }
 
     #[test]
+    fn a_phone_band_pick_lands_where_the_operator_can_actually_key() {
+        // THE OTHER TERM of the same `set_ptt` line. `manual_ptt = on && tx_enabled &&
+        // tx_allowed()`: the Enable-TX latch is the first term (the context-halt bug —
+        // `a_context_change_keeps_the_manual_modes_armed`), and this is the second, with the
+        // same operator-visible shape — pick a band in Phone, and the mic won't key.
+        //
+        // The band dropdown parked the dial ON the licensed segment edge. On the LSB bands
+        // (<10 MHz) the SSB passband hangs 2.8 kHz BELOW the dial, so the edge itself is a
+        // frequency the transmit gate refuses: an EXTRA picking 40 m landed on 7.1250, whose
+        // passband opens at 7.1222 — under the 7.125 phone floor — and the cockpit came up
+        // 🔒 TX LOCKED on a band this operator owns outright. `mode_home` (the section-entry
+        // home) had the lift; `band_pick_default` (the dropdown's) and the licensed-band
+        // command each recomputed it from the bare edge and did not. All three now ask
+        // `privileges::phone_home`.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB");
+        e.pick_band("40m", Some("phone")); // the Phone cockpit's band dropdown
+        assert!(
+            (e.settings().dial_mhz - 7.1278).abs() < 1e-9,
+            "the 40 m phone pick parks a WHOLE passband clear of the 7.125 floor, got {}",
+            e.settings().dial_mhz
+        );
+        assert!(
+            e.tx_allowed(),
+            "…which is the entire point: a picked band must be keyable"
+        );
+        e.set_ptt(true);
+        assert!(
+            e.manual_ptt(),
+            "PTT works on the band the dropdown just chose"
+        );
+
+        // The same for the other two LSB phone bands, at both class floors — 160/80/40 m are
+        // where the passband hangs below the dial. Each on a fresh engine so the pick reads an
+        // EMPTY memory cell (a remembered dial would answer instead of the default).
+        for (class, band, want) in [
+            ("extra", "160m", 1.8028),
+            ("extra", "80m", 3.6028),
+            ("general", "80m", 3.8028),
+            ("general", "40m", 7.1778),
+        ] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_license_class(class);
+            e.set_operating_mode("phone", true);
+            e.pick_band(band, Some("phone"));
+            assert!(
+                (e.settings().dial_mhz - want).abs() < 1e-9,
+                "{class} picking {band} in Phone must land on {want}, got {}",
+                e.settings().dial_mhz
+            );
+            e.set_ptt(true);
+            assert!(
+                e.manual_ptt(),
+                "{class} must be able to key its {band} pick"
+            );
+        }
+
+        // …and the USB bands are UNCHANGED: the passband extends UP from the dial, so the
+        // segment start was always clear and the dropdown's dial must not move.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", true);
+        e.pick_band("20m", Some("phone"));
+        assert!(
+            (e.settings().dial_mhz - 14.225).abs() < 1e-9,
+            "20 m phone still parks exactly on the General floor, got {}",
+            e.settings().dial_mhz
+        );
+        assert!(e.tx_allowed());
+    }
+
+    #[test]
     fn a_band_pick_records_the_cell_it_read() {
         use crate::settings::OperatingMode;
         // The cockpit's band dropdown passes its OWN mode, because `settings.operating_mode` is
@@ -15149,6 +15342,193 @@ mod tests {
         eng.set_tx_enabled(true);
         eng.observe_rig_freq(21_074_000);
         assert!(!eng.tx_enabled, "rig-knob band switch must halt TX");
+    }
+
+    #[test]
+    fn a_context_change_keeps_the_manual_modes_armed() {
+        // Operator report (0.27.2 bench, FTdx10 + IC-9700): Satellites → work something on
+        // the Icom → back to Phone → pick 20 m (band routing hands back to the Yaesu) → the
+        // PTT button presses and the rig does not key; going to FT8 and back cured it.
+        //
+        // In Phone/CW/RTTY the Enable-TX latch IS the PTT enable (`set_ptt` masks on it) and
+        // the Phone cockpit renders no control for it — so a context halt left the operator
+        // holding a dead microphone with nothing on screen to explain it. The carrier still
+        // stops; the mic stays. (Digital is a different contract — see the test below.)
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        assert!(e.tx_enabled(), "baseline: entering Phone arms transmit");
+
+        // A band change…
+        e.set_frequency(7.200, "40m", "LSB");
+        assert!(
+            e.tx_enabled(),
+            "a band QSY must not take the operator's mic"
+        );
+
+        // …the rig's own knob across a band edge…
+        e.observe_rig_freq(21_300_000);
+        assert!(e.tx_enabled(), "nor does a knob QSY the rig reports");
+
+        // …and a radio handoff. Band routing, satellite routing, the coverage fallback and
+        // the operator's own radio button ALL arrive at `set_active_radio`, so covering it
+        // covers every path that changes the active radio.
+        e.settings.ensure_radio_profiles();
+        let r1 = e.add_radio();
+        e.set_active_radio(0);
+        assert!(e.tx_enabled(), "nor does a radio handoff");
+        e.set_active_radio(r1);
+        assert!(e.tx_enabled(), "…in either direction");
+
+        // A held key is STILL released by the switch — the restore puts the latch back, it
+        // does not carry a key across to a radio nobody keyed.
+        e.set_frequency(14.250, "20m", "USB");
+        e.set_ptt(true);
+        assert!(
+            e.manual_ptt(),
+            "the operator can key after the handoff — the report"
+        );
+        e.set_active_radio(0);
+        assert!(
+            !e.manual_ptt(),
+            "…but the held key does not follow the switch"
+        );
+        assert!(e.tx_enabled(), "…while the mic itself is still live");
+    }
+
+    #[test]
+    fn a_context_change_never_arms_transmit_by_itself() {
+        // The restore is a RESTORE: it puts the Enable-TX latch back where the operator left
+        // it and can never turn transmit ON. Two boundaries, both load-bearing.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+
+        // 1. An explicit TX Off (RTTY and Operate surface the button) survives a QSY.
+        e.set_operating_mode("rtty", false);
+        assert!(e.tx_enabled(), "baseline: entering RTTY arms transmit");
+        e.set_tx_enabled(false); // operator hits TX Off
+        e.set_frequency(7.080, "40m", "LSB");
+        assert!(
+            !e.tx_enabled(),
+            "a QSY must never silently re-arm a rig the operator disarmed"
+        );
+
+        // 2. Digital still halts on a band change — the FT8 launch-safety invariant and the
+        //    documented sequencer behaviour (a directed call must not follow you to a new band).
+        e.set_operating_mode("digital", false);
+        e.set_tx_enabled(true);
+        e.set_frequency(14.074, "20m", "USB");
+        assert!(
+            !e.tx_enabled(),
+            "Digital stays stopped across a band change — the auto-sequencer must not re-arm"
+        );
+    }
+
+    #[test]
+    fn stop_tx_still_disarms_in_the_manual_modes() {
+        // `halt_tx` itself is unchanged: the operator's Stop TX button and the WSJT-X UDP
+        // HaltTx mean STOP, in every mode. Only the CONTEXT halts restore the latch.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        e.set_ptt(true);
+        assert!(e.manual_ptt(), "baseline: keyed");
+
+        e.halt_tx(); // operator hits Stop TX
+        assert!(
+            !e.tx_enabled(),
+            "Stop TX disarms in Phone too — never weakened"
+        );
+        e.set_ptt(true);
+        assert!(
+            !e.manual_ptt(),
+            "and a fresh press stays refused until transmit is armed again"
+        );
+    }
+
+    #[test]
+    fn a_context_change_does_not_hand_a_broker_client_the_new_band() {
+        // The restore is the OPERATOR's mic. `broker_ptt` gates on the same Enable-TX latch,
+        // so keeping it up would ALSO re-open the door to a FOREIGN key — and a broker client
+        // (WSJT-X/N1MM sharing the rig) cannot see the QSY until its next dial poll, so its
+        // periodic `T 1` would key on a band it never asked for. Before the restore the latch
+        // was down and that client was refused until the operator armed again; it still is.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.settings.cat_broker_ptt = true; // the operator opted in to sharing PTT
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        assert!(
+            e.broker_ptt(true),
+            "baseline: an opted-in client keys an idle transmitter"
+        );
+        assert!(e.broker_ptt(false), "…and un-keys");
+
+        // The operator picks another band. 15 m deliberately — a USB band, so this test
+        // turns on the broker rule alone and not on the LSB home lift next door.
+        e.pick_band("15m", Some("phone"));
+        assert!(
+            e.tx_enabled(),
+            "scene guard: the operator's own mic survived the pick (that is the fix)"
+        );
+        e.set_ptt(true);
+        assert!(e.manual_ptt(), "…and it keys");
+        e.set_ptt(false);
+
+        assert!(
+            !e.broker_ptt(true),
+            "a foreign key must NOT follow the operator to a band its client never asked for"
+        );
+        // A HOLD, not a ban: the next operator arm is the consent it waits for — exactly the
+        // release it had before, when the arm was also what raised the latch.
+        e.set_tx_enabled(true);
+        assert!(
+            e.broker_ptt(true),
+            "an operator arm releases the hold — the client keys again"
+        );
+    }
+
+    #[test]
+    fn a_transponder_pick_has_never_been_what_stopped_the_mic() {
+        // DISCLOSED, and deliberately NOT changed here (verifier finding 5). After a
+        // transponder pick the rig sits on the bird's DOWNLINK, and a Phone PTT press keys
+        // it there unless an uplink split landed. Manual PTT has never consulted
+        // `sat_dial_owner`; what USED to intervene was an accident — the pick's cross-band
+        // QSY ran `halt_tx`, which dropped the latch.
+        //
+        // It was never a guard, because the only surface with a PTT button is an operating
+        // section, and ENTERING one arms transmit (`set_operating_mode`, the manual-mode arm
+        // — a rig's live mic). So the shipped path "pick a bird → open Phone → press PTT"
+        // ends with an armed mic on the downlink whatever the halt did. Proven the strong
+        // way: force the latch DOWN with a full `halt_tx` (harder than the old halt) and
+        // walk the operator's real path anyway.
+        //
+        // Refusing the mic under a pass instead is an OPERATOR's ruling, not a quiet one:
+        // SSB satellite work IS the mic, and on a rig put into satellite mode by hand there
+        // is no uplink write for us to check — a guard keyed on "did WE write it" would take
+        // the mic away mid-pass, which is the dead-mic symptom this whole branch is about.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB");
+        pick_bird(&mut e); // → the 2 m downlink of a V/U linear bird
+        assert!(
+            (e.settings().dial_mhz - 145.960).abs() < 1e-6,
+            "scene guard: the pick parked the rig on the DOWNLINK, got {}",
+            e.settings().dial_mhz
+        );
+        e.halt_tx(); // the pre-fix context halt, and then some
+        assert!(!e.tx_enabled(), "scene guard: the latch is down");
+
+        e.set_operating_mode("phone", false); // the operator opens the Phone cockpit
+        e.set_ptt(true);
+        assert!(
+            e.manual_ptt(),
+            "section entry re-arms and the mic keys on the downlink — the shipped behaviour, \
+             reachable with or without the context-halt restore"
+        );
     }
 
     #[test]

@@ -8404,21 +8404,27 @@ fn get_licensed_band_plan(
     };
     let mut out = Vec::new();
     for (band, group) in BANDS {
-        if let Some(seg) = tempo_app::privileges::segment_start(class, band, mode) {
-            // In CW, park in the CW ACTIVITY window (14.030, not the dead 14.000 edge) —
-            // clamped to the licensed segment start so it never drops below privileges.
-            let dial = if matches!(mode, OperatingMode::Cw) {
-                tempo_app::bandplan::cw_activity_mhz(band).map_or(seg, |a| a.max(seg))
-            } else {
-                seg
-            };
-            // Sideband stored: USB/LSB by band for phone; digital-safe USB otherwise (the
-            // rig-mode policy forces CW in the CW section regardless of this field).
-            let sideband = if matches!(mode, OperatingMode::Phone) && dial < 10.0 {
-                "LSB"
-            } else {
-                "USB"
-            };
+        // PHONE goes through THE phone home (`privileges::phone_home`), which lifts an LSB
+        // home clear of the segment edge — the bare edge is a dial the transmit gate refuses,
+        // and this command recomputing it from `segment_start` is how the dropdown used to
+        // publish an unkeyable 7.1250 for 40 m. Sideband comes from the same answer.
+        // CW parks in the ACTIVITY window (14.030, not the dead 14.000 edge), clamped to the
+        // licensed segment start so it never drops below privileges; digital on the start.
+        // Sideband is digital-safe USB for both (the rig-mode policy forces CW in the CW
+        // section regardless of this field).
+        let home = if matches!(mode, OperatingMode::Phone) {
+            tempo_app::privileges::phone_home(class, band)
+        } else {
+            tempo_app::privileges::segment_start(class, band, mode).map(|seg| {
+                let dial = if matches!(mode, OperatingMode::Cw) {
+                    tempo_app::bandplan::cw_activity_mhz(band).map_or(seg, |a| a.max(seg))
+                } else {
+                    seg
+                };
+                (dial, "USB")
+            })
+        };
+        if let Some((dial, sideband)) = home {
             out.push(BandChannel {
                 band: band.to_string(),
                 group: group.to_string(),
