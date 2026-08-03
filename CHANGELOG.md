@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: your uplink VFO now gets told what mode to be in, on every bird
+
+Reported from a live AO-123 pass on the IC-9700: "it recomended the mode v/u fm transiver, it sets
+fm in 435 but its setting lsb on the 145 side." AO-123 is an FM transceiver both ways — FM up on
+145, FM down on 435. The downlink went into FM correctly; the transmit side sat in the LSB left
+over from a linear bird worked earlier in the session.
+
+Nexus was not putting LSB there. It was saying nothing at all, and the mode already on that VFO
+showed through. The uplink mode was only ever sent when the two legs wanted *different* modes —
+the sideband swap an inverting linear transponder needs — on the assumption that a transmit VFO
+follows the receive VFO's mode. It does not. On a 9700 in satellite mode, Main and Sub carry their
+own modes, and so do VFO A and B on most modern rigs. "Both legs want FM" is not "nothing to say";
+it is "say FM to the other VFO too".
+
+So it did not just cost the FM birds. A non-inverting linear transponder — USB up and USB down —
+was silenced by exactly the same rule, and its uplink kept whatever the previous pass had left
+there. Only an inverting bird was ever written.
+
+The consequences were the two you would expect, and neither announces itself: an SSB carrier into
+an FM satellite's input gets nothing through and splatters across everyone else in the pass, and a
+wideband FM carrier into a linear transponder's 30 kHz passband is the loudest possible way to be
+wrong. Either one sounds, from your seat, exactly like nobody answering.
+
+Now the uplink mode is stated for every transponder you hold — FM for an FM bird, the downlink's
+own sideband for a straight linear one, the mirrored sideband for an inverting one — and it is
+still sent only when the answer *changes*, so it does not chatter on the bus and does not fight
+you if you reach for the rig's own mode knob. Everything that already refused to touch your
+transmit VFO still refuses: a beacon, a one-channel simplex bird, an uplink mapping you have not
+confirmed for that radio, Doppler switched off, or you taking the mode yourself mid-pass. A
+pile-up split on another band ("UP 5" on 20 m) can still never inherit a satellite's sideband.
+
 ### Fixed: a rotator that stops answering no longer takes the dial with it
 
 Reported from a live pass: "I saw a first Doppler shift, then it snapped back to the none

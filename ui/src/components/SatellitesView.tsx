@@ -853,13 +853,15 @@ function DopplerReadout({
    * "not confirmed for this radio" is the wrong sentence (and the wrong fix)
    * when confirmation would change nothing on this bird. */
   undrivableUplink: boolean
-  /** The sideband the ENGINE declares for the TX (split) leg — the DTO's
+  /** The mode the ENGINE declares for the TX (split) leg — the DTO's
    * `txMode`, i.e. `Engine::sat_tx_mode`'s own per-tick answer, so this shows
-   * exactly what the radio loop writes and nothing else. Null = the engine
-   * commands nothing (legs share a mode, a mapping without the uplink,
-   * Doppler off, or the operator took the mode back) — and then nothing is
-   * claimed. Never derived from the SatNOGS record here: a second derivation
-   * of the command is how a display claims a write the radio never gets. */
+   * exactly what the radio loop writes and nothing else. Answered whether or
+   * not the legs differ: the transmit VFO carries its own mode. Null = the
+   * engine commands nothing (a mapping without the uplink, a transponder with
+   * no uplink leg, Doppler off, or the operator took the mode back) — and then
+   * nothing is claimed. Never derived from the SatNOGS record here: a second
+   * derivation of the command is how a display claims a write the radio never
+   * gets. */
   txMode?: string | null
   /** Put the radio back on the frequencies printed here — see the button. Absent
    * when there is no held pick to re-assert. */
@@ -952,7 +954,7 @@ function DopplerReadout({
               {txMode != null && (
                 <span
                   className="sat-dop-txmode"
-                  title={`The TX (split) VFO's sideband — this bird's uplink runs ${txMode} while the downlink does not, and the radio's TX leg is set to match. Commanded by the engine with the Doppler tuning; shown here so a swapped sideband is never a surprise.`}
+                  title={`The TX (split) VFO's mode — this bird's uplink runs ${txMode}, and the radio's TX leg is set to match. The transmit VFO carries its own mode, so it is set whether or not it differs from the downlink. Commanded by the engine with the Doppler tuning; shown here so the mode your uplink is in is never a surprise.`}
                 >
                   {' '}
                   {txMode}
@@ -3372,7 +3374,7 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                             ? 'Doppler correction is off'
                             : !detailTrack.dopplerUplink
                               ? 'Doppler is not driving the uplink on this radio'
-                              : 'the legs share a sideband, or the mode is yours'}
+                              : 'the mode is yours'}
                           ).
                         </>
                       )

@@ -3463,11 +3463,14 @@ impl RadioLoop {
                                         }
                                         "rig rejected split — work the pile-up manually".to_string()
                                     });
-                                    // The TX VFO's MODE, while a satellite pass holds it. On
-                                    // a linear INVERTING transponder the sidebands swap —
-                                    // listen USB, transmit LSB — and `M` only ever reaches
-                                    // the RX VFO, so `X` here is the one place the uplink's
-                                    // sideband can be commanded at all.
+                                    // The TX VFO's MODE, while a satellite pass holds it. `M`
+                                    // only ever reaches the RX VFO, so `X` here is the one
+                                    // place the uplink's mode can be commanded at all — and
+                                    // it is sent for EVERY held bird, not just the inverting
+                                    // ones whose sidebands swap. The transmit VFO carries its
+                                    // own mode: an FM bird's uplink left unspoken to keeps
+                                    // whatever the last linear pass put there (KD9TAW's
+                                    // AO-123 report — FM on 435, a stale LSB on 145).
                                     //
                                     // Consulted per SPLIT, not per hold: this one-shot also
                                     // serves the terrestrial pile-up path ("UP 5"), and a
@@ -10871,6 +10874,376 @@ mod tests {
             Some("USB"),
             "a new transponder pick re-asserts the BIRD's mode over a mode picked for the \
              previous one: {modes:?}"
+        );
+    }
+
+    // ---- "it sets fm in 435 but its setting lsb on the 145 side" ----
+    //
+    // KD9TAW, live AO-123 pass, IC-9700. AO-123 is a V/U FM TRANSCEIVER:
+    // 145 MHz up, 435 MHz down, BOTH LEGS FM. The downlink was commanded FM
+    // correctly; the uplink VFO sat in the LSB left over from linear work
+    // earlier in the session. Nexus was not commanding LSB — it was commanding
+    // NOTHING, and the stale mode showed through.
+    //
+    // `Engine::sat_tx_mode` suppressed its own answer whenever the two legs
+    // wanted the SAME mode, on the assumption that the transmit VFO INHERITS
+    // the receive VFO's mode. It does not: on a 9700 in satellite mode Main and
+    // Sub carry independent modes, and so do VFO A/B on modern rigs generally.
+    // "Both legs want FM" does not mean "nothing to say" — it means "say FM to
+    // the other VFO too".
+    //
+    // NOT AN FM BUG. The same suppression silenced every transponder whose legs
+    // want one mode, which includes a NON-INVERTING linear bird (USB down, USB
+    // up). Only an inverting SSB bird — where the sideband genuinely differs —
+    // was ever written.
+    //
+    // Driven through the REAL loop against a recording rigctld, because the
+    // claim is about a frame that was NEVER SENT: no engine state can show the
+    // absence of an `X` on the wire.
+
+    /// AO-123's V/U FM transceiver — 2 m up, 70 cm down, both legs FM. THE
+    /// operator's bird. `half_width_hz: 0` because an FM transponder is a
+    /// CHANNEL, not a passband to tune inside.
+    const AO123: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 145_960_000,
+        downlink_centre_hz: 435_100_000,
+        invert: false,
+        half_width_hz: 0,
+    };
+
+    /// A NON-INVERTING linear transponder — the second shape the same
+    /// suppression silenced. USB down and USB up, so the two legs matched and
+    /// the transmit VFO was left in whatever it happened to be carrying,
+    /// exactly like the FM bird above.
+    const STRAIGHT_LINEAR: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 145_925_000,
+        downlink_centre_hz: 435_300_000,
+        invert: false,
+        half_width_hz: 30_000,
+    };
+
+    /// The split-VFO MODE tokens the rig was commanded, in order — the `X <mode>
+    /// <pbw>` verb with its passband dropped, the twin of [`commanded_modes`].
+    /// `M` only ever reaches the RECEIVE VFO, so `X` is the only verb on the
+    /// wire that says anything at all about the transmit VFO's mode.
+    fn split_modes(log: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|c| {
+                c.strip_prefix("X ")
+                    .and_then(|m| m.split_whitespace().next())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// One satellite pass on the wire: a recording rigctld, a real `Rig` on it,
+    /// and ONE `RadioLoop` whose state persists across steps.
+    ///
+    /// That persistence is load-bearing rather than tidy. `last_split_mode` is
+    /// LOOP state — it is what makes the split mode a write-on-CHANGE — so a
+    /// fresh loop per step would re-send the mode every tick and the
+    /// bus-quiet assertions below would pass on a build that spams the bus.
+    ///
+    /// The uplink rides VFO A/B (`ADownBUp`), not the 9700's Main/Sub: Main/Sub
+    /// is a native-CI-V-only path (`Engine::sat_split_tx_vfo`) that a Hamlib
+    /// stub is refused outright, and the question here is the MODE VERB, not
+    /// which VFO carries it.
+    struct SatPass {
+        engine: Arc<Mutex<Engine>>,
+        log: Arc<Mutex<Vec<String>>>,
+        rig: Rig,
+        state: RadioLoop,
+        backend: MockBackend,
+        station: StationSinks,
+        tick: f64,
+    }
+
+    impl SatPass {
+        /// A Phone-section station. `confirm` grants the per-radio uplink
+        /// consent (`Settings::sat_doppler_uplink`); withheld, the transmit VFO
+        /// was never handed to us and nothing may be written to it.
+        fn new(confirm: bool) -> Self {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.operating_mode = tempo_app::settings::OperatingMode::Phone;
+                e.apply_settings(s);
+                if confirm {
+                    // The consent pair is engine-owned live state a settings
+                    // payload cannot carry — granted through THE verb, the way
+                    // the operator's click on the pass rail grants it.
+                    e.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+                }
+            }
+            let (addr, log) = recording_rigctld_stub();
+            Self {
+                engine,
+                log,
+                rig: Rig::rigctld(&addr),
+                state: loop_state(),
+                backend: MockBackend::new(),
+                station: StationSinks::new(),
+                tick: 0.0,
+            }
+        }
+
+        fn steps(&mut self, n: usize) {
+            let sinks = no_sinks();
+            let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+            for _ in 0..n {
+                self.tick += 400.0;
+                self.state
+                    .step(
+                        &self.engine,
+                        &mut self.backend,
+                        &mut self.rig,
+                        &sinks,
+                        self.tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut self.station,
+                    )
+                    .unwrap();
+            }
+        }
+
+        /// The operator's click: hold the transponder and tune to it, then let
+        /// the loop carry the pick to the rig.
+        fn pick(
+            &mut self,
+            label: &str,
+            tp: tempo_core::doppler::Transponder,
+            class: tempo_core::doppler::DownlinkClass,
+        ) {
+            {
+                let mut e = self.engine.lock().unwrap();
+                e.set_sat_transponder(Some((label.to_string(), 0, tp)));
+                e.sat_tune_nominal(class, 1_000_000);
+            }
+            self.steps(4);
+        }
+
+        /// One Doppler correction, then the ticks that carry it to the rig.
+        fn correct(&mut self, rate_km_s: f64, now_ms: u64) {
+            {
+                let mut e = self.engine.lock().unwrap();
+                e.sat_doppler_tick(rate_km_s, now_ms, false);
+            }
+            self.steps(2);
+        }
+    }
+
+    #[test]
+    fn an_fm_bird_states_fm_on_the_uplink_vfo() {
+        // THE FIELD REPORT. AO-123 is FM up and FM down; the uplink VFO is a
+        // different VFO and carries its own mode, so FM has to be SAID to it.
+        // Left unsaid it keeps the LSB an earlier linear bird put there — and
+        // an SSB carrier in an FM satellite's input is both silence at the far
+        // end and interference to everyone else in the pass.
+        let mut p = SatPass::new(true);
+        p.pick("AO-123|V/U FM", AO123, FM_BIRD);
+
+        assert!(
+            commanded_freqs(&p.log).contains(&435_100_000),
+            "scene: the downlink reached the rig: {:?}",
+            commanded_freqs(&p.log)
+        );
+        assert_eq!(
+            commanded_modes(&p.log).last().map(String::as_str),
+            Some("FM"),
+            "scene: the RECEIVE leg is commanded FM, as it always was: {:?}",
+            commanded_modes(&p.log)
+        );
+        assert_eq!(
+            split_verbs(&p.log)
+                .iter()
+                .filter(|l| l.starts_with("I "))
+                .count(),
+            1,
+            "scene: the uplink dial reached the transmit VFO: {:?}",
+            split_verbs(&p.log)
+        );
+        assert_eq!(
+            split_modes(&p.log),
+            vec!["FM".to_string()],
+            "the TRANSMIT VFO is told FM too — the operator's 145 MHz side sat in a \
+             leftover LSB because nothing was ever sent: {:?}",
+            split_verbs(&p.log)
+        );
+    }
+
+    #[test]
+    fn a_non_inverting_linear_bird_states_its_sideband_on_the_uplink_vfo() {
+        // The same defect, one bird-shape over: both legs want USB, so the two
+        // matched and nothing was said. A transmit VFO left in FM from the
+        // previous pass then puts a wideband FM carrier through a 30 kHz linear
+        // passband — the loudest possible way to be wrong.
+        let mut p = SatPass::new(true);
+        p.pick("straight linear", STRAIGHT_LINEAR, SSB_BIRD);
+
+        assert_eq!(
+            commanded_modes(&p.log).last().map(String::as_str),
+            Some("USB"),
+            "scene: the receive leg is USB: {:?}",
+            commanded_modes(&p.log)
+        );
+        assert_eq!(
+            split_modes(&p.log),
+            vec!["USB".to_string()],
+            "a non-inverting bird still has to STATE its uplink mode — matching legs \
+             are not an empty answer: {:?}",
+            split_verbs(&p.log)
+        );
+    }
+
+    #[test]
+    fn an_inverting_linear_bird_still_states_the_mirrored_sideband() {
+        // Unchanged, and pinned so the widened answer cannot quietly cost the
+        // one case that already worked: RS-44 inverts, so USB down means LSB up.
+        let mut p = SatPass::new(true);
+        p.pick("RS-44|linear", RS44, SSB_BIRD);
+
+        assert_eq!(
+            split_modes(&p.log),
+            vec!["LSB".to_string()],
+            "an inverting bird transmits in the mirrored sideband: {:?}",
+            split_verbs(&p.log)
+        );
+    }
+
+    #[test]
+    fn the_uplink_mode_is_written_once_per_answer_not_once_per_correction() {
+        // The bus-noise defect this branch already fixed once for the DIAL:
+        // a Doppler correction is not a QSY, and the split mode is a
+        // write-on-CHANGE. Widening WHEN there is an answer must not widen how
+        // OFTEN it is sent — the split VFO's mode cannot be read back, so
+        // re-asserting it every correction would silently overrule an operator
+        // who reached for the rig's own mode knob.
+        let mut p = SatPass::new(true);
+        p.pick("AO-123|V/U FM", AO123, FM_BIRD);
+        assert_eq!(
+            split_modes(&p.log),
+            vec!["FM".to_string()],
+            "scene: the pick states the mode once"
+        );
+        let uplinks_after_pick = split_verbs(&p.log)
+            .iter()
+            .filter(|l| l.starts_with("I "))
+            .count();
+
+        for n in 1..=4u64 {
+            p.correct(-5.0 + n as f64, 1_000_000 + n * 3_000);
+        }
+
+        // Every correction still reaches the transmit dial…
+        let uplinks = split_verbs(&p.log)
+            .iter()
+            .filter(|l| l.starts_with("I "))
+            .count();
+        assert!(
+            uplinks >= uplinks_after_pick + 4,
+            "scene: the corrections reached the transmit dial: {:?}",
+            split_verbs(&p.log)
+        );
+        // …and NOT ONE further mode frame.
+        assert_eq!(
+            split_modes(&p.log),
+            vec!["FM".to_string()],
+            "the answer never changed, so the mode is never re-sent: {:?}",
+            split_verbs(&p.log)
+        );
+    }
+
+    #[test]
+    fn nothing_is_said_to_a_transmit_vfo_that_is_not_ours() {
+        // Each of these is a way of NOT owning the transmit VFO, and the mode
+        // write rides THE one legs derivation (`Engine::sat_doppler_legs`) so it
+        // can never claim a leg the frequency writer refused. Widening the
+        // answer must not widen WHO it is answered for.
+
+        // A BEACON has no transmit leg to be in any mode.
+        let mut p = SatPass::new(true);
+        p.pick(
+            "AO-7|beacon",
+            tempo_core::doppler::Transponder {
+                uplink_centre_hz: 0,
+                ..RS44
+            },
+            SSB_BIRD,
+        );
+        assert_eq!(
+            split_verbs(&p.log),
+            Vec::<String>::new(),
+            "a beacon gets no split at all, and so no split mode"
+        );
+
+        // A SIMPLEX channel (145.825 up AND down) is one dial carrying both
+        // legs — growing it a split would engage the rig's cross-band satellite
+        // mode on a same-band channel.
+        let mut p = SatPass::new(true);
+        p.pick(
+            "ISS|APRS digipeater",
+            tempo_core::doppler::Transponder {
+                uplink_centre_hz: 145_825_000,
+                downlink_centre_hz: 145_825_000,
+                invert: false,
+                half_width_hz: 0,
+            },
+            FM_BIRD,
+        );
+        assert_eq!(
+            split_verbs(&p.log),
+            Vec::<String>::new(),
+            "a simplex channel must never grow a split"
+        );
+
+        // NO CONFIRMED MAPPING: the transmit VFO was never handed to us, so the
+        // frequency is not ours to write and neither is the mode.
+        let mut p = SatPass::new(false);
+        p.pick("AO-123|V/U FM", AO123, FM_BIRD);
+        assert!(
+            commanded_freqs(&p.log).contains(&435_100_000),
+            "scene: the RECEIVE dial still follows the pass — this refusal is \
+             about the transmit leg only: {:?}",
+            commanded_freqs(&p.log)
+        );
+        assert_eq!(
+            split_verbs(&p.log),
+            Vec::<String>::new(),
+            "an unconfirmed uplink mapping commands nothing onto a transmit VFO"
+        );
+    }
+
+    #[test]
+    fn the_operator_taking_the_mode_back_ends_the_uplink_mode_writes() {
+        // Never fight the operator. Reaching for the mode themselves while a
+        // pass owns the dial is them taking it back (`sat_mode_released`): we
+        // stop having an opinion for the rest of the pass rather than
+        // re-asserting over their choice on every later correction.
+        let mut p = SatPass::new(true);
+        p.pick("RS-44|linear", RS44, SSB_BIRD);
+        assert_eq!(
+            split_modes(&p.log),
+            vec!["LSB".to_string()],
+            "scene: the pass owns the uplink mode"
+        );
+
+        p.engine
+            .lock()
+            .unwrap()
+            .request_sideband_override(Some("USB"));
+        for n in 1..=3u64 {
+            p.correct(-5.0 + n as f64, 1_000_000 + n * 3_000);
+        }
+
+        assert_eq!(
+            split_modes(&p.log),
+            vec!["LSB".to_string()],
+            "the operator picked a mode by hand — stand down, and never restore: {:?}",
+            split_verbs(&p.log)
         );
     }
 

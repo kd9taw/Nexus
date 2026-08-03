@@ -304,9 +304,12 @@ describe('the uplink sideband display', () => {
     expect(tx?.getAttribute('title')).toMatch(/TX/i)
   })
 
-  it('claims nothing when the legs share a mode — nothing is commanded', async () => {
-    // The engine says nothing (txMode null on the wire — same-mode legs), and
-    // the record agrees: no claim anywhere.
+  it('claims nothing when the engine commands nothing', async () => {
+    // The engine says nothing (txMode null on the wire — no uplink leg it
+    // owns), and the record's legs match: no claim anywhere. Matching legs are
+    // NOT themselves a reason for null — the transmit VFO carries its own mode,
+    // so the engine states it either way — which is why this drives the DTO
+    // value directly rather than inferring it from the record.
     api.getSatTrackStatus.mockImplementation(() => Promise.resolve(liveStatus({ txMode: null })))
     const d = detail()
     d.transmitters[2] = { ...d.transmitters[2], uplinkMode: 'USB', downlinkMode: 'USB' }

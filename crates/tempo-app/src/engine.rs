@@ -7826,10 +7826,27 @@ impl Engine {
     ///   all; a mode command onto a VFO we never tuned would be moving a radio
     ///   nobody handed us;
     /// - the operator has not taken the mode back
-    ///   ([`Engine::request_sideband_override`]);
-    /// - and the two legs actually DIFFER. An FM bird is FM both ways and a
-    ///   non-inverting linear is the same sideband both ways: there is nothing
-    ///   to command, and a CAT write that changes nothing can only lose.
+    ///   ([`Engine::request_sideband_override`]).
+    ///
+    /// ⚠️ AND NOT "the two legs DIFFER". That test shipped here and silenced
+    /// every bird whose legs want ONE mode — KD9TAW's AO-123 pass, a V/U FM
+    /// transceiver: 435 was commanded FM, 145 kept the LSB an earlier linear
+    /// bird had left on the transmit VFO. Nexus was not commanding LSB, it was
+    /// commanding NOTHING. It cost the non-inverting linears too; only an
+    /// inverting SSB bird was ever written. The assumption underneath it —
+    /// that the transmit VFO INHERITS the receive VFO's mode — is false on the
+    /// radios this drives: a 9700 in satellite mode carries independent modes
+    /// on Main and Sub, as do VFO A/B on modern rigs generally. "Both legs
+    /// want FM" is not "nothing to say"; it is "say FM to the other VFO too".
+    /// Not writing a mode that changes nothing is the LOOP's job, one layer
+    /// down, and it already does it (`last_split_mode`) — from the ANSWER's
+    /// history, which is the only place that knows.
+    ///
+    /// The answer is always drawn from [`Self::rig_mode_effective`]'s own
+    /// vocabulary ([`tempo_core::doppler::uplink_mode_for`] mirrors USB↔LSB and
+    /// passes everything else through, and both sidebands are already in it),
+    /// so the split-mode verb can never carry a token the dial's mode verb
+    /// does not already command every pass.
     ///
     /// Nothing is "restored" when the pass ends — the answer simply becomes
     /// `None` and the loop stops writing, which is exactly what releasing the
@@ -7848,8 +7865,10 @@ impl Engine {
         // read from the one write-side canon rather than a second guess at it,
         // so the two legs can never be derived from different beliefs.
         let down = self.rig_mode_effective();
-        let up = tempo_core::doppler::uplink_mode_for(&down, st.transponder.invert);
-        (!up.eq_ignore_ascii_case(&down)).then_some(up)
+        Some(tempo_core::doppler::uplink_mode_for(
+            &down,
+            st.transponder.invert,
+        ))
     }
 
     /// [`Engine::sat_tx_mode`], answered only for the split apply that carries
@@ -21940,13 +21959,21 @@ mod tests {
         // and commanding it on the dial would deafen the operator.
         assert_eq!(e.rig_mode_effective(), "USB");
 
-        // A NON-inverting linear bird is the same sideband both ways, so there
-        // is nothing to command — and a CAT write that changes nothing can only
-        // lose (it fights a front-panel change and burns a slot on the bus).
+        // A NON-inverting linear bird is the same sideband both ways — which is
+        // still an ANSWER, not silence. This asserted `None` until KD9TAW's
+        // AO-123 pass: the transmit VFO does not inherit the receive VFO's
+        // mode, so "both legs want USB" has to be SAID to the transmit VFO or
+        // it keeps whatever the last bird left there. Writing nothing when the
+        // answer has not changed is the radio loop's job (`last_split_mode`),
+        // one layer down, and only it has the history to know.
         let mut straight = tp;
         straight.invert = false;
         e.set_sat_transponder(Some(("FO-29|linear".into(), 0, straight)));
-        assert_eq!(e.sat_tx_mode(), None, "non-inverting ⇒ same mode both legs");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("USB"),
+            "non-inverting ⇒ the SAME sideband, stated for the transmit leg"
+        );
 
         // Releasing the transponder (transponder cleared, or LOS) says nothing
         // further — exactly like the dial, which is handed back rather than
@@ -22093,13 +22120,52 @@ mod tests {
             None,
             "only the exact sent uplink is the satellite's split"
         );
+
+        // …AND THE SAME GUARD NOW CARRIES THE WHOLE LOAD. It used to be the
+        // second of two: an FM bird (or a non-inverting linear) answered
+        // `None` from `sat_tx_mode` anyway, so a pile-up worked under one of
+        // those could not inherit anything even if this check were wrong. Now
+        // every held bird answers, and this identity check is the only thing
+        // standing between an FM satellite hold and an FM carrier commanded
+        // onto a 20 m SSB pile-up's transmit VFO.
+        let fm = tempo_core::doppler::Transponder {
+            invert: false,
+            half_width_hz: 0,
+            ..tp
+        };
+        e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, fm)));
+        {
+            let mut s = e.settings().clone();
+            s.phone_mode = "fm".to_string();
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("FM"),
+            "precondition: the FM hold DOES answer now"
+        );
+        let c = e
+            .sat_doppler_tick(-3.0, 20_000, false)
+            .expect("the FM bird's uplink is driven too");
+        let up = c.uplink_hz.expect("the mapping drives the uplink");
+        assert_eq!(e.sat_tx_mode_for_split(up).as_deref(), Some("FM"));
+        assert_eq!(
+            e.sat_tx_mode_for_split(14_235_000),
+            None,
+            "an FM bird held while a 20 m pile-up is worked must never put FM on the \
+             pile-up's transmit VFO"
+        );
     }
 
     #[test]
-    fn an_fm_bird_is_the_same_mode_both_ways_so_nothing_is_commanded() {
-        // FM repeaters (the AO-91/SO-50 majority) are FM up and FM down. There
-        // is no sideband to mirror, so there is nothing to say — and saying it
-        // anyway would be a CAT write per pass that can only go wrong.
+    fn an_fm_bird_states_fm_on_both_legs() {
+        // FM repeaters (the AO-91/SO-50 majority, and KD9TAW's AO-123) are FM
+        // up and FM down. This asserted `None` — "no sideband to mirror, so
+        // nothing to say" — and that is the defect the AO-123 pass reported:
+        // the transmit VFO carries its own mode, so an uplink nobody speaks to
+        // keeps the LSB the previous linear bird left in it, and an SSB carrier
+        // in an FM satellite's input is silence at the far end plus
+        // interference to everyone else in the pass.
         let (mut e, tp) = sat_mode_engine(false, 145_990_000);
         {
             let mut s = e.settings().clone();
@@ -22113,13 +22179,80 @@ mod tests {
             ..tp
         };
         e.set_sat_transponder(Some(("AO-91|FM".into(), 0, fm)));
-        assert_eq!(e.sat_tx_mode(), None, "FM both legs ⇒ untouched");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("FM"),
+            "FM both legs ⇒ FM is STATED for the transmit leg, not withheld"
+        );
 
         // Even if a record claimed inversion, FM has no sideband to swap: the
-        // answer is still "nothing to command", never a guess.
+        // answer is FM, never a guessed sideband.
         let fm_inv = tempo_core::doppler::Transponder { invert: true, ..fm };
         e.set_sat_transponder(Some(("AO-91|FM".into(), 0, fm_inv)));
-        assert_eq!(e.sat_tx_mode(), None, "FM has no sideband to mirror");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("FM"),
+            "FM has no sideband to mirror — an inverting record cannot make one up"
+        );
+    }
+
+    #[test]
+    fn the_uplink_mode_never_leaves_the_vocabulary_the_dial_is_commanded_from() {
+        // Widening WHEN the uplink has an answer must not widen WHAT it can
+        // say. The split-mode verb ends at a closed mode set in the CAT
+        // backends, and a token outside it burns the loop's one bounded attempt
+        // on a rejection. Nothing here can invent one: the answer is
+        // `rig_mode_effective` passed through `uplink_mode_for`, which mirrors
+        // USB↔LSB and returns everything else unchanged — and both sidebands
+        // are already in that same range. So whatever the transmit VFO is told
+        // is a token the DIAL is told on some pass anyway.
+        //
+        // Every section, both transponder senses, because the section decides
+        // the FORM (a DATA submode, the rig's CW/RTTY mode) and the bird
+        // decides the SIDE — and it is the product of the two that reaches the
+        // wire.
+        use crate::settings::OperatingMode;
+        for section in [
+            OperatingMode::Phone,
+            OperatingMode::Cw,
+            OperatingMode::Rtty,
+            OperatingMode::Digital,
+        ] {
+            for invert in [false, true] {
+                let (mut e, tp) = sat_mode_engine(invert, 145_965_000);
+                {
+                    let mut s = e.settings().clone();
+                    s.operating_mode = section;
+                    e.apply_settings(s);
+                }
+                e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
+                let up = e
+                    .sat_tx_mode()
+                    .expect("a held, consented uplink always has a mode to state");
+                // The dial's OWN range for this section: the two sideband sides
+                // it can be commanded on, which is every token it produces
+                // short of the FM arm (asked separately below).
+                let dial_range = [
+                    e.settings.rig_mode_on_sideband(false),
+                    e.settings.rig_mode_on_sideband(true),
+                ];
+                assert!(
+                    dial_range.contains(&up),
+                    "{section:?} invert={invert}: the uplink was told {up:?}, which the dial \
+                     is never commanded ({dial_range:?}) — a token the mode plumbing has \
+                     never had to handle"
+                );
+            }
+        }
+
+        // …and the FM arm, the one class that is not a side.
+        let (mut e, tp) = sat_mode_engine(false, 145_990_000);
+        let fm = tempo_core::doppler::Transponder {
+            half_width_hz: 0,
+            ..tp
+        };
+        e.set_sat_transponder(Some(("AO-91|FM".into(), 0, fm)));
+        assert_eq!(e.sat_tx_mode(), Some(e.rig_mode_effective()));
     }
 
     // ===================== tune-on-pick (the S.A.T.-box behaviour) =====================
