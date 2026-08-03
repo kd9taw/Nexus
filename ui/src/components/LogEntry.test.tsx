@@ -256,6 +256,29 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
     expect(rec.mode).toBe('FM')
   })
 
+  it('states what will be logged without an empty slot when the dial has no band', () => {
+    // `bandplan::band_for_dial` stops at 23 cm, so QO-100 (10.489 GHz) and the
+    // IC-905 microwave birds arrive with band === '' — and the satellite path
+    // now TUNES them rather than refusing, which is what makes this reachable.
+    // Printing the slot anyway read "as SSB ·  · 10489.550 MHz": a separator
+    // with a hole in it. The frequency is the truth either way.
+    const noBand = {
+      radio: { band: '', dialMhz: 10489.55 },
+      hunt: null,
+    } as unknown as AppSnapshot
+    render(<LogEntry snap={noBand} mode="SSB" defaultRst="59" fieldDay={null} fdMode={undefined} />)
+    const hint = screen.getByText(/Logs to the shared logbook/).textContent ?? ''
+    expect(hint).toContain('as SSB · 10489.550 MHz')
+    expect(hint).not.toMatch(/·\s+·/)
+
+    // …and a dial the plan CAN name still names it.
+    cleanup()
+    renderStd()
+    expect(screen.getByText(/Logs to the shared logbook/).textContent).toContain(
+      'as SSB · 20m · 14.200 MHz',
+    )
+  })
+
   it('offers no USB/LSB in the mode picker — those are ADIF submodes TQSL rejects as a MODE', () => {
     renderStd()
     fireEvent.click(overrideToggle())

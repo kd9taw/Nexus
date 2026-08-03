@@ -44,6 +44,20 @@ Arm an alarm on a pass and Nexus reminds you before AOS so you don't miss it.
 [DXpedition wake-me alarm](dxpeditions.md#set-a-wake-me-alarm) — the same alarm
 machinery.)
 
+### Tune around the passband — and get back on the bird
+
+Working a linear bird means chasing a station across the transponder, so turn
+the VFO and Nexus follows: it takes your new dial as your position in the
+passband and moves your uplink to match (mirrored, if the transponder inverts).
+Doppler keeps correcting around wherever you put yourself.
+
+Tune *outside* the passband and that stops — you've left the transponder as far
+as Nexus can tell, which is the right call, because the alternative is dragging
+somebody's uplink to a passband edge because they QSY'd to 20 m. **Lock on**, in
+the Doppler readout, puts you back: it re-runs the transponder pick you already
+made, so the radio, the band and the mode all come with it, and you land in the
+middle of the passband again.
+
 ### Auto-track with a rotator
 
 1. Configure your rotator in

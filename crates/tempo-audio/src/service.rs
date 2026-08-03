@@ -6262,6 +6262,12 @@ mod tests {
     use super::*;
     use crate::backend::MockBackend;
 
+    /// What `sat_tune_nominal` is told the bird needs the radio to be in —
+    /// named for the same reason the engine's tests name them: the argument's
+    /// MEANING ("a linear bird", "an FM bird") is what these scenes are about.
+    const SSB_BIRD: tempo_core::doppler::DownlinkClass = tempo_core::doppler::DownlinkClass::Usb;
+    const FM_BIRD: tempo_core::doppler::DownlinkClass = tempo_core::doppler::DownlinkClass::Fm;
+
     /// Display-liveliness round 2: the fast STRENGTH read is DECIMATED against the dial —
     /// every other dial interval, never the dial's own cadence. At 1:1 the added reads
     /// doubled the healthy-link CAT tick rate (with `feed_rx_audio` queued behind those
@@ -9061,7 +9067,7 @@ mod tests {
             eng.apply_settings(s);
             eng.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::MainDownSubUp));
             eng.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
-            eng.sat_tune_nominal(false, 1_000_000);
+            eng.sat_tune_nominal(SSB_BIRD, 1_000_000);
         }
         engine
     }
@@ -9869,6 +9875,231 @@ mod tests {
                     .and_then(|h| h.trim().parse::<u64>().ok())
             })
             .collect()
+    }
+
+    /// Mode TOKENS the rig was commanded, in order — the `M <mode> <pbw>` verb
+    /// with its passband dropped. One wire for both backends: `Rig::set_mode`
+    /// always speaks the rigctld line protocol, and native CI-V serves that
+    /// same protocol in-process (`rigctld_server` → `CivBackend::set_mode` →
+    /// CI-V `0x06`), so what lands here is what lands on the operator's bus.
+    fn commanded_modes(log: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|c| {
+                c.strip_prefix("M ")
+                    .and_then(|m| m.split_whitespace().next())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    // ---- "the modes don't change when I move to each bird; it stays in FM" ----
+    //
+    // KD9TAW, live pass, IC-9700 on native CI-V. Picking an FM bird and then a
+    // linear one left the radio in FM on the linear transponder — which is
+    // silence. Driven through the REAL loop against a recording rigctld,
+    // because the question is what reaches the RIG: the engine-level satellite
+    // tests all pass, and the mode they assert is not the one the loop commands.
+
+    /// SO-50's FM repeater — 70 cm down, 2 m up. The bird every operator picks
+    /// first, and the one that leaves the rig in FM.
+    const SO50: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 145_850_000,
+        downlink_centre_hz: 436_795_000,
+        invert: false,
+        half_width_hz: 0,
+    };
+
+    /// RS-44's inverting LINEAR transponder — 70 cm down, 2 m up. Same 70 cm
+    /// band as SO-50, which is exactly why nothing incidental clears the FM.
+    const RS44: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 145_965_000,
+        downlink_centre_hz: 435_640_000,
+        invert: true,
+        half_width_hz: 30_000,
+    };
+
+    #[test]
+    fn picking_a_linear_bird_after_an_fm_one_takes_the_rig_out_of_fm() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = lagging_rigctld_stub(0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+
+        // THE STATION STATE THAT MAKES THIS REPRODUCE, and it is an ordinary
+        // one: Phone section with `phone_mode` = "fm". That field is
+        // station-wide, `Engine::repeater_tune` WRITES it, and nothing — not a
+        // band change, not a radio switch — ever resets it. One repeater worked
+        // earlier in the day is enough.
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.operating_mode = tempo_app::settings::OperatingMode::Phone;
+            s.phone_mode = "fm".into();
+            e.apply_settings(s);
+        }
+
+        // 1 — SO-50. An FM bird belongs in FM, and always did.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, SO50)));
+            e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        }
+        run(&mut state, &mut rig, &mut backend, 3, &mut tick);
+        assert!(
+            commanded_freqs(&log).contains(&436_795_000),
+            "scene: the FM bird's downlink reached the rig: {:?}",
+            commanded_freqs(&log)
+        );
+        assert_eq!(
+            commanded_modes(&log).last().map(String::as_str),
+            Some("FM"),
+            "scene: an FM bird is commanded FM — unchanged, and it must stay that way: {:?}",
+            commanded_modes(&log)
+        );
+
+        // 2 — RS-44, the SAME 70 cm band. A linear passband demodulated as FM
+        // is silence, so the mode has to follow the transponder here exactly as
+        // it followed it into FM above.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(SSB_BIRD, 2_000_000);
+        }
+        run(&mut state, &mut rig, &mut backend, 3, &mut tick);
+        assert!(
+            commanded_freqs(&log).contains(&435_640_000),
+            "the linear bird's downlink reached the rig: {:?}",
+            commanded_freqs(&log)
+        );
+        let modes = commanded_modes(&log);
+        assert_eq!(
+            modes.last().map(String::as_str),
+            Some("USB"),
+            "the transponder switch must put the rig BACK on the linear path — this is the \
+             operator's report: it stayed in FM: {modes:?}"
+        );
+
+        // …AND IT MUST STAY. The steady-state arm only writes on a CHANGE, so a
+        // mode that is re-asserted from the section policy on a later iteration
+        // would look correct for one tick and then revert — the section-follow
+        // failure class.
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+        let modes = commanded_modes(&log);
+        assert_eq!(
+            modes.last().map(String::as_str),
+            Some("USB"),
+            "nothing may re-assert FM after the pick: {modes:?}"
+        );
+        assert_eq!(
+            engine.lock().unwrap().rig_mode_effective(),
+            "USB",
+            "and the engine's write-side canon agrees"
+        );
+    }
+
+    #[test]
+    fn a_stale_cockpit_fm_pick_does_not_outrank_the_next_transponder() {
+        // The SECOND route into "it's staying in FM", and it survives longer
+        // than the first: the Phone cockpit's mode picker sets
+        // `sideband_override`, which `tune_dial` drops only on a BAND CHANGE.
+        // SO-50 → RS-44 is one 70 cm band, so an FM chosen by hand for the
+        // repeater bird would otherwise outrank every linear pick for the rest
+        // of the session.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = lagging_rigctld_stub(0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.operating_mode = tempo_app::settings::OperatingMode::Phone;
+            e.apply_settings(s);
+            e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, SO50)));
+            e.sat_tune_nominal(FM_BIRD, 1_000_000);
+            // The operator reaches for the cockpit's mode button during the
+            // FM pass. Their choice, and it stands — for THIS bird.
+            e.request_sideband_override(Some("FM"));
+        }
+        for _ in 0..3 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            commanded_modes(&log).last().map(String::as_str),
+            Some("FM"),
+            "scene: the hand-picked FM is what the rig is on"
+        );
+
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(SSB_BIRD, 2_000_000);
+        }
+        for _ in 0..6 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        let modes = commanded_modes(&log);
+        assert_eq!(
+            modes.last().map(String::as_str),
+            Some("USB"),
+            "a new transponder pick re-asserts the BIRD's mode over a mode picked for the \
+             previous one: {modes:?}"
+        );
     }
 
     #[test]

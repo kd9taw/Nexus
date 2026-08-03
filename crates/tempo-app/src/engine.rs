@@ -1509,23 +1509,35 @@ pub struct Engine {
     /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
     /// applies to Phone-FM, so a knob-QSY down to HF can never leave FM forced.
     fm_channel: bool,
-    /// The held transponder is an FM BIRD, so the rig belongs in FM (session-only,
-    /// never persisted). Set by [`Engine::sat_tune_nominal`] on the leg it actually
-    /// writes; makes `rig_mode_effective` command FM and `route_mode` answer Fm,
-    /// for the reason the terrestrial APRS tune already carries — a 2 m packet or
-    /// FM-repeater signal demodulated as USB is garbled audio, and the Satellites
-    /// section is not a Phone/Digital operating section, so it cannot ride the
-    /// Phone-FM override.
+    /// What the HELD transponder needs the rig to be in (session-only, never
+    /// persisted). Set by [`Engine::sat_tune_nominal`] on the leg it actually
+    /// writes; makes `rig_mode_effective` command that mode and `route_mode`
+    /// answer Fm for an FM bird — for the reason the terrestrial APRS tune
+    /// already carries: the Satellites section is not a Phone/Digital operating
+    /// section, so a pick cannot ride the Phone-mode override, and the mode a
+    /// bird needs is a property of the BIRD, not of the section the operator
+    /// happened to arrive from.
     ///
-    /// Forces SIMPLEX plumbing like `aprs_fm`, and that is the load-bearing half:
-    /// a satellite has NO repeater shift (an FM bird's uplink is its own dial or
-    /// the split), so inheriting the operator's last machine's shift and tone
-    /// would transmit off-frequency.
+    /// ⭐ IT USED TO BE A BARE `sat_fm: bool`, AND THAT ASYMMETRY WAS THE BUG
+    /// (operator report, live pass): an FM bird could FORCE FM, and a
+    /// linear/CW bird could force nothing. So the moment a linear bird was
+    /// picked the commanded mode fell back to the terrestrial section policy —
+    /// and on a station whose `phone_mode` is "fm" (station-wide, written by
+    /// `repeater_tune`, reset by nothing) that policy is FM. Picking RS-44
+    /// after SO-50 left the rig in FM on a linear transponder, which is
+    /// silence. An `Option` makes both halves the same shape: present = a pass
+    /// owns the mode and here is what it must be; absent = nobody is holding
+    /// one.
     ///
-    /// Cleared by every QSY, section change and radio switch, exactly like the two
-    /// flags above, and read behind the same 29 MHz gate — so it can never leave
-    /// FM forced after the operator has gone elsewhere.
-    sat_fm: bool,
+    /// [`DownlinkClass::Fm`] additionally forces SIMPLEX plumbing like
+    /// `aprs_fm`, and that is load-bearing: a satellite has NO repeater shift
+    /// (an FM bird's uplink is its own dial or the split), so inheriting the
+    /// operator's last machine's shift and tone would transmit off-frequency.
+    ///
+    /// Cleared by every QSY, section change and radio switch, exactly like the
+    /// two flags above, and read behind the same 29 MHz gate — so it can never
+    /// leave a VHF/UHF mode forced after the operator has gone down to HF.
+    sat_mode: Option<tempo_core::doppler::DownlinkClass>,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
     /// The operator explicitly STOPPED the SSTV receiver this session, so opening
@@ -2800,7 +2812,7 @@ impl Engine {
             aprs_msg_seq: 0,
             aprs_fm: false,
             fm_channel: false,
-            sat_fm: false,
+            sat_mode: None,
             sstv_armed: false,
             sstv_auto_arm_declined: false,
             sstv_health: SstvHealth::default(),
@@ -3276,7 +3288,7 @@ impl Engine {
         // this clears the flag outright so it never lingers pointed at a different radio.
         self.aprs_fm = false;
         self.fm_channel = false;
-        self.sat_fm = false;
+        self.sat_mode = None;
         // Frequency coverage belongs to the RADIO, so it must not survive the switch. Dropping it to
         // "unknown" makes the window before the loop re-probes fail OPEN; keeping the old radio's
         // list would let an HF-only rig's ranges block a QSY on the VHF radio that just became
@@ -3552,7 +3564,7 @@ impl Engine {
         // hold (sat_tune_nominal, likewise).
         self.aprs_fm = false;
         self.fm_channel = false;
-        self.sat_fm = false;
+        self.sat_mode = None;
         // Band change invalidates the decode context: answering a HISTORY row from
         // the old band would target a station that isn't here and derive parity
         // from the old band's slots. The heard-stations roster goes with it —
@@ -4132,7 +4144,7 @@ impl Engine {
         // and satellite FM-bird holds with it — that section's own mode policy takes over here.
         self.aprs_fm = false;
         self.fm_channel = false;
-        self.sat_fm = false;
+        self.sat_mode = None;
         let om = match mode.to_ascii_lowercase().as_str() {
             "phone" => OperatingMode::Phone,
             "cw" => OperatingMode::Cw,
@@ -4362,6 +4374,39 @@ impl Engine {
         self.immediate_retune = true;
     }
 
+    /// Is the held transponder an FM bird? The FM half of `sat_mode`, asked as
+    /// a question so the routing class, the FM plumbing and the dial-provenance
+    /// test all read ONE piece of state (they were three reads of a `sat_fm`
+    /// bool that no longer exists).
+    fn sat_fm(&self) -> bool {
+        self.sat_mode.is_some_and(|c| c.is_fm())
+    }
+
+    /// The LINEAR half of `sat_mode` — the sideband a held transponder needs the
+    /// rig to be in. `None` for an FM bird (the FM arm answers first), and
+    /// `None` once the hold is GONE.
+    ///
+    /// ⚠️ The hold is part of the question here, and deliberately is NOT part of
+    /// it for [`Self::sat_fm`]. That asymmetry is the whole point:
+    ///
+    /// - An FM hold outlives its bird on purpose. `set_sat_transponder(None)`
+    ///   (LOS handback) and a knob QSY (`observe_rig_freq`) both leave it armed,
+    ///   because FM is the CHANNEL mode of VHF/UHF: an operator who hands SO-50
+    ///   back and spins the knob lands on another FM channel far more often than
+    ///   not, and being wrong there is the garbled-audio failure this whole arm
+    ///   exists to prevent. Only the 29 MHz gate ends it, so a QSY down to HF
+    ///   can never leave FM forced.
+    /// - A linear passband is not a neighbourhood — it is a 30 kHz slice on one
+    ///   bird. Off the bird nothing about the class survives, and the 29 MHz gate
+    ///   is no protection at all: a released RS-44 hold forcing USB onto 146.520
+    ///   is the exact mirror of the operator's report, one band up.
+    ///
+    /// So the FM hold ends with the DIAL and the linear hold ends with the BIRD.
+    fn sat_linear_mode(&self) -> Option<tempo_core::doppler::DownlinkClass> {
+        self.sat_tune.as_ref()?;
+        self.sat_mode.filter(|c| !c.is_fm())
+    }
+
     /// The mode the radio loop should COMMAND: the operator's transient Phone override when set,
     /// else the band-derived policy (`settings.rig_mode`). Write-side canon for the rig `M` verb.
     pub fn rig_mode_effective(&self) -> String {
@@ -4379,14 +4424,6 @@ impl Engine {
         // be on 10 m through 23 cm, and 29 MHz is the line below which FM isn't used — the same
         // threshold `Settings::rig_mode` applies to Phone-FM, so the two can't disagree.
         if self.fm_channel && self.settings.dial_mhz >= 29.0 {
-            return "FM".to_string();
-        }
-        // An FM BIRD parks the rig in FM for the same reason APRS does: SO-50 and
-        // the 145.825 packet digipeaters are FM channels, and a packet or FM-voice
-        // downlink demodulated as USB is garbled audio. Same 29 MHz gate as the
-        // FM-channel arm above, and every satellite downlink clears it — the gate
-        // is there so a knob-QSY down to HF can never leave FM forced.
-        if self.sat_fm && self.settings.dial_mhz >= 29.0 {
             return "FM".to_string();
         }
         if self.settings.operating_mode == crate::settings::OperatingMode::Phone {
@@ -4418,6 +4455,54 @@ impl Engine {
                 return m.clone();
             }
         }
+        // ⭐ THE SYMMETRIC HALF OF THE FM-BIRD ARM ABOVE, and the operator's
+        // "the mode doesn't change when I move to another bird; it stays in
+        // FM". A LINEAR transponder also has a mode the rig must be in, and
+        // until this arm existed nothing asserted it: the FM arm could FORCE
+        // FM, and a linear/CW/beacon bird could force nothing, so the commanded
+        // mode fell through to the TERRESTRIAL section policy. For a station
+        // whose station-wide `phone_mode` is "fm" — which `repeater_tune`
+        // writes and no band change resets — that policy answers FM at any
+        // dial ≥29 MHz. SO-50 then RS-44 is one 70 cm band, so nothing even
+        // cleared it: the rig sat in FM on a linear passband, which is silence.
+        //
+        // The BIRD names the side; the SECTION names the form. Neither
+        // overrides the other's job, which is why this is not a bare "return
+        // USB": working a bird in the Digital section still commands the DATA
+        // submode (FT8 through a GEO transponder is real, and plain USB there
+        // radiates zero RF on a normally-wired rig), CW still commands CW.
+        // What the bird decides is FM-vs-linear and WHICH SIDEBAND — the one
+        // thing the terrestrial band convention cannot know, and the thing an
+        // inverting transponder's uplink is mirrored from.
+        //
+        // ⭐ THE SATELLITE HOLDS — BOTH classes, and BELOW the two Phone arms on
+        // purpose. An SSTV transmission and an explicit cockpit mode pick are
+        // the operator's own current action, and this app can be wrong about a
+        // bird: the transponder record comes from SatNOGS, its mode vocabulary
+        // is open and crowd-maintained, and a bird can be worked in a mode
+        // nobody wrote down. So a hand pick made DURING a pass wins for the rest
+        // of it, in both directions — which is also the discipline the UPLINK
+        // side already follows (`request_sideband_override` sets
+        // `sat_mode_released`, and `sat_tx_mode` then stands down rather than
+        // re-asserting a swap over the operator's choice). Picking a
+        // transponder clears the override, so a fresh bird always re-asserts.
+        //
+        // Same 29 MHz gate as the two holds above, for the same reason: a
+        // knob-QSY down to HF must never leave a VHF/UHF mode forced. The two
+        // classes differ only in how they END — see `sat_linear_mode`.
+        if self.settings.dial_mhz >= 29.0 {
+            // An FM BIRD parks the rig in FM for the reason APRS does: SO-50
+            // and the 145.825 packet digipeaters are FM channels, and a packet
+            // or FM-voice downlink demodulated as USB is garbled audio.
+            if self.sat_fm() {
+                return "FM".to_string();
+            }
+            if let Some(class) = self.sat_linear_mode() {
+                return self
+                    .settings
+                    .rig_mode_on_sideband(class == tempo_core::doppler::DownlinkClass::Lsb);
+            }
+        }
         self.settings.rig_mode()
     }
 
@@ -4429,6 +4514,12 @@ impl Engine {
     /// disagree with the mode that radio is then put in. In particular both FM gates are mirrored:
     /// APRS-FM only counts on 2 m, and Phone-FM only at/above 29 MHz (below it FM isn't used, and
     /// `phone_mode` is one station-wide field that nothing resets on a band change).
+    ///
+    /// The LINEAR satellite hold (`sat_linear_mode`) has no mirror here, and needs none: this is
+    /// asked only from inside `tune_dial`, which clears the hold on the next lines — so by the
+    /// time the routed rig is commanded a mode, the hold this would have answered for is gone.
+    /// A mirror would instead route a repeater click made DURING a pass on SSB, which is the
+    /// disagreement the invariant is about, pointing the other way.
     pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
         use crate::settings::{OperatingMode, RouteMode};
         if self.aprs_fm && band.eq_ignore_ascii_case("2m") {
@@ -4442,7 +4533,7 @@ impl Engine {
         // …and the `sat_fm` arm, for the same invariant: a rig held on an FM bird routes on FM.
         // (The satellite pick names its class explicitly via `route_intent`, so this arm answers
         // for the QSYs that follow it rather than for the pick itself.)
-        if self.sat_fm && dial_mhz >= 29.0 {
+        if self.sat_fm() && dial_mhz >= 29.0 {
             return RouteMode::Fm;
         }
         match self.settings.operating_mode {
@@ -4501,7 +4592,7 @@ impl Engine {
             .is_some_and(|p| p.eq_ignore_ascii_case(band))
             || (self.aprs_fm && band.eq_ignore_ascii_case("2m"))
             || (self.fm_channel && dial_mhz >= 29.0)
-            || (self.sat_fm && dial_mhz >= 29.0)
+            || (self.sat_fm() && dial_mhz >= 29.0)
     }
 
     /// Where a given (band, mode class) WOULD route right now — the Settings "test" affordance, so
@@ -4527,7 +4618,7 @@ impl Engine {
     /// it shares with the downlink (simplex) — so a stale terrestrial shift would key it somewhere
     /// the operator never chose.
     pub fn fm_repeater_config(&self) -> (String, i64, f32) {
-        if self.aprs_fm || self.sat_fm {
+        if self.aprs_fm || self.sat_fm() {
             ("simplex".to_string(), 0, 0.0)
         } else {
             (
@@ -7123,30 +7214,53 @@ impl Engine {
     /// only the radio stays put — and the reason is returned (and stored) for
     /// the rail rather than swallowed.
     ///
-    /// `fm` = this transponder is an FM bird, from the SatNOGS record the caller
-    /// already parsed (`satnogs::Transmitter::is_fm`, over the one mode map in
-    /// [`tempo_core::doppler::mode_is_fm`]). It decides two
-    /// things, from that single answer so they cannot disagree:
+    /// `class` = what this transponder needs the RADIO to be in, classified by
+    /// the caller from the SatNOGS record
+    /// (`satnogs::Transmitter::downlink_class`, over the one mode map in
+    /// [`tempo_core::doppler::downlink_class`]). A CLASS and not a mode string:
+    /// the satellite vocabulary is open and the rig's mode verb is closed, so
+    /// no raw SatNOGS name may ever reach `set_mode`. It decides two things,
+    /// from that single answer so they cannot disagree:
     ///
     /// - the routing CLASS ([`RouteMode::Fm`] vs [`RouteMode::Ssb`]), which is
     ///   what lets one band reach two rigs;
-    /// - the mode the rig is COMMANDED into, via `sat_fm` — FM for an FM bird,
-    ///   USB otherwise. That is a correctness gate, not a preference: a packet
-    ///   or FM-voice downlink demodulated as USB is garbled audio, exactly as
-    ///   it is for terrestrial APRS.
+    /// - the mode the rig is COMMANDED into, via `sat_mode`. That is a
+    ///   correctness gate, not a preference, in BOTH directions: a packet or
+    ///   FM-voice downlink demodulated as USB is garbled audio exactly as it is
+    ///   for terrestrial APRS — and a linear passband demodulated as FM is
+    ///   silence, which is the shape the operator actually reported.
     ///
-    /// The FM hold forces SIMPLEX plumbing (`fm_repeater_config`), because a
+    /// An FM class forces SIMPLEX plumbing (`fm_repeater_config`), because a
     /// satellite has no repeater shift — an FM bird's uplink is the split dial
     /// written below, or on a simplex channel the same dial as the downlink —
     /// so inheriting a stale `rptr_shift` would transmit it off-frequency.
     ///
+    /// # A dial this app cannot NAME is still tuned
+    ///
+    /// [`crate::bandplan::band_for_dial`] stops at 23 cm, so QO-100 (10.489
+    /// GHz) and the IC-905 microwave birds have no band label. That used to be
+    /// a REFUSAL — the app declining a legal, physically possible tune because
+    /// its own lookup table was incomplete, on an operator with no privilege
+    /// restriction at all. The band is for ROUTING and LABELLING, never for
+    /// permission, so an unnameable dial now tunes and the band travels as
+    /// `None`: routing asks the tiers that never read a band and skips the ones
+    /// that do, rather than matching everything against an empty string, and
+    /// the rail prints the reason without a band chip.
+    /// The privilege gate is untouched and is somewhere else entirely
+    /// (`emission_allowed`, on the transmit path) — an Open-class operator has
+    /// no restriction, a Technician is still gated exactly as before.
+    ///
     /// `now_ms` stamps the seed described below; pass the same clock the track
     /// loop feeds [`Self::sat_doppler_tick`].
-    pub fn sat_tune_nominal(&mut self, fm: bool, now_ms: u64) -> SatBinding {
-        // `simplex: false` here is not a claim about the bird: these refusals
-        // return before any transponder shape was consulted (no hold at all) or
-        // before routing resolved anything (a band-plan miss), and the UI prints
-        // the reason alone for both.
+    pub fn sat_tune_nominal(
+        &mut self,
+        class: tempo_core::doppler::DownlinkClass,
+        now_ms: u64,
+    ) -> SatBinding {
+        let fm = class.is_fm();
+        // `simplex: false` here is not a claim about the bird: this refusal
+        // returns before any transponder shape was consulted (there is no hold
+        // at all), and the UI prints the reason alone.
         let refuse = |note: &str| SatBinding {
             radio_id: None,
             radio_name: String::new(),
@@ -7170,13 +7284,19 @@ impl Engine {
         let (t, state) = (st.transponder, st.state);
         let want = tempo_core::doppler::tuning(&t, state, 0.0);
         let down_mhz = want.downlink_hz as f64 / 1_000_000.0;
-        let Some(band) = crate::bandplan::band_for_dial(down_mhz) else {
-            let b = refuse(&format!(
-                "{down_mhz:.4} MHz is outside the band plan — the dial is yours."
-            ));
-            self.sat_binding = Some(b.clone());
-            return b;
-        };
+        // ABSENT, never guessed. `band_for_dial` stops at 23 cm, so QO-100 and
+        // the microwave birds simply have no label here. `None` travels; an
+        // empty string must NOT stand in for it, because `RoutingRule::matches`
+        // and `radio_for_band` both treat an empty band-list as a CATCH-ALL and
+        // would happily match "" — routing a 10 GHz bird to whichever rig owns
+        // "everything else" is precisely the wrong guess this refuses to make.
+        //
+        // ⚠️ AND NOT BY GROWING THE TABLE. `ab_cross_band_refusal` reads
+        // `band_for_dial` on BOTH legs and fails CLOSED above the ceiling by
+        // design (0.27.0) — extending the table would let a same-band 10 GHz
+        // pass resolve and STOP that shipped refusal firing. The fix is for the
+        // tune not to DEPEND on a name.
+        let band = crate::bandplan::band_for_dial(down_mhz);
         let route_mode = if fm {
             crate::settings::RouteMode::Fm
         } else {
@@ -7201,10 +7321,24 @@ impl Engine {
         // made HERE is handed to `set_frequency` verbatim via `route_target`
         // — peg-lock pins the active radio, so a pegged station's binding
         // must name the rig it pegged, not the rig a rule would have chosen.
-        let routed = self
-            .settings
-            .route_radio_satellite(band, route_mode)
-            .or_else(|| self.sat_fallback_radio(down_mhz, band));
+        //
+        // With NO band, the tiers that READ one are skipped and the tiers that
+        // never did are asked exactly as always (`route_radio_bandless`). The
+        // distinction is the whole discipline here: a rule whose band selector
+        // is EMPTY — the shape the app itself recommends for "satellite work
+        // goes to the IC-9700" — answers the same for every band and therefore
+        // for no band, so dropping it would discard an answer the operator
+        // explicitly wrote and silently tune the HF rig to 10 GHz instead. A
+        // rule that NAMES bands cannot claim a dial we cannot name, and neither
+        // can the band-coverage tiers. The coverage fallback below still
+        // answers, because its first question is about FREQUENCY
+        // (`rig_covers_mhz`, straight off the rig's own RX ranges), which works
+        // perfectly at 10 GHz.
+        let routed = match band {
+            Some(b) => self.settings.route_radio_satellite(b, route_mode),
+            None => self.settings.route_radio_bandless(route_mode),
+        }
+        .or_else(|| self.sat_fallback_radio(down_mhz, band));
         let bound = if self.settings.radio_pegged {
             self.settings.active_radio
         } else {
@@ -7220,7 +7354,9 @@ impl Engine {
         let mut binding = SatBinding {
             radio_id: Some(bound),
             radio_name,
-            band: band.to_string(),
+            // "" IS the wire's absent band, and the rail already reads it that
+            // way — it prints no band chip rather than an empty separator.
+            band: band.unwrap_or_default().to_string(),
             fm,
             simplex: t.is_simplex(),
             downlink_mhz: None,
@@ -7261,16 +7397,20 @@ impl Engine {
                 .iter()
                 .filter(|p| p.enabled && p.id != self.settings.active_radio)
                 .count();
-            binding.note = Some(if !self.settings.radio_pegged && others > 1 {
-                format!(
+            // The band-naming cure is only WRITABLE when there is a band to
+            // write. Off the band table ("add  to that radio's bands") it would
+            // be an instruction the operator cannot follow, so that case falls
+            // to the plain refusal — a refusal an operator cannot act on is how
+            // the original field report reached us.
+            binding.note = Some(match band.filter(|_| !self.settings.radio_pegged && others > 1) {
+                Some(band) => format!(
                     "This radio doesn't cover {down_mhz:.4} MHz, and nothing says which of your \
                      other radios owns {band} — add {band} to that radio's bands (or write a \
                      routing rule), then pick again."
-                )
-            } else {
-                format!(
+                ),
+                None => format!(
                     "This radio doesn't cover {down_mhz:.4} MHz — the transponder is held, but nothing was tuned."
-                )
+                ),
             });
             self.sat_binding = Some(binding.clone());
             return binding;
@@ -7299,22 +7439,35 @@ impl Engine {
             self.route_target = Some(routed);
             // The bird's OWN mode class decides what the rig is put in — the
             // same one map that chose the routing class, so the two cannot
-            // disagree. "USB" is the satellite convention on VHF/UHF (and what
-            // the Phone policy commands there anyway); FM is a correctness gate,
-            // not a preference — an FM-repeater or packet downlink demodulated
-            // as USB is garbled audio, exactly as it is for terrestrial APRS.
+            // disagree. `class.sideband()` is FM / USB / LSB, which is what the
+            // tuned channel's sideband means; the SECTION's form (a DATA
+            // submode, the rig's CW mode) is applied on top of it by
+            // `rig_mode_effective`, which is why this stays a plain sideband.
+            // An absent band is passed through as "" — `tune_dial` writes it to
+            // `settings.band`, and empty is the honest ABSENT there too (the
+            // ADIF BAND field is optional and FREQ carries the truth).
             // MACHINERY provenance: the bird's downlink is Doppler's frequency, not the
             // operator's dial on that band — and, crucially, the dial being LEFT here IS
             // the operator's (they were on 20 m phone when the pass came over), so it banks
             // on the way out. The command sets `sat_dial_owner` BEFORE calling this, which
             // is precisely why the answer cannot come from reading that flag now.
-            self.machinery_tune(down_mhz, band, if fm { "FM" } else { "USB" });
-            // The tune clears the FM holds (a QSY normally leaves one), so
+            self.machinery_tune(down_mhz, band.unwrap_or_default(), class.sideband());
+            // The tune clears the mode holds (a QSY normally leaves one), so
             // — exactly like `aprs_tune` and `repeater_tune` — re-arm after it.
             // Set ONLY on the leg actually written: with no dial write there was
-            // no handoff, and putting a rig we were never handed into FM would be
-            // moving a radio nobody gave us.
-            self.sat_fm = fm;
+            // no handoff, and putting a rig we were never handed into a mode
+            // would be moving a radio nobody gave us.
+            self.sat_mode = Some(class);
+            // …and DROP a transient Phone mode pick, for the same reason
+            // `tune_dial` drops it across a band change: it describes the
+            // frequency being LEFT. It survives a same-band QSY on purpose, but
+            // SO-50 → RS-44 is one 70 cm band, so a cockpit "FM" chosen for the
+            // repeater bird would otherwise outrank every later linear pick for
+            // the rest of the session — the second route into the operator's
+            // "it's staying in FM". A pick made DURING this pass still wins:
+            // `request_sideband_override` sets `sat_mode_released`, and the
+            // override arm sits above the satellite arm.
+            self.sideband_override = None;
             binding.pending_downlink_mhz = Some(down_mhz);
         }
         // A SIMPLEX bird (145.825 up AND down) is ONE channel on ONE dial: there
@@ -7454,7 +7607,15 @@ impl Engine {
     /// possible destination" holds for catch-alls, never over a contrary
     /// configuration (the handoff is a full active-radio switch, and it would
     /// end in a refused dial on a rig the operator configured away).
-    fn sat_fallback_radio(&self, down_mhz: f64, band: &str) -> Option<u32> {
+    ///
+    /// `band` is `None` for a downlink off the band table (QO-100, the
+    /// microwave birds). The FIRST question — does the active rig cover this
+    /// FREQUENCY — is asked of the rig's own RX ranges and is unaffected, which
+    /// is why this tier still answers up there. Only the band-list check needs
+    /// a verdict, and the honest one is that an EXPLICIT list can never be
+    /// shown to contain a band we cannot name: a catch-all rig is still the
+    /// only possible destination; a rig whose list the operator wrote is not.
+    fn sat_fallback_radio(&self, down_mhz: f64, band: Option<&str>) -> Option<u32> {
         if self.rig_covers_mhz(down_mhz) != Some(false) {
             return None;
         }
@@ -7466,7 +7627,9 @@ impl Engine {
         match (others.next(), others.next()) {
             (Some(only), None)
                 if only.bands.is_empty()
-                    || only.bands.iter().any(|b| b.eq_ignore_ascii_case(band)) =>
+                    || band.is_some_and(|band| {
+                        only.bands.iter().any(|b| b.eq_ignore_ascii_case(band))
+                    }) =>
             {
                 Some(only.id)
             }
@@ -12777,6 +12940,14 @@ mod tests {
     use super::*;
     use modes::Decode;
 
+    /// What `sat_tune_nominal` is told the bird needs the radio to be in. Named
+    /// rather than spelled `DownlinkClass::Usb` at ~40 call sites because the
+    /// argument's MEANING is the thing under test in most of them: "a linear
+    /// bird" vs "an FM bird", not a mode token.
+    const SSB_BIRD: tempo_core::doppler::DownlinkClass = tempo_core::doppler::DownlinkClass::Usb;
+    const FM_BIRD: tempo_core::doppler::DownlinkClass = tempo_core::doppler::DownlinkClass::Fm;
+    const LSB_BIRD: tempo_core::doppler::DownlinkClass = tempo_core::doppler::DownlinkClass::Lsb;
+
     fn dec_dt(msg: &str, dt: f32) -> Decode {
         Decode {
             message: msg.to_string(),
@@ -14421,7 +14592,7 @@ mod tests {
     fn pick_bird(e: &mut Engine) {
         confirm_map_for_all(e, crate::settings::SatVfoMap::MainDownSubUp);
         e.set_sat_transponder(Some(("AO-7|linear V/U".to_string(), 0, VU_BIRD)));
-        e.sat_tune_nominal(false, 1_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
     }
 
     #[test]
@@ -21574,7 +21745,7 @@ mod tests {
         assert_eq!(e.settings.active_radio, 0, "precondition: HF rig active");
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
 
         assert_eq!(
             e.settings.active_radio, ic9700,
@@ -21636,7 +21807,7 @@ mod tests {
         // must flip the leg to a reason, never leave it implying it will land.
         let (mut e, _, _) = sat_station();
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 1_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert!(e.sat_binding().unwrap().pending_downlink_mhz.is_some());
 
         // The loop's push_dial gave up: the radio refused 435.640.
@@ -21648,7 +21819,7 @@ mod tests {
 
         // Same for the split: re-pick, then the rig rejects the split apply.
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 2_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
         let up = e
             .sat_binding()
             .unwrap()
@@ -21663,7 +21834,7 @@ mod tests {
         // And an unrelated dial ack (a terrestrial QSY, a Doppler step) must
         // not confirm anything: only the exact pending frequency resolves.
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 3_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 3_000_000);
         e.rig_dial_applied(14_074_000);
         let b = e.sat_binding().unwrap();
         assert!(
@@ -21682,7 +21853,7 @@ mod tests {
         // resolve only its OWN request, never the fresh one.
         let (mut e, _, _) = sat_station();
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 2_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
         let consumed = e
             .take_split_request()
             .expect("the pick queued a split")
@@ -21717,7 +21888,7 @@ mod tests {
         // identity gate that keeps it away from terrestrial pile-ups.
         let (mut e, _, _) = sat_station();
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 1_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
 
         // The bird's own uplink under Main-down/Sub-up ⇒ the Sub band — on the
         // native CI-V backend, the one that can engage satellite mode and
@@ -21746,7 +21917,7 @@ mod tests {
         // `an_a_b_split_on_a_main_sub_icom_is_refused_only_when_it_would_cross_bands`.)
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 2_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
         for cat in [NATIVE, HAMLIB] {
             assert!(e
                 .sat_split_tx_vfo(145_965_000, cat)
@@ -21763,7 +21934,7 @@ mod tests {
         // a backend, so the wording must not blame one.
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainUpSubDown);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 3_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 3_000_000);
         for cat in [NATIVE, HAMLIB] {
             let err = e.sat_split_tx_vfo(145_965_000, cat).unwrap_err();
             assert!(
@@ -21805,7 +21976,7 @@ mod tests {
         e.settings.sync_active_from_flat();
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 1_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         e
     }
 
@@ -22178,7 +22349,7 @@ mod tests {
             confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
             // RS-44: 2 m up, 70 cm down — CROSS-BAND.
             e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-            e.sat_tune_nominal(false, 2_000_000);
+            e.sat_tune_nominal(SSB_BIRD, 2_000_000);
             for cat in [NATIVE, HAMLIB] {
                 assert!(
                     e.sat_split_tx_vfo(145_965_000, cat)
@@ -22191,7 +22362,7 @@ mod tests {
             // The SAME rig on a V/V bird: A/B is how it is done, and taking it
             // away would cost a real operating case.
             e.set_sat_transponder(Some(("SO-50|V/V".into(), 0, SAME_BAND)));
-            e.sat_tune_nominal(false, 3_000_000);
+            e.sat_tune_nominal(SSB_BIRD, 3_000_000);
             for cat in [NATIVE, HAMLIB] {
                 assert_eq!(
                     e.sat_split_tx_vfo(145_990_000, cat),
@@ -22216,7 +22387,7 @@ mod tests {
         let mut e = main_sub_station(3090); // IC-905
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
         e.set_sat_transponder(Some(("L/X|linear".into(), 0, SHF_UP))); // 5.67 GHz up, 23 cm down
-        e.sat_tune_nominal(false, 4_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 4_000_000);
         for cat in [NATIVE, HAMLIB] {
             assert!(
                 e.sat_split_tx_vfo(5_670_000_000, cat)
@@ -22233,25 +22404,31 @@ mod tests {
         // message may not say "the two legs are not on one band" — here they
         // ARE. It states only what Nexus knows: it could not confirm it.
         //
-        // Reached through the DOPPLER TICK, because `sat_tune_nominal` refuses
-        // a bird whose DOWNLINK is off the band plan before it ever marks the
-        // pair sent — the layer above this one, and its own fail-closed.
+        // ⚠️ THE ROUTE HERE CHANGED AND THE VERDICT DID NOT. This case used to
+        // be reached through the DOPPLER TICK, because `sat_tune_nominal`
+        // REFUSED a bird whose downlink was off the band plan before it ever
+        // marked the pair sent. That refusal is gone — a dial the table cannot
+        // NAME is now tuned (see
+        // `a_downlink_the_band_table_cannot_name_is_still_tuned`), so the pick
+        // itself seeds the pair and this guard is now asked on the production
+        // path rather than through a tick standing in for it. What must NOT
+        // change is the answer: the split is still refused, on both backends,
+        // because Nexus still cannot prove the two legs share a band.
         let mut e = main_sub_station(3090);
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
         e.set_sat_transponder(Some(("3cm|X/X".into(), 0, SHF_SAME_BAND)));
-        let refused = e.sat_tune_nominal(false, 5_000_000);
+        let tuned = e.sat_tune_nominal(SSB_BIRD, 5_000_000);
+        let up = (tuned
+            .pending_uplink_mhz
+            .expect("the pick queues the uplink leg")
+            * 1e6)
+            .round() as u64;
         assert_eq!(
-            (refused.downlink_mhz, refused.uplink_mhz),
+            (
+                crate::bandplan::band_for_dial(10_489.5),
+                crate::bandplan::band_for_dial(up as f64 / 1e6)
+            ),
             (None, None),
-            "a downlink off the band plan tunes nothing at all"
-        );
-        let c = e
-            .sat_doppler_tick(0.0, 5_100_000, false)
-            .expect("the tick drives the held pair");
-        let up = c.uplink_hz.expect("the uplink leg is confirmed and driven");
-        assert_eq!(
-            crate::bandplan::band_for_dial(up as f64 / 1e6),
-            None,
             "both legs are off the table — the premise of this case"
         );
         assert!(
@@ -22273,7 +22450,7 @@ mod tests {
             let mut e = main_sub_station(model);
             confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
             e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-            e.sat_tune_nominal(false, 2_000_000);
+            e.sat_tune_nominal(SSB_BIRD, 2_000_000);
             assert_eq!(e.sat_split_tx_vfo(145_965_000, HAMLIB), Ok("VFOB"));
             assert_eq!(e.sat_split_tx_vfo(145_965_000, NATIVE), Ok("VFOB"));
         }
@@ -22296,7 +22473,7 @@ mod tests {
             let mut e = main_sub_station(model);
             confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
             e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-            e.sat_tune_nominal(false, 2_000_000);
+            e.sat_tune_nominal(SSB_BIRD, 2_000_000);
             for cat in [NATIVE, HAMLIB] {
                 assert!(
                     e.sat_split_tx_vfo(145_965_000, cat)
@@ -22319,7 +22496,7 @@ mod tests {
         let mut e = main_sub_station(3081);
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 2_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
         assert!(
             !e.settings().sat_doppler_downlink(),
             "precondition: uplink-only leaves the receive dial to the operator"
@@ -22343,7 +22520,7 @@ mod tests {
             let mut e = main_sub_station(model);
             confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
             e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-            e.sat_tune_nominal(false, 2_000_000);
+            e.sat_tune_nominal(SSB_BIRD, 2_000_000);
             assert_eq!(e.sat_split_tx_vfo(145_965_000, HAMLIB), Ok("VFOB"));
             assert_eq!(e.sat_split_tx_vfo(145_965_000, NATIVE), Ok("VFOB"));
         }
@@ -22390,7 +22567,7 @@ mod tests {
         // radio is the only possible destination — hand the QSY to it.
         let (mut e, ic9700) = fresh_dual_radio_sat_station();
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
 
         assert_eq!(
             e.settings.active_radio, ic9700,
@@ -22425,7 +22602,7 @@ mod tests {
         let (mut e, _) = fresh_dual_radio_sat_station();
         e.set_radio_pegged(true);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(e.settings.active_radio, 0, "peg-lock pins the active rig");
         assert!((e.settings.dial_mhz - 14.074).abs() < 1e-9, "no QSY");
         assert!(b.note.is_some(), "and the refusal is said out loud");
@@ -22440,7 +22617,7 @@ mod tests {
         e.settings.dial_mhz = 14.074;
         e.observe_rig_rx_ranges(Some(vec![(30_000, 75_000_000)]));
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(e.settings.active_radio, 0, "two candidates ⇒ no guess");
         assert!((e.settings.dial_mhz - 14.074).abs() < 1e-9, "no QSY");
         let note = b.note.expect("the refusal names the missing configuration");
@@ -22464,7 +22641,7 @@ mod tests {
             p.bands = vec!["40m".into(), "20m".into()];
         }
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(
             e.settings.active_radio, 0,
             "no handoff onto a contrary band list"
@@ -22485,7 +22662,7 @@ mod tests {
         //     the radio is actually on, not against zero.
         let (mut e, _, _) = sat_station();
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 1_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
 
         assert_eq!(
             e.sat_tx_mode_for_split(145_965_000).as_deref(),
@@ -22517,7 +22694,7 @@ mod tests {
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::Off);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
 
         assert_eq!(e.settings.active_radio, ic9700, "the QSY still routes");
         assert!(
@@ -22544,7 +22721,7 @@ mod tests {
         e.apply_settings(s);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert!((e.settings.dial_mhz - 14.074).abs() < 1e-9);
         assert_eq!(e.split_tx_mhz(), None);
         assert!(b.note.is_some());
@@ -22559,7 +22736,7 @@ mod tests {
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::DownlinkOnly);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(e.settings.active_radio, ic9700);
         assert!((e.settings.dial_mhz - 435.640).abs() < 1e-9);
         assert_eq!(e.split_tx_mhz(), None, "no uplink under a receive-only map");
@@ -22594,7 +22771,7 @@ mod tests {
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
 
         // The pre-AOS pick puts the dial on the nominal downlink centre.
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert!(
             (e.settings.dial_mhz - 435.640).abs() < 1e-9,
             "the pick tunes the downlink, got {}",
@@ -22624,7 +22801,7 @@ mod tests {
         // until the operator has confirmed a mapping for this radio.
         let mut e = fresh_ic9700_station();
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(e.split_tx_mhz(), None, "no split from the pick");
         assert_eq!(b.pending_uplink_mhz, None);
         assert_eq!(
@@ -22654,7 +22831,7 @@ mod tests {
         e.confirm_sat_uplink(None, Some(crate::settings::SatVfoMap::MainDownSubUp));
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(
             b.pending_uplink_mhz.map(|m| (m * 1e6).round() as u64),
             Some(145_965_000)
@@ -22743,7 +22920,7 @@ mod tests {
         e.apply_settings(s);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert!((e.settings.dial_mhz - 432.100).abs() < 1e-9, "no QSY");
         assert_eq!(e.split_tx_mhz(), None);
         assert!(b.note.is_some(), "and the rail is told why");
@@ -22817,7 +22994,7 @@ mod tests {
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(e.settings.active_radio, 0, "no downlink leg ⇒ no handoff");
         assert_eq!(
             b.radio_id,
@@ -22846,7 +23023,7 @@ mod tests {
         // whichever radio came next.
         let (mut e, ic9700, _) = sat_station();
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 1_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(e.settings().active_radio, ic9700, "precondition: routed");
         // Drain the pick's own one-shot: the loop applied it to the 9700.
         assert_eq!(e.take_split_request(), Some(Some(145.965)));
@@ -22917,7 +23094,7 @@ mod tests {
 
         // …and the pick writes no transmit frequency for it.
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(
             e.split_tx_mhz(),
             None,
@@ -23036,7 +23213,7 @@ mod tests {
 
         let beacon = tempo_core::doppler::Transponder::channel(0, 435_605_000);
         e.set_sat_transponder(Some(("RS-44|CW beacon".into(), 1, beacon)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(b.downlink_mhz, None);
         assert_eq!(b.uplink_mhz, None);
         assert_eq!(e.split_tx_mhz(), None, "a beacon has no uplink to write");
@@ -23071,7 +23248,7 @@ mod tests {
                 "precondition: unconfirmed for the radio in play"
             );
             e.set_sat_transponder(Some(("bird|hold".into(), 0, tp)));
-            let b = e.sat_tune_nominal(false, 1_000_000);
+            let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
             assert_eq!(e.split_tx_mhz(), None);
             let note = b.note.expect("nothing moved ⇒ there is a reason to give");
             assert!(
@@ -23093,7 +23270,7 @@ mod tests {
         let (mut e, ic9700, ft991a) = sat_station();
         let so50 = tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000);
         e.set_sat_transponder(Some(("SO-50|FM".into(), 0, so50)));
-        let b = e.sat_tune_nominal(true, 1_000_000);
+        let b = e.sat_tune_nominal(FM_BIRD, 1_000_000);
         assert_eq!(e.settings.active_radio, ft991a, "FM class ⇒ the FM rig");
         assert_eq!(b.radio_id, Some(ft991a));
         assert_ne!(b.radio_id, Some(ic9700));
@@ -23151,6 +23328,13 @@ mod tests {
         tempo_core::doppler::Transponder::channel(145_825_000, 145_825_000)
     }
 
+    /// SO-50's FM repeater — 70 cm down, 2 m up. The SAME 70 cm band as RS-44,
+    /// which is what makes the FM→linear switch a same-band move that nothing
+    /// incidental cleans up after.
+    fn fm_bird() -> tempo_core::doppler::Transponder {
+        tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000)
+    }
+
     #[test]
     fn an_aprs_digipeater_bird_routes_to_the_fm_rig_and_writes_no_split() {
         // THE field report (0.24.4, dual-radio). Picking the ISS-class APRS
@@ -23199,10 +23383,13 @@ mod tests {
 
         // The class comes from the SatNOGS mode string, through the one map the
         // command uses — this is the field case end to end, not a hand-set flag.
-        let fm = tempo_core::doppler::mode_is_fm("AFSK");
-        assert!(fm, "precondition: the mode map reads AFSK as an FM bird");
+        let class = tempo_core::doppler::downlink_class(Some("AFSK"));
+        assert_eq!(
+            class, FM_BIRD,
+            "precondition: the map reads AFSK as an FM bird"
+        );
         e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
-        let b = e.sat_tune_nominal(fm, 1_000_000);
+        let b = e.sat_tune_nominal(class, 1_000_000);
 
         // 1 — the operator's FM rule fires and the 9700 takes the pick.
         assert_eq!(
@@ -23245,7 +23432,7 @@ mod tests {
         // TRANSMIT leg twice as far off the bird's receiver as leaving it alone.
         let (mut e, _) = aprs_field_station();
         e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
-        e.sat_tune_nominal(true, 1_000_000);
+        e.sat_tune_nominal(FM_BIRD, 1_000_000);
         assert_eq!(e.split_tx_mhz(), None, "precondition: the pick wrote none");
 
         // A whole pass's geometry: approaching hard, through TCA, to receding.
@@ -23293,10 +23480,13 @@ mod tests {
         let (mut e, ic9700, ft991a) = satellite_designated_station();
         assert_eq!(e.settings.active_radio, 0, "precondition: HF rig active");
 
-        let fm = tempo_core::doppler::mode_is_fm("AFSK");
-        assert!(fm, "precondition: the mode map reads AFSK as an FM bird");
+        let class = tempo_core::doppler::downlink_class(Some("AFSK"));
+        assert_eq!(
+            class, FM_BIRD,
+            "precondition: the map reads AFSK as an FM bird"
+        );
         e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
-        let b = e.sat_tune_nominal(fm, 1_000_000);
+        let b = e.sat_tune_nominal(class, 1_000_000);
         assert_eq!(
             e.settings.active_radio, ic9700,
             "the satellite designation outranks the FM & APRS rule"
@@ -23319,7 +23509,7 @@ mod tests {
         let (mut e, _ic9700, ft991a) = three_radio_engine();
         sat_ready(&mut e);
         e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
-        let b = e.sat_tune_nominal(true, 1_000_000);
+        let b = e.sat_tune_nominal(FM_BIRD, 1_000_000);
         assert_eq!(e.settings.active_radio, ft991a);
         assert_eq!(b.radio_id, Some(ft991a));
     }
@@ -23334,12 +23524,239 @@ mod tests {
         e.set_active_radio(ic9700);
 
         e.set_sat_transponder(Some(("ISS|Mode V APRS".into(), 0, aprs_bird())));
-        let b = e.sat_tune_nominal(true, 1_000_000);
+        let b = e.sat_tune_nominal(FM_BIRD, 1_000_000);
         assert_eq!(
             e.settings.active_radio, ic9700,
             "already on the designated rig: the pick must not move the QSY off it"
         );
         assert_eq!(b.radio_id, Some(ic9700));
+    }
+
+    #[test]
+    fn a_linear_bird_leaves_fm_even_when_the_station_policy_says_fm() {
+        // THE OPERATOR'S DEFECT, at the engine seam. `phone_mode` is one
+        // station-wide field; `repeater_tune` writes it and nothing resets it,
+        // so a station that worked a repeater earlier is sitting on
+        // phone_mode = "fm" for the rest of the session. Before the fix the
+        // satellite path had an FM arm and NO linear arm, so the moment a
+        // linear bird was picked the commanded mode fell through to that
+        // policy — FM, on a linear passband, which is silence.
+        let (mut e, _, _) = sat_station();
+        e.settings.phone_mode = "fm".into();
+
+        e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, fm_bird())));
+        e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        assert_eq!(e.rig_mode_effective(), "FM", "an FM bird: unchanged");
+
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "the BIRD owns the mode, not the station's terrestrial phone policy"
+        );
+
+        // And the 29 MHz gate that every other hold is read behind still holds:
+        // a knob-QSY down to HF can never leave a VHF/UHF mode forced. Below
+        // it the satellite hold says nothing and the band convention answers —
+        // on 40 m that is LSB, which no satellite mode would ever have set.
+        e.settings.dial_mhz = 7.150;
+        assert_eq!(
+            e.rig_mode_effective(),
+            "LSB",
+            "below 29 MHz the hold is silent and the band convention answers"
+        );
+    }
+
+    #[test]
+    fn a_mid_pass_mode_pick_beats_the_bird_whatever_the_bird_says() {
+        // "How are you accounting for when you are wrong and operators want to
+        // override your mode settings?" — the transponder record comes from
+        // SatNOGS, whose mode vocabulary is open and crowd-maintained, and a
+        // bird can be worked in a mode nobody wrote down. So the cockpit mode
+        // pick outranks BOTH satellite holds, and it lasts the pass.
+        //
+        // The uplink side already worked this way (see
+        // `the_operators_own_mode_pick_stands_the_uplink_sideband_down`); the
+        // FM half of the DOWNLINK did not, which is the case we are most likely
+        // to be wrong about and the one the operator could not take back.
+        for (class, tp, ours, theirs) in [
+            (FM_BIRD, fm_bird(), "FM", "USB"),
+            (SSB_BIRD, RS44, "USB", "FM"),
+        ] {
+            let (mut e, _, _) = sat_station();
+            e.set_sat_transponder(Some(("bird".into(), 0, tp)));
+            e.sat_tune_nominal(class, 1_000_000);
+            assert_eq!(e.rig_mode_effective(), ours, "precondition: {class:?}");
+
+            e.request_sideband_override(Some(theirs));
+            assert_eq!(
+                e.rig_mode_effective(),
+                theirs,
+                "{class:?}: the hand on the mode button wins"
+            );
+            assert_eq!(
+                e.sat_tx_mode(),
+                None,
+                "{class:?}: …and the uplink stands down rather than swapping under them"
+            );
+
+            // A FRESH pick is the operator asking for this bird's tuning again,
+            // so it re-asserts — the override describes the bird being left.
+            e.set_sat_transponder(Some(("bird".into(), 0, tp)));
+            e.sat_tune_nominal(class, 2_000_000);
+            assert_eq!(
+                e.rig_mode_effective(),
+                ours,
+                "{class:?}: picking the transponder again is fresh consent"
+            );
+        }
+    }
+
+    #[test]
+    fn a_released_linear_hold_stops_owning_the_mode() {
+        // THE MIRROR OF THE DEFECT ABOVE, caught in review before it shipped.
+        // The linear arm forces a sideband, and until it required the HOLD
+        // nothing ended it: `set_sat_transponder(None)` (the LOS handback,
+        // "the dial is yours") and `observe_rig_freq` (the VFO knob) both
+        // leave the mode holds alone. So a released RS-44 kept commanding USB
+        // — and on 146.520 that is FM voice demodulated as USB, which is
+        // garbled audio, and keyed it is SSB into a repeater input. One band
+        // up from the operator's own report, and just as wrong.
+        //
+        // The 29 MHz gate that catches the FM holds is no protection here at
+        // all: 146.520 is well above it.
+        let (mut e, _, _) = sat_station();
+        e.settings.phone_mode = "fm".into();
+
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "precondition: the bird owns the mode while it is held"
+        );
+
+        e.set_sat_transponder(None); // LOS — the pass ends, the dial goes back
+        e.observe_rig_freq(146_520_000); // …and the operator spins the knob to 2 m simplex
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "off the bird the linear hold says nothing, and the station's own policy answers"
+        );
+    }
+
+    #[test]
+    fn an_fm_hold_outlives_its_bird_on_purpose() {
+        // The other half of that asymmetry, pinned so it is not "simplified"
+        // away by clearing `sat_mode` on the handback. FM is the CHANNEL mode
+        // of VHF/UHF: an operator who hands SO-50 back and spins the knob
+        // lands on another FM channel far more often than not, and being
+        // wrong there is the exact garbled-audio failure the arm exists to
+        // prevent. Only the 29 MHz gate ends it, so a QSY down to HF can
+        // never leave FM forced.
+        //
+        // `phone_mode` is "ssb" here on purpose: without the surviving hold
+        // the station policy would answer USB at 145.500.
+        let (mut e, _, _) = sat_station();
+        e.settings.phone_mode = "ssb".into();
+
+        e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, fm_bird())));
+        e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        e.set_sat_transponder(None);
+        e.observe_rig_freq(145_500_000);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "the FM hold ends with the DIAL, not with the bird"
+        );
+
+        e.observe_rig_freq(14_250_000);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "…and the dial is what ends it: below 29 MHz nothing is forced"
+        );
+    }
+
+    #[test]
+    fn the_bird_names_the_sideband_and_the_section_names_the_form() {
+        // The mode mapping, stated as behaviour. Two authorities, neither
+        // overriding the other's job:
+        //   * the BIRD decides FM-vs-linear and WHICH SIDEBAND — the one thing
+        //     no terrestrial band convention can know;
+        //   * the SECTION decides the FORM — plain SSB, a DATA submode, CW.
+        //
+        // Getting this wrong in the obvious direction ("a linear bird ⇒ command
+        // USB") would break FT8 through a GEO transponder: plain USB on a
+        // normally-wired rig takes TX audio from the MIC and radiates zero RF.
+        use crate::settings::OperatingMode;
+        for (om, usb_bird, lsb_bird) in [
+            (OperatingMode::Phone, "USB", "LSB"),
+            (OperatingMode::Digital, "PKTUSB", "PKTLSB"),
+            (OperatingMode::Cw, "CW", "CWR"),
+        ] {
+            for (class, want) in [(SSB_BIRD, usb_bird), (LSB_BIRD, lsb_bird)] {
+                let (mut e, _, _) = sat_station();
+                let mut s = e.settings().clone();
+                s.operating_mode = om;
+                e.apply_settings(s);
+                e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+                e.sat_tune_nominal(class, 1_000_000);
+                assert_eq!(e.rig_mode_effective(), want, "{om:?} on a {class:?} bird");
+            }
+        }
+    }
+
+    #[test]
+    fn a_declared_cw_downlink_is_worked_in_usb_and_a_declared_lsb_one_in_lsb() {
+        // THE TWO JUDGEMENT CALLS, pinned where they are made.
+        //
+        // CW: a declared `CW` downlink is a LINEAR-path downlink, and working
+        // CW through a linear transponder is done in USB — you copy the tone
+        // inside the SSB passband. Commanding the rig's CW mode instead would
+        // (a) make the displayed dial mean something rig- and menu-dependent
+        // while the Doppler engine steers it at up to ~100 Hz/s, and (b) lose
+        // the inverting transponder's sideband swap entirely, because
+        // `uplink_mode_for` can only mirror USB↔LSB. A CW BEACON is not
+        // special-cased for the same two reasons.
+        //
+        // LSB: a record that names the LOWER sideband is the one case that must
+        // not be commanded USB. It is an inverted-sideband error on the
+        // downlink, and on an inverting bird it inverts the uplink with it —
+        // the exact failure the transponder machinery exists to prevent.
+        use tempo_core::doppler::{downlink_class, DownlinkClass};
+        for m in ["CW", "USB", "BPSK", "PSK31", "FT8", "MFSK", "LoRa", "CERTO"] {
+            assert_eq!(downlink_class(Some(m)), DownlinkClass::Usb, "{m}");
+        }
+        assert_eq!(downlink_class(Some("LSB")), DownlinkClass::Lsb);
+        assert_eq!(
+            downlink_class(None),
+            DownlinkClass::Usb,
+            "absent reads as USB"
+        );
+        for m in ["FM", "AFSK", "GMSK", "FSK AX.25 G3RUH", "DUV", "SSTV"] {
+            assert_eq!(downlink_class(Some(m)), DownlinkClass::Fm, "{m}");
+        }
+
+        // End to end: a CW beacon commands USB, not CW.
+        let (mut e, _, _) = sat_station();
+        let beacon = tempo_core::doppler::Transponder::channel(0, 435_103_000);
+        e.set_sat_transponder(Some(("AO-7|CW beacon".into(), 0, beacon)));
+        e.sat_tune_nominal(downlink_class(Some("CW")), 1_000_000);
+        assert_eq!(e.rig_mode_effective(), "USB");
+
+        // …and an LSB downlink inverts the UPLINK's sideband correctly, which
+        // is the half an operator actually hears.
+        let (mut e, _, _) = sat_station();
+        e.set_sat_transponder(Some(("inverting|LSB down".into(), 0, RS44)));
+        e.sat_tune_nominal(LSB_BIRD, 1_000_000);
+        assert_eq!(e.rig_mode_effective(), "LSB");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("USB"),
+            "an inverting transponder mirrors the sideband — the uplink is the other one"
+        );
     }
 
     #[test]
@@ -23350,7 +23767,7 @@ mod tests {
         // OPPOSITE directions once the bird is up.
         let (mut e, ic9700, _) = sat_station();
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        let b = e.sat_tune_nominal(tempo_core::doppler::mode_is_fm("USB"), 1_000_000);
+        let b = e.sat_tune_nominal(tempo_core::doppler::downlink_class(Some("USB")), 1_000_000);
 
         assert_eq!(e.settings.active_radio, ic9700);
         assert!(!b.fm, "a linear transponder is SSB class");
@@ -23370,17 +23787,140 @@ mod tests {
     }
 
     #[test]
-    fn a_transponder_outside_the_band_plan_is_refused_without_losing_the_hold() {
-        // A 10 GHz bird (or a malformed SatNOGS record) has no band to route on.
-        // Refuse the TUNE, keep the HOLD, and say which it was.
+    fn a_downlink_the_band_table_cannot_name_is_still_tuned() {
+        // OPERATOR REPORT: "there are some frequencies that say in sat that it
+        // isn't in my band plan — you should allow me to go to those, I am in
+        // open mode right now."
+        //
+        // This USED TO REFUSE. `bandplan::band_for_dial` stops at 23 cm, so
+        // QO-100's 10.489 GHz downlink had no label and the pick answered
+        // "10489.5500 MHz is outside the band plan — the dial is yours" — the
+        // app declining a legal, physically possible tune because its own
+        // lookup table is incomplete. The band table is for ROUTING and
+        // LABELLING; it is not a permission system, and the operator's licence
+        // class never entered into it.
         let (mut e, _, _) = sat_station();
-        let odd = tempo_core::doppler::Transponder::channel(0, 10_450_000_000);
-        e.set_sat_transponder(Some(("QO-100|X".into(), 0, odd)));
-        let b = e.sat_tune_nominal(false, 1_000_000);
-        assert!((e.settings.dial_mhz - 14.074).abs() < 1e-9, "no QSY");
-        assert_eq!(b.downlink_mhz, None);
-        assert!(b.note.is_some());
-        assert!(e.sat_transponder_held().is_some());
+        let qo100 = tempo_core::doppler::Transponder::channel(0, 10_489_550_000);
+        assert_eq!(
+            crate::bandplan::band_for_dial(10_489.550),
+            None,
+            "premise: the table cannot name this dial — and is deliberately NOT extended, \
+             because `ab_cross_band_refusal` fails closed on exactly that answer"
+        );
+
+        e.set_sat_transponder(Some(("QO-100|NB transponder".into(), 0, qo100)));
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+
+        assert!(
+            (e.settings.dial_mhz - 10_489.550).abs() < 1e-6,
+            "the dial goes to the downlink, got {}",
+            e.settings.dial_mhz
+        );
+        assert_eq!(
+            b.pending_downlink_mhz.map(|m| (m * 1e6).round() as u64),
+            Some(10_489_550_000),
+            "the leg is queued for the loop like any other"
+        );
+        assert_eq!(b.note, None, "and there is nothing left to apologise for");
+        assert!(e.sat_transponder_held().is_some(), "the hold is untouched");
+
+        // ABSENT, NOT GUESSED — every consumer that wants a band label gets
+        // "there isn't one" rather than a plausible wrong one.
+        assert_eq!(b.band, "", "the rail's band chip has nothing to print");
+        assert_eq!(e.settings.band, "", "and neither has the logged band");
+        // The mode still follows the bird: absent band, present transponder.
+        assert_eq!(e.rig_mode_effective(), "USB");
+    }
+
+    #[test]
+    fn an_unnameable_band_asks_the_rules_that_never_read_a_band() {
+        // TWO traps, in opposite directions, and the line between them.
+        //
+        // Fixing the above with an EMPTY STRING trips the first:
+        // `RoutingRule::matches` is `bands.is_empty() || bands.contains(band)`
+        // and `radio_for_band` ranks an empty band list as the CATCH-ALL tier
+        // — so both MATCH "". A placeholder would silently send a 10 GHz bird
+        // to whichever rig owns "everything else": a wrong guess wearing the
+        // costume of an answer.
+        //
+        // Skipping routing OUTRIGHT trips the second, and it is no better: a
+        // rule whose band selector is EMPTY — the shape the app itself
+        // recommends for "satellite work goes to the IC-9700" — never read a
+        // band in the first place. Discarding it tunes the HF rig to
+        // 10.489 GHz with a `note` of `None`, so nothing is even said.
+        //
+        // The line: ask the tiers whose answer never read a band, skip the
+        // ones whose answer is a band claim.
+        let (mut e, ic9700, _) = sat_station();
+        let qo100 = tempo_core::doppler::Transponder::channel(0, 10_489_550_000);
+        assert_eq!(e.settings.active_radio, 0, "precondition: HF rig active");
+
+        // The station's only satellite-capable rule NAMES bands (sat_station's
+        // "2 m + 70 cm SSB → IC-9700"). It cannot be shown to contain a band
+        // nothing can name, so it does not claim this dial.
+        e.set_sat_transponder(Some(("QO-100|NB transponder".into(), 0, qo100)));
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, 0,
+            "a rule about BANDS cannot claim a dial that has no band"
+        );
+        assert_eq!(b.radio_id, Some(0), "the pick stays on the active radio");
+        assert_eq!(b.band, "");
+
+        // Now the operator writes the catch-all satellite rule. It answers the
+        // same for every band and therefore for no band — so it answers HERE
+        // exactly as it answers for RS-44, and the bird lands on the rig they
+        // designated instead of on the HF radio.
+        let mut rules = e.settings().routing_rules.clone();
+        rules.push(crate::settings::RoutingRule {
+            bands: Vec::new(),
+            mode: None,
+            context: Some(crate::settings::RouteContext::Satellite),
+            radio: ic9700,
+        });
+        e.set_routing_rules(rules);
+        e.set_sat_transponder(Some(("QO-100|NB transponder".into(), 0, qo100)));
+        let b = e.sat_tune_nominal(SSB_BIRD, 2_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "'satellite work goes HERE' is not a band claim, and it still holds off the table"
+        );
+        assert_eq!(b.radio_id, Some(ic9700));
+        assert!(
+            (e.settings.dial_mhz - 10_489.550).abs() < 1e-6,
+            "…and the routed rig is the one that gets the downlink, got {}",
+            e.settings.dial_mhz
+        );
+        assert_eq!(b.band, "", "still nothing to print in the band chip");
+
+        // Same rule, a bird the table CAN name: unchanged, so the tier order
+        // itself did not move.
+        e.set_active_radio(0);
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 3_000_000);
+        assert_eq!(e.settings.active_radio, ic9700);
+    }
+
+    #[test]
+    fn an_unnameable_band_leaves_the_privilege_gate_exactly_where_it_was() {
+        // The tune is not a transmit permission, and nothing here moved one.
+        // Open class (the reporting operator) may key 10 GHz; every other class
+        // is refused there by `privileges::tx_allowed` for want of a licensed
+        // segment — unchanged, and reached through `emission_allowed`, which is
+        // not on the satellite tune path at all.
+        use crate::settings::{LicenseClass, OperatingMode};
+        for (class, allowed) in [
+            (LicenseClass::Open, true),
+            (LicenseClass::Technician, false),
+            (LicenseClass::General, false),
+            (LicenseClass::Extra, false),
+        ] {
+            assert_eq!(
+                crate::privileges::tx_allowed(class, 10_489.550, OperatingMode::Phone),
+                allowed,
+                "{class:?} at 10 GHz"
+            );
+        }
     }
 
     #[test]
@@ -23398,7 +23938,7 @@ mod tests {
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::UplinkOnly);
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 1_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert!(
             e.split_tx_mhz().is_some(),
             "precondition: the pick put the uplink on the split TX dial"

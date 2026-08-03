@@ -838,6 +838,7 @@ function DopplerReadout({
   uplinkOnly,
   undrivableUplink,
   txMode,
+  onLockOn,
 }: {
   rotor: SatTrackStatus
   dopplerOn: boolean
@@ -859,6 +860,9 @@ function DopplerReadout({
    * claimed. Never derived from the SatNOGS record here: a second derivation
    * of the command is how a display claims a write the radio never gets. */
   txMode?: string | null
+  /** Put the radio back on the frequencies printed here — see the button. Absent
+   * when there is no held pick to re-assert. */
+  onLockOn?: (() => void) | null
 }) {
   const any = rotor.downlinkHz != null || rotor.uplinkHz != null
   if (!any) {
@@ -893,6 +897,35 @@ function DopplerReadout({
           >
             INVERTING
           </span>
+        )}
+        {/* LOCK ON — put the radio back on the numbers printed right here.
+            Operator report: "should we introduce a button to lock on to the
+            implied frequency if I move the dial on my own?"
+
+            Nexus already adopts a knob move made INSIDE the passband as your
+            position and mirrors the uplink to it. What had no way back was
+            leaving the passband — by hand, or because the rig came back on a
+            different frequency — after which the dial is somewhere the pass
+            does not describe. The transponder cards cannot fix that either:
+            they are radio buttons, and clicking the one already selected fires
+            no change event, so the pick that would re-assert everything was
+            literally unreachable.
+
+            This re-runs that pick — the same command the card runs — so it
+            routes, sets the band and the mode, and writes both legs, rather
+            than shoving a frequency at the rig behind the bookkeeping's back.
+            It re-centres in the passband, which is what "the implied
+            frequency" means; a position you tuned to by hand is not something
+            to preserve while asking to be put back on the bird. */}
+        {onLockOn && (
+          <button
+            type="button"
+            className="sat-dop-lock"
+            onClick={onLockOn}
+            title="Put the radio back on these frequencies — routes, sets the band and mode, and re-centres you in the passband. Use it after moving the dial off the transponder by hand."
+          >
+            Lock on
+          </button>
         )}
       </div>
       <dl className="sat-dop-legs">
@@ -1582,16 +1615,22 @@ function SatRadioBinding({
         {railDot(confirmed && !pending)}
         <span className="sat-rail-name">Radio</span>
         <span className="sat-rail-state">
-          {/* An empty band = a refusal that returned BEFORE routing (band-plan
-              miss): no rig was resolved and no class chosen, so the reason
-              stands alone — never "this radio · · SSB" beside a rig that was
-              never picked. */}
-          {binding.band !== '' && (
+          {/* No RIG = a refusal that returned before routing resolved one, so
+              the reason stands alone — never "this radio · · SSB" beside a rig
+              that was never picked.
+
+              Keyed on radioId, not on the band. An absent BAND no longer means
+              "nothing was resolved": a downlink the band table cannot name
+              (QO-100, the microwave birds) routes and tunes like any other, and
+              hiding the rig there would print frequencies beside no radio at
+              all. The band chip is dropped on its own instead — absent is
+              absent, and it is the one thing here we genuinely do not know. */}
+          {binding.radioId != null && (
             <>
               {binding.radioName || 'this radio'}
               <span className="sat-bind-why">
-                {' '}
-                · {binding.band} · {binding.fm ? 'FM' : 'SSB'}
+                {binding.band !== '' ? ` · ${binding.band}` : ''} ·{' '}
+                {binding.fm ? 'FM' : 'SSB'}
               </span>
             </>
           )}
@@ -1599,7 +1638,7 @@ function SatRadioBinding({
               the dial landed) — print both rather than letting either win. */}
           {legs.length > 0
             ? ` — ${legs.join(' · ')} MHz${binding.note ? ` — ${binding.note}` : ''}`
-            : binding.band !== ''
+            : binding.radioId != null
               ? ` — ${binding.note ?? ''}`
               : (binding.note ?? '')}
         </span>
@@ -3118,6 +3157,20 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                       // held record having no uplink at all.
                       undrivableUplink={heldSimplex || (heldT != null && heldT.uplinkLowHz == null)}
                       txMode={detailTrack.txMode ?? null}
+                      // Only when there is a pick to RE-RUN. Without a held
+                      // index there is nothing to re-assert, and a button that
+                      // re-picked "whatever looks right" would be choosing a
+                      // transponder for the operator.
+                      onLockOn={
+                        heldIndex == null
+                          ? null
+                          : () =>
+                              pickTransponder(
+                                detail.name,
+                                heldIndex,
+                                heldT?.description ?? detailTrack.transponder ?? '',
+                              )
+                      }
                     />
                     {/* The strip goes under the readout: the readout says what
                         the radio is tuned to, the strip says where that puts

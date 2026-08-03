@@ -1026,7 +1026,12 @@ export function LogEntry({
           <span className="le-ov-warn">Enter a frequency for the override to log</span>
         ) : (
           <>
-            Logs to the shared logbook as {effMode} · {effBand} ·{' '}
+            {/* The band slot is EMPTY for a dial the band plan cannot name (QO-100 at
+                10.489 GHz, the microwave birds) — printing it anyway left a doubled
+                separator with a hole in it, "as SSB ·  · 10489.550 MHz". Drop the slot,
+                the way the satellite rail drops its band chip: the frequency is the truth
+                either way, and ADIF's BAND field is optional. */}
+            Logs to the shared logbook as {effMode} ·{effBand ? ` ${effBand} ·` : ''}{' '}
             {effFreqMhz.toFixed(3)} MHz
             {logGrid ? ` · ${logGrid}` : ''}
             {logCountry ? ` · ${logCountry}` : ''}

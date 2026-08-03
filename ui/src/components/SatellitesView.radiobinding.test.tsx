@@ -229,10 +229,9 @@ describe('the radio binding line', () => {
   })
 
   it('shows a refusal that never resolved a rig as the reason alone — no phantom rig, band or class', async () => {
-    // A band-plan refusal (a 10 GHz SatNOGS record) returns before routing:
-    // radioName and band are empty and no class was ever chosen. Rendering the
-    // fallback rig name and the separators anyway produced
-    // "this radio · · SSB — 10450.0000 MHz is outside the band plan…" — a rig
+    // A refusal that returns BEFORE routing carries no radioId, no radioName
+    // and no band, and no class was ever chosen. Rendering the fallback rig
+    // name and the separators anyway produced "this radio · · SSB — …" — a rig
     // never resolved and a routing class that never routed.
     api.getSatTransponder.mockImplementation(() =>
       Promise.resolve({
@@ -247,7 +246,7 @@ describe('the radio binding line', () => {
           uplinkMhz: null,
           pendingDownlinkMhz: null,
           pendingUplinkMhz: null,
-          note: '10450.0000 MHz is outside the band plan — the dial is yours.',
+          note: 'No transponder is held — nothing to tune to.',
         },
       }),
     )
@@ -256,9 +255,42 @@ describe('the radio binding line', () => {
     // The STATE span only — the peg button's own label legitimately says
     // "pin this radio" and is not the surface under test.
     const state = bind.querySelector('.sat-rail-state')!.textContent
-    expect(state).toMatch(/outside the band plan/)
+    expect(state).toMatch(/nothing to tune to/)
     expect(state).not.toMatch(/this radio/)
     expect(state).not.toMatch(/SSB/)
+    expect(state).not.toMatch(/· ·/)
+  })
+
+  it('names the rig for a downlink the band table cannot label — the chip drops, the radio does not', async () => {
+    // QO-100 and the microwave birds have no band label (bandplan::band_for_dial
+    // stops at 23 cm), and that used to be a REFUSAL. Now they tune, so an empty
+    // band arrives alongside a resolved rig and a real leg. Keying the rig line
+    // on the band — as this rail once did — would print "10489.550 ↓ …" beside
+    // no radio at all. Absent is absent: the band chip goes, nothing else does.
+    api.getSatTransponder.mockImplementation(() =>
+      Promise.resolve({
+        ...heldTuned(),
+        binding: {
+          radioId: 1,
+          radioName: 'IC-9700',
+          band: '',
+          fm: false,
+          simplex: false,
+          downlinkMhz: null,
+          uplinkMhz: null,
+          pendingDownlinkMhz: 10489.55,
+          pendingUplinkMhz: null,
+          note: null,
+        },
+      }),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    const bind = await screen.findByTestId('sat-radio-binding')
+    const state = bind.querySelector('.sat-rail-state')!.textContent
+    expect(state).toMatch(/IC-9700/)
+    expect(state).toMatch(/10489\.550 ↓ …/)
+    expect(state).toMatch(/SSB/)
+    // …and no empty band slot left behind where the chip used to be.
     expect(state).not.toMatch(/· ·/)
   })
 
