@@ -2078,10 +2078,22 @@ impl RadioLoop {
     /// Both windows are transient and self-clearing (the handoff retries every tick; the
     /// hold self-expires engine-side), and every gated site HOLDS its work rather than
     /// dropping it: a queued CW word, an APRS beacon, a voice message, a tune or a mic
-    /// press is left where the engine put it, so whatever the engine still wants goes out
-    /// on the first tick the loop owns the right radio again.
+    /// press is left where the engine put it, so nothing is CONSUMED against a rig the
+    /// loop cannot key.
+    ///
+    /// Whether that work then survives the window is a separate question this guard does
+    /// not answer, and a reader chasing "my over vanished across a switch" should not stop
+    /// here: a landed handoff rebuilds the RX audio to the new radio, and that rebuild runs
+    /// `halt_tx_for_context_change` — `halt_tx` empties every TX queue. So the pending over
+    /// is dropped there, by the switch, and only the operator's Enable-TX latch carries
+    /// across. This guard's job is the narrower absolute one: no key on the wrong radio.
     ///
     /// UNKEYING is never gated. Dropping a key is safe on either radio and must always run.
+    ///
+    /// Every applier is pinned against a CONTENDED switch, asserting on the outgoing
+    /// radio's rigctld wire log: `a_contended_switch_never_keys_the_outgoing_radio` (mic),
+    /// `a_deferred_switch_stops_the_tune_carrier_and_the_slot_over_too`, and the six
+    /// `a_contended_switch_never_…_on_the_outgoing_radio` scenes.
     fn may_key(&self) -> bool {
         !self.handoff_deferred && !self.cat_hold_active
     }
@@ -8376,6 +8388,539 @@ mod tests {
             "the same over keys once the loop owns the rig"
         );
         assert!(rig.keyed, "…and Rig::ptt(true) ran");
+    }
+
+    /// The contended-switch scene, built once per applier below.
+    ///
+    /// `a_contended_switch_never_keys_the_outgoing_radio` pins the MIC through this scene;
+    /// the six tests that follow pin the six other `may_key` appliers through the same one.
+    /// Two logging rigctlds stand in for the operator's two radios, the loop is parked on
+    /// radio 0 (the Yaesu), and radio 1 (the Icom) waits in the monitor pool. The caller
+    /// HOLDS the pool lock, so `handoff_if_switched` can only ever defer — which leaves the
+    /// loop's `rig` pointing at the OUTGOING radio while the engine's dial, mode and TX
+    /// intent are already the INCOMING one's.
+    struct ContendedSwitch {
+        engine: Arc<Mutex<Engine>>,
+        pool: MonitorPool,
+        rig: Rig,
+        state: RadioLoop,
+        backend: MockBackend,
+        last_active: u32,
+        /// The radio the operator switched TO — still in the pool until the handoff lands.
+        incoming: u32,
+        /// Every command line each radio's rigctld was sent. Asserting on the WIRE, not on
+        /// `Rig::keyed`: the handoff's own unkey clears `keyed` a tick later and would hide
+        /// a key that really did go out.
+        outgoing_log: Arc<Mutex<Vec<String>>>,
+        incoming_log: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ContendedSwitch {
+        /// One radio-loop tick, handoff first — see [`loop_tick`].
+        fn tick(&mut self, now_ms: f64) {
+            loop_tick(
+                &self.engine,
+                &self.pool,
+                &mut self.rig,
+                &mut self.state,
+                &mut self.last_active,
+                &mut self.backend,
+                now_ms,
+            );
+        }
+        fn outgoing_saw(&self, key: impl Fn(&str) -> bool) -> bool {
+            self.outgoing_log.lock().unwrap().iter().any(|l| key(l))
+        }
+        fn incoming_saw(&self, key: impl Fn(&str) -> bool) -> bool {
+            self.incoming_log.lock().unwrap().iter().any(|l| key(l))
+        }
+        fn outgoing_lines(&self) -> Vec<String> {
+            self.outgoing_log.lock().unwrap().clone()
+        }
+        fn incoming_lines(&self) -> Vec<String> {
+            self.incoming_log.lock().unwrap().clone()
+        }
+    }
+
+    /// Build the scene. `arm` runs on the engine while it is still parked on the OUTGOING
+    /// radio — the operating section, dial and mode the applier under test needs. The
+    /// switch itself is the caller's, because it must happen with the pool lock held.
+    fn contended_switch_scene(arm: impl FnOnce(&mut Engine)) -> ContendedSwitch {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_logging_rigctld();
+        let (icom_addr, icom_port, icom_log) = mock_logging_rigctld();
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let (icom, icom_profile, yaesu_transport) = {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            // Radio 0 — the Yaesu, keyed over CAT so every key-up is a line on its own wire.
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 1042; // FTDX10
+            s.serial_port = "/dev/tempo-test-cat-a".to_string();
+            s.rigctld_port = yaesu_port;
+            s.audio_in = "FTDX10 codec".to_string();
+            s.audio_out = "FTDX10 codec".to_string();
+            e.apply_settings(s);
+            // Radio 1 — the Icom, likewise. `add_radio` makes it active, so the flat form
+            // below edits ITS profile.
+            let icom = e.add_radio();
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 3081; // IC-9700
+            s.serial_port = "/dev/tempo-test-cat-b".to_string();
+            s.rigctld_port = icom_port;
+            s.audio_in = "IC-9700 codec".to_string();
+            s.audio_out = "IC-9700 codec".to_string();
+            e.apply_settings(s);
+            let icom_profile = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.id == icom)
+                .unwrap()
+                .clone();
+            // Start on the Yaesu, in whatever section the applier under test lives in.
+            e.set_active_radio(0);
+            arm(&mut e);
+            let yaesu_transport = Transport::from_settings(e.settings());
+            (icom, icom_profile, yaesu_transport)
+        };
+        let mut state = loop_state();
+        state.applied = yaesu_transport;
+        ContendedSwitch {
+            engine,
+            pool: Arc::new(Mutex::new(vec![MonitorConn {
+                id: icom,
+                transport: Transport::from_profile(&icom_profile),
+                // Opened READ-ONLY by the monitor thread; the adopt gives it the real PTT mode.
+                rig: Rig::with_control(Some(icom_addr), PttMode::Vox),
+                rigctld_proc: None,
+                last_poll: 0.0,
+                ticks: 0,
+                smeter_supported: None,
+                freq_misses: 0,
+                open_failures: 0,
+                retry_after_ms: 0.0,
+            }])),
+            rig: Rig::with_control(Some(yaesu_addr), PttMode::Cat),
+            state,
+            backend: MockBackend::new(),
+            last_active: 0,
+            incoming: icom,
+            outgoing_log: yaesu_log,
+            incoming_log: icom_log,
+        }
+    }
+
+    #[test]
+    fn a_contended_switch_never_keys_a_cw_word_on_the_outgoing_radio() {
+        // CW's word pump is gated by `may_key` on the POLL: not calling `poll_cw_one` is
+        // what holds the word in the engine's queue. `send_cw` re-arms TX by itself (CW is
+        // manual keying — hitting the key must always transmit), so the deferral is the only
+        // thing between an F-key macro and the radio the operator switched away from.
+        //
+        // Wire evidence is the CAT keyer's own line, `b <word>` (Hamlib send_morse) — the
+        // default keyer backend keys CW without ever touching PTT.
+        let mut sc = contended_switch_scene(|e| {
+            e.set_operating_mode("cw", true);
+            e.set_frequency(14.050, "20m", "CW");
+        });
+        let pool = Arc::clone(&sc.pool);
+        let guard = pool.lock().unwrap();
+        {
+            let mut e = sc.engine.lock().unwrap();
+            e.set_active_radio(sc.incoming);
+            // The switch restored the Icom's own dial — park back in the CW segment so the
+            // privilege gate is not what refuses the key. Same band: a plain dial move.
+            e.set_frequency(14.050, "20m", "CW");
+            e.send_cw("TEST"); // an F-key macro, fired while the switch is still in flight
+            assert!(
+                e.tx_enabled(),
+                "scene guard: send_cw re-arms TX — only the loop can refuse now"
+            );
+        }
+        for tick in 1..=4 {
+            sc.tick(f64::from(tick) * 20.0);
+            assert!(
+                sc.state.handoff_deferred,
+                "scene guard: the contended pool keeps the handoff deferred"
+            );
+        }
+        assert!(
+            !sc.outgoing_saw(|l| l.starts_with("b ")),
+            "no CW may reach the radio the operator switched AWAY from — saw {:?}",
+            sc.outgoing_lines()
+        );
+
+        // The monitor's burst ends: the handoff lands and the loop owns the Icom.
+        drop(guard);
+        for tick in 5..=9 {
+            sc.tick(f64::from(tick) * 20.0);
+        }
+        assert_eq!(
+            sc.last_active, sc.incoming,
+            "the deferred handoff completed"
+        );
+        assert!(!sc.state.handoff_deferred, "…and cleared its deferral");
+
+        // A REFUSAL, not a mute: the operator fires the macro again and it goes out — on
+        // the Icom. (The word queued mid-switch is gone by now, and deliberately: the
+        // handoff's own RX-audio rebuild runs `halt_tx_for_context_change`, which drops
+        // every queued over. A switch cuts pending TX; only the LATCH survives it.)
+        sc.engine.lock().unwrap().send_cw("TEST");
+        sc.tick(200.0);
+        assert!(
+            sc.incoming_saw(|l| l.starts_with("b ")),
+            "the same macro must key the INCOMING radio once the loop owns it — saw {:?}",
+            sc.incoming_lines()
+        );
+        assert!(
+            !sc.outgoing_saw(|l| l.starts_with("b ")),
+            "…and the outgoing radio was never keyed at any point — saw {:?}",
+            sc.outgoing_lines()
+        );
+    }
+
+    #[test]
+    fn a_contended_switch_never_keys_an_rtty_over_on_the_outgoing_radio() {
+        // RTTY's message pump is gated the same way as CW's — on the POLL, so an unpolled
+        // over stays in the queue. The AFSK backend (the default: no FSK keyline port) keys
+        // PTT around the tone stream, so the wire evidence is `T 1`.
+        let mut sc = contended_switch_scene(|e| {
+            e.set_operating_mode("rtty", true);
+            e.set_frequency(14.085, "20m", "RTTY");
+        });
+        let pool = Arc::clone(&sc.pool);
+        let guard = pool.lock().unwrap();
+        {
+            let mut e = sc.engine.lock().unwrap();
+            e.set_active_radio(sc.incoming);
+            e.set_frequency(14.085, "20m", "RTTY");
+            assert!(
+                e.tx_enabled(),
+                "scene guard: the switch left RTTY armed (halt_tx_for_context_change)"
+            );
+            e.rtty_send_text("TEST DE KD9TAW")
+                .expect("scene guard: the engine accepted the send");
+        }
+        for tick in 1..=4 {
+            sc.tick(f64::from(tick) * 20.0);
+            assert!(
+                sc.state.handoff_deferred,
+                "scene guard: the contended pool keeps the handoff deferred"
+            );
+        }
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "no RTTY over may key the radio the operator switched AWAY from — saw {:?}",
+            sc.outgoing_lines()
+        );
+
+        drop(guard);
+        for tick in 5..=9 {
+            sc.tick(f64::from(tick) * 20.0);
+        }
+        assert_eq!(
+            sc.last_active, sc.incoming,
+            "the deferred handoff completed"
+        );
+        assert!(!sc.state.handoff_deferred, "…and cleared its deferral");
+
+        // A refusal, not a mute — the same send, once the loop owns the Icom. (The over
+        // queued mid-switch is gone: the handoff's RX-audio rebuild halts TX for the
+        // context change, which drops every queued over. Only the latch survives a switch.)
+        sc.engine
+            .lock()
+            .unwrap()
+            .rtty_send_text("TEST DE KD9TAW")
+            .expect("the engine accepts the send again once the switch has landed");
+        sc.tick(200.0);
+        assert!(
+            sc.incoming_saw(|l| l == "T 1"),
+            "the same over must key the INCOMING radio once the loop owns it — saw {:?}",
+            sc.incoming_lines()
+        );
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "…and the outgoing radio was never keyed at any point — saw {:?}",
+            sc.outgoing_lines()
+        );
+    }
+
+    #[test]
+    fn a_contended_switch_never_beacons_aprs_on_the_outgoing_radio() {
+        // The APRS beacon is a one-shot the engine has ALREADY rendered to audio — the loop
+        // only has to key and play it. `poll_aprs_tx` holds the queue while it isn't called,
+        // which is what `may_key` on the applier buys: the packet rides the right rig.
+        let mut sc = contended_switch_scene(|e| {
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+        });
+        let pool = Arc::clone(&sc.pool);
+        let guard = pool.lock().unwrap();
+        {
+            let mut e = sc.engine.lock().unwrap();
+            e.set_active_radio(sc.incoming);
+            e.set_frequency(14.250, "20m", "USB");
+            assert!(
+                e.tx_enabled(),
+                "scene guard: the switch left Phone armed (halt_tx_for_context_change)"
+            );
+            e.aprs_beacon(41.88, -87.63, '/', '>', "mid-switch", &[])
+                .expect("scene guard: the engine queued the beacon");
+        }
+        for tick in 1..=4 {
+            sc.tick(f64::from(tick) * 20.0);
+            assert!(
+                sc.state.handoff_deferred,
+                "scene guard: the contended pool keeps the handoff deferred"
+            );
+        }
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "no beacon may key the radio the operator switched AWAY from — saw {:?}",
+            sc.outgoing_lines()
+        );
+
+        drop(guard);
+        for tick in 5..=9 {
+            sc.tick(f64::from(tick) * 20.0);
+        }
+        assert_eq!(
+            sc.last_active, sc.incoming,
+            "the deferred handoff completed"
+        );
+        assert!(!sc.state.handoff_deferred, "…and cleared its deferral");
+
+        // A refusal, not a mute — the same beacon, once the loop owns the Icom. (The one
+        // queued mid-switch is gone: the handoff's RX-audio rebuild halts TX for the
+        // context change, which empties the beacon queue with every other pending over.)
+        sc.engine
+            .lock()
+            .unwrap()
+            .aprs_beacon(41.88, -87.63, '/', '>', "after the switch", &[])
+            .expect("the engine accepts the beacon again once the switch has landed");
+        sc.tick(200.0);
+        assert!(
+            sc.incoming_saw(|l| l == "T 1"),
+            "the same beacon must key the INCOMING radio once the loop owns it — saw {:?}",
+            sc.incoming_lines()
+        );
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "…and the outgoing radio was never keyed at any point — saw {:?}",
+            sc.outgoing_lines()
+        );
+    }
+
+    #[test]
+    fn a_contended_switch_never_plays_a_voice_message_on_the_outgoing_radio() {
+        // The voice keyer's message is TAKEN by `poll_voice`, so skipping the call is the
+        // only thing that keeps it for the rig it was queued for. Phone stays armed across a
+        // radio switch, so nothing else stands between an F-key and the outgoing radio.
+        let mut sc = contended_switch_scene(|e| {
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+        });
+        let pool = Arc::clone(&sc.pool);
+        let guard = pool.lock().unwrap();
+        {
+            let mut e = sc.engine.lock().unwrap();
+            e.set_active_radio(sc.incoming);
+            e.set_frequency(14.250, "20m", "USB");
+            e.send_voice(vec![0.05f32; 12_000]);
+            assert!(
+                e.tx_owner() == Some(tempo_app::engine::TxOwner::Voice),
+                "scene guard: the engine holds a voice message"
+            );
+        }
+        for tick in 1..=4 {
+            sc.tick(f64::from(tick) * 20.0);
+            assert!(
+                sc.state.handoff_deferred,
+                "scene guard: the contended pool keeps the handoff deferred"
+            );
+        }
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "no voice message may key the radio the operator switched AWAY from — saw {:?}",
+            sc.outgoing_lines()
+        );
+
+        drop(guard);
+        for tick in 5..=9 {
+            sc.tick(f64::from(tick) * 20.0);
+        }
+        assert_eq!(
+            sc.last_active, sc.incoming,
+            "the deferred handoff completed"
+        );
+        assert!(!sc.state.handoff_deferred, "…and cleared its deferral");
+
+        // A refusal, not a mute — the same F-key, once the loop owns the Icom. (The message
+        // queued mid-switch is gone: the handoff's RX-audio rebuild halts TX for the context
+        // change, which drops it with every other pending over.)
+        sc.engine.lock().unwrap().send_voice(vec![0.05f32; 12_000]);
+        sc.tick(200.0);
+        assert!(
+            sc.incoming_saw(|l| l == "T 1"),
+            "the same message must key the INCOMING radio once the loop owns it — saw {:?}",
+            sc.incoming_lines()
+        );
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "…and the outgoing radio was never keyed at any point — saw {:?}",
+            sc.outgoing_lines()
+        );
+    }
+
+    #[test]
+    fn a_contended_switch_never_starts_an_sstv_image_on_the_outgoing_radio() {
+        // SSTV is ONE continuous keyed over of up to ~4.9 minutes: starting it on the wrong
+        // radio is the longest-lived version of this bug. `may_key` joins the idle backstop
+        // that already holds the job (`poll_sstv_tx` takes it), so the image waits.
+        let mut sc = contended_switch_scene(|e| {
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.230, "20m", "USB"); // the SSTV calling frequency
+        });
+        let pool = Arc::clone(&sc.pool);
+        let guard = pool.lock().unwrap();
+        {
+            let mut e = sc.engine.lock().unwrap();
+            e.set_active_radio(sc.incoming);
+            e.set_frequency(14.230, "20m", "USB");
+            e.sstv_send(vec![0.05f32; 12_000], "Scottie 1".to_string())
+                .expect("scene guard: the engine queued the image");
+        }
+        for tick in 1..=4 {
+            sc.tick(f64::from(tick) * 20.0);
+            assert!(
+                sc.state.handoff_deferred,
+                "scene guard: the contended pool keeps the handoff deferred"
+            );
+        }
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "no image may key the radio the operator switched AWAY from — saw {:?}",
+            sc.outgoing_lines()
+        );
+
+        drop(guard);
+        for tick in 5..=9 {
+            sc.tick(f64::from(tick) * 20.0);
+        }
+        assert_eq!(
+            sc.last_active, sc.incoming,
+            "the deferred handoff completed"
+        );
+        assert!(!sc.state.handoff_deferred, "…and cleared its deferral");
+
+        // A refusal, not a mute — the same image, once the loop owns the Icom. (The one
+        // queued mid-switch is gone: the handoff's RX-audio rebuild halts TX for the context
+        // change, which drops it with every other pending over.)
+        sc.engine
+            .lock()
+            .unwrap()
+            .sstv_send(vec![0.05f32; 12_000], "Scottie 1".to_string())
+            .expect("the engine accepts the image again once the switch has landed");
+        sc.tick(200.0);
+        assert!(
+            sc.incoming_saw(|l| l == "T 1"),
+            "the same image must key the INCOMING radio once the loop owns it — saw {:?}",
+            sc.incoming_lines()
+        );
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "…and the outgoing radio was never keyed at any point — saw {:?}",
+            sc.outgoing_lines()
+        );
+    }
+
+    #[test]
+    fn a_contended_switch_never_keys_the_immediate_over_on_the_outgoing_radio() {
+        // The snappy first over: a directed call (or a Call CQ / broadcast) keys the CURRENT
+        // period instead of waiting a full T/R cycle. It is the one slot key that does NOT
+        // go through `key_boundary_tx`, so the boundary's own `may_key` never sees it.
+        //
+        // One tick BEFORE the switch settles the loop the way a running station is settled:
+        // the FT8 slot clock is built and slot 0's boundary is consumed. That is the
+        // situation this path exists for — the operator clicks MID-slot, past the boundary —
+        // and it keeps the scene honest, because a boundary owns the slot once it runs and
+        // would drain `immediate_tx` on its way through.
+        let mut sc = contended_switch_scene(|e| {
+            e.set_tier(Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+        });
+        sc.tick(10.0);
+        assert_eq!(
+            sc.state.last_slot,
+            Some(0),
+            "scene guard: slot 0's boundary is already consumed"
+        );
+        let pool = Arc::clone(&sc.pool);
+        let guard = pool.lock().unwrap();
+        {
+            let mut e = sc.engine.lock().unwrap();
+            e.set_active_radio(sc.incoming);
+            e.set_frequency(14.074, "20m", "USB");
+            // Digital does NOT keep the latch across a switch — the broadcast re-arms it and
+            // requests the snappy over, exactly as a double-click or Call CQ does.
+            e.broadcast("CQ KD9TAW EN52");
+            assert!(
+                e.tx_enabled() && e.peek_immediate_tx(),
+                "scene guard: the engine armed TX and asked to key THIS period"
+            );
+        }
+        // 20–80 ms is inside slot 0 (even = our TX parity) with the whole over still fitting,
+        // so the fit/parity checks admit it and only `may_key` can refuse.
+        for tick in 1..=4 {
+            sc.tick(f64::from(tick) * 20.0);
+            assert!(
+                sc.state.handoff_deferred,
+                "scene guard: the contended pool keeps the handoff deferred"
+            );
+        }
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "no mid-slot over may key the radio the operator switched AWAY from — saw {:?}",
+            sc.outgoing_lines()
+        );
+        assert!(
+            sc.engine.lock().unwrap().peek_immediate_tx(),
+            "the request only ever gets PEEKED while the loop doesn't own the rig"
+        );
+
+        drop(guard);
+        for tick in 5..=9 {
+            sc.tick(f64::from(tick) * 20.0);
+        }
+        assert_eq!(
+            sc.last_active, sc.incoming,
+            "the deferred handoff completed"
+        );
+        assert!(!sc.state.handoff_deferred, "…and cleared its deferral");
+        assert_eq!(
+            sc.state.last_slot,
+            Some(0),
+            "still mid-slot 0 — so the key below can only be the immediate path"
+        );
+
+        // A refusal, not a mute — the same click, once the loop owns the Icom. (The over
+        // armed mid-switch is gone: the handoff's RX-audio rebuild halts TX for the context
+        // change, and `halt_tx` drops a pending snappy-TX request with the queue it belongs
+        // to.)
+        sc.engine.lock().unwrap().broadcast("CQ KD9TAW EN52");
+        sc.tick(200.0);
+        assert!(
+            sc.incoming_saw(|l| l == "T 1"),
+            "the same over must key the INCOMING radio once the loop owns it — saw {:?}",
+            sc.incoming_lines()
+        );
+        assert!(
+            !sc.outgoing_saw(|l| l == "T 1"),
+            "…and the outgoing radio was never keyed at any point — saw {:?}",
+            sc.outgoing_lines()
+        );
     }
 
     #[test]
