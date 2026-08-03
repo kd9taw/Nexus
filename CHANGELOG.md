@@ -35,8 +35,34 @@ own sideband for a straight linear one, the mirrored sideband for an inverting o
 still sent only when the answer *changes*, so it does not chatter on the bus and does not fight
 you if you reach for the rig's own mode knob. Everything that already refused to touch your
 transmit VFO still refuses: a beacon, a one-channel simplex bird, an uplink mapping you have not
-confirmed for that radio, Doppler switched off, or you taking the mode yourself mid-pass. A
-pile-up split on another band ("UP 5" on 20 m) can still never inherit a satellite's sideband.
+confirmed for that radio, Doppler switched off, or you taking the mode yourself mid-pass.
+
+**The mirror now covers the digital modes too.** An inverting transponder flips the passband, so it
+flips the sideband — and a data mode still *has* a sideband. Working an inverting bird in FT8 put
+your uplink in DATA-U where it belonged in DATA-L, and RTTY put it on the normal tone sense where
+it belonged on reverse. The frequency was right and the side was wrong, which from your seat is
+indistinguishable from nobody hearing you — and once every held bird got its mode written, it was
+Nexus putting it there rather than a leftover. All three pairs mirror now: USB/LSB, the DATA
+submodes, and RTTY normal/reverse. CW is deliberately left alone: CW and CW-R pick which side of
+the carrier your *receiver* listens on, and both transmit the same carrier on the dial, so there is
+no side for an inverting bird to swap. Keying CW through the soundcard puts the rig in plain SSB,
+and that one does mirror.
+
+**FT8 through a linear bird also stopped being refused where the uplink rides the Sub band.** On
+native CI-V the transmit mode went through the plain-mode path only, so a Digital-section pass
+answered "rig would not set the TX mode — put Sub in PKTUSB by hand" instead of setting it. The Sub
+band now gets what the dial gets: base sideband plus DATA. Your per-radio "plain SSB for data
+modes" setting still applies to both legs, so a mic-jack interface keeps plain SSB either side of
+the transponder. This CI-V sequence has not been confirmed against a real IC-9700 yet — if your
+uplink does not land in DATA, say so.
+
+**And a split you program after a pass now states its own mode.** A satellite hold puts the bird's
+mode on your transmit VFO; work a 20 m pile-up "UP 5" afterwards and that split rides the same VFO.
+Nexus correctly refused to put the *bird's* sideband on a terrestrial split — but it did not put
+anything else there either, so the satellite's FM stayed and the rig transmitted FM on 20 m. Any
+split that gets programmed is now told the mode that belongs to it: the satellite's uplink gets the
+mirrored sideband, everything else gets the mode you are listening in. Still written only when the
+answer changes.
 
 ### Fixed: a rotator that stops answering no longer takes the dial with it
 

@@ -589,10 +589,44 @@ impl RigBackend for CivBackend {
         // The uplink sideband (`X`, the inverting-bird LSB): command it on the
         // Sub band, selection restored, same discipline as the frequency —
         // including the remembered stray selection on a refused restore.
-        let Some(m) = Mode::from_name(mode) else {
-            return Some(false);
+        //
+        // PKT*/DATA-* decompose into base sideband + the DATA flag, byte for
+        // byte as `set_mode` does for the dial — one decomposition, so the two
+        // VFOs cannot end up with different ideas of what "PKTUSB" means.
+        // Without it this resolved through `Mode::from_name` alone, `PKTUSB`
+        // was not a name it knows, and a Digital-section pass through a linear
+        // bird answered "rig would not set the TX mode — put Sub in PKTUSB by
+        // hand". FT8 through a transponder is real operating and plain SSB on a
+        // normally-wired rig radiates ZERO RF, so that refusal is a dead
+        // transmit leg rather than caution (operator ruling, 2026-08-03: "if I
+        // am doing FT over sat, it should put it in data").
+        //
+        // ⚠️ UNVERIFIED ON HARDWARE. `1A 06` against a SELECTED Sub band is
+        // what the rig should be told; nobody has watched an IC-9700 take it.
+        // Everything around it is the verified discipline: the write lands on
+        // the selected band, the selection is handed back to Main on EVERY path
+        // including failure (a stray selection makes the next dial read serve
+        // the uplink and the next `05` write land the downlink in the uplink's
+        // band), and a refused restore is remembered rather than shrugged off.
+        let up = mode.to_ascii_uppercase();
+        let (base, data) = match up.as_str() {
+            "PKTUSB" | "DATA-U" | "PKT-U" => (Mode::Usb, true),
+            "PKTLSB" | "DATA-L" | "PKT-L" => (Mode::Lsb, true),
+            _ => match Mode::from_name(&up) {
+                Some(m) => (m, false),
+                None => return Some(false),
+            },
         };
-        let ok = self.select("Sub") && self.ack(commands::set_mode(self.addr, m, None));
+        let ok = if self.select("Sub") {
+            let mode_ok = self.ack(commands::set_mode(self.addr, base, None));
+            // Same ACK discipline as `set_mode`: tolerate a NAK turning DATA
+            // OFF (some rigs NAK a redundant off) and REQUIRE it turning DATA
+            // ON — an uplink that silently missed USB-D transmits nothing.
+            let data_ok = self.ack(commands::set_data_mode(self.addr, data, None));
+            mode_ok && (data_ok || !data)
+        } else {
+            false
+        };
         let restored = self.select("Main");
         g.sel_stray = !restored;
         if restored {
@@ -972,6 +1006,56 @@ mod tests {
             assert!(!r.satmode, "satellite mode released (16 5A 00)");
             assert!(!r.log.iter().any(|(cmd, _)| *cmd == 0x0F));
         }
+    }
+
+    #[test]
+    fn an_ft_uplink_gets_the_data_submode_on_sub_not_a_refusal() {
+        // OPERATOR RULING (2026-08-03): "if I am doing FT over sat, it should
+        // put it in data." This resolved through `Mode::from_name` alone, which
+        // does not know `PKTUSB`, so a Digital-section pass through a linear
+        // bird answered RPRT -1 and the loop told the operator to "put Sub in
+        // PKTUSB by hand". FT8 through a transponder is real operating and
+        // plain SSB on a normally-wired rig radiates ZERO RF, so the refusal is
+        // a dead transmit leg — not caution.
+        //
+        // ⚠️ The `1A 06` sequence against a selected Sub band is UNVERIFIED ON
+        // HARDWARE. This pins what the rig is TOLD, which is the part software
+        // owns.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435640000\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 145965000\n"), "RPRT 0\n");
+
+        // An INVERTING bird worked in FT8: USB down ⇒ PKTLSB up.
+        assert_eq!(roundtrip(&mut c, &mut rd, "X PKTLSB 3000\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_mode, 0x00, "the uplink's BASE sideband is LSB");
+            assert!(r.sub_data, "…and DATA is ON, which is what routes TX audio");
+            assert_eq!(r.main_mode, 0x01, "Main (the downlink) untouched");
+            assert!(
+                !r.main_data,
+                "the DATA write landed on SUB, not on the dial"
+            );
+            assert!(!r.sel_sub, "selection handed back to Main");
+        }
+        // The dial still reads the DOWNLINK — a stray selection would serve the
+        // uplink here and put the next `05` write in the wrong band.
+        assert_eq!(roundtrip(&mut c, &mut rd, "f\n"), "435640000\n");
+
+        // A PLAIN mode after it turns DATA back OFF, so an operator moving from
+        // the Digital section to Phone mid-pass is not left in a DATA submode.
+        assert_eq!(roundtrip(&mut c, &mut rd, "X USB 0\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_mode, 0x01);
+            assert!(!r.sub_data, "a plain mode clears DATA on the uplink too");
+            assert!(!r.sel_sub);
+        }
+
+        // And a token no rig knows is still an honest refusal, not a guess.
+        assert_eq!(roundtrip(&mut c, &mut rd, "X NOSUCH 0\n"), "RPRT -1\n");
     }
 
     #[test]
