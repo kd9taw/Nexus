@@ -4140,11 +4140,25 @@ impl Engine {
         // machinery, and before `settings.operating_mode` stops naming the mode this
         // dial was actually used in.
         self.bank_dial_memory();
-        // Entering a real operating section ends the APRS FM-simplex context, and the FM-channel
-        // and satellite FM-bird holds with it — that section's own mode policy takes over here.
+        // Entering a real operating section ends the APRS FM-simplex context and the FM-channel
+        // hold — that section's own mode policy takes over here.
+        //
+        // ⚠️ NOT the satellite hold, and this used to clear it. A section change is not a
+        // leave-event for a PASS: the rig is still parked on the bird's downlink, Doppler is
+        // still correcting both legs (the track loop is backend and section-independent), the
+        // rotor is still slewing. Only the view changed. Clearing the hold here threw away the
+        // BIRD's half of the mode answer and let the terrestrial policy supply both — so an
+        // operator who stepped over to Phone mid-pass with a station-wide `phone_mode` of "fm"
+        // put the rig into FM on a linear passband, which is the silence they reported, reached
+        // through a different door than the transponder switch.
+        //
+        // The two authorities are unchanged and both still apply: the BIRD names the sideband,
+        // the SECTION names the form — which is the whole point of asking the new section. The
+        // hold ends where it always did: with the bird for a linear transponder, with the dial
+        // for an FM one (`sat_linear_mode`). A section change is neither. Where it also QSYs
+        // (`follow_freq`), `tune_dial` clears it below exactly as any other QSY does.
         self.aprs_fm = false;
         self.fm_channel = false;
-        self.sat_mode = None;
         let om = match mode.to_ascii_lowercase().as_str() {
             "phone" => OperatingMode::Phone,
             "cw" => OperatingMode::Cw,
@@ -23611,6 +23625,47 @@ mod tests {
                 "{class:?}: picking the transponder again is fresh consent"
             );
         }
+    }
+
+    #[test]
+    fn a_pass_keeps_its_mode_when_the_operator_walks_to_another_section() {
+        // OPERATOR: "if Doppler radio control is running, and I go over to the
+        // Phone section, it will still all work, correct? It should."
+        //
+        // It should, and the frequency half always did — the track loop is
+        // backend and section-independent, so the hold and the dial ownership
+        // both survive. The MODE half did not: a section change cleared the
+        // satellite hold outright, so the commanded mode fell back to the new
+        // section's terrestrial policy. On a station whose `phone_mode` is
+        // "fm" that is FM, on a linear passband, which is silence — the same
+        // failure as the transponder switch, through a different door.
+        let (mut e, _, _) = sat_station();
+        e.settings.phone_mode = "fm".into();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(e.rig_mode_effective(), "USB", "precondition");
+
+        // Step over to Phone — a NAVIGATION, not a QSY. Nothing about the
+        // radio changed: same dial, same bird, Doppler still correcting.
+        e.set_operating_mode("phone", false);
+        assert!(e.sat_transponder_held().is_some(), "the hold is untouched");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "the bird still names the sideband after a section change"
+        );
+
+        // …and the SECTION still names the form, which is the reason the new
+        // section is asked at all: the same bird in Digital wants the DATA
+        // submode, because FT8 through a transponder is real.
+        e.set_operating_mode("digital", false);
+        assert_eq!(e.rig_mode_effective(), "PKTUSB");
+
+        // A section change that also QSYs is an ordinary leave-event, and the
+        // hold ends there exactly as it does for any other QSY.
+        e.set_frequency(14.074, "20m", "USB");
+        assert_eq!(e.rig_mode_effective(), "PKTUSB", "20 m FT8, nothing held");
+        assert_eq!(e.settings.band, "20m");
     }
 
     #[test]

@@ -160,6 +160,25 @@ describe('Lock on — putting the radio back on the bird', () => {
     expect(btn.closest('.sat-doppler')).toBeTruthy()
   })
 
+  it('appears on the ENGINE’s hold, not just on a click this section saw', async () => {
+    // THE OPERATOR REPORT, 0.27.1: "I don't see the button to lock on." He was
+    // holding a transponder with Doppler correcting both legs — and this is
+    // the ordinary shape of that, not an edge case. Arm a pass, open the
+    // section afterwards (or come back to the bird), and the engine holds a
+    // transponder while this section's own click-state never saw a click.
+    //
+    // The file's rule is engine truth first, local pick second — `heldT`
+    // follows it and the readout's `held` prop is written to tolerate exactly
+    // this. Asking the local pick alone made the button vanish precisely when
+    // the operator was mid-pass, which is the only time it is any use.
+    api.getSatTransponder.mockImplementation(() => Promise.resolve(null))
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await lockOn())
+    // The index comes off the track DTO, which indexes the same getSatDetail
+    // list the cards do — so it re-runs the pick the ENGINE is holding.
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+  })
+
   it('is absent when no transponder is held — it never picks one for you', async () => {
     api.getSatTransponder.mockImplementation(() => Promise.resolve(null))
     // With nothing held the engine drives nothing, so the readout carries its

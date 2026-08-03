@@ -3161,16 +3161,28 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                       // index there is nothing to re-assert, and a button that
                       // re-picked "whatever looks right" would be choosing a
                       // transponder for the operator.
-                      onLockOn={
-                        heldIndex == null
+                      //
+                      // ENGINE TRUTH FIRST, local pick second — the same
+                      // precedence `heldT` uses, and the reason the `held`
+                      // prop above tolerates a null `heldIndex`. This asked
+                      // `heldIndex` alone and so was ABSENT for the ordinary
+                      // case: a pass armed, then the section opened, where the
+                      // engine holds a transponder and this section's own
+                      // click-state never saw the click (operator report,
+                      // 0.27.1 — "I don't see the button"). The track DTO's
+                      // index is the engine's own answer and indexes the same
+                      // getSatDetail list.
+                      onLockOn={(() => {
+                        const idx = detailTrack.transponderIndex ?? heldIndex
+                        return idx == null
                           ? null
                           : () =>
                               pickTransponder(
                                 detail.name,
-                                heldIndex,
+                                idx,
                                 heldT?.description ?? detailTrack.transponder ?? '',
                               )
-                      }
+                      })()}
                     />
                     {/* The strip goes under the readout: the readout says what
                         the radio is tuned to, the strip says where that puts
