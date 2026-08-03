@@ -91,21 +91,25 @@ impl Transmitter {
         )
     }
 
-    /// True when the RADIO must be in FM to work this transmitter — the FM/AFSK
-    /// repeater and packet birds (SO-50, AO-91, the ISS APRS digipeater), as
-    /// opposed to the linear/SSB majority.
+    /// What the RADIO must be put in to work this transmitter — FM, or the
+    /// linear path on the sideband the record declares.
     ///
     /// Per-leg mode FIRST for the same reason [`Transmitter::uplink_mode`]
     /// exists: the single `mode` field cannot describe an inverting
     /// transponder's two legs, and it is the DOWNLINK the rig demodulates. The
-    /// mode-name table itself lives in [`tempo_core::doppler::mode_is_fm`] —
+    /// classification itself lives in [`tempo_core::doppler::downlink_class`] —
     /// one map, shared with the routing class and the commanded rig mode, so
     /// the three cannot disagree about the same bird.
+    pub fn downlink_class(&self) -> tempo_core::doppler::DownlinkClass {
+        tempo_core::doppler::downlink_class(self.downlink_mode.as_deref().or(self.mode.as_deref()))
+    }
+
+    /// True when the RADIO must be in FM to work this transmitter — the FM/AFSK
+    /// repeater and packet birds (SO-50, AO-91, the ISS APRS digipeater), as
+    /// opposed to the linear/SSB majority. The FM half of
+    /// [`Self::downlink_class`], derived from it so the two cannot drift.
     pub fn is_fm(&self) -> bool {
-        self.downlink_mode
-            .as_deref()
-            .or(self.mode.as_deref())
-            .is_some_and(tempo_core::doppler::mode_is_fm)
+        self.downlink_class().is_fm()
     }
 
     /// Centre of the downlink passband (or the single downlink frequency).

@@ -1554,16 +1554,22 @@ function SatRadioBinding({
         {railDot(confirmed && !pending)}
         <span className="sat-rail-name">Radio</span>
         <span className="sat-rail-state">
-          {/* An empty band = a refusal that returned BEFORE routing (band-plan
-              miss): no rig was resolved and no class chosen, so the reason
-              stands alone — never "this radio · · SSB" beside a rig that was
-              never picked. */}
-          {binding.band !== '' && (
+          {/* No RIG = a refusal that returned before routing resolved one, so
+              the reason stands alone — never "this radio · · SSB" beside a rig
+              that was never picked.
+
+              Keyed on radioId, not on the band. An absent BAND no longer means
+              "nothing was resolved": a downlink the band table cannot name
+              (QO-100, the microwave birds) routes and tunes like any other, and
+              hiding the rig there would print frequencies beside no radio at
+              all. The band chip is dropped on its own instead — absent is
+              absent, and it is the one thing here we genuinely do not know. */}
+          {binding.radioId != null && (
             <>
               {binding.radioName || 'this radio'}
               <span className="sat-bind-why">
-                {' '}
-                · {binding.band} · {binding.fm ? 'FM' : 'SSB'}
+                {binding.band !== '' ? ` · ${binding.band}` : ''} ·{' '}
+                {binding.fm ? 'FM' : 'SSB'}
               </span>
             </>
           )}
@@ -1571,7 +1577,7 @@ function SatRadioBinding({
               the dial landed) — print both rather than letting either win. */}
           {legs.length > 0
             ? ` — ${legs.join(' · ')} MHz${binding.note ? ` — ${binding.note}` : ''}`
-            : binding.band !== ''
+            : binding.radioId != null
               ? ` — ${binding.note ?? ''}`
               : (binding.note ?? '')}
         </span>

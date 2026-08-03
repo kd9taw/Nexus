@@ -1865,6 +1865,18 @@ impl RoutingRule {
         let mode_ok = self.mode.is_none_or(|m| m == mode);
         band_ok && mode_ok
     }
+
+    /// Does this rule cover `mode` on a dial [`crate::bandplan::band_for_dial`] cannot NAME a
+    /// band for (QO-100, the microwave birds — see [`Settings::route_radio_bandless`])?
+    ///
+    /// Only a rule with an EMPTY band selector can answer, and it answers the same as always:
+    /// its verdict never read a band in the first place, so there is nothing about it to guess
+    /// at. A rule that NAMES bands cannot be shown to contain a band we cannot name, so it does
+    /// not match — the opposite of [`Self::matches`], where an empty selector and an empty band
+    /// string would BOTH match and quietly turn "no band" into "every band".
+    pub fn matches_bandless(&self, mode: RouteMode) -> bool {
+        self.bands.is_empty() && self.mode.is_none_or(|m| m == mode)
+    }
 }
 
 /// One radio's complete, independently-configurable connection profile. A single-radio station has
@@ -2699,6 +2711,34 @@ impl Settings {
         self.route_radio(band, mode)
     }
 
+    /// [`Self::route_radio_satellite`] for a downlink this app cannot NAME a band for — QO-100 at
+    /// 10.489 GHz, the IC-905 microwave birds. Same tier ORDER (satellite-designated rules above
+    /// plain mode rules, first-match-wins within each), asking only the tiers whose answer never
+    /// read a band:
+    ///
+    /// - A rule with an empty band selector is consulted, because it answers identically for
+    ///   every band and therefore for no band. The operator wrote "satellite work goes HERE" and
+    ///   discarding that is not caution, it is dropping an explicit answer on the floor.
+    /// - A rule that NAMES bands cannot match: nothing shows an unnameable dial is in its list.
+    /// - [`Self::radio_for_band`] is skipped — it ranks rigs BY band coverage, and an empty
+    ///   `bands` list ranks as catch-all, so it would answer "the rig that owns everything else"
+    ///   for a dial it knows nothing about. The satellite path's own coverage fallback
+    ///   (`Engine::sat_fallback_radio`) covers that case honestly, because it asks the rig's RX
+    ///   RANGES about a FREQUENCY, which works perfectly at 10 GHz.
+    /// - `default_radio` is skipped for the same reason, one tier weaker: "use this rig when no
+    ///   band has an owner" is a band-coverage answer, and it is most often the HF rig.
+    pub fn route_radio_bandless(&self, mode: RouteMode) -> Option<u32> {
+        let usable = |id: u32| self.radios.iter().any(|p| p.id == id && p.enabled);
+        let designated = |ctx: Option<RouteContext>| {
+            self.routing_rules
+                .iter()
+                .find(|r| r.context == ctx && r.matches_bandless(mode) && usable(r.radio))
+        };
+        let rule = designated(Some(RouteContext::Satellite)).or_else(|| designated(None))?;
+        // Authoritative exactly as in the band tiers, stay-put included.
+        (rule.radio != self.active_radio).then_some(rule.radio)
+    }
+
     /// Drop routing state that points at a radio which no longer EXISTS, so a removed radio can
     /// never leave a rule that silently never fires — or worse, a `default_radio` aimed at a gone
     /// rig. A merely DISABLED radio keeps its rules (unplugging a rig for the afternoon must not
@@ -3173,6 +3213,52 @@ impl Settings {
     }
 
     pub fn rig_mode(&self) -> String {
+        // FM is BAND-GATED, and that gate is a bug fix, not a preference. `phone_mode`
+        // is one station-wide field: nothing resets it when the operator changes band or
+        // switches radios (`sync_flat_from_active` does not touch it, and RadioProfile
+        // has no equivalent). So without the gate, working an FM repeater and then tuning
+        // to 20 m phone commands the rig into FM on 20 m — a wideband signal on a band
+        // whose plan has no room for it. Reachable on a SINGLE radio: an FT-991A or
+        // IC-7100 covers both, so that is an ordinary evening, not a corner case.
+        //
+        // 29.0 MHz is the floor because 29.0-29.7 is the 10 m FM segment; below it FM is
+        // not used. Above, every band an FM-capable rig reaches (10 m, 6 m, 2 m, 70 cm
+        // and up) is FM territory. Falling back to the band's sideband — rather than
+        // refusing or holding FM — matches what the operator would have set by hand, and
+        // is the same "force the correct thing for this band" rule the sideband
+        // convention below already applies. Pinned by
+        // `fm_does_not_follow_the_operator_down_to_hf`.
+        if self.operating_mode == OperatingMode::Phone
+            && self.phone_mode.eq_ignore_ascii_case("fm")
+            && self.dial_mhz >= 29.0
+        {
+            return "FM".to_string(); // FM voice (10 m FM segment, VHF/UHF simplex + repeaters)
+        }
+        // WHICH SIDE the section policy below works on. Two different questions,
+        // deliberately not unified: Digital's side is a property of the tuned CHANNEL
+        // (FT8 on 40 m is USB-side — the band convention would say LSB and be wrong),
+        // while Phone and CW follow the hard band convention (LSB below 10 MHz).
+        let lsb = match self.operating_mode {
+            OperatingMode::Digital => self.sideband.trim().eq_ignore_ascii_case("LSB"),
+            _ => self.dial_mhz < 10.0,
+        };
+        self.rig_mode_on_sideband(lsb)
+    }
+
+    /// [`Self::rig_mode`]'s per-section policy with the SIDEBAND SIDE supplied
+    /// rather than derived — the form the section needs (plain SSB, a DATA
+    /// submode, the rig's CW or RTTY mode), on the side the caller names.
+    ///
+    /// It exists for the satellite path, which is the one caller that knows the
+    /// side better than any band convention does: the transponder's own record
+    /// declares it, and an inverting bird's uplink is derived by mirroring it.
+    /// Splitting it out rather than duplicating it is deliberate — two copies of
+    /// the section policy is exactly how the commanded mode and the routing
+    /// class learn to disagree about one bird.
+    ///
+    /// NO FM arm: this answers for the LINEAR path only. FM is a class, not a
+    /// side, and its callers gate on it before they get here.
+    pub(crate) fn rig_mode_on_sideband(&self, lsb: bool) -> String {
         match self.operating_mode {
             // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
             // in USB so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
@@ -3187,40 +3273,15 @@ impl Settings {
                 // at 30 m and up. The waterfall/zero-beat math already signs CWR as
                 // LSB-side, and the mode-apply helpers treat CWR exactly like CW.
                 CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer | CwKeyerBackend::Serial => {
-                    if self.dial_mhz < 10.0 { "CWR" } else { "CW" }.to_string()
+                    if lsb { "CWR" } else { "CW" }.to_string()
                 }
-                CwKeyerBackend::Soundcard => {
-                    if self.dial_mhz < 10.0 { "LSB" } else { "USB" }.to_string()
-                }
+                CwKeyerBackend::Soundcard => if lsb { "LSB" } else { "USB" }.to_string(),
             },
-            // Phone: force the correct sideband for the band — the hard convention is
-            // LSB below 10 MHz (160/80/40 m), USB at 30 m and up. (AM comes later as an
-            // explicit choice in the Phone cockpit.)
-            //
-            // FM is BAND-GATED, and that gate is a bug fix, not a preference. `phone_mode`
-            // is one station-wide field: nothing resets it when the operator changes band or
-            // switches radios (`sync_flat_from_active` does not touch it, and RadioProfile
-            // has no equivalent). So without the gate, working an FM repeater and then tuning
-            // to 20 m phone commands the rig into FM on 20 m — a wideband signal on a band
-            // whose plan has no room for it. Reachable on a SINGLE radio: an FT-991A or
-            // IC-7100 covers both, so that is an ordinary evening, not a corner case.
-            //
-            // 29.0 MHz is the floor because 29.0-29.7 is the 10 m FM segment; below it FM is
-            // not used. Above, every band an FM-capable rig reaches (10 m, 6 m, 2 m, 70 cm
-            // and up) is FM territory. Falling back to the band's sideband — rather than
-            // refusing or holding FM — matches what the operator would have set by hand, and
-            // is the same "force the correct thing for this band" rule the sideband
-            // convention above already applies. Pinned by
-            // `fm_does_not_follow_the_operator_down_to_hf`.
-            OperatingMode::Phone => {
-                if self.phone_mode.eq_ignore_ascii_case("fm") && self.dial_mhz >= 29.0 {
-                    "FM".to_string() // FM voice (10 m FM segment, VHF/UHF simplex + repeaters)
-                } else if self.dial_mhz < 10.0 {
-                    "LSB".to_string()
-                } else {
-                    "USB".to_string()
-                }
-            }
+            // Phone: force the correct sideband — the hard convention is LSB below
+            // 10 MHz (160/80/40 m), USB at 30 m and up. (AM comes later as an explicit
+            // choice in the Phone cockpit.) The FM arm lives in `rig_mode`, above the
+            // side derivation, because FM is not a side.
+            OperatingMode::Phone => if lsb { "LSB" } else { "USB" }.to_string(),
             // RTTY: the mode follows the keying backend, like CW's keyer split. True FSK
             // needs the rig in its RTTY mode (Hamlib "RTTY" → Yaesu RTTY-L etc.) so the FSK
             // input keys the shift AND the rig's narrow RTTY filters unlock. AFSK is an audio
@@ -3249,12 +3310,9 @@ impl Settings {
             // retry — it tries once, the rig rejects it, and it gives up, rather than
             // leaving the rig stuck in the previous section's SSB/CW mode.) Any non-LSB
             // sideband (incl. empty/garbled) maps to the USB-side PKTUSB that FT8 uses.
-            OperatingMode::Digital => self.plain_ssb_if_configured(
-                match self.sideband.trim().to_ascii_uppercase().as_str() {
-                    "LSB" => "PKTLSB",
-                    _ => "PKTUSB",
-                },
-            ),
+            OperatingMode::Digital => {
+                self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
+            }
         }
     }
 
@@ -3785,6 +3843,63 @@ mod tests {
             s.route_radio_satellite("70cm", RouteMode::Fm),
             Some(ft991a),
             "falls through to the FM rule when the designated radio is disabled"
+        );
+    }
+
+    #[test]
+    fn a_bandless_tune_asks_only_the_rules_whose_answer_never_read_a_band() {
+        // QO-100 at 10.489 GHz has no band label (`band_for_dial` stops at 23 cm),
+        // and the satellite path now tunes it rather than refusing. Which rig?
+        // Only the rules that never read a band can say — and they say it exactly
+        // as they always did.
+        let mut s = three_radio_shack();
+        let (ic9700, ft991a) = (1, 2);
+        assert_eq!(s.active_radio, 0, "precondition: the HF rig is active");
+
+        // The three_radio_shack rules all NAME bands, so none of them claims it,
+        // and no band-coverage tier is consulted at all — including the FTdx10's
+        // empty (catch-all) band list, which would otherwise rank as coverage.
+        assert_eq!(s.route_radio_bandless(RouteMode::Ssb), None);
+        assert_eq!(s.route_radio_bandless(RouteMode::Fm), None);
+
+        // A plain MODE rule with no band selector does claim it: its verdict is
+        // the same for every band, and therefore for no band.
+        s.routing_rules.push(RoutingRule {
+            bands: Vec::new(),
+            mode: Some(RouteMode::Ssb),
+            context: None,
+            radio: ft991a,
+        });
+        assert_eq!(s.route_radio_bandless(RouteMode::Ssb), Some(ft991a));
+        assert_eq!(
+            s.route_radio_bandless(RouteMode::Fm),
+            None,
+            "a mode selector still scopes it — mode is not a band"
+        );
+
+        // …and a satellite DESIGNATION outranks it, the same tier order as the
+        // band path, whatever the list positions are.
+        s.routing_rules.push(RoutingRule {
+            bands: Vec::new(),
+            mode: None,
+            context: Some(RouteContext::Satellite),
+            radio: ic9700,
+        });
+        assert_eq!(s.route_radio_bandless(RouteMode::Ssb), Some(ic9700));
+
+        // Stay-put and the disabled-radio skip work as they do everywhere else.
+        s.active_radio = ic9700;
+        assert_eq!(s.route_radio_bandless(RouteMode::Ssb), None);
+        s.active_radio = 0;
+        s.radios
+            .iter_mut()
+            .find(|p| p.id == ic9700)
+            .unwrap()
+            .enabled = false;
+        assert_eq!(
+            s.route_radio_bandless(RouteMode::Ssb),
+            Some(ft991a),
+            "falls through to the mode rule when the designated radio is unplugged"
         );
     }
 

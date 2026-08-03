@@ -276,6 +276,94 @@ pub fn mode_is_fm(mode: &str) -> bool {
         .any(|tok| FM_MODE_TOKENS.iter().any(|m| tok.eq_ignore_ascii_case(m)))
 }
 
+/// What the RADIO must be put in to work a transponder, from the downlink mode
+/// the satellite database declares — a CLOSED set of three, never a SatNOGS
+/// mode name passed through.
+///
+/// The closure is load-bearing rather than tidy. The satellite vocabulary is
+/// open ("GFSK/BPSK", "Mode U - SSTV - Robot-36", "LoRa", "CERTO"), the rig's
+/// mode verb accepts a fixed list, and a token it does not know is answered
+/// `RPRT -1` — which spends the radio loop's bounded set-mode budget and lands
+/// the operator on a "the rig refused X" note. So a declared mode is
+/// CLASSIFIED here and only the class travels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownlinkClass {
+    /// An FM channel — the SO-50/AO-91 repeaters and the packet birds.
+    Fm,
+    /// The linear/SSB path, upper sideband: the satellite convention on
+    /// VHF/UHF, and where every unrecognised mode lands.
+    Usb,
+    /// The linear path, LOWER sideband — only when the record says so.
+    Lsb,
+}
+
+impl DownlinkClass {
+    /// Does the rig belong in FM for this bird? The routing class and the FM
+    /// plumbing both ask this rather than re-reading a mode string.
+    pub fn is_fm(self) -> bool {
+        matches!(self, DownlinkClass::Fm)
+    }
+
+    /// The sideband name for the linear classes (`None` for FM) — what the
+    /// engine stores as the tuned channel's sideband.
+    pub fn sideband(self) -> &'static str {
+        match self {
+            DownlinkClass::Fm => "FM",
+            DownlinkClass::Usb => "USB",
+            DownlinkClass::Lsb => "LSB",
+        }
+    }
+}
+
+/// Classify a declared satellite DOWNLINK mode. `None` (the record does not
+/// say) reads as [`DownlinkClass::Usb`], which is what this path did for every
+/// mode before any map existed.
+///
+/// | declared | class | why |
+/// |---|---|---|
+/// | anything [`mode_is_fm`] claims | `Fm` | one map, so the routing class and the commanded mode cannot disagree |
+/// | `LSB` | `Lsb` | the record naming the lower sideband is the ONE case that must not be commanded USB — an inverted-sideband error, and on an inverting bird it inverts the uplink with it |
+/// | `USB`, `CW`, `BPSK`, `PSK31`, `FT8`, `MFSK`, `DVB-S2`, `LoRa`, unknown, absent | `Usb` | every one of them is worked through a LINEAR path, in the SSB passband |
+///
+/// ⚠️ **A DECLARED `CW` DOWNLINK IS NOT COMMANDED `CW`.** Working CW through a
+/// linear transponder is done in USB — you copy the tone inside the SSB
+/// passband, and that is what the whole passband model here assumes. Three
+/// concrete reasons, not convention:
+///
+/// - every frequency in this module is a plain suppressed-carrier dial
+///   ([`tuning`], the operator's passband offset, `follow_downlink_in_band`),
+///   and NOTHING applies a CW-pitch correction. In the rig's CW mode the
+///   relationship between the displayed dial and the actual carrier is the
+///   rig's CW-pitch/CW-R setting — per rig, per menu. Steering a dial we cannot
+///   interpret, at up to ~100 Hz/s, would silently walk the operator off the
+///   station they are working;
+/// - [`uplink_mode_for`] can only mirror USB↔LSB. Commanded `CW`, an INVERTING
+///   transponder's sideband swap is lost — the correct uplink frequency in the
+///   wrong sideband, which is silence at the far end;
+/// - the rig's own CW filter memory narrows the passband, which is the opposite
+///   of what hunting a whole transponder wants.
+///
+/// A CW BEACON is the case where a narrow filter genuinely helps, and it is
+/// deliberately NOT special-cased: the first two reasons apply to it unchanged
+/// (the Doppler engine steers a beacon's dial exactly the same way), and a
+/// beacon is perfectly copyable as an audio tone in USB.
+pub fn downlink_class(mode: Option<&str>) -> DownlinkClass {
+    let Some(m) = mode.map(str::trim).filter(|m| !m.is_empty()) else {
+        return DownlinkClass::Usb;
+    };
+    if mode_is_fm(m) {
+        return DownlinkClass::Fm;
+    }
+    // Per TOKEN, exactly like the FM map, so a compound record ("LSB linear")
+    // is read the same way "FSK AX.25 G3RUH" is.
+    if m.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| tok.eq_ignore_ascii_case("LSB"))
+    {
+        return DownlinkClass::Lsb;
+    }
+    DownlinkClass::Usb
+}
+
 /// The sideband pair for a transponder, given the downlink mode the satellite
 /// database reports. An inverting transponder swaps the uplink sideband — the
 /// single most-missed detail in satellite operating.

@@ -5158,17 +5158,24 @@ async fn set_sat_transponder(
         _ => 0,
     };
     let label = format!("{}|{}", name.trim(), tp.description);
-    // An FM bird (the SO-50/AO-91 repeaters and the 145.825 packet digipeaters)
-    // is FM-CLASS traffic and must follow the operator's FM routing rule, not
-    // their SSB one — that is the whole point of mode-class routing (one band,
-    // two rigs) — and the rig belongs in FM, not USB.
+    // What the RADIO must be put in for this transponder — FM, or the linear
+    // path on the sideband the record declares. An FM bird (the SO-50/AO-91
+    // repeaters and the 145.825 packet digipeaters) is FM-CLASS traffic and
+    // must follow the operator's FM routing rule, not their SSB one — that is
+    // the whole point of mode-class routing (one band, two rigs) — and the rig
+    // belongs in FM, not USB.
     //
-    // The classification is `Transmitter::is_fm` (per-leg mode first, over the
-    // one mode-name map in `tempo_core::doppler::mode_is_fm`). It used to be
+    // The classification is `Transmitter::downlink_class` (per-leg mode first,
+    // over the one map in `tempo_core::doppler::downlink_class`). It used to be
     // `mode.starts_with("FM")` inline, which matches exactly two names in the
     // 58-entry SatNOGS vocabulary — so every packet bird (AFSK/FSK/GMSK/…, the
     // ISS APRS digipeater among them) fell through to the SSB class.
-    let fm = tp.is_fm();
+    //
+    // A CLASS, never the record's mode string: the SatNOGS vocabulary is open
+    // ("GFSK/BPSK", "Mode U - SSTV - Robot-36", "LoRa") and the rig's mode verb
+    // takes a closed list, so a raw name handed down would be refused on the
+    // wire and spend the loop's bounded set-mode budget.
+    let class = tp.downlink_class();
     let mut eng = engine_lock(&state);
     eng.set_sat_transponder(Some((
         label,
@@ -5186,7 +5193,7 @@ async fn set_sat_transponder(
     // off, "None — leave the dial to me", a rig that can't reach the band) never
     // disturbs the hold, and its reason is stored for the readiness rail. NO TX
     // gate is involved: this moves the dial and the split RX state, nothing else.
-    eng.sat_tune_nominal(fm, (now_unix().max(0) as u64).saturating_mul(1_000));
+    eng.sat_tune_nominal(class, (now_unix().max(0) as u64).saturating_mul(1_000));
     Ok(())
 }
 

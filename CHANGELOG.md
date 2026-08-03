@@ -5,6 +5,81 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed: the radio mode now follows the transponder, instead of staying in FM
+
+Working a pass, picking an FM bird and then a linear one left the radio in FM — on a linear
+transponder, which is silence. Reported from a live session: "should I expect the radio modes to
+change when I move to each one like in other areas? It's not; it's staying in FM."
+
+The satellite path could force FM and could force nothing else. An FM bird (SO-50, AO-91, the
+packet digipeaters) parked the rig in FM, correctly — but a linear, CW or beacon transponder
+asserted no mode at all, so the radio fell back to whatever the terrestrial section policy said.
+For a station whose Phone mode is FM — one station-wide setting, written whenever you tune an FM
+repeater, and reset by nothing — that policy answers FM on every frequency above 29 MHz. SO-50
+and RS-44 are both on 70 cm, so nothing incidental cleared it either. Picking a hand-chosen FM in
+the Phone cockpit during an FM pass had the same effect and lasted longer: that choice only
+expired on a band change, so it outranked every later linear pick for the rest of the session.
+
+Now a held transponder names the mode in both directions, and a new pick re-asserts it over a
+mode chosen for the previous bird. What the transponder decides is FM-versus-linear and **which
+sideband**; what your operating section decides is the form — plain SSB in Phone, the DATA
+submode in Digital, CW in the CW section. So FT8 through a GEO transponder still gets DATA (plain
+USB there transmits no RF on a normally-wired rig).
+
+**And you can always overrule it.** The transponder's mode comes from SatNOGS, whose vocabulary is
+open and crowd-maintained, and plenty of birds get worked in ways nobody wrote down — so picking a
+mode by hand in the Phone cockpit during a pass now wins for the rest of that pass, on an FM bird
+as well as a linear one. The uplink stands down at the same moment rather than swapping sidebands
+underneath you, which is what it already did. Picking a transponder again is you asking for that
+bird's tuning back, and re-asserts it. (Previously an FM bird could not be overruled at all: it
+was decided above the mode picker, which is exactly the case Nexus is most likely to have wrong.)
+
+Two judgement calls worth stating, because they are deliberate:
+
+- **A transponder that advertises CW is worked in USB, not CW.** Through a linear transponder you
+  copy the tone inside the SSB passband — that is how it is done, and it is what everything in
+  Nexus's passband and Doppler model already assumes. Commanding the rig's CW mode would make the
+  displayed dial mean something rig- and menu-dependent while Doppler is steering it, and it would
+  lose an inverting transponder's sideband swap entirely. A CW **beacon** is not special-cased for
+  the same reasons; it copies perfectly well as an audio tone in USB.
+- **A transponder that publishes an LSB downlink is now put in LSB** and its uplink mirrored
+  accordingly. That was an inverted-sideband error before — the exact mistake the transponder
+  machinery exists to prevent — and on an inverting bird it inverted the uplink with it.
+
+Data downlinks (BPSK, PSK31, FT8, MFSK and the rest) are worked on the linear path as they always
+were; only the FM-carried ones (AFSK, FSK, GMSK, DUV, satellite SSTV) command FM, unchanged.
+
+### Fixed: a satellite downlink Nexus cannot name is no longer refused
+
+"There are some frequencies that say in sat that it isn't in my band plan — you should allow me
+to go to those." Correct, and the refusal was ours, not the law's. Nexus's band table stops at
+23 cm, so QO-100 at 10.489 GHz — and every IC-905-class microwave bird — was declined with
+"outside the band plan", on an operator running Open class with no restriction of any kind.
+
+The band table exists to route a QSY to the right radio and to label a contact. It is not a
+permission system, and it was never asked whether the tune was legal. A downlink it cannot name
+now tunes like any other, and the missing label is reported as **missing** rather than guessed:
+the pass rail drops its band chip but still names the rig and the frequencies, the log strip
+drops the band slot instead of printing an empty one, and the logged band is left empty with the
+frequency carrying the truth.
+
+Routing still works, and works from what you actually wrote. A rule that names bands cannot claim
+a dial that has no band, and no per-radio band list is consulted (asking either with a blank would
+have matched every catch-all and sent the bird to whichever rig owns "everything else"). But a
+rule with no band selector — "satellite work goes to the IC-9700", the shape Nexus itself
+recommends — answers the same for every band and therefore for no band, so it still routes these
+birds to the rig you designated. Where nothing answers, the existing fallback applies: if the
+active rig cannot reach the downlink and exactly one other radio could, the pass goes to it.
+
+Nothing about transmit permission moved. The licence-class gate is a separate check on the
+transmit path and is untouched: an Open-class operator may key 10 GHz, and a Technician or
+General is still locked out there exactly as before. The 0.27.0 refusal that declines an
+unverifiable cross-band split on the Main/Sub Icoms is also unchanged — it deliberately fails
+closed when it cannot prove both legs share one band, which is still the case above the table's
+ceiling, so the band table was fixed around rather than extended.
+
 ## [0.27.0] — 2026-08-02
 
 ### Fixed: the log strip no longer invites an accidental log entry
