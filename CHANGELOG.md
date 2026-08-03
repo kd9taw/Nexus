@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: Lock on — put the radio back on the bird
+
+Move the dial inside the transponder's passband and Nexus already follows you: that is you
+chasing a station across the passband, and your uplink moves with you (mirrored, on an inverting
+bird). Move it *outside* — by hand, or because the rig came back somewhere else — and the dial is
+somewhere the pass does not describe, with no way back short of hunting for the transponder you
+already had selected. **Lock on**, in the Doppler readout beside the frequencies it re-asserts,
+is that way back: one click re-runs the pick you already made, so the routing, the band, the
+commanded mode and both legs all come with it, and you land back in the middle of the passband.
+
 ### Fixed: the radio mode now follows the transponder, instead of staying in FM
 
 Working a pass, picking an FM bird and then a linear one left the radio in FM — on a linear

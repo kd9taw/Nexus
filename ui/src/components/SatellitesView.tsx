@@ -838,6 +838,7 @@ function DopplerReadout({
   uplinkOnly,
   undrivableUplink,
   txMode,
+  onLockOn,
 }: {
   rotor: SatTrackStatus
   dopplerOn: boolean
@@ -859,6 +860,9 @@ function DopplerReadout({
    * claimed. Never derived from the SatNOGS record here: a second derivation
    * of the command is how a display claims a write the radio never gets. */
   txMode?: string | null
+  /** Put the radio back on the frequencies printed here — see the button. Absent
+   * when there is no held pick to re-assert. */
+  onLockOn?: (() => void) | null
 }) {
   const any = rotor.downlinkHz != null || rotor.uplinkHz != null
   if (!any) {
@@ -893,6 +897,35 @@ function DopplerReadout({
           >
             INVERTING
           </span>
+        )}
+        {/* LOCK ON — put the radio back on the numbers printed right here.
+            Operator report: "should we introduce a button to lock on to the
+            implied frequency if I move the dial on my own?"
+
+            Nexus already adopts a knob move made INSIDE the passband as your
+            position and mirrors the uplink to it. What had no way back was
+            leaving the passband — by hand, or because the rig came back on a
+            different frequency — after which the dial is somewhere the pass
+            does not describe. The transponder cards cannot fix that either:
+            they are radio buttons, and clicking the one already selected fires
+            no change event, so the pick that would re-assert everything was
+            literally unreachable.
+
+            This re-runs that pick — the same command the card runs — so it
+            routes, sets the band and the mode, and writes both legs, rather
+            than shoving a frequency at the rig behind the bookkeeping's back.
+            It re-centres in the passband, which is what "the implied
+            frequency" means; a position you tuned to by hand is not something
+            to preserve while asking to be put back on the bird. */}
+        {onLockOn && (
+          <button
+            type="button"
+            className="sat-dop-lock"
+            onClick={onLockOn}
+            title="Put the radio back on these frequencies — routes, sets the band and mode, and re-centres you in the passband. Use it after moving the dial off the transponder by hand."
+          >
+            Lock on
+          </button>
         )}
       </div>
       <dl className="sat-dop-legs">
@@ -3096,6 +3129,20 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
                       // held record having no uplink at all.
                       undrivableUplink={heldSimplex || (heldT != null && heldT.uplinkLowHz == null)}
                       txMode={detailTrack.txMode ?? null}
+                      // Only when there is a pick to RE-RUN. Without a held
+                      // index there is nothing to re-assert, and a button that
+                      // re-picked "whatever looks right" would be choosing a
+                      // transponder for the operator.
+                      onLockOn={
+                        heldIndex == null
+                          ? null
+                          : () =>
+                              pickTransponder(
+                                detail.name,
+                                heldIndex,
+                                heldT?.description ?? detailTrack.transponder ?? '',
+                              )
+                      }
                     />
                     {/* The strip goes under the readout: the readout says what
                         the radio is tuned to, the strip says where that puts
