@@ -5387,13 +5387,18 @@ struct SatTrackDto {
     /// grant has to land on the rig the operator saw named even if the active
     /// radio moved between the poll and the click.
     uplink_radio_id: u32,
-    /// The sideband the engine will command the TX (split) VFO into while
-    /// this pass owns the uplink (`Engine::sat_tx_mode` — the inverting-bird
-    /// swap), or `None` when nothing is commanded: legs share a mode, a
-    /// mapping that does not drive the uplink, Doppler off, or the operator
-    /// took the mode back. The UI displays THIS, never a second derivation
-    /// from the SatNOGS record — two derivations of one command is how a
-    /// display claims a write the radio never gets.
+    /// The MODE the engine will command the TX (split) VFO into while this
+    /// pass owns the uplink (`Engine::sat_tx_mode`) — the inverting bird's
+    /// mirrored sideband, and equally the plain FM of an FM bird or the plain
+    /// USB of a non-inverting linear, because the transmit VFO carries its own
+    /// mode and has to be told — from EVERY operating section, since the
+    /// section decides the form of the answer and never whether there is one.
+    /// `None` only when nothing is commanded at all: a mapping that does not
+    /// drive the uplink, a transponder with no uplink leg, Doppler off, or the
+    /// operator took the mode back. The UI displays
+    /// THIS, never a second derivation from the SatNOGS record — two
+    /// derivations of one command is how a display claims a write the radio
+    /// never gets.
     tx_mode: Option<String>,
     /// Did a rotator this track WAS driving stop answering mid-pass
     /// (`SatTrackLoss::RotorGaveUp`)? The track carries on — pass clock,

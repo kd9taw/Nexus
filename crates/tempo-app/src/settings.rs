@@ -3258,6 +3258,22 @@ impl Settings {
     ///
     /// NO FM arm: this answers for the LINEAR path only. FM is a class, not a
     /// side, and its callers gate on it before they get here.
+    ///
+    /// ⚠️ **A SECTION MAY IGNORE `lsb` ENTIRELY, AND ONE DOES.** The RTTY arm
+    /// answers LSB-side for both values, because amateur RTTY is LSB-side on
+    /// every band (see it below). So the answer for that section encodes NO
+    /// side, and a caller that needs one cannot get it from here.
+    ///
+    /// ⚠️ **AND THAT IS NOT A REASON TO STAY SILENT — asking this function
+    /// twice to find out was tried and RESTORED A SHIPPED DEFECT.**
+    /// `Engine::sat_tx_mode` briefly gated the whole satellite uplink mode on
+    /// `rig_mode_on_sideband(false) == rig_mode_on_sideband(true)`. That test
+    /// reads TRUE in the RTTY section whatever bird is held, so an FM bird
+    /// worked from RTTY went back to commanding nothing at all onto the
+    /// transmit VFO — KD9TAW's AO-123 report, restored by the guard meant to
+    /// be careful. Whether a mode MIRRORS is a property of the token
+    /// (`tempo_core::doppler::uplink_mode_for`), and whether there is an answer
+    /// AT ALL is not this function's question in the first place.
     pub(crate) fn rig_mode_on_sideband(&self, lsb: bool) -> String {
         match self.operating_mode {
             // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
@@ -3296,6 +3312,15 @@ impl Settings {
             // rig's own RTTY mode, which is what unlocks the narrow RTTY filters and keys the
             // shift. "Plain SSB" has no meaning there — only the AFSK (soundcard) path, which
             // is a DATA submode for the same reason FT8 is, can be switched.
+            //
+            // ⚠️ THIS ARM IGNORES `lsb`, deliberately: the RTTY convention is
+            // LSB-side on 80 m and on 20 m alike, so the band rule does not get
+            // a say here and neither does a satellite's declared downlink. The
+            // answer therefore carries no side of its own — but note WHICH
+            // TOKEN it carries, because that is what the satellite uplink
+            // mirror is asked about: AFSK's `PKTLSB` names the lower side and
+            // mirrors on an inverting bird, FSK's `RTTY` names none and does
+            // not. See this function's doc and `doppler::uplink_mode_for`.
             OperatingMode::Rtty => {
                 if self.rtty_backend.eq_ignore_ascii_case("fsk") {
                     "RTTY".to_string()

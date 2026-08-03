@@ -337,9 +337,10 @@ impl DownlinkClass {
 ///   rig's CW-pitch/CW-R setting — per rig, per menu. Steering a dial we cannot
 ///   interpret, at up to ~100 Hz/s, would silently walk the operator off the
 ///   station they are working;
-/// - [`uplink_mode_for`] can only mirror USB↔LSB. Commanded `CW`, an INVERTING
-///   transponder's sideband swap is lost — the correct uplink frequency in the
-///   wrong sideband, which is silence at the far end;
+/// - in the rig's CW mode there is no sideband for [`uplink_mode_for`] to
+///   mirror, so an INVERTING transponder's swap has nothing to act on. Worked
+///   in the SSB passband the swap is real and the mirror applies it, which is
+///   the difference between hearing the far end and calling into silence;
 /// - the rig's own CW filter memory narrows the passband, which is the opposite
 ///   of what hunting a whole transponder wants.
 ///
@@ -367,6 +368,82 @@ pub fn downlink_class(mode: Option<&str>) -> DownlinkClass {
 /// The sideband pair for a transponder, given the downlink mode the satellite
 /// database reports. An inverting transponder swaps the uplink sideband — the
 /// single most-missed detail in satellite operating.
+///
+/// # EVERY token that NAMES a radiated side, not just the plain pair
+///
+/// A DATA submode still names a sideband: `PKTUSB` is USB-side and `PKTLSB` is
+/// LSB-side (Yaesu DATA-U/DATA-L, Icom USB-D/LSB-D), and the audio the sound
+/// card plays lands the opposite way up in each. Knowing only `USB`/`LSB` those
+/// tokens fall through the `_ => m` arm UNCHANGED — which cost nothing while
+/// `Engine::sat_tx_mode` suppressed a matching-legs answer (a Digital bird's
+/// legs always match, so it never asked), and becomes an AUTHORED wrong side
+/// the moment every held bird states its uplink mode: the correct uplink
+/// frequency in the wrong sideband, which is silence at the far end, on a
+/// transmission we wrote rather than one we declined. Both pairs mirror:
+///
+/// | section | downlink | uplink through an INVERTING bird |
+/// |---|---|---|
+/// | Phone (and CW on the soundcard keyer) | `USB` / `LSB` | `LSB` / `USB` |
+/// | Digital, SSTV | `PKTUSB` / `PKTLSB` | `PKTLSB` / `PKTUSB` |
+///
+/// A radio configured for plain SSB on the data modes
+/// (`RadioProfile::data_modes_plain_ssb` — a mic-jack interface) commands
+/// `USB`/`LSB` for those sections instead, and the two steps COMMUTE: the
+/// downlink answer is de-DATA'd before it gets here, and the plain pair mirrors
+/// to the same side the DATA pair would have.
+///
+/// The list is deliberately of tokens that NAME a side, because that is the
+/// only thing an inverting transponder changes. Two other mode pairs look like
+/// sides: `CW`/`CWR`, which is ruled on below, and `RTTY`/`RTTYR`, which is
+/// not — it is an open question, also below.
+///
+/// # ⚠️ `CW`/`CWR` DELIBERATELY DO NOT MIRROR — the argued case
+///
+/// The token pair exists and would type-check, so the omission has to be a
+/// ruling rather than an oversight:
+///
+/// - **`CW` vs `CW-R` is a RECEIVE-side choice.** It selects which side of the
+///   carrier the rig takes its beat note from. On TRANSMIT both key the
+///   identical carrier at the displayed dial frequency — there is no upper or
+///   lower sideband in a keyed carrier to be on the wrong side of. The uplink
+///   VFO this answer reaches is transmit-only by construction (VFO B of an A/B
+///   split, or the Sub band with the rig in satellite mode, where TX is fixed
+///   on Sub and nothing ever demodulates it), so a mirror there would change
+///   the rig's state and its CW filter without moving one hertz of what is
+///   radiated. This module only states what it can cash.
+/// - **The CW case that DOES carry a sideband already mirrors.** With the
+///   soundcard keyer the rig is put in plain `USB`/`LSB` and the keying is an
+///   audio TONE inside the SSB passband — a real sideband, offset by the
+///   sidetone pitch, and it goes through the plain pair above. That is the arm
+///   where getting the side wrong actually lands the tone ~2× the pitch away.
+/// - **A CW-declared DOWNLINK never reaches here as `CW` anyway** —
+///   [`downlink_class`] works it in USB, for reasons of its own. `CW`/`CWR`
+///   arrive only when the operator is standing in the CW section, which is
+///   their deliberate pick of the rig's CW mode, and passing it through keeps
+///   the transmit VFO in the CW-class mode the keyer needs.
+///
+/// # ⚠️ `RTTY`/`RTTYR` — AN OPEN QUESTION, NOT A RULING
+///
+/// Which side an inverting bird's RTTY uplink belongs on is NOT settled, here
+/// or anywhere. `RTTY` and `RTTYR` are therefore NOT in the mirror list, for
+/// the plain reason that nothing has shown they belong there — the same
+/// treatment every unrecognised token gets, not a decision about RTTY.
+///
+/// ⚠️ **THE CONSEQUENCE, AND IT IS NOT SYMMETRIC BETWEEN THE TWO RTTY
+/// BACKENDS.** This map asks one question — does the TOKEN name a radiated
+/// side — and the RTTY section reaches it with two different tokens:
+///
+/// | RTTY backend | `Settings::rig_mode_on_sideband` answers | inverting uplink |
+/// |---|---|---|
+/// | AFSK (soundcard) | `PKTLSB` (or plain `LSB` under `data_modes_plain_ssb`) | MIRRORED — `PKTUSB` / `USB` |
+/// | FSK (the rig's own RTTY mode) | `RTTY` | `RTTY`, unmirrored |
+///
+/// That difference is not a ruling on RTTY either. It falls out of the tokens:
+/// a DATA submode names the lower side and an inverting transponder mirrors
+/// what names a side, while `RTTY` names none. `Engine::sat_tx_mode` states
+/// whichever answer follows and takes no view — the alternative, a section
+/// branch, was tried and RESTORED the AO-123 defect (see the ⚠️ on that
+/// function, which also carries what IS known about the RTTY question).
 pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     let m = downlink_mode.trim().to_ascii_uppercase();
     if !invert {
@@ -375,7 +452,16 @@ pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     match m.as_str() {
         "USB" => "LSB".to_string(),
         "LSB" => "USB".to_string(),
-        // CW/FM/data modes have no sideband to mirror.
+        // The DATA submodes carry the same two sides — FT8/FT4 and SSTV
+        // through a transponder are worked here, and so does RTTY on the AFSK
+        // backend, which commands `PKTLSB` for the same soundcard reason. The
+        // token is the whole question; the SECTION behind it is not asked.
+        "PKTUSB" => "PKTLSB".to_string(),
+        "PKTLSB" => "PKTUSB".to_string(),
+        // FM is a class, not a side, and `CW`/`CWR` are a receive-side BFO
+        // choice with one transmitted carrier behind both — see the ruling
+        // above. Everything else, `RTTY`/`RTTYR` included, is passed through
+        // untouched rather than guessed at.
         _ => m,
     }
 }
@@ -643,6 +729,92 @@ mod tests {
         assert_eq!(uplink_mode_for("CW", true), "CW");
         assert_eq!(uplink_mode_for("FM", true), "FM");
         assert_eq!(uplink_mode_for(" usb ", true), "LSB", "case/space tolerant");
+    }
+
+    #[test]
+    fn every_token_that_names_a_side_mirrors_not_just_the_plain_pair() {
+        // A DATA submode still NAMES a side — PKTUSB is USB-side, PKTLSB is
+        // LSB-side. Left out of the map they fall through `_ => m` unchanged,
+        // which was harmless only while nothing asked for a Digital bird's
+        // uplink mode (its legs match, and matching legs used to answer
+        // nothing). Now that every held bird answers, that fall-through would
+        // TELL an inverting FT8 uplink to transmit on the SAME side it receives
+        // on: the right frequency, the wrong sideband, silence at the far end,
+        // on a transmission we authored rather than declined.
+        for (down, up) in [("PKTUSB", "PKTLSB"), ("PKTLSB", "PKTUSB")] {
+            assert_eq!(
+                uplink_mode_for(down, true),
+                up,
+                "an inverting transponder mirrors {down} to {up}"
+            );
+            assert_eq!(
+                uplink_mode_for(down, false),
+                down,
+                "a straight-through transponder leaves {down} alone"
+            );
+        }
+        // Both directions of every pair, so the map cannot be one-way.
+        for m in ["USB", "LSB", "PKTUSB", "PKTLSB"] {
+            assert_eq!(
+                uplink_mode_for(&uplink_mode_for(m, true), true),
+                m,
+                "mirroring {m} twice is the identity — a pair, not a redirect"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rtty_tokens_pass_through_and_the_two_backends_therefore_differ() {
+        // ⭐ THE OPEN QUESTION, PINNED AS THE CONSEQUENCE IT IS. Which side an
+        // inverting bird's RTTY uplink belongs on is not settled, so `RTTY` and
+        // `RTTYR` are simply not in the mirror list — the same treatment every
+        // unrecognised token gets.
+        //
+        // That leaves the RTTY SECTION answering differently per backend, and
+        // the asymmetry is real rather than an accident to be papered over:
+        // AFSK commands `PKTLSB` (a DATA submode, because the soundcard needs
+        // one) and FSK commands the rig's own `RTTY`. This map asks ONE
+        // question — does the token name a radiated side — and gets two
+        // different answers because it is handed two different tokens.
+        //
+        // The alternative, a SECTION branch upstream, was tried: it restored
+        // the AO-123 defect (an FM bird worked from RTTY commanded nothing at
+        // all). See `Engine::sat_tx_mode`.
+        for m in ["RTTY", "RTTYR"] {
+            assert_eq!(
+                uplink_mode_for(m, true),
+                m,
+                "{m} names no radiated side, so nothing is mirrored — and nothing is ruled"
+            );
+            assert_eq!(uplink_mode_for(m, false), m);
+        }
+        assert_eq!(
+            uplink_mode_for("PKTLSB", true),
+            "PKTUSB",
+            "RTTY-AFSK's token IS a DATA submode, so it mirrors like any other — the \
+             token is the question, never the section behind it"
+        );
+    }
+
+    #[test]
+    fn cw_does_not_mirror_and_that_is_the_ruling() {
+        // NOT an oversight: `CWR` exists, the rigs know it, and adding the arm
+        // would type-check. `CW` vs `CW-R` selects which side of the carrier
+        // the rig takes its BEAT NOTE from — a receive-side choice. On transmit
+        // both key the identical carrier at the displayed dial, and the VFO
+        // this answer reaches is transmit-only, so a mirror would change the
+        // rig's state and its CW filter without moving one hertz of what is
+        // radiated.
+        for m in ["CW", "CWR"] {
+            assert_eq!(uplink_mode_for(m, true), m, "{m} is not a transmitted side");
+            assert_eq!(uplink_mode_for(m, false), m);
+        }
+        // The CW-section case that DOES carry a side is the SOUNDCARD keyer,
+        // which puts the rig in plain SSB and keys an audio tone inside the
+        // passband. That one mirrors, through the plain pair.
+        assert_eq!(uplink_mode_for("USB", true), "LSB");
+        // …and FM stays a class, not a side, however the record is marked.
+        assert_eq!(uplink_mode_for("FM", true), "FM");
     }
 
     #[test]
