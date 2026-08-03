@@ -74,10 +74,13 @@ callbook lookup, the same recall card and the same prior-contact history. It is
 there whether or not a pass is armed, and it stays there after the bird sets, so
 you can catch up on a contact once your hands are free.
 
-Type the call, press Enter. The band, frequency, mode and time come from where
-you already are, and the report defaults to the one for that mode. Working a
-bird from a rig Nexus isn't connected to? Open **Log a contact from another
-radio** in the strip and set the band, frequency, mode and UTC time by hand.
+Type the call and press Enter **twice**. On a call the strip hasn't seen yet the
+first Enter runs the callbook lookup and fills the name and QTH; the second one
+logs. (Once the name is filled, one Enter logs.) The band, frequency, mode and
+time come from where you already are, and the report defaults to the one for
+that mode. Working a bird from a rig Nexus isn't connected to? Open **Log a
+contact from another radio** in the strip and set the band, frequency, mode and
+UTC time by hand.
 
 **It logs an ordinary contact, not a satellite contact.** This is worth being
 plain about, because it decides whether a contact can ever earn satellite
@@ -95,6 +98,38 @@ you want satellite credit you have to add the two fields yourself: set them in
 whatever logger you upload from, or add them to the ADIF before you sign it. Any
 record that already carries them — a foreign import, or one you repaired — keeps
 them: Nexus writes them out on export and reads them back on import untouched.
+
+#### Three things this strip does not do yet
+
+None of the three is a decision that satellite work should stay this way. They
+are the price of dropping the Phone/CW log strip in unchanged rather than
+building a satellite-aware one, and each is meant to be closed.
+
+**Nexus's own satellite counters miss these contacts too — not just LoTW.**
+Nexus decides "was this a satellite QSO?" the same way LoTW does, from
+`PROP_MODE=SAT` in the record. With nothing writing that field, a contact logged
+here counts toward neither the **Satellite VUCC** totals on the Awards screen nor
+the satellite needs board that ranks which pass is worth chasing. On 70 cm and
+23 cm it is worse than a miss: those bands have no per-band grid slot of their
+own, so the grid you just worked lands in no bucket at all. Adding the two
+fields by hand puts the contact back into both counts: edit the ADIF with Nexus
+closed, exactly as below, and the totals pick it up the next time Nexus starts.
+
+**During Field Day, this strip logs to the ordinary log, not the contest log.**
+The Phone and CW strips switch to the Field Day log while a session is running;
+this one is not wired to Field Day yet, so a satellite contact made during FD
+goes into your general log and scores the club nothing. Until it is wired, log
+satellite contacts made during Field Day from the Phone or CW cockpit, or add
+them to the FD log afterwards.
+
+**The recorded MODE comes from your sideband, so it is wrong on a data mode.**
+The strip writes `FM`, `CW`, `AM` or `SSB`, chosen from the mode the rig is
+commanded to. That is right for voice and CW work. But the Satellites section is
+also reachable on the digital tiers (FT8, Q65, JT65, …) where every channel
+commands USB — so a contact typed here while you are on one of those records
+`MODE=SSB`, which is not what you worked. Until the strip is tier-aware, use
+**Log a contact from another radio** and pick the mode by hand, or fix the
+record afterwards.
 
 **If you ran 0.24.0 through 0.27.x, check your log.** In those versions a
 contact logged while a transponder was held picked up `PROP_MODE=SAT` and a

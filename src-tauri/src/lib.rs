@@ -9806,10 +9806,18 @@ fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
     Ok(eng.clear_logbook())
 }
 
-/// Whether a logged QSO was made through a satellite (`PROP_MODE=SAT`, the ADIF
-/// value the tracked-pass stamping writes) — the flag the award/needs folds
-/// state per record so satellite grid credit lands in the Satellite-VUCC
-/// buckets, never the per-band ones.
+/// Whether a logged QSO was made through a satellite (`PROP_MODE=SAT`) — the
+/// flag the award/needs folds state per record so satellite grid credit lands in
+/// the Satellite-VUCC buckets, never the per-band ones.
+///
+/// ⚠️ NOTHING IN NEXUS WRITES `PROP_MODE` TODAY. The tracked-pass stamp that
+/// used to set it was removed (see `Engine::log_qso`), and satellite tagging is
+/// not yet built, so the only records that answer `true` here are ones that
+/// ARRIVED with the field — a foreign ADIF import, or one the operator repaired
+/// by hand. A contact logged from the Satellites section therefore earns no
+/// in-app satellite credit either, which is a consequence for the operator and
+/// is stated as such in docs/guide/satellites.md. Pinned by
+/// `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`.
 fn qso_is_sat(prop_mode: Option<&str>) -> bool {
     prop_mode.is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
 }
@@ -14794,7 +14802,8 @@ mod tests {
     use super::{
        assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
         engine_lock, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
-        load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, rect_lands_on_work_area,
+        load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, qso_is_sat,
+        rect_lands_on_work_area,
         resolve_bird, resolve_birds, run_sat_track, sanitize_profile, sat_excluded,
         tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
         tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path,
@@ -14943,6 +14952,107 @@ mod tests {
             "downlink-only is an answer, not an absence"
         );
         assert_eq!(con.offer_map, None);
+    }
+
+    /// ⚠️ THE DISCLOSED COST OF DESCOPING THE SATELLITE STAMP — pinned so the
+    /// docs cannot drift away from it, and so the person who finally builds
+    /// satellite tagging is told which sentences to delete.
+    ///
+    /// The CHANGELOG and docs/guide/satellites.md both say, in as many words,
+    /// that a contact logged from the Satellites section earns no satellite
+    /// credit **inside Nexus** either — not just on LoTW. This walks the real
+    /// chain that makes that true: `Engine::log_qso` with a transponder held
+    /// writes no `PROP_MODE`, `qso_is_sat` therefore answers `false`, and the
+    /// awards fold `get_awards` performs puts the contact's grid in no bucket
+    /// at all (the band-independent satellite set is the only one that accepts
+    /// a 70 cm grid).
+    ///
+    /// Written as an assertion on the CURRENT, DEFERRED behaviour. When
+    /// satellite tagging lands, this test goes red — which is the point: the
+    /// two "not yet" paragraphs must come out in the same change.
+    #[test]
+    fn a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit() {
+        use tempo_core::doppler::Transponder;
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        e.log_qso(tempo_core::logbook::QsoRecord {
+            call: "W1AW".into(),
+            grid: Some("FN31".into()),
+            country: None,
+            state: None,
+            band: "70cm".into(),
+            freq_mhz: 436.795,
+            mode: "FM".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: 1_700_000_000,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: vec![],
+            credit_submitted: vec![],
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
+        });
+
+        let logged = &e.get_log()[0];
+        assert_eq!(logged.prop_mode, None, "a satellite stamp is back");
+        assert!(
+            !qso_is_sat(logged.prop_mode.as_deref()),
+            "the contact reads as a satellite QSO to the award fold"
+        );
+
+        // The exact fold `get_awards` runs over the logbook.
+        let mut awards = propagation::Awards::new();
+        awards.set_home_call("KD9TAW");
+        awards.add_qso(
+            &logged.call,
+            &logged.band,
+            &logged.mode,
+            logged.award_confirmed,
+            false,
+            logged.state.as_deref(),
+            logged.grid.as_deref(),
+            logged.ota.iota.as_deref(),
+            qso_is_sat(logged.prop_mode.as_deref()),
+        );
+        let s = awards.summary();
+        assert_eq!(
+            s.vucc.sat_worked, 0,
+            "the Satellite-VUCC total counted a contact Nexus never tagged"
+        );
+        // And no per-band grid slot absorbed it either: `Band::from_label` has
+        // no centimetre variant, so 70 cm falls out of the terrestrial fold.
+        assert_eq!(
+            s.vucc.worked, 0,
+            "70 cm has no per-band grid slot — the grid is credited nowhere"
+        );
+        // The mechanism, for every centimetre band and not just the one logged
+        // above — this is what makes the guide's "70 cm and 23 cm" true.
+        for cm in ["70cm", "33cm", "23cm", "13cm", "9cm", "5cm", "3cm", "1.2cm"] {
+            assert!(
+                propagation::model::Band::from_label(cm).is_none(),
+                "{cm} gained a per-band grid slot — the guide's claim needs revisiting"
+            );
+        }
     }
 
     /// ROUND 3, DEFECT 4. With a mapping IN FORCE that drives the uplink but

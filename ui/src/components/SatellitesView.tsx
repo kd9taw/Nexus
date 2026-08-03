@@ -102,7 +102,23 @@ const SCHEDULE_HOURS = 48
  * USB/LSB deliberately fold to SSB: they are ADIF SUBMODEs, and `<MODE>USB`
  * gets the whole record rejected on LoTW upload — the same closed-enumeration
  * trap LogEntry's LOG_MODES table documents. Nothing about the satellite feeds
- * this: not the bird, not the transponder, not the downlink. */
+ * this: not the bird, not the transponder, not the downlink.
+ *
+ * ⚠️ KNOWN WRONG ON A DIGITAL TIER — NOT YET FIXED. The four arms above are the
+ * complete set only where the Phone and CW cockpits are: those sections are
+ * reachable only in their own operating mode. This section is not — it is
+ * reachable on FT8/FT4/Q65/JT65/MSK144/WSPR/FST4/Tempo too, and every band-plan
+ * channel on those tiers commands "USB", the sideband a data mode is generated
+ * on. So an operator working a data mode from here records `MODE=SSB`, which is
+ * wrong on a permanent record.
+ *
+ * It is disclosed rather than guessed at: the honest value is the TIER's own
+ * ADIF mode, this function is handed only the sideband, and a wrong MODE is
+ * exactly the class of error this whole strip is being careful about. Until it
+ * is wired, the strip's own "Log a contact from another radio" override carries
+ * a mode picker (LogEntry's `LOG_MODES`) that sets the record's mode by hand.
+ * Stated in docs/guide/satellites.md and the CHANGELOG; pinned by
+ * `records SSB on a digital tier` in SatellitesView.logentry.test.tsx. */
 function adifModeFromStation(sideband: string | null | undefined): string {
   const m = (sideband ?? '').trim().toUpperCase()
   if (m === 'FM') return 'FM'
@@ -3296,9 +3312,16 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 it logs the SAME ORDINARY CONTACT they log. It is NOT a
                 satellite-aware log — nothing about the bird reaches the record.
                 Satellite tagging (ADIF PROP_MODE/SAT_NAME, which LoTW needs for
-                satellite credit) is deliberately not done here; see the note
-                line below, docs/guide/satellites.md and the CHANGELOG, all of
-                which say so plainly so nobody waits on credit that isn't coming.
+                satellite credit) is NOT YET BUILT — deferred, not designed away;
+                see the note line below, docs/guide/satellites.md and the
+                CHANGELOG, all of which say so plainly so nobody waits on credit
+                that isn't coming. Two further consequences of dropping in the
+                shared strip UNCHANGED are documented in the guide rather than
+                fixed here: during Field Day this strip logs to the ordinary log
+                while the Phone and CW strips route to the contest log (App.tsx
+                passes them `fieldDay`/`fdMode` and does not pass it here), and
+                the recorded MODE is folded from the sideband, which is wrong on
+                a digital tier (see `adifModeFromStation`).
 
                 WHY HERE, and not above the dome or below the globe. The column
                 is one scroller and its two square graphics — the sky dome
@@ -3325,8 +3348,9 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 <p className="sats-log-note">
                   Logs an ordinary contact from your dial, exactly as the Phone and CW log
                   panels do. It is <b>not</b> tagged as a satellite QSO: Nexus does not write
-                  the ADIF PROP_MODE and SAT_NAME fields LoTW needs for satellite credit. Add
-                  them yourself if you want that credit.
+                  the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward
+                  neither LoTW satellite credit <b>nor Nexus&rsquo;s own satellite totals</b>.
+                  Add the two fields yourself if you want that credit.
                 </p>
               </div>
             )}

@@ -27,6 +27,26 @@ satellite QSO: LoTW wants the ADIF `PROP_MODE` and `SAT_NAME` fields for that, a
 write them. The strip says so under the fields, so nobody waits on satellite credit that isn't
 coming. If you want it, add those two fields yourself in whatever you upload from.
 
+**Three things it does not do yet.** None of them is a decision that satellite work should stay
+this way — they are the price of dropping the existing strip in unchanged instead of building a
+satellite-aware one, and each is meant to be closed.
+
+- **Nexus's own satellite counters miss these contacts too**, not just LoTW. Nexus decides "was
+  this a satellite QSO?" from `PROP_MODE=SAT` in the record, exactly as LoTW does, so a contact
+  logged here counts toward neither the **Satellite VUCC** totals on the Awards screen nor the
+  satellite needs board. On 70 cm and 23 cm it lands in no grid bucket at all — those bands have
+  no per-band grid slot of their own, and the satellite one is the only home they had.
+- **During Field Day it logs to the general log, not the contest log.** The Phone and CW strips
+  switch to the Field Day log while a session runs; this one is not wired to Field Day yet, so a
+  satellite contact made during FD scores the club nothing. Log those from the Phone or CW
+  cockpit for the duration.
+- **The recorded mode comes from your sideband**, so it says `SSB` when you are on a data mode.
+  Right for voice and CW; wrong on the digital tiers (FT8, Q65, JT65 …), where every channel
+  commands USB and the strip has nothing else to go on. Use **Log a contact from another radio**
+  and pick the mode by hand until the strip is tier-aware.
+
+All three are written up in the guide's [satellite chapter](docs/guide/satellites.md).
+
 ### Fixed: contacts logged during a pass no longer carry a satellite name LoTW rejects
 
 This one is in the version you are running now. Since 0.24.0, any contact logged while you had a
@@ -45,6 +65,14 @@ Nexus no longer writes either field for any contact it logs. Records that arrive
 a foreign ADIF import, or one you fixed by hand — are untouched, on import, on export and in the
 logbook.
 
+**That has a cost inside Nexus too, and it is not permanent.** The same `PROP_MODE=SAT` field is
+what Nexus reads to decide a contact was a satellite QSO, so with nothing writing it your
+**Satellite VUCC** totals and the satellite needs board no longer see contacts Nexus logs for you
+either. Writing a satellite name Nexus can stand behind is work that has not been done yet, not
+work that was ruled out. Until it is done, adding the two fields by hand restores both: the LoTW
+credit on your next upload, and the in-app totals the next time Nexus starts and re-reads the
+log file.
+
 **Contacts already logged that way are left alone**, and deliberately: some of them were real
 satellite QSOs that want the name corrected, some were ordinary contacts that want the tag gone,
 and nothing in the record tells them apart — that call is yours. To find them, search your log
@@ -52,15 +80,20 @@ file (`~/.config/tempo/log.adi`, or `%APPDATA%\tempo\log.adi` on Windows) for `S
 it there with Nexus closed. The guide's [satellite chapter](docs/guide/satellites.md) walks
 through it.
 
-### Fixed: a microwave contact is no longer broadcast to N1MM / N3FJP as a metre-band contact
+### Fixed: the microwave bands go out to N1MM / N3FJP in metres
 
-The band label Nexus puts on the club-log wire converted 70 cm, 33 cm and 23 cm by hand and
-guessed at everything else by chopping the letters off the end — which cannot tell centimetres
-from metres. Any other centimetre band came out as a bare number: a 6 cm contact was broadcast as
-"6", identical to 6 metres, and the club log filed it on the wrong band with nothing on screen to
-show it had happened. Centimetre bands are now converted by the rule the three hand-written ones
-already followed, so a centimetre band can never read as a metre band. The three values that have
-always gone out are unchanged.
+The `band` field on the club-log wire is a **metre count** — "20", "0.7". Nexus converted 70 cm,
+33 cm and 23 cm by hand and guessed at everything else by chopping the letters off the end, which
+cannot tell centimetres from metres. So every other centimetre band left as a bare number: a
+13 cm contact was broadcast as "13", a 3 cm contact as "3".
+
+Those are not hypothetical bands. The Q65 band plan ships 13 cm, 9 cm, 5 cm, 3 cm and 1.2 cm
+channels (JT65 the first three), and the band you pick is the band that goes on the wire. Nobody
+is known to have been caught by this — what is on record is that Nexus could send it.
+
+Centimetre bands are now converted by the same rule the three hand-written ones already followed,
+so 13 cm goes out as "0.13". **The three values that have always gone out are unchanged**, no band
+was added to any list, and nothing else about what Nexus broadcasts moved.
 
 ### Fixed: the ⊞ Panels menu no longer offers a checkbox that changes nothing
 

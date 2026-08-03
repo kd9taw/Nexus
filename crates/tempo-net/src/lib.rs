@@ -60,15 +60,25 @@ pub use wsjtx::{Decode, Inbound, QsoLogged, Status};
 /// blind alpha-strip ("70cm" would have read as SEVENTY METERS in N3FJP).
 ///
 /// ⚠️ CENTIMETRES ARE CONVERTED, NEVER STRIPPED. "70cm"/"33cm"/"23cm" were once
-/// three hand-written arms with the strip below as the catch-all — which cannot
-/// tell "cm" from "m", so any OTHER centimetre label came out as a bare metre
-/// count: `band_for_interop("6cm")` returned `"6"`, byte-identical to 6 METRES,
-/// and the club log filed the contact on the wrong band with nothing to show it
-/// had happened. The three arms all encoded one rule (centimetres ÷ 100), so the
-/// rule stands in for them and the collision is unrepresentable rather than
-/// merely absent. This adds no band to any vocabulary — the labels Nexus emits
-/// are unchanged — it only guarantees that whatever reaches this function keeps
-/// the band it was made on.
+/// three hand-written arms with the strip below as the catch-all — and the strip
+/// cannot tell "cm" from "m", so every OTHER centimetre label left here as a
+/// bare number in a field that means METRES.
+///
+/// That was reachable, not hypothetical: `tempo_app::bandplan`'s Q65 plan ships
+/// 13 cm, 9 cm, 5 cm, 3 cm and 1.2 cm channels (JT65 the first three), and
+/// picking one stores that label as `settings.band`, which becomes
+/// `QsoRecord.band` and arrives here on the N1MM `<contactinfo>` and the N3FJP
+/// band report. A 13 cm contact went out as `"13"` — thirteen metres — when the
+/// value the wire wants is `"0.13"`. No claim is made that this reached anyone's
+/// club log; what is on record is that Nexus could emit it.
+///
+/// The three hand-written arms all encoded ONE rule (centimetres ÷ 100), so the
+/// rule stands in for them. This adds no band to any vocabulary — the labels
+/// Nexus emits are unchanged, and the three values that have always gone out are
+/// byte-identical — it only guarantees that a centimetre label keeps the band it
+/// was made on. Pinned here by `every_centimetre_band_converts_to_metres`, and
+/// against the channels actually shipped by `tempo_app::bandplan`'s
+/// `no_shipped_channel_reaches_the_interop_wire_as_a_band_it_is_not_on`.
 pub fn band_for_interop(label: &str) -> String {
     if let Some(cm) = label.strip_suffix("cm") {
         if let Ok(n) = cm.parse::<f64>() {
@@ -92,37 +102,49 @@ mod tests {
         assert_eq!(band_for_interop("20m"), "20");
         assert_eq!(band_for_interop("160m"), "160");
         assert_eq!(band_for_interop("6m"), "6");
-        // The trap: an alpha-strip alone turns the cm bands into absurd meter
-        // counts, and the club log silently files the contact on the wrong band.
+        // The three values that have gone out since this function existed —
+        // unchanged by the conversion rule that replaced their hand-written arms.
         assert_eq!(band_for_interop("70cm"), "0.7");
         assert_eq!(band_for_interop("33cm"), "0.33");
         assert_eq!(band_for_interop("23cm"), "0.23");
     }
 
     #[test]
-    fn a_centimetre_band_can_never_collide_with_a_metre_band() {
-        // ⚠️ THE COLLISION. Three cm bands were spelled out by hand and
-        // everything else fell to the alpha-strip, which cannot tell "cm" from
-        // "m": a 6 cm contact went out as "6" — BYTE-IDENTICAL to a 6 m
-        // contact — and N1MM / N3FJP file it on 6 metres. Silent, permanent in
-        // the club log, and unfixable from our end once broadcast.
+    fn every_centimetre_band_converts_to_metres() {
+        // THE DEFECT. Three cm bands were spelled out by hand and everything
+        // else fell to the alpha-strip, which cannot tell "cm" from "m" — so the
+        // microwave channels the Q65 and JT65 plans ship left here as bare
+        // numbers in a field that means METRES: 13 cm as "13", 3 cm as "3".
         //
-        // The three hand-written arms all encoded the SAME rule (N/100), so the
-        // rule replaces them. No token is invented and no band vocabulary is
-        // added anywhere: this only guarantees that whatever centimetre label
-        // reaches this function is DISTINGUISHABLE from a metre band.
-        for cm in ["3cm", "6cm", "9cm", "13cm", "23cm", "33cm", "70cm"] {
-            let meters = cm.trim_end_matches("cm");
+        // Every label below is one `tempo_app::bandplan` ships today (that
+        // census is asserted in bandplan.rs, which can see both crates). No
+        // operator is claimed to have been affected — what is claimed, and
+        // pinned here, is that Nexus could emit it.
+        for (cm, wire) in [
+            ("70cm", "0.7"),
+            ("33cm", "0.33"),
+            ("23cm", "0.23"),
+            ("13cm", "0.13"),
+            ("9cm", "0.09"),
+            ("5cm", "0.05"),
+            ("3cm", "0.03"),
+        ] {
+            assert_eq!(band_for_interop(cm), wire, "{cm} on the interop wire");
+            let bare = cm.trim_end_matches("cm");
             assert_ne!(
                 band_for_interop(cm),
-                band_for_interop(&format!("{meters}m")),
-                "{cm} goes out on the interop wire as {meters} METRES"
+                bare,
+                "{cm} goes out as the bare number {bare}, which the wire reads as metres"
             );
         }
-        assert_eq!(band_for_interop("6cm"), "0.06");
-        assert_eq!(band_for_interop("13cm"), "0.13");
-        // Metre bands are untouched, decimal ones included.
+        // 1.2 cm is shipped too, and is the one label whose conversion is not
+        // exact in binary — asserted on the value the wire actually carries.
+        assert_eq!(band_for_interop("1.2cm"), format!("{}", 1.2f64 / 100.0));
+        assert!(band_for_interop("1.2cm").starts_with("0.012"));
+        // Metre bands are untouched, decimal ones included, and a label this
+        // rule cannot parse still falls through to the strip.
         assert_eq!(band_for_interop("1.25m"), "1.25");
         assert_eq!(band_for_interop("2m"), "2");
+        assert_eq!(band_for_interop("cm"), "");
     }
 }

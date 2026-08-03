@@ -142,12 +142,15 @@ const held = (): SatTransponderHeld =>
   }) as SatTransponderHeld
 
 /** The rig on the DOWNLINK — 70 cm USB, which is what the operator's dial reads
- *  while the engine corrects RS-44's downlink. */
-const snap = (over: Record<string, unknown> = {}): AppSnapshot =>
+ *  while the engine corrects RS-44's downlink. `top` sets snapshot-level fields
+ *  (the Field Day status, the active tier); `over` sets radio ones. */
+const snap = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): AppSnapshot =>
   ({
     mycall: 'KD9TAW',
     mygrid: 'EN52',
     hunt: null,
+    fieldDay: null,
+    link: { tier: 'TempoFast' },
     radio: {
       dialMhz: 435.64332,
       band: '70cm',
@@ -159,7 +162,20 @@ const snap = (over: Record<string, unknown> = {}): AppSnapshot =>
       txAllowed: true,
       ...over,
     },
+    ...top,
   }) as unknown as AppSnapshot
+
+/** Field Day running, the way `snap.fieldDay` arrives from the engine. */
+const fieldDay = () => ({
+  myClass: '1D',
+  mySection: 'IL',
+  running: true,
+  state: 'running',
+  qsoCount: 4,
+  sections: 2,
+  points: 8,
+  log: [],
+})
 
 const settings = (over: Record<string, unknown> = {}) => ({
   mygrid: 'EN52',
@@ -181,6 +197,8 @@ beforeEach(() => {
   api.getSatTransponder.mockReset()
   api.getSatTransponder.mockImplementation(() => Promise.resolve(held()))
   api.logQso.mockClear()
+  api.fdLogManual.mockClear()
+  api.qrzLookup.mockClear()
 })
 afterEach(cleanup)
 
@@ -304,6 +322,15 @@ describe('Satellites — logging the contact you just made', () => {
     expect(note.textContent).toMatch(/not.*tagged as a satellite QSO/i)
     expect(note.textContent).toMatch(/PROP_MODE/)
     expect(note.textContent).toMatch(/SAT_NAME/)
+    // AND that the cost is not only an upload one. Nexus decides "satellite
+    // QSO?" locally from PROP_MODE (`qso_is_sat`), so the Satellite-VUCC totals
+    // on the Awards screen and the satellite needs board miss it too. A note
+    // that named only LoTW would leave an operator watching an in-app counter
+    // that is never going to move.
+    expect(
+      note.textContent,
+      'the note frames this as an upload-only matter — it is not',
+    ).toMatch(/Nexus.s own satellite totals/i)
   })
 
   it('logs the mode the station is on, folded to the closed ADIF enumeration', async () => {
@@ -324,5 +351,72 @@ describe('Satellites — logging the contact you just made', () => {
     const rec = await logCall('W1AW')
     expect(rec.mode).toBe('CW')
     expect(rec.rstSent, 'a CW contact defaults to a three-digit report').toBe('599')
+  })
+
+  // ---- THE TWO DISCLOSED DIVERGENCES ----
+  //
+  // Both are assertions on behaviour that is DEFERRED, not decided: the shared
+  // strip was dropped in unchanged, and these are what "unchanged" costs. They
+  // are pinned so the docs cannot drift off them, and so that whoever fixes
+  // either one is handed the paragraphs to delete — these tests go red on the
+  // fix, which is the coupling.
+
+  it('records SSB on a digital tier — the disclosed mode fold, NOT YET fixed', async () => {
+    // The Satellites section, unlike the Phone and CW cockpits, is reachable on
+    // a digital tier, and every band-plan channel on those tiers commands
+    // "USB" — the sideband a data mode is generated on, not the mode. The fold
+    // has only the sideband to go on, so it answers SSB.
+    //
+    // Wrong on a permanent record, and documented in docs/guide/satellites.md
+    // rather than guessed at (the honest value is the TIER's ADIF mode, which
+    // this function is not given). The operator's workaround today is the
+    // strip's own "Log a contact from another radio" mode picker.
+    render(
+      <SatellitesView focusSat="RS-44" snap={snap({ sideband: 'USB' }, { link: { tier: 'Q65' } })} />,
+    )
+    const rec = await logCall('W1AW')
+    expect(
+      rec.mode,
+      'the tier-aware mode landed — delete the "not yet" note in the guide and the CHANGELOG',
+    ).toBe('SSB')
+  })
+
+  it('logs to the ORDINARY log during Field Day — the disclosed FD divergence, NOT YET fixed', async () => {
+    // App.tsx passes `fieldDay`/`fdMode` to CwCockpit and PhoneCockpit, so those
+    // strips route through `fdLogManual` into the contest log while FD runs. It
+    // does not pass them here, so a satellite contact made during Field Day
+    // lands in the general log and earns the club nothing — with FD visibly
+    // running everywhere else in the app.
+    render(<SatellitesView focusSat="RS-44" snap={snap({}, { fieldDay: fieldDay() })} />)
+    const rec = await logCall('W1AW')
+    expect(rec.call).toBe('W1AW')
+    expect(
+      api.fdLogManual,
+      'the Satellites strip reached the Field Day log — delete the "not yet" note in the guide and the CHANGELOG',
+    ).not.toHaveBeenCalled()
+  })
+
+  it('takes TWO Enters on a fresh call: the first looks it up, the second logs', async () => {
+    // What the guide has to say, because it is what the strip does. The first
+    // Enter on an un-enriched call fires the callbook lookup and swallows the
+    // commit (`onCallEnter` → `triedLookupRef`); only the next one logs. A guide
+    // that says "type the call, press Enter" sends an operator away from the
+    // radio believing a contact is in the log when it is not.
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    const call = await screen.findByPlaceholderText('Call')
+    await act(async () => {
+      fireEvent.change(call, { target: { value: 'W1AW' } })
+    })
+    await act(async () => {
+      fireEvent.keyDown(call, { key: 'Enter' })
+    })
+    await waitFor(() => expect(api.qrzLookup).toHaveBeenCalledWith('W1AW'))
+    expect(api.logQso, 'the first Enter logged the contact').not.toHaveBeenCalled()
+
+    await act(async () => {
+      fireEvent.keyDown(call, { key: 'Enter' })
+    })
+    await waitFor(() => expect(api.logQso).toHaveBeenCalled())
+    expect(lastLoggedRecord().call).toBe('W1AW')
   })
 })

@@ -407,13 +407,10 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn every_channel_token_canonicalises_to_a_plain_band_label() {
-        // Walk every token every plan ships (the Tempo plan plus each per-tier
-        // plan): the canonical form must carry no channel suffix, be non-empty,
-        // and — when the channel's dial maps to a band at all — agree with the
-        // dial-derived band. This is the census that keeps the presentation-id /
-        // band-identity split honest as channels are added.
+    /// Every channel Nexus can put an operator on: the Tempo plan plus each
+    /// per-tier plan. ONE census, so a plan added here is guarded by every test
+    /// below rather than by whichever list happened to be updated.
+    fn every_shipped_channel() -> Vec<BandChannel> {
         let mut plans = vec![band_plan()];
         for f in [
             ft8_band_plan,
@@ -429,7 +426,17 @@ mod tests {
         ] {
             plans.push(f());
         }
-        for c in plans.into_iter().flatten() {
+        plans.into_iter().flatten().collect()
+    }
+
+    #[test]
+    fn every_channel_token_canonicalises_to_a_plain_band_label() {
+        // Walk every token every plan ships: the canonical form must carry no
+        // channel suffix, be non-empty, and — when the channel's dial maps to a
+        // band at all — agree with the dial-derived band. This is the census
+        // that keeps the presentation-id / band-identity split honest as
+        // channels are added.
+        for c in every_shipped_channel() {
             let canon = canonical_band(&c.band);
             assert!(!canon.is_empty(), "{}: empty canonical band", c.band);
             assert!(
@@ -445,6 +452,63 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn no_shipped_channel_reaches_the_interop_wire_as_a_band_it_is_not_on() {
+        // ⚠️ THE REACHABILITY HALF of `tempo_net::band_for_interop`'s rule, and
+        // the reason that rule is not speculative. The N1MM `<contactinfo>`
+        // `band` and the N3FJP band report both carry a METRE count, and both
+        // get it from `settings.band` — which is a band-plan channel's own
+        // label, canonicalised (`tune_dial`/`pick_band` call `canonical_band`
+        // at the state boundary and nothing else touches it).
+        //
+        // So every label in the census below is one the wire can carry. The
+        // centimetre ones are the point: the alpha-strip that used to be the
+        // catch-all left 13 cm as "13" and 3 cm as "3" — bare numbers a
+        // metres-bucketed field cannot read as anything but metres. Q65 ships
+        // 13/9/5/3/1.2 cm channels TODAY (JT65 the first three), so this is a
+        // census, not a hypothetical; it fails the moment the rule or a channel
+        // moves.
+        let mut cm_seen = Vec::new();
+        for c in every_shipped_channel() {
+            let band = canonical_band(&c.band);
+            let wire = tempo_net::band_for_interop(&band);
+            match band.strip_suffix("cm") {
+                Some(n) => {
+                    let n: f64 = n
+                        .parse()
+                        .unwrap_or_else(|_| panic!("{band}: unparsable cm"));
+                    assert_eq!(
+                        wire,
+                        format!("{}", n / 100.0),
+                        "{band} must reach the interop wire in metres"
+                    );
+                    assert_ne!(
+                        wire,
+                        n.to_string(),
+                        "{band} goes out as the bare number {n}"
+                    );
+                    cm_seen.push(band);
+                }
+                // A metre label is already the metre count — strip the unit only.
+                None => assert_eq!(
+                    wire,
+                    band.trim_end_matches(|ch: char| ch.is_alphabetic()),
+                    "{band} must reach the interop wire unchanged"
+                ),
+            }
+        }
+        cm_seen.sort();
+        cm_seen.dedup();
+        // Named so a reader can see WHICH microwave channels are in play — and
+        // so deleting them all (rather than fixing the wire) cannot quietly turn
+        // the loop above into a no-op.
+        assert_eq!(
+            cm_seen,
+            ["1.2cm", "13cm", "23cm", "33cm", "3cm", "5cm", "70cm", "9cm"],
+            "the centimetre channels Nexus ships"
+        );
     }
 
     #[test]

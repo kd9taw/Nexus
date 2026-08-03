@@ -498,7 +498,15 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
         {/* Satellite VUCC — its own ARRL category, and the ONLY place a
             satellite QSO's grid counts (the terrestrial card above excludes
             them), so the bucket must be visible or those contacts vanish
-            from the awards surface entirely. */}
+            from the awards surface entirely.
+
+            ⚠️ THIS CARD CANNOT MOVE ON A CONTACT NEXUS LOGGED, and says so
+            nowhere on screen. The count comes from `PROP_MODE=SAT`
+            (`qso_is_sat`), and nothing in Nexus writes that field — the
+            tracked-pass stamp was removed and satellite tagging is not yet
+            built (see `Engine::log_qso`). Only an imported or hand-repaired
+            record answers. Stated for the operator in the CHANGELOG and
+            docs/guide/satellites.md; an in-card line is the open item. */}
         <div className={`aw-card${aw.vucc.satConfirmed >= VUCC_GRIDS ? ' aw-card-elite' : ''}`}>
           <span className="aw-k">
             <Satellite size={13} aria-hidden="true" /> Sat VUCC

@@ -5708,15 +5708,32 @@ impl Engine {
         //    never released at all — so ordinary terrestrial contacts made long
         //    after the pass were stamped as satellite QSOs too.
         //
-        // Writing satellite fields at all is TABLED work: `SAT_NAME` needs a
-        // resolved designator LoTW accepts, and a QSO record is permanent, so a
-        // guessed value is worse than none. Nothing in Nexus writes these two
-        // fields today. Records that ARRIVE with them — a foreign ADIF import,
-        // or a record the operator repaired by hand — are carried through
-        // verbatim by `logbook::adif_record`/`parse_adif` and are untouched
-        // here; the awards side still reads them (`qso_is_sat`).
+        // Writing satellite fields at all is NOT YET DONE — deferred, not
+        // decided against: `SAT_NAME` needs a resolved designator LoTW accepts,
+        // and a QSO record is permanent, so a guessed value is worse than none.
+        // Nothing in Nexus writes these two fields today. Records that ARRIVE
+        // with them — a foreign ADIF import, or a record the operator repaired
+        // by hand — are carried through verbatim by
+        // `logbook::adif_record`/`parse_adif` and are untouched here.
         //
-        // Pinned by `a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields`.
+        // ⚠️ THE IN-APP COST, which is not only an upload matter. Nexus decides
+        // "was this a satellite QSO?" locally, from `PROP_MODE` alone
+        // (`qso_is_sat` in src-tauri), and that answer feeds:
+        //   · Satellite VUCC — `propagation::awards::Awards::add_qso(sat)`, the
+        //     `sat_worked`/`sat_confirmed` totals on the Awards screen; and
+        //   · the satellite needs board / pass-earn ranking —
+        //     `propagation::dxped::LogNeeds::add_qso(sat)` → `satneeds`.
+        // With no writer, a contact logged from the Satellites section reaches
+        // neither. It is not merely uncredited by LoTW — it does not count
+        // toward Nexus's own satellite totals either. And because the
+        // band-independent satellite bucket is the ONLY grid bucket that accepts
+        // a 70 cm / 23 cm contact (`Band::from_label` has no cm variant), such a
+        // contact now earns no grid slot at all. Documented for the operator in
+        // docs/guide/satellites.md and the CHANGELOG.
+        //
+        // Pinned by `a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields`
+        // here, and end-to-end by src-tauri's
+        // `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`.
 
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
