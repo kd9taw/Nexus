@@ -58,6 +58,17 @@ the Doppler readout, puts you back: it re-runs the transponder pick you already
 made, so the radio, the band and the mode all come with it, and you land in the
 middle of the passband again.
 
+### Pin the radio a pass uses
+
+On a multi-radio station the readiness rail names the rig a pick routed to, and
+the band and mode class it routed on. If two rigs cover the downlink, the pick
+goes wherever your routing says — which is usually what you want, and sometimes
+not. **🔓 pin this radio** holds the pass on the radio you are on: it stays 🔒
+pinned until you click it again, and no pick hands the bird to another rig
+meanwhile. It is the same switch as the 🔒 beside the radio selector in the top
+bar, put where you are working the pass. Pinning does not re-tune anything — it
+decides where the *next* pick lands.
+
 ### Auto-track with a rotator
 
 1. Configure your rotator in

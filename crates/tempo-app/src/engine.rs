@@ -19643,6 +19643,37 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_payload_cannot_move_peg_lock_in_either_direction() {
+        // ⭐ THE "GOES PINNED, THEN GOES UNPINNED" REPORT. `radio_pegged` is live roster state
+        // owned by `set_radio_pegged`: `apply_settings` captures it before the payload moves in
+        // and puts it back after, so a stale form Save cannot unpin the operator — and, the half
+        // that bit the Satellites rail, a payload cannot PIN either. A surface that wrote the pin
+        // as a whole-settings save saw its write vanish and the next read-back undo the switch.
+        let (mut e, _ic9700, _ft991a) = three_radio_engine();
+        e.set_radio_pegged(true);
+        let mut stale = Settings::default(); // a form loaded before the pin
+        stale.ensure_radio_profiles();
+        assert!(!stale.radio_pegged);
+        e.apply_settings(stale);
+        assert!(
+            e.settings.radio_pegged,
+            "a stale Save did not unpin the operator"
+        );
+        // …and the same wall the other way: only the verb turns it off.
+        e.set_radio_pegged(false);
+        let mut asks_to_pin = Settings::default();
+        asks_to_pin.ensure_radio_profiles();
+        asks_to_pin.radio_pegged = true;
+        e.apply_settings(asks_to_pin);
+        assert!(
+            !e.settings.radio_pegged,
+            "a payload must not be able to pin — the UI has to use set_radio_pegged"
+        );
+        e.set_radio_pegged(true);
+        assert!(e.settings.radio_pegged, "the verb still moves it");
+    }
+
+    #[test]
     fn dxped_work_mode_routing_still_reaches_the_right_radio() {
         // The dxpedWorkMode invariant: a DXpedition card's mode string picks the cockpit, and that
         // cockpit's section name is what `work_spot` routes on. Regression guard that adding the

@@ -36,6 +36,7 @@ import {
   getSatDetail,
   getSettings,
   setSettings,
+  setPegLock,
   confirmSatUplink,
   setSatTransponder,
   getSatTransponder,
@@ -1584,8 +1585,9 @@ function TrackRail({
  * confirmed on the wire.
  *
  * The override is the app's OWN one — peg-lock, the same switch behind the
- * TopBar RadioSwitcher's 🔒 — reachable where the operator is, written
- * read-modify-write like the two Doppler switches on the rail below.
+ * TopBar RadioSwitcher's 🔒 — reachable where the operator is, written through
+ * its own backend verb (see `writePegged`), not read-modify-write like the two
+ * Doppler switches on the rail below.
  *
  * Layout: content-height, never a grower (ui-layout §2), shares the rail's box. */
 function SatRadioBinding({
@@ -2398,13 +2400,21 @@ export function SatellitesView({ focusSat, onPopOut }: Props) {
         settingsWriteBusy.current = false
       })
   }
-  /** Peg-lock: the app-wide "don't auto-switch radios" override, written the
-   * same read-modify-write way as the two switches beside it. Pinning does not
-   * re-tune — it changes where the NEXT pick lands, and the line re-reads. */
+  /** Peg-lock: the app-wide "don't auto-switch radios" override. Pinning does
+   * not re-tune — it changes where the NEXT pick lands, and the line re-reads.
+   *
+   * Written through the backend verb (`setPegLock`, api.ts), NOT read-modify-
+   * write like the two Doppler switches beside it: `radio_pegged` is part of
+   * the LIVE dual-radio roster state, which `apply_settings` captures before an
+   * incoming payload moves in and restores after it (engine.rs `live_pegged`,
+   * the same protection the roster, the routing rules and the uplink consent
+   * pair get). A whole-settings save therefore cannot carry this field — it
+   * landed nowhere, the mirror flipped to 🔒 on the resolved promise, and the
+   * rail's next 2 s read-back returned the untouched value and flipped it back
+   * to 🔓. That is the "goes pinned, then goes unpinned" field report. */
   const writePegged = (on: boolean) => {
     settingsWriteBusy.current = true
-    getSettings()
-      .then((s: Settings) => setSettings({ ...s, radioPegged: on }))
+    setPegLock(on)
       .then(() => setPegged(on))
       .catch((e) => pushToast(`Peg-lock: ${e instanceof Error ? e.message : e}`, 'error'))
       .finally(() => {

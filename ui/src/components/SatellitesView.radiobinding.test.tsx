@@ -20,7 +20,7 @@
 //  - the peg override is the app's existing one (Settings `radioPegged`,
 //    read-modify-write like the two Doppler switches beside it).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
 import type { SatDetail, SatTransponderHeld } from '../types'
 
@@ -31,6 +31,7 @@ const api = vi.hoisted(() => ({
   getSatDetail: vi.fn(),
   getSettings: vi.fn(),
   setSettings: vi.fn((_s: unknown) => Promise.resolve({} as never)),
+  setPegLock: vi.fn((_on: boolean) => Promise.resolve({} as never)),
   setSatTransponder: vi.fn(() => Promise.resolve()),
   getSatTransponder: vi.fn((): Promise<SatTransponderHeld | null> => Promise.resolve(null)),
   startSatTrack: vi.fn(() => Promise.resolve(null)),
@@ -102,12 +103,39 @@ beforeEach(() => {
   api.getSettings.mockImplementation(() => Promise.resolve(settings()))
   api.setSettings.mockReset()
   api.setSettings.mockImplementation(() => Promise.resolve({} as never))
+  api.setPegLock.mockReset()
+  api.setPegLock.mockImplementation(() => Promise.resolve({} as never))
   api.setSatTransponder.mockReset()
   api.setSatTransponder.mockImplementation(() => Promise.resolve())
   api.getSatTransponder.mockReset()
   api.getSatTransponder.mockImplementation(() => Promise.resolve(null))
 })
-afterEach(cleanup)
+afterEach(() => {
+  vi.useRealTimers()
+  cleanup()
+})
+
+/** The settings store as the ENGINE really behaves, which a `resolve({})` stub
+ * hides: `set_peg_lock` OWNS `radio_pegged`, and `apply_settings` captures the
+ * live value before the incoming payload moves in and puts it back after
+ * (engine.rs `live_pegged`) — the same treatment the roster, the routing rules
+ * and the uplink consent pair get. A whole-settings save therefore cannot carry
+ * peg-lock in either direction; only the verb can move it. */
+const backedStore = () => {
+  const store = settings() as Record<string, unknown>
+  api.getSettings.mockImplementation(() => Promise.resolve({ ...store }))
+  api.setSettings.mockImplementation((s: unknown) => {
+    const incoming = { ...(s as Record<string, unknown>) }
+    delete incoming.radioPegged // the engine restores the live value over it
+    Object.assign(store, incoming)
+    return Promise.resolve({} as never)
+  })
+  api.setPegLock.mockImplementation((on: boolean) => {
+    store.radioPegged = on
+    return Promise.resolve({} as never)
+  })
+  return store
+}
 
 describe('the radio binding line', () => {
   it('names the radio the pick routed to, and the band+class it routed on', async () => {
@@ -312,17 +340,43 @@ describe('the radio binding line', () => {
     expect(bind.textContent).toMatch(/IC-9700/)
   })
 
-  it('overrides routing through the app’s own peg-lock, read-modify-write', async () => {
+  it('overrides routing through the app’s own peg-lock — the verb that owns the field', async () => {
     // The existing override idiom (the TopBar RadioSwitcher's 🔒), reachable
-    // where the operator is. Read-modify-write so the one field changes and
-    // nothing else in the settings object rides along wrong.
+    // where the operator is. It must go through `set_peg_lock`, the verb that
+    // owns `radio_pegged` — the same reason the VFO mapping beside it goes
+    // through `confirm_sat_uplink` rather than riding a settings payload.
+    backedStore()
     api.getSatTransponder.mockImplementation(() => Promise.resolve(heldTuned()))
     render(<SatellitesView focusSat="RS-44" />)
     await screen.findByTestId('sat-radio-binding')
     fireEvent.click(screen.getByRole('button', { name: /pin this radio/i }))
-    await waitFor(() => expect(api.setSettings).toHaveBeenCalled())
-    const written = api.setSettings.mock.calls[0][0] as Record<string, unknown>
-    expect(written.radioPegged).toBe(true)
-    expect(written.mygrid).toBe('EN52') // the rest of the object survived
+    await waitFor(() => expect(api.setPegLock).toHaveBeenCalledWith(true))
+    // …and never smuggled through a whole-settings save, which discards it.
+    expect(api.setSettings).not.toHaveBeenCalled()
+  })
+
+  it('STAYS pinned across the rail’s 2 s read-back', async () => {
+    // ⭐ THE FIELD REPORT: "I tried pin this radio and it goes pinned, then goes
+    // unpinned." The rail wrote peg-lock as a whole-settings payload
+    // (getSettings → spread → setSettings). `apply_settings` restores the LIVE
+    // `radio_pegged` over anything a payload carries, so the write landed
+    // nowhere; the local mirror flipped to 🔒 on the resolved promise, and the
+    // next 2 s poll read the untouched `false` back and flipped it to 🔓 again.
+    // Not a race — the busy guard covers the whole write window correctly. The
+    // write simply used a verb that cannot carry this field.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    backedStore()
+    api.getSatTransponder.mockImplementation(() => Promise.resolve(heldTuned()))
+    render(<SatellitesView focusSat="RS-44" />)
+    await screen.findByTestId('sat-radio-binding')
+    fireEvent.click(screen.getByRole('button', { name: /pin this radio/i }))
+    await screen.findByRole('button', { name: /pinned/i })
+    // One poll tick — the read-back the operator watched undo his click.
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+    })
+    expect(screen.queryByRole('button', { name: /pin this radio/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /pinned/i })).toBeTruthy()
   })
 })

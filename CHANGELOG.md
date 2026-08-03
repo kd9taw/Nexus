@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: "pin this radio" on a pass now holds
+
+Reported from the bench: "I tried pin this radio and it goes pinned, then goes unpinned." The
+switch showed 🔒 for a moment and flipped itself back to 🔓 a couple of seconds later.
+
+Peg-lock belongs to the live radio roster, alongside which rig is active and how bands route to
+it. Saving the settings form can never move any of that — a form loaded before you switched rigs
+would otherwise yank you back to the old one — so the roster is put back exactly as it was after
+every save. The pin on the pass rail was written as a settings save, which meant it was one of
+the things being put back: the click went nowhere, the switch lit anyway, and the rail's own two-
+second re-read of the setting showed the truth and turned it off again. It now goes through the
+control that owns the setting, the same one behind the 🔒 in the top bar, so it sticks until you
+click it again.
+
+Worth knowing if you saw this: the pin was not merely failing to display. It never engaged, so a
+transponder pick could still hand the bird to whichever rig your routing preferred, exactly the
+thing you clicked to prevent.
+
 ### Fixed: a Doppler correction no longer rewrites the mode every three seconds
 
 From an operator's CI-V trace of a live pass: 110 seconds carried 38 mode commands and 38
