@@ -86,15 +86,24 @@ interface Props {
  * rig-mode keystone, wired in App).
  */
 /** ⊞ Panels menu labels. The vocabulary itself lives in panelState — note what is NOT
- *  in it: the CockpitHeader, the PTT row, the voice keyer and the log strip are pinned by
- *  construction, so no menu entry can ever hide a transmit control or the log. */
+ *  in it: the CockpitHeader (Tune / Stop TX), the PTT row and the log strip are pinned by
+ *  construction, so no menu entry can ever hide a way to STOP a transmission, or the log. */
 const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
   rigscope: 'Rig Scope Controls',
   txmeters: 'TX Meters',
   dsp: 'DSP Functions',
   dspLevels: 'RX DSP Levels',
   bandActivity: 'Band Activity',
+  voiceKeyer: 'Voice Keyer',
 }
+
+/** The one ⊞ entry whose tick has a TRANSMIT consequence, so the entry carries it before
+ *  the tick rather than after. Hiding the keyer unmounts it, and its cleanup calls
+ *  stopVoice — defensible (that is a stop, not a strand) but not something to do to an
+ *  operator silently mid-message. `note`, not `unavailable`: the entry stays checkable,
+ *  and PanelsMenu hangs this off aria-describedby, so it reaches a screen reader too. */
+export const VOICE_KEYER_STOPS_ON_HIDE =
+  'hiding this stops a voice message that is playing — the F-keys go with it'
 
 /** Expert DSP-function toggles. `key` matches the RadioStatus field + the set_rig_func name; the
  * cockpit only renders those the rig reports as supported (field non-null), so no dead buttons. */
@@ -489,7 +498,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           dsp: canDsp ? undefined : NO_DSP_FUNCS_REASON,
           dspLevels: canDspLevels ? undefined : NO_DSP_LEVELS_REASON,
         },
-        notes: { txmeters: TX_METERS_WHEN },
+        notes: { txmeters: TX_METERS_WHEN, voiceKeyer: VOICE_KEYER_STOPS_ON_HIDE },
       })
     : null
   const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)
@@ -506,17 +515,26 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // Which panes CAN render right now — the exact conditions that gate them in the JSX,
   // hoisted because the region's column budget (maxCols) depends on them.
   const hasBandPane = onWorkSpot != null && shown('bandActivity')
+  const hasKeyerPane = shown('voiceKeyer')
   const hasRigScopePane = shown('rigscope') && (civScope || flexScope)
   const hasDspPane = shown('dsp') && canDsp
   const hasDspLevelsPane = shown('dspLevels') && canDspLevels
   const auxPresent = hasRigScopePane || hasDspPane || hasDspLevelsPane
+  // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
+  // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
+  // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`
+  // column holding nothing beside the log, which is the "band of empty black" this region
+  // was rebuilt to kill. So the column is not rendered when it is empty, and maxCols
+  // collapses with it — a bounded tier (2/3, `overflow:hidden`) never gets a track with
+  // nothing in it.
+  const leadPresent = hasBandPane || hasKeyerPane || auxPresent
   // Three columns are band | keyer+rig/dsp | log, so the tier is only offered when the
   // leading column (Band Activity) AND at least one aux pane exist — otherwise a track
   // would sit empty, the operator's "band of empty black" rebuilt. This is the same
   // collapse panelHost ships as dataCols 'one'|'two' for Operate; it feeds maxCols and
   // is NEVER stamped on the region (useRegionCols owns data-cols='1|2|3').
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
-    auxPresent && hasBandPane ? 3 : 2,
+    auxPresent && hasBandPane ? 3 : leadPresent ? 2 : 1,
   )
 
   const bandPane =
@@ -539,21 +557,29 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
   // The voice keyer TRANSMITS, but it is a pane, not dock chrome (design3 §2/§6: F1–F6
   // visible, record controls may sit behind the pane scroll): its F-key sends are
-  // guarded inside the component (txEnabled/keyed/licence via the engine) and it is
-  // deliberately NOT in the panel vocabulary — no menu entry or stored layout can hide
-  // it (paneId here is a test/pop-out handle, not vocabulary membership).
+  // guarded inside the component (txEnabled/keyed/licence via the engine).
   //
-  // Because it transmits, this pane must NEVER remount on a tier flip: its unmount
-  // cleanup aborts an in-flight voice message (stopVoice) and discards an in-progress
-  // recording — correct when leaving the section, data loss when merely reflowing. So
-  // the keyer lives in the LEADING column at every tier (see the region JSX): a pane
-  // whose column assignment changes with the tier changes DOM parents, and React cannot
-  // carry a fiber across that.
-  const keyerPane = (
+  // It IS in the panel vocabulary, since the 2026-08-03 narrowing of the TX rule: a pane
+  // that can only START a transmission may be hidden, anything that can STOP one may not.
+  // The keyer only starts overs — and the hide is itself the stop, because unmounting it
+  // calls stopVoice. So no tick here can leave the operator keyed with the abort scrolled
+  // away, which is the risk the blunt "no TX id in any vocabulary" rule was proxying for.
+  // PTT, Tune and Stop TX stay in the dock/header with no id at all. Because the abort is
+  // real, the ⊞ entry carries VOICE_KEYER_STOPS_ON_HIDE — the operator is told before the
+  // tick, not surprised by a dropped message after it.
+  //
+  // Because it transmits, this pane must NEVER remount for any reason but its OWN entry:
+  // the same cleanup that makes hiding it safe is data loss when the region merely
+  // reflows (an in-flight message aborted, an in-progress recording discarded). So the
+  // keyer lives in the LEADING column at every tier (see the region JSX): a pane whose
+  // column assignment changes with the tier changes DOM parents, and React cannot carry a
+  // fiber across that. Guarded by PhoneCockpit.structure.test.tsx (tier flips, ⊞ toggles
+  // of other panels, and the restore back to stock).
+  const keyerPane = hasKeyerPane ? (
     <CockpitPaneFrame title="Voice keyer" paneId="voiceKeyer" fit="content">
       <VoiceKeyer txEnabled={snap.radio.txEnabled} keyed={keyed} fdExchange={fdExchange} />
     </CockpitPaneFrame>
-  )
+  ) : null
 
   /* Aux panes — rig-scope / DSP / RX-DSP-levels control strips. In the 3-column tier
      they share the middle column with the voice keyer; below that they append to the
@@ -1017,7 +1043,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           .cockpit-col groups as the tier: at 1 the two-column grouping simply stacks and
           the region is the scroller; at 2 it is band+keyer+aux | log; at 3 the aux
           strips take their own middle column. Columns are implicit-row grids, so a pane
-          hidden from ⊞ Panels leaves no empty cell behind.
+          hidden from ⊞ Panels leaves no empty cell behind — and when the ⊞ menu empties
+          the LEADING column outright (possible only since the keyer gained an entry), the
+          column itself is not rendered and maxCols collapses to 1 with it, so a bounded
+          tier never holds a track with nothing in it.
 
           The columns are KEYED, and the log + keyer keep the same key at every tier: a
           tier flip that moved a pane to a different column div would UNMOUNT it (React
@@ -1042,11 +1071,13 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           </>
         ) : (
           <>
-            <div className="cockpit-col" key="main">
-              {bandPane}
-              {keyerPane}
-              {auxPanes}
-            </div>
+            {leadPresent && (
+              <div className="cockpit-col" key="main">
+                {bandPane}
+                {keyerPane}
+                {auxPanes}
+              </div>
+            )}
             <div className="cockpit-col" key="log">{logPane}</div>
           </>
         )}

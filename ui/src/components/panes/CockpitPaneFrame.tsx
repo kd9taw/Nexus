@@ -15,9 +15,11 @@
 //   - no picker. Connect's slot picker belongs to Connect's assignable grid; a cockpit's
 //     placement is the fixed responsive template, and visibility is the ⊞ Panels menu.
 //
-// TX-safety: this is a layout wrapper and nothing more. TX chrome (PTT, send, abort, Tune,
-// Stop TX) does not render through it — it lives in the shell's pinned .cockpit-txdock,
-// outside the pane region, with no id in any pane vocabulary.
+// TX-safety: this is a layout wrapper and nothing more. Anything that can STOP a
+// transmission (PTT, abort, Tune, Stop TX) does not render through it — it lives in the
+// shell's pinned .cockpit-txdock or the header, with no id in any pane vocabulary. A pane
+// that only STARTS one may sit in a frame (Phone's voice keyer), because hiding that frame
+// unmounts it and its own cleanup ends the over — see cockpit-panes.css, "THE STOP LINE".
 import type { ReactNode } from 'react'
 
 export function CockpitPaneFrame({

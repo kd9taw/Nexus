@@ -210,12 +210,29 @@ describe('share (seam resize)', () => {
   })
 })
 
-describe('cockpit vocabularies (Phase 3 TX-safety)', () => {
-  // TX-safety BY CONSTRUCTION: keying/stop/tune/arm/macro controls have NO panel id, so no menu
-  // entry, stored value, or coercion rule can ever remove them from any cockpit.
-  const txCritical = [
-    'send', 'stop', 'stopTx', 'tune', 'arm', 'ptt', 'enableTx', 'txbar',
-    'keyer', 'wpm', 'macros', 'macro', 'compose', 'send', 'header', 'band', 'mode',
+describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
+  // THE RULE, narrowed 2026-08-03 (operator ruling): a pane that can only START a
+  // transmission may be hidden; anything that can STOP one may never be. What is protected
+  // is the operator's ability to shut the transmitter up, not the ability to reach a
+  // sender — so the ids below are the STOP-capable ones, and only those:
+  //   ptt/tune/arm/enableTx  — each stops what it started (release, untune, drop the latch)
+  //   stop/stopTx/halt/haltTx/abort — the last resort itself
+  //   txbar/header/keyer     — the composite strips that HOST one of the above (CW's keyer
+  //                            strip carries Tune + Stop TX; the CockpitHeader carries
+  //                            Stop TX in every cockpit)
+  // Deliberately NOT here any more: send, compose, macro(s), wpm, band, mode. They start a
+  // transmission (or nothing at all) and the narrowed rule permits hiding them.
+  // 'voiceKeyer' is the first id taken up under the narrowing.
+  //
+  // HONESTY NOTE — this is a NAME backstop and nothing more. It cannot see whether an id is
+  // wired to a stop control, so it never really enforced the old rule either: it would have
+  // waved through a vocabulary id called `dsp` that gated the PTT row. What COMPUTES the
+  // rule is PhoneCockpit.structure.test.tsx's "hiding ANY panel in the vocabulary leaves
+  // every stop control mounted" — it renders the real cockpit once per id and looks.
+  const stopCapable = [
+    'stop', 'stopTx', 'halt', 'haltTx', 'abort',
+    'ptt', 'tune', 'arm', 'enableTx',
+    'txbar', 'header', 'keyer',
   ]
   const cases: Array<[string, readonly string[]]> = [
     ['SSTV', SSTV_PANELS.panelIds],
@@ -223,19 +240,29 @@ describe('cockpit vocabularies (Phase 3 TX-safety)', () => {
     ['CW', CW_PANELS.panelIds],
     ['RTTY', RTTY_PANELS.panelIds],
   ]
-  it.each(cases)('%s vocabulary excludes every TX control', (_name, ids) => {
-    for (const id of txCritical) {
+  it.each(cases)('%s vocabulary excludes every control that can STOP a transmission', (_name, ids) => {
+    for (const id of stopCapable) {
       expect((ids as readonly string[]).includes(id)).toBe(false)
     }
   })
 
   it('lists the expected content panels per cockpit', () => {
     expect([...SSTV_PANELS.panelIds]).toEqual(['txcompose', 'gallery'])
-    expect([...PHONE_PANELS.panelIds]).toEqual(['rigscope', 'txmeters', 'dsp', 'dspLevels', 'bandActivity'])
+    expect([...PHONE_PANELS.panelIds]).toEqual([
+      'rigscope', 'txmeters', 'dsp', 'dspLevels', 'bandActivity', 'voiceKeyer',
+    ])
     expect([...RTTY_PANELS.panelIds]).toEqual(['stream'])
     expect([...CW_PANELS.panelIds]).toEqual([
       'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
     ])
+  })
+
+  it('Phone can hide the voice keyer — it starts overs, it is not the way you end one', () => {
+    // The pane TRANSMITS (F1–F6 play a canned message with PTT keyed), which is why the
+    // blunt rule kept it out. It is admissible under the narrowed one because hiding it
+    // IS a stop: the unmount cleanup calls stopVoice, so the hide cannot strand you keyed.
+    // The abort itself is proven at the real site in PhoneCockpit.keyerHide.test.tsx.
+    expect((PHONE_PANELS.panelIds as readonly string[]).includes('voiceKeyer')).toBe(true)
   })
 })
 

@@ -66,8 +66,13 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   `fit="content"` for control strips (exactly content height — a strip cannot use surplus),
   fill + `weight` for feeds and the log column. A pane never sizes itself; structural size
   lives in `cockpit-panes.css` (flat selectors, fenced) and only there.
-- TX/safety controls (PTT, send, abort, macros) live in the dock and have **no id in any pane
-  vocabulary** — moving or hiding them must stay unrepresentable.
+- **The stop line** (narrowed 2026-08-03): a pane that can only **start** a transmission may be
+  hidden; anything that can **stop** one may never be. PTT, Stop TX, Tune and the TX-enable latch
+  live in the dock/header with **no id in any pane vocabulary** — moving or hiding them stays
+  unrepresentable, not merely guarded. A sender is admissible only if its hide path is itself the
+  stop (Phone's voice keyer: unmounting it calls `stopVoice`) *and* its ⊞ entry says so before the
+  tick. Enforced by computation, not by a name list: `PhoneCockpit.structure.test.tsx` drives every
+  id in the real vocabulary through the real hide path and checks the stop controls survive.
 - Responsive behavior: `[data-viewport='xs|sm|md|lg|xl']` + `--vh-eff`/`--vw-eff` only. Never a
   size-based `@media`, never raw `vh/vw` inside `.app` (zoom-blind) — the portaled
   `.ui-dialog`/`.ui-tooltip` are the one permanent exception (their content re-applies

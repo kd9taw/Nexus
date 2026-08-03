@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed: the ⊞ Panels menu no longer offers a checkbox that changes nothing
+### Fixed: the ⊞ Panels menu no longer offers a checkbox that changes nothing, and it gains a Voice Keyer entry
 
 From the bench: "what do the Panels selection / deselection of Rig Scope Controls and TX meters
 do on the Phone tab? I don't see them anywhere on my screen whether enabled or disabled. Nothing
@@ -34,6 +34,15 @@ what your radio reports over CAT — on a rig that reports neither, those panes 
 and the boxes did nothing. In CW, **Sent Echo** holds what you have transmitted this session, so
 at every start-up it is empty and its box moved nothing at all until your first over; it now says
 so, and goes live when you send. Everything else in the menu is unchanged and still tickable.
+
+The menu also gains one entry it never had: **Voice Keyer** in Phone. If you work with a mic and
+never touch the F-key slots, you can now put that pane away and the panes around it take the room.
+It was held out until now by a blunt rule — nothing that transmits gets a checkbox — and the rule
+is narrower now, because what it was really protecting is your ability to shut the transmitter up:
+a pane that can only *start* an over can be hidden, and anything that can *stop* one cannot. PTT,
+Tune and Stop TX are still not panels, have no entry, and no saved layout can put them out of
+reach. Unticking Voice Keyer while a message is playing stops the message rather than leaving it
+transmitting behind a pane you just closed, and the entry says so before you tick it.
 
 Reaching all of this from the keyboard works the way the rest of Nexus does: an entry that cannot
 appear is still a tab stop, still takes focus, and reads its reason aloud with the panel name —

@@ -5,8 +5,9 @@
 // reachable, and never more than one click from Undo / Reset — both ship here, before
 // the operator can make a mess.
 //
-// Only the panels the CURRENT layout renders are listed; TX controls are not panels at
-// all, so they have no entry here by construction (see features/panelState).
+// Only the panels the CURRENT layout renders are listed. Anything that can STOP a
+// transmission is not a panel at all, so it has no entry here by construction (see
+// features/panelState) — an entry can cost you a sender, never the way to shut one up.
 //
 // A listed entry must be able to CHANGE something. Some panels are conditional on the
 // station (rig-scope controls need the radio's own panadapter streaming), so ticking

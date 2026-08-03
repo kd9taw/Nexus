@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
+import { PHONE_PANEL_IDS } from '../features/panelState'
 import type { PanelLayoutApi, PhonePanelId } from '../features/panelState'
 
 vi.mock('../api', () => ({
@@ -215,6 +216,61 @@ describe('PhoneCockpit pane-grid shell', () => {
     expect(document.querySelector('.cockpit-txdock .ph-ptt')).not.toBeNull()
   })
 
+  // ── THE STOP LINE (operator ruling, 2026-08-03) ────────────────────────────────────
+  // A pane that can only START a transmission may be hidden; anything that can STOP one
+  // may never be. This is the guard that COMPUTES it: it drives every id in the real
+  // vocabulary through the real hide path and looks at what is left standing. A name list
+  // (features/panelState.test.ts) cannot see a vocabulary id wired to the PTT row; this
+  // can. Run RED by gating the PTT row on `shown('txmeters')` — one line at the real site.
+  it('hiding ANY panel in the vocabulary leaves every stop-a-transmission control mounted', () => {
+    for (const id of PHONE_PANEL_IDS) {
+      renderCockpit({ panels: fakePanels([id]) })
+      expect(
+        document.querySelector('.cockpit-txdock .ph-ptt'),
+        `hiding "${id}" took the PTT button with it`,
+      ).not.toBeNull()
+      // Stop TX lives in the CockpitHeader (stubbed here down to its element): the
+      // assertion is that no panel id gates the header's render.
+      expect(document.querySelector('.cockpit-header'), `hiding "${id}" took the header (Stop TX) with it`).not.toBeNull()
+      cleanup()
+    }
+    // And with the whole vocabulary hidden at once — the state an operator reaches by
+    // unticking down the menu — the transmitter can still be shut up.
+    renderCockpit({ panels: fakePanels([...PHONE_PANEL_IDS]) })
+    expect(document.querySelector('.cockpit-txdock .ph-ptt')).not.toBeNull()
+    expect(document.querySelector('.cockpit-header')).not.toBeNull()
+  })
+
+  it('the voice keyer is a panel now: docked by default, gone when the operator hides it', () => {
+    renderCockpit({ panels: fakePanels() })
+    expect(document.querySelector('[data-pane="voiceKeyer"]'), 'keyer not docked by default').not.toBeNull()
+    cleanup()
+    renderCockpit({ panels: fakePanels(['voiceKeyer']) })
+    expect(document.querySelector('[data-pane="voiceKeyer"]'), 'keyer survived its own ⊞ entry').toBeNull()
+    // Hiding the keyer is a stop, never a strand: PTT is untouched, and the pane's own
+    // unmount aborts the message (PhoneCockpit.keyerHide.test.tsx renders the real one).
+    expect(document.querySelector('.cockpit-txdock .ph-ptt')).not.toBeNull()
+  })
+
+  it('the leading column is never left empty by the menu (no band of empty panel)', async () => {
+    // Reachable the moment the keyer became hideable: a rig that reports no DSP and no
+    // native scope has nothing in the leading column but Band Activity and the keyer, so
+    // unticking both used to leave a `minmax(0,1fr)` track holding nothing beside the log
+    // — the "empty black box" complaint rebuilt. The tier collapses to 1 instead, and the
+    // .cockpit-col count still equals data-cols (useRegionCols' standing invariant).
+    renderCockpit({
+      snap: makeSnap({ nb: null, nr: null, nrLevel: null, agc: null }),
+      panels: fakePanels(['bandActivity', 'voiceKeyer']),
+    })
+    const region = document.querySelector('.cockpit-panes')!
+    stubWidth(region, 1800)
+    act(() => fire!())
+    await frame()
+    expect(region.getAttribute('data-cols')).toBe('1')
+    expect(region.querySelectorAll(':scope > .cockpit-col').length).toBe(1)
+    expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
+  })
+
   it('three columns group band+keyer | aux | log (keyer never leaves the leading column)', async () => {
     renderCockpit()
     const region = document.querySelector('.cockpit-panes')!
@@ -323,6 +379,17 @@ describe('PhoneCockpit pane-grid shell', () => {
     expect(region.getAttribute('data-cols')).toBe('2')
     expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), 'log form remounted on ⊞ toggle').toBe(true)
     expect(document.querySelector('[data-testid="vk-stub"]')!.isSameNode(vk0), 'voice keyer remounted on ⊞ toggle').toBe(true)
+    // …and the restore back to stock (⊞ Reset layout / Undo) flips maxCols 2→3 again.
+    // Vocabulary membership must not have made the keyer's fiber depend on anything but
+    // its OWN entry: a menu interaction that merely reorders the region must not abort an
+    // over that is on the air while the operator is in the menu.
+    r.rerender(
+      <PhoneCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} panels={fakePanels()} />,
+    )
+    await frame()
+    expect(region.getAttribute('data-cols')).toBe('3')
+    expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), 'log form remounted on ⊞ restore').toBe(true)
+    expect(document.querySelector('[data-testid="vk-stub"]')!.isSameNode(vk0), 'voice keyer remounted on ⊞ restore').toBe(true)
   })
 
   it('TX meters render ABOVE the PTT row in the bottom-anchored dock', () => {

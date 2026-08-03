@@ -43,6 +43,10 @@ on it — it goes live by itself when your station can render it:
   so rather than hiding an empty pane behind a live checkbox.
 - **TX Meters** (SWR / ALC / PO / COMP) read on transmit, so the panel is empty
   while you listen. The entry stays tickable and says when it reads.
+- **Voice Keyer** hides the F-key message pane if you work with a mic and never
+  use it. Unticking it stops a voice message that is playing — the entry says so
+  before you tick it. Nothing else changes: PTT, Tune and Stop TX are not panels
+  and have no entry, so no layout you save can put them out of reach.
 
 A greyed entry is still a tab stop: it takes keyboard focus and reads its reason
 with the panel name. If the list outgrows your window it scrolls inside the menu,
@@ -88,6 +92,10 @@ The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
    default input is the rig's RX audio, so point "Voice mic (recording)" at your
    actual microphone.
 2. Press a slot to play it. Playback keys PTT for the duration; **Esc** aborts.
+
+If you never use it, untick **Voice Keyer** in ⊞ Panels and the pane goes away.
+Hiding it while a message is playing stops the message — that is deliberate, and
+the menu entry tells you so first.
 
 ### Record a QSO
 

@@ -9,11 +9,19 @@
 // rather than guarded — and the Classic/Roster presets stop fighting the operator for
 // the same reason.
 //
-// TX-safety: TX controls are NOT panels. The dial, the band/mode pickers, the Rx/Tx
-// offset spinners and the QSO strip's TX On / Tune / Stop TX / Hold Tx have no id in
-// any vocabulary here, so there is no menu entry, no stored value and no coercion rule
-// that can reach them. That is strictly stronger than a `removable: false` flag, which
-// a bad code path or a hand-edited blob could bypass.
+// TX-safety — THE STOP LINE (narrowed 2026-08-03, operator ruling). A pane that can only
+// START a transmission may be hidden; anything that can STOP one may never be. So the
+// dial, the band/mode pickers, the Rx/Tx offset spinners and the QSO strip's TX On / Tune
+// / Stop TX / Hold Tx still have no id in any vocabulary here — there is no menu entry, no
+// stored value and no coercion rule that can reach them, which is strictly stronger than a
+// `removable: false` flag a bad code path or a hand-edited blob could bypass.
+//
+// What the narrowing admits: a sender whose HIDE PATH IS ITSELF THE STOP. Phone's voice
+// keyer is the first — its unmount cleanup calls stopVoice, so unticking it aborts the
+// message rather than leaving it playing with the abort scrolled away. The rule protects
+// the operator's ability to shut the transmitter up, and hiding a pane that shuts itself
+// up cannot take that away. A pane whose own ■ Stop is the ONLY way to end something it
+// did not start is still out.
 import { useCallback, useMemo, useState } from 'react'
 import { windowInstance } from './windowScope'
 
@@ -329,9 +337,21 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
 }
 
 /** Phone cockpit's removable panels (Phase 3) — the panes UNDER the scope. The scope, the
- *  whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW), the PTT row, the voice
- *  keyer, and the log strip are NOT panels (TX-safety by construction). */
-export const PHONE_PANEL_IDS = ['rigscope', 'txmeters', 'dsp', 'dspLevels', 'bandActivity'] as const
+ *  whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW), the PTT row and the
+ *  log strip are NOT panels: each is, or hosts, a way to STOP a transmission.
+ *
+ *  `voiceKeyer` IS one, since 2026-08-03. It transmits, but it only ever STARTS an over —
+ *  and hiding it stops that over (VoiceKeyer's unmount cleanup calls stopVoice), so no tick
+ *  here can leave the operator keyed with the abort scrolled away. The ⊞ entry says so
+ *  before the tick. */
+export const PHONE_PANEL_IDS = [
+  'rigscope',
+  'txmeters',
+  'dsp',
+  'dspLevels',
+  'bandActivity',
+  'voiceKeyer',
+] as const
 export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
 
 export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {

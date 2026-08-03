@@ -19,6 +19,24 @@
    with the dock parked sticky at the bottom. Horizontal surplus has exactly one fate
    (another column). Nothing clips.
 
+   THE STOP LINE — what may and may not have a ⊞ Panels id (narrowed 2026-08-03, operator
+   ruling). A PANE THAT CAN ONLY START A TRANSMISSION MAY BE HIDDEN. ANYTHING THAT CAN STOP
+   ONE MAY NEVER BE. PTT, Stop TX, Tune and the TX-enable latch live in the dock or the
+   header with no id in any pane vocabulary (features/panelState.ts), so moving or hiding
+   them stays unrepresentable rather than merely guarded — a `removable: false` flag is
+   something a bad code path or a hand-edited storage blob can bypass; a missing id is not.
+   This replaces the blunt "TX chrome has no id" rule, which was a proxy: what it was
+   really protecting is the operator's ability to shut the transmitter up, and it paid for
+   that by forbidding senders that carry no such risk. The narrow rule names the risk, so
+   it can be applied instead of recited. Phone's voice keyer is the first pane admitted
+   under it — it only starts overs, and hiding it IS a stop (its unmount cleanup calls
+   stopVoice), so the entry cannot strand an operator keyed with the abort scrolled away.
+   A pane admitted this way owes two things: its hide path must genuinely stop what it
+   started, and its ⊞ entry must SAY so before the tick (PanelsMenu `note`). Enforcement is
+   computed, not recited: PhoneCockpit.structure.test.tsx drives every id in the real
+   vocabulary through the real hide path and asserts the stop controls are still standing;
+   PhoneCockpit.keyerHide.test.tsx renders the real keyer and watches the abort fire.
+
    WHY COLUMNS ARE FLEX STACKS AND NOT grid-template-areas. Areas were the first choice —
    they keep panes as direct grid children. They lose to the ⊞ Panels menu: a hidden panel
    leaves its named area EMPTY, and a `minmax(0,1fr)` row with nothing in it is a band of
@@ -122,12 +140,14 @@
   min-height: 0;
 }
 
-/* TX DOCK — PTT / send / abort, and nothing else. `flex: 0 0 auto` is load-bearing: the
+/* TX DOCK — the STOP surface: PTT / abort / send, and nothing else. `flex: 0 0 auto` is load-bearing: the
    dock is neither a grower (it must not absorb spare height) nor a shrink victim (the
    controls must stay hit-able at their full size). `position: sticky` is the belt to that
    braces — if the shell's own deficit valve ever engages, the dock stays parked at the
    bottom of the scrollport instead of scrolling out of reach. It is pinned OUTSIDE the
-   pane region, so no pane layout, stored or hand-edited, can move or hide it. */
+   pane region, so no pane layout, stored or hand-edited, can move or hide it — the
+   dock side of the STOP LINE above. A sender may live in a pane; the way to end an over
+   may not. */
 .cockpit-txdock {
   flex: 0 0 auto;
   position: sticky;
