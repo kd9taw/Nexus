@@ -71,13 +71,29 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   cockpit, at least one control that stops a transmission renders OUTSIDE every ⊞-removable pane.**
   Hide every id in that cockpit's vocabulary, singly and all at once, and those controls are still on
   screen and no more disabled than they were — no vocabulary id reaches them, so hiding one is
-  unrepresentable rather than guarded. **The controls that hold it up:** Phone — PTT (dock), Stop TX
-  + Tune (header); CW — Stop TX + Tune (header), Esc; Operate — TX On/Off, Tune, Stop TX, S&P (all in
-  `.cockpit-qso`), Esc; RTTY — Stop TX + the TX-enable latch (header), the dock's Esc/Stop macro and
-  the sequencer's Abort; SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch. APRS is a sixth cockpit
-  with no vocabulary at all. The TopBar's TX cluster backstops none of them — App hides it in Operate
-  and in Phone/CW/RTTY/SSTV/APRS — so each cockpit stands on its own. Each cockpit's sweep list is
-  exactly this set, which is what makes the rule checkable in minutes.
+  unrepresentable rather than guarded. **The controls that hold it up** (re-verified against the code
+  2026-08-03; only `halt_tx` is universal, so each names what it stops): Phone — PTT (dock; the mic
+  key it holds), Stop TX (header → `halt_tx`), Tune (the tune carrier only), Space (window keyup =
+  PTT-release, and only while Lock is off); CW — Stop TX (→ `stopCw`+`haltTx`), Tune, Esc; Operate —
+  Stop TX (`.op-btn.stop` in `.cockpit-qso` → `halt_tx`, the only control here that cuts an over in
+  flight), Tune, Esc; RTTY — Stop TX (never disabled), the dock's Esc/Stop macro (`disabled={!sending}`,
+  live exactly while an over is on the air), the TX-enable latch and the sequencer's Abort (rendered
+  only while auto runs); SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch. **Operate's TX On/Off and
+  S&P are NOT stop controls and were removed from this list:** `set_tx_enabled` deliberately does not
+  arm `slot_tx_abort` (operator 2026-07-31 — the FT over in flight completes; the button's own tooltip
+  says so), and `onSetMode('qso-monitor')` ends the CQ run and drops the queue without arming anything.
+  **The latch is a stop in RTTY and SSTV only:** there `set_tx_enabled(false)` arms `rtty_abort` /
+  `sstv_abort`, which the audio loop turns into flush + unkey while an over is keying, and it stays a
+  *button* through those overs because `radio.transmitting` is the slot-TX indicator alone. APRS is a
+  sixth cockpit with no vocabulary at all, so the rule holds by construction — and it renders no stop
+  control; its TX On/Off is an arm latch that only holds the queue. The TopBar's TX cluster backstops
+  none of them — App hides it in Operate and in Phone/CW/RTTY/SSTV/APRS — so each cockpit stands on
+  its own. **The sweeps do not match this census one for one** (the claim that they did was false for
+  four of the five swept cockpits): swept are Phone's PTT/Stop TX/Tune, CW's Stop TX/Tune, RTTY's Stop
+  TX/Esc-Stop macro/latch and SSTV's Stop/latch (the one exact match); Operate's guard list is the
+  whole TX/sequencer surface of the strip, not a stop-control list. Census-only, and outside both
+  sweeps by construction: Phone's Space and CW's/Operate's Esc (keyboard-only) and RTTY's sequencer
+  Abort (conditionally rendered).
   **Nothing else about a pane bears on whether it may be hidden.** A pane *may* host a stop control
   of its own, and it goes away with the pane: **two do** — Phone's `voiceKeyer` (■ Stop → `stopVoice`
   → `Engine::stop_voice`, which flushes the output ring and unkeys) and RTTY's `stream` (the "Auto on"
@@ -91,7 +107,9 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   moving one *into* a ⊞-removable pane, which is how it would get one; (2) gating one on a pane id
   without moving it (`disabled={!shown('dsp')}`) — mounted and dead is the same loss as gone;
   (3) shipping a cockpit whose *only* stop control is inside a removable pane (none does; RTTY is
-  closest and survives on four outside `stream`); (4) adding a **pane-resident** stop control to a
+  closest — `stream` is its whole vocabulary — and four sit outside it, of which **three are live**
+  while an over is actually keying outside an auto sequence: Stop TX, the Esc/Stop macro and the
+  latch, the sequencer's Abort not being rendered then); (4) adding a **pane-resident** stop control to a
   sweep's `stopControls`, which would make the sweep demand its pane be unhideable.
   **The practice, and it is courtesy, not safety:** if hiding a pane *ends* something in flight, its
   ⊞ entry should say so before the tick — a stop the operator did not ask for reads as a dropout.
@@ -126,8 +144,10 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   note-pairing is computed for Phone only**, with no coverage test across vocabularies of the kind
   the name guard has (that costs courtesy, not the guarantee); **Operate's sweep is presence-only**
   (no baseline, no `disabled` comparison, no one-id-at-a-time pass) and is not the equivalent of the
-  four-cockpit sweep; and that a *newly added* stop control reached its cockpit's sweep list is a
-  human step.
+  four-cockpit sweep; **no sweep can see a keyboard-only or conditionally rendered stop** (both look
+  for buttons by accessible name in one fixture state, so Phone's Space, CW's/Operate's Esc and RTTY's
+  sequencer Abort are census-only by construction); and that a *newly added* stop control reached its
+  cockpit's sweep list is a human step.
 - Responsive behavior: `[data-viewport='xs|sm|md|lg|xl']` + `--vh-eff`/`--vw-eff` only. Never a
   size-based `@media`, never raw `vh/vw` inside `.app` (zoom-blind) — the portaled
   `.ui-dialog`/`.ui-tooltip` are the one permanent exception (their content re-applies

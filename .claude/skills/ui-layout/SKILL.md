@@ -22,7 +22,7 @@ The enforcement: `cockpit-panes.test.ts`, `cockpit-shells.test.ts`, `responsive-
 | New full view | Bounded shell with ONE scroll owner (either the view scrolls, or exactly one designated inner scroller does). Copy Operate/Connect/Stats patterns, not Phone-pre-overhaul. |
 | Modal / dialog | `ui/Dialog` (portaled; its content auto-applies `--ui-zoom`, its box measures the real window — do not fight either half). Give any new modal a `--vh-eff` max-height + internal scroll. |
 | Pop-out window | `DetachedPanel` branch with className `app detached …` (the `app` class carries zoom — its omission was a shipped bug). Min sizes live in `open_panel_window` (src-tauri). |
-| TX-adjacent control | The cockpit TX dock, full stop. TX chrome must have NO id in any pane vocabulary — moving/hiding it stays unrepresentable. |
+| TX-adjacent control | Default to the cockpit TX dock or header. THE STOP LINE is the rule (CLAUDE.md, `panelState.ts`): *the operator must never be unable to stop a transmission* — mechanically, in every cockpit at least one control that STOPS one renders outside every ⊞-removable pane, so those controls have no id in any vocabulary. A pane that merely SENDS may be hidden (six ship that way), and a pane may host a stop of its own (two do). Adding a stop control? Put it outside the panes and add it to that cockpit's census + sweep. |
 
 ## 2. The role question (ask it of every pane, every time)
 

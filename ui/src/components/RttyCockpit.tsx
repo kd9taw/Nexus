@@ -164,8 +164,10 @@ function seqLabel(s: string): string {
  * operator is on another section.
  */
 export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', panels }: Props) {
-  // Panels (Phase 3): the waterfall + all TX chrome (header, auto-seq strip, macros, send) are
-  // pinned; only the decoded-text stream is removable, filling the space between them.
+  // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
+  // bar are pinned; only the decoded-text stream is removable, filling the space between them.
+  // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
+  // a real stop (see the pane comment below). What is pinned is this cockpit's stop-line census.
   const host = panels
     ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: RTTY_PANEL_LABELS })
     : null
@@ -410,7 +412,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           fine under THE STOP LINE (features/panelState.ts), because Stop TX and the TX-enable
           latch are in the header and the Esc/Stop macro and the sequencer's Abort are in the
           dock, none of them with a ⊞ id. A pane's own stop is a convenience; those four are
-          what hold the guarantee up. This pane is the second of exactly two like it in the app
+          what hold the guarantee up — and while an over is actually keying outside an auto
+          sequence, THREE of the four are live: Stop TX (never disabled), the Esc/Stop macro
+          (disabled={!sending}, so enabled exactly then) and the latch (a button, because
+          radio.transmitting is the slot-TX indicator and is false here). The sequencer's Abort
+          is not rendered then. This pane is the second of exactly two like it in the app
           (Phone's voice keyer is the other) and the reason the FOURTH wording of the rule was
           falsified. Its hide ENDS nothing — unmounting calls no wire — so it correctly carries
           no ⊞ note, and it is not a sender: Arm RX is RX-only and Auto ON never keys by
@@ -514,9 +520,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           reach. None of these has an id in the RTTY panel vocabulary ('stream' is the only
           entry). For the sequencer's Abort, the Esc/Stop macro and the header's Stop TX /
           TX-arm that is THE STOP LINE — those four render outside every ⊞-removable pane, so
-          unticking 'stream' (which takes its own Auto-toggle stop with it) still leaves the
-          operator four ways to stop. For the macros and the compose bar it is this cockpit's
-          own choice: the rule is indifferent to senders. */}
+          unticking 'stream' (which takes its own Auto-toggle stop with it) cannot take any of
+          them away. FOUR IS THE LIST, NOT THE LIVE COUNT: mid-over outside an auto sequence
+          three are operable (Stop TX, the Esc/Stop macro, the latch) and the Abort below is
+          not on screen at all; inside an auto sequence all four are. For the macros and the
+          compose bar it is this cockpit's own choice: the rule is indifferent to senders. */}
       <div className="cockpit-txdock">
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">

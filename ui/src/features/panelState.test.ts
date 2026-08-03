@@ -269,8 +269,10 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
       for (const id of vocab.panelIds) {
         expect(
           (STOP_CONTROL_WORDS as readonly string[]).includes(norm(id)),
-          `"${id}" is in the ${vocab.view} vocabulary — a stop control with a ⊞ entry is a ` +
-            'stop control the operator can hide',
+          `"${id}" is in the ${vocab.view} vocabulary — an id NAMED for a stop control reads ` +
+            'as one of the controls that hold the stop line up, and those have no ⊞ entry. ' +
+            '(A pane may host a stop of its own — two do — so this is a naming rule, not the ' +
+            'falsified fourth wording that forbade any hideable stop at all.)',
         ).toBe(false)
       }
     },

@@ -48,11 +48,20 @@ never touch the F-key slots, you can now put that pane away and the panes around
 It was held out until now by a blunt rule — nothing that transmits gets a checkbox — and the rule
 is narrower now, because what it was really protecting is one thing: **you must never be unable to
 stop a transmission.** That is held by the controls that sit outside the panes entirely: on Phone,
-PTT in the transmit bar and Stop TX and Tune in the header; on CW, Stop TX and Tune; on the
-Operating screen, TX On/Off, Tune, Stop TX and S&P in the operating strip; on RTTY, Stop TX, the
-TX-enable button and both aborts in the transmit bar; on SSTV, Stop and the TX-enable button. None
-of them is in a Panels menu, so no combination of ticks and no saved layout can put them out of
-reach — that is the guarantee, and it is the only thing the rule protects.
+PTT in the transmit bar (and the Space bar, which is the same key), Stop TX and Tune in the header;
+on CW, Stop TX and Tune, and Esc, which does what Stop TX does; on the Operating screen, Stop TX and
+Tune in the operating strip, and Esc; on RTTY, Stop TX, the TX-enable button and both aborts in the
+transmit bar; on SSTV, Stop and the TX-enable button. None of them is in a Panels menu, so no
+combination of ticks and no saved layout can put them out of reach — that is the guarantee, and it
+is the only thing the rule protects.
+
+Two buttons on the Operating screen are worth naming because they are *not* on that list, and an
+earlier draft of this note said they were. **TX On/Off** turns transmit off for the next cycle and
+lets the over already going out finish — that is deliberate, it is how WSJT-X's Enable Tx behaves,
+and the button says so when you hover it. **S&P** stops a CQ run and drops what is queued behind it;
+it does not cut the over on the air. Stop TX is the immediate halt on that screen, and Esc reaches
+it without the mouse. On RTTY and SSTV the TX-enable button *does* cut the over in flight, because
+those modes have no next cycle to wait for — which is why it is on their lists and not on Operate's.
 
 Everything else follows from it. Whether a pane can *start* a transmission has nothing to do with
 whether you can put it away — the Operating screen's Tx messages and its decode lists have always

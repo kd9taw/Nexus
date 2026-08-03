@@ -227,7 +227,10 @@ describe('CwCockpit pane-grid shell', () => {
       ).toBeNull()
       expect(el!.closest('.cockpit-panes'), `${sel} is inside the pane region`).toBeNull()
     }
-    // The dock holds no pane frames at all — TX chrome has no id in the pane vocabulary.
+    // The dock holds no pane frames at all. Not because "TX chrome has no id" — the dock also
+    // renders TxMeters, and `txmeters` IS in CW_PANEL_IDS (CwCockpit.tsx says so) — but because
+    // nothing in the dock renders THROUGH CockpitPaneFrame, so no pane scroller can carry the
+    // macros or the send bar out of reach.
     expect(dock!.querySelector('.pane-frame')).toBeNull()
     // And the dock comes AFTER the region in the DOM (pinned at the bottom).
     const region = document.querySelector('.cockpit-panes')!
@@ -239,7 +242,9 @@ describe('CwCockpit pane-grid shell', () => {
     expect(document.querySelector('[data-pane="decode"]')).toBeNull()
     expect(document.querySelector('[data-pane="copilot"]')).not.toBeNull()
     expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
-    // TX chrome is not gated by the menu — it has no id to gate.
+    // The macros and the send bar are not gated by the menu — they have no id to gate. (That
+    // is this cockpit's own choice, not the stop line: they are SENDERS, and the rule is
+    // indifferent to senders — CwCockpit.tsx's region comment says the same.)
     expect(document.querySelector('.cockpit-txdock .cw-send-btn')).not.toBeNull()
     expect(document.querySelector('.cockpit-txdock .cw-macro')).not.toBeNull()
   })

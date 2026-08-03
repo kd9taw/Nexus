@@ -187,9 +187,20 @@ describe('the merged operating strip is the un-removable TX surface', () => {
   // surface for them. Asserting they render inside `.cockpit-qso` is the direct form of
   // "outside every pane" — the strip is not a CockpitPaneFrame and has no vocabulary id.
   //
+  // PROTECTED BELOW IS NOT A STOP-CONTROL LIST, and must not be read as Operate's census. It
+  // is the whole TX/sequencer surface of the strip — the DOCK LAW, a wider claim than the stop
+  // line. Of the eight, exactly one stops an over in flight: Stop TX (→ onHaltTx →
+  // Engine::halt_tx). Tune ends its own carrier. TX On/Off and S&P are NOT stop controls —
+  // `set_tx_enabled` deliberately does not arm `slot_tx_abort` (operator 2026-07-31: the FT
+  // over in flight completes; the button's own tooltip says so), and `onSetMode('qso-monitor')`
+  // builds a fresh monitoring station with running:false, ending the CQ RUN and dropping the
+  // queue without arming anything. Call CQ, Hold Tx, TX auto and Skip Tx1 are here for the dock
+  // law alone. Operate's third census holder, Esc (window keydown → the same halt), is
+  // keyboard-only and unsweepable here.
+  //
   // No Operate pane hosts a stop control of its own (the two that do in the app are Phone's
-  // `voiceKeyer` and RTTY's `stream`), so PROTECTED below is simply the whole set. Five of
-  // Operate's seven panes are SENDERS and all five are hideable — the rule is indifferent.
+  // `voiceKeyer` and RTTY's `stream`). Five of Operate's seven panes are SENDERS and all five
+  // are hideable — the rule is indifferent.
   //
   // IT IS WEAKER THAN THAT FILE'S SWEEP AND IS NOT ITS EQUIVALENT. This is PRESENCE-ONLY:
   // every id removed at once, no baseline capture, no `disabled` comparison, no one-id-at-a-

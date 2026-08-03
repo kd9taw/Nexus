@@ -200,7 +200,9 @@ describe('PhoneCockpit pane-grid shell', () => {
     expect(ptt!.closest('.cockpit-txdock'), 'PTT is not in the TX dock').not.toBeNull()
     expect(ptt!.closest('.pane-frame'), 'PTT is inside a pane frame — a pane can scroll it away').toBeNull()
     expect(ptt!.closest('.cockpit-panes'), 'PTT is inside the pane region').toBeNull()
-    // The dock holds no pane frames at all — TX chrome has no id in the pane vocabulary.
+    // The dock holds no pane frames at all. Not because "TX chrome has no id" — the dock also
+    // renders TxMeters, and `txmeters` IS in PHONE_PANEL_IDS — but because nothing in the dock
+    // renders THROUGH CockpitPaneFrame, so no pane scroller can carry PTT out of reach.
     const dock = document.querySelector('.cockpit-txdock')!
     expect(dock.querySelector('.pane-frame')).toBeNull()
     // And the dock comes AFTER the region in the DOM (pinned at the bottom).
@@ -213,7 +215,8 @@ describe('PhoneCockpit pane-grid shell', () => {
     expect(document.querySelector('[data-pane="dsp"]')).toBeNull()
     expect(document.querySelector('[data-pane="dspLevels"]')).not.toBeNull()
     expect(document.querySelector('[data-pane="bandActivity"]')).not.toBeNull()
-    // TX chrome is not gated by the menu — it has no id to gate.
+    // PTT is not gated by the menu — it has no id to gate. (That is true of this cockpit's
+    // stop-line census, not of "TX chrome": voiceKeyer transmits and is listed.)
     expect(document.querySelector('.cockpit-txdock .ph-ptt')).not.toBeNull()
   })
 

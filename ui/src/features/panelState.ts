@@ -26,19 +26,84 @@
 //   coercion rule reaches it, which is strictly stronger than a `removable: false` flag a bad
 //   code path or a hand-edited blob could bypass.
 //
-//   THE CONTROLS THAT HOLD IT UP, counted 2026-08-03 (each cockpit's sweep list is the same
-//   set, which is how this is checkable in minutes):
-//     · Phone  — PTT (the dock's .ph-ptt-row) · Stop TX, Tune (CockpitHeader) · Space (window).
-//     · CW     — Stop TX → stopCw+haltTx, Tune (CockpitHeader) · Esc (window).
-//     · Operate— TX On/Off, Tune, Stop TX, S&P (all in the merged .cockpit-qso strip) · Esc.
-//     · RTTY   — Stop TX, the TX-enable latch (CockpitHeader) · the dock's Esc/Stop macro ·
-//                the auto-sequencer's Esc/Abort (dock, while a sequence runs).
-//     · SSTV   — Stop (.sstv-tx-bar) · the TX-enable latch (CockpitHeader).
+//   THE CONTROLS THAT HOLD IT UP, re-verified entry by entry against shipped code 2026-08-03.
+//   Each one names WHAT it stops, because "a control that stops a transmission" is not one
+//   thing — `halt_tx` is universal and everything else has a scope — and because two entries
+//   that read like stops turned out not to be:
+//     · Phone  — PTT (the dock's .ph-ptt-row): release, or Lock-toggle-off, → setPtt(false) →
+//                Engine::set_ptt, dropping the mic key it is holding, and only that.
+//                · Stop TX (CockpitHeader) → haltTx → Engine::halt_tx — the universal kill:
+//                slot/cw/rtty/sstv aborts armed, voice_tx dropped, every queue cleared, manual
+//                and broker PTT released. · Tune (CockpitHeader) → Engine::set_tune(false),
+//                which ends the tune carrier and only that. · the Space bar (window keyup) →
+//                the same setPtt(false) as PTT-release, and ONLY while `lock` is off: both
+//                Space handlers early-return in Lock (hands-free) mode.
+//     · CW     — Stop TX (CockpitHeader) → stopCw + haltTx. · Tune → set_tune (the carrier
+//                only). · Esc (window keydown) → the same abort() Stop TX calls.
+//     · Operate— Stop TX (.op-btn.stop in the merged .cockpit-qso strip) → onHaltTx →
+//                Engine::halt_tx. It is the ONLY control in this cockpit that cuts an over
+//                already in flight. · Tune (same strip) → set_tune, the carrier only.
+//                · Esc (window keydown, while the view is active) → the same halt.
+//                TWO ENTRIES WERE REMOVED FROM THIS LIST 2026-08-03, both falsified by code:
+//                  – TX On/Off is Engine::set_tx_enabled, which by the operator's own
+//                    2026-07-31 ruling deliberately does NOT arm slot_tx_abort (engine.rs
+//                    ~6826 and ~7106): "TX Off should disable TX for the next cycle, but allow
+//                    any ongoing TX to complete." The button's own tooltip says exactly that.
+//                    It stops the NEXT over, never the one on the air.
+//                  – S&P is onSetMode('qso-monitor'): engine.rs ~5957 builds a fresh
+//                    QsoStation::monitoring with running:false and clears tx_queue /
+//                    broadcast_queue / own_tx. It arms no abort and does not touch tx_enabled.
+//                    It ends the CQ RUN and drops what is queued behind the over still keying.
+//     · RTTY   — Stop TX (CockpitHeader) → rttyStop + haltTx; carries no `disabled`, so it is
+//                always operable. · the dock's Esc/Stop macro → the same pair,
+//                `disabled={!sending}`, so it is live exactly while an over is on the air.
+//                · the TX-enable latch (CockpitHeader) — a REAL stop here, unlike in Operate:
+//                set_tx_enabled(false) clears rtty_queue and arms rtty_abort (engine.rs ~7120,
+//                "a disarm must abort the over in flight AND drop the queue"), and
+//                tempo-audio/service.rs ~3826 consumes it — FSK keyer cleared, output ring
+//                flushed, rig.ptt(false) — whenever `now < rtty_busy_until`, i.e. an over is
+//                actually keying. CockpitHeader draws it as a BUTTON only while
+//                radio.transmitting is false; radio.transmitting is the SLOT-TX indicator
+//                alone (Engine::set_transmitting is called from poll_tx and halt_tx and
+//                nowhere else — RTTY reports through rtty_sending instead), so the latch stays
+//                a button through every RTTY over. · the auto-sequencer's Esc/Abort →
+//                seq.abort() + Engine::rtty_stop(), rendered only inside
+//                `{auto && seqState !== 'idle'}`.
+//     · SSTV   — Stop (.sstv-tx-bar) → sstvStop, `disabled={!sending}`. · the TX-enable latch,
+//                a real stop here for the same reason as RTTY: set_tx_enabled(false) drops
+//                sstv_tx and arms sstv_abort (engine.rs ~7124), which service.rs ~4174 turns
+//                into feed dropped + output flushed + unkey while an image is in flight.
 //     · APRS   — a sixth cockpit with NO vocabulary at all: no ⊞ menu, nothing hideable, so
-//                its TX On/Off latch is out of reach by construction.
+//                the rule holds there by construction. Say what that does and does not buy:
+//                APRS renders NO stop control. Its TX On/Off is an arm latch —
+//                set_tx_enabled does not clear aprs_tx_queue (only halt_tx does, engine.rs
+//                ~6856) and arms no APRS abort; poll_aprs_tx merely HOLDS the queue while the
+//                latch is down. Nothing on that screen cuts a beacon already keying.
 //   The app-wide TopBar TX cluster is NOT a backstop for any of them: App hides it in Operate
 //   (hideTxControls) and in Phone/CW/RTTY/SSTV/APRS (hideDigitalChrome). Every cockpit stands
 //   on its own controls.
+//
+//   HOW THE SWEEPS LINE UP WITH THAT CENSUS. They do NOT match it one for one, and the claim
+//   that they did — "each cockpit's sweep list is the same set, which is how this is checkable
+//   in minutes" — was false for four of the five swept cockpits. What is true:
+//     · Phone  — swept: PTT, Stop TX, Tune. Space is census-only: a window key handler has no
+//                accessible name, and the sweep queries buttons BY name.
+//     · CW     — swept: Stop TX, Tune. Esc is census-only, same reason.
+//     · Operate— its guard's list is not a stop-control list at all. PROTECTED in
+//                OperateCockpit.structure.test.tsx is the whole TX/sequencer surface of the
+//                strip (Call CQ, S&P, TX On/Off, Tune, Stop TX, Hold Tx, TX auto, Skip Tx1),
+//                asserted present inside .cockpit-qso with every id removed — the dock law,
+//                which is a wider claim than this rule. Stop TX is the stop control in it;
+//                Tune ends its own carrier; the rest are there for other reasons. Esc is
+//                census-only.
+//     · RTTY   — swept: Stop TX, the Esc/Stop macro, the TX-enable latch. The sequencer's
+//                Abort is census-only: it renders only inside `{auto && seqState !== 'idle'}`
+//                and the sweep's fixture is auto:false / seqState:'idle', so there is nothing
+//                on screen to find.
+//     · SSTV   — swept: Stop, the TX-enable latch. An exact match, and the only one.
+//   A control that is KEYBOARD-ONLY or CONDITIONALLY RENDERED is outside both sweeps by
+//   construction. What is checkable in minutes is not list equality: it is that every swept
+//   list is a non-empty subset of its cockpit's census.
 //
 //   NOTHING ELSE ABOUT A PANE BEARS ON WHETHER IT MAY BE HIDDEN:
 //     · A PANE MAY HOST A STOP CONTROL OF ITS OWN, and it goes away with the pane. TWO DO.
@@ -63,7 +128,13 @@
 //        dead is the same loss as gone — which is why the wiring sweep compares a
 //        nothing-hidden BASELINE rather than `disabled === false`.
 //     3. Shipping a cockpit whose ONLY stop control sits inside a ⊞-removable pane. None does.
-//        RTTY is the closest and survives because four more sit outside `stream`.
+//        RTTY is the closest — `stream` is its ENTIRE vocabulary — and it survives because
+//        Stop TX, the Esc/Stop macro, the TX-enable latch and the sequencer's Abort all sit
+//        outside it. Count what is LIVE, not what is listed: while an RTTY over is actually
+//        keying OUTSIDE an auto sequence, THREE of those four are operable — Stop TX (never
+//        disabled), the Esc/Stop macro (`disabled={!sending}`, so live exactly then) and the
+//        latch (a button, because radio.transmitting is false) — and the sequencer's Abort is
+//        not rendered at all.
 //     4. Adding a PANE-RESIDENT stop control to a sweep's `stopControls`. That makes the sweep
 //        demand its pane be unhideable — which is precisely how the first wording excluded the
 //        pane it was written to admit. The keyer's ■ Stop and RTTY's Auto toggle stay off
@@ -147,8 +218,10 @@
 // CONTROL THAT IS PRESENT, ENABLED AND INERT (an `onClick={() => {}}` on Stop TX passes the
 // whole suite); the name backstop is EXACT-WORD, so `txStop`/`pttRow`/`killTx` walk past it;
 // the PRACTICE note-pairing is computed for Phone only; Operate's sweep is presence-only and
-// is not the equivalent of the four-cockpit one; and that a NEWLY ADDED stop control reached
-// its cockpit's sweep list is a human step, named in each sweep.
+// is not the equivalent of the four-cockpit one; NO SWEEP CAN SEE A KEYBOARD-ONLY OR
+// CONDITIONALLY RENDERED STOP (Phone's Space, CW's and Operate's Esc, RTTY's sequencer Abort
+// are all census-only for that reason); and that a NEWLY ADDED stop control reached its
+// cockpit's sweep list is a human step, named in each sweep.
 import { useCallback, useMemo, useState } from 'react'
 import { windowInstance } from './windowScope'
 
@@ -171,7 +244,9 @@ export interface PanelLayout<P extends string> {
 export interface PanelVocabulary<P extends string> {
   /** View id — the `<view>` in `nexus.panels.<view>.<instance>`. */
   readonly view: string
-  /** Every panel this view can hide. TX chrome is deliberately absent (see above). */
+  /** Every panel this view can hide. The controls on this cockpit's stop-line census are
+   *  deliberately absent — NOT "TX chrome", which is a wider and falsified claim: `voiceKeyer`
+   *  transmits and `stream` hosts a stop control, and both are listed here on purpose. */
   readonly panelIds: readonly P[]
 }
 
@@ -596,11 +671,17 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
  * boot; it must not call `redockStalePopouts` per-record, because that is how the bug it
  * fixes got in — it ran on OPERATE_PANELS alone.
  *
- * Operate is the only cockpit with both a pop-out affordance and a re-dock bar. In the other
- * four a stored 'popped' renders the pane DOCKED while its ⊞ entry reads "popped out", with
- * no window to re-dock from and nothing that ever clears it, so the record said it at every
- * launch, forever. Driving the loop off ALL_PANEL_VOCABULARIES covers a sixth cockpit by its
- * being exported, the same way the stop-line name backstop does.
+ * Operate is the only cockpit that ever WRITES 'popped' into a visibility record —
+ * OperateCockpit's waterfall pop-out holds the app's single `setPanelState(id, 'popped')`
+ * call — and the only one with a re-dock bar. Pop-out AFFORDANCES are not rare, and an earlier
+ * version of this note implied they were: DetachedPanel dispatches ten panel kinds (waterfall,
+ * needed, memories, connect, dxped, sats, fieldday, operate, bandmapPhone, bandmapCw), and
+ * Phone's and CW's band-map panes each carry one. Those call `openPanelWindow` directly and
+ * never touch the record, which is exactly why they leave no stale 'popped' behind. In the
+ * other four vocabularies a stored 'popped' renders the pane DOCKED while its ⊞ entry reads
+ * "popped out", with no window to re-dock from and nothing that ever clears it, so the record
+ * said it at every launch, forever. Driving the loop off ALL_PANEL_VOCABULARIES covers a sixth
+ * cockpit by its being exported, the same way the stop-line name backstop does.
  */
 export function redockAllStalePopouts(): void {
   for (const vocab of ALL_PANEL_VOCABULARIES) redockStalePopouts(vocab)

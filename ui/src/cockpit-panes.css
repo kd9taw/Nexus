@@ -34,14 +34,39 @@
      flag is something a bad code path or a hand-edited storage blob can bypass; a missing
      id is not.
 
-     THE CONTROLS THAT HOLD IT UP: Phone — PTT (dock), Stop TX + Tune (header). CW — Stop TX
-     + Tune (header), Esc. Operate — TX On/Off, Tune, Stop TX, S&P, all in the merged
-     .cockpit-qso strip, plus Esc. RTTY — Stop TX + the TX-enable latch (header), the dock's
-     Esc/Stop macro and the sequencer's Abort. SSTV — Stop (.sstv-tx-bar) + the TX-enable
-     latch. APRS has no vocabulary at all. The TopBar's TX cluster backstops none of them:
-     App hides it in Operate and in Phone/CW/RTTY/SSTV/APRS, so every cockpit stands on its
-     own controls. Each cockpit's sweep list is exactly this set — which is what makes the
-     rule checkable in minutes.
+     THE CONTROLS THAT HOLD IT UP, re-verified against the code 2026-08-03, each with WHAT it
+     stops (only halt_tx is universal; everything else has a scope):
+       Phone — PTT (dock; drops the mic key it holds), Stop TX (header → halt_tx), Tune
+         (header; the tune carrier only), the Space bar (window keyup → the same unkey as
+         PTT-release, and only while Lock is off).
+       CW — Stop TX (header → stopCw + haltTx), Tune (the carrier only), Esc (the same abort).
+       Operate — Stop TX (.op-btn.stop in the merged .cockpit-qso strip → halt_tx; the ONLY
+         control here that cuts an over in flight), Tune (the carrier only), Esc (the same
+         halt). TX On/Off and S&P WERE ON THIS LIST AND ARE NOT STOP CONTROLS: set_tx_enabled
+         deliberately does not arm slot_tx_abort (operator 2026-07-31 — the FT over in flight
+         completes), and onSetMode('qso-monitor') ends the CQ RUN and drops the queue without
+         arming anything.
+       RTTY — Stop TX (header, never disabled), the dock's Esc/Stop macro (disabled={!sending},
+         so live exactly while an over is on the air), the TX-enable latch (a real stop HERE:
+         set_tx_enabled(false) arms rtty_abort, which the audio loop turns into flush + unkey
+         while an over is keying; it stays a BUTTON through RTTY overs because
+         radio.transmitting is the slot-TX indicator alone), and the sequencer's Abort (dock,
+         rendered only while auto is on and the sequence is not idle).
+       SSTV — Stop (.sstv-tx-bar, disabled={!sending}) and the TX-enable latch (same mechanism
+         as RTTY, via sstv_abort).
+       APRS — no vocabulary at all, so the rule holds by construction; and note that APRS
+         renders no stop control, its TX On/Off being an arm latch that only holds the queue.
+     The TopBar's TX cluster backstops none of them: App hides it in Operate and in
+     Phone/CW/RTTY/SSTV/APRS, so every cockpit stands on its own controls.
+
+     THE SWEEPS DO NOT MATCH THAT CENSUS ONE FOR ONE, and the claim that they did was false
+     for four of the five swept cockpits. Swept: Phone — PTT, Stop TX, Tune. CW — Stop TX,
+     Tune. RTTY — Stop TX, the Esc/Stop macro, the latch. SSTV — Stop, the latch (the one
+     exact match). Operate's guard list is not a stop-control list at all: it is the whole
+     TX/sequencer surface of the strip, presence-only. Census-only, and outside both sweeps by
+     construction: Phone's Space and CW's/Operate's Esc (keyboard-only, no accessible name)
+     and RTTY's sequencer Abort (conditionally rendered). What is checkable in minutes is that
+     each swept list is a non-empty subset of its cockpit's census.
 
      NOTHING ELSE ABOUT A PANE BEARS ON WHETHER IT MAY BE HIDDEN:
        · A pane MAY host a stop control of its own, and it goes away with the pane. TWO DO —
@@ -59,7 +84,10 @@
      control an id, or moving one INTO a ⊞-removable pane, which is how it would get one;
      (2) gating one on a pane id without moving it (a `disabled` bound to `!shown('dsp')`) —
      mounted and dead is the same loss as gone; (3) shipping a cockpit whose ONLY stop control
-     is inside a removable pane (none does; RTTY is closest, surviving on four outside `stream`);
+     is inside a removable pane (none does; RTTY is closest — `stream` is its entire vocabulary
+     — and four sit outside it, of which THREE are live while an over is actually keying
+     outside an auto sequence: Stop TX, the Esc/Stop macro and the latch, the sequencer's Abort
+     not being rendered then);
      (4) adding a PANE-RESIDENT stop control to a sweep's `stopControls`, which would make the
      sweep demand its pane be unhideable — exactly how wording 1 excluded the pane it was
      written to admit.
@@ -143,6 +171,11 @@
        every id removed. It takes no baseline, compares no `disabled` state and does not hide
        ids one at a time. It is NOT the equivalent of the four-cockpit sweep and must not be
        described as one.
+     · NEITHER SWEEP CAN SEE A KEYBOARD-ONLY OR CONDITIONALLY RENDERED STOP. Both look for
+       BUTTONS by accessible name, in one fixed fixture state, so Phone's Space bar, CW's and
+       Operate's Esc and RTTY's sequencer Abort are census-only by construction. They are real
+       controls and they hold nothing up on their own — every cockpit that has one also has a
+       swept control on its list.
      · That a NEWLY ADDED stop control reached its cockpit's sweep list is a human step. It
        is named in each sweep.
 

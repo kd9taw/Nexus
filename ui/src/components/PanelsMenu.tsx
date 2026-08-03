@@ -6,9 +6,11 @@
 // the operator can make a mess.
 //
 // Only the panels the CURRENT layout renders are listed. Every cockpit keeps at least one
-// control that STOPS a transmission outside every pane this menu can reach — Stop TX, Tune,
-// PTT, the TX-enable latch, the dock aborts — so none of them has an entry here by
-// construction (see features/panelState, THE STOP LINE). An entry can cost you a sender, and
+// control that STOPS a transmission outside every pane this menu can reach — Stop TX and PTT
+// everywhere they exist, Tune for its own carrier, the dock aborts, and the TX-enable latch in
+// RTTY and SSTV, where a disarm really does abort the over (it does not in Operate; see
+// features/panelState, THE STOP LINE, for the per-cockpit census). None of them has an entry
+// here by construction. An entry can cost you a sender, and
 // it can cost you a stop control a PANE happens to host (Phone's voice keyer holds a ■ Stop,
 // RTTY's decode pane holds the Auto toggle) — what it can never cost you is the way to shut a
 // transmission up, because that lives where no tick reaches. Senders ARE listed, six of them:

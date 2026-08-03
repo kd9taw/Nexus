@@ -58,11 +58,26 @@
 // compares no `disabled` state and hides every id at once rather than one at a time. It
 // catches a control that VANISHES; it would not catch one left mounted-and-disabled.
 //
+// EACH LIST BELOW IS A SUBSET OF ITS COCKPIT'S CENSUS, NOT A COPY OF IT. panelState.ts once
+// claimed "each cockpit's sweep list is the same set, which is how this is checkable in
+// minutes"; that was false for four of the five swept cockpits. Two kinds of holder cannot be
+// swept here, by construction rather than by oversight — this file finds BUTTONS BY ACCESSIBLE
+// NAME, in one fixed fixture state:
+//   · KEYBOARD-ONLY. Phone's Space bar (window keyup → setPtt(false), only while Lock is off)
+//     and CW's Esc (window keydown → the same abort() Stop TX calls) have no accessible name
+//     and no element. Operate's Esc is the same, in its own sweep.
+//   · CONDITIONALLY RENDERED. RTTY's auto-sequencer Abort renders only inside
+//     `{auto && seqState !== 'idle'}`, and the `rttyState` fixture above is auto:false /
+//     seqState:'idle' — so there is nothing on screen to look for. Adding a second RTTY case
+//     with an in-flight sequence would sweep it; not done here, and not claimed.
+// SSTV is the one cockpit whose list and census match exactly.
+//
 // WHAT THIS DOES NOT COMPUTE, stated rather than guarded:
 //   · A STOP CONTROL THAT IS PRESENT, ENABLED AND INERT. Every assertion here is about the
 //     button being in the document and operable — never about what pressing it does.
 //     Verified: `onClick={() => {}}` on CockpitHeader's Stop TX passes this file and the
 //     whole suite. Nothing below would go red.
+//   · The keyboard-only and conditionally rendered holders above.
 //   · That a NEWLY ADDED stop control was added to the list below. Adding one is a human
 //     step. Each cockpit's list is its case's `stopControls`, so the next person editing a
 //     dock finds it beside the cockpit it guards.
@@ -330,7 +345,17 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
 
 /** The TX-enable latch as CockpitHeader labels it. `radio.txEnabled` is true and
  *  `transmitting` false in this fixture, so it reads "▼ TX On"; the disarmed face is matched
- *  too, so a fixture flip cannot make the sweep silently stop finding the control. */
+ *  too, so a fixture flip cannot make the sweep silently stop finding the control.
+ *
+ *  IT IS A STOP CONTROL IN THESE TWO COCKPITS AND NOWHERE ELSE, which is why it appears only
+ *  in the RTTY and SSTV cases. `set_tx_enabled(false)` clears rtty_queue + arms rtty_abort
+ *  (engine.rs ~7120) and drops sstv_tx + arms sstv_abort (~7124); tempo-audio/service.rs turns
+ *  either into flush + rig.ptt(false) while an over is in flight. It deliberately does NOT arm
+ *  `slot_tx_abort`, so in Operate the same handler lets the FT over complete — that is the
+ *  operator's 2026-07-31 ruling, and it is why Operate's TX On/Off is NOT on any stop list.
+ *  CockpitHeader draws the latch as a BUTTON only while `radio.transmitting` is false; that
+ *  flag is the slot-TX indicator alone (RTTY/SSTV report through rtty_sending/sstv_sending),
+ *  so it is still a button through every RTTY and SSTV over. */
 const TX_LATCH: [string, RegExp] = ['TX-enable latch', /^▼ tx on$|^■ tx off$/i]
 
 const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
@@ -345,6 +370,12 @@ const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
   // rig unkeyed). It is a real stop control and it goes away when `stream` is hidden — the
   // second of the app's two pane-resident stops, and the reason the fourth wording of the rule
   // was falsified. Listing it here would demand that RTTY's ONLY ⊞ entry be unhideable.
+  //
+  // ALSO NOT LISTED, for a different reason: the auto-sequencer's Esc/Abort (dock, → seq.abort()
+  // + Engine::rtty_stop()). It IS one of RTTY's census holders and it has no ⊞ id, but it
+  // renders only inside `{auto && seqState !== 'idle'}` and the fixture above is idle, so
+  // listing it would fail the baseline assertion ("not on screen with every panel SHOWN")
+  // rather than prove anything. Census-only, said so in panelState.ts.
   stopControls: [
     ['Stop TX', /^stop tx$/i],
     ['Stop (RTTY abort)', /^esc\s*stop$/i],

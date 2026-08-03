@@ -490,9 +490,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
   // ── THE PANE REGION (2026-07-30 layout assessment, design3 §3) ─────────────────────
   // Every operator-content block under the scope renders through a CockpitPaneFrame in
-  // ONE .cockpit-panes grid; the ⊞ Panels 'removed' gating is unchanged (shown()). TX
-  // chrome never enters the region — the PTT row lives in the pinned .cockpit-txdock and
-  // has no id in the pane vocabulary, so moving or hiding it is unrepresentable.
+  // ONE .cockpit-panes grid; the ⊞ Panels 'removed' gating is unchanged (shown()).
+  //
+  // "TX CHROME NEVER ENTERS THE REGION" USED TO BE WRITTEN HERE AND IS FALSE: the voiceKeyer
+  // pane transmits (F1–F6 key the rig) and hosts a ■ Stop of its own, and it renders inside
+  // .cockpit-panes with a ⊞ id. What is true is THE STOP LINE (features/panelState.ts): the
+  // controls this cockpit's census rests on stay out of the region — the PTT row lives in the
+  // pinned .cockpit-txdock, Stop TX and Tune in the header — and none of them has an id in the
+  // pane vocabulary, so moving or hiding one is unrepresentable. Whether a pane transmits has
+  // no bearing on whether it may be hidden.
   //
   // DSP funcs: only those the rig actually reports (non-null) render — capability-gated,
   // no dead buttons. STICKY ONCE SEEN: `null` means BOTH "this rig lacks the func" and
