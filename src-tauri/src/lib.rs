@@ -14845,7 +14845,7 @@ mod tests {
             e.apply_settings(s);
             e.confirm_sat_uplink(None, Some(map));
             e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
-            e.sat_tune_nominal(false, 1_000_000);
+            e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
             e
         };
 

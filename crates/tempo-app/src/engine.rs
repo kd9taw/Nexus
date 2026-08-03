@@ -22041,7 +22041,7 @@ mod tests {
     fn ab_refusal_text(e: &mut Engine, cat: SatCatBackend) -> String {
         confirm_map_for_all(e, crate::settings::SatVfoMap::ADownBUp);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 2_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
         e.sat_split_tx_vfo(145_965_000, cat)
             .expect_err("a cross-band A/B uplink on a Main/Sub Icom is refused")
     }
@@ -22145,7 +22145,7 @@ mod tests {
         let mut e = main_sub_station_wired(model, "serial", "", native_on);
         confirm_map_for_all(&mut e, map);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
-        e.sat_tune_nominal(false, 2_000_000);
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
         e
     }
 
@@ -22184,7 +22184,7 @@ mod tests {
         let mut ok = main_sub_station_wired(3081, "serial", "", true);
         confirm_map_for_all(&mut ok, SatVfoMap::ADownBUp);
         ok.set_sat_transponder(Some(("SO-50|V/V".into(), 0, SAME_BAND)));
-        ok.sat_tune_nominal(false, 2_000_000);
+        ok.sat_tune_nominal(SSB_BIRD, 2_000_000);
         assert_eq!(ok.sat_split_tx_vfo(145_990_000, NATIVE), Ok("VFOB"));
         assert_eq!(ok.sat_uplink_mapping_dead_end(), None);
 
@@ -22233,7 +22233,7 @@ mod tests {
                 half_width_hz: 0,
             },
         )));
-        beacon.sat_tune_nominal(false, 2_000_000);
+        beacon.sat_tune_nominal(SSB_BIRD, 2_000_000);
         assert_eq!(beacon.sat_uplink_mapping_dead_end(), None);
     }
 
