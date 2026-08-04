@@ -380,6 +380,33 @@ describe('every control still does what it did', () => {
     await waitFor(() => expect(api.stopSatTrack).toHaveBeenCalled())
   })
 
+  it('the badge and the ✕ are emitted BEFORE the rail — one bar line, both columns', async () => {
+    // A HEIGHT INVARIANT THAT ONLY DOCUMENT ORDER CAN CARRY. `.sat-rail` is
+    // `flex: 1 1 100%` — a deliberate wrap point, so the readiness rail always
+    // takes its own bar line and ANYTHING after it starts a third. With the
+    // badge and the ✕ last (how this shipped), measured at the 1024×768 floor:
+    // 99.2 effective px and four flex lines. Emitted before the rail: 79.9 px
+    // and three. The bar spans BOTH columns, so that ~16.5 px is paid twice —
+    // once by the schedule's row count and once by the pass column's fold.
+    // No CSS rule can state this; `order` would fix the paint and leave the tab
+    // order wrong. So it is asserted where it lives: in the DOM.
+    await console_()
+    const bar = screen.getByTestId('sats-armbar')
+    const kids = Array.from(bar.children)
+    const at = (sel: string) => kids.findIndex((k) => k.matches(sel))
+    const rail = at('[data-testid="sat-rail"]')
+    expect(rail, 'the readiness rail left the arm bar').toBeGreaterThan(-1)
+    for (const sel of ['.sats-tracking-badge', '.sats-detail-close']) {
+      const i = at(sel)
+      expect(i, `${sel} left the arm bar`).toBeGreaterThan(-1)
+      expect(
+        i,
+        `${sel} is emitted after \`.sat-rail\`, whose \`flex: 1 1 100%\` gives it a bar line of ` +
+          'its own — that is a third line at every window size, and both columns pay for it',
+      ).toBeLessThan(rail)
+    }
+  })
+
   it('a transponder card in the quadrant still runs the pick', async () => {
     await console_()
     const cards = screen.getByTestId('sat-tp-list')

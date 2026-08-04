@@ -15,8 +15,23 @@ best 24 hours… my screen with my LOS and AOS… It also should contain the qso
 with the frequencies and slections of what to select as a prominent feature… that main window
 should have all contained, without any scrolling for normal operation."
 
-It does now. On a normal window everything you need to work a pass is on one screen at once, and
-the only thing below the fold is the Birds catalog you use between passes.
+It does now, and here is exactly where — measured, not rounded, because a promise that holds
+nowhere is worse than a bound that holds. "Everything for the pass" means the sky dome and its
+rise/set readout, the ground-track globe, the pass timeline, the log strip down to its **Log**
+button, and the honesty line under it.
+
+- **From a 1200×750 window upward — every size a Nexus window normally opens at — the whole set is
+  on screen at once.** The only thing below the fold is the Birds catalog you use between passes,
+  which is where this column deliberately parks its spare room.
+- **At 1024×768, the smallest supported window, it does not quite fit.** The **Log** button sits
+  6 px under the fold and the note under it 36 px: one nudge of the wheel, on a column that already
+  scrolls to reach the Birds list. Nothing is unreachable and nothing is hidden behind a second
+  scrollbar. And shrinking the sky dome would not buy it — going back to the smaller dome returns
+  27 px and still leaves the last line 9 px under the fold. What would actually close it is
+  dropping two of {that note, the strip's "Log this QSO" heading, the pass timeline}, and none of
+  those is being taken away without asking.
+- Also at 1024×768: the schedule table is wider than its column and scrolls sideways inside its own
+  box. It stops doing that at 1366 wide.
 
 What moved, and why it fits when it did not before. The detail column used to hold the bird's
 name, four bordered instrument boxes, the sky dome, the pass timeline, the Doppler readout, the
@@ -33,9 +48,11 @@ screens of content in one column, with the ground-track globe last. Four changes
 - **The bird's identity, the radio binding, Lock on and the five readiness gates merged into one
   arm bar** across the top, in place of six separately-framed boxes and a heading.
 - **The schedule scrolls inside its own box** and is bounded by the frequencies panel beneath it
-  rather than by any fixed cap, so the window decides how many rows you get: about seven at the
-  1024×768 minimum, ten to eleven on a typical laptop, twenty-five or more on a tall or ultrawide
-  screen. Nothing was removed from it.
+  rather than by any fixed cap, so the window decides how many rows you get. Counted on a 42-pass
+  fixture, mid-pass: **5 rows at 1024×768, 7–8 at 1366×768 and 1280×800, 16 at 1920×1080, 24 in a
+  tall 1200×1390 window and 30 at 3440×1440.** The "first 10 lines" you asked for arrives at about
+  900 px of window height. Nothing was removed from the schedule — every pass is still there,
+  below the ones you can see.
 
 Nothing was deleted to make room and no control changed what it does — the density came from
 merging frames and laying stacks out sideways, the same way the FT8 decode window was rebuilt.
@@ -49,9 +66,40 @@ bearings and the live az/el are drawn on the dome, so their size follows its siz
 At the 1024×768 minimum the dome used to render 458 px across, which made those numbers the
 largest type anywhere in the section — bigger than the section heading. The dome is capped against
 the window height now, and the plate text was scaled up against it so it does not shrink with the
-dome by default. The result is about a third smaller rather than exactly a quarter: the last few
-pixels of the dome were what let the pass column fit without scrolling at the smallest supported
-window. If you want them nearer the quarter you asked for, say so — it is one number.
+dome by default. **The cut lands on the quarter you asked for: 24.8% at the smallest supported
+window**, and more than that on bigger screens, where the old dome kept growing with the column
+and the capped one does not.
+
+One thing worth knowing before you reach for the zoom control: on a normal-width window the dome
+is sized against the window's height, and that measurement does not change when you raise UI zoom.
+So at a high zoom everything grows except the dome and the az/el numbers on it. On a narrow window
+— or a wide one at a large zoom, where the layout goes to one column — that is fixed: the dome is
+sized in text units there and grows with the rest of the interface.
+
+### Fixed: opening the full transponder list could take the schedule away
+
+On a bird with a lot of transmitters, the chooser collapses the extras behind **show all N** and
+**show N inactive**. Clicking both — two clicks, on a bird like one of the multi-mode cubesats —
+grew the frequencies panel past the height of the column it lives in. The schedule above it was
+squeezed to nothing (not scrolled to nothing: *gone*, with no way to scroll it back), and the
+bottom of the chooser itself was cut off — including the control that would have collapsed it
+again. Switching birds was the only way out.
+
+The frequencies panel now stops growing at a share of the column and scrolls inside itself, the
+schedule always keeps a few rows, and the whole left column has a scrollbar of last resort. Opening
+the full list still costs schedule rows — that is the right trade and it is what the panel is
+bounded by — but it can no longer cost you the schedule, and nothing goes out of reach.
+
+### Fixed: the arm bar could scroll away on a narrow or heavily zoomed window
+
+At small window widths, and on any window at a large UI zoom, the Satellites section becomes a
+single scrolling column. The bar carrying the bird's name, the readiness gates, **■ stop** and the
+✕ was meant to stay pinned at the top there. It never did — it scrolled off with everything else,
+so stopping a track meant scrolling back up to find the button. It stays put now.
+
+The **■ stop** button also sat in a different place from one moment to the next: the badge it lives
+in is redrawn every two seconds with the current antenna bearing, and the button moved with the
+text. It is anchored to the right-hand end of the bar now and stays there.
 
 ### Fixed: a half-typed satellite contact can no longer be wiped out
 
