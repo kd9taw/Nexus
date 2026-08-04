@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.28.1] — 2026-08-03
 
+### Changed: the Satellites section is a pass console
+
+Reported after a pass worked with the manual rotor: "the schedule next list is long, and that
+should be made smaller and scrollable to free up more real estate… I need to see the top next and
+best 24 hours… my screen with my LOS and AOS… It also should contain the qso logging area along
+with the frequencies and slections of what to select as a prominent feature… that main window
+should have all contained, without any scrolling for normal operation."
+
+It does now. On a normal window everything you need to work a pass is on one screen at once, and
+the only thing below the fold is the Birds catalog you use between passes.
+
+What moved, and why it fits when it did not before. The detail column used to hold the bird's
+name, four bordered instrument boxes, the sky dome, the pass timeline, the Doppler readout, the
+passband, the log strip, the transponder cards and the globe — one on top of another, about three
+screens of content in one column, with the ground-track globe last. Four changes:
+
+- **The sky dome and the ground-track globe sit side by side.** The globe was always in the
+  section; it was just two screens down. Stacked, the two square graphics were taller than the
+  column they lived in at every window size. Abreast, and both capped against the window height,
+  they cost the height of one.
+- **The frequencies and the transponder chooser moved to the bottom left**, permanently on screen
+  and never scrolled. Choosing a transponder is the most consequential control in the section — a
+  wrong pick is a wrong uplink — and it used to be a long way down a scrolling column.
+- **The bird's identity, the radio binding, Lock on and the five readiness gates merged into one
+  arm bar** across the top, in place of six separately-framed boxes and a heading.
+- **The schedule scrolls inside its own box** and is bounded by the frequencies panel beneath it
+  rather than by any fixed cap, so the window decides how many rows you get: about seven at the
+  1024×768 minimum, ten to eleven on a typical laptop, twenty-five or more on a tall or ultrawide
+  screen. Nothing was removed from it.
+
+Nothing was deleted to make room and no control changed what it does — the density came from
+merging frames and laying stacks out sideways, the same way the FT8 decode window was rebuilt.
+
+### Changed: the sky dome, and the numbers on it, are smaller
+
+"The actual aos, los and az, el text could be made smaller by 25%" — and, in the same breath, the
+dome itself "could overall be reduced in size". Both, and they pull the same lever: the AOS/LOS
+bearings and the live az/el are drawn on the dome, so their size follows its size.
+
+At the 1024×768 minimum the dome used to render 458 px across, which made those numbers the
+largest type anywhere in the section — bigger than the section heading. The dome is capped against
+the window height now, and the plate text was scaled up against it so it does not shrink with the
+dome by default. The result is about a third smaller rather than exactly a quarter: the last few
+pixels of the dome were what let the pass column fit without scrolling at the smallest supported
+window. If you want them nearer the quarter you asked for, say so — it is one number.
+
+### Fixed: a half-typed satellite contact can no longer be wiped out
+
+The log strip was rendered inside the bird's detail card, and it keeps everything you type in the
+form itself. So closing the bird with ✕, pressing Escape, clicking another bird, or Nexus simply
+losing its connection to SatNOGS mid-pass **deleted a contact you were part way through entering**
+— between overs, on a pass a few minutes long. The strip is now a sibling of the detail card and
+renders from your radio's state alone, so nothing about which bird is open, whether a pass is
+armed, or whether AOS has happened can reach it.
+
+
 ### Fixed: the IC-9700 no longer flips in and out of satellite mode during a pass
 
 Reported on the bench: with native CI-V control the radio switched "from single frequency to the

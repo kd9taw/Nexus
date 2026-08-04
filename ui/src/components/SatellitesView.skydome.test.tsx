@@ -24,6 +24,8 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import type { SatDetail, SatPass, SatTrackStatus } from '../types'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const api = vi.hoisted(() => ({
   // Typed: the stale-chip case below hands back a real SatView, and an
@@ -871,5 +873,183 @@ describe('the stale-TLE chip', () => {
       const chip = container.querySelector('.sat-chip.stale')
       expect(chip?.textContent).toContain('TLE 21 days')
     })
+  })
+})
+
+/* ===================== THE 25% INSTRUCTION, COMPUTED ======================
+ * Operator, 2026-08-03: "the actual aos, los and az, el text could be made
+ * smaller by 25%, please do that."
+ *
+ * ⚠️ THIS CANNOT BE CHECKED BY LOOKING AT ONE NUMBER, WHICH IS WHY IT IS HERE
+ * AND NOT A CSS PRESENCE TEST. The on-dome az/el and the two rim bearings are
+ * SVG text in viewBox units, so what the operator sees is
+ *
+ *     rendered px = fontSize attribute × (rendered dome px ÷ 248)
+ *
+ * and the second factor lives in a CSS `max-width` on `.sat-dome`. The two
+ * numbers are ONE decision: raise the constant without capping the dome and the
+ * text gets BIGGER; cap the dome without raising the constant and it collapses
+ * to ~9 px, which is under every size token the app ships. So this guard reads
+ * the unit off the RENDERED marks (jsdom gives the real attribute the component
+ * emits) and the cap off the SHEET (resolving the winner by specificity then
+ * source order, against the real element), and asserts on the product.
+ *
+ * THE BASELINE it is measured against is what shipped before: TAG_FS 10 on a
+ * dome that rendered 458 px wide at the supported 1024×768 floor — 18.5
+ * effective px, the largest type in the whole section and bigger than the <h1>.
+ * That is what the operator was looking at when he asked. */
+describe('the AOS/LOS/az/el type is 25% smaller than it was', () => {
+  // Resolved off the vitest cwd (ui/) rather than `import.meta.url`: this file
+  // runs in the jsdom environment, where `import.meta.url` is not a file: URL.
+  const SHEET = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8')
+
+  /** Brace-aware rule walk, descending into at-rule blocks. */
+  function rules(css: string, out: { sel: string; body: string; n: number }[] = [], c = { n: 0 }) {
+    let i = 0
+    let selStart = 0
+    while (i < css.length) {
+      if (css[i] === '{') {
+        const sel = css.slice(selStart, i).trim()
+        i++
+        const start = i
+        let depth = 1
+        while (i < css.length && depth > 0) {
+          if (css[i] === '{') depth++
+          else if (css[i] === '}') depth--
+          i++
+        }
+        const body = css.slice(start, i - 1)
+        if (sel.startsWith('@')) rules(body, out, c)
+        else {
+          c.n++
+          for (const one of sel.split(',').map((x) => x.trim().replace(/\s+/g, ' '))) {
+            if (one) out.push({ sel: one, body, n: c.n })
+          }
+        }
+        selStart = i
+      } else i++
+    }
+    return out
+  }
+  const RULES = rules(SHEET.replace(/\/\*[\s\S]*?\*\//g, ''))
+  const spec = (s: string) => (s.match(/\.[a-z][\w-]*|\[[^\]]+\]|#[a-z][\w-]*/g) ?? []).length
+  /** The winning declaration for `prop` among the selectors that MATCH `el`. */
+  function computed(el: Element, prop: string): string | null {
+    let win: { v: string; s: number; n: number } | null = null
+    const re = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, 'g')
+    for (const r of RULES) {
+      let hit = false
+      try {
+        hit = el.matches(r.sel)
+      } catch {
+        hit = false
+      }
+      if (!hit) continue
+      const all = [...r.body.matchAll(re)]
+      if (!all.length) continue
+      const v = all[all.length - 1][1].trim()
+      const s = spec(r.sel)
+      if (!win || s > win.s || (s === win.s && r.n >= win.n)) win = { v, s, n: r.n }
+    }
+    return win?.v ?? null
+  }
+  /** `min(100%, calc(F * var(--vh-eff, …)))` → F. */
+  function vhFraction(v: string): number {
+    const m = v.match(/calc\(\s*([0-9.]+)\s*\*\s*var\(--vh-eff/)
+    expect(
+      m,
+      `\`${v}\` is not a --vh-eff-relative cap — a raw vh is blind to .app's zoom`,
+    ).toBeTruthy()
+    return Number(m![1])
+  }
+
+  /** Effective viewport height at the supported 1024×768 floor: useScale fits a
+   *  1200×900 natural box into 1024×768 at 85%, so the app sees 1205×904. */
+  const VH_EFF_AT_FLOOR = 904
+  /** What shipped before this change, at that same floor. */
+  const OLD_UNIT = 10
+  const OLD_DOME_PX = 458
+
+  /** The rendered px of the bird's own az/el plate at the supported floor. */
+  async function renderedPx(): Promise<number> {
+    const bird = await screen.findByTestId('sat-bird-tag')
+    const domeEl = (await dome()) as unknown as Element
+    const unit = Number(bird.querySelector('text')!.getAttribute('font-size'))
+    expect(unit, 'the plate text carries no fontSize attribute').toBeGreaterThan(0)
+    // ⚠️ RESOLVED AGAINST THE LIVE ELEMENT. `.sat-sky.live .sat-dome` is (0,3,0);
+    // a cap written only on `.sat-dome` is (0,1,0) and would lose for the whole
+    // of every live pass — i.e. exactly when the size matters. That is this
+    // sheet's documented failure mode, so the fixture pass is in progress and
+    // the winner is computed against the element that actually renders.
+    expect(domeEl.closest('.sat-sky')!.className).toContain('live')
+    const cap = computed(domeEl, 'max-width')
+    expect(cap, 'the dome declares no max-width that wins for a LIVE pass').not.toBeNull()
+    return unit * ((vhFraction(cap!) * VH_EFF_AT_FLOOR) / 248)
+  }
+
+  it('lands on the quarter he asked for, at the supported floor', async () => {
+    render(<SatellitesView focusSat="RS-44" />)
+    const before = OLD_UNIT * (OLD_DOME_PX / 248)
+    const after = await renderedPx()
+    const cut = 1 - after / before
+    expect(
+      cut,
+      `the on-dome az/el renders ${after.toFixed(1)} px against ${before.toFixed(1)} px before ` +
+        `(${(cut * 100).toFixed(0)}% smaller). He asked for 25%.`,
+    ).toBeGreaterThan(0.2)
+    // ⚠️ THE UPPER BOUND IS 36%, NOT 25%, AND THE OVERSHOOT IS DELIBERATE — it
+    // is written here rather than quietly allowed. He asked for two things in
+    // one sentence: this text 25% smaller, and the dome it lives on "reduced in
+    // size". The dome cap is what delivers the second, and it is also the second
+    // factor in this text's rendered size, so the two instructions pull the same
+    // number. Measured in headless Chrome against the real sheet, a cap that
+    // landed the type on exactly 25% (0.31·--vh-eff) left the pass column five
+    // effective pixels over its box at the 1024×768 floor — the whole no-scroll
+    // promise missing by a third of a text line. 0.28 closes it and costs the
+    // type another seven points. The band stops at 36% because past that the
+    // type is heading under `--fs-micro`, which the guard below refuses outright.
+    expect(cut, 'smaller than asked — this is the number a mast is turned by').toBeLessThan(0.36)
+  })
+
+  it('is still the section’s most prominent number, not its smallest', async () => {
+    // The honest ceiling on the cut. `--fs-micro` (11 px) is the smallest size
+    // token the app ships, and this is what a manual-rotor operator reads
+    // mid-turn with both hands busy. A "25%" delivered by taking it under the
+    // app's own floor would be the wrong trade — and it is the trade a dome cap
+    // makes silently if the plate constants are not raised to meet it.
+    render(<SatellitesView focusSat="RS-44" />)
+    expect(await renderedPx()).toBeGreaterThanOrEqual(11)
+  })
+
+  it('the two rim bearings take exactly the same size as the bird’s own plate', async () => {
+    // One instrument, one type size. The rise/set bearings are read WITH the
+    // live az/el to decide which way to turn a mast; two sizes there would read
+    // as two different kinds of number.
+    render(<SatellitesView focusSat="RS-44" />)
+    const bird = await screen.findByTestId('sat-bird-tag')
+    const unit = bird.querySelector('text')!.getAttribute('font-size')
+    for (const id of ['sat-aos-tag', 'sat-los-tag']) {
+      const t = screen.getByTestId(id).querySelector('text')!
+      expect(t.getAttribute('font-size'), `${id} drifted off the bird plate's size`).toBe(unit)
+    }
+  })
+
+  it('the ring and compass labels came down with them', async () => {
+    // Same instrument, same instruction. These are `font-size` in CSS but INSIDE
+    // the SVG, so they are viewBox units too and scale with the dome exactly as
+    // the plates do — which means the dome cap alone would have shrunk them ~39%
+    // while the plates stayed put. They go UP for the same reason TAG_FS did.
+    render(<SatellitesView focusSat="RS-44" />)
+    await dome()
+    const ring = document.querySelector('.sat-dome-ringlabel')!
+    const comp = document.querySelector('.sat-dome-compass')!
+    expect(
+      Number(computed(ring, 'font-size')!.replace('px', '')),
+      'the ring labels were not re-scaled with the dome',
+    ).toBeGreaterThan(9)
+    expect(
+      Number(computed(comp, 'font-size')!.replace('px', '')),
+      'the compass letters were not re-scaled with the dome',
+    ).toBeGreaterThan(11)
   })
 })

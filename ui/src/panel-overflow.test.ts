@@ -238,12 +238,57 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
       ).toBeNull()
     }
   })
-  it('.sats-sched is PINNED to the grower row (Next-up may be absent now)', () => {
-    // The gate-ladder reorder means "Next up" can be missing while the
-    // schedule renders; auto-placement would then land the schedule in the
-    // `auto` row — an unbounded table under .sats-view's overflow:hidden.
-    expect(winner('.sats-best', 'grid-row')).toBe('2')
-    expect(winner('.sats-sched', 'grid-row')).toBe('3')
+  it('the schedule is the grower inside a BOUNDED planning column', () => {
+    // The reason this guard exists is unchanged and still load-bearing: "Next
+    // up" can be missing while the schedule renders, and if the schedule ever
+    // ends up in an unbounded track it is an uncapped table under
+    // .sats-view's overflow:hidden — the overhaul's own bug class.
+    //
+    // 2026-08-03 (the pass rebuild): the three column-1 sections are no longer
+    // grid children pinned to explicit rows. They are flex children of
+    // `.sats-plan`, which is itself the grid grower. The invariant is now
+    // stated in flex and cannot be re-ordered into the bug: the strip and the
+    // radio quadrant are fit-content, the schedule is the only thing that
+    // grows, and the shell that holds all three is bounded and clips.
+    expect(winner('.sats-plan', 'grid-row'), 'the planning column owns the grower row').toBe('3')
+    expect(winner('.sats-plan', 'display')).toBe('flex')
+    expect(winner('.sats-plan', 'flex-direction')).toBe('column')
+    expect(winner('.sats-plan', 'min-height'), 'a flex column that cannot shrink is not bounded').toBe('0')
+    expect(
+      winner('.sats-plan', 'overflow-y') ?? winner('.sats-plan', 'overflow'),
+      'the planning column clips; its ONE scroller is .sats-sched-scroll inside it',
+    ).toBe('hidden')
+    expect(winner('.sats-best', 'flex'), 'the strip cannot use surplus height').toBe('0 0 auto')
+    expect(winner('.sats-sched', 'flex'), 'the schedule is the only grower').toBe('1 1 auto')
+    expect(winner('.sats-radio', 'flex'), 'the radio quadrant cannot use surplus height').toBe(
+      '0 0 auto',
+    )
+  })
+
+  it('the radio quadrant is what BOUNDS the schedule — so it may never floor itself', () => {
+    // The operator asked for the schedule to be "made smaller and scrollable to
+    // free up more real estate". There is deliberately NO max-height and no row
+    // cap on the schedule (see the guard above and the one below): what stops
+    // it eating the page is that a fit-content block sits under it in a bounded
+    // column, so the window sets the row count instead of a constant.
+    //
+    // That only works while the quadrant genuinely yields. A min-height here
+    // would drive the only shrinkable child — the schedule scroller, min-height
+    // 0 — to zero and then clip the quadrant itself, with no scroller anywhere
+    // in the chain. The bound on the quadrant's own height is a ROW COUNT in
+    // the component (TP_ALIVE_CAP), the DISCOVERY_ROW_CAP idiom.
+    for (const sel of ['.sats-radio', '.sats-radio-cell', '.sats-best']) {
+      expect(winner(sel, 'min-height'), `${sel} must not floor its height`).toBeNull()
+      expect(winner(sel, 'height'), `${sel} must not fix a height`).toBeNull()
+    }
+    // `.sats-plan` is the exception and the opposite case: its `min-height: 0`
+    // is what makes it shrinkable at all (asserted in the guard above), so a
+    // floor is only forbidden here in the form of a fixed height.
+    expect(winner('.sats-plan', 'height'), '.sats-plan must not fix a height').toBeNull()
+    // Both tracks shrinkable: a min-content floor in either cell would blow the
+    // quadrant out sideways under .sats-view's overflow-x:hidden.
+    expect(winner('.sats-radio', 'grid-template-columns')).toBe('minmax(0, 1fr) minmax(0, 1fr)')
+    expect(winner('.sats-radio-cell', 'min-width')).toBe('0')
   })
   it('the Next/Best strip stays fit-content — no floors, the side tags never grow', () => {
     // The strip sits in the auto row above the schedule grower with a budget
@@ -263,35 +308,119 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
       'the rows column must be shrinkable (long why-lines under a narrow schedule column)',
     ).toBe('0')
   })
-  it('the sticky detail heading (the ✕ home) has an opaque background', () => {
-    // DIRECT CHILD. The detail card hosts the shared LogEntry strip, which has
-    // its own <h2>; as a DESCENDANT rule this one out-cascaded `.log-entry h2`
-    // (identical specificity, later in the sheet) and made a second sticky
-    // heading inside the same scroller. The guard asks for the scoped form so
-    // the descendant version cannot come back.
+  it('NO heading rule in this section can reach the shared log strip', () => {
+    // THE BUG THIS REPLACES, kept because it is the reason for the shape below.
+    // The detail card used to carry the bird's name as `.sats-detail > h2`,
+    // STICKY, because the sky dome and the globe stacked were together taller
+    // than the column at every window size and a ✕ at the top scrolled away.
+    // Written as a DESCENDANT (`.sats-detail h2`) that rule out-cascaded
+    // `.log-entry h2` — identical specificity, later in the sheet — and both
+    // shrank the log strip's own "Log this QSO" and pinned the wrong heading to
+    // the top of the scroller. It shipped that way once.
     //
-    // ⚠️ EXACTLY WHAT THESE THREE LINES PROVE, and nothing beyond it. `winner`
-    // matches rules by SELECTOR TEXT (`r.selector !== selector`), so this is a
-    // cascade computed WITHIN one selector string, not across the selectors that
-    // would match a given element:
-    //   · line 1/2 — among rules literally written `.sats-detail > h2`, the
-    //     winning `position` is `sticky` and the winning `background` is a
-    //     `--bg*` variable. It does NOT prove that rule wins over anything else.
-    //   · line 3 — NO rule in the sheet is literally written `.sats-detail h2`
-    //     with a `position`. It does NOT rule out another descendant form that
-    //     would also capture the strip's heading (`.sats-side h2`,
-    //     `.sats-detail div h2`, …).
-    // What is therefore NOT computed here is the thing the bug was: the cascade
-    // between this rule and `.log-entry h2` against the real heading element.
-    // That needs a matcher over a rendered DOM, which this CSS-text file has no
-    // way to build — carried, not claimed.
-    expect(winner('.sats-detail > h2', 'position')).toBe('sticky')
-    const bg = winner('.sats-detail > h2', 'background')
-    expect(bg, 'sticky surfaces need an opaque background (contract rule)').toContain('var(--bg')
+    // The 2026-08-03 pass rebuild retires the whole shape rather than defending
+    // it: the bird's identity and the ✕ live in `.sats-armbar`, a non-scrolling
+    // grid row; the log strip is a SIBLING of `.sats-detail`, not a descendant;
+    // and `.sats-detail` has no heading at all. No heading, no sticky, no trap.
+    //
+    // ⚠️ WHAT THIS GUARD PROVES, and its honest limit. `winner` matches rules by
+    // SELECTOR TEXT, so it cannot compute the cascade across every selector that
+    // would match a real element — that needs a matcher over a rendered DOM, and
+    // `SatellitesView.console.test.tsx` carries the rendered half. What is
+    // computed here is that no rule in the sheet is written in a form that COULD
+    // capture a heading inside the log strip: the strip lives in `.sats-side`,
+    // beside `.sats-detail` and `.sats-favmgr` and near `.sats-radio`, and each
+    // of those is a plausible place for someone to reach for `X h2` by reflex.
+    for (const sel of [
+      '.sats-detail > h2',
+      '.sats-detail h2',
+      '.sats-side h2',
+      '.sats-log h2',
+      '.sats-radio h2',
+      '.sats-plan h2',
+    ]) {
+      for (const prop of ['position', 'font-size', 'text-transform', 'background']) {
+        expect(
+          winner(sel, prop),
+          `\`${sel}\` declares ${prop} — a heading rule in that form reaches the shared ` +
+            'LogEntry’s own <h2> and re-creates the cascade bug this section already shipped once',
+        ).toBeNull()
+      }
+    }
+    // …and the card headings that DO exist are matched by a class or by a box
+    // that cannot contain the strip. `.sats-radio-title` is the new one, and it
+    // is a class for exactly this reason.
+    expect(winner('.sats-radio-title', 'font-size'), 'the quadrant titles lost their styling').toBe(
+      'var(--fs-label)',
+    )
+    // The strip's own scoped compaction still out-ranks the base component
+    // rules: (0,2,0) vs (0,1,0), position-independent.
+    expect(winner('.sats-log .log-entry', 'padding')).toBe('var(--space-2) var(--space-3)')
+  })
+
+  it('the arm bar is a non-scrolling grid row, and sticky ONLY where the page scrolls', () => {
+    // It carries the ■ stop, the ✕ and the five readiness gates. At md+ it is
+    // grid row 2 of a bounded shell — nothing scrolls past it, so it needs no
+    // sticky and must not have one (a sticky in a non-scrolling context is dead
+    // weight that later reads as a fix). At sm/xs `.sats-view` really is the page
+    // scroller, and there it sticks with an OPAQUE surface.
+    expect(winner('.sats-armbar', 'grid-row')).toBe('2')
+    expect(winner('.sats-armbar', 'grid-column')).toBe('1 / -1')
+    expect(winner('.sats-armbar', 'position'), 'no sticky at md+ — nothing scrolls past it').toBeNull()
+    for (const vp of ['sm', 'xs']) {
+      const sel = `[data-viewport='${vp}'] .sats-armbar`
+      expect(winner(sel, 'position'), `${sel}: the page scroller would carry the ■ stop away`).toBe(
+        'sticky',
+      )
+      expect(
+        winner(sel, 'background'),
+        `${sel}: a sticky surface needs an opaque background (contract rule)`,
+      ).toContain('var(--bg')
+    }
+  })
+
+  it('the pass column: the two graphics are ABREAST and both capped in --vh-eff', () => {
+    // THE MOVE THAT MAKES THE NO-SCROLL PROMISE ARITHMETICALLY POSSIBLE. Stacked,
+    // the sky dome and the ground-track globe cost ~916 px of a 713 px column at
+    // the 1024×768 floor — which is why the ✕ above them had to be sticky.
+    // Abreast and capped they cost the height of the taller one and stop growing
+    // with the window.
+    expect(winner('.sats-pass-graphics', 'display')).toBe('grid')
     expect(
-      winner('.sats-detail h2', 'position'),
-      'the exact selector `.sats-detail h2` declares position again — it captures the log strip’s own heading',
-    ).toBeNull()
+      winner('.sats-pass-graphics', 'grid-template-columns'),
+      'both tracks must be minmax(0,…) — a min-content floor here blows the column out sideways',
+    ).toBe('minmax(0, 1fr) minmax(0, 0.85fr)')
+
+    // ⚠️ THE DOME CAP HAS TO OUT-RANK `.sat-sky.live .sat-dome`, WHICH IS (0,3,0).
+    // A cap written only on `.sat-dome` is (0,1,0) and loses for the whole of
+    // every live pass — i.e. at exactly the moment the size matters. That is this
+    // sheet's documented failure mode (two fixes shipped dead that way), so both
+    // selectors must resolve to the SAME capped value.
+    const plain = winner('.sat-dome', 'max-width')
+    const live = winner('.sat-sky.live .sat-dome', 'max-width')
+    expect(plain, '.sat-dome declares no max-width').not.toBeNull()
+    expect(plain!, 'the cap must be --vh-eff-relative, never a raw vh (zoom-blind)').toContain(
+      'var(--vh-eff',
+    )
+    expect(
+      live,
+      'a `.sat-sky.live .sat-dome` rule that sets max-width without the cap would out-rank it ' +
+        '(0,3,0 vs 0,1,0) and the dome would be uncapped for the whole of every live pass',
+    ).toBe(plain)
+
+    // The globe is capped the same way, and its floor YIELDS: it sits under a
+    // bounded column now, and a hard px floor there is the contract's named bug.
+    const g = winner('.sat-globe-box', 'width')
+    expect(g!).toContain('var(--vh-eff')
+    expect(
+      winner('.sat-globe-box', 'min-height')!.replace(/\s+/g, ''),
+      'a bare px floor under a bounded parent clips; the idiom is min(Xpx, 100%)',
+    ).toBe('min(180px,100%)')
+
+    // The passband plot grew with its column off a 320×102 viewBox — 224 px tall
+    // at 1024×768 and 551 px at 3440×1440, the fastest-growing block in the
+    // section. Capping the WIDTH is what caps the height.
+    expect(winner('.sat-pb-plot', 'max-width'), 'the plot is unbounded again').toBe('300px')
   })
 })
 
