@@ -3467,7 +3467,23 @@ body.resizing {
   overflow-y: auto;
 }
 .layout.single > .panel {
+  /* DEFINITE height, deliberately — it is what bounds every inner scroller (.settings-scroll,
+     .log-scroll, .rp-results). Relax it to `min-height` and the wrapper above starts scrolling
+     instead, but each `flex: 1` child then contributes its MAX-CONTENT height to the panel's
+     intrinsic main size (Flexbox §9.9.1) and stops scrolling: Settings would grow one endless
+     page and the Logbook virtualizer, which measures .log-scroll, would mount every row. */
   height: 100%;
+  /* ...and because the height is definite, `.layout.single { overflow-y: auto }` above can
+     NEVER fire: a 100%-tall child makes scrollHeight equal clientHeight, so that valve is dead
+     by construction, not by content. The deficit therefore has to be owned HERE — the first of
+     the two legal fates in cockpit-panes.css, "a scrollbar inside the pane that overflowed" —
+     because `.panel { overflow: hidden }` would otherwise CLIP whatever the flex column could
+     not shrink. It clipped Logbook's "Log" submit under the open manual form and Program's
+     whole delivery row at 1024×768 (2026-08-04). Five views had escaped this rule one at a
+     time (the two :has() rules below, .aprs-cockpit, the triple-class cockpit shells, and
+     POTA's own overflow-y) before it was fixed at the base. overflow-x stays hidden.
+     Computed in layout-single-deficit.test.tsx. */
+  overflow-y: auto;
   max-width: 1100px;
   margin: 0 auto;
 }
@@ -14384,10 +14400,12 @@ button.cq-skiptx1.on {
   color: var(--text-faint);
 }
 
-/* POTA / SOTA view. */
+/* POTA / SOTA view. (It used to re-declare `overflow-y: auto` here to escape
+   `.panel { overflow: hidden }` — a fifth private escape from the same base rule, winning only
+   on source order at equal specificity. `.layout.single > .panel` now declares the identical
+   value at (0,2,0), and POTA renders nowhere else, so this one was dead and is gone.) */
 .pota-view {
   padding: var(--space-3);
-  overflow-y: auto;
 }
 .pota-body {
   display: grid;
