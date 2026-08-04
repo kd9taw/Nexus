@@ -10,14 +10,17 @@ logbook and license privileges wired in.
 Phone is an opt-in section. Turn it on in the first-run wizard's "which modes?"
 step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
-<!-- TODO: capture screenshot — the Phone cockpit — dial read-back, bandscope, PTT, voice keyer -->
+![The Phone cockpit on 15 m: the dial reads 21.2000 MHz, the mode chips show AUTO-FM selected next to USB, LSB and FM, and a rig: USB badge beside them flags that the radio itself is still on USB. The bandscope fills the upper half — a panadapter trace over a scrolling waterfall, with the Full / Voice / Low / High span chips above it — while Band Activity and the six-slot voice keyer, F1 CQ through F6 Again, stack in the left column and the LOG pane runs down the right. PUSH TO TALK and its Lock tick sit in the dock across the bottom; Panels, the Power slider, Tune and Stop TX ride in the header above the scope.](../img/manual/phone-cockpit.webp)
 
 ## The tour
 
 **Live dial read-back.** The cockpit polls the rig about every 750 ms: spin the
 VFO knob and the displayed frequency follows. On SSB the sideband is automatic —
 LSB below 10 MHz, USB above — so the rig lands on the right sideband for the band.
-A mode badge shows what the cockpit has the rig on (LSB / USB / FM).
+The mode chips — **AUTO / USB / LSB / FM** — set what the cockpit commands, and
+AUTO shows the sideband it settled on (`AUTO·USB`, `AUTO·FM`). If the rig's own
+mode knob disagrees, a **rig:** badge appears beside them naming what the radio
+is actually on; logging and TX follow the commanded mode until you match it up.
 
 **The bandscope** is a fast (~30 Hz) colored display split into a panadapter
 trace and a scrolling waterfall, with per-frame AGC so signals stay visible as
