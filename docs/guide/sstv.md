@@ -10,8 +10,10 @@ button. It is not an image editor (your picture is cover-cropped to the mode's
 size and nothing else) and it does not log: no QSO is written from this section.
 
 SSTV sits in the left rail's Digital group (FT · Tempo · RTTY · SSTV · APRS) and
-is on by default. A goal profile picked in the first-run wizard leaves it out, so
-if the rail has no SSTV button, turn it on in
+is on by default. It is a mode rather than a goal, so the five goal profiles in
+the first-run wizard leave it out; **Everything (expert)** turns it on, and so
+does ticking SSTV in the wizard's "which modes?" step, which applies on top of
+whichever goal you picked. If the rail has no SSTV button, turn it on in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the SSTV section receiving: the band waterfall replaced by a half-decoded Scottie 1 picture, the "decoding Scottie 1…" caption under it, two images already in the Gallery, the Transmit composer empty -->
