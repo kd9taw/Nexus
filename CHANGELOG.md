@@ -5,7 +5,84 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] — 2026-08-04
+
+Nexus has been a beta since its first public build, and this release closes the beta period.
+What that means here is narrow, and worth saying plainly: the modes, the rig control, the logbook
+and the awards engine have been run on the air through that period, on more than one station and
+on rigs the author does not own, and what came back from that is what the last several releases
+have been made of. It is not a claim that nothing is left — every entry below still says what a
+change does **not** do, and that habit does not stop at 1.0. Windows, Linux and Raspberry Pi
+build from the same tree and ship together, as they have every release. Upgrading asks nothing of
+you: 1.0.0 installs over 0.27.0 and reads your existing log, settings and layouts as they are.
+
+0.28.0, 0.28.1, 0.28.2 and 0.29.0 were bench builds and were never published. Coming from 0.27.0,
+which is the last public release, this install brings you the 0.28.0 and 0.28.2 sections below as
+well as this one.
+
+### Fixed: two controls you could not reach — the Logbook's Log button and Program's export row
+
+Both at 1024×768, the supported floor, and both with nothing to scroll:
+
+- **The Logbook's manual entry form.** Press **Log QSO**, fill it in, and at a UI zoom of 115 %
+  or more the **Log** button that commits it was off the bottom of the screen. No scrollbar,
+  nothing to drag. The header above the form and the form itself are both fixed height, so the
+  overflow had nowhere to go.
+- **Program's whole delivery row** — **Export for CHIRP…**, **Export CSV**, **Save to Memory
+  Bank**, **Clear**. At 120 % and up all four were off the bottom, sitting under two lists that
+  each hold a floor of their own. That is the worse of the two: building a channel list and
+  getting it out to the radio *is* the section, so the step you could not take was the last one.
+
+One cause, and it is three rules deep. The view's wrapper carries a scrollbar, and the panel
+inside it is told to be exactly the wrapper's height — so the wrapper's contents can never be
+taller than the wrapper, and that scrollbar can never appear. Not because there was nothing to
+scroll: **by construction**. The panel then clipped whatever its own column could not shrink,
+which is how a button ends up painted nowhere.
+
+Fixed at the rule rather than at the two symptoms. The panel keeps its exact height, because that
+is what bounds the scrolling lists inside it — letting it grow instead would break every view
+that works today: Settings would become one endless page, and the Logbook would stop virtualising
+and mount every row in your log. The panel owns its own overflow instead. Five views had each
+escaped that rule privately, one at a time, which is the tell that the rule was wrong rather than
+the views; POTA's private escape is dead now and is deleted with the cause.
+
+**This is a scrollbar, not more room.** At 1024×768 with a large zoom the open form is still
+taller than the pane holding it — what changed is that you reach the button by scrolling instead
+of not at all. Nothing moves at any size where it already fit.
+
+### Fixed: Phone and CW stop cutting controls off at the window Nexus opens at
+
+Reported as Phone and CW looking bad at low resolution, and the diagnosis is upside down from the
+obvious one. At 1024×768 the panes run in a single column and that column has always scrolled —
+the floor was the safe case. The clip bit at the **default window**, where the panes run two
+columns and the region holding them does not scroll.
+
+A column of control strips is a stack of things that cannot shrink, standing against an edge that
+cuts, with nothing in between. Phone's leading column is control strips end to end, so the NR
+slider, the AGC chips, the DSP toggles and the voice keyer's F4–F6 rendered past that edge — not
+below the fold, *gone*, with no scrollbar and nothing to drag. The column scrolls now. In the
+single-column layout the rule is inert, because a column there is exactly as tall as what is in it.
+
+Two more, behind the same door:
+
+- **Every pane that fills had a floor of zero.** CW's six aux strips cannot shrink, so they took
+  their height out of the one pane that can — the decode transcript, the pane the cockpit exists
+  for — and it could be starved toward nothing. There is a floor under it now, and it is written
+  to yield: stated in text units rather than pixels, and never claiming more than the space it is
+  in.
+- **The column count was being read as a claim about width.** Untick CW's decode, sent echo and
+  aux panes on a 3440-wide window and the log pane went content-height with the whole rest of the
+  window left blank — because the ⊞ Panels menu could drive the region to one column at *any*
+  width, and one column meant content-height rows. The track count and the width claim are
+  separate things now, and it is the width that decides the vertical behaviour.
+
+CW's leading column is no longer drawn when there would be nothing in it. One column used to mean
+content-height rows, so an empty one was merely cheap; with the fill behaviour above it would
+have been a strip of dead space beside the log.
+
+All of this is layout. No pane changes parents, so a half-typed log entry and a recording in
+progress survive every flip between one, two and three columns. PTT, Stop TX and Tune are not in
+the pane region and are untouched.
 
 ### Changed: the CW decode window is the pane the CW cockpit gives room to
 
@@ -105,6 +182,118 @@ Also in the Phone cockpit: the hint line under **PUSH TO TALK** is gone from the
 dock, where it held a full line at every window size and repeated the button's own tooltip. The
 part that was not a repeat — *you talk on the rig's mic* — is now on the button itself.
 
+### Fixed: a cockpit header can no longer be crushed under its own controls
+
+The header every cockpit shares carried a hard 44-pixel floor. A floor written that way forfeits
+the automatic protection that stops a flex child shrinking below its own contents, so the header
+was the one child of a cockpit column allowed to be squeezed smaller than what it holds.
+
+**That shipped once, and it is worth naming.** At 1366×768 the CW header wrapped onto extra rows,
+was squeezed back to 44 px, and drew those rows outside its own border box — where the scope
+panel below it, which is opaque, painted straight over them. What went under the paint was the
+keyer's **Speed** slider and **Tune / Stop TX / CAT**. A control that stops a transmission, under
+opaque paint, on a screen that looked fine.
+
+The repair at the time was a hand-maintained list of the four cockpits it had been seen in — CW,
+Phone, RTTY and SSTV. That made the protection opt-in per cockpit, could not reach a grid-based
+host at all, and left the Operating screen out; Operate survived on an accident of what it
+happens to render today, which was asserted nowhere.
+
+The 44 px is a real requirement — it is what keeps the header the same height across modes, so it
+does not jog when you switch — and it stays. It moved onto the identity block the header always
+draws, so it arrives as *content*: it raises the header's height instead of overriding the
+header's minimum. The protection is back in every cockpit, including one nobody has written yet,
+and the allowlist is deleted along with the reason for it. Nothing moves on screen, and Stop TX
+and Tune stay where they are, outside every removable pane.
+
+### Fixed: the APRS header stops cutting off its own controls
+
+APRS was the one full view in Nexus with no way to scroll an overflow at all, and the reason
+nothing caught it is that nothing ever checked — the census that computes this for the other
+cockpits did not have APRS in it. Both are fixed.
+
+The APRS header is a control strip that wraps: frequency picker, **Re-tune**, the TX arm latch,
+**Monitor**, both health chips and the internet control. Narrow the window, or raise UI zoom, and
+it grows onto more rows and cannot shrink below them. It sat directly against a hard edge — the
+only other thing in the view absorbs none of an overflow — so everything the strip could not fit
+was cut off with no scrollbar anywhere in the chain. The internet-feed panel is inside that same
+edge: at 1024×768 under a pinned zoom the header wraps deep enough that the panel's Watched calls
+row and the note under it fell past the bottom of the view, with no way to reach either.
+
+The view scrolls vertically now. Sideways it still does not, on purpose — the station table
+scrolls itself — and the view keeps the exact height the map canvas is drawn against, so the map
+does not start growing again.
+
+APRS has no removable panes, so nothing here was ever hidden by a ⊞ menu. The arm latch that
+holds the transmit queue was simply out of reach at those sizes, and is not now.
+
+### Fixed: the memory strip stops clipping its chips
+
+The favourites strip in the Phone, CW and Operating headers carried a hard 26-pixel ceiling with
+its vertical axis clipped — no scrollbar, no recovery. What sits under that ceiling is written in
+your type, not in pixels: the chips and the **+** and **=** buttons are sized against the
+browser's root font, and the strip reserves a horizontal scrollbar under them. At the ordinary
+16-pixel root font one row already comes to about 29 px against a 26 px ceiling, so the bottom of
+every chip and of both buttons was outside the clip **before** any UI zoom, any font bump, or any
+theme with a thicker border — on an axis that cuts rather than scrolls. There was no way to reach
+it.
+
+Re-tuning the number is not the fix. A pixel ceiling over type-sized content is wrong in kind:
+the two sides are denominated in different units and move on different inputs, so no constant
+makes the relationship hold.
+
+The ceiling is deleted, and the thing it was written to prevent — the old memory list growing the
+top bar with every save — is held by the shape that already holds it. The strip is exactly one
+row however many favourites you keep, bounded sideways, and scrolling horizontally past that;
+scrolling surplus chips sideways is the right behaviour for a chip strip and is what makes one
+row enough. The header does not get taller either: its cross-mode height floor is 44 px, well
+above the strip's row.
+
+### Fixed: opening Bonuses no longer flattens the Field Day sections board
+
+The Field Day column is the banner, the header, the operator row, the score tiles, the sections
+board, the **Bonuses** list and the log — and every one of them is a fixed height except the
+board. So the board was the only thing that could give, and it gave for all of them. Open the
+fifteen-row Bonuses list at 1200×750 and the board a club watches all weekend went to a blank
+strip, with the growth past that off the bottom of the log and no scrollbar in the chain.
+
+The cap on the Bonuses list was written as the fix for exactly this, and carried a comment saying
+so. It could never have been: the cap is a fraction of the same window the space is coming out
+of, so it bounds the list's own height and says nothing whatever about that height displacing its
+neighbours. **The cap stays, and its comment now says what it does** — it gives you all fifteen
+rows inside a list of its own, instead of about 290 px of checkboxes between you and the log.
+
+Two rules do the actual work, and neither is any use alone. The board carries a floor, on the box
+the outer column actually sizes — the old floor sat one level in, where the column could not see
+it, and could not shrink, so a squeezed board just painted through the section beneath it. And
+the column scrolls past that floor, because a floor with nothing above it turns a crush into a
+clip, which is worse.
+
+### Fixed: the scope splitter has travel at both ends, and RTTY's waterfall yields on a short window
+
+Three faces of one defect: pixel limits written onto strips whose height is a share of the window.
+
+- **The scope splitter's drag was dead at both ends.** Phone and CW handed the drag a minimum of
+  100 and 90 pixels against a stylesheet floor of 112, and both handed it a maximum of 420
+  against a ceiling that is 45 % of the effective window — 346 px on a 768-tall screen, 648 px on
+  a 1440-tall one. So at both ends the pointer moved, the number moved, and the panel did not.
+  The drag takes its limits from the same place the panel takes its size now, so the whole travel
+  is live. Nothing renders at a different height on a 768-tall window; only the ends of the drag
+  become real.
+- **RTTY's waterfall had a 120-pixel floor and no way out of it.** RTTY is the one scope in Nexus
+  with no splitter for you to drag, so that floor was unrecoverable: on a 768-tall window at
+  175 % UI zoom the effective viewport is 439 px and at 200 % it is 384, and a large part of that
+  was a floor you could not move. It yields now, and never claims more than 28 % of the window.
+  Its 220-pixel ceiling went with it — that one bit only above a roughly 1000-pixel window, where
+  it froze a tall display below the share every other size already gets.
+- **The Phone scope panel's base rule carried a dead floor and a dead ceiling.** Both shipped
+  hosts override them, so nothing was wrong on screen. But a dead rule holding a pixel floor
+  *and* a pixel ceiling is a loaded gun: a third host rendering that strip would have been
+  silently pinned between 120 and 220 px at every window and every zoom. Size belongs to the host
+  now, and the base rule keeps chrome only.
+
+RTTY's shorter floor only frees room above its transmit dock. Nothing else on that screen moves.
+
 ## [0.28.2] — 2026-08-03
 
 ### Changed: the Satellites section is a pass console
@@ -176,63 +365,6 @@ So at a high zoom everything grows except the dome and the az/el numbers on it. 
 — or a wide one at a large zoom, where the layout goes to one column — that is fixed: the dome is
 sized in text units there and grows with the rest of the interface.
 
-### Fixed: opening the full transponder list could take the schedule away
-
-On a bird with a lot of transmitters, the chooser collapses the extras behind **show all N** and
-**show N inactive**. Clicking both — two clicks, on a bird like one of the multi-mode cubesats —
-grew the frequencies panel past the height of the column it lives in. The schedule above it was
-squeezed to nothing (not scrolled to nothing: *gone*, with no way to scroll it back), and the
-bottom of the chooser itself was cut off — including the control that would have collapsed it
-again. Switching birds was the only way out.
-
-The frequencies panel now stops growing at a share of the column and scrolls inside itself, the
-schedule always keeps a few rows, and the whole left column has a scrollbar of last resort. Opening
-the full list still costs schedule rows — that is the right trade and it is what the panel is
-bounded by — but it can no longer cost you the schedule, and nothing goes out of reach.
-
-### Fixed: the arm bar could scroll away on a narrow or heavily zoomed window
-
-At small window widths, and on any window at a large UI zoom, the Satellites section becomes a
-single scrolling column. The bar carrying the bird's name, the readiness gates, **■ stop** and the
-✕ was meant to stay pinned at the top there. It never did — it scrolled off with everything else,
-so stopping a track meant scrolling back up to find the button. It stays put now.
-
-The **■ stop** button also sat in a different place from one moment to the next: the badge it lives
-in is redrawn every two seconds with the current antenna bearing, and the button moved with the
-text. It is anchored to the right-hand end of the bar now and stays there.
-
-### Fixed: a half-typed satellite contact can no longer be wiped out
-
-The log strip was rendered inside the bird's detail card, and it keeps everything you type in the
-form itself. So closing the bird with ✕, pressing Escape, clicking another bird, or Nexus simply
-losing its connection to SatNOGS mid-pass **deleted a contact you were part way through entering**
-— between overs, on a pass a few minutes long. The strip is now a sibling of the detail card and
-renders from your radio's state alone, so nothing about which bird is open, whether a pass is
-armed, or whether AOS has happened can reach it.
-
-
-### Fixed: the IC-9700 no longer flips in and out of satellite mode during a pass
-
-Reported on the bench: with native CI-V control the radio switched "from single frequency to the
-double frequency sat mode back and forth aggressivly". 0.27.0 tracked the same pass cleanly on the
-same rig.
-
-0.28.0 began stating the uplink VFO's mode for every held bird, where before it only did so when
-the uplink and downlink sidebands differed. On a Main/Sub Icom that mode write selects the Sub
-band, and the Sub selection is bound up with the rig's satellite mode — so birds that had never
-touched that path started driving it every few seconds. Reverted whole: the CI-V split path is
-back to exactly what shipped in 0.27.0.
-
-What comes back with it: on an FM bird the uplink VFO keeps whatever sideband the previous bird
-left there, because the mode is only sent when it differs from the downlink's. That is the 0.27.0
-behaviour, and it is being worked on again from what the radio actually does rather than from
-what the engine believes.
-
-### Made smaller: the Satellites log strip
-
-It shares a scrolling column with the sky dome, and at full size it pushed the dome off the top.
-Now compact enough to log a station while still watching where the bird is.
-
 ### Added: the grid square is a field you can type in the Satellites section
 
 The satellite log strip now has a **Grid** box, beside the two signal reports. The square was
@@ -253,10 +385,11 @@ and there the strip is 4 px *taller* than before rather than 48 px shorter. It i
 threshold — wider and narrower windows both get the full saving.
 
 The callbook still fills the box when it is blank, and it will **not** overwrite a square you
-typed. Nexus takes a **4-, 6- or 8-character** locator (`EN52`, `EN52XA`, `EN52XA25`) — every
-length ADIF carries, so every one of them uploads. Anything else holds the **Log** button until
-you fix it or clear it, and says so on the line above the button. A blank grid is not an error —
-most contacts have none.
+typed — and a callbook answer that is not a locator at all (a rover's `EN52/EN53`, free text)
+does not go into the box, because an empty box logs an empty grid. Nexus takes a **4-, 6- or
+8-character** locator (`EN52`, `EN52XA`, `EN52XA25`) — every length ADIF carries, so every one of
+them uploads. Anything else holds the **Log** button until you fix it or clear it, and says so on
+the line above the button. A blank grid is not an error — most contacts have none.
 
 **Not in the Phone and CW strips yet**, and that is a height decision rather than a verdict: the
 box costs each of those a wrapped line, and this change was asked to stay on the satellite
@@ -264,26 +397,17 @@ section. The case for putting it there is good and still open — a wrong callbo
 corrected in those cockpits today, and they are the ones that meet the rovers and portable
 stations whose square is wrong most often (2 m and 6 m and the VHF contests are grid-for-grid too).
 
-### Fixed: a callbook square could stop you logging
+### Changed: a bird's exchange has no park in it
 
-A callbook that answered with an 8-character locator (`FN31PR99` is a real one) filled the Grid
-box and was then refused by it, so the **Log** button went dead over a value nobody typed — mid
-pass, on a contact that would have logged fine a moment earlier. Eight characters are now
-accepted and logged whole, and a callbook answer that is not a locator at all (a rover's
-`EN52/EN53`, free text) no longer goes into the box: an empty box logs an empty grid, which is
-what happened before the box existed.
+There is no park on a satellite. The section asks the shared log strip for a **satellite**
+exchange, so the program picker and the park search are not built there at all, and the sky dome
+has that room instead. The Phone and CW strips are unchanged: hunting an activator is part of the
+exchange there, and the park row stays.
 
-### Removed: the POTA/SOTA row in the Satellites section
-
-There is no park on a satellite. The section now asks the shared log strip for a satellite
-exchange, so the program picker and the park search are not built there at all — which also gives
-the sky dome back the space they were taking in that column. The Phone and CW strips are
-unchanged: hunting an activator is part of the exchange there, and the park row stays.
-
-And no park reference reaches a satellite contact by any other route. Hunting a park in another
-section leaves a pending reference behind, and once that hunt ended or moved to a different park
-the leftover was being written to the satellite QSO as its POTA reference — a park contact in the
-log, with no row on screen to show it or clear it.
+No park reference reaches a satellite contact by any other route either. A hunt you started in
+another section leaves a pending reference behind, and the satellite exchange refuses it whatever
+that hunt is doing — so a pass cannot put a park contact in your log with no row on screen to
+show it or clear it.
 
 ## [0.28.0] — 2026-08-03
 
