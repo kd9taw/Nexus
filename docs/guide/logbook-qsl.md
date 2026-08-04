@@ -35,10 +35,16 @@ unconfirmed and stays in that list.
 
 ### Add or edit a QSO by hand
 
-Manual entry seeds the draft from **what you were actually running**: log a
-contact from the [Phone cockpit](phone.md) and the draft says SSB, from
-[CW](cw.md) it says CW — no more accidental "FT8" voice contacts. Edit any field
-inline; the store round-trips to ADIF, so an export re-imports without loss.
+Press **Log QSO** for the manual entry form. It seeds the draft from **what you
+were actually running**: log a contact from the [Phone cockpit](phone.md) and the
+draft says SSB, from [CW](cw.md) it says CW — no more accidental "FT8" voice
+contacts. Edit any field inline; the store round-trips to ADIF, so an export
+re-imports without loss.
+
+When the open form stands taller than the pane holding it — 1024×768 at a large
+UI zoom is where you meet this — the pane scrolls and the **Log** button that
+commits the contact is one drag away. It is a scrollbar rather than more room:
+nothing moves at any window size where the form already fits.
 
 ### Upload to LoTW
 

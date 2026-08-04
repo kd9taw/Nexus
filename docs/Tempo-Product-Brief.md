@@ -66,7 +66,7 @@ The core isn't the interface — it's the waveforms. Tempo gives you a two-tier 
 
 **Why "faster" is the headline — transmit/turnaround cycle per over** *(context, not a sensitivity benchmark — shorter = a snappier back-and-forth):* FT8 15 s · JS8 Normal 15 s · JS8 Fast 10 s · JS8 Turbo 6 s · **Tempo TempoFast 4 s**.
 
-For the full protocol deep-dive, see [TempoFast-Protocol.md](TempoFast-Protocol.md).
+For the full protocol deep-dive, see [Tempo-Protocol.md](Tempo-Protocol.md).
 
 ---
 
@@ -94,7 +94,7 @@ For the full protocol deep-dive, see [TempoFast-Protocol.md](TempoFast-Protocol.
 
 We'd rather under-promise. Here's exactly where things stand:
 
-- **The app is feature-complete and runs on Windows.** The installer is a ~210 MB per-user, **unsigned, cross-compiled** build that bundles WebView2 and Hamlib offline — no admin rights, no internet needed. Expect a SmartScreen warning ("More info → Run anyway"), as with any unsigned beta. macOS / Linux desktop builds are Phase 2.
+- **The app is feature-complete and runs on Windows.** The installer is a ~210 MB per-user, **unsigned, cross-compiled** build that bundles WebView2 and Hamlib offline — no admin rights, no internet needed. Expect a SmartScreen warning ("More info → Run anyway"), as with any unsigned build. Linux and Raspberry Pi ship alongside Windows, built from the same tree; macOS is not packaged yet.
 - **The waveforms have closed real links on the air**, including a completed two-station QSO (KD9TAW and N9UM, 6 m) on 2026-07-26. **Their published thresholds are still bench numbers** (TempoFast ~−15 dB, TempoDeep ~−18.6 dB) from AWGN and Rayleigh-fading sweeps in the test harness, not field results.
 - **On-air decode-rate-vs-SNR validation is the #1 remaining gate** — the single biggest reason the project needs operators.
 - **Shipped in v0.2.0 (beta):** **IR-HARQ** joint-turbo soft-combining is now live end-to-end and on by default; **TempoDeep full-passband acquisition** now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, `tempo.exe`, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. **The figures remain bench and cross-build measurements rather than on-air results.**

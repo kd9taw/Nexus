@@ -7,10 +7,12 @@ always-current version, updated alongside the code it documents.
 **Full docs on GitHub:**
 <https://github.com/kd9taw/Nexus/tree/main/docs>
 
-> **Beta.** Where a feature is opt-in, or a number comes from the bench rather than
-> the air, these pages say so. The FT8/FT4 core is the production tier and is built
-> to WSJT-X's behaviour. TempoFast and TempoDeep have closed real links on the air,
-> and their sensitivity figures are still bench numbers.
+> **1.0.0 closes the beta period, and the habit it was written with stays.** Where
+> a feature is opt-in, or a number comes from the bench rather than the air, these
+> pages say so, and each section guide ends with what that section does **not** do.
+> The FT8/FT4 core is the production tier and is built to WSJT-X's behaviour.
+> TempoFast and TempoDeep have closed real links on the air, and their sensitivity
+> figures are still bench numbers.
 
 New here? Start with [Quick Start](Quick-Start), [Install](Install), and
 [Rig Setup](Rig-Setup) on this wiki, then come back for the depth below.

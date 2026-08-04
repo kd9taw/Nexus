@@ -9,14 +9,16 @@ chaser. Windows, Linux and Raspberry Pi. GPL-3.0, built in Rust.
 &nbsp;·&nbsp; [Source](https://github.com/kd9taw/Nexus)
 &nbsp;·&nbsp; [hamradiotools.io](https://hamradiotools.io)
 
-> **Beta, and here is what that means.** The FT8/FT4 core is the production tier:
-> over a thousand automated tests, wire formats pinned by test, field-verified end
-> to end on a Yaesu FTDX10 and FT-991A and on native-CI-V Icom. APRS is on the air
-> with its internet feed and receive-only iGate confirmed against a live
-> connection. The FlexRadio native panadapter is opt-in and not yet confirmed on
-> hardware here. TempoFast and TempoDeep have closed real links on the air,
-> including a completed two-station QSO on 6 m, and their sensitivity figures are
-> still bench numbers. The installer is unsigned, so verify the published SHA-256.
+> **1.0.0 closes the beta period, and here is what that claims.** The FT8/FT4 core
+> is the production tier: over a thousand automated tests, wire formats pinned by
+> test, field-verified end to end on a Yaesu FTDX10 and FT-991A and on native-CI-V
+> Icom. APRS is on the air with its internet feed and receive-only iGate confirmed
+> against a live connection. It does **not** claim nothing is left, and what is
+> left stays printed rather than buried: the FlexRadio native panadapter is opt-in
+> and not yet confirmed on hardware here, and TempoFast and TempoDeep have closed
+> real links on the air — including a completed two-station QSO on 6 m — with
+> their sensitivity figures still bench numbers. The Windows installer is
+> unsigned, so verify the published SHA-256.
 
 ---
 

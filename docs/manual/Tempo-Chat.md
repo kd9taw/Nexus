@@ -152,11 +152,11 @@ For full legal framing and Part 97 citations see [Privacy and Coordinated QSY](P
 - **Free-text character set is restricted.** Only `0–9 A–Z space + - . / ?`. Lowercase is upcased; unsupported characters become `?`.
 - **Store-and-forward is single-hop only.** No multi-hop routing; a message queues until the direct recipient is heard present.
 - **Coordinated QSY does not provide privacy.** A capable listener can see the directive and follow. It is a QRM-avoidance and modest-obscurity aid only.
-- **The entire Tempo/TempoFast/TempoDeep layer is beta (v0.2.0 beta).** It has not been tested in a real on-air net or a multi-station pileup. Honest on-air reports welcome.
-- **TempoDeep full-passband acquisition is pending on-air validation** (noted in `docs/TempoFast-Protocol.md §9`).
+- **The entire Tempo/TempoFast/TempoDeep layer is still experimental.** It has closed real links on the air — first decode 2026-07-21, first two-station QSO 2026-07-26 — but it has not been tested in a real on-air net or a multi-station pileup, and every sensitivity figure published for it is a simulation number. Honest on-air reports welcome.
+- **TempoDeep full-passband acquisition is pending on-air validation** (noted in `docs/Tempo-Protocol.md §9`).
 - **Relay nodes are not implemented.** There is no intermediate relay or digipeater path.
 - **Desktop-only (Tauri v2).** No mobile or web client.
 
 ---
 
-*See also: [Tiers TempoFast vs TempoDeep](../TempoFast-Protocol.md) · [Privacy and Coordinated QSY](Privacy-and-Coordinated-QSY.md) · [Operating Guide](Operate-FT8-FT4.md) · [Frequency Plan](Frequency-Plan.md) · [Architecture and Protocol](Architecture-and-Protocol.md)*
+*See also: [Tiers TempoFast vs TempoDeep](../Tempo-Protocol.md) · [Privacy and Coordinated QSY](Privacy-and-Coordinated-QSY.md) · [Operating Guide](Operate-FT8-FT4.md) · [Frequency Plan](Frequency-Plan.md) · [Architecture and Protocol](Architecture-and-Protocol.md)*

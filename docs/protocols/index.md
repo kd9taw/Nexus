@@ -1,15 +1,15 @@
 # Protocols in Nexus — which mode, when
 
 Nexus operates four digital tiers over one shared message layer. Two are the proven
-WSJT-X standards you already know; two are new, experimental protocols in open beta.
-This page is the picker. The short version:
+WSJT-X standards you already know; two are new and still experimental. This page is
+the picker. The short version:
 
 - **FT8 / FT4** — the proven, interoperable workhorses. Use these for everyday DX and
   contesting. Nothing experimental here.
-- **[TempoFast](ft1.md)** — new. A 4-second cycle for *fast keyboard chat* down in the
-  noise. Open beta.
-- **[TempoDeep](dx1.md)** — new. A robust, fading-resilient tier for rough paths. Open
-  beta.
+- **[TempoFast](tempofast.md)** — new. A 4-second cycle for *fast keyboard chat* down in
+  the noise. Works on the air; its thresholds are bench numbers.
+- **[TempoDeep](tempodeep.md)** — new. A robust, fading-resilient tier for rough paths.
+  Same caveat.
 
 Every tier carries the **same 77-bit WSJT-X message payload** and the same
 **LDPC(174,91) + CRC-14** error correction — the same callsigns, grids, reports, and
@@ -22,9 +22,9 @@ Performance figures for **TempoFast and TempoDeep are bench numbers** from simul
 on-air measurements, though both tiers have closed real links on the air. FT8/FT4 figures are the commonly-cited operational values. Thresholds
 are 50%-decode points in a 2500 Hz reference bandwidth.
 
-| | **FT8** | **FT4** | **[TempoFast](ft1.md)** | **[TempoDeep](dx1.md)** |
+| | **FT8** | **FT4** | **[TempoFast](tempofast.md)** | **[TempoDeep](tempodeep.md)** |
 |---|---|---|---|---|
-| Status | proven standard | proven standard | **open beta** | **open beta** |
+| Status | proven standard | proven standard | **experimental** | **experimental** |
 | Best for | max sensitivity, everyday DX | fast contesting | fast keyboard chat | fading / rough paths |
 | T/R cycle | 15 s | 7.5 s | **4 s** | 15 s |
 | Modulation | 8-GFSK | 4-GFSK | 4-CPM (coherent) | 8-FSK (non-coherent) |
@@ -40,22 +40,23 @@ are 50%-decode points in a 2500 Hz reference bandwidth.
   the most sensitive single-shot mode here and everyone runs it.
 - **Contesting, want to move fast but keep the ecosystem?** Use **FT4.**
 - **Want an actual conversation — ragchew, keyboard-to-keyboard — while still weak?**
-  Use **[TempoFast](ft1.md).** The 4-second cycle is what makes it feel like talking, and
+  Use **[TempoFast](tempofast.md).** The 4-second cycle is what makes it feel like talking, and
   IR-HARQ lets weak retransmissions combine instead of being wasted. Just remember:
   **TempoFast is not more sensitive than FT8 — it is faster.** It trades ~6 dB for that
   speed.
-- **Path fading, fluttering, or long and marginal?** Use **[TempoDeep](dx1.md).** It gives
+- **Path fading, fluttering, or long and marginal?** Use **[TempoDeep](tempodeep.md).** It gives
   up a little raw reach to be nearly immune to the fading that collapses coherent
   modes.
 
 ## The honesty banner
 
-TempoFast and TempoDeep are **experimental modes in open beta.** The waveforms are implemented
-and TempoFast's IR-HARQ is live, but every sensitivity number is from **simulation** — AWGN
-and Rayleigh-fading bench sweeps, re-validated in the test suite and the Windows
-cross-build. They are bench numbers rather than field results. Decode rate against signal level on real bands is
-the project's #1 remaining gate, and honest field reports are the most valuable thing
-a beta operator can send back.
+TempoFast and TempoDeep are **experimental modes.** The waveforms are implemented and
+TempoFast's IR-HARQ is live, and both tiers have closed real links on the air — but every
+sensitivity number is from **simulation**: AWGN and Rayleigh-fading bench sweeps,
+re-validated in the test suite and the Windows cross-build. They are bench numbers rather
+than field results. Decode rate against signal level on real bands is the project's #1
+remaining gate, and an honest field report is the most valuable thing an operator can
+send back.
 
 Two practical notes:
 
@@ -68,8 +69,8 @@ Two practical notes:
 
 ---
 
-**Go deeper:** [TempoFast explained](ft1.md) · [TempoDeep explained](dx1.md) · the full DSP and
-math in [TempoFast-Protocol.md](../TempoFast-Protocol.md) · running alongside WSJT-X and your
+**Go deeper:** [TempoFast explained](tempofast.md) · [TempoDeep explained](tempodeep.md) · the full DSP and
+math in [Tempo-Protocol.md](../Tempo-Protocol.md) · running alongside WSJT-X and your
 logger in [interop.md](../interop.md).
 
 *License: GPL-3.0 · Repository: <https://sourceforge.net/projects/nexus-ham-radio>*

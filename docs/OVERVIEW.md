@@ -81,9 +81,12 @@ mode** can instead ride an upstream WSJT-X/JTDX decode stream over UDP :2237 —
 another app owns the rig. **Always-on decode** means there is no Monitor toggle to forget: the
 decoder runs every RX slot regardless of TX state.
 
-*Not yet:* Fox role, contest modes (NA VHF / RTTY RU / WW Digi), WSPR-as-a-mode,
-Q65/MSK144. (Per-QSO WAV save has since shipped —
-Settings ▸ Operating ▸ Save received audio.)
+*Not yet:* the Fox role (running a DXpedition end) and contest modes (NA VHF / RTTY RU /
+WW Digi). **Q65, FST4, FST4W, MSK144, JT65 and WSPR have since shipped and transmit**, each
+keeping its own operating rhythm rather than inheriting FT8's — MSK144 waits twelve transmit
+periods before giving up where FT8 waits three, and WSPR and FST4W never touch the QSO
+sequencer at all. Per-QSO WAV save has shipped too — Settings ▸ Operating ▸ Save received
+audio.
 
 ## The CW cockpit
 
@@ -320,12 +323,18 @@ POTA/SOTA hunter, Field Day mode, Connect map, setup/CAT.
 
 **Casual-grade by design:** CW and Phone cockpits (no contests).
 
-**Beta pending on-air validation:** TempoFast/TempoDeep chat tiers.
+**On the air, with bench numbers still to confirm:** the TempoFast/TempoDeep chat tiers.
+They have closed real links — first decode 2026-07-21, first two-station QSO 2026-07-26 —
+and every published sensitivity figure for them is a simulation number until on-air
+decode-rate-versus-SNR reports come back.
 
-**Not yet:** Fox role, contest modes, WSPR-as-a-mode, Q65/MSK144, mobile/web clients. (Shipped since this list was first written: rotator control with
-satellite pass auto-track, the Satellites section, 23 cm/IC-9700 support, HRDLog.net, the
-headphone monitor, and the native ITU-R P.533 propagation engine.) The Windows installer is
-the supported package; the code builds on Linux.
+**Not yet:** the Fox role (running a DXpedition end), contest modes (NA VHF, RTTY RU,
+WW Digi), transmit-side iGating (deliberately never — it means a radio keying up
+unattended), and mobile/web clients.
+
+**Windows, Linux and Raspberry Pi build from the same tree and ship together every
+release:** an NSIS installer, an AppImage, a PC `.deb`, and a `.deb` per live Raspberry
+Pi OS base.
 
 ---
 

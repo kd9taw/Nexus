@@ -31,8 +31,9 @@ whether it *does*. Please open issues with as much detail as you can — band,
 dial, mode/tier, distance, conditions, and what you saw versus what you
 expected.
 
-Published Windows binaries are **cross-compiled beta** builds. Treat them
-accordingly and report what breaks.
+Published Windows binaries are **cross-compiled and unsigned** — built on Linux
+targeting Windows, so SmartScreen warns and the SHA-256 published with each release
+is how you check the file. Report what breaks.
 
 ---
 

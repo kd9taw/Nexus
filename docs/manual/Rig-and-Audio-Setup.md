@@ -261,7 +261,7 @@ Frequency is polled continuously — a manual VFO knob turn is reflected in the 
 ## Limits / Not Yet
 
 - **Rig auto-detection requires the `radio` Cargo feature.** The headless/UI-dev build returns empty lists for ports, audio, and detected rigs.
-- **Bundled Hamlib is Windows-only.** Linux and macOS require `rigctld` on PATH.
+- **Bundled Hamlib is Windows-only.** Linux and the Raspberry Pi use the system Hamlib: the `.deb` pulls `libhamlib-utils` in for you, and AppImage users install it once (`sudo apt install libhamlib-utils`). macOS is not packaged and needs `rigctld` on PATH.
 - **Generic-cable rigs always need a manual model pick.** Only native-USB rigs that embed a model name in the USB product string auto-match a Hamlib model.
 - **The curated model table is ~50 entries.** Use `rigctl -l` for the full list. Out-of-table rigs can be entered by Hamlib model number but receive no friendly name in the dropdown.
 - **Serial PTT (RTS/DTR) requires the `serial` Cargo feature.** Without it, falls back silently to VOX — no hardware keying, no error shown.

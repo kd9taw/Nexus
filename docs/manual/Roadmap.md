@@ -37,7 +37,7 @@ Everything else in digital modes is downstream of this. Nexus ships bench-valida
 - Full-band CW skimmer (multi-signal decode) — the shipped CW decoder is single-signal only.
 
 **Platform**
-- macOS and Linux desktop packages — the headless Rust core and test suite build and pass on Linux today; the Tauri desktop shell is packaged for Windows only. macOS `.dmg` and Linux `.AppImage`/`.deb` are in the queue.
+- macOS desktop packages. Windows, Linux and Raspberry Pi already build from the same tree and ship together every release — an NSIS installer, an AppImage, a PC `.deb`, and a `.deb` per live Raspberry Pi OS base. macOS is a packaging and testing job rather than a port, since the codebase is cross-platform Rust and Tauri.
 
 ---
 

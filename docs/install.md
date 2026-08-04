@@ -1,25 +1,29 @@
 # Install & Verify
 
-Everything you need to install Nexus on Windows, verify the download, upgrade,
-uninstall, and know where your data lives. If you just want to get on the air,
-the [Quick Start](quick-start.md) covers install in three paragraphs; come here
-for the complete picture.
+Everything you need to install Nexus, verify the download, upgrade, uninstall, and
+know where your data lives. Windows is written out step by step below; Linux and
+Raspberry Pi are packaged too and are covered where they differ. If you just want to
+get on the air, the [Quick Start](quick-start.md) covers install in three paragraphs;
+come here for the complete picture.
 
 ---
 
 ## What you need
 
-- **Windows 10 or 11, 64-bit (x64).** Windows is the supported platform today.
-  The codebase is cross-platform Rust/Tauri and builds on Linux, but only the
-  Windows installer ships.
+- **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **64-bit Raspberry Pi**
+  (Pi 3/4/5). All three build from the same tree and ship together every release.
+  macOS does not ship yet.
 - **A radio with CAT + audio**, or a network rig (FlexRadio, remote `rigctld`).
   You can install and explore without a radio — the wizard and every panel open —
   but you need a rig connected to transmit.
-- **Nothing else to install.** The installer bundles the **WebView2** runtime and
-  **Hamlib** (`rigctld.exe` plus its DLLs), so CAT and rotor control work offline
-  out of the box. There is no separate Hamlib, WebView2, or driver download for
+- **Nothing else to install on Windows.** The installer bundles the **WebView2**
+  runtime and **Hamlib** (`rigctld.exe` plus its DLLs), so CAT and rotor control work
+  offline out of the box. There is no separate Hamlib, WebView2, or driver download for
   supported radios. (USB bridge-chip drivers are the one exception — see
   [Troubleshooting → drivers](troubleshooting.md#driver-hint-usb-bridge-chip-detected-but-the-rig-wont-open).)
+  On **Linux and the Pi**, CAT uses the system Hamlib instead: the `.deb` pulls
+  `libhamlib-utils` in automatically, and AppImage users run
+  `sudo apt install libhamlib-utils` once.
 
 The installer is roughly **210 MB** because it carries the WebView2 runtime,
 Hamlib, and the DSP stack so a bare PC works with no internet.
@@ -28,7 +32,22 @@ Hamlib, and the DSP stack so a bare PC works with no internet.
 
 ## Download
 
-The installer is `Nexus_<version>_x64-setup.exe`. Get it from:
+Five files ship per release:
+
+| File | Platform |
+|---|---|
+| `Nexus_<version>_x64-setup.exe` | Windows 10/11 x64 — NSIS, per-user, bundles WebView2 and Hamlib |
+| `Nexus_<version>_amd64.AppImage` | Linux, portable — one file, updates itself in place |
+| `Nexus_<version>_pc_amd64.deb` | Debian / Ubuntu on a PC |
+| `Nexus_<version>_pi_arm64_bookworm.deb` | Raspberry Pi OS bookworm, 64-bit |
+| `Nexus_<version>_pi_arm64_trixie.deb` | Raspberry Pi OS trixie, 64-bit |
+
+The `.deb` names changed at 1.0.0. Before that the PC and Pi packages were told apart
+only by `amd64` versus `arm64`, so picking the right one meant already knowing that
+`amd64` means "PC" here. They say `pc` and `pi` now, and the two Pi files name the Pi
+OS base they are built against — match yours (`cat /etc/os-release`).
+
+Get them from:
 
 - **SourceForge (primary):** <https://sourceforge.net/projects/nexus-ham-radio/files/latest/download>
 - **SourceForge (mirror):** the Nexus project files section
@@ -83,10 +102,21 @@ only.
 
 ## Upgrading
 
-There is **no auto-update**. To upgrade, download the newer installer and run it —
-it installs over the existing version in place. Your settings and logbook live in
-a separate location (below) and are left untouched, so upgrading never disturbs
-your data.
+**Nexus updates itself on Windows and on the Linux AppImage.** A new version
+downloads quietly in the background and then offers to install. Nothing installs
+behind your back and nothing happens on a schedule: the button waits for you, and it
+stands down while you are transmitting, tuning, in a contact or running CQ, and tells
+you which — restarting mid-contact would lose the contact. Every update is signed and
+verified before it is applied, and an altered installer is refused.
+
+**The `.deb` packages are managed by your package system** — the PC one and both
+Raspberry Pi ones. Nexus notifies you that a new version exists rather than replacing
+a file apt owns.
+
+To upgrade by hand at any time, download the newer file and install it over the
+existing version. Your settings and logbook live in a separate location (below) and
+are left untouched, so upgrading never disturbs your data — 1.0.0 installs over 0.27.0
+and reads your existing log, settings and layouts as they are.
 
 To confirm you're on the build you expect, check the build hash in the Settings
 header against the release you installed.
@@ -105,27 +135,31 @@ data folders below by hand after uninstalling.
 
 ## Where your data lives
 
-| What | Location | Notes |
-|---|---|---|
-| Settings | `%APPDATA%\tempo\settings.json` | JSON, camelCase keys; partial files merge with defaults, so it's safe to hand-edit |
-| **Logbook** | `%APPDATA%\tempo\log.adi` | ADIF 3.1.4 — **this is the file to back up** |
-| Received-audio recordings | `%APPDATA%\tempo\recordings\` | Only if you enable audio saving; can get large |
-| UI state | `%LOCALAPPDATA%\com.kd9taw.tempo\` | Theme, UI scale, panel layout, wizard-seen flag, board filters |
+Windows keys off `%APPDATA%`; Linux and Raspberry Pi key off `$XDG_CONFIG_HOME`, which
+is `~/.config` unless you have set it. The folder is called `tempo` on both, from the
+app's original name.
+
+| What | Windows | Linux / Raspberry Pi | Notes |
+|---|---|---|---|
+| Settings | `%APPDATA%\tempo\settings.json` | `~/.config/tempo/settings.json` | JSON, camelCase keys; partial files merge with defaults, so it's safe to hand-edit |
+| **Logbook** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.4 — **this is the file to back up** |
+| Received-audio recordings | `%APPDATA%\tempo\recordings\` | `~/.config/tempo/recordings/` | Only if you enable audio saving; can get large |
+| UI state | `%LOCALAPPDATA%\com.kd9taw.tempo\` | the webview's own store for `com.kd9taw.tempo` | Theme, UI scale, panel layout, wizard-seen flag, board filters |
 
 Two things worth understanding:
 
 - **`log.adi` is the irreplaceable file.** Everything else can be rebuilt or
   re-entered; your contacts can't. Back it up. It's plain ADIF, so any logger can
   read it, and Nexus round-trips it faithfully.
-- **UI preferences don't roam with settings.** Theme, UI scale, and layout live in
-  the WebView2 store under `%LOCALAPPDATA%\com.kd9taw.tempo`, not in
+- **UI preferences don't roam with settings.** Theme, UI scale, and layout live in the
+  webview's own store — WebView2 on Windows, WebKitGTK on Linux and the Pi — not in
   `settings.json`. Copying `settings.json` to another machine carries your rig and
-  station config but not your theme or window layout, and clearing that store
-  resets them to defaults.
+  station config but not your theme or window layout, and clearing that store resets
+  them to defaults.
 
 Credentials for online services (LoTW, QRZ, ClubLog, eQSL, HRDLog) are **not** in
-any of these files — they live in the Windows Credential Manager (the OS keychain)
-and are never written to config or logs.
+any of these files — they live in the OS keychain (Windows Credential Manager, or the
+Secret Service keyring on Linux and the Pi) and are never written to config or logs.
 
 ---
 

@@ -8,7 +8,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Raspberry%20Pi-0078D6)
 [![Release](https://img.shields.io/github/v/release/kd9taw/Nexus?label=release)](https://github.com/kd9taw/Nexus/releases/latest)
 [![Downloads](https://img.shields.io/sourceforge/dt/nexus-ham-radio?label=downloads)](https://sourceforge.net/projects/nexus-ham-radio/files/)
-![Status](https://img.shields.io/badge/status-beta-orange)
+![Status](https://img.shields.io/badge/status-1.0-brightgreen)
 
 [![Download](https://img.shields.io/badge/⬇_Download-Windows_·_Linux_·_Pi-0078D6?style=for-the-badge&logo=windows)](https://github.com/kd9taw/Nexus/releases/latest)
 [![Operator manual](https://img.shields.io/badge/📖_Operator_manual-docs-8957e5?style=for-the-badge)](docs/manual/)
@@ -268,9 +268,20 @@ logs, and never shown back to the UI beyond "configured."
 
 ## Quick start
 
-1. **[Download](https://github.com/kd9taw/Nexus/releases/latest)** the installer for your platform.
-   Windows x64 is offline and per-user with no admin needed; Linux ships a `.deb` and an AppImage;
-   Raspberry Pi (64-bit, Pi 3/4/5) has its own arm64 `.deb`.
+1. **[Download](https://github.com/kd9taw/Nexus/releases/latest)** the file for your platform.
+   Every release carries all five, built from the same tree:
+
+   | File | Platform |
+   |---|---|
+   | `Nexus_1.0.0_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
+   | `Nexus_1.0.0_amd64.AppImage` | **Linux, portable** — one file, runs from anywhere, updates itself in place |
+   | `Nexus_1.0.0_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed, pulls `libhamlib-utils` in for CAT |
+   | `Nexus_1.0.0_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
+   | `Nexus_1.0.0_pi_arm64_trixie.deb` | **Raspberry Pi OS trixie**, 64-bit (Pi 3/4/5) |
+
+   The `.deb` names are new in 1.0.0. The PC and Pi packages used to be told apart only by `amd64`
+   versus `arm64`, so picking the right one meant already knowing that `amd64` means "PC" here —
+   the names say `pc` and `pi` now, and the Pi files name their OS base.
 2. Plug in the radio, open **Settings ▸ Rig & Audio**, click **Detect my radio**.
 3. Answer the first-run wizard: callsign, grid, license class, and what you want to do.
 4. Watch decodes arrive. Double-click a station, the sequencer runs the QSO, and the contact lands
@@ -285,6 +296,11 @@ New here? Start with **[Getting Started](docs/manual/Getting-Started.md)**.
 > On a slower Raspberry Pi, **Settings ▸ Decode depth ▸ Fast** keeps FT8/FT4 decoding in real time.
 
 ## Status — the honest version
+
+**1.0.0 closes the beta period**, and what that claims is narrow: the modes, the rig control, the
+logbook and the awards engine have been run on the air through that period, on more than one
+station and on rigs the author does not own. It does not claim nothing is left. Every line below
+still says what a thing does *not* do, and so does every entry in the changelog.
 
 - The **FT8/FT4 tier is the production core**: operational parity with stock WSJT-X, verified
   against a 207-row behavior matrix, over a thousand automated tests, wire formats pinned by test,

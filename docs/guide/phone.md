@@ -63,6 +63,14 @@ Each entry is a keyboard tab stop and reads its reason with the panel name;
 of the app. If the list outgrows your window it scrolls inside the menu, so **Undo
 last change** and **Reset layout** stay reachable.
 
+**The control column.** Band Activity, the voice keyer and the rig-scope / DSP /
+RX-DSP strips share the leading column, and none of them can shrink. When the
+stack stands taller than the space it has — a small window, or a large UI zoom —
+that column scrolls, so the NR slider, the AGC chips, the DSP toggles and the
+keyer's F-keys are always reachable rather than rendered past the edge. **PTT**,
+**Stop TX** and **Tune** are not in the pane region at all, so nothing you do in
+⊞ Panels and no window size moves them.
+
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->
 
 ## Core workflows
@@ -101,7 +109,10 @@ The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
    automatically). Choose your recording mic in
    [Settings ▸ Audio](settings-reference.md#audio) — on a digital setup the
    default input is the rig's RX audio, so point "Voice mic (recording)" at your
-   actual microphone.
+   actual microphone. Both controls that start a recording — the **●** button and
+   an empty slot — carry that warning, so it reaches you where you are standing
+   when it matters. Recording the rig's RX audio into a slot is how a canned call
+   goes on the air with the wrong voice in it.
 2. Press a slot to play it. Playback keys PTT for the duration; **Esc** aborts.
 
 If you never use it, untick **Voice Keyer** in ⊞ Panels and the pane goes away.
@@ -121,7 +132,12 @@ session never leaves you with a corrupt file.
 
 The log strip pre-fills **59 / SSB**. Log a contact and — because the draft is
 seeded from what you were actually running — it says SSB, never an accidental
-"FT8." During [Field Day](contesting-pota.md), the strip becomes an FD entry with
+"FT8." The **Log** button sits inside the log pane at every window from 1024×768
+up, so committing a contact never means scrolling to find the button that commits
+it. The strip takes its name from the pane head above it (**LOG**), which is also
+what a screen reader reads — the printed repeat and the strip's own inner card
+are gone, and that is where the height came from. Nothing is in a smaller type.
+During [Field Day](contesting-pota.md), the strip becomes an FD entry with
 class and section, sharing dupe checking with the other cockpits, and each
 contact routes to the event log.
 

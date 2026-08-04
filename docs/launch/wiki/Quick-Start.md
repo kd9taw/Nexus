@@ -1,24 +1,32 @@
 # Quick Start — from install to your first FT8 contact
 
-The short path from a downloaded installer to a logged QSO. It assumes a Windows
-PC, a radio with a USB (or network) connection, and a working antenna. By the
-end you'll have Nexus installed, your station and rig set up, a cockpit full of
-live decodes, and one FT8 QSO in your log — in about 15 minutes.
+The short path from a downloaded installer to a logged QSO. The install step below
+is written for Windows; Linux and Raspberry Pi take the same path from step 2, and
+[Install](Install) covers all three. It assumes a radio with a USB (or network)
+connection and a working antenna. By the end you'll have Nexus installed, your
+station and rig set up, a cockpit full of live decodes, and one FT8 QSO in your log
+— in about 15 minutes.
 
-> **Beta.** The FT8/FT4 core is built to WSJT-X's behaviour and exercised on the air
-> daily, and that is the production part of the app. TempoFast and TempoDeep have
-> closed real links on the air, including a completed two-station QSO on 6 m, and
-> their published threshold figures are still bench numbers. Field reports are what
-> closes that gap.
+> **1.0.0 closes the beta period.** The FT8/FT4 core is built to WSJT-X's behaviour
+> and exercised on the air daily, and that is the production part of the app.
+> TempoFast and TempoDeep have closed real links on the air, including a completed
+> two-station QSO on 6 m, and their published threshold figures are still bench
+> numbers. Field reports are what closes that gap.
 
 ---
 
 ## 1. Install and get past SmartScreen (~3 min)
 
 [**⬇ Download the latest release**](https://github.com/kd9taw/Nexus/releases/latest)
-— `Nexus_<version>_x64-setup.exe`, roughly 210 MB. It's a per-user install and
-needs no administrator rights; WebView2 and Hamlib are bundled, so there's
-nothing else to install.
+— on Windows that is `Nexus_<version>_x64-setup.exe`, roughly 210 MB. It's a
+per-user install and needs no administrator rights; WebView2 and Hamlib are
+bundled, so there's nothing else to install.
+
+On Linux take `Nexus_<version>_amd64.AppImage` (portable, one file) or
+`Nexus_<version>_pc_amd64.deb`; on a 64-bit Raspberry Pi take
+`Nexus_<version>_pi_arm64_bookworm.deb` or `..._pi_arm64_trixie.deb` to match your
+Pi OS base. The `.deb` names say `pc` and `pi` so you do not have to know that
+`amd64` means "PC" to pick the right file.
 
 Run it. Because the binaries are cross-compiled and **unsigned**, Windows
 SmartScreen shows a blue *"Windows protected your PC"* dialog. This is expected.

@@ -1,14 +1,13 @@
 # TempoDeep — the robust tier
 
-*The fading-resilient companion to [TempoFast](ft1.md), by KD9TAW.
+*The fading-resilient companion to [TempoFast](tempofast.md), by KD9TAW.
 This page is the approachable story; the full DSP is in
-[TempoFast-Protocol.md](../TempoFast-Protocol.md).*
+[Tempo-Protocol.md](../Tempo-Protocol.md).*
 
-> **Read this first.** TempoDeep is **experimental and in open beta.** Its sensitivity and
-> fading figures are **bench numbers** from sweeps rather than on-air measurements.
-> The use cases below (NVIS, polar, rough conditions) are stated as **design
-> intent**, not as demonstrated results. On-air characterization is the goal of the
-> beta.
+> **Read this first.** TempoDeep is **experimental.** Its sensitivity and fading figures
+> are **bench numbers** from sweeps rather than on-air measurements. The use cases below
+> (NVIS, polar, rough conditions) are stated as **design intent**, not as demonstrated
+> results. On-air characterization is what is still owed.
 
 ---
 
@@ -19,7 +18,7 @@ opposite solutions.
 
 One is simple **weakness** — the signal is just barely above the noise. The fix is
 sensitivity: integrate longer, track the carrier's phase, extract every last bit of
-information. That is what a *coherent* mode like [TempoFast](ft1.md) (or, more sensitively,
+information. That is what a *coherent* mode like [TempoFast](tempofast.md) (or, more sensitively,
 FT8) does well.
 
 The other is **fading** — the signal is strong enough on average, but multipath and
@@ -98,7 +97,7 @@ A TempoDeep decode reports no redundancy version because there is none.
 ## What TempoDeep is designed for
 
 These are the conditions the mode was **designed** to handle. They are design intent,
-not proven claims — confirming them on the air is part of the beta:
+not proven claims — confirming them on the air is what is still owed:
 
 - **NVIS and regional nets** — near-vertical-incidence skywave, where signals are
   strong but the near-vertical path fades and flutters.
@@ -107,7 +106,7 @@ not proven claims — confirming them on the air is part of the beta:
 - **Rough, disturbed conditions generally** — the marginal-DX openings and unsettled
   bands where a coherent mode's decode rate collapses but a robust one hangs on.
 
-If the path is stable and you want speed, use [TempoFast](ft1.md). If the path is fading,
+If the path is stable and you want speed, use [TempoFast](tempofast.md). If the path is fading,
 flaky, or long-and-marginal and you are willing to slow to a 15-second cycle for
 reliability, that is TempoDeep. In Nexus the choice is a visible per-transmission toggle —
 both tiers carry the identical message, just at different speed-versus-robustness
@@ -116,7 +115,7 @@ points.
 ---
 
 **More detail:** the TempoDeep waveform, chirp sync, and full-passband scan — with exact
-constants — are documented in [TempoFast-Protocol.md §7.2](../TempoFast-Protocol.md). To choose
+constants — are documented in [Tempo-Protocol.md §7.2](../Tempo-Protocol.md). To choose
 between the tiers, see the [protocol overview](index.md).
 
 *License: GPL-3.0 · Repository: <https://sourceforge.net/projects/nexus-ham-radio>*

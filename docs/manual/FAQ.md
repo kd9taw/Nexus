@@ -12,7 +12,7 @@ Yes. Nexus is **GPLv3** open-source software. Source lives at [kd9taw/nexus](htt
 
 ### What operating systems does Nexus run on?
 
-**Windows** is the current desktop target. The Tauri v2 desktop shell is packaged for Windows only; no mobile or web client exists. The headless Rust core builds and tests on Linux, and macOS/Linux desktop packaging is planned — see [Roadmap](Roadmap.md). Non-Windows users who want to test the core library can build from source.
+**Windows, Linux and Raspberry Pi** all ship, built from the same tree every release: an NSIS installer, an AppImage, a PC `.deb`, and a `.deb` per live Raspberry Pi OS base. **macOS is not packaged yet** and no mobile or web client exists — see [Roadmap](Roadmap.md).
 
 ---
 
@@ -113,7 +113,7 @@ Yes — a live single-signal decoder follows the station at your marker pitch an
 
 ### Does Nexus run on Linux or macOS?
 
-The headless Rust core builds and tests on Linux. The Tauri v2 desktop shell is packaged for Windows only today; macOS and Linux desktop builds are planned. If you want to experiment on Linux, you can build from source — the core library and modem crates compile without a Windows-specific dependency. See [Building from Source](Building-from-Source.md).
+The desktop shell is packaged for **Windows, Linux and Raspberry Pi**, all from the same tree. **macOS is not packaged yet**; the codebase is cross-platform Rust and Tauri, so it is a packaging and testing job rather than a port. You can also build any platform from source — see [Building from Source](Building-from-Source.md).
 
 ---
 
@@ -151,9 +151,9 @@ In Companion source mode, Nexus can also ride an upstream WSJT-X or JTDX decode 
 
 ### How do I help the project?
 
-**On-air TempoFast/TempoDeep reports are the highest-value contribution.** Report what you observed: band, dial frequency, mode/tier (TempoFast or TempoDeep), path distance, conditions (time UTC, solar conditions if notable), and what you decoded vs. what you expected. Open an issue at [kd9taw/nexus](https://sourceforge.net/projects/nexus-ham-radio) with that data. The simulation thresholds (TempoFast ≈ −15 dB AWGN, TempoDeep ≈ −18.6 dB AWGN) need real-path confirmation before the beta label comes off.
+**On-air TempoFast/TempoDeep reports are the highest-value contribution.** Report what you observed: band, dial frequency, mode/tier (TempoFast or TempoDeep), path distance, conditions (time UTC, solar conditions if notable), and what you decoded vs. what you expected. Open an issue at [kd9taw/nexus](https://sourceforge.net/projects/nexus-ham-radio) with that data. The simulation thresholds (TempoFast ≈ −15 dB AWGN, TempoDeep ≈ −18.6 dB AWGN) still need real-path confirmation; that is the one gate 1.0 did not close.
 
-Bug reports, pull requests, and build feedback for non-Windows platforms are also welcome via the same repo.
+Bug reports, pull requests, and build feedback from every platform are also welcome via the same repo.
 
 ---
 

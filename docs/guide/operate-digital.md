@@ -176,13 +176,17 @@ On top of the waveform:
 
 ### Honest status of TempoFast/TempoDeep
 
-Every TempoFast and TempoDeep performance number above is a **bench figure** (AWGN and
-fading sweeps); none are proven on the air yet. **TempoFast does not beat FT8 on raw
-sensitivity — it trades roughly 6 dB of raw single-shot sensitivity for a
-nearly 4× faster cycle plus HARQ.** On-air
-decode-rate-versus-SNR reports are the single most valuable thing a beta tester
-can contribute. The FT8/FT4 tier carries the daily-driver load while this layer
-earns its stripes.
+Two questions live here and they have different answers. **Do the tiers work on
+the air? Yes** — the first over-the-air TempoFast decode was on 2026-07-21 and the
+first two-station Tempo QSO (KD9TAW and N9UM, 6 m) completed on 2026-07-26, which
+retires the question every new waveform faces. **Did the threshold numbers come
+from the air? No.** Every TempoFast and TempoDeep performance figure above is a
+**bench number** from AWGN and fading sweeps, and it is labelled that way for that
+reason. **TempoFast does not beat FT8 on raw sensitivity — it trades roughly 6 dB
+of raw single-shot sensitivity for a nearly 4× faster cycle plus HARQ.** What is
+still owed is decode rate against signal level on real paths, and an on-air report
+is the single most useful thing you can send. The FT8/FT4 tier carries the
+daily-driver load meanwhile.
 
 ## Related guides
 

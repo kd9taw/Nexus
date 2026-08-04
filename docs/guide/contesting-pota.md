@@ -50,6 +50,14 @@ power multiplier + a 15-item ARRL bonus checklist = total. **Winter Field Day
 deliberately shows raw counts only** — its objectives math isn't ARRL's, and
 Nexus won't display a fake total.
 
+Opening **Bonuses** does not cost you the sections board. The board is the only
+part of the Field Day column that can give height, so it used to give it for
+everything else and collapse to a blank strip when the fifteen-row checklist
+opened. It carries a floor now and the column scrolls past that floor, so the
+board a club watches all weekend stays a board. The checklist keeps its own cap
+and scrolls inside itself: all fifteen rows are there, in a list of their own,
+rather than 290 px of checkboxes between you and the log.
+
 ### Export and club interop
 
 Exports are submittable: **Cabrillo 3.0** with real per-QSO UTC timestamps and

@@ -162,7 +162,7 @@
 <main>
 
   <header class="hero">
-    <div class="kicker"><span class="dot"></span> Nexus · Product Brief <span class="beta">Open Beta</span></div>
+    <div class="kicker"><span class="dot"></span> Nexus · Product Brief <span class="beta">1.0</span></div>
     <div class="wordmark">Tempo<span class="tick">.</span></div>
     <div class="tagline">The off-grid calling layer inside Nexus <span class="accent">— text at the speed of conversation.</span></div>
     <div class="subtag">Tempo is Nexus's chat-first, off-grid text layer — fast, two-way weak-signal text in a genuinely modern messenger, built on new, purpose-designed waveforms. Nexus is the all-mode ham radio operations center; Tempo is the calling layer inside it. The radio stays first-class; the experience finally feels like this decade.</div>
@@ -294,7 +294,7 @@
       <div class="st-head"><span class="badge">Honest status</span><h2 class="sec">…and why we need you.</h2></div>
       <p class="intro">We'd rather under-promise. Here's exactly where things stand:</p>
       <ul>
-        <li><strong>The app is feature-complete and runs on Windows.</strong> The installer is a ~199 MB per-user, <strong>unsigned, cross-compiled</strong> build that bundles WebView2 and Hamlib offline — no admin rights, no internet needed. Expect a SmartScreen warning ("More info → Run anyway"), as with any unsigned beta. macOS / Linux desktop builds are Phase 2.</li>
+        <li><strong>The app is feature-complete and runs on Windows.</strong> The installer is a ~199 MB per-user, <strong>unsigned, cross-compiled</strong> build that bundles WebView2 and Hamlib offline — no admin rights, no internet needed. Expect a SmartScreen warning ("More info → Run anyway"), as with any unsigned build. Linux and Raspberry Pi ship alongside Windows, built from the same tree; macOS is not packaged yet.</li>
         <li><strong>The waveforms have closed real links on the air</strong>, including a completed two-station QSO (KD9TAW and N9UM, 6 m) on 2026-07-26. <strong>Their published thresholds are still bench numbers</strong> (TempoFast ~−15 dB, TempoDeep ~−18.6 dB) from AWGN and Rayleigh-fading sweeps in the test harness, not field results.</li>
         <li><strong>On-air decode-rate-vs-SNR validation is the #1 remaining gate</strong> — the single biggest reason the project needs operators.</li>
         <li><strong>Shipped in v0.2.0 (beta):</strong> <strong>IR-HARQ</strong> joint-turbo soft-combining is now live end-to-end and on by default; <strong>TempoDeep full-passband acquisition</strong> now decodes every signal across 200–2900 Hz per slot (the tuned RX offset is now just a waterfall marker / TX-pairing hint). The Windows cross-build is validated — modem self-tests, <span class="mono">tempo.exe</span>, and the NSIS installer all cross-build clean, with 5/5 Windows test exes passing. The figures remain bench and cross-build measurements rather than on-air results.</li>

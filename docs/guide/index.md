@@ -1,14 +1,19 @@
 # Nexus User Guide
 
-Nexus is a free, open-source ham radio workstation for Windows that puts the
-whole station — digital, phone, CW, satellites, propagation, DX chasing,
-logging, and awards — into one modern app. This guide is the per-section
-reference: pick the section you're working in and jump to its page.
+Nexus is a free, open-source ham radio workstation for Windows, Linux and
+Raspberry Pi that puts the whole station — digital, phone, CW, satellites,
+propagation, DX chasing, logging, and awards — into one modern app. This guide
+is the per-section reference: pick the section you're working in and jump to its
+page.
 
-Nexus is in **open beta**. The FT8/FT4 core is production-grade and built to
-WSJT-X's behavior; the newest features are fresh from the bench. Where a feature
-is experimental or a number comes from simulation rather than the air, these
-pages say so.
+1.0.0 closes the beta period. The habit the beta was written with does not
+close with it: where a feature is opt-in, or a number comes from simulation
+rather than the air, these pages say so, and each page ends with what its
+section does **not** do.
+
+The supported window floor is **1024×768**. Everything is reachable there —
+some columns scroll to reach the bottom of themselves, and the pages that
+measure it say where the fold falls at which size.
 
 <!-- TODO: capture screenshot — the Nexus main window with the left nav rail labelled -->
 

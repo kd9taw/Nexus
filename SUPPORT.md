@@ -5,10 +5,11 @@ digital with WSJT-X parity, CW, SSB phone, propagation intelligence,
 logging/awards, POTA/SOTA, Field Day) that also carries the experimental Tempo
 TempoFast/TempoDeep chat layer. Here's the fastest way to get unstuck or get involved.
 
-> Reminder: the **TempoFast/TempoDeep tiers** are **beta** — those waveforms are validated
-> by simulation, not yet on the air. Real-world results are expected to vary,
-> and reporting them helps a lot (see below). The FT8/FT4 tier is in daily
-> production use.
+> Reminder: the **TempoFast/TempoDeep tiers** have closed real links on the air —
+> first decode 2026-07-21, first two-station QSO 2026-07-26 — but every sensitivity
+> figure published for them is still a **simulation** number. Real-world results are
+> expected to vary, and reporting them helps a lot (see below). The FT8/FT4 tier is
+> in daily production use.
 
 ## 1. Check the manual first
 

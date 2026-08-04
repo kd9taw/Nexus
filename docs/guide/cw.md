@@ -15,30 +15,37 @@ step or in [Settings ▸ Features](settings-reference.md#features).
 
 ## The tour
 
-**Keyer back-ends.** Three keyers ship and are selectable at the top of the
-cockpit:
+**Keyer back-ends.** Four ship, on the header's **Keyer** dropdown. Hovering the
+dropdown explains the one you are keying with; each entry in the list carries its
+own explanation, so you can read the others before you switch:
 
 - **CAT** — the rig generates the Morse (Hamlib `send_morse`), with speed pushed
   over CAT. Zero extra hardware; needs a rig that supports CW keying over CAT.
-- **Soundcard** — Nexus synthesizes PARIS-timed, click-free Morse (5 ms
-  raised-cosine envelopes) through the TX audio path, for rigs without a CW keyer
-  command. This works **only** if Nexus's audio output is routed to the rig
-  (as for FT8) *and* PTT works — otherwise it looks like it's sending but nothing
-  reaches the air. The rig goes to USB/LSB for this path.
+- **Serial** — Nexus toggles DTR or RTS into the rig's KEY jack and the rig
+  shapes the signal (rig in CW). This is the N1MM/fldigi method for a rig with no
+  CAT keying command. Set the keyline port and line in
+  [Settings ▸ Rig / CAT](settings-reference.md#rig--cat).
 - **WinKeyer** — a K1EL WinKeyer hardware keyer over serial (rig in CW). It's the
   no-ambiguity option: real hardware timing, nothing to route. Set its serial
   port under **WinKeyer port** in
   [Settings ▸ Rig / CAT](settings-reference.md#rig--cat).
+- **Soundcard** — Nexus synthesizes PARIS-timed, click-free Morse (5 ms
+  raised-cosine envelopes) through the TX audio path, for rigs without a CW keyer
+  command. This is the workaround, not the clean path: it works **only** if
+  Nexus's audio output is routed to the rig (as for FT8) *and* PTT works, and you
+  must keep drive below ALC — otherwise it looks like it's sending and nothing
+  reaches the air. The rig goes to USB/LSB for this path.
 
-**The CW decoder.** A live single-signal decoder reads the receive audio at your
-marker pitch and prints a running transcript that persists as text scrolls by,
-along with the decoded WPM (until you set WPM by hand, the keyer can follow the
-decoded speed). A **sensitivity** slider trades false characters against
-weak-signal copy: slide it down and spurious characters thin out on a noisy
-frequency; slide it up to catch weaker or off-pitch signals and QSB. The middle
-is the default. A **copilot** row shows the decoded callsigns as chips and, in
-Guided mode, prompts the next logical over; switch it to Expert for just the call
-chips.
+**The CW decoder.** The **AI** decoder is the default: a neural net (the DeepCW
+model by e04) reads the whole 400–1200 Hz window rather than one pitch, which is
+what makes it copy a station you have not zero-beat and hold on through QSB. The
+switch beside the **AI** badge in the Decode pane's title bar turns it off and
+falls back to the classic single-pitch decoder, which reads only the tone at your
+marker. Either way you get a running transcript that persists as text scrolls by,
+the decoded **WPM** beside it — leave WPM on auto and the keyer follows the
+station's speed — and a **Clear** button that wipes the decoded and sent
+transcripts together. A **Copilot** pane shows the decoded callsigns as chips;
+click one to make that station your worked peer.
 
 **Speed.** WPM runs 5–50 (default 25). Nudge it on the fly with **PgUp / PgDn**
 (±2 WPM, hold Shift for ±4).
@@ -51,14 +58,29 @@ entry with nothing on screen behind it right now says why in a line under it —
 it stays keyboard-reachable and reads that reason with the panel name.
 **Scope Controls** command the radio's own panadapter, so they appear only while
 an Icom CI-V or FlexRadio scope is streaming; **DSP Toggles** and **RX DSP
-Levels** offer only what your radio reports over CAT; **Sent Echo** holds what
-you have transmitted this session, so it is empty until your first over; **TX
-Meters** read on transmit. The line explains the screen; the tick is still
-yours — untick Sent Echo at start-up and it stays away after your first over,
+Levels** offer only what your radio reports over CAT. Those three draw inside one
+**Rig controls** card and sit on a single row at the default width, which is one
+title bar and one border instead of three — they are still three separate menu
+entries, each switching its own group and explaining itself when your radio
+cannot feed it. **Sent Echo** holds what you have transmitted this session, so it
+is empty until your first over; **TX Meters** read on transmit. The line explains
+the screen; the tick is still yours — untick Sent Echo at start-up and it stays away after your first over,
 rather than making you transmit before you can hide it. Once you have unticked an
 entry its line goes with it: the pane is off your screen because you said so, not
 because of anything the rig is doing. **Esc** closes the menu and puts focus back
 on the ⊞ button. See [Phone](phone.md) for the same menu on the voice side.
+
+**What the cockpit gives room to.** The Decode transcript is the pane a CW
+operator works from, and it is the one the layout grows: everything beside it —
+the Sent echo, Rig controls, Band Activity, the Copilot — is exactly as tall as
+what it holds, and the transcript takes the rest. There is a floor under it, so a
+column full of control strips can no longer starve it toward nothing. At the
+window Nexus opens at that comes to four lines of copy with one short drag left
+to scroll; on a wide window the aux panes get a column of their own and the
+transcript keeps the whole gain. The leading column scrolls when it stands taller
+than the space it has, so a control never renders past the edge. **Stop TX**,
+**Tune** and **Esc** sit outside the pane region — no layout you save can put
+them out of reach.
 
 <!-- TODO: capture screenshot — the eight F-key macro buttons with the recommended-next highlight -->
 
@@ -95,13 +117,14 @@ cut down to `5NN`** automatically. Set your operator name (for `{NAME}`) in
 
 ### Read the other station
 
-1. Zero-beat the station so its tone sits at your marker pitch (use the AF
-   scope's hairline). The decoder reads that one pitch.
-2. Watch the transcript fill in, with the decoded WPM beside it. Leave WPM on
-   auto and the keyer matches the station's speed for you.
-3. If a noisy frequency is throwing false characters, slide **sensitivity** down;
-   if a weak or drifting signal is being dropped, slide it up.
-4. Click a decoded-call chip in the copilot to make that station your worked peer
+1. Watch the transcript fill in, with the decoded WPM beside it. Leave WPM on
+   auto and the keyer matches the station's speed for you. With the AI decoder on
+   you do not have to zero-beat first — it reads the whole 400–1200 Hz window.
+2. If you turn AI off, the classic decoder reads only the tone at your marker, so
+   zero-beat the station you want using the AF scope's hairline.
+3. **Clear** wipes the decoded and sent transcripts together and re-pins both to
+   follow the next copy, even if you had scrolled up.
+4. Click a decoded-call chip in the Copilot to make that station your worked peer
    — it fills the his-call token in your macros and the log strip.
 
 ### Land here from the Needed board
@@ -112,10 +135,18 @@ for your first over. The log strip pre-fills **CW / 599**.
 
 ## Honest limits
 
-- **The decoder is single-signal**, reading the one station at your marker pitch
-  — it is not a full-band skimmer that copies everything at once. Zero-beat the
-  station you want, and expect ordinary machine-copy behavior: clean sending
-  decodes well, heavy QSB and swamped signals less so.
+- **The decoder prints one transcript, not a skimmer's rows.** The AI decoder
+  reads the whole 400–1200 Hz window, but everything it copies lands in the same
+  running text — it does not split two stations into two columns the way a
+  full-band skimmer does. Expect ordinary machine-copy behavior either way: clean
+  sending decodes well, heavy QSB and swamped signals less so. The classic
+  decoder is narrower still, reading only your marker pitch.
+- **The AI model ships as an app resource** (DeepCW, AGPL-3.0, © e04). A build
+  without it says so in the pane and the classic decoder carries on — nothing
+  else in the cockpit is affected.
+- **Unassisted mode turns the AI decoder off**, whatever the switch says, because
+  a declared unassisted entry means no machine copy. That is the one case where
+  the AI decoder is silent with the setting still on.
 - **No contest exchanges or serials** — this is a casual keyboard station by
   design. (Contest exchange modes aren't built.)
 

@@ -1,9 +1,10 @@
 # FAQ
 
 Answers for new operators and for hams evaluating Nexus against the tools they
-already run. Nexus is in **open beta**: the FT8/FT4 core is production-grade and
-verified against WSJT-X behavior; the newest features are fresh from the bench and
-field reports are wanted.
+already run. **1.0.0 closes the beta period**: the FT8/FT4 core is production-grade
+and verified against WSJT-X behavior, and where a number still comes from the bench
+rather than the air these answers say so. Field reports are still what closes those
+gaps.
 
 ---
 
@@ -68,7 +69,7 @@ One thing worth knowing before you try: check the clock reading in the top bar a
 be fatal to Tempo, and both stations need a build at 0.19.6 or newer for the
 transmit-offset fix.
 
-### How do I help the beta?
+### How do I help close that gap?
 
 Send honest on-air reports: band, dial frequency, which tier (TempoFast or TempoDeep),
 distance and rough conditions, and what you decoded versus what you expected —
@@ -83,10 +84,14 @@ right now. Open a ticket on the SourceForge tracker at
 
 ### Do I need to install Hamlib, WebView2, or drivers first?
 
-No. Hamlib (for CAT and rotator control) and the WebView2 runtime are **bundled**
-in the installer, so Nexus works on a bare PC with no separate installs. If Windows
-is missing a USB bridge-chip driver for your rig's interface, the first-run wizard
-detects that and gives you the right download link.
+On **Windows**, no. Hamlib (for CAT and rotator control) and the WebView2 runtime
+are **bundled** in the installer, so Nexus works on a bare PC with no separate
+installs. If Windows is missing a USB bridge-chip driver for your rig's interface,
+the first-run wizard detects that and gives you the right download link.
+
+On **Linux and the Raspberry Pi**, CAT uses the system Hamlib instead of a bundled
+copy: the `.deb` pulls `libhamlib-utils` in automatically, and AppImage users run
+`sudo apt install libhamlib-utils` once.
 
 ### Will Nexus transmit on its own?
 
@@ -105,10 +110,11 @@ and more), and Hamlib is bundled, so CAT and rotator control work offline. "Dete
 my radio" scans USB and finds FlexRadios on the LAN, then fills in the model, port,
 and paired audio in one click. See [Rig Setup](Rig-Setup) for the per-brand path.
 
-**Field-verified so far:** the FTDX10 and FT-991A (on real hardware, by the
-author). Other rigs use Hamlib's well-established support but haven't each been
-bench-verified in Nexus specifically — this is a beta, and confirming your
-particular rig is useful feedback.
+**Field-verified so far:** the Yaesu FTDX10 and FT-991A, and native-CI-V Icom,
+where the IC-9700's own panadapter streams live into the cockpit — all on real
+hardware. Other rigs use Hamlib's well-established support but haven't each been
+bench-verified in Nexus specifically, so confirming your particular rig is useful
+feedback whatever the version number says.
 
 ### What's the story with FlexRadio and Xiegu?
 
@@ -116,10 +122,12 @@ Both work today over **Hamlib CAT** — Flex via SmartSDR's network CAT, Xiegu o
 serial — and Flex is discoverable on the LAN with one-click DAX audio pairing.
 Honest status:
 
-- **FlexRadio:** the FLEX-6400M CAT path is in **final verification** on hardware.
-  The deeper native SmartSDR integration (slices, panadapter, DAX as first-class
-  objects) is deferred to a later phase — today Flex is driven as a network-CAT
-  rig, not through the native SmartSDR API.
+- **FlexRadio:** there are two paths. Hamlib network CAT is the default and is the
+  verified one. The **native SmartSDR path** — the SmartSDR panadapter, DAX RX and
+  TX audio and the rig's native meters over VITA-49 — ships, and it keeps working
+  under Remote Desktop where the DAX sound devices are invisible. It is **opt-in,
+  off by default, and not yet confirmed on hardware here**. Turn it back off if
+  decodes stop.
 - **Xiegu:** supported via Hamlib CAT (e.g. the G90), but **not yet verified on
   hardware** in Nexus. If you run one, a field report is welcome.
 
@@ -132,8 +140,9 @@ separate installs and no admin rights — a per-user install that just runs.
 ### Why does the installer warn that it's unsigned?
 
 Nexus ships **unsigned** today, so Windows SmartScreen will show a warning when
-you run the installer. This is expected for a beta from an individual developer —
-code-signing certificates are a paid, identity-verified process. To install
+you run the installer. This is what an unsigned build from an individual developer
+looks like — code-signing certificates are a paid, identity-verified process, and
+1.0 does not change that. To install
 safely, **verify the SHA-256 hash** of the download against the value published on
 the download page before running it, then click "More info → Run anyway". The full
 walkthrough is on the [Install](Install) page.
@@ -146,8 +155,9 @@ walkthrough is on the [Install](Install) page.
 
 Your log stays **local**, in an ADIF file on your machine. Uploads happen **only**
 to the services you explicitly configure — LoTW, QRZ, ClubLog, eQSL, HRDLog.net —
-and those credentials live in the **Windows keychain**, never in a plaintext
-config file. Journey/achievement progress never leaves your computer. Nexus has no
+and those credentials live in the **OS keychain** (Windows Credential Manager, or
+the Secret Service keyring on Linux and the Pi), never in a plaintext config file.
+Journey/achievement progress never leaves your computer. Nexus has no
 telemetry or analytics phone-home; the only outbound traffic is the connectors you
 turn on and, by default, PSK Reporter spot uploads (which you can disable).
 
@@ -163,17 +173,20 @@ modes you already run.
 ### Where is the source code, and can I contribute?
 
 The repository is <https://github.com/kd9taw/Nexus>. Contributions are welcome —
-issues, field reports, and pull requests all help. The most valuable contributions
-during beta are **on-air decode reports** for TempoFast and TempoDeep and **rig confirmations**
-for radios beyond the two the author has bench-verified.
+issues, field reports, and pull requests all help. The most valuable ones are
+**on-air decode reports** for TempoFast and TempoDeep and **rig confirmations**
+for radios beyond the ones the author has bench-verified.
 
 ### Mac or Linux?
 
-**Linux ships**, as a `.deb` and an AppImage, and there is a separate arm64 `.deb`
-for 64-bit Raspberry Pi OS on a Pi 3, 4 or 5. On a slower Pi, Settings, Decode
-depth, Fast keeps FT8 and FT4 decoding in real time. CAT on Linux uses the system
-Hamlib; the `.deb` pulls `libhamlib-utils` in for you and AppImage users should
-`sudo apt install libhamlib-utils`.
+**Linux ships**, as `Nexus_<version>_pc_amd64.deb` and
+`Nexus_<version>_amd64.AppImage`, and 64-bit **Raspberry Pi OS** on a Pi 3, 4 or 5
+gets its own `.deb` per base — `Nexus_<version>_pi_arm64_bookworm.deb` and
+`Nexus_<version>_pi_arm64_trixie.deb`. Match the one to your Pi OS base rather than
+guessing (`cat /etc/os-release`). On a slower Pi, Settings, Decode depth, Fast
+keeps FT8 and FT4 decoding in real time. CAT on Linux uses the system Hamlib; the
+`.deb` pulls `libhamlib-utils` in for you and AppImage users should `sudo apt
+install libhamlib-utils`.
 
 **macOS does not ship.** The codebase is cross-platform Rust and Tauri, so it is a
 packaging and testing job rather than a port. If you want it, say so on the issue

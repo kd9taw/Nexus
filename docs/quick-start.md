@@ -1,22 +1,27 @@
 # Quick Start — your first FT8 QSO in 15 minutes
 
-This is the short path from a downloaded installer to a logged contact. It assumes
-a Windows PC, a radio with a USB (or network) connection, and a working antenna.
-Everything here is also covered in more depth in the [operator manual](manual/) —
-this page is the fast lane.
+This is the short path from a downloaded installer to a logged contact. The install
+step below is written for Windows; Linux and Raspberry Pi take the same path from
+step 2, and [Install & Verify](install.md) covers all three. It assumes a radio with
+a USB (or network) connection and a working antenna. Everything here is also covered
+in more depth in the [operator manual](manual/) — this page is the fast lane.
 
 By the end you will have Nexus installed, your station and rig set up, a cockpit
 full of live decodes, and one FT8 QSO in your log.
 
-> **Beta note:** Nexus is in open beta. The FT8/FT4 core is built to WSJT-X's
-> behavior and exercised on the air daily; it is the production part of the app.
-> The newer surfaces are fresh from the bench and we want your field reports.
+> **1.0.0 closes the beta period.** The FT8/FT4 core is built to WSJT-X's behavior
+> and exercised on the air daily; it is the production part of the app. Where a
+> number still comes from the bench rather than the air, these pages say so, and
+> field reports are what close that gap.
 
 ---
 
 ## 1. Install and get past SmartScreen (about 3 minutes)
 
-Download the Windows installer — `Nexus_<version>_x64-setup.exe` — from the
+Download the file for your platform — `Nexus_<version>_x64-setup.exe` on Windows,
+`Nexus_<version>_amd64.AppImage` or `Nexus_<version>_pc_amd64.deb` on Linux,
+`Nexus_<version>_pi_arm64_bookworm.deb` / `..._trixie.deb` on a 64-bit Raspberry Pi —
+from the
 [SourceForge download page](https://sourceforge.net/projects/nexus-ham-radio/files/)
 (source lives on [GitHub](https://sourceforge.net/projects/nexus-ham-radio)). It is a per-user install and needs no administrator rights;
 WebView2 and Hamlib are bundled, so there is nothing else to install. Full detail,

@@ -1,20 +1,25 @@
 # Rig Setup
 
-Nexus talks to your radio through **Hamlib** — the same CAT library WSJT-X uses —
-and bundles it inside the Windows installer, so CAT and rotor control work offline
-out of the box with nothing else to install. Around fifty rigs are curated into
-the model picker; the definitive list for your installed Hamlib is always
-`rigctl -l`.
+Nexus talks to your radio through **Hamlib** — the same CAT library WSJT-X uses.
+The Windows installer bundles it, so CAT and rotor control work offline out of the
+box with nothing else to install; Linux and the Raspberry Pi use the system Hamlib
+instead, which the `.deb` pulls in for you (AppImage users run `sudo apt install
+libhamlib-utils` once). Around fifty rigs are curated into the model picker; the
+definitive list for your installed Hamlib is always `rigctl -l`.
 
 Nexus never transmits on launch — TX is always an explicit operator action, and
 your declared license class is enforced as a real Part 97 sub-band lockout (a
 software guard in every TX path).
 
-> **Field status.** Verified on the Yaesu **FTDX10** and **FT-991A**. The Icom
-> IC-9700 (incl. 23 cm) and IC-7300-class single-USB path are supported; FlexRadio
-> LAN discovery is verified on a FLEX-6400M with the CAT chain in final
-> verification; Xiegu and rotators are supported but not yet field-verified. This
-> is an open beta — confirming your particular rig is useful feedback.
+> **Field status.** Verified on the Yaesu **FTDX10** and **FT-991A** and on
+> native-CI-V **Icom**, where the IC-9700's own spectrum scope streams into the
+> cockpit as a real panadapter (23 cm included). The IC-7300-class single-USB path
+> is supported. FlexRadio LAN discovery is verified on a FLEX-6400M over Hamlib
+> network CAT; the **native SmartSDR path** (panadapter, DAX audio, native meters)
+> ships opt-in and is not yet confirmed on hardware here. Xiegu and rotators are
+> supported but not yet field-verified. 1.0 does not change what a field report is
+> worth — confirming your particular rig is still the most useful thing you can
+> send.
 
 ---
 
@@ -103,6 +108,15 @@ like WSJT-X's two-instance pattern.
 **Key gotcha.** The **SmartSDR native** model (23005) is alpha-grade and failed on
 real hardware — nothing auto-picks it. Use the SmartSDR CAT path (model 2036 at
 `127.0.0.1:5002`), which is the one that works.
+
+**Nexus's own native Flex path** is a separate thing from that Hamlib model, and
+it ships: Nexus speaks VITA-49 to the radio directly for the SmartSDR panadapter,
+DAX RX and TX audio, and the rig's native meters. What it buys you is a real RF
+panadapter in the cockpit and audio that survives **Remote Desktop**, where the
+DAX sound devices are invisible to any app going through Windows. It is **opt-in
+and off by default**, and it is **not yet confirmed on hardware here** — if
+decodes stop after you switch it on, switch it back off and the Hamlib CAT path
+above is unchanged underneath.
 
 **RIGCTLD TCP Port = 4532.** In **Settings ▸ Rig ▸ Advanced**, the **RIGCTLD TCP
 Port** should be the default **4532** (Hamlib's standard). If a Flex connects for

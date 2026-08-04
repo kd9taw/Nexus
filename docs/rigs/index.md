@@ -1,16 +1,17 @@
 # Rig Setup Guides
 
-Nexus talks to your radio through **Hamlib** — the same CAT library WSJT-X uses —
-and bundles it inside the Windows installer, so CAT and rotor control work
-offline out of the box with nothing else to install. Around fifty rigs are
-curated into the model picker; the definitive list for your installed Hamlib
-version is always `rigctl -l`.
+Nexus talks to your radio through **Hamlib** — the same CAT library WSJT-X uses.
+The Windows installer bundles it, so CAT and rotor control work offline out of the
+box with nothing else to install. Around fifty rigs are curated into the model
+picker; the definitive list for your installed Hamlib version is always
+`rigctl -l`.
 
-> **Nexus is Windows open beta.** The bundled `rigctld` (and rotator daemon)
-> ship in the Windows installer only. The code builds on Linux and macOS, but
-> those platforms expect `rigctld` on your PATH. Nexus never transmits on
-> launch — TX is always an explicit operator action, and a declared license
-> class is enforced as a real Part 97 sub-band lockout.
+> **Where Hamlib comes from depends on the platform.** The bundled `rigctld` (and
+> rotator daemon) ship in the Windows installer only. Linux and Raspberry Pi use
+> the system Hamlib instead: the `.deb` pulls `libhamlib-utils` in for you, and
+> AppImage users run `sudo apt install libhamlib-utils` once. Either way Nexus
+> never transmits on launch — TX is always an explicit operator action, and a
+> declared license class is enforced as a real Part 97 sub-band lockout.
 
 ---
 

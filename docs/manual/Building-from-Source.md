@@ -68,7 +68,7 @@ No MSYS2 needed; produces the same installer.
 
    The script cross-builds a static single-precision **FFTW3f** for MinGW (cached), links the whole modem stack statically (libtempo → gfortran → quadmath → stdc++ → fftw3f) so the result needs no MinGW runtime DLLs, and produces the NSIS installer.
 
-> The **published binaries are produced this way** — cross-compiled beta. Treat them accordingly and report what breaks.
+> The **published Windows binaries are produced this way** — cross-compiled on Linux and unsigned, which is why SmartScreen warns and why each release publishes a SHA-256. Report what breaks. The Linux and Raspberry Pi packages are built natively; see `scripts/build-linux.sh` and the release workflow.
 
 ---
 
@@ -97,7 +97,7 @@ Before opening a PR, the project asks for a clean `cargo fmt --all`, `cargo clip
 
 ## What gets built
 
-- `Nexus_0.2.0_x64-setup.exe` — the NSIS installer (per-user; bundles offline WebView2 + Hamlib `rigctld`).
+- `Nexus_<version>_x64-setup.exe` — the NSIS installer (per-user; bundles offline WebView2 + Hamlib `rigctld`).
 - `nexus.exe` — the app.
 - `win_smoke.exe` — a fully-static modem self-test.
 

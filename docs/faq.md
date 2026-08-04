@@ -1,9 +1,10 @@
 # Nexus FAQ
 
 Answers for new operators and for hams evaluating Nexus against the tools they
-already run. Nexus is in **open beta**: the FT8/FT4 core is production-grade and
-verified against WSJT-X behavior; the newest features are fresh from the bench and
-field reports are wanted.
+already run. **1.0.0 closes the beta period**: the FT8/FT4 core is production-grade
+and verified against WSJT-X behavior, and where a number still comes from the bench
+rather than the air these answers say so. Field reports are still what closes those
+gaps.
 
 ---
 
@@ -17,16 +18,17 @@ WSJT-X doesn't have — country and worked-before flags on every decode, one-cli
 "work it" that jumps band/mode/frequency together, and a Needed board that ranks the
 stations on the air by what they are worth to *your* log.
 
-But WSJT-X still has **more modes** (Q65, MSK144, WSPR, and others Nexus does not
-implement), and it runs on macOS and Linux where Nexus ships Windows only today. And
+Nexus now transmits and receives **Q65, FST4, FST4W, MSK144, JT65 and WSPR** as well, so
+the mode gap has largely closed; WSJT-X still runs on **macOS**, which Nexus does not. And
 Nexus speaks WSJT-X's UDP protocol, so you don't have to choose all-or-nothing — your
 GridTracker/JTAlert/logger workflow survives either way. See [interop.md](interop.md).
 
 ### What is TempoFast, in one sentence?
 
 FT8's message set on a 4-second cycle with cellular-style retransmission combining —
-keyboard chat at conversation speed, still down in the weak-signal noise (open beta;
-bench figures). The longer story is in [protocols/tempofast.md](protocols/tempofast.md).
+keyboard chat at conversation speed, still down in the weak-signal noise. It works on
+the air; the published threshold figures are still bench numbers. The longer story is in
+[protocols/tempofast.md](protocols/tempofast.md).
 
 ### Is TempoFast more sensitive than FT8?
 
@@ -37,25 +39,25 @@ combine instead of being wasted. FT8's ~−21 dB threshold is the most sensitive
 TempoFast's ~−15 dB sits about where FT4 does. Those numbers are **bench figures
 only.** If you want maximum reach in
 one shot, use FT8; if you want a conversation, use TempoFast. When the path is fading, use
-[TempoDeep](protocols/dx1.md).
+[TempoDeep](protocols/tempodeep.md).
 
 ### What is TempoDeep?
 
 The robust tier: non-coherent 8-FSK on a 15-second cycle, built to shrug off the
 fading that collapses coherent modes (a ~3.7 dB fading penalty in simulation, where
 coherent modes lose 10+ dB). It gives up some raw sensitivity to stay decodable on
-NVIS, polar, and rough paths. Details in [protocols/dx1.md](protocols/dx1.md).
+NVIS, polar, and rough paths. Details in [protocols/tempodeep.md](protocols/tempodeep.md).
 
 ### Are the TempoFast/TempoDeep performance numbers proven?
 
 The modes work on the air: first TempoFast decode 2026-07-21, first two-station QSO
 2026-07-26. The **numbers** come from AWGN and Rayleigh-fading bench sweeps, re-checked
 in the test suite and the Windows cross-build, rather than from the air.
-Decode-rate-versus-SNR on real bands is the project's #1 remaining gate, and it is
-what the open beta exists to establish. Every dB figure Nexus publishes is labeled
-"simulated" for exactly this reason.
+Decode-rate-versus-SNR on real bands is the project's #1 remaining gate, and on-air
+reports are what close it. Every dB figure Nexus publishes is labeled "simulated" for
+exactly this reason.
 
-### How do I help the beta?
+### How do I help close that gap?
 
 Send honest on-air reports: band, dial frequency, which tier (TempoFast or TempoDeep), distance
 and rough conditions, and what you decoded versus what you expected — including the
@@ -90,10 +92,11 @@ more), and Hamlib is bundled, so CAT and rotator control work offline. "Detect m
 radio" scans USB and finds FlexRadios on the LAN, then fills in the model, port, and
 paired audio in one click.
 
-**Field-verified so far:** the FTDX10 and FT-991A (on real hardware, by the author).
-Other rigs use Hamlib's well-established support but have not each been bench-verified
-in Nexus specifically — this is a beta, and confirming your particular rig is useful
-feedback.
+**Field-verified so far:** the Yaesu FTDX10 and FT-991A, and native-CI-V Icom, where the
+IC-9700's own spectrum scope streams into the cockpit as a real panadapter — all on real
+hardware. Other rigs use Hamlib's well-established support but have not each been
+bench-verified in Nexus specifically, so confirming your particular rig is useful feedback
+whatever the version number says.
 
 ### What's the story with FlexRadio and Xiegu?
 
@@ -101,10 +104,12 @@ Both work today over **Hamlib CAT** — Flex via SmartSDR's network CAT, Xiegu o
 serial — and Flex is discoverable on the LAN with one-click DAX audio pairing. Honest
 status:
 
-- **FlexRadio:** the FLEX-6400M CAT path is in **final verification** on hardware. The
-  deeper native SmartSDR integration (slices, panadapter, DAX as first-class objects)
-  is deferred to a later phase — today Flex is driven as a network-CAT rig, not
-  through the native SmartSDR API.
+- **FlexRadio:** there are two paths. Hamlib network CAT is the default and is the
+  verified one, on a FLEX-6400M. The **native SmartSDR path** — the SmartSDR panadapter,
+  DAX RX and TX audio and the rig's native meters over VITA-49 — ships, and it keeps
+  working under Remote Desktop where the DAX sound devices are invisible. It is
+  **opt-in, off by default, and not yet confirmed on hardware here**; turn it back off
+  if decodes stop.
 - **Xiegu:** supported via Hamlib CAT (e.g. the G90), but **not yet verified on
   hardware** in Nexus. If you run one, a field report is welcome.
 
@@ -117,8 +122,9 @@ separate installs and no admin rights — a per-user install that just runs.
 ### Why does the installer warn that it's unsigned?
 
 Nexus ships **unsigned** today, so Windows SmartScreen will show a warning when you
-run the installer. This is expected for a beta from an individual developer — code-
-signing certificates are a paid, identity-verified process. To install safely,
+run the installer. This is what an unsigned build from an individual developer looks
+like — code-signing certificates are a paid, identity-verified process, and 1.0 does not
+change that. To install safely,
 **verify the SHA-256 hash** of the download against the value published on the release
 page before running it. Click "More info → Run anyway" once the hash matches.
 
@@ -130,7 +136,8 @@ page before running it. Click "More info → Run anyway" once the hash matches.
 
 Your log stays **local**, in an ADIF file on your machine. Uploads happen **only** to
 the services you explicitly configure — LoTW, QRZ, ClubLog, eQSL, HRDLog.net — and
-those credentials live in the **Windows keychain**, never in a plaintext config file.
+those credentials live in the **OS keychain** (Windows Credential Manager, or the Secret
+Service keyring on Linux and the Pi), never in a plaintext config file.
 Journey/achievement progress never leaves your computer. Nexus has no telemetry or
 analytics phone-home; the only outbound traffic is the connectors you turn on and, by
 default, PSK Reporter spot uploads (which you can disable).
@@ -147,28 +154,40 @@ you already run.
 ### Where is the source code, and can I contribute?
 
 The repository is <https://sourceforge.net/projects/nexus-ham-radio>. Contributions are welcome —
-issues, field reports, and pull requests all help. The most valuable contributions
-during beta are **on-air decode reports** for TempoFast and TempoDeep (see "How do I help the
-beta?" above) and **rig confirmations** for radios beyond the two the author has
-bench-verified. Bugs, propagation-model feedback, and interop reports against your
-particular logger or cluster are all useful.
+issues, field reports, and pull requests all help. The most valuable ones are **on-air
+decode reports** for TempoFast and TempoDeep (see "How do I help close that gap?" above)
+and **rig confirmations** for radios beyond the ones the author has bench-verified. Bugs,
+propagation-model feedback, and interop reports against your particular logger or cluster
+are all useful.
 
 ### Mac or Linux?
 
-Not yet as a shipping build. The codebase is cross-platform Rust/Tauri, but only the
-**Windows** installer ships today (built, in fact, by cross-compiling from Linux). If
-you want a native macOS or Linux build, say so on the issue tracker — interest is what
-prioritizes it.
+**Linux ships**, as `Nexus_<version>_pc_amd64.deb` and `Nexus_<version>_amd64.AppImage`,
+and 64-bit **Raspberry Pi OS** on a Pi 3, 4 or 5 gets its own `.deb` per base —
+`Nexus_<version>_pi_arm64_bookworm.deb` and `Nexus_<version>_pi_arm64_trixie.deb`. All
+three platforms build from the same tree and ship together every release. CAT on Linux
+uses the system Hamlib rather than a bundled copy; the `.deb` pulls `libhamlib-utils` in
+for you and AppImage users run `sudo apt install libhamlib-utils` once. On a slower Pi,
+**Settings ▸ Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
+
+**macOS does not ship.** The codebase is cross-platform Rust and Tauri, so it is a
+packaging and testing job rather than a port. If you want it, say so on the issue
+tracker — interest is what prioritizes it.
 
 ### Will there be automatic updates?
 
-Not in this beta — there is no auto-updater yet. Watch the release page (and verify
-the SHA-256 of each new download) to update manually.
+They already work. A new version downloads quietly in the background and then offers to
+install. Nothing installs behind your back and nothing happens on a schedule: the button
+waits for you, and it stands down while you are transmitting, tuning, in a contact or
+running CQ, and tells you which. Every update is signed and verified before it is applied,
+and an altered installer is refused. Windows and the Linux AppImage update in place; the
+`.deb` packages, both Raspberry Pi ones included, are managed by your package system and
+notify you instead.
 
 ---
 
-**More:** [protocol overview](protocols/index.md) · [TempoFast](protocols/ft1.md) ·
-[TempoDeep](protocols/dx1.md) · [interop and companion setup](interop.md)
+**More:** [protocol overview](protocols/index.md) · [TempoFast](protocols/tempofast.md) ·
+[TempoDeep](protocols/tempodeep.md) · [interop and companion setup](interop.md)
 
 *License: GPL-3.0 · by KD9TAW · Repository:
 <https://sourceforge.net/projects/nexus-ham-radio>*

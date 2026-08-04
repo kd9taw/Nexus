@@ -1,16 +1,15 @@
 # TempoFast — chat-speed weak-signal HF
 
 *A new digital protocol by KD9TAW. This page is the approachable
-story; for the full DSP and math, see [TempoFast-Protocol.md](../TempoFast-Protocol.md).*
+story; for the full DSP and math, see [Tempo-Protocol.md](../Tempo-Protocol.md).*
 
-> **Read this first.** TempoFast is **experimental and in open beta.** Every sensitivity
-> number below is a **bench figure** from sweeps in AWGN and
-> Rayleigh fading rather than an on-air measurement, though the mode itself has
-> closed real links on the air. And the headline honesty: **TempoFast does not
-> beat FT8 on raw sensitivity.** It trades roughly 6 dB of single-shot reach
-> (−15 vs ~−21 dB, simulated) for a nearly 4× faster cycle plus a retransmission-
-> combining path FT8 doesn't have. Proving
-> the tradeoff pays off on real bands is exactly what this beta is for.
+> **Read this first.** TempoFast is **experimental.** Every sensitivity number below is
+> a **bench figure** from sweeps in AWGN and Rayleigh fading rather than an on-air
+> measurement, though the mode itself has closed real links on the air. And the headline
+> honesty: **TempoFast does not beat FT8 on raw sensitivity.** It trades roughly 6 dB of
+> single-shot reach (−15 vs ~−21 dB, simulated) for a nearly 4× faster cycle plus a
+> retransmission-combining path FT8 doesn't have. Whether that tradeoff pays off on real
+> bands is the open question, and an on-air report is what answers it.
 
 ---
 
@@ -29,7 +28,7 @@ conversation speed, still down in the weak-signal noise.**
 
 The cost of a short cycle is sensitivity — there is less time to integrate the
 signal out of the noise. That is real physics, not a bug, and it is why TempoFast is a
-*companion* to a slower robust tier ([TempoDeep](dx1.md)), not a replacement for
+*companion* to a slower robust tier ([TempoDeep](tempodeep.md)), not a replacement for
 everything.
 
 ## Same message set as FT8 — the ecosystem carries over
@@ -116,7 +115,7 @@ referenced to a 2500 Hz noise bandwidth, the standard yardstick for these modes.
 A note on that last row: TempoFast's occupied bandwidth is **not** published as a hard
 number anywhere in the source. Estimates range roughly 42–67 Hz depending on how you
 measure. Treat it as "designed to be narrow," not as a spec — and on cramped bands
-(17 m, 12 m) prefer [TempoDeep](dx1.md)'s tighter ~50 Hz signal.
+(17 m, 12 m) prefer [TempoDeep](tempodeep.md)'s tighter ~50 Hz signal.
 
 ## The FT8 tradeoff, stated plainly
 
@@ -135,12 +134,12 @@ incremental redundancy.
 
 If you need to dig out the weakest possible signal in one shot, use FT8. If you want
 a *conversation* down in the noise, that is what TempoFast is for. And if the path is
-fading, reach for [TempoDeep](dx1.md), which is built to survive exactly the conditions
+fading, reach for [TempoDeep](tempodeep.md), which is built to survive exactly the conditions
 that hurt a coherent mode like TempoFast most.
 
 ## Status, and how to help
 
-TempoFast is in **open beta.** The modem is implemented, IR-HARQ is live end-to-end and on
+TempoFast is **experimental.** The modem is implemented, IR-HARQ is live end-to-end and on
 by default, and every number above holds up in simulation and in the Windows
 cross-build self-tests. What is **not** yet done — and it is the project's #1 gate —
 is **on-air characterization:** decode-rate-versus-SNR on real bands, with real
@@ -162,7 +161,7 @@ into real, trustworthy operating specs.
 
 **More detail:** the full waveform, FEC, sync, and IR-HARQ math — with the exact
 constants from the modem source — lives in
-[TempoFast-Protocol.md](../TempoFast-Protocol.md). For how to pick between the tiers, see the
-[protocol overview](index.md); for the robust tier, [TempoDeep](dx1.md).
+[Tempo-Protocol.md](../Tempo-Protocol.md). For how to pick between the tiers, see the
+[protocol overview](index.md); for the robust tier, [TempoDeep](tempodeep.md).
 
 *License: GPL-3.0 · Repository: <https://sourceforge.net/projects/nexus-ham-radio>*
