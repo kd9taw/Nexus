@@ -17248,22 +17248,29 @@ button.sat-chip:disabled {
 }
 
 /* ── Memories — the saved-channel manager + the cockpit MEM strip ─────────────
-   The strip is deliberately HEIGHT-BOUNDED and wrapping: the old MemoryBank
-   header list grew the cockpit top bar with every saved channel (the reported
-   scroll bug). Chips wrap inside a two-row max-height and scroll internally,
-   so the header height is capped no matter how many favorites exist. */
+   The strip is deliberately HEIGHT-BOUNDED: the old MemoryBank header list grew
+   the cockpit top bar with every saved channel (the reported scroll bug). The
+   bound is now STRUCTURAL — one non-wrapping row plus a horizontal scroll — so
+   the header height is capped no matter how many favorites exist. */
 .mem-strip {
   display: flex;
-  /* ONE 26px row (density pass 2026-08 — the operator's "massive icons" header
+  /* ONE row (density pass 2026-08 — the operator's "massive icons" header
      complaint): chips never wrap, surplus chips scroll horizontally inside the
-     strip. Still hard-capped so the header-growth bug stays dead. */
+     strip. `nowrap` IS the header-growth bound — one row cannot grow with the
+     favorite count — so nothing needs a ceiling on top of it. The `max-height:
+     26px` that used to sit here was a leftover from the wrapping era and could
+     only ever clip: the row resolves to ~29px at the default root font (a
+     0.78rem ＋/≡ button, plus the 10px ::-webkit-scrollbar the horizontal scroll
+     reserves), and `overflow-y: hidden` gave the lost bottom no recovery. A
+     device-px ceiling over em/rem content is wrong in kind — the two sides scale
+     on different inputs (root font size, theme border width, UI zoom). Three
+     cockpit headers inherit this box; mem-strip-clip.test.tsx computes it. */
   flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-1);
   flex: 0 1 auto;
   min-width: 0;
   max-width: 40rem;
-  max-height: 26px;
   overflow-x: auto;
   overflow-y: hidden;
 }
