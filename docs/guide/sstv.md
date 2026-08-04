@@ -16,7 +16,7 @@ does ticking SSTV in the wizard's "which modes?" step, which applies on top of
 whichever goal you picked. If the rail has no SSTV button, turn it on in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
-<!-- TODO: capture screenshot — the SSTV section receiving: the band waterfall replaced by a half-decoded Scottie 1 picture, the "decoding Scottie 1…" caption under it, two images already in the Gallery, the Transmit composer empty -->
+![The SSTV section armed and listening on 20 m: the header carries the SSTV badge, a 14.0740 MHz readout, the 20m (custom) band pick, the Slant trim, an Arm button reading Armed and a lit ▼ TX On latch. The waterfall still holds the space a picture will take — a busy band across 0–3 kHz — and the status line under it reads "Hearing audio, no SSTV header yet — a picture decodes automatically when one starts. Images on this band appear at 14.230 USB." Below, the Transmit pane's drop zone is empty and the Gallery pane runs nine received cards — Scottie 1, Scottie 2 and Robot 36, some clean MMSSTV art and some torn to noise, one carrying a decoded G8GRG callsign — over the pinned transmit bar with its Scottie 1 · ≈110s · 320×256 mode picker, Send and Stop.](../img/manual/sstv.webp)
 
 ## The tour
 
