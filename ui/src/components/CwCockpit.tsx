@@ -1278,6 +1278,14 @@ export function CwCockpit({
           pane" means once growth is an fr share instead of a sole flex grower. Columns
           are implicit-row grids, so a pane hidden from ⊞ Panels leaves no empty cell.
 
+          The leading column is not rendered when it would be EMPTY — every CW pane but the
+          log is ⊞-removable, and an empty `.cockpit-col` is a `minmax(0,1fr)` grid row of
+          dead space beside the log: the "band of empty black", one level below the empty
+          TRACK maxCols already collapses. (It used to be merely cheap, because one track
+          meant content-height rows; the track count is a content budget, not a width claim,
+          so that state is now genuinely bounded — see useRegionCols. Phone's twin gate is
+          `leadPresent`.) The key stays "main", so the log column reconciles unmoved.
+
           The columns are KEYED so a tier flip reconciles them by identity: the log
           column (and the transcript column) keep their fibers across 2↔3, because a
           pane that lands under a different column div is UNMOUNTED by React — which
@@ -1300,11 +1308,13 @@ export function CwCockpit({
           </>
         ) : (
           <>
-            <div className="cockpit-col" key="main">
-              {decodePane}
-              {sentPane}
-              {auxPanes}
-            </div>
+            {(mainPresent || auxPresent) && (
+              <div className="cockpit-col" key="main">
+                {decodePane}
+                {sentPane}
+                {auxPanes}
+              </div>
+            )}
             <div className="cockpit-col" key="log">
               {logPane}
               {assistPane}

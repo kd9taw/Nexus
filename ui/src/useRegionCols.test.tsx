@@ -114,6 +114,9 @@ describe('useRegionCols', () => {
     render(<Region />) // clientWidth stays 0 — CSS must never see a region with no tier
     const el = screen.getByTestId('region')
     expect(el.getAttribute('data-cols')).toBe('1')
+    // …and never a region with no FLOW either: unstamped, the sheet falls back to its base
+    // rule, and the failure direction must stay "scrolls", never "clips".
+    expect(el.getAttribute('data-flow')).toBe('stack')
   })
 
   it('caps the tier at the number of column groups the cockpit can actually fill', async () => {
@@ -129,6 +132,63 @@ describe('useRegionCols', () => {
     // resize event to prompt it.
     rerender(<Region max={3} />)
     expect(el.getAttribute('data-cols')).toBe('3')
+  })
+
+  it('stamps the measured FLOW beside the track count — narrow stacks, wide fills', async () => {
+    render(<Region />)
+    const el = screen.getByTestId('region')
+    stubWidth(el, 900) // genuinely narrow: the region owns the scrollbar
+    fire!()
+    await frame()
+    expect(el.getAttribute('data-cols')).toBe('1')
+    expect(el.getAttribute('data-flow')).toBe('stack')
+    stubWidth(el, 1470) // the default shipped window
+    fire!()
+    await frame()
+    expect(el.getAttribute('data-flow')).toBe('fill')
+  })
+
+  it('the CAP never fakes narrowness: one track on a wide region still FILLS', async () => {
+    // THE TIER SOURCE. `data-cols` is min(measured, maxCols) — a CONTENT budget, so the ⊞
+    // Panels menu can drive it to 1 at any width. Everything the sheet does because the
+    // region is narrow (content-height rows, the region owning the scrollbar, fill panes
+    // collapsing to content height) must therefore hang off the MEASUREMENT, not off the
+    // budget. Untick CW's decode/sent/aux on a 3440 window and the log pane went
+    // content-height with the whole surplus left blank — a width claim the code never made.
+    render(<Region max={1} />)
+    const el = screen.getByTestId('region')
+    stubWidth(el, 3390) // 3440 fullscreen
+    fire!()
+    await frame()
+    expect(el.getAttribute('data-cols')).toBe('1') // one track: only one column has content
+    expect(el.getAttribute('data-flow')).toBe('fill') // …but the region is NOT narrow
+  })
+
+  it("never stamps a 'stack' flow at more than one track (the state space CSS enumerates)", async () => {
+    // 'stack' implies the measurement was tier 1, and cols = min(1, maxCols) = 1. So
+    // (2|3, 'stack') is unreachable, which is what lets cockpit-panes.test.ts enumerate
+    // four region states instead of six.
+    for (const [w, max] of [
+      [900, 3],
+      [900, 2],
+      [900, 1],
+      [1470, 3],
+      [1470, 1],
+      [3390, 3],
+      [3390, 2],
+      [3390, 1],
+    ] as const) {
+      cleanup()
+      render(<Region max={max} />)
+      const el = screen.getByTestId('region')
+      stubWidth(el, w)
+      fire!()
+      await frame()
+      const cols = el.getAttribute('data-cols')
+      const flow = el.getAttribute('data-flow')
+      expect(flow, `width ${w} max ${max}: no flow stamped`).not.toBeNull()
+      if (flow === 'stack') expect(cols, `width ${w} max ${max}`).toBe('1')
+    }
   })
 
   it('debounces bursts to one measurement per frame and disconnects on unmount', async () => {

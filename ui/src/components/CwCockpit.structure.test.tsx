@@ -335,12 +335,56 @@ describe('CwCockpit pane-grid shell', () => {
     expect(document.querySelector('[data-pane="decode"]')!.isSameNode(decode0), 'decode transcript remounted on 3→2').toBe(true)
   })
 
+  it('emptying the leading column from ⊞ Panels does not remount the log form', async () => {
+    // The column-count gate below is a NEW way for a `.cockpit-col` to disappear, and every
+    // such path is a chance to wipe a half-typed QSO: LogEntry keeps its fields in plain
+    // useState. This pins the ⊞ path the way the test above pins the resize path.
+    //
+    // HONEST SCOPE — measured, not assumed (mutation 2026-08-04). The two columns are
+    // STATIC JSX SLOTS of one fragment, so slot 1 stays slot 1 whether or not slot 0
+    // renders: dropping `key="log"` does NOT fail this test (it fails the 2↔3 tier flip
+    // above, where the ternary swaps whole branches — that is where the keys are
+    // load-bearing). What this catches is the gate being written so it REORDERS the
+    // region's children — the array/filter spelling someone reaches for when tidying a
+    // conditional — which is the way this path could start remounting the form.
+    const snap = makeSnap({ nb: null, nr: null, notch: null, nrLevel: null, agc: null })
+    const { rerender } = await renderCockpit({
+      snap,
+      onWorkSpot: undefined,
+      panels: fakePanels(['sent', 'copilot', 'bandActivity']),
+    })
+    const region = document.querySelector('.cockpit-panes')!
+    stubWidth(region, 1800)
+    act(() => fire!())
+    await frame()
+    expect(region.querySelectorAll(':scope > .cockpit-col').length).toBe(2)
+    const log0 = document.querySelector('[data-testid="log-stub"]')!
+
+    // The operator unticks DECODE — the last pane the leading column had.
+    await act(async () => {
+      rerender(
+        <CwCockpit
+          snap={snap}
+          theme="dark"
+          onWorkSpot={undefined}
+          spots={[]}
+          panels={fakePanels(['decode', 'sent', 'copilot', 'bandActivity'])}
+        />,
+      )
+    })
+    await frame()
+    expect(region.querySelectorAll(':scope > .cockpit-col').length).toBe(1)
+    expect(
+      document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0),
+      'log form remounted when the leading column unmounted',
+    ).toBe(true)
+  })
+
   it('collapses to ONE column when only the log can render (no empty 1fr band)', async () => {
     // Every CW pane except the log is ⊞-removable; with all of them hidden and no rig
     // capability, a 2-col template renders an EMPTY leading minmax(0,1fr) track beside
     // the log — the full-height "band of empty black" the model claims is
-    // unrepresentable. The tier must collapse to 1 (region scroller; auto rows, so an
-    // empty column takes no space).
+    // unrepresentable. The tier must collapse to 1 track…
     await renderCockpit({
       snap: makeSnap({ nb: null, nr: null, notch: null, nrLevel: null, agc: null }),
       onWorkSpot: undefined,
@@ -351,6 +395,16 @@ describe('CwCockpit pane-grid shell', () => {
     act(() => fire!())
     await frame()
     expect(region.getAttribute('data-cols')).toBe('1')
+    // …and the empty leading COLUMN must not render either. The region is wide, so its
+    // flow is 'fill' and its rows are minmax(0,1fr): an empty `.cockpit-col` there is a
+    // grid ROW of dead space — the same band of black, one level down. (It was merely
+    // cheap before, when one track meant auto rows; the track count is a content budget,
+    // not a width claim, so this state is now genuinely bounded.) Phone already gates its
+    // leading column on `leadPresent`; this is CW's twin.
+    expect(region.getAttribute('data-flow')).toBe('fill')
+    const cols = region.querySelectorAll(':scope > .cockpit-col')
+    expect(cols.length, 'an empty leading column rendered beside the log').toBe(1)
+    expect(cols[0].querySelector('[data-pane="log"]'), 'the one column is not the log column').not.toBeNull()
   })
 
   it('maxCols caps the tier at 2 when a column would sit empty', async () => {
