@@ -58,8 +58,13 @@ NAMES = {
     "needed": "needed",
     "potasota": "pota-sota",
     "tempo": "tempo",
+    # Settings tabs. Captures are named for the tab alone ("radio.png"), so both the
+    # bare and the qualified form map to the same published image.
+    "radio": "settings-radio",
     "settingsradio": "settings-radio",
+    "contesting": "settings-contesting",
     "settingscontesting": "settings-contesting",
+    "modes": "settings-modes",
     "settingsmodes": "settings-modes",
     "settingsstation": "settings-station",
     "settingsfrequencies": "settings-frequencies",
