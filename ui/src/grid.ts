@@ -32,9 +32,27 @@ export function gridToLatLon(grid: string): LatLon | null {
  * map spot that has coordinates but no reported grid. */
 /** STRICT Maidenhead check: exactly 4 or 6 chars, fields A–R, squares 0–9,
  * subsquares A–X. `gridToLatLon` deliberately stays permissive (it's a
- * distance-badge helper) — use THIS for anything that persists a locator. */
+ * distance-badge helper) — use THIS for the operator's OWN square (the setup
+ * wizard, the programming workbench), which Nexus stores at 4/6 precision. */
 export function isValidGrid(grid: string): boolean {
   return /^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$/.test(grid.trim())
+}
+
+/** The same locator alphabet, for a square that goes into a QSO RECORD: 4, 6 or
+ * 8 characters. Two rulings, deliberately, and the difference is what the value
+ * is FOR — not two parsers, the extended pair is the one optional group added on
+ * the end of the pattern above.
+ *
+ *  · `isValidGrid` gates the operator's own station square, which Nexus stores
+ *    and prints at 4/6 and never at 8.
+ *  · This one gates a square the operator was PASSED. ADIF's GRIDSQUARE carries
+ *    4, 6 or 8 characters, so all three upload cleanly to LoTW/eQSL/ClubLog —
+ *    and 8 is exactly what the VHF/microwave and satellite operators who pass
+ *    grids at all use. Refusing one meant a callbook that answered `FN31PR99`
+ *    filled the log strip's Grid field with a value the strip then refused,
+ *    disabling Log over a square the operator never typed. */
+export function isValidLoggedGrid(grid: string): boolean {
+  return /^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2}([0-9]{2})?)?$/.test(grid.trim())
 }
 
 export function latLonToGrid(lat: number, lon: number): string {

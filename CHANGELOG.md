@@ -29,6 +29,54 @@ what the engine believes.
 It shares a scrolling column with the sky dome, and at full size it pushed the dome off the top.
 Now compact enough to log a station while still watching where the bird is.
 
+### Added: the grid square is a field you can type in the Satellites section
+
+The satellite log strip now has a **Grid** box, beside the two signal reports. The square was
+already in the record and already on the callsign card, but only a callbook could ever write it,
+so a locator a station passed you **on the air** could not be entered at all — and on a bird that
+is most of the contact. Satellite work is grid-for-grid, and the grid is what Satellite VUCC is
+scored on.
+
+It sits with the reports rather than down with QTH because that is what it is on a satellite:
+something the other operator says in the same breath as his report, read and typed in the same
+moment. It also costs the strip nothing there — that row already wraps, and the box lands in the
+space the wrap leaves. **The whole strip is 48 px shorter than before**, at both the width a
+1366-wide window gives this column (368 → 320 px) and at the layout's narrow floor (499 → 451 px):
+the park row below came out and nothing took its place.
+
+The callbook still fills the box when it is blank, and it will **not** overwrite a square you
+typed. Nexus takes a **4-, 6- or 8-character** locator (`EN52`, `EN52XA`, `EN52XA25`) — every
+length ADIF carries, so every one of them uploads. Anything else holds the **Log** button until
+you fix it or clear it, and says so on the line above the button. A blank grid is not an error —
+most contacts have none.
+
+**Not in the Phone and CW strips yet**, and that is a height decision rather than a verdict: the
+box costs each of those a wrapped line, and this change was asked to stay on the satellite
+section. The case for putting it there is good and still open — a wrong callbook square cannot be
+corrected in those cockpits today, and they are the ones that meet the rovers and portable
+stations whose square is wrong most often (2 m and 6 m and the VHF contests are grid-for-grid too).
+
+### Fixed: a callbook square could stop you logging
+
+A callbook that answered with an 8-character locator (`FN31PR99` is a real one) filled the Grid
+box and was then refused by it, so the **Log** button went dead over a value nobody typed — mid
+pass, on a contact that would have logged fine a moment earlier. Eight characters are now
+accepted and logged whole, and a callbook answer that is not a locator at all (a rover's
+`EN52/EN53`, free text) no longer goes into the box: an empty box logs an empty grid, which is
+what happened before the box existed.
+
+### Removed: the POTA/SOTA row in the Satellites section
+
+There is no park on a satellite. The section now asks the shared log strip for a satellite
+exchange, so the program picker and the park search are not built there at all — which also gives
+the sky dome back the space they were taking in that column. The Phone and CW strips are
+unchanged: hunting an activator is part of the exchange there, and the park row stays.
+
+And no park reference reaches a satellite contact by any other route. Hunting a park in another
+section leaves a pending reference behind, and once that hunt ended or moved to a different park
+the leftover was being written to the satellite QSO as its POTA reference — a park contact in the
+log, with no row on screen to show it or clear it.
+
 ## [0.28.0] — 2026-08-03
 
 ### Added: log a contact from the Satellites section

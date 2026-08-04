@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   isValidGrid,
+  isValidLoggedGrid,
   gridToLatLon,
   bearingDeg,
   haversineKm,
@@ -33,6 +34,39 @@ describe('isValidGrid', () => {
   it('bounds the subsquare letters at X (there is no Y/Z subsquare)', () => {
     expect(isValidGrid('EN52xx')).toBe(true)
     expect(isValidGrid('EN52yz')).toBe(false)
+  })
+})
+
+// The RECORD-side check. Two rulings on purpose, and the difference is what the
+// value is FOR: `isValidGrid` gates the operator's OWN square, which Nexus
+// stores and prints at 4/6; this one gates a square he was PASSED, which goes to
+// ADIF's GRIDSQUARE and may be 4, 6 or 8 characters.
+describe('isValidLoggedGrid', () => {
+  it('takes everything isValidGrid takes', () => {
+    for (const g of ['EN52', 'en52', 'JJ00', 'RR73', 'EN52xa', 'IO91WM', ' EN52 ']) {
+      expect(isValidLoggedGrid(g), g).toBe(true)
+    }
+  })
+
+  it('ALSO takes the 8-character extended locator, which is where the two differ', () => {
+    // The live probe that started this: a callbook answered FN31PR99, the log
+    // strip filled its Grid field with it and then refused it, disabling Log
+    // over a value the operator never typed.
+    for (const g of ['FN31PR99', 'EN52XA25', 'en52xa00', 'RR73XX99']) {
+      expect(isValidLoggedGrid(g), g).toBe(true)
+      expect(isValidGrid(g), `${g} — the own-square ruling must stay at 4/6`).toBe(false)
+    }
+  })
+
+  it('refuses the same garbage, and every length between and beyond', () => {
+    for (const g of ['1234', 'ZZ99', '3N52', 'EN5', 'EN52x', 'EN52YA', 'EN52XA9', 'EN52XA999', '', 'EN 52', 'EN52/EN53']) {
+      expect(isValidLoggedGrid(g), g).toBe(false)
+    }
+  })
+
+  it('bounds the extended pair at digits, not letters', () => {
+    expect(isValidLoggedGrid('EN52XA25')).toBe(true)
+    expect(isValidLoggedGrid('EN52XAXA')).toBe(false)
   })
 })
 

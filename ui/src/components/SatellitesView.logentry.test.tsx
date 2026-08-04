@@ -235,11 +235,15 @@ describe('Satellites — logging the contact you just made', () => {
     const panel = strip.closest('.log-entry')
     expect(panel, 'the log strip is not the shared LogEntry').not.toBeNull()
     expect(panel!.querySelector('.le-log-btn'), 'no commit row').not.toBeNull()
-    // Two features nothing but LogEntry has: the POTA/SOTA park row and the
-    // other-radio override. Their presence is the proof this is the cockpits'
-    // strip rather than a lookalike built for this section.
-    expect(panel!.querySelector('.le-park-prog'), 'no park row').not.toBeNull()
+    // Three features nothing but LogEntry has: the other-radio override, the
+    // callbook lookup and the private notes box. Their presence is the proof this
+    // is the cockpits' strip rather than a lookalike built for this section.
+    // (The park row used to stand here as the fourth. It is gone from this
+    // section on purpose — see 'asks for no park row' below — so it can no longer
+    // be the evidence.)
     expect(panel!.querySelector('.le-override-toggle'), 'no other-radio override').not.toBeNull()
+    expect(panel!.querySelector('.le-lookup'), 'no callbook lookup').not.toBeNull()
+    expect(panel!.querySelector('.le-notes'), 'no notes box').not.toBeNull()
 
     // Exactly one of them. Two log panels in one column is the bug this test exists to catch.
     expect(document.querySelectorAll('.log-entry').length).toBe(1)
@@ -275,6 +279,141 @@ describe('Satellites — logging the contact you just made', () => {
       panel.compareDocumentPosition(globe) & Node.DOCUMENT_POSITION_FOLLOWING,
       'the globe is above the log strip',
     ).toBeTruthy()
+  })
+
+  it('asks for no park row — there is no POTA/SOTA reference on a bird', async () => {
+    // Operator, 0.28.1: "that section still has a pota/sota section, which is
+    // shouldnt". NOT ASKED FOR rather than hidden: the section passes
+    // `exchange="satellite"`, an exchange with no park in it, so the picker, the
+    // reference search and the park-detail chip are never rendered — and they
+    // take no vertical space in a column already shared with the sky dome (the
+    // same column he asked to make smaller one message earlier).
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    const panel = (await screen.findByPlaceholderText('Call')).closest('.log-entry')!
+    expect(panel.querySelector('.le-park-row'), 'the POTA/SOTA row is still here').toBeNull()
+    expect(panel.querySelector('.le-park-prog')).toBeNull()
+    expect(panel.querySelector('.le-park-search')).toBeNull()
+    expect(screen.queryByPlaceholderText(/^Park \(/)).toBeNull()
+    expect(screen.queryByPlaceholderText(/^Summit \(/)).toBeNull()
+  })
+
+  it('takes the GRID the station passed you, and it reaches the record', async () => {
+    // Operator, same message: "what about the sat, gridsquares features to log".
+    // Grid-for-grid IS the satellite exchange — on a bird it is most of the
+    // contact. The field was state-only before this: callbook-filled, printed in
+    // the summary line, and impossible to TYPE, so a square passed on air could
+    // not be logged at all. Asserted on the RECORD, never on the display.
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    const call = await screen.findByPlaceholderText('Call')
+    const grid = screen.getByPlaceholderText('Grid')
+    await act(async () => {
+      fireEvent.change(call, { target: { value: 'W1AW' } })
+    })
+    await act(async () => {
+      fireEvent.change(grid, { target: { value: 'fn31pr' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    })
+    await waitFor(() => expect(api.logQso).toHaveBeenCalled())
+    expect(lastLoggedRecord().grid).toBe('FN31PR')
+  })
+
+  // ---- NO PARK REACHES A SATELLITE RECORD, BY ANY PATH ----
+  //
+  // Removing the park ROW is not the same as removing the park. A pending
+  // POTA/SOTA hunt is snapshot state that arrives whatever section the operator
+  // is in, and the strip used to latch its reference into `logParkRef`. The
+  // commit then asked "does this differ from the pending hunt?" and sent it as
+  // `ota` when it did — which is exactly what a STALE latch looks like once the
+  // hunt has ended or moved to another park. The record leaves as ADIF
+  // SIG/SIG_INFO: a satellite contact filed as a park contact, with nothing on
+  // screen to reveal, edit or clear it. That is worse than the visible row.
+  //
+  // Asserting on the RECORD in both cases, from the section, with the hunt in
+  // the state that produces the stale latch — a chip check would pass while the
+  // wire lied.
+  const huntSnap = (hunt: unknown) =>
+    snap({}, { hunt: hunt as never, mycall: 'KD9TAW' })
+
+  async function logFromSection(call: string) {
+    const field = await screen.findByPlaceholderText('Call')
+    await act(async () => {
+      fireEvent.change(field, { target: { value: call } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    })
+    await waitFor(() => expect(api.logQso).toHaveBeenCalled())
+    return lastLoggedRecord()
+  }
+
+  it('carries no park reference after a hunt ENDS mid-pass', async () => {
+    const { rerender } = render(
+      <SatellitesView focusSat="RS-44" snap={huntSnap({ program: 'POTA', reference: 'K-1234', call: 'W1AW' })} />,
+    )
+    await screen.findByPlaceholderText('Call')
+    // The activator logs out / the engine clears the pend: hunt gone, any latched
+    // reference now differs from "no hunt at all" and reads as an explicit entry.
+    await act(async () => {
+      rerender(<SatellitesView focusSat="RS-44" snap={huntSnap(null)} />)
+    })
+    const rec = await logFromSection('W1AW')
+    expect(rec.ota ?? null, 'a park reference rode onto a satellite contact').toBeNull()
+    expect(JSON.stringify(rec)).not.toContain('K-1234')
+  })
+
+  it('carries no park reference after a hunt SWITCHES to another park', async () => {
+    const { rerender } = render(
+      <SatellitesView focusSat="RS-44" snap={huntSnap({ program: 'POTA', reference: 'K-1234', call: 'W1AW' })} />,
+    )
+    await screen.findByPlaceholderText('Call')
+    await act(async () => {
+      rerender(
+        <SatellitesView focusSat="RS-44" snap={huntSnap({ program: 'POTA', reference: 'K-9999', call: 'W1AW' })} />,
+      )
+    })
+    const rec = await logFromSection('W1AW')
+    expect(rec.ota ?? null, 'a park reference rode onto a satellite contact').toBeNull()
+    expect(JSON.stringify(rec)).not.toContain('K-1234')
+    expect(JSON.stringify(rec)).not.toContain('K-9999')
+  })
+
+  it('carries no park reference while a hunt is still LIVE and matching', async () => {
+    // The third state, for completeness: the engine's callsign auto-tag owns
+    // this one, and the strip must not double-report it either.
+    render(
+      <SatellitesView focusSat="RS-44" snap={huntSnap({ program: 'POTA', reference: 'K-1234', call: 'W1AW' })} />,
+    )
+    const rec = await logFromSection('W1AW')
+    expect(rec.ota ?? null).toBeNull()
+    expect(JSON.stringify(rec)).not.toContain('K-1234')
+  })
+
+  it('a callbook square the operator never typed cannot strand him mid-pass', async () => {
+    // QRZ answers `grid` with whatever is in the profile. An 8-character
+    // extended locator (probed live: FN31PR99) filled the field, failed the
+    // strip's 4/6 check and DISABLED Log — on a pass, over a value nobody typed.
+    // 8 is a legal ADIF GRIDSQUARE, so it is accepted and logged whole.
+    api.qrzLookup.mockResolvedValueOnce({ call: 'W1AW', grid: 'FN31PR99', name: 'Hiram' } as never)
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    const call = await screen.findByPlaceholderText('Call')
+    await act(async () => {
+      fireEvent.change(call, { target: { value: 'W1AW' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Lookup' }))
+    })
+    await waitFor(() =>
+      expect((screen.getByPlaceholderText('Grid') as HTMLInputElement).value).toBe('FN31PR99'),
+    )
+    const btn = screen.getByRole('button', { name: 'Log' }) as HTMLButtonElement
+    expect(btn.disabled, 'the callbook locked the operator out of his own log').toBe(false)
+    await act(async () => {
+      fireEvent.click(btn)
+    })
+    await waitFor(() => expect(api.logQso).toHaveBeenCalled())
+    expect(lastLoggedRecord().grid).toBe('FN31PR99')
   })
 
   it('logs an ORDINARY contact — no satellite fields reach the record', async () => {

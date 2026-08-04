@@ -6499,8 +6499,24 @@ input.cw-pitch::-webkit-inner-spin-button {
   max-width: 80px;
   flex: 0 0 auto !important;
 }
-/* State + Country sit beside QTH. Both are narrow and non-growing so adding them does not
-   squeeze the Comment field, which is the one that genuinely needs the room. */
+/* Grid (exchange row) + State and Country (QTH row) are all narrow and NON-GROWING, so
+   adding them does not squeeze QTH/Comment, the fields that genuinely need the room.
+   `!important` is load-bearing on the flex, not decoration: `.le-row .settings-input` is
+   (0,2,0) and would otherwise out-specify these (0,1,0) rules and grow them like Comment.
+   `0 0 auto` means they do not shrink either — the wrapping row moves an item to the next
+   line rather than squeezing it — but their caps are far below the 24em pane floor, so none
+   of them can ever be the single item that overflows a line. Computed (never regex-matched)
+   in panel-overflow.test.ts. */
+/* 84px is a BUDGET, not a taste call. Grid shares the exchange row's last wrapped line
+   with Name and Clear, and at the two-column floor that line has 296px: Name's 9em basis
+   (126) + Clear (61) + two 8px gaps leaves 93. Staying under it is what keeps Grid free of
+   a new line — panel-overflow.test.ts › '.le-grid fits the LINE BUDGET' computes the same
+   sum from this sheet. It still shows a 6-character locator whole (50.6px of mono + 26px
+   of chrome); 8 characters scroll, and the summary line under the strip prints them. */
+.le-grid {
+  max-width: 84px;
+  flex: 0 0 auto !important;
+}
 .le-state {
   max-width: 90px;
   flex: 0 0 auto !important;
