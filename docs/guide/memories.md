@@ -211,11 +211,13 @@ mileage follows you.
   flag.
 - **Recall reaches three cockpits only** — Phone, CW and Operate. An RTTY or PSK31
   memory is treated as digital and opens the FT8/FT4 Operate cockpit, not the RTTY
-  cockpit. SSTV is not on that mode list, and no save path guesses it: however you
-  save one it comes out **Kind: Other**, so recall sends it to the **Phone**
-  cockpit in SSB, tuned to the frequency, with "set SSTV on the rig" in the toast.
-  Set the row's **Kind** to **Digital** in the editor and it opens Operate instead
-  — Kind is the override for a mode the list does not name.
+  cockpit. SSTV is not on that mode list, so a row whose **mode** reads `SSTV`
+  gets no digital inference: it saves as **Kind: Other** and recall sends it to
+  the **Phone** cockpit in SSB, tuned to the frequency, with "set SSTV on the rig"
+  in the toast. **Kind** is the override — set it to **Digital** in the editor and
+  the same row opens Operate instead. The three SSTV rows in the bundled Digital
+  Watering Holes pack already carry it: they are stored as mode `USB` with
+  **Kind: Digital**, so they recall to Operate rather than Phone.
 - **Phone recall commands USB, LSB and FM only.** An AM, WFM or DV memory tunes
   the dial and then tells you to set the mode on the rig rather than claim a mode
   Nexus did not command — a WWV or shortwave reference channel behaves this way.

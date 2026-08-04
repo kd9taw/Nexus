@@ -71,11 +71,13 @@ controls.
   decoder reads **Monitor off** even when the dial is also in the wrong place:
   arm Monitor and read the chip again rather than trusting the frequency because
   the chip did not complain about it. The bottom four — **N decoded**, **N failed
-  CRC**, **Silent**, **Listening** — end their hover sentence with the **live
-  input level in dBFS**, the peak of the most recent 0.1 s drain, so once audio is
+  CRC**, **Silent**, **Listening** — carry the **live input level in dBFS** in
+  their hover sentence, the peak of the most recent 0.1 s drain, so once audio is
   known to be arriving "what is the app actually hearing" is a number rather than
-  an inference. The four above them carry no level: each has already found a fault
-  the level cannot speak to. When the verdict is a wrong dial, a **Tune to
+  an inference. **Listening** goes further and gives you the targets to compare it
+  against: roughly what the hiss should read with the squelch open, and the range a
+  packet burst should peak into. The four above them carry no level: each has
+  already found a fault the level cannot speak to. When the verdict is a wrong dial, a **Tune to
   144.390** button appears beside the chip.
 - **on \<radio name\>** appears only when more than one of your radios covers the
   band. The tap follows the active radio, and wrong-radio silence is

@@ -95,8 +95,9 @@ that takes one tone of a pair down. Straddle-point bit-clock recovery judges eve
 bit at the middle of its window and re-centres on each character's start bit, so a
 sender running a little off 45.45 baud does not slide into garbage part-way down a
 line. Phase-difference AFC is clamped so it can never cross onto the neighbouring
-tone (±45% of your shift — about ±76 Hz at 170). A signal-presence squelch gates the printed output, so an
-armed decoder on a quiet band stays silent instead of streaming garbage. It runs
+tone (±45% of your shift — about ±76 Hz at 170). A signal-presence squelch gates
+the printed output, so an armed decoder on a quiet band stays silent instead of
+streaming garbage. It runs
 in its own thread on a 100 ms drain and keeps decoding while you are on another
 section; the cockpit polls it twice a second while RTTY is the visible view, so
 the first tick after you come back catches the display up.
