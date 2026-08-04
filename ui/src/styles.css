@@ -15489,6 +15489,31 @@ button.sat-chip:disabled {
 .sats-log {
   margin: var(--space-2) 0;
 }
+/* COMPACT, because this strip shares one scroll column with the sky dome, and the
+   operator reads them TOGETHER: he is logging a station while watching where the
+   bird is, with a hand on a rotator (operator, 2026-08-03: "its too big, make it
+   smaller so the logging and az/el map are visable together").
+   At full size the strip pushed the dome off the top of `.sats-side`.
+
+   Tightened, never scrolled: `.sats-side` is the section's ONE scroll owner, so a
+   max-height + inner scroller here would make a second one inside it — the exact
+   thing the layout contract forbids. Same treatment `.cw-cockpit .log-entry`
+   already applies to this component for the same reason (a narrow shared column),
+   so this is the established shape and not a new one.
+
+   Specificity 0,2,0 beats the base `.log-entry` rules (0,1,0) regardless of sheet
+   order, and it is scoped to `.sats-log`, so the Phone and CW strips are
+   untouched. */
+.sats-log .log-entry {
+  padding: var(--space-2) var(--space-3);
+}
+.sats-log .log-entry h2 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-label);
+}
+.sats-log .log-entry .le-row {
+  margin-bottom: var(--space-1);
+}
 /* The honesty line under the strip: this logs an ORDINARY contact, with no
    satellite tagging. Same micro type as the strip's own hints, but lifted out
    of --text-faint because it is a credit consequence the operator has to act
