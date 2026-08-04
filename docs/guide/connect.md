@@ -128,11 +128,11 @@ FT8/FT4/CW/SSB "workable now" chips.
 
 ### Choose the prediction engine
 
-In [Settings ▸ Connections](settings-reference.md#connections), **Prediction
-engine** selects **Modelled (fast heuristic)** or **ITU-R P.533 (full physics)**.
-P.533 is the real circuit-reliability method (validated against the ITU
-reference, ~0.1 s per prediction, and it uses your station power and antenna
-gain). **Live spots always win over any model.**
+In [Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds),
+**Prediction engine** selects **Modelled (fast heuristic)** or **ITU-R P.533
+(full physics)**. P.533 is the real circuit-reliability method (validated
+against the ITU reference, ~0.1 s per prediction, and it uses your station power
+and antenna gain). **Live spots always win over any model.**
 
 ## The Now-Bar
 

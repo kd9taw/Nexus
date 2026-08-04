@@ -11,7 +11,7 @@ directory: no map, no polling, no browsing for its own sake.
 Program is an opt-in section. It is on under the **Just getting started**,
 **POTA / SOTA** and **6m / VHF** goal profiles and off under DX chasing and
 contesting; turn it on either way in
-[Settings ▸ Features](settings-reference.md#features).
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the Program section on a wide window: fetched results on the left showing FM rows plus one badged DMR row and one OFF-AIR row, a six-channel list built on the right, the whole delivery row visible under it -->
 

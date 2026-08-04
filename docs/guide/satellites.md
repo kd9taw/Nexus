@@ -6,8 +6,9 @@ favorites at the top, plots each pass, lists the working frequencies, and — if
 you have a rotator — can auto-track a bird across the sky through a pass.
 
 Satellites is an opt-in section. Turn it on in the first-run wizard or in
-[Settings ▸ Features](settings-reference.md#features). It needs your grid set in
-[Settings ▸ Station](settings-reference.md#station) to compute passes.
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features). It needs
+your grid set in [Settings ▸ Station](settings-reference.md#station) to compute
+passes.
 
 <!-- TODO: capture screenshot — the Satellites pass list with a favorite starred and its polar plot -->
 
@@ -292,10 +293,10 @@ decides where the *next* pick lands.
 ### Auto-track with a rotator
 
 1. Configure your rotator in
-   [Settings ▸ Rig / CAT](settings-reference.md#rig--cat) — pick your model and
-   its COM port and Nexus runs the control daemon for you. No hardware? Pick the
-   **Dummy (testing)** model, or run `rotctld -m 1` and point Nexus at
-   `127.0.0.1:4533` to watch it work.
+   [Settings ▸ Radio ▸ Rig Control](settings-reference.md#rig-control) — pick
+   your model and its COM port and Nexus runs the control daemon for you. No
+   hardware? Pick the **Dummy (testing)** model, or run `rotctld -m 1` and point
+   Nexus at `127.0.0.1:4533` to watch it work.
 2. **Arm rotor track** on a pass. Nexus slews the rotator to follow the bird
    across the sky through the pass; the compass shows the track, with °T and °M
    side by side, and a STOP control halts it.

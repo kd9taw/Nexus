@@ -73,9 +73,9 @@ multi-monitor shack.
 On first launch a three-step wizard — Station, Rig, Goals — gets you on the air.
 Every step is skippable and everything it sets stays editable later in Settings.
 The Goals step shapes which sections appear by default; you can turn any section
-on or off in [Settings ▸ Features](settings-reference.md#features). If you'd
-rather set things by hand, the [Settings reference](settings-reference.md) covers
-every field.
+on or off in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+If you'd rather set things by hand, the
+[Settings reference](settings-reference.md) covers every field.
 
 ## Keyboard shortcuts
 

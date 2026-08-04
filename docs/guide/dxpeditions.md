@@ -7,8 +7,9 @@ each entity plus a wake-me alarm that only fires when the expedition is actually
 on the air.
 
 DXpeditions is an opt-in section. Turn it on in the first-run wizard or in
-[Settings ▸ Features](settings-reference.md#features). It never touches the rig
-on its own — it's a board; working a station happens through the cockpits.
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features). It never
+touches the rig on its own — it's a board; working a station happens through the
+cockpits.
 
 <!-- TODO: capture screenshot — the DXpeditions board — active now, upcoming calendar, need status -->
 
@@ -20,9 +21,9 @@ which ones matter to your log.
 
 **The week planner.** Every calendar entry carries a 7-day strip colored by
 *your* modelled best shot each day. Dimmed days mean they're not on the air yet.
-Hover a day's chip for that day's best band and window. This is your own station's
-forecast, not a generic one — it uses your propagation engine choice from
-[Settings ▸ Connections](settings-reference.md#connections).
+Hover a day's chip for that day's best band and window. This is your own
+station's forecast, not a generic one — it uses the propagation engine you
+picked in [Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds).
 
 <!-- TODO: capture screenshot — a week-planner strip with per-day best-shot colors and a hover chip -->
 

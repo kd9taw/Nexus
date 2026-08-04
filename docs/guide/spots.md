@@ -10,9 +10,9 @@ Needed board has.
 
 Spots is an opt-in section: the first-run Goals step turns it on under **DX
 chasing & awards**, **Contesting** and **Everything (expert)**, and
-[Settings ▸ Features](settings-reference.md#features) turns it on or off any
-time. It describes itself there as "Every cluster/RBN spot on the air — the raw
-firehose, filter by band/mode."
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features) turns it on
+or off any time. It describes itself there as "Every cluster/RBN spot on the air
+— the raw firehose, filter by band/mode."
 
 <!-- TODO: capture screenshot — the Spots board on a busy evening: a few hundred rows sorted by Age, the filter drawer open with band chips and mode chips visible, and the header count reading a filtered "N of M" -->
 
@@ -24,16 +24,17 @@ are looking at. Beside it sit the hint "every spot on the air — single-click t
 work it", the search box, and the **Filter** button, which reads **Filtered**
 while any chip filter is set.
 
-**What feeds it.** Two RBN skimmer firehoses — CW and digital — plus *every* human
-DX-cluster node you list in
-[Settings ▸ Connections](settings-reference.md#connections), unioned into one
-buffer. RBN carries CW and digital only, so phone rows come from the human nodes:
-with no node configured this board is nearly all CW and FT8. PSK Reporter does
-**not** feed it — that is the Needed board's evidence lane and the propagation
-nowcast's — and neither do your own radio's decodes. The panel re-reads the buffer
-every 15 seconds, so a spot is on screen within a quarter-minute of the feed
-carrying it, and it ages out of the buffer at 20 minutes (the Needed board's
-window is 15, so Spots holds a station about five minutes longer).
+**What feeds it.** Two RBN skimmer firehoses — CW and digital — plus *every*
+human DX-cluster node you list in
+[Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds),
+unioned into one buffer. RBN carries CW and digital only, so phone rows come
+from the human nodes: with no node configured this board is nearly all CW and
+FT8. PSK Reporter does **not** feed it — that is the Needed board's evidence
+lane and the propagation nowcast's — and neither do your own radio's decodes.
+The panel re-reads the buffer every 15 seconds, so a spot is on screen within a
+quarter-minute of the feed carrying it, and it ages out of the buffer at 20
+minutes (the Needed board's window is 15, so Spots holds a station about five
+minutes longer).
 
 **One row per station per frequency.** A second report of the same call within
 2 kHz replaces the row and resets its age rather than adding another line, so a

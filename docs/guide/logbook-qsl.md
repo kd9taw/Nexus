@@ -49,24 +49,25 @@ nothing moves at any window size where the form already fits.
 ### Upload to LoTW
 
 1. Set your **LoTW Station Location** (and optionally the TQSL path) in
-   [Settings ▸ Confirmations](settings-reference.md#confirmations). Nexus signs
-   through *your installed TQSL* against that named Station Location — no
-   certificate or password is stored by Nexus.
+   [Settings ▸ Logging & Connectors](settings-reference.md#confirmations).
+   Nexus signs through *your installed TQSL* against that named Station Location
+   — no certificate or password is stored by Nexus.
 2. Click **Upload to LoTW** in the logbook. The button shows the count of
    un-uploaded QSOs; it signs and uploads the unsent batch.
-3. Pull confirmations back with **Sync LoTW now** (Settings ▸ Confirmations). The
-   first sync pulls your whole history; later syncs are incremental. Syncing also
+3. Pull confirmations back with **Sync LoTW now** (Settings ▸ Logging &
+   Connectors). The first sync pulls your whole history; later syncs are
+   incremental. Syncing also
    marks which of *your* uploads LoTW holds on file, so a pending contact reads
    "waiting on the other op," not "never uploaded."
 
 ### Push a single QSO to QRZ / ClubLog / HRDLog
 
 Auto-upload (configured per service in
-[Settings ▸ Confirmations](settings-reference.md#confirmations)) pushes each QSO
-as you log it. When one fails — a service was down, a key was wrong — the logbook
-gives you a **per-row re-push** for **QRZ**, **ClubLog**, and **HRDLog.net** so
-you can retry that one contact after fixing the cause. A "duplicate" result is
-the benign "already there" answer, not an error.
+[Settings ▸ Logging & Connectors](settings-reference.md#confirmations)) pushes
+each QSO as you log it. When one fails — a service was down, a key was
+wrong — the logbook gives you a **per-row re-push** for **QRZ**, **ClubLog**,
+and **HRDLog.net** so you can retry that one contact after fixing the cause. A
+"duplicate" result is the benign "already there" answer, not an error.
 
 ### Mark a QSL sent
 

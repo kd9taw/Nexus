@@ -16,8 +16,11 @@ set to **FT8/FT4**. Flip it to **Tempo** for the TempoFast/TempoDeep chat cockpi
 
 ## The tour
 
-**Waterfall + decode feed.** The waterfall renders on the right rail by default
-(move it to a top strip in [Settings ▸ Workspace](settings-reference.md#workspace)).
+**Waterfall + decode feed.** The waterfall renders on the right rail by default.
+Drag the dividers between panes to resize it (double-click a divider to reset),
+or use the ⊞ menu to show and hide panes; **Reset pane sizes** in
+[Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) restores the
+defaults.
 Decoding is **always on** — there is no Monitor toggle to forget; the decoder
 runs every RX slot regardless of TX state. Click the waterfall to set your TX/RX
 audio frequency.
@@ -32,8 +35,8 @@ annotations stock WSJT-X never had:
 - **CQ** and **YOU** badges,
 - **AP** / low-confidence markers,
 - **JTAlert highlight colors** (honored over UDP if JTAlert is feeding them),
-- a teal **L** mark on calls known to upload to LoTW (populate the users list
-  in [Settings ▸ Confirmations](settings-reference.md#confirmations)).
+- a teal **L** mark on calls known to upload to LoTW (populate the users list in
+  [Settings ▸ Logging & Connectors](settings-reference.md#lotw-users-list)).
 
 **The QSO strip** sits below with your transmit controls — **TX On/Off**,
 **Tune**, **Stop TX**, **Hold Tx** — beside **Call CQ** and **S&P**. (These live
@@ -67,8 +70,8 @@ Roster when you're scanning a busy band for the one call worth working.
    a bystander never advances your QSO, and portable suffixes are matched by
    base call.
 4. On the final 73, TX disarms (WSJT-X default — see "Disable TX after sending
-   73" in [Settings ▸ Operating](settings-reference.md#operating)). The QSO logs
-   automatically if Auto-log is on.
+   73" in [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4)).
+   The QSO logs automatically if Auto-log is on.
 
 ### Run CQ (call and work the pileup)
 
@@ -76,13 +79,14 @@ Roster when you're scanning a busy band for the one call worth working.
    CQ NA, CQ POTA, CQ 040…) persists across the run exactly like stock Tx6.
 2. When a station answers, the sequencer works them, then **auto-returns to CQ**
    for the next caller.
-3. Optional guards in [Settings ▸ Operating](settings-reference.md#operating):
-   "Stop CQ after N calls" ends an unanswered run; "Auto-CQ: drop a silent caller
-   after N overs" abandons a station that answered then went quiet.
+3. Optional guards in
+   [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4): "Stop CQ
+   after N calls" ends an unanswered run; "Auto-CQ: drop a silent caller after N
+   overs" abandons a station that answered then went quiet.
 
 Remember to pick your **transmit period** (Tx 1st / even, or Tx 2nd / odd) —
 the two stations in a QSO must be on opposite periods. The choice is on the top
-bar and in [Settings ▸ Operating](settings-reference.md#operating).
+bar and in [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4).
 
 ### Work a needed station
 
@@ -94,8 +98,8 @@ double-clicking a spot on the [Connect map](connect.md).
 ### Hound a DXpedition (Fox/Hound)
 
 1. Turn on **DXpedition mode ▸ Hound** in
-   [Settings ▸ Operating](settings-reference.md#operating) (or start it from a
-   [DXpedition board](dxpeditions.md) row).
+   [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4) (or start
+   it from a [DXpedition board](dxpeditions.md) row).
 2. Nexus spreads your initial calls above 1000 Hz (session-salted so callers
    don't stack) and **auto-moves your TX to the Fox's frequency** the moment
    you're answered.
@@ -108,12 +112,12 @@ end) is not implemented.
 ### Split, decode depth, and re-decode
 
 - **Split Operation** offers the stock trio in
-  [Settings ▸ Rig / CAT](settings-reference.md#rig--cat): **None**, **Rig**
+  [Settings ▸ Radio ▸ Rig Control](settings-reference.md#rig-control): **None**, **Rig**
   (VFO B), and **Fake It** (TX audio held to 1500–2000 Hz with the dial shifted
   in 500 Hz steps for a cleaner signal).
 - **Decode depth** (Fast / Normal / Deep) and the **decoder passband**
   (default 200–2900 Hz) are in
-  [Settings ▸ Operating](settings-reference.md#operating).
+  [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4).
 - **`F6`** re-decodes the retained last period and adds only what the first pass
   missed. **`Esc`** halts TX, **`F4`** clears the DX call, **`Alt+1`–`Alt+6`**
   fire the Tx slots.
@@ -128,14 +132,16 @@ schedule.
 
 If another app owns the rig, **Companion mode** rides an upstream WSJT-X/JTDX
 decode stream over UDP (default :2237) instead of decoding itself — point it at
-the source in [Settings ▸ Connections](settings-reference.md#connections).
+the source in
+[Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds).
 
 ## Honest limits
 
 - **Fox role is not implemented** — you can hound a DXpedition, not run one.
 - **No contest modes** in the digital cockpit beyond Field Day (no NA VHF,
   RTTY RU, WW Digi).
-- **No WSPR, Q65, or MSK144** — Nexus does FT8, FT4, and its own TempoFast/TempoDeep.
+- **Fox role aside, the mode list is complete**: FT8, FT4, FST4, FST4W, Q65, MSK144, JT65 and
+  WSPR all decode *and* transmit, alongside Nexus's own TempoFast/TempoDeep.
 
 ---
 
@@ -168,7 +174,7 @@ On top of the waveform:
   retransmissions are joint-combined (RV0 → RV1 → RV2) until the message lands,
   for a simulated ~+2.5 dB / ~2× completion gain in the marginal zone. A session
   rescue counter in the UI shows how often it saved a frame. Toggle it in
-  [Settings ▸ Operating](settings-reference.md#operating).
+  [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4).
 - **Coordinated QSY (Roam)** — an announced, plain-text, in-the-clear frequency
   move for keeping an off-grid net together, with deterministic timing and
   automatic return-home on lost sync. It is a net convenience, **not** privacy

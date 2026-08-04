@@ -12,8 +12,11 @@ that station is real for *you*, not for a superstation two time zones away.
 
 Each row is one opportunity, ranked by value to your log:
 
+- **wanted** (120) — a call on your wanted list; nothing outranks it,
 - **ATNO** (all-time-new-one, 100) — an entity you've never worked,
 - **new zone** (70),
+- **new state** (60) — a state you still need for WAS,
+- **new grid** (55) — a Maidenhead square you have not worked,
 - **new band** (50) — an entity you've worked, but never on *this* band,
 - **new mode** (30) — an entity you've worked, but never in this **mode class**
   (CW / Phone / digital) on **any** band. The row reads "(any band)" because that
@@ -77,12 +80,12 @@ Filters persist across sessions:
 - **Mode class** — CW / Phone / digital.
 
 CW and Phone rows appear **only when those operating modes are enabled**
-([Settings ▸ Features](settings-reference.md#features)), so a digital-only
-operator's board stays clean. This is also why phone/SSB needs can look sparse:
-RBN auto-spots only CW and digital, so SSB needs come from the human DX cluster —
-add cluster nodes in
-[Settings ▸ Connections](settings-reference.md#connections) to widen phone
-coverage.
+([Settings ▸ Appearance ▸ Features](settings-reference.md#features)), so a
+digital-only operator's board stays clean. This is also why phone/SSB needs can
+look sparse: RBN auto-spots only CW and digital, so SSB needs come from the
+human DX cluster — add cluster nodes in
+[Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds)
+to widen phone coverage.
 
 ### Pop it out to a second monitor
 

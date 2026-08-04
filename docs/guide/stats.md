@@ -8,10 +8,10 @@ and has no controls at all — no filter, no date range, no export. Every figure
 on the page counts your **whole** logbook unless this page says otherwise.
 
 Stats is an opt-in section that depends on the logbook: turn it on in
-[Settings ▸ Features](settings-reference.md#features), and note that turning
-**Logbook** off there takes Stats (and Awards, and POTA/SOTA) with it. If Stats
-is off when you log your first QSO, Nexus offers it once as a nudge — it never
-switches itself on.
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features), and note
+that turning **Logbook** off there takes Stats (and Awards, and POTA/SOTA) with
+it. If Stats is off when you log your first QSO, Nexus offers it once as a nudge
+— it never switches itself on.
 
 <!-- TODO: capture screenshot — the Stats dashboard on a log of a few thousand QSOs: the four-figure headline row above the card grid, with By band, By mode, By year and Top DXCC entities visible -->
 

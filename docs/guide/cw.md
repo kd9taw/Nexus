@@ -9,7 +9,7 @@ hold a conversation without a paddle and without copying by ear if you'd rather
 not.
 
 CW is an opt-in section. Turn it on in the first-run wizard's "which modes?"
-step or in [Settings ▸ Features](settings-reference.md#features).
+step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the CW cockpit — macros, WPM control, AF scope, log strip -->
 
@@ -24,11 +24,11 @@ own explanation, so you can read the others before you switch:
 - **Serial** — Nexus toggles DTR or RTS into the rig's KEY jack and the rig
   shapes the signal (rig in CW). This is the N1MM/fldigi method for a rig with no
   CAT keying command. Set the keyline port and line in
-  [Settings ▸ Rig / CAT](settings-reference.md#rig--cat).
+  [Settings ▸ Modes ▸ CW](settings-reference.md#cw).
 - **WinKeyer** — a K1EL WinKeyer hardware keyer over serial (rig in CW). It's the
   no-ambiguity option: real hardware timing, nothing to route. Set its serial
   port under **WinKeyer port** in
-  [Settings ▸ Rig / CAT](settings-reference.md#rig--cat).
+  [Settings ▸ Modes ▸ CW](settings-reference.md#cw).
 - **Soundcard** — Nexus synthesizes PARIS-timed, click-free Morse (5 ms
   raised-cosine envelopes) through the TX audio path, for rigs without a CW keyer
   command. This is the workaround, not the clean path: it works **only** if

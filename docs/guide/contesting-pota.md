@@ -4,7 +4,7 @@ Two portable/event workflows live here: **Field Day** (ARRL or Winter Field Day)
 which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. Both are opt-in sections — enable them in the first-run
-wizard or [Settings ▸ Features](settings-reference.md#features).
+wizard or [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 ---
 
@@ -18,7 +18,7 @@ mode-class) dupe checking, and a scoreboard.
 
 ### Set it up first
 
-In [Settings ▸ Field Day](settings-reference.md#field-day):
+In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup):
 
 1. **Event** — ARRL Field Day or Winter Field Day. This changes scoring labels
    and export headers.
@@ -75,8 +75,8 @@ Both are fire-and-forget on background threads, so a hung logging PC can never
 stall your TX slot. The WSJT-X UDP Status message sets `special_op = Field Day`,
 so JTAlert/GridTracker auto-activate their FD behavior too.
 
-Configure N3FJP and N1MM in
-[Settings ▸ Field Day](settings-reference.md#field-day).
+Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
+[N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
 
 ---
 
@@ -132,4 +132,4 @@ they're heard on the air.
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Logbook & QSL](logbook-qsl.md)
-- [Settings reference — Field Day](settings-reference.md#field-day)
+- [Settings reference — Field Day Setup](settings-reference.md#field-day-setup)

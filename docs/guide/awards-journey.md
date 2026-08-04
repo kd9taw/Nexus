@@ -7,7 +7,7 @@ firsts, ladders, collections, and personal bests. Both read straight from your
 [logbook](logbook-qsl.md); neither needs an account or a network.
 
 Awards is an opt-in section, nudged on after your first QSO. Turn it on any time
-in [Settings ▸ Features](settings-reference.md#features).
+in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the Awards tab — DXCC slots, Honor Roll countdown, WAS/WAZ -->
 
@@ -56,14 +56,14 @@ What's on the board:
 - **Collections and personal bests.**
 
 Some feats read your station power (from
-[Settings ▸ Operating](settings-reference.md#operating)) — set it to unlock the
-miles-per-watt and QRP feats.
+[Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4)) — set it to
+unlock the miles-per-watt and QRP feats.
 
 ### Optional weekly streak
 
 Off by default: a gentle **"weeks on the air"** counter (never a daily streak,
 never a penalty for a break). Enable it under Journey in
-[Settings ▸ Operating](settings-reference.md#operating).
+[Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4).
 
 ### Share a card
 

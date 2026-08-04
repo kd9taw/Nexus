@@ -10,7 +10,7 @@ serials, no dupe check, no log strip — a contact you work by hand goes in the
 [Logbook](logbook-qsl.md) yourself.
 
 RTTY is an opt-in section. Turn it on in the first-run wizard's "which modes?"
-step or in [Settings ▸ Features](settings-reference.md#features).
+step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the RTTY cockpit mid-QSO: RX armed with the AFC pill showing a locked offset, the waterfall carrying the green M and orange S cursors straddling a real signal, several lines of decoded copy with some faint low-confidence characters, and the macro row + compose bar below -->
 
@@ -38,7 +38,7 @@ pill. The latch is this cockpit's Enable-Tx — the top bar's TX cluster is hidd
 behind the digital chrome here, so without it a send would sit at "TX is off"
 with no way to arm from this screen. There is no power slider and no **Tune**
 button in this cockpit: drive is **Tx Power** in
-[Settings ▸ Audio](settings-reference.md#audio), set so ALC reads just zero.
+[Settings ▸ Radio ▸ Audio](settings-reference.md#audio), set so ALC reads just zero.
 
 **The waterfall** is the same instrument the FT cockpit uses, run at the
 live-band cadence: a new row every 50 ms rather than the 120 ms the slot-synchronous
@@ -246,8 +246,8 @@ wherever you are.
   not.)
 - **Nothing you work by hand is logged.** There is no log strip here. Only the
   auto-sequencer writes a QSO, and only when **Auto-log QSOs** is on in
-  [Settings ▸ Operating](settings-reference.md#operating) — with auto-log off,
-  even a completed auto-run contact is not written anywhere.
+  [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4) — with
+  auto-log off, even a completed auto-run contact is not written anywhere.
 - **An auto run works one station and stops.** After the contact is logged and
   your closing goes out, the sequencer reaches Done and stays there. Press
   **Esc · Abort** to return it to idle before you can call CQ again — it will not

@@ -8,7 +8,7 @@ for the calls you make over and over, and crash-safe QSO recording, all with you
 logbook and license privileges wired in.
 
 Phone is an opt-in section. Turn it on in the first-run wizard's "which modes?"
-step or in [Settings ▸ Features](settings-reference.md#features).
+step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the Phone cockpit — dial read-back, bandscope, PTT, voice keyer -->
 
@@ -83,7 +83,7 @@ keyer's F-keys are always reachable rather than rendered past the edge. **PTT**,
    - hold the on-screen **PTT** button,
    - **hold the Space bar** (works unless you're typing in a field),
    - or let the configured rig method key it (CAT, serial RTS/DTR, or VOX) — set
-     in [Settings ▸ Rig / CAT](settings-reference.md#rig--cat).
+     in [Settings ▸ Radio ▸ Rig Control](settings-reference.md#rig-control).
    For hands-free operating, toggle **Lock**.
 3. Talk on the rig's microphone. Nexus handles the canned messages, recording,
    scope, and CAT/PTT — the voice path itself is the rig's own mic.
@@ -93,7 +93,7 @@ keyer's F-keys are always reachable rather than rendered past the edge. **PTT**,
 ### Work FM and repeaters
 
 1. Set **Phone mode ▸ FM** in
-   [Settings ▸ Rig / CAT](settings-reference.md#rig--cat). The cockpit's mode
+   [Settings ▸ Modes ▸ Phone](settings-reference.md#phone-ssb--fm). The cockpit's mode
    badge switches to FM and the rig is driven to FM.
 2. For a repeater, set the **Repeater shift** (simplex / plus / minus — the
    offset is the band standard, e.g. 600 kHz on 2 m, 5 MHz on 70 cm) and the
@@ -107,12 +107,12 @@ The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
 
 1. **Record in-app** or **import any WAV** (Nexus resamples and downmixes
    automatically). Choose your recording mic in
-   [Settings ▸ Audio](settings-reference.md#audio) — on a digital setup the
-   default input is the rig's RX audio, so point "Voice mic (recording)" at your
-   actual microphone. Both controls that start a recording — the **●** button and
-   an empty slot — carry that warning, so it reaches you where you are standing
-   when it matters. Recording the rig's RX audio into a slot is how a canned call
-   goes on the air with the wrong voice in it.
+   [Settings ▸ Modes ▸ Phone](settings-reference.md#phone-ssb--fm) — on a
+   digital setup the default input is the rig's RX audio, so point "Voice mic
+   (recording)" at your actual microphone. Both controls that start a recording
+   — the **●** button and an empty slot — carry that warning, so it reaches you
+   where you are standing when it matters. Recording the rig's RX audio into a
+   slot is how a canned call goes on the air with the wrong voice in it.
 2. Press a slot to play it. Playback keys PTT for the duration; **Esc** aborts.
 
 If you never use it, untick **Voice Keyer** in ⊞ Panels and the pane goes away.

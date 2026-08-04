@@ -190,7 +190,8 @@ sanctioned ARISS uplink event. Send anyway?"
 ### Catch an ISS pass
 
 1. Turn on **ISS SSTV auto-arm** in
-   [Settings ▸ Radio ▸ Rig Control](settings-reference.md#rig-control). It is off by default.
+   [Settings ▸ Radio ▸ Rig Control](settings-reference.md#rig-control). It is
+   off by default.
 2. At AOS of a pass, Nexus saves your dial, tunes 145.800 FM and arms the
    receiver, telling you it has done so.
 3. ARISS transmits PD-120, which decodes here like anything else.

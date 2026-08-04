@@ -11,7 +11,7 @@ positions/messages, send a beacon."*
 APRS ships enabled, but no goal profile in the first-run wizard turns it on and
 the wizard's "which modes?" step does not list it — so if you picked a goal
 there, switch APRS on in
-[Settings ▸ Features](settings-reference.md#features).
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the APRS cockpit at 1024×768 or wider: the left rail (beacon form, message compose, station table with mixed RF/net rows) beside the map at its default local zoom with a dozen symbols plotted, header showing "144.390 · N. America", "● Monitoring (auto)" and a green "N decoded" chip -->
 
