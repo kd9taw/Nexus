@@ -815,6 +815,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         snap={snap}
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
         defaultRst="59"
+        exchange="terrestrial"
         onSpot={(call) => {
           setSpotCall(call)
           setSpotOpen(true)

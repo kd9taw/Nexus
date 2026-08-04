@@ -108,6 +108,35 @@ that mode. Working a bird from a rig Nexus isn't connected to? Open **Log a
 contact from another radio** in the strip and set the band, frequency, mode and
 UTC time by hand.
 
+**The grid goes in the Grid box, beside the two reports.** Satellite work is
+grid-for-grid, so type the square he passed you — it sits with the reports because
+that is when you hear it. It is the one field the callbook regularly gets wrong for
+satellite work — a rover or a portable operator gives you where he *is*, and his
+callbook says where he lives — so the box wins: a lookup fills it only while it is
+blank and never overwrites what you typed. Clearing it and running the lookup again
+gets you the callbook's square back.
+
+Nexus takes a **4-, 6- or 8-character** locator: `EN52`, `EN52XA` or `EN52XA25` —
+every length ADIF's grid field carries, so all three upload. Case doesn't matter,
+it uppercases as you type. Anything else — a half-typed `EN5`, two squares in one
+box — is **refused**: the **Log** button goes dead and the line above it says which
+forms it takes, until you fix the square or clear the box. It refuses rather than
+quietly dropping what you typed, because a QSO record is permanent and a wrong
+square is not a missing grid but a grid credited to a square you never worked. A
+blank Grid box is not an error.
+
+A callbook answer that is not a locator never lands in the box at all — nothing you
+did not type can put the **Log** button out of reach in the middle of a pass.
+
+The box is in this section only for now. The Phone and CW strips do not have one
+yet: it costs each of them a wrapped line, and there was no room to spend on that
+here. It is still on the table.
+
+**There is no park row here.** POTA and SOTA are a terrestrial exchange, and the
+Phone and CW strips still carry the picker and the park search. This section asks
+the same strip for a *satellite* exchange, so that row isn't built here — one
+fewer thing between the Doppler readout and the sky dome in this column.
+
 **It logs an ordinary contact, not a satellite contact.** This is worth being
 plain about, because it decides whether a contact can ever earn satellite
 credit. LoTW recognises a satellite QSO by two ADIF fields:

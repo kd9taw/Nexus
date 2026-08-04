@@ -3,6 +3,7 @@ import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
 import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { callHistory, entitySlots, isNewEntity } from '../features/callHistory'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
+import { isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
 import { pushToast, withErrorToast } from '../toast'
 
@@ -75,6 +76,31 @@ interface Props {
   mode: string
   /** Default signal report for this mode ('599' / '59'). */
   defaultRst: string
+  /**
+   * WHAT THE TWO STATIONS PASS EACH OTHER here — the one thing this strip's
+   * three consumers (Phone, CW, Satellites) actually differ on, and therefore
+   * the whole of the prop surface that keeps them sharing one component instead
+   * of forking it. Required, not defaulted: a fourth consumer must state what
+   * its contacts are made of rather than inherit somebody else's.
+   *
+   *  · 'terrestrial' — Phone and CW. Their operators hunt POTA/SOTA activators,
+   *    so the park/summit reference of the station worked is part of the
+   *    exchange and the picker + directory search render.
+   *  · 'satellite' — the Satellites section. There is no park on a bird, so the
+   *    park row is simply NOT ASKED FOR: nothing to hide, nothing to suppress,
+   *    and no vertical space taken in a column shared with the sky dome. What
+   *    IS passed through a bird is the grid, so the Grid field is asked for
+   *    here and only here — beside the reports, in the exchange row.
+   *
+   * Grid in the terrestrial exchanges is an OPEN QUESTION, not a settled no: a
+   * wrong callbook square is uncorrectable in Phone and CW today, and those are
+   * the cockpits that meet the rovers and /P activations whose square is wrong
+   * most often (2 m/6 m and the VHF contests are grid-for-grid too). It is left
+   * out here because it costs the Phone and CW strips a wrapped line each and
+   * the operator's instruction for this change was "keep focused on sat" — the
+   * height, not the merit, is what is unresolved. See CHANGELOG › Unreleased.
+   */
+  exchange: 'terrestrial' | 'satellite'
   /** Spot the typed call to the DX cluster: renders a 📢 Spot button beside Log that
    * hands the CURRENT call field up (the host opens its SpotDialog seeded with it +
    * the dial). Phone/CW ask (operator 2026-07-21); omitted = no button (FT8 has its
@@ -122,6 +148,7 @@ export function LogEntry({
   snap,
   mode,
   defaultRst,
+  exchange,
   onSpot,
   pendingWork,
   onConsumeWork,
@@ -130,6 +157,12 @@ export function LogEntry({
   fdMode,
 }: Props) {
   const fdActive = fieldDay != null
+  // Does this cockpit's exchange carry a park/summit reference? See `exchange`.
+  const asksForPark = exchange === 'terrestrial'
+  // …and a grid square? A bird's exchange is grid-for-grid, so the field is asked
+  // for there. NOT in Phone/CW — see `exchange` for why that is an open question
+  // and not a settled no. The FD layout renders neither field.
+  const asksForGrid = exchange === 'satellite' && !fdActive
 
   const [logCall, setLogCall] = useState('')
   const [logRstSent, setLogRstSent] = useState(defaultRst)
@@ -239,6 +272,13 @@ export function LogEntry({
 
   // Prefill the park field from a hunted spot (snap.hunt = the activator's program+ref). Keyed on
   // the reference string so it fires when a NEW park is hunted, not on every snapshot poll.
+  //
+  // Deliberately NOT gated on `asksForPark`. It latches in every exchange, and what stops a
+  // latch reaching a satellite record is the ONE guard on `ota` at the commit — one seam,
+  // one mechanism, mutable and therefore testable. A second guard here would make that one
+  // untestable (remove it and the record still comes out clean, because the latch was never
+  // taken) which is how a load-bearing fix quietly dies. The two effects below carry their
+  // own guards for their own reason: they reach the NETWORK.
   useEffect(() => {
     const h = snap.hunt
     if (!h?.reference) return
@@ -263,7 +303,19 @@ export function LogEntry({
   }, [snap.hunt?.reference, snap.hunt?.program, logCall])
 
   // Search the local park directory as the operator types a POTA reference (debounced).
+  // `asksForPark` for the same reason as the lookup below: an exchange with no park row
+  // runs no park machinery, and this one reaches the disk. It was already unreachable in
+  // the satellite exchange — but only by the ACCIDENT that the prefill above sets
+  // `parkPicked` in the same commit, so this effect always finds the flag and consumes it
+  // instead of searching. That is not a guard, it is a coincidence between two effects, and
+  // no single change to either can be tested for. Stated instead of relied on. (Which is
+  // also why no test here reddens on removing this line alone: `parkPicked` still catches
+  // it. The guard's value is that the property no longer depends on that.)
   useEffect(() => {
+    if (!asksForPark) {
+      setParkHits([])
+      return
+    }
     if (parkPicked) {
       setParkPicked(false)
       return
@@ -280,14 +332,18 @@ export function LogEntry({
     }, 180)
     return () => clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logParkRef, logParkProgram])
+  }, [logParkRef, logParkProgram, asksForPark])
 
   // Auto-load a park's details the moment a COMPLETE valid POTA reference is entered (like HRD):
   // instant offline lookup first, then the live POTA directory if it's not in the local list. Purely
   // informational — never blocks typing or logging, and swallows all errors (offline = no chip).
+  // `asksForPark` first: a pending hunt still PREFILLS logParkRef in every exchange
+  // (the engine tags by callsign whichever strip logs), so without this the satellite
+  // exchange would fire a local lookup and then a live POTA-directory fetch for a chip
+  // it never renders.
   useEffect(() => {
     const ref = logParkRef.trim().toUpperCase()
-    if (logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
+    if (!asksForPark || logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
       setParkDetail(null)
       return
     }
@@ -317,7 +373,7 @@ export function LogEntry({
       cancelled = true
       clearTimeout(id)
     }
-  }, [logParkRef, logParkProgram])
+  }, [logParkRef, logParkProgram, asksForPark])
 
   const refreshLog = () => void getLog().then(setAllLog).catch(() => {})
   useEffect(() => {
@@ -440,7 +496,21 @@ export function LogEntry({
     const preferredName = r.nickname || r.name
     if (preferredName) setLogName((v) => (v.trim() ? v : preferredName))
     if (r.qth) setLogQth((v) => (v.trim() ? v : r.qth ?? ''))
-    if (r.grid) setLogGrid((v) => (v.trim() ? v : r.grid ?? ''))
+    // The callbook's square only lands if it IS a square. QRZ answers this field with
+    // whatever the operator put in their profile — an 8-character extended locator
+    // (probed live: FN31PR99, which `isValidLoggedGrid` takes), but also a rover's
+    // "EN52/EN53" or free text, which it does not. Filling the field with a value the
+    // strip refuses is how a callbook came to disable the Log button over a square the
+    // operator never typed. Blanks-only is unchanged: a typed square still wins.
+    // …AND ONLY WHERE THE BOX EXISTS. The reason to filter is that a value the strip
+    // will then REFUSE must not arrive on its own; that reason lives entirely in
+    // `asksForGrid`. Applying it in the terrestrial exchanges too changed what their
+    // records carry — a callbook grid that is not a 4/6/8 locator stopped reaching
+    // the record — for cockpits with no Grid box, no `gridBlocked` and nothing to
+    // strand. Those strips were explicitly out of scope for this change, so they keep
+    // taking the callbook's answer exactly as they did.
+    if (r.grid && (!asksForGrid || isValidLoggedGrid(r.grid)))
+      setLogGrid((v) => (v.trim() ? v : r.grid ?? ''))
     if (r.state) setLogState((v) => (v.trim() ? v : r.state ?? ''))
     if (r.country) setLogCountry((v) => (v.trim() ? v : r.country ?? ''))
     setLogImage(r.image ?? null) // display-only; no operator value to preserve
@@ -544,6 +614,27 @@ export function LogEntry({
   const fdExchangeOk =
     fdClass.trim() !== '' && FD_SECTION_CODES.has(fdSection.trim().toUpperCase())
 
+  // GRID GATE. A blank grid is normal and logs fine — most HF contacts have none.
+  // A grid that is NOT a Maidenhead locator is refused at the commit, the same
+  // shape as the two gates above and below it (the FD section code, the override
+  // frequency), and for the same reason: a QSO record is permanent, it cannot be
+  // repaired after upload, and a bad square is not a missing credit but a WRONG
+  // one (it counts toward a VUCC grid the operator never worked). Refused rather
+  // than silently dropped — dropping a value the operator can still see on screen
+  // makes the screen lie about what was written — and the reason renders beside
+  // the disabled button so it is two keystrokes to clear, not a dead end.
+  //
+  // `isValidLoggedGrid` (ui/src/grid.ts) takes 4, 6 or 8 characters — every length
+  // ADIF's GRIDSQUARE carries, so every square that uploads cleanly. It is the
+  // record-side ruling, distinct from `isValidGrid`'s own-station 4/6 (which still
+  // gates the setup wizard and the programming workbench, untouched).
+  //
+  // ARMED ONLY BY THE FIELD THAT IS ON SCREEN. `asksForGrid` is already false in
+  // Phone/CW and on the FD path, so no layout without a Grid input can be held by
+  // a value it does not render — which is why the FD Log button below needs no
+  // `gridBlocked` term rather than being quietly missing one.
+  const gridBlocked = asksForGrid && logGrid.trim() !== '' && !isValidLoggedGrid(logGrid)
+
   // The band / freq / mode this standard-log QSO will record: the hand-entered override when
   // it's open, else the live rig (byte-identical to before). When the override IS open it is
   // all-or-nothing — band, freq, mode AND time come from it together. A blank/garbage freq does
@@ -562,6 +653,13 @@ export function LogEntry({
     if (!call) return
     if (overrideBlocked) {
       pushToast('Enter a valid frequency for the override, or close it', 'error')
+      return
+    }
+    if (gridBlocked) {
+      pushToast(
+        `“${logGrid.trim()}” isn’t a grid square — enter EN52, EN52XA or EN52XA25, or clear it`,
+        'error',
+      )
       return
     }
 
@@ -609,10 +707,19 @@ export function LogEntry({
       whenUnix,
       confirmed: false,
       awardConfirmed: false,
+      // `asksForPark` FIRST: an exchange with no park row sends no park reference, by any
+      // path. The test below it is "differs from the pending hunt", which is precisely the
+      // shape a STALE latch passes — end the hunt or switch parks and the ref left in state
+      // no longer matches, so it reads as an explicit entry and rides onto the record as
+      // SIG/SIG_INFO. In a cockpit with a park row that is visible and editable; in one
+      // without, a satellite contact would be filed as a park contact with nothing on
+      // screen to reveal or clear it.
+      //
       // Only send an EXPLICIT park. A hunt-PREFILLED ref (still equal to the pending hunt) is left
       // to the engine's callsign-matched auto-tag — which also clears the pend — so a prefill can
       // never ride onto a non-matching call, and the hunt tags exactly the right QSO once.
       ota:
+        asksForPark &&
         logParkRef.trim() &&
         logParkRef.trim().toUpperCase() !== (snap.hunt?.reference ?? '').trim().toUpperCase()
           ? { theirProgram: logParkProgram, theirRef: logParkRef.trim().toUpperCase() }
@@ -705,6 +812,10 @@ export function LogEntry({
               title="Their ARRL section"
             />
           </label>
+          {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
+              is false whenever `fdActive` is, so `logIt`'s grid guard — which
+              sits above the FD branch — is provably inert on this path. A layout
+              with no Grid input can never be held by grid state. */}
           <button
             type="button"
             className="le-log-btn le-fd-log-btn"
@@ -801,6 +912,38 @@ export function LogEntry({
             autoComplete="off"
           />
         </label>
+        {/* GRID — the last of this cluster still write-only. `logGrid` has always
+            reached the RECORD and printed in the summary line and the recall card,
+            but only a callbook could ever write it: the square a station passed ON
+            AIR could not be entered at all.
+
+            IN THE EXCHANGE ROW, beside the reports — not down in the QTH row with
+            State and Country. Those are callbook facts about where a station
+            LIVES; a grid on a bird is something the other operator SAYS, in the
+            same breath as the report, and it is read and typed at the same moment.
+            It also costs nothing here, which is the whole reason the first attempt
+            was refused: this row already wraps at both measured widths, and Grid
+            fits in the slack a wrapped line leaves. In the QTH row it did not —
+            that row is a single full line at a 611 px column, so Grid pushed it to two and
+            made the satellite strip TALLER than the park row it replaced (+52 vs
+            −48). Measured in a real layout engine, and its two halves are pinned:
+            LogEntry.test.tsx › 'sits in the EXCHANGE row' and 'the QTH row is
+            BYTE-FOR-BYTE the same four fields' hold the placement, and
+            panel-overflow.test.ts › '.le-grid fits the LINE BUDGET' computes the
+            width that keeps it off a line of its own. Numbers in the CHANGELOG. */}
+        {asksForGrid && (
+          <input
+            className={`settings-input mono le-grid${gridBlocked ? ' invalid' : ''}`}
+            value={logGrid}
+            onChange={(e) => setLogGrid(e.target.value.toUpperCase())}
+            onKeyDown={onEnter}
+            placeholder="Grid"
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={gridBlocked}
+            title="Their Maidenhead locator — the satellite exchange. 4, 6 or 8 characters (EN52, EN52XA or EN52XA25); auto-filled by the callbook lookup only while it is blank"
+          />
+        )}
         <input
           className="settings-input le-name"
           value={logName}
@@ -856,6 +999,17 @@ export function LogEntry({
         />
       </div>
 
+      {/* THE PARK/SUMMIT REFERENCE — part of the terrestrial exchange only.
+          The Satellites section asks for an exchange that has no park in it, so
+          this is NOT ASKED FOR there rather than hidden there: there is nothing
+          on a bird for a POTA/SOTA reference to name, and the row was taking
+          vertical space in a column the operator shares with the sky dome
+          (operator, 0.28.1: "that section still has a pota/sota section, which
+          is shouldnt"). The hunt chip above stays in every exchange on purpose —
+          it reports what the ENGINE will do (it auto-tags a pending hunt onto a
+          matching callsign at log time, whichever strip logged it), so removing
+          it would make that tag silent rather than absent. */}
+      {asksForPark && (
       <div className="le-row le-park-row">
         <select
           className="settings-input le-park-prog"
@@ -903,8 +1057,10 @@ export function LogEntry({
           )}
         </div>
       </div>
+      )}
 
-      {parkDetail &&
+      {asksForPark &&
+        parkDetail &&
         logParkProgram === 'POTA' &&
         // Only show the chip while it still matches the field — never the PREVIOUS ref's park
         // during an in-flight lookup of a newly-typed ref (both paths return the normalized ref).
@@ -1024,6 +1180,14 @@ export function LogEntry({
       <span className="le-hint">
         {overrideBlocked ? (
           <span className="le-ov-warn">Enter a frequency for the override to log</span>
+        ) : gridBlocked ? (
+          // Why Log went dead, in the place that otherwise states what will be
+          // written. `role="alert"` because it is the only explanation of a
+          // disabled primary action, and a screen-reader operator gets no other.
+          <span className="le-ov-warn le-grid-warn" role="alert">
+            “{logGrid.trim()}” isn’t a grid square — Nexus logs 4, 6 or 8 characters (EN52,
+            EN52XA or EN52XA25). Fix it or clear it to log.
+          </span>
         ) : (
           <>
             {/* The band slot is EMPTY for a dial the band plan cannot name (QO-100 at
@@ -1051,8 +1215,14 @@ export function LogEntry({
           type="button"
           className="le-log-btn"
           onClick={logIt}
-          disabled={!logCall.trim() || overrideBlocked}
-          title={overrideBlocked ? 'Enter a valid frequency for the override, or close it' : undefined}
+          disabled={!logCall.trim() || overrideBlocked || gridBlocked}
+          title={
+            overrideBlocked
+              ? 'Enter a valid frequency for the override, or close it'
+              : gridBlocked
+                ? 'Enter a 4-, 6- or 8-character grid square (EN52, EN52XA or EN52XA25), or clear it'
+                : undefined
+          }
         >
           Log
         </button>

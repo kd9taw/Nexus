@@ -995,6 +995,7 @@ export function CwCockpit({
         snap={snap}
         mode="CW"
         defaultRst="599"
+        exchange="terrestrial"
         onSpot={(call) => {
           setSpotCall(call)
           setSpotOpen(true)

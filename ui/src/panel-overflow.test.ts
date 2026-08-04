@@ -82,6 +82,48 @@ function winner(selector: string, prop: string): string | null {
   return win?.value ?? null
 }
 
+/** One declaration plus the three things the cascade actually orders by. */
+interface Decl {
+  value: string
+  important: boolean
+  spec: number
+  order: number
+}
+
+/** The winning declaration for an EXACT selector. `winner` above answers the
+ *  VALUE only, which is enough to check one selector against itself but cannot
+ *  compare two DIFFERENT selectors that both match the same element — the
+ *  question `.le-grid` vs `.le-row .settings-input` asks. */
+function decl(selector: string, prop: string): Decl | null {
+  let win: Decl | null = null
+  const re = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, 'g')
+  for (const r of RULES) {
+    if (r.selector !== selector) continue
+    const all = [...r.body.matchAll(re)]
+    if (!all.length) continue
+    const raw = all[all.length - 1][1].trim()
+    const important = /!\s*important$/.test(raw)
+    const d: Decl = {
+      value: raw.replace(/!\s*important$/, '').trim(),
+      important,
+      spec: specificity(r.selector),
+      order: r.order,
+    }
+    if (!win || (win.important === d.important && (d.spec > win.spec || (d.spec === win.spec && d.order >= win.order))) || (d.important && !win.important)) {
+      win = d
+    }
+  }
+  return win
+}
+
+/** Does `a` beat `b` on an element BOTH selectors match? Importance, then
+ *  specificity, then source order — the CSS cascade, in that order. */
+function beats(a: Decl, b: Decl): boolean {
+  if (a.important !== b.important) return a.important
+  if (a.spec !== b.spec) return a.spec > b.spec
+  return a.order > b.order
+}
+
 describe('Field Day: the Bonuses list cannot crush the Sections board', () => {
   // census/floors.md #2 — `.fd-bonuses-section { flex: 0 0 auto }` wraps a 15-row grid with
   // no cap, inside `.panel { overflow: hidden }` with no panel-level scroller. Opening
@@ -534,5 +576,87 @@ describeLe('log-entry rows wrap instead of overflowing the pane', () => {
     expectLe(m).not.toBeNull()
     expectLe(m![0]).toMatch(/flex:\s*1\s+1\s+\d/)
     expectLe(m![0]).toMatch(/min-width:\s*0/)
+  })
+})
+
+describe('Grid joins the exchange row without re-arming the sideways overflow', () => {
+  // The descope of the first Grid attempt named a REAL concern: the strip already
+  // wraps at 24em, and a new field in a wrapping row is a new chance to overflow.
+  // The answer is the same one `.le-state`/`.le-country` use — a narrow,
+  // NON-GROWING and non-shrinking field, so a wrapping row moves it to the next
+  // line rather than squeezing it — and these guards COMPUTE that it survives the
+  // cascade rather than merely existing (`.le-row .settings-input` is more
+  // specific and would otherwise win, which is exactly how a dead fix ships).
+  it('.le-grid neither grows nor shrinks, and BEATS the row default that would grow it', () => {
+    const grid = decl('.le-grid', 'flex')
+    const rowDefault = decl('.le-row .settings-input', 'flex')
+    expect(grid, '.le-grid declares no flex — it inherits the growing row default').not.toBeNull()
+    expect(rowDefault, "the row's own input default vanished").not.toBeNull()
+    expect(grid!.value.replace(/\s+/g, ' ')).toBe('0 0 auto')
+    expect(
+      beats(grid!, rowDefault!),
+      "`.le-row .settings-input` (0,2,0) out-specifies `.le-grid` (0,1,0), so the narrow rule " +
+        'needs !important to win — without it Grid grows like Comment and squeezes the row. ' +
+        'This is why `.le-state` and `.le-country` carry it too.',
+    ).toBe(true)
+  })
+
+  it('.le-grid is capped far below the 24em pane minimum, so it can never BE the overflow', () => {
+    // A wrapping row only overflows if a single item is wider than the line box.
+    // 24em ≈ 384px at the pane floor; the cap is a quarter of that.
+    const cap = winner('.le-grid', 'max-width')
+    expect(cap, '.le-grid declares no max-width — an input defaults to ~20 characters').not.toBeNull()
+    const px = Number(/^(\d+(?:\.\d+)?)px$/.exec(cap!.trim())?.[1] ?? NaN)
+    expect(px, `max-width is \`${cap}\` — express the cap in px like its row neighbours`).toBeGreaterThan(0)
+    expect(px, 'a field wider than the 24em pane floor is a sideways overflow by itself').toBeLessThan(24 * 16)
+  })
+
+  it('.le-grid fits the LINE BUDGET that keeps it off a new row of its own', () => {
+    // THE NUMBER THE HEIGHT FIX RESTS ON, computed from this sheet rather than
+    // trusted. Grid shares the exchange row's last wrapped line with Name and
+    // Clear. At the two-column floor (.sats-view's `minmax(340px, …)`) that line
+    // is 296px wide: 340 − 18 (.sats-detail border+padding) − 26 (.log-entry
+    // border+padding). Name is `.le-row .settings-input`'s 9em basis at the
+    // input's own 14px font = 126px; Clear measures 61px; two 8px gaps. What is
+    // left for Grid is 93px, and a cap over it wraps Clear onto a FOURTH line:
+    // measured at 94px the strip goes 451 → 491, handing back 40 of the 48px the
+    // park row's removal bought. Not a regression at that width, but the whole
+    // point of putting Grid in this row was that it costs NOTHING.
+    //
+    // Measured against real layout (headless Chrome, the section's own
+    // wrappers): parent 499px → 451px at 340, and 368px → 320px at a 611px
+    // column. Both DOWN by the whole park row.
+    //
+    // ⚠️ DO NOT restate 611px as "what a 1366-wide window gives" — that
+    // derivation was published and was wrong. `.sats-view` sits BEHIND
+    // `.mode-nav` (88px + 1px border) and INSIDE `main.layout.single`
+    // (padding var(--gap) a side), none of which the arithmetic included.
+    // These are column widths, which is what this test controls; the
+    // window width that produces one is a separate measurement.
+    const cap = Number(/^(\d+(?:\.\d+)?)px$/.exec(winner('.le-grid', 'max-width')!.trim())![1])
+    const basis = /^1\s+1\s+(\d+(?:\.\d+)?)em$/.exec(
+      decl('.le-row .settings-input', 'flex')!.value.replace(/\s+/g, ' ').trim(),
+    )
+    expect(basis, "the row default's wrap basis is no longer an em length — re-derive the budget").not.toBeNull()
+    const nameBasis = Number(basis![1]) * 14 // .settings-input sets font-size: 14px
+    const gap = 8 // --space-2 at --space-scale: 1
+    const CLEAR_BTN = 61 // measured
+    const line = 340 - 18 - 26
+    expect(
+      cap,
+      `.le-grid is ${cap}px; the last wrapped line has ${line - nameBasis - CLEAR_BTN - 2 * gap}px ` +
+        'left after Name and Clear. Over it, Clear wraps onto a FOURTH line (measured at 94px: ' +
+        '451 → 491) and hands 40 of the park row\'s 48px straight back — re-measure before raising it.',
+    ).toBeLessThanOrEqual(line - nameBasis - CLEAR_BTN - 2 * gap)
+  })
+
+  it('.le-grid keeps the released intrinsic floor — it does not re-declare min-width', () => {
+    // `min-width: 0` on `.le-row .settings-input` is what let the row shrink at all
+    // (the 2026-07-31 fix). Re-flooring it here would put the overflow straight back.
+    expect(
+      decl('.le-grid', 'min-width'),
+      '.le-grid declares its own min-width — the row default releases the floor, leave it released',
+    ).toBeNull()
+    expect(winner('.le-row .settings-input', 'min-width')).toBe('0')
   })
 })

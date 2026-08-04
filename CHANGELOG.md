@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.28.1] — 2026-08-03
+## [0.28.2] — 2026-08-03
 
 ### Changed: the Satellites section is a pass console
 
@@ -84,6 +84,58 @@ what the engine believes.
 
 It shares a scrolling column with the sky dome, and at full size it pushed the dome off the top.
 Now compact enough to log a station while still watching where the bird is.
+
+### Added: the grid square is a field you can type in the Satellites section
+
+The satellite log strip now has a **Grid** box, beside the two signal reports. The square was
+already in the record and already on the callsign card, but only a callbook could ever write it,
+so a locator a station passed you **on the air** could not be entered at all — and on a bird that
+is most of the contact. Satellite work is grid-for-grid, and the grid is what Satellite VUCC is
+scored on.
+
+It sits with the reports rather than down with QTH because that is what it is on a satellite:
+something the other operator says in the same breath as his report, read and typed in the same
+moment. It also costs the strip nothing there — that row already wraps, and the box lands in the
+space the wrap leaves. **The whole strip is 48 px shorter than before** across the ordinary range
+of window widths: the park row below came out and nothing took its place.
+
+One honest exception, because it is measurable and somebody will meet it: in a narrow band of
+window widths the Grid box does not fit the space the wrap leaves and takes a line of its own,
+and there the strip is 4 px *taller* than before rather than 48 px shorter. It is a band, not a
+threshold — wider and narrower windows both get the full saving.
+
+The callbook still fills the box when it is blank, and it will **not** overwrite a square you
+typed. Nexus takes a **4-, 6- or 8-character** locator (`EN52`, `EN52XA`, `EN52XA25`) — every
+length ADIF carries, so every one of them uploads. Anything else holds the **Log** button until
+you fix it or clear it, and says so on the line above the button. A blank grid is not an error —
+most contacts have none.
+
+**Not in the Phone and CW strips yet**, and that is a height decision rather than a verdict: the
+box costs each of those a wrapped line, and this change was asked to stay on the satellite
+section. The case for putting it there is good and still open — a wrong callbook square cannot be
+corrected in those cockpits today, and they are the ones that meet the rovers and portable
+stations whose square is wrong most often (2 m and 6 m and the VHF contests are grid-for-grid too).
+
+### Fixed: a callbook square could stop you logging
+
+A callbook that answered with an 8-character locator (`FN31PR99` is a real one) filled the Grid
+box and was then refused by it, so the **Log** button went dead over a value nobody typed — mid
+pass, on a contact that would have logged fine a moment earlier. Eight characters are now
+accepted and logged whole, and a callbook answer that is not a locator at all (a rover's
+`EN52/EN53`, free text) no longer goes into the box: an empty box logs an empty grid, which is
+what happened before the box existed.
+
+### Removed: the POTA/SOTA row in the Satellites section
+
+There is no park on a satellite. The section now asks the shared log strip for a satellite
+exchange, so the program picker and the park search are not built there at all — which also gives
+the sky dome back the space they were taking in that column. The Phone and CW strips are
+unchanged: hunting an activator is part of the exchange there, and the park row stays.
+
+And no park reference reaches a satellite contact by any other route. Hunting a park in another
+section leaves a pending reference behind, and once that hunt ended or moved to a different park
+the leftover was being written to the satellite QSO as its POTA reference — a park contact in the
+log, with no row on screen to show it or clear it.
 
 ## [0.28.0] — 2026-08-03
 
