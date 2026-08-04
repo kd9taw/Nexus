@@ -634,3 +634,98 @@ describe('Connect strip cap caps the PANES, not the grid track', () => {
     expect(v!, `cap is \`${v}\``).toContain('var(--vh-eff')
   })
 })
+
+/** A box whose computed overflow-y makes it a scroll container. */
+const SCROLLS = (v: string) => v === 'auto' || v === 'scroll'
+
+/** Final scrollbar-width a block computes (in-block declaration order). */
+function blockScrollbarWidth(body: string): string | null {
+  let v: string | null = null
+  for (const decl of body.split(';')) {
+    const m = /^\s*scrollbar-width\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+    if (m) v = m[1]
+  }
+  return v
+}
+
+/** The Connect grid's ancestor chain (ConnectView.tsx ~314: `<main class="layout single">`
+ *  → `.connect-shell` → `.connect`). Connect's shell carries no cockpit class. */
+const CONNECT_HOST: Array<Set<string>> = [
+  new Set(['app']),
+  new Set(['shell']),
+  new Set(['layout', 'single']),
+  new Set(['connect-shell']),
+  new Set(['connect']),
+]
+
+/** Every place the SHARED `.pane-frame`/`.pane-body` family actually mounts — Connect's
+ *  PaneFrame (rails + bottom strip) and CockpitPaneFrame (region columns, and the bare
+ *  shell children of the two region-less cockpits). */
+const PANE_HOSTS: Array<[string, Array<Set<string>>]> = [
+  ['Connect rail', CONNECT_HOST],
+  ['Connect bottom strip', [...CONNECT_HOST, new Set(['connect-strip'])]],
+  [
+    'Phone pane region',
+    [...shellChain('phone-cockpit'), new Set(['cockpit-panes']), new Set(['cockpit-col'])],
+  ],
+  [
+    'CW pane region',
+    [...shellChain('cw-cockpit'), new Set(['cockpit-panes']), new Set(['cockpit-col'])],
+  ],
+  ['RTTY (region-less, bare shell child)', shellChain('rtty-cockpit')],
+  ['SSTV (region-less, bare shell child)', shellChain('sstv-view')],
+]
+
+const paneBodyChain = (host: Array<Set<string>>) => [
+  ...host,
+  new Set(['pane-frame']),
+  new Set(['pane-body']),
+]
+
+describe('the shared pane body is the first legal fate of vertical deficit', () => {
+  // `.pane-body { flex:1; min-height:0; overflow:auto }` (styles.css ~1583) is the whole
+  // per-pane scroll contract — every cockpit and Connect depend on it, and CockpitPaneFrame
+  // refuses a className precisely so a pane cannot opt out. Yet nothing COMPUTED it: the
+  // shells' valve is guarded above, the region tiers in cockpit-panes.test.ts, and the only
+  // test that touched this block was a regex-presence match on `scrollbar-width: thin` in
+  // connectLayout.test.ts — the exact form CLAUDE.md forbids, because a dead selector passes
+  // it. A later `.phone-cockpit .pane-body { overflow: hidden }` is (0,2,0) against the base
+  // (0,1,0): every Phone pane would CLIP instead of scroll and the whole suite stayed green.
+  //
+  // Scope note, and it is a composition rather than a gap: this scan reads styles.css only,
+  // and the other sheet cannot reach these boxes at all — cockpit-panes.test.ts ('panes are
+  // sized by the grid, never by themselves') fails the build if cockpit-panes.css so much as
+  // names .pane-frame/.pane-head/.pane-body. Between the two, the family's cascade is closed.
+  for (const [name, host] of PANE_HOSTS) {
+    const chain = paneBodyChain(host)
+
+    it(`${name}: .pane-body resolves a scrolling overflow-y in every media context`, () => {
+      for (const ctx of mediaContexts(chain)) {
+        const win = winningOverflowY(chain, ctx)
+        expect(win, `${name}: no rule declares overflow on .pane-body at all`).not.toBeNull()
+        expect(
+          SCROLLS(win!.value),
+          `${name}${ctx ? ` (within \`${ctx}\`)` : ''}: the cascade winner is ` +
+            `\`${win!.selector} { overflow-y: ${win!.value} }\` — the pane CLIPS. Deficit inside a ` +
+            'pane has exactly one legal fate and this is it; with the body clipping, the pane ' +
+            'edge is a hard cut with no scrollbar, and neither the column valve nor the shell ' +
+            'valve can reach content inside a box that has no scroll extent.',
+        ).toBe(true)
+      }
+    })
+
+    it(`${name}: .pane-body keeps a visible scrollbar affordance`, () => {
+      // What the retired connectLayout regex meant to assert, computed: a scroller the
+      // operator cannot SEE reads as clipped content. `thin` is the shipped value; `none`
+      // is the failure this replaces a presence-match with a cascade winner to catch.
+      const win = winningValue(chain, blockScrollbarWidth)
+      expect(win, `${name}: no rule declares scrollbar-width on .pane-body`).not.toBeNull()
+      expect(
+        win!.value,
+        `${name}: the cascade winner is \`${win!.selector} { scrollbar-width: ${win!.value} }\` — ` +
+          'the pane scrolls with no visible affordance, which reads to the operator as content ' +
+          'that simply ends.',
+      ).not.toBe('none')
+    })
+  }
+})

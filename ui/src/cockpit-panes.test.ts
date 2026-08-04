@@ -504,26 +504,67 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
   // the shell rule and fenced below.
   const ALLOWED = new Set<string>([])
 
-  /** Final flex-grow a block computes (longhand + shorthand, in-block order). */
-  function blockGrow(body: string): number | null {
+  /** Per-PROPERTY exemptions: a rule that may declare one named size property because a
+   *  scroller stands behind it. `.connect-strip > .pane-frame` caps the Connect bottom
+   *  strip at 30% of --vh-eff — the strip's real ceiling, since a grid track max always
+   *  pays out (cockpit-shells.test.ts computes that the cap stays --vh-eff-bounded) — and
+   *  a pane taller than the cap scrolls inside its own `.pane-body`, which the same file
+   *  now COMPUTES for this exact chain instead of regex-matching. */
+  const SIZED_OK = new Map<string, Set<string>>([
+    ['.connect-strip > .pane-frame', new Set(['max-height'])],
+  ])
+
+  /** A flex-basis that leaves the frame's height to the grid/column. Anything else is the
+   *  frame sizing itself, which is what this file exists to forbid. */
+  const OK_BASIS = new Set(['0', '0px', '0%', 'auto', 'content'])
+
+  /** Final flex triple a block computes (longhands + shorthand, in-block declaration
+   *  order). The shorthand's omitted components take their SHORTHAND defaults, not the
+   *  property initials — `flex: 2` is `2 1 0`, and `flex: 0 0 12em` pins a frame at 12em
+   *  with a grow of 0, i.e. sails straight past a grow-only census. */
+  function blockFlex(body: string): {
+    grow: number | null
+    shrink: number | null
+    basis: string | null
+  } {
     let grow: number | null = null
+    let shrink: number | null = null
+    let basis: string | null = null
     for (const decl of body.split(';')) {
-      let m = /^\s*flex-grow\s*:\s*([\d.]+)/.exec(decl)
+      let m = /^\s*flex-grow\s*:\s*([\d.]+)\s*$/.exec(decl)
       if (m) {
         grow = parseFloat(m[1])
         continue
       }
+      m = /^\s*flex-shrink\s*:\s*([\d.]+)\s*$/.exec(decl)
+      if (m) {
+        shrink = parseFloat(m[1])
+        continue
+      }
+      m = /^\s*flex-basis\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+      if (m) {
+        basis = m[1].replace(/\s+/g, ' ')
+        continue
+      }
       m = /^\s*flex\s*:\s*(\S[^]*?)\s*$/.exec(decl)
       if (!m) continue
-      const v = m[1]
-      if (v === 'none' || v === 'initial') grow = 0
-      else if (v === 'auto') grow = 1
+      const v = m[1].replace(/\s+/g, ' ')
+      if (v === 'none') [grow, shrink, basis] = [0, 0, 'auto']
+      else if (v === 'initial') [grow, shrink, basis] = [0, 1, 'auto']
+      else if (v === 'auto') [grow, shrink, basis] = [1, 1, 'auto']
       else {
-        const first = /^([\d.]+)/.exec(v)
-        grow = first ? parseFloat(first[1]) : 0
+        const parts = v.split(' ')
+        grow = /^[\d.]+$/.test(parts[0]) ? parseFloat(parts[0]) : 0
+        if (parts[1] !== undefined && /^[\d.]+$/.test(parts[1])) {
+          shrink = parseFloat(parts[1])
+          basis = parts[2] ?? '0'
+        } else {
+          shrink = 1
+          basis = parts[1] ?? '0'
+        }
       }
     }
-    return grow
+    return { grow, shrink, basis }
   }
 
   /** Subject (rightmost compound) of a selector. */
@@ -532,23 +573,40 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
     return parts[parts.length - 1]
   }
 
-  it('no styles.css rule on .pane-frame declares flex-grow or a min-height floor', () => {
+  it('no styles.css rule on .pane-frame sizes it (grow, shrink pin, basis, floor, height or cap)', () => {
+    // The census used to read flex-GROW and min-height only, so four properties that size a
+    // frame just as hard walked straight through it: `height`/`max-height` (a definite box,
+    // the mechanism `.connect-strip > .pane-frame` already legitimately uses — an exemption
+    // that was invisible rather than declared), a flex-BASIS length, and `flex-shrink: 0`,
+    // which under the region's `overflow: hidden` is the rigid-stack-with-no-scroller shape
+    // the contract forbids. All of them are reachable through the flex SHORTHAND too, where
+    // a grow of 0 made them doubly invisible.
     const offenders: string[] = []
     for (const r of STYLES_RULES) {
       if (!/\.pane-frame(?![a-z0-9-])/.test(subject(r.selector)) || ALLOWED.has(r.selector)) continue
-      const grow = blockGrow(r.body)
+      const { grow, shrink, basis } = blockFlex(r.body)
       if (grow != null && grow > 0) offenders.push(`${r.selector} { flex-grow: ${grow} }`)
+      if (shrink === 0) offenders.push(`${r.selector} { flex-shrink: 0 }`)
+      if (basis != null && !OK_BASIS.has(basis)) offenders.push(`${r.selector} { flex-basis: ${basis} }`)
       for (const m of r.body.matchAll(/min-height\s*:\s*([^;]+)/g)) {
         if (m[1].trim() !== '0') offenders.push(`${r.selector} { min-height: ${m[1].trim()} }`)
+      }
+      // Declaration-split so a `height` probe can never match `min-height`/`max-height`.
+      for (const prop of ['height', 'max-height'] as const) {
+        if (SIZED_OK.get(r.selector)?.has(prop)) continue
+        for (const decl of r.body.split(';')) {
+          const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(decl)
+          if (m) offenders.push(`${r.selector} { ${prop}: ${m[1].replace(/\s+/g, ' ')} }`)
+        }
       }
     }
     expect(
       offenders,
       `a pane frame sized from styles.css:\n${offenders.join('\n')}\nThe grid cell sizes the ` +
-        'frame (design3 §5 rule 2). A grower/floor here is the per-cockpit sizing mechanism ' +
-        'that recurred five times — express prominence as a fill weight via CockpitPaneFrame ' +
-        '`rows`, or for a region-less cockpit add the exact selector to ALLOWED with its ' +
-        'valve documented.',
+        'frame (design3 §5 rule 2). A grower/floor/cap/pin here is the per-cockpit sizing ' +
+        'mechanism that recurred five times — express prominence as a fill weight via ' +
+        'CockpitPaneFrame `weight`, or add the exact selector to ALLOWED (whole rule) or ' +
+        'SIZED_OK (one property) with the scroller that stands behind it documented.',
     ).toEqual([])
   })
 
