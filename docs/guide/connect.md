@@ -155,6 +155,9 @@ looks like a dead feed.
 ## Related guides
 
 - [Needed — DX that's on the air now](needed-dx.md)
+- [Spots](spots.md) — the same cluster/RBN traffic as a table, unranked
+- [APRS](aprs.md) — the other map in the app, plotting the packet stations your
+  own receiver decodes
 - [Satellites](satellites.md)
 - [DXpeditions](dxpeditions.md)
 - [Settings reference](settings-reference.md)

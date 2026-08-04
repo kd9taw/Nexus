@@ -85,6 +85,7 @@ message, an email, or a post.
 ## Related guides
 
 - [Logbook & QSL](logbook-qsl.md)
+- [Stats](stats.md) — the same log counted rather than judged against a list
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Contesting & POTA/SOTA](contesting-pota.md)
 - [Settings reference](settings-reference.md)

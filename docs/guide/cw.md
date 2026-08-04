@@ -157,6 +157,9 @@ Technician CW-only segments on 80/40/15 m. Set your class in
 ## Related guides
 
 - [Phone (SSB)](phone.md)
+- [RTTY](rtty.md) — the other type-it-and-send-it mode, with its own F-key macros
+  and live decoder
+- [Memories](memories.md) — the bank behind this cockpit's MEM strip
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Settings reference](settings-reference.md)

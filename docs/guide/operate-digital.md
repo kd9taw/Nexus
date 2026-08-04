@@ -10,7 +10,7 @@ and tools depend on.
 
 This is the cockpit you land in when the mode switch (top of the left rail) is
 set to **FT8/FT4**. Flip it to **Tempo** for the TempoFast/TempoDeep chat cockpit, covered
-[at the end of this page](#the-tempo-chat-layer-ft1dx1).
+[at the end of this page](#the-tempo-chat-layer-tempofasttempodeep).
 
 <!-- TODO: capture screenshot — the Operate cockpit — waterfall, Band Activity, QSO strip -->
 
@@ -197,6 +197,9 @@ daily-driver load meanwhile.
 ## Related guides
 
 - [Needed — DX that's on the air now](needed-dx.md)
+- [RTTY](rtty.md) — the sibling digital cockpit, free-running instead of slotted
+- [SSTV](sstv.md) — the same waterfall instrument, carrying pictures
+- [Memories](memories.md) — the bank behind this cockpit's MEM strip
 - [Connect — map + propagation](connect.md)
 - [Logbook & QSL](logbook-qsl.md)
 - [Settings reference](settings-reference.md)

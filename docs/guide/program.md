@@ -244,6 +244,8 @@ is one machine and you want it starred immediately.
 
 ## Related guides
 
+- [Memories](memories.md) — where **Save to Memory Bank** puts the channel list,
+  and what the cockpit MEM strip recalls
 - [Phone (SSB)](phone.md) — working FM and repeaters once the channels are in
 - [Field Day & POTA/SOTA](contesting-pota.md)
 - [Settings reference](settings-reference.md)

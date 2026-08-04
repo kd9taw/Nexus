@@ -40,18 +40,31 @@ multi-monitor shack.
 - **[Phone (SSB)](phone.md)** — a traditional rig panel: live dial read-back,
   fast colored bandscope, voice keyer, QSO recording.
 - **[CW](cw.md)** — a casual/ragchew keyboard CW station with F-key macros.
-- **[Tempo chat (TempoFast/TempoDeep)](operate-digital.md#the-tempo-chat-layer-ft1dx1)** — the
+- **[RTTY](rtty.md)** — a 45.45 baud Baudot teleprinter: per-character decode
+  confidence, a click-to-net waterfall, macros, and AFSK or true FSK keying.
+- **[SSTV](sstv.md)** — receive-first slow-scan; pictures decode themselves into
+  a local gallery, and transmit is always an explicit **Send**.
+- **[APRS](aprs.md)** — a 2 m AFSK-1200 packet monitor with its own map, plus
+  position beacons and short messages you send by hand.
+- **[Memories](memories.md)** — the saved-channel bank behind the cockpit MEM
+  strip: one click tunes the rig, applies the shift and tone, and opens the
+  cockpit that mode belongs in.
+- **[Tempo chat (TempoFast/TempoDeep)](operate-digital.md#the-tempo-chat-layer-tempofasttempodeep)** — the
   original weak-signal chat tiers, covered at the end of the Operate guide.
 
 ### DX & awards
 - **[Needed — DX that's on the air now](needed-dx.md)** — every station on the
   air ranked by what it's worth to *your* log, each row carrying the evidence.
+- **[Spots](spots.md)** — the same cluster and RBN traffic raw: the last twenty
+  minutes unranked and unscored, sorted however you like.
 - **[DXpeditions](dxpeditions.md)** — active and upcoming expeditions, your
   modelled best window per day, and a wake-me alarm.
 - **[Logbook & QSL](logbook-qsl.md)** — the ADIF logbook, confirmation sources,
   and the online-service connectors (LoTW/QRZ/ClubLog/eQSL/HRDLog).
 - **[Awards & Journey](awards-journey.md)** — offline DXCC/Challenge/Honor
   Roll/WAS/WAZ, plus the local-only Journey achievement layer.
+- **[Stats](stats.md)** — the same logbook counted rather than judged: QSOs by
+  band, mode, year, hour, entity and confirmation.
 
 ### Propagation & satellites
 - **[Connect — map + propagation](connect.md)** — the shaded 3-D globe, greyline,
@@ -65,6 +78,8 @@ multi-monitor shack.
   with Cabrillo and club interop, plus the POTA/SOTA hunter.
 
 ### System
+- **[Program](program.md)** — the radio-programming workbench: the repeaters
+  around a location become a channel list, and the list becomes a CHIRP CSV.
 - **[Settings reference](settings-reference.md)** — a walk through all eleven
   Settings tabs, field by field.
 

@@ -398,5 +398,7 @@ plainly when it can't:
 ## Related guides
 
 - [Connect — map + propagation](connect.md) (Satellite Passes pane, live map layer)
+- [SSTV](sstv.md) (ISS SSTV auto-arm: at AOS Nexus tunes 145.800 FM and arms the
+  decoder for you)
 - [Settings reference](settings-reference.md) (rotator setup)
 - [DXpeditions](dxpeditions.md) (the same alarm machinery)

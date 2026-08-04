@@ -104,6 +104,7 @@ back presence ("credential stored"), never the secret itself.
 ## Related guides
 
 - [Awards & Journey](awards-journey.md)
+- [Stats](stats.md) — these same records counted by band, mode, year and entity
 - [Settings reference — Confirmations](settings-reference.md#confirmations)
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Contesting & POTA/SOTA](contesting-pota.md)

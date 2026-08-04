@@ -259,6 +259,8 @@ mileage follows you.
 
 ## Related guides
 
+- [Program](program.md) — building a repeater list for a location, and **Save to
+  Memory Bank**, which drops it straight into this bank
 - [Phone (SSB)](phone.md)
 - [CW](cw.md)
 - [Operate — FT8/FT4 digital](operate-digital.md)

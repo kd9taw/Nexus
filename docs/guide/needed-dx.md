@@ -105,6 +105,8 @@ untick it and it stays where you left it (the setting persists).
 
 ## Related guides
 
+- [Spots](spots.md) — the same cluster and RBN traffic as a raw table, with none
+  of this scoring applied
 - [Connect — map + propagation](connect.md)
 - [DXpeditions](dxpeditions.md)
 - [Awards & Journey](awards-journey.md)

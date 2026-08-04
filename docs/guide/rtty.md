@@ -302,6 +302,7 @@ stop a transmission.
 ## Related guides
 
 - [CW](cw.md)
+- [SSTV](sstv.md) — the other free-running mode in the Digital group
 - [Phone (SSB)](phone.md)
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Needed — DX that's on the air now](needed-dx.md)
