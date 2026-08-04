@@ -2888,30 +2888,20 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
               }
             />
           )}
-          {/* THE READINESS RAIL: the arming chain AS a chain, each gate fixable
-              in place. Content-height, and now content-WIDTH too — the five
-              gates lay out across the bar instead of down a column. */}
-          {detailTrack && (
-            <TrackRail
-              track={detailTrack}
-              rotorOn={rotorOn}
-              dopplerOn={dopplerOn}
-              vfoMap={vfoMap}
-              heldDesc={detailTrack.transponder ?? heldT?.description ?? null}
-              heldInverting={detailTrack.inverting || !!heldT?.invert}
-              simplex={!!(binding?.simplex && detail != null && tuned?.name === detail.name)}
-              autoPicked={!!(tuned?.auto && detail != null && tuned.name === detail.name)}
-              canPick={(detail?.transmitters.length ?? 0) > 0}
-              nowSecs={nowSecs}
-              onStop={disarmTrack}
-              onDopplerOn={writeDopplerOn}
-              onVfoMap={writeVfoMap}
-              onGoToPicker={goToPicker}
-              onRefreshElements={() => void refreshTles()}
-              scrollRef={railRef}
-            />
-          )}
-        {track && (
+          {/* ⚠️ THE BADGE AND THE ✕ ARE EMITTED BEFORE THE RAIL, AND THAT IS A
+              HEIGHT DECISION, NOT A READING-ORDER PREFERENCE. `.sat-rail` is
+              `flex: 1 1 100%` — a chosen wrap point — so anything after it in
+              DOM order lands on a THIRD bar line of its own. Measured at the
+              1024×768 floor with a track armed: 99.2 eff px and four lines with
+              these two last, 79.9 and three with them here. That ~19 px is
+              spent by BOTH columns (the bar spans them), which is why it is
+              worth a reorder rather than a comment.
+              They still read as a trailing group: `.sats-tracking-badge` carries
+              the bar's one `margin-left: auto` and the ✕ gives its own up when it
+              follows the badge (styles.css records why two auto margins on one
+              line was the bug), so both go flush right and the ■ stop stops
+              sliding under the cursor on the 2 s poll. */}
+          {track && (
           <span
             className="sats-tracking-badge"
             title={
@@ -2998,7 +2988,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
               ■ stop
             </button>
           </span>
-        )}
+          )}
           {selected != null && detail != null && (
             <button
               type="button"
@@ -3009,6 +2999,29 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             >
               ✕
             </button>
+          )}
+          {/* THE READINESS RAIL: the arming chain AS a chain, each gate fixable
+              in place. Content-height, and now content-WIDTH too — the five
+              gates lay out across the bar instead of down a column. */}
+          {detailTrack && (
+            <TrackRail
+              track={detailTrack}
+              rotorOn={rotorOn}
+              dopplerOn={dopplerOn}
+              vfoMap={vfoMap}
+              heldDesc={detailTrack.transponder ?? heldT?.description ?? null}
+              heldInverting={detailTrack.inverting || !!heldT?.invert}
+              simplex={!!(binding?.simplex && detail != null && tuned?.name === detail.name)}
+              autoPicked={!!(tuned?.auto && detail != null && tuned.name === detail.name)}
+              canPick={(detail?.transmitters.length ?? 0) > 0}
+              nowSecs={nowSecs}
+              onStop={disarmTrack}
+              onDopplerOn={writeDopplerOn}
+              onVfoMap={writeVfoMap}
+              onGoToPicker={goToPicker}
+              onRefreshElements={() => void refreshTles()}
+              scrollRef={railRef}
+            />
           )}
         </div>
       )}
@@ -3041,10 +3054,18 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
 
            IT ALSO BOUNDS THE SCHEDULE WITHOUT A PIXEL OR A ROW CAP. The
            schedule scroller keeps `flex: 1 1 auto` and no max-height at all
-           (panel-overflow.test.ts:203 passes verbatim) — what stops it eating
-           the page is the fit-content block underneath it in a bounded column.
-           The number of rows is then set by the window, which is better than
-           any constant: 15 at the 1024×768 floor, more than 30 in portrait. */
+           (panel-overflow.test.ts's "the discovery band is bounded by ROW COUNT,
+           never a pixel height" passes verbatim) — what stops it eating the page
+           is the fit-content block underneath it in a bounded column, and the
+           number of rows is set by the window rather than by a constant.
+
+           MEASURED, because a round-1 comment here claimed "15 at the floor,
+           more than 30 in portrait" and neither figure was ever produced: it is
+           5 rows at the 1024×768 floor, 7–8 at 1366×768 and 1280×800, 16 at
+           1920×1080, 24 in a 1200×1390 portrait and 30 at 3440×1440. The
+           operator's "like the first 10 lines" arrives at about 900 px of window
+           height. The per-size statement lives in the CHANGELOG and the guide;
+           styles.css's `.sats-plan` comment carries the full table. */
         <section className="sats-plan">
           {/* THE NEXT/BEST STRIP — still the primary action surface
               (litigation ①: a pass is WORKED from here, not merely opened),
@@ -3814,8 +3835,9 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             />
             <p
               className="sats-log-note"
-              /* Clamped to two lines in styles.css — the full sentence stays in
-                 the DOM for a screen reader, and is here for a pointer. */
+              /* Clamped to ONE line in styles.css (`line-clamp: 1`) — the full
+                 sentence stays in the DOM for a screen reader, and is here for a
+                 pointer. */
               title="Logs an ordinary contact from your dial, exactly as the Phone and CW log panels do. It is NOT tagged as a satellite QSO: Nexus does not write the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward neither LoTW satellite credit nor Nexus's own satellite totals. Add BOTH fields yourself if you want that credit — one without the other is refused at signing, and on 2 m the grid otherwise counts toward your terrestrial VUCC, which a satellite contact does not earn."
             >
               Logs an ordinary contact from your dial, exactly as the Phone and CW log
