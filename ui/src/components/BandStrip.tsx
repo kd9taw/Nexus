@@ -99,7 +99,11 @@ export function BandStrip({
   return (
     <div className="bandstrip">
       <div className="bandstrip-head">
-        <span className="bandstrip-title">Band activity</span>
+        {/* No title of its own (density pass 2026-08-04): BOTH hosts render this strip in a
+            CockpitPaneFrame whose head reads "Band activity" and is the pane's accessible
+            name — PhoneCockpit and CwCockpit, checked host by host before the delete, since
+            a component with an unframed surface (as LogEntry has in SatellitesView) would
+            have needed a prop instead. The live count below is not a duplicate and stays. */}
         <span className="bandstrip-count">
           {phone.length > 0
             ? `${phone.length} ${modeLabel} spot${phone.length === 1 ? '' : 's'} · ${band}`

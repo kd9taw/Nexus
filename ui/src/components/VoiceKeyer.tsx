@@ -29,6 +29,19 @@ interface Props {
 }
 
 /**
+ * THE INPUT-DEVICE WARNING, and it is not chrome. It had a `.vk-note` paragraph of its own —
+ * two permanent lines of the pane at every window, in a leading column that already overflows
+ * its track (density pass, 2026-08-04). The ROW went; the SENTENCE did not, because recording
+ * the rig's RX audio into a slot puts the WRONG AUDIO on the air the moment the slot is
+ * played, which is an on-air failure, not 40px of ornament. It now rides BOTH controls that
+ * start a recording — the ● tool, and the slot button itself while the slot is empty — since
+ * either one is where the operator is standing when it matters. Pinned in
+ * PhoneCockpit.density.test.tsx, which asserts the sentence rather than the deletion.
+ */
+const RECORD_HINT =
+  "Records from your INPUT DEVICE — often the rig's RX audio, not a mic. If it is, record the message elsewhere and use Import (⤓)."
+
+/**
  * Phone voice keyer (casual) — F1–F6 message slots, each a recorded 12 kHz mono WAV played
  * to the rig with PTT keyed for the message (the same TX path the soundcard CW keyer uses).
  * Click a slot or press its F-key to play; ● records from the input device; ⤓ imports a
@@ -230,10 +243,8 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
           ■ Stop
         </button>
       </div>
-      <p className="vk-note">
-        ● records from your <strong>input device</strong> — often the rig's RX audio, not a
-        mic. If so, record your message elsewhere and use Import (⤓).
-      </p>
+      {/* The `.vk-note` paragraph stood here until 2026-08-04 — see RECORD_HINT above, which
+          is where its sentence went. */}
       {fdExchange && (
         <p className="vk-fd-hint">
           Field Day: record a slot with your exchange <strong>“{fdExchange}”</strong> for
@@ -251,7 +262,9 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
                 className="vk-play"
                 onClick={() => (hasFile ? play(m.slot) : startRec(m.slot))}
                 disabled={recording !== null && !isRec}
-                title={hasFile ? `Play F${m.slot} (${m.label})` : `Record F${m.slot}`}
+                title={
+                  hasFile ? `Play F${m.slot} (${m.label})` : `Record F${m.slot}. ${RECORD_HINT}`
+                }
               >
                 <span className="vk-fkey">F{m.slot}</span>
                 <span className="vk-label">{m.label || `Slot ${m.slot}`}</span>
@@ -269,7 +282,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
                       className="vk-tool"
                       onClick={() => startRec(m.slot)}
                       disabled={recording !== null}
-                      title="Record from your input device"
+                      title={`Record F${m.slot}. ${RECORD_HINT}`}
                     >
                       ●
                     </button>

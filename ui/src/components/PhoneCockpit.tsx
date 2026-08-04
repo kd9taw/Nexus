@@ -1007,21 +1007,27 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           />
         )}
         <RotorStrip />
+        {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
+            '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
+            the glyph and the tooltip already say. The accessible name is explicit here rather
+            than left to the glyph — a screen reader must not be handed a bare bullet. */}
         <button
           type="button"
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
           disabled={recBusy}
+          aria-label={recording ? 'Stop recording this QSO' : 'Record QSO audio'}
           title={
             recording
-              ? 'Stop recording this QSO'
+              ? 'Recording — click to stop recording this QSO'
               : 'Record the received audio to a WAV in the recordings folder'
           }
         >
-          {recording ? '■ Recording' : '● Record QSO'}
+          {recording ? '■' : '●'}
         </button>
+        {/* No visible 'RX': the meter is a role="meter" already named "RX audio level", and
+            the label element keeps the same string as its tooltip. */}
         <label className="ph-rxmeter" title="RX audio level">
-          <span>RX</span>
           <LiveLevelMeter label="RX audio level" variant="compact" />
         </label>
       </CockpitHeader>
@@ -1050,7 +1056,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               </span>
             )
           })()}
-          <span className="ph-scope-head-label">Colors</span>
+          {/* No 'Colors' label: PalettePicker is a <select> that already carries
+              aria-label="Waterfall color palette (applies to all modes)" and the matching
+              tooltip, so the word was the third statement of the same thing on one row. */}
           <PalettePicker />
         </div>
         <div className="ph-scope-wrap" ref={scopeRef} title="Scroll here to tune the VFO">

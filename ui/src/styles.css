@@ -7144,9 +7144,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .phone-cockpit .vk-head {
   margin-bottom: var(--space-1);
 }
-.phone-cockpit .vk-note {
-  margin: 0 0 var(--space-1);
-}
+/* (`.phone-cockpit .vk-note` retired with the paragraph — see the base rule's note.) */
 .ph-mode-badge {
   font-weight: 800;
   font-size: var(--fs-label);
@@ -7822,6 +7820,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+/* CARD-IN-CARD, the same miss as `.pane-body > .bandstrip` above and for the same reason —
+   no `panel` class, so the shipped flatten walks past it. 26px of Phone's leading column,
+   and the keyer's ONLY host frames it. The sticky `.vk-head` below is unaffected: its
+   `top` is measured against the pane body's scrollport, not against this padding, and it
+   keeps its own opaque background, so the abort still parks flush and still occludes the
+   slots scrolling under it. Computed in PhoneCockpit.density.test.tsx. */
+.pane-body > .vk {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 .vk-head {
   display: flex;
   align-items: baseline;
@@ -7841,12 +7850,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
-.vk-note {
-  margin: 0 0 10px;
-  font-size: var(--fs-micro);
-  color: var(--text-faint);
-  line-height: 1.4;
-}
+/* (`.vk-note` lived here. The paragraph it styled — "● records from your INPUT DEVICE" —
+   was two permanent lines of the pane at every window; its warning is NOT chrome, so the
+   2026-08-04 density pass moved the sentence onto BOTH controls that start a recording
+   rather than dropping it. Rule retired with the last element that carried it.) */
 /* Field Day slot hint — only shown in FD mode (fdExchange set). */
 .vk-fd-hint {
   margin: 0 0 10px;
@@ -9529,19 +9536,30 @@ select.settings-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+/* CARD-IN-CARD, and a doubled margin with it. `.bandstrip` carries no `panel` class, so the
+   shipped `.pane-body > .panel` flatten misses it and the strip draws its own bordered,
+   padded card inside the pane frame's — the same miss `.pane-body > .rtty-stream` and
+   `.pane-body > .log-entry` already document — while its own margin stacks on top of the
+   pane body's padding. 34px of a leading column that already overflows its track
+   (PhoneCockpit.density.test.tsx). Keyed on the FRAME rather than a cockpit, exactly as
+   `.pane-body > .ph-dsp` is: BOTH hosts frame this strip (PhoneCockpit "Band activity",
+   CwCockpit "Band activity"), so there is no unframed surface to protect and a future host
+   that frames it gets the flatten for free. (0,2,0) against a (0,1,0) base with no other
+   rule in the sheet reaching a `.bandstrip`; the winner is computed, not assumed. */
+.pane-body > .bandstrip {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
 .bandstrip-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: 6px;
 }
-.bandstrip-title {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
+/* (`.bandstrip-title` lived here and is retired with the span it styled: the frame head one
+   line above reads BAND ACTIVITY and is the pane's accessible name in both hosts. The live
+   spot count below is NOT the same thing and stays.) */
 .bandstrip-count {
   font-size: 11px;
   color: var(--text-faint);

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: the Phone cockpit's control column stops scrolling its own frame
+
+At low resolution the left-hand column of the Phone cockpit — Band Activity, the voice keyer and
+the rig-scope / DSP / RX-DSP strips — stands taller than the space it has, so the DSP buttons sit
+below the fold and you scroll a *control* column in the middle of a contact. Nothing was
+unreachable; it was simply further away than it needed to be.
+
+Two of those panes were drawing a second card inside the pane's card, and one was printing a
+paragraph that no longer needed a line of its own. Both are gone: the band strip's own border,
+padding and margin, and the voice keyer's. That is 60 px, plus 41 px for the keyer's note, out of a
+column that was over-full by 237 px at the window Nexus opens at — a bit over 40 % of the overflow,
+recovered without moving a single control and **without making any type smaller**.
+
+The band strip also stops printing "Band activity" one line under a pane head that already reads
+**BAND ACTIVITY**. The live spot count beside it is not the same thing and stays. This lands in the
+CW cockpit too, which frames the same strip.
+
+What the keyer's note said is not chrome and has not been dropped: **● records from your input
+device — often the rig's RX audio, not a mic** is the sentence that stops a slot going on the air
+with the wrong audio in it. It now rides both controls that start a recording — the ● button and an
+empty slot itself — so it reaches you where you are standing when it matters.
+
+In the header, three words that repeated the control beside them are gone: **Record QSO** next to
+the ● that records, **RX** next to a meter already announced as "RX audio level", and **Colors**
+next to a palette picker already announced as "Waterfall color palette". Every one of them keeps
+its name to a screen reader; what went was the printed duplicate, and with it about 120 px of a
+header row that wraps at small windows.
+
 ### Changed: the log strip commits above the fold
 
 Reported at low resolution: "the Log button ends up below the fold with a half-typed QSO above

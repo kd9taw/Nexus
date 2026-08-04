@@ -283,7 +283,11 @@ describe('hiding the Phone voice keyer', () => {
     const r = render(view())
     await act(async () => {})
     // Start a recording in slot 1 the way the operator does — the ● button on the slot.
-    fireEvent.click(screen.getByTitle('Record from your input device'))
+    // Matched on the title's opening rather than the whole string: since the 2026-08-04
+    // density pass that title also carries the input-device warning the `.vk-note` paragraph
+    // used to hold (PhoneCockpit.density.test.tsx owns that sentence). Slot 1 is this
+    // fixture's only slot and it HAS a file, so the ● tool is the only Record here.
+    fireEvent.click(screen.getByTitle(/^Record F1\./))
     await act(async () => {})
     expect(startVoiceRecording, 'the harness never started a recording').toHaveBeenCalled()
 
@@ -341,7 +345,7 @@ describe('hiding the Phone voice keyer', () => {
     })
     render(<LivePanels />)
     await act(async () => {})
-    fireEvent.click(screen.getByTitle('Record from your input device'))
+    fireEvent.click(screen.getByTitle(/^Record F1\./))
     await act(async () => {})
     toggle(/Voice Keyer/, false)
     await act(async () => {})
@@ -372,7 +376,7 @@ describe('hiding the Phone voice keyer', () => {
     ).toBe(VOICE_KEYER_UNDO_ENDS)
 
     // …and the press really does reach the same teardown the tick does.
-    fireEvent.click(screen.getByTitle('Record from your input device'))
+    fireEvent.click(screen.getByTitle(/^Record F1\./))
     await act(async () => {})
     cancelVoiceRecording.mockClear()
     fireEvent.click(within(openMenu()).getByRole('button', { name: /undo last change/i }))
