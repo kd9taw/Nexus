@@ -11,7 +11,7 @@ not.
 CW is an opt-in section. Turn it on in the first-run wizard's "which modes?"
 step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
-<!-- TODO: capture screenshot — the CW cockpit — macros, WPM control, AF scope, log strip -->
+![The CW cockpit at 1920×1080, receiving on 14.0310 MHz. Its header carries the Keyer dropdown set to CAT, the Speed slider at 22 WPM, Pitch and the MEM strip, with ⊞ Panels · 2 hidden, Tune and Stop TX on the row above the CW audio zero-beat scope. Below the scope the Decode pane holds the transcript, its title bar carrying the AI badge, the decoded 28 WPM, the AI switch and Clear; Band activity sits under it and the Log pane (WC1D, 599 sent and received) takes the right-hand column, with the eight F-key macros and the type-and-send field along the bottom.](../img/manual/cw-cockpit.webp)
 
 ## The tour
 
@@ -125,13 +125,13 @@ cut down to `5NN`** automatically. Set your operator name (for `{NAME}`) in
 3. **Clear** wipes the decoded and sent transcripts together and re-pins both to
    follow the next copy, even if you had scrolled up.
 4. Click a decoded-call chip in the Copilot to make that station your worked peer
-   — it fills the his-call token in your macros and the log strip.
+   — it fills the his-call token in your macros and the Log pane.
 
 ### Land here from the Needed board
 
 Click a CW row on the [Needed board](needed-dx.md) and Nexus QSYs to the spot and
-opens this cockpit with the **callsign already typed** in the log strip, ready
-for your first over. The log strip pre-fills **CW / 599**.
+opens this cockpit with the **callsign already typed** in the Log pane, ready
+for your first over. The Log pane pre-fills **CW / 599**.
 
 ## Honest limits
 
