@@ -54,21 +54,28 @@ controls.
   automatic acks. It reads the engine, not a local copy, so the button and the
   decode chip can never disagree.
 - **The decode chip** is the one that turns an empty screen into a diagnosis.
-  Hover it for the full sentence; the label is the verdict. Eight of them, in
-  strict precedence: **No 2 m radio** (the rig's Hamlib coverage table says it
-  cannot receive this channel at all — above everything, because no amount of
-  tuning, squelch or audio routing fixes it), **Wrong frequency** / **Wrong
-  mode** (CAT knows where the dial is; *"FM packet audio demodulated as SSB is
-  garbled, so nothing will decode however strong the signal is"*), **Monitor
-  off**, **No input** (armed, and no samples arriving at all — a real capture
-  fault), **N failed CRC** (bursts heard, none passing the checksum, with the
-  burst's peak level and headroom advice), **Silent** (audio flowing at zero
-  level — normally just a closed squelch, which is what an idle FM channel looks
-  like), **Listening** (a quiet channel), and **N decoded**, which latches once a
-  checksummed frame lands so the readout cannot flap back to an alarm in the gap
-  between packets. Every state carries the **live input level in dBFS**, measured
-  over the most recent 0.1 s drain — so "what is the app actually hearing" is a
-  number rather than an inference. When the verdict is a wrong dial, a **Tune to
+  Hover it for the full sentence; the label is the verdict. Eight of them, and
+  the chip shows the topmost one that is true, in this order: **No 2 m radio**
+  (the rig's Hamlib coverage table says it cannot receive this channel at all —
+  above everything, because no amount of arming, tuning, squelch or audio routing
+  fixes it), **Monitor off** (the decoder is not running), **Wrong frequency** /
+  **Wrong mode** (CAT knows where the dial is; *"FM packet audio demodulated as
+  SSB is garbled, so nothing will decode however strong the signal is"*), **No
+  input** (armed, and no samples arriving at all — a real capture fault), **N
+  decoded**, which latches once a checksummed frame lands so the readout cannot
+  flap back to an alarm in the gap between packets, **N failed CRC** (bursts
+  heard, none passing the checksum, with the burst's peak level and headroom
+  advice), **Silent** (audio flowing at zero level — normally just a closed
+  squelch, which is what an idle FM channel looks like) and **Listening** (a
+  quiet channel). The order is the order to work in, and it is why a disarmed
+  decoder reads **Monitor off** even when the dial is also in the wrong place:
+  arm Monitor and read the chip again rather than trusting the frequency because
+  the chip did not complain about it. The bottom four — **N decoded**, **N failed
+  CRC**, **Silent**, **Listening** — end their hover sentence with the **live
+  input level in dBFS**, the peak of the most recent 0.1 s drain, so once audio is
+  known to be arriving "what is the app actually hearing" is a number rather than
+  an inference. The four above them carry no level: each has already found a fault
+  the level cannot speak to. When the verdict is a wrong dial, a **Tune to
   144.390** button appears beside the chip.
 - **on \<radio name\>** appears only when more than one of your radios covers the
   band. The tap follows the active radio, and wrong-radio silence is
@@ -80,7 +87,7 @@ controls.
   feed's controls in place: the on/off switch, **Radius (km)**, and **Watched
   calls** (committed on blur, not per keystroke, because each write reconnects
   the feed). Server, port, traffic types and the iGate live in
-  Settings ▸ Modes ▸ APRS, and the panel says so.
+  [Settings ▸ Modes ▸ APRS](settings-reference.md#aprs), and the panel says so.
 - **Internet N** / **Internet N hidden** appears once the feed has contributed
   stations your own antenna has not heard. One click hides them, leaving the
   honest picture of what this radio can actually reach. The count is in the
@@ -149,9 +156,8 @@ hands focus back where it came from.
 
 ## Safety — why transmit works the way it does
 
-This is the part worth reading before you use the section, because the reasoning
-*is* the feature. A radio that keys up with nobody at the desk is the failure
-this design refuses, so:
+A radio that keys up with nobody at the desk is the failure this design refuses,
+so:
 
 **Opening APRS only ever starts a receive-only decoder.** Entering the view arms
 Monitor so the section does not open on a dead screen you have to notice and fix.
@@ -173,9 +179,8 @@ needs two independent operator acts.** You must have armed Monitor *yourself*
 (an auto-arm never counts, whatever the TX latch says), **and** TX must be on.
 That is why the Monitor button distinguishes "Monitoring (auto)" from
 "Monitoring", and why clicking it while auto-armed always *stops* rather than
-quietly upgrading to ack-capable: turning a click that reads as "stop" into
-"grant unattended-transmit capability" would be the most dangerous surprise
-available on this screen.
+quietly upgrading to ack-capable: a click that reads as "stop" never grants
+unattended-transmit capability.
 
 **Internet traffic never gates back out onto the air.** Nexus has no
 internet→RF path at all. The iGate is receive-only and says so on the wire — it
@@ -259,7 +264,8 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
 
 ### Run the receive-only iGate
 
-1. Switch **Receive-only iGate** on in Settings ▸ Modes ▸ APRS (it sits under the
+1. Switch **Receive-only iGate** on in
+   [Settings ▸ Modes ▸ APRS](settings-reference.md#aprs) (it sits under the
    APRS-IS feed and needs it on). It publishes under your callsign, which is why
    it is a separate choice from watching the feed.
 2. Keep the RF decoder armed — the iGate contributes only what your own antenna
