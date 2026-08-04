@@ -19,7 +19,7 @@ The tabs, in the order they appear:
 The panel header carries the **build stamp** (confirm a fresh install actually
 took) and a **Check for updates** button.
 
-<!-- TODO: capture screenshot — the Settings panel with its eight tabs across the top -->
+![The Settings panel with the Radio tab open. The eight tabs — Station, Radio, Modes, Frequencies, Spots & Alerts, Logging & Connectors, Contesting, Appearance — run across the top, and the panel header carries the build stamp and Check for updates. Under them the Radios roster lists three configured rigs: a Yaesu FTDX10 on COM3 badged ACTIVE, an Icom IC-9700 on COM6 and a 991a on a CP2105 bridge, each with Edit / Make active / Remove and a row of band chips lighting the bands it covers — 160 m through 2 m for the Yaesu, 2 m and 70 cm for the 9700, 6 m and 2 m for the 991a. + Add radio closes the roster and Save sits at the bottom right; the rest of the tab continues below the fold.](../img/manual/settings-radio.webp)
 
 ---
 
@@ -360,6 +360,8 @@ frame lives here, not with the radio.
 
 All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
 (Companion mode) decodes arrive already made and **none of them apply**.
+
+![The Decoder and Station Housekeeping groups of the Digital (FT8/FT4) fieldset, part-way down the Modes tab. Decode depth is set to Deep, the passband reads F low 200 and F high 2900, A-priori (AP) decoding — FT8 is on while AP: CQ hypothesis only and Single decode are off, and DXpedition mode sits on Off rather than Hound. The housekeeping row underneath carries Journey, Beacon, IR-HARQ and Clock check (NTP) as toggles — Beacon the only one off — with Station power (W) starting below them. Each control has its explanation printed under it.](../img/manual/settings-modes.webp)
 
 - **Decode depth** — Fast / Normal / Deep. "Deep finds the most signals (WSJT-X
   default); Fast saves CPU on old hardware."
@@ -901,6 +903,8 @@ HTTP.
 
 Always visible — capability, not configuration, gates the tabs.
 
+![The Contesting tab, both its fieldsets in one view. Contest Category holds the Unassisted entry switch, off here, above a live ASSISTED line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs have been supplying callsign identification since 16:27Z, and an Assistance record of eight timestamped rows, each a Nexus start with those same three sources active. Field Day Setup below is off and unfilled: the Event pair ARRL Field Day / Winter Field Day, empty FD Class and ARRL Section boxes showing their 1D and WI hints, and ×2 ≤100W picked from the power-multiplier chips.](../img/manual/settings-contesting.webp)
+
 ### Contest Category
 
 - **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots and
@@ -908,8 +912,8 @@ Always visible — capability, not configuration, gates the tabs.
   **Takes effect at once**" — its own command, not Save, because an operator
   flips it as an event starts. "Your own settings for each of those are left
   alone and come back when you switch this off."
-- **Assistance record** — the timestamped journal of every flip, with which
-  sources were active. Kept in `assistance_journal.json` beside your settings, so
+- **Assistance record** — the timestamped journal: a row per flip and a row each
+  time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
   it survives restarts. Newest first.
 
 ### Field Day Setup
