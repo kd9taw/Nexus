@@ -531,12 +531,15 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
     let shrink: number | null = null
     let basis: string | null = null
     for (const decl of body.split(';')) {
-      let m = /^\s*flex-grow\s*:\s*([\d.]+)\s*$/.exec(decl)
+      // `!important` must NOT hide a declaration from this census. It is the one spelling that
+      // actually beats CockpitPaneFrame's inline `flex`, so an anchored `\s*$` here made the
+      // most dangerous rule the only invisible one. Caught by adversarial review, 2026-08-04.
+      let m = /^\s*flex-grow\s*:\s*([\d.]+)\s*(?:!\s*important\s*)?$/.exec(decl)
       if (m) {
         grow = parseFloat(m[1])
         continue
       }
-      m = /^\s*flex-shrink\s*:\s*([\d.]+)\s*$/.exec(decl)
+      m = /^\s*flex-shrink\s*:\s*([\d.]+)\s*(?:!\s*important\s*)?$/.exec(decl)
       if (m) {
         shrink = parseFloat(m[1])
         continue
@@ -572,6 +575,23 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
     const parts = sel.split(/\s*[>+~]\s*|\s+/)
     return parts[parts.length - 1]
   }
+
+  it('the census itself sees `!important` — the one spelling that beats the inline flex', () => {
+    // A REGRESSION GUARD ON THE GUARD. blockFlex's grow/shrink patterns were once anchored
+    // `\s*$`, so `flex-grow: 1 !important` parsed as nothing and the census reported a clean
+    // tree. That is precisely backwards: CockpitPaneFrame stamps `flex` INLINE, so a plain
+    // stylesheet `flex-grow` loses to it and is nearly harmless, while `!important` wins and
+    // is the rule that can actually re-size a frame from styles.css. The most dangerous
+    // spelling was the only invisible one, and the full suite stayed green.
+    expect(blockFlex('flex-grow: 2 !important').grow).toBe(2)
+    expect(blockFlex('flex-grow:1!important').grow).toBe(1)
+    expect(blockFlex('flex-shrink: 0 !important').shrink).toBe(0)
+    // and the ordinary spellings still parse
+    expect(blockFlex('flex-grow: 1').grow).toBe(1)
+    expect(blockFlex('flex-shrink: 0').shrink).toBe(0)
+    // a value that is not a bare number must still not be mistaken for one
+    expect(blockFlex('flex-grow: var(--x)').grow).toBeNull()
+  })
 
   it('no styles.css rule on .pane-frame sizes it (grow, shrink pin, basis, floor, height or cap)', () => {
     // The census used to read flex-GROW and min-height only, so four properties that size a
