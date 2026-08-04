@@ -15096,15 +15096,65 @@ button.cq-skiptx1.on {
    Type was NOT shrunk to buy any of it. The one type change is the sky dome's
    on-plate az/el, which the operator asked for by name.
 
-   THE SCROLL OWNERS, unchanged in count from before this rebuild — two
-   siblings plus one pre-existing nested:
-     · `.sats-sched-scroll` owns column 1 (and stays the schedule table's
-       horizontal escape).
+   ⚠️ WHAT IS PROMISED, PER SIZE — the acceptance test the operator actually
+   set (2026-08-04: "or we could ship it and build with the assumtive
+   overflow"). Scrolling is fine; being TRAPPED is not, and a claim that holds
+   nowhere is worse than a bound that holds. Measured in a real browser on the
+   rendered DOM, mid-pass, with a track armed and a transponder held. "Pass set"
+   = the sky dome + its readout + the ground-track globe + the pass timeline +
+   the log strip through its Log button + the honesty line.
+
+   The last two columns are the ONLY honest measure of "does it fit": the
+   distance from the bottom of the pass column to the bottom of the last thing
+   in the set. Negative = room to spare.
+
+     window        eff (zoom)     pass column   Log btn   honesty line   rows
+     1024×768      1205×904 (85)      657         +6.2        +36.3        5
+     1200×750 pin  1500×938 (80)      706        −45.6        −15.9        8
+     1280×800      1506×941 (85)      708        −46.2        −16.1        8
+     1366×768      1607×904 (85)      670        −59.5        −29.4        7
+     1600×900      1600×900 (100)     669        −61.0        −31.0        7
+     1920×1080     1920×1080          868       −204.2       −174.2       16
+     1200×1390     1200×1390         1143       −450.3       −420.3       24
+     3440×1440     3440×1440         1228       −452.6       −422.6       30
+
+   So: FROM 1200×750 UP the whole pass set is on screen at once, and the only
+   thing you scroll for is the Birds catalog below it — which is where this
+   column deliberately puts its surplus. AT THE 1024×768 FLOOR it does not fit:
+   the honesty line is 36 px past the fold and the Log button 6 px, and the pass
+   column scrolls by that much. Nothing is unreachable and there is no second
+   scroller in the way.
+
+   ⚠️ AND THE OBVIOUS SAVING DOES NOT BUY IT. Putting the dome back to
+   0.28·--vh-eff — the round-1 value, which cost the operator's "25%" seven
+   points — returns 27 px and leaves the honesty line 9 px past the fold anyway.
+   Measured on the round-1 tree too: with 0.28 AND the taller three-line arm bar
+   it was 28.5 px past. The floor has never fitted, at either coefficient. What
+   would actually close it is dropping two of {the honesty line, the log strip's
+   own heading, the pass timeline}, and none of those is a layout decision to
+   make quietly. The CHANGELOG says so in the same words.
+
+   Also at the floor, and also stated rather than hidden: the 11-column schedule
+   table is ~146 px wider than column 1 there and scrolls SIDEWAYS inside its own
+   scroller — 11–13 px of it left at 1200–1280 wide, and none at 1366 and above.
+   A round-1 note claimed the sideways scroll was gone at the floor; it is not,
+   and it cannot be without taking the width off the pass column beside it.
+
+   THE SCROLL OWNERS — three siblings, one pre-existing nested, one dormant
+   backstop:
+     · `.sats-sched-scroll` owns column 1's schedule (and stays the schedule
+       table's horizontal escape).
+     · `.sats-radio` owns the transponder chooser's own overflow. It is DORMANT
+       until the chooser's disclosures are opened; see its rule for the trap it
+       replaces.
      · `.sats-side` owns column 2 — the pass card, the log and Birds.
      · `.sats-favmgr ul` is capped and scrolls inside `.sats-side`; its own
        comment records the violation it was added for.
-   `.sats-view`, `.sats-head`, `.sats-armbar`, `.sats-plan`, `.sats-sched`,
-   `.sats-radio` and `.sats-detail` never scroll.
+     · `.sats-plan` is a BACKSTOP: `overflow-y: auto`, measured at 0 px of
+       overflow at every swept size. It exists so no content arrangement can
+       clip this column with no way to reach what it clipped.
+   `.sats-view`, `.sats-head`, `.sats-armbar`, `.sats-sched` and `.sats-detail`
+   never scroll.
 
    ⚠️ A TRAP FOR ANY LATER REVIEWER: 1024×768 and 1366×768 both auto-fit to
    85% UI zoom, so they have the SAME ~904 px of effective height. 1366 buys
@@ -15153,13 +15203,43 @@ button.cq-skiptx1.on {
    One strip carrying the bird's identity, which rig is bound, Lock on, the five
    readiness gates, the live tracking badge and the ✕. It replaces six
    separately-bordered blocks stacked down the 486 px detail column — ~175 px of
-   frame plus a 25 px sticky heading — with one wrapping row across the full
+   frame plus a 25 px sticky heading — with a wrapping row across the full
    window, and hands that height to the pass surfaces below.
 
+   ⚠️ IT IS TWO LINES WHILE A PASS IS ARMED, NEVER ONE — and the budget is
+   written on the real number, because the CSS FORBIDS the other one.
+   `.sat-rail { flex: 1 1 100% }` below is a deliberate wrap point: the readiness
+   rail always starts its own line. So the bar is (identity + binding + Lock on +
+   badge + ✕) then (the five gates), and a round-1 comment that budgeted "one
+   wrapping row / 29 px" was describing a layout this sheet cannot produce.
+   MEASURED, at the mid-pass fixture with a track armed and a transponder held
+   (effective px, and the flex-line count is by vertical OVERLAP — `align-items:
+   center` gives items on the SAME line different `top`s, which is how a round-1
+   count read six):
+
+     1024×768 floor  79.9, 3 lines   1280×800   66.1, 3   1366×768   66.1, 3
+     1200×750 pin80  65.4, 3 lines   1600×900   65.0, 3   1920×1080  46.0, 2
+     1200×1390       81.0, 3 lines   3440×1440  46.0, 2
+
+   Two lines only where the identity, the binding, Lock on, the badge and the ✕
+   all fit one line; three at the floor and in a portrait window, where they do
+   not. It is never one.
+
+   The badge and the ✕ used to take a further line of their own at EVERY size,
+   because they follow the rail in DOM order and the rail's 100% basis pushed
+   them past it — 99.2 px and four lines at the floor. They are emitted BEFORE
+   the rail now (SatellitesView.tsx says so at the call site, and
+   SatellitesView.console.test.tsx pins the order against a rendered DOM, which
+   is the only place that invariant can live) and ride the identity line,
+   trailing-anchored. That is ~16.5–19 eff px back at every window size, and the
+   bar spans both columns, so both spend it.
+
    IT IS A GRID ROW, SO IT NEVER SCROLLS and needs no sticky at md+. At sm/xs,
-   where `.sats-view` really is the page scroller, it sticks to the top with an
-   OPAQUE background (the contract's rule for sticky surfaces) so the ■ stop and
-   the ✕ stay reachable however far the page has scrolled.
+   where the page genuinely scrolls (`main.layout.single`), it sticks to the top
+   with an OPAQUE background (the contract's rule for sticky surfaces) so the
+   ■ stop and the ✕ stay reachable however far the page has scrolled — see the
+   `[data-viewport='sm'] .sats-armbar` rule and the two `.sats-view` conditions
+   that have to hold for it to be anything but decoration.
 
    THE WRAP POINT IS CHOSEN, NOT CONTENT-DEPENDENT (the FT8 console's `.cq-break`
    lesson): `.sat-rail`'s `flex-basis: 100%` always starts a new line, so the
@@ -15194,6 +15274,23 @@ button.cq-skiptx1.on {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* TRAILING-ANCHORED, and it takes two rules because there are two of them.
+   `.sats-tracking-badge` and `.sats-detail-close` BOTH declared
+   `margin-left: auto`, and two auto margins on one flex line SPLIT the free
+   space between them — so the badge sat mid-bar, and because its own text
+   ("⟳ tracking RS-44 · cmd az 214° el 46°") is re-rendered on the 2 s poll, the
+   ■ stop button inside it moved under the cursor twice a minute. Measured 403.6
+   effective px in from the bar's right edge at the 1024×768 floor. Exactly the
+   thing this bar's chosen-wrap-point design set out to prevent, one element
+   short of the finish.
+   The fix is to make the PAIR one trailing group: the badge keeps the auto
+   margin (it is first), and the ✕ gives its up when it follows the badge, so all
+   the free space lands in one place and both go flush right. When there is no
+   track the ✕ is alone and keeps its own auto — the sibling selector simply does
+   not match. `.sats-tracking-badge + .sats-detail-close` is (0,2,0) against the
+   close button's own (0,1,0), so it wins on specificity and not on sheet order.
+   Because the group is right-anchored, the badge's width changes now move its
+   LEFT edge and the ■ stop stays put. */
 .sats-tracking-badge {
   margin-left: auto;
   font-size: var(--fs-micro);
@@ -15265,18 +15362,57 @@ button.cq-skiptx1.on {
    A bounded flex shell: Next/Best (fit) → the schedule (THE grower) → the radio
    quadrant (fit). It is what makes the operator's "the schedule next list is
    long, and that should be made smaller and scrollable" true WITHOUT a
-   max-height or a row cap anywhere — the schedule scroller keeps `flex: 1 1
-   auto` and no cap of any kind, and what stops it eating the page is simply
-   that a fit-content block sits under it in a bounded column. The row count is
-   then set by the window rather than by a constant, which is strictly better:
-   15 rows at the 1024×768 floor, more than 30 in a portrait window.
+   max-height or a row cap on the schedule — `.sats-sched-scroll` still keeps
+   `flex: 1 1 auto` and no cap of any kind, and what stops it eating the page is
+   simply that a fit-content block sits under it in a bounded column. (The SHELL
+   around it, `.sats-sched`, carries a yielding min-height and `flex-basis: 0`;
+   both are about the shell never collapsing to nothing, and neither is a cap.)
+   The row count is then set by the window rather than by a constant.
+
+   ⚠️ WHAT THAT ACTUALLY COMES TO, MEASURED (42-row fixture, mid-pass, a track
+   armed and a transponder held — rows FULLY visible inside the scroller, not
+   half a row):
+
+     1024×768 floor  5      1280×800   8      1366×768   7
+     1600×900        7      1920×1080  16     1200×1390  24     3440×1440  30
+
+   A round-1 comment here claimed "15 at the floor, more than 30 in portrait".
+   Neither number was ever produced by this sheet; the real ones are above and
+   the reason is arithmetic, not a bug: at 768 px of window height the whole
+   column is ~657 effective px and the Next/Best strip (165) plus the radio
+   quadrant (277) are two thirds of it. The operator's "like the first 10 lines"
+   is reached at ~900 px of window height and held everywhere above it. That is
+   stated per size in the CHANGELOG and in docs/guide/satellites.md rather than
+   averaged into one number that is true nowhere.
 
    `.sats-best` and `.sats-sched` used to be pinned to explicit GRID rows here,
    for a reason that still holds and is now expressed in flex instead: "Next up"
    can be absent, and auto-placement would then land the schedule in an `auto`
    track — an unbounded table under `overflow: hidden`, the overhaul's own bug
-   class. `flex: 0 0 auto` / `flex: 1 1 auto` / `flex: 0 0 auto` says the same
-   thing and cannot be re-ordered into that bug. */
+   class. The flex triple says the same thing and cannot be re-ordered into it.
+
+   ⚠️ WHY THIS COLUMN SCROLLS AS A BACKSTOP, AND WHY IT NEVER DOES IN PRACTICE.
+   A round-1 build had `overflow: hidden` here over TWO fit-content children
+   (`.sats-best`, `.sats-radio`) with only the schedule able to give — and that
+   was a reachable TRAP, not a theoretical one. Measured at the 1024×768 floor
+   on a 12-transmitter bird with the chooser's two disclosures open (two clicks):
+   `.sats-sched` collapsed to 0 px, so its scroller had a 0-px box and the whole
+   48 h schedule was UNREACHABLE, and `.sats-radio` was clipped 667 px past this
+   column — including the "show fewer" control that would have undone it. Even
+   at 1920×1080 the schedule went to 0 and 60 px of the chooser was clipped.
+   Three changes kill the class rather than the instance:
+     · `overflow-y: auto` HERE is the interposed scroller the contract requires
+       above a clipping box with unshrinkable children. It is DORMANT at every
+       swept size (measured 0 px of overflow at all ten, expanded chooser
+       included) — it exists so no arrangement of content can ever clip this
+       column with no way to reach what it clipped.
+     · `.sats-sched` is `flex: 1 1 0` with a YIELDING floor, so it can never be
+       a 0-px scroller (the dead-scrollbar bug by another name).
+     · `.sats-radio` is capped and owns its own overflow — see its rule.
+   The clip this replaces was there to stop the schedule TABLE blowing out the
+   grid area. That no longer depends on it: `.sats-sched { overflow: hidden }`
+   plus its inner scroller bound the table, and `flex-basis: 0` means the table's
+   content height can never contribute to this column's size in the first place. */
 .sats-plan {
   grid-column: 1;
   grid-row: 3;
@@ -15284,7 +15420,7 @@ button.cq-skiptx1.on {
   flex-direction: column;
   gap: var(--space-2);
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
 }
 .sats-best {
   flex: 0 0 auto;
@@ -15441,10 +15577,24 @@ h2.sats-best-tag {
    the discovery band is a ROW COUNT in the component (DISCOVERY_ROW_CAP) —
    never a max-height here, which would be a second nested scroller. */
 .sats-sched {
-  flex: 1 1 auto; /* THE grower inside .sats-plan — see its comment */
+  /* THE grower inside .sats-plan — see its comment. `flex-basis: 0`, not `auto`:
+     with `auto` the basis is the TABLE's content height (~1,090 px for a 42-row
+     schedule), so free space in this column was always hugely negative and every
+     shrinkable sibling got squeezed by a number that had nothing to do with what
+     the column could hold. Basis 0 makes this item take exactly the leftover,
+     which is what it already resolved to at every measured size (178.9 px at the
+     1024×768 floor, before and after), and it is what lets `.sats-radio` be
+     shrinkable at all without collapsing in the ordinary case. */
+  flex: 1 1 0;
+  /* NEVER A 0-PX SCROLLER. Under pressure this used to shrink to nothing, and a
+     scroller with a 0-px box cannot be scrolled — the whole schedule became
+     unreachable. Written to YIELD (`min()` against the column's own definite
+     height) so it is a floor and not a hard floor: ~3½ rows plus the sticky
+     header when there is room, and it gets out of the way when the column
+     itself is shorter than that. */
+  min-height: min(9em, 100%);
   display: flex;
   flex-direction: column;
-  min-height: 0;
   overflow: hidden;
 }
 .sats-sched-strip {
@@ -15811,6 +15961,10 @@ button.sat-chip:disabled {
   font-size: var(--fs-body);
   padding: 0 2px;
 }
+/* The second half of the trailing group — see `.sats-tracking-badge`. */
+.sats-tracking-badge + .sats-detail-close {
+  margin-left: 0;
+}
 .sats-detail-close:hover {
   color: var(--text);
 }
@@ -15854,7 +16008,7 @@ button.sat-chip:disabled {
    out-rank a fix. `panel-overflow.test.ts` computes the winner for a
    `.sat-sky.live .sat-dome` element against the whole sheet.
 
-   THE NUMBER. 0.28·--vh-eff = 253 px at the 1024×768 floor, against 458 px
+   THE NUMBER. 0.31·--vh-eff = 280 px at the 1024×768 floor, against 458 px
    before. The old 0.55 / 0.7 caps were INERT at every window except ultrawide:
    the dome was bound by its COLUMN, not by the viewport, so at 3440×1440 it
    rendered 1,008 px square and at 1024×768 it ran past the fold on its own.
@@ -15863,21 +16017,31 @@ button.sat-chip:disabled {
    It also sets the on-plate az/el type, which is what the operator's "25%"
    instruction is about: those are SVG viewBox units, so rendered px = unit ×
    dome px / 248. See TAG_FS in SatellitesView.tsx — the two numbers are ONE
-   decision and neither may be changed without the other.
+   decision and neither may be changed without the other, and TAG_FS 12.3 is
+   derived FROM 0.31: 12.3 × 280/248 = 13.9 px against 18.5 before, which is
+   the −24.8% he asked for. A round-1 build shipped 0.28 here while that
+   arithmetic still said 0.31, which quietly made the cut −32% — seven points
+   past the one number in the instruction — to buy 27 px of a no-scroll promise
+   the operator has since withdrawn ("or we could ship it and build with the
+   assumtive overflow", 2026-08-03). The 27 px are spent honestly now: see the
+   per-size statement in the section header above and in the CHANGELOG.
 
-   ⚠️ WHY 0.28 AND NOT 0.31, WHICH WOULD HAVE LANDED THE TYPE ON EXACTLY 25%.
-   Measured: at 0.31 the pass column came out 5 effective px over its box at the
-   1024×768 floor — the whole no-scroll promise missing by a third of a text
-   line. 0.28 closes it with room, and costs the type another seven points
-   (−32% instead of −25%). That is the operator's own second instruction paying
-   for his first: he asked for the dome to come down in the same sentence. It is
-   the one place this rebuild overshot what he asked for by name, it is flagged
-   in the CHANGELOG rather than buried, and raising it back to 0.31 is a
-   one-character change if he wants the type nearer the quarter. */
+   ⚠️ ONE DISCLOSED CONSEQUENCE, and it is disclosed rather than fixed at md+.
+   `--vh-eff` is `innerHeight / --ui-zoom`, so `0.31 · --vh-eff` LAYOUT px is
+   `0.31 · innerHeight` DEVICE px however the operator sets UI zoom — the dome
+   is zoom-invariant in physical size while every other surface grows. Raising
+   zoom for readability therefore magnifies everything EXCEPT the az/el numbers
+   a manual-rotor operator steers by, and at a pinned 175% they become the
+   smallest type on screen. At md+ that is deliberate: the effective viewport
+   at high zoom is genuinely short (514 px at 175% on 1600×900), and a dome
+   that grew with zoom would push the whole pass set off it. At sm/xs, where
+   the page scrolls and height is not the constraint, it IS fixed — see the
+   `[data-viewport='sm'] .sat-dome` rule, which caps in `em` so the dome and
+   its plate type scale with zoom like the rest of the UI. */
 .sat-dome,
 .sat-sky.live .sat-dome {
   width: 100%;
-  max-width: min(100%, calc(0.28 * var(--vh-eff, 100vh)));
+  max-width: min(100%, calc(0.31 * var(--vh-eff, 100vh)));
   display: block;
   margin: 0 auto;
 }
@@ -16405,9 +16569,32 @@ button.sat-chip:disabled {
    Whatever it costs comes out of the schedule's row count directly above it,
    which is exactly where a bird with an unusual number of transmitters should
    show up, and the graceful failure is "fewer schedule rows" rather than a
-   clipped control. TP_ALIVE_CAP in the component is what bounds it. */
+   clipped control.
+
+   ⚠️ TP_ALIVE_CAP DOES NOT BOUND IT, WHICH IS WHY THIS BOX IS CAPPED HERE. The
+   component's row cap collapses the surplus behind "show all N" and "show N
+   inactive" — and those are BUTTONS: two clicks turn a 4-card chooser into a
+   12-card one. Measured at the 1024×768 floor, that took this box to 1,123 px
+   in a 637-px column, collapsed the schedule to 0 px (unreachable, see
+   `.sats-plan`) and clipped 667 px of the chooser itself — the "show fewer"
+   control among it. So:
+     · `max-height` is a SHARE of the column, written to yield: `28em` is the
+       comfortable ceiling and `55%` takes over when the column is shorter than
+       that, so the cap can never be larger than the box it lives in.
+     · `overflow-y: auto` is the interposed scroller that share requires. It is
+       DORMANT until the cap binds — an ordinary one- or two-transmitter bird
+       renders 246–278 px here at every swept size, well under it, and shows no
+       scrollbar. The chooser's own disclosure is what arms it.
+     · `min-height: 0` + a shrink factor let the column, not this box, decide
+       who gives first when both cannot fit.
+   This is a SECOND scroll owner in column 1, and it is deliberate: it is not
+   nested inside the schedule's scroller (they are siblings), and the alternative
+   measured above is a clipped control with no path to it. */
 .sats-radio {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(28em, 55%);
+  overflow-y: auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--space-2);
@@ -16434,15 +16621,19 @@ button.sat-chip:disabled {
    (zoomed context). 0.27 rather than 0.52 because it is now sharing a row with
    the dome rather than owning one.
 
-   ⚠️ THE FLOOR IS WRITTEN TO YIELD. It was a hard `min-height: 260px`; this box
-   now lives inside `.sats-pass-graphics` under a bounded column, and a hard
-   floor under a clipping ancestor with no interposed scroller is the contract's
-   named bug. `min(180px, 100%)` is comfortable when there is room and gets out
-   of the way when there is not. */
+   ⚠️ THERE IS NO FLOOR, AND THERE MUST NOT BE ONE. It was a hard
+   `min-height: 260px`, then `min(180px, 100%)` — and the second was INERT, not
+   merely gentle: the percentage resolves against the box's containing block,
+   which is an `auto` grid row inside `.sats-pass-graphics`, so it is an
+   indefinite height and `100%` computes to 0. `min(180px, 0)` is 0, i.e. the
+   rule bought nothing at any window size and the box has always been sized by
+   `width` + `aspect-ratio` alone. Deleted rather than re-armed: this box lives
+   under a clipping column, and a hard floor there with no interposed scroller
+   is the contract's named bug — width + aspect-ratio already give a square that
+   shrinks with the column, which is exactly what a floor was reaching for. */
 .sat-globe-box {
   width: min(100%, calc(0.27 * var(--vh-eff, 100vh)));
   aspect-ratio: 1 / 1;
-  min-height: min(180px, 100%);
   margin-inline: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -16506,23 +16697,55 @@ button.sat-chip:disabled {
    dead since birth and the globe column held its 340-px floor at every width. */
 [data-viewport='sm'] .sats-view,
 [data-viewport='xs'] .sats-view {
-  grid-template-columns: minmax(0, 1fr);
-  /* All-auto rows: .sats-view is the PAGE scroller here, so no track may
-     bound a child — a bounded child with its own scroller is the nested-
-     scroller violation, and one with overflow:visible spills its track. */
-  grid-template-rows: auto auto auto auto;
+  /* ⚠️ NOT A GRID HERE, AND THAT IS A FIX, NOT A TIDY-UP. One column means the
+     grid and a flex column lay out identically — but a GRID ITEM's sticky
+     containing block is its own grid AREA, and with `auto` tracks that area is
+     exactly the item's height, i.e. zero travel. `.sats-armbar`'s `position:
+     sticky` below shipped DEAD for that reason. As a flex column the arm bar's
+     containing block is this whole box, so the sticky has the room to work.
+     `gap` is why flex and not `display: block`. */
+  display: flex;
+  flex-direction: column;
+  /* ⚠️ AND `overflow` MUST NOT SCROLL HERE — the second half of the same dead
+     sticky. This box used to declare `overflow-y: auto`, which made it a scroll
+     CONTAINER; sticky positions against the nearest scroll container, and with
+     `height: auto` this one can never scroll, so the arm bar was pinned to a
+     scrollport that never moves. `visible` hands the job back to
+     `main.layout.single` (`.layout.single { overflow-y: auto }`), which is the
+     real page scroller at these widths — measured 2,333 px of it at a pinned
+     175% on 1600×900, against 0 px here.
+     The horizontal escape the old `hidden` provided is unaffected: the 11-column
+     nowrap table scrolls inside `.sats-sched-scroll` (its own rule below), so
+     nothing reaches this box to spill sideways. */
+  overflow: visible;
   /* ⚠️ height:auto IS LOAD-BEARING, and its absence was a measured defect.
-     `height: 100%` with four `auto` tracks and negative free space resolves
-     every track to MIN-CONTENT — and `.sats-sched-scroll`'s min-content is 0
-     (min-height:0 + overflow-y:auto). At a pinned 175% zoom on 1600×900 the
-     schedule collapsed to a 43 px sliver holding 1,067 px of rows and
-     `.sats-side` to 63 px. Nothing was unreachable, so it was not a trap, but
-     it made the accessibility-zoom layout useless. With `height: auto` the
-     tracks take their content height and the page scroller does its job — which
-     is what the comment below has always claimed. */
+     `height: 100%` with negative free space resolved every child to
+     MIN-CONTENT — and `.sats-sched-scroll`'s min-content is 0 (min-height:0 +
+     overflow-y:auto). At a pinned 175% zoom on 1600×900 the schedule collapsed
+     to a 43 px sliver holding 1,067 px of rows and `.sats-side` to 63 px.
+     Nothing was unreachable, so it was not a trap, but it made the
+     accessibility-zoom layout useless. With `height: auto` the children take
+     their content height and the page scroller does its job. */
   height: auto;
   min-height: 100%;
-  overflow-y: auto;
+}
+/* THE DOME, AND THE ONE PLACE THE ZOOM-INVARIANCE IS FIXED RATHER THAN
+   DISCLOSED. `0.31 · --vh-eff` layout px is `0.31 · innerHeight` DEVICE px at
+   any zoom (`--vh-eff` is `innerHeight / --ui-zoom`), so raising UI zoom for
+   readability magnified everything EXCEPT the az/el plate — SVG units scaled by
+   the dome's px size — and at a pinned 175% those numbers became the smallest
+   type on screen, on the instrument a manual-rotor operator steers by. Here the
+   page scrolls and viewport height is not the constraint, so the cap is `em`:
+   em IS multiplied by `zoom`, so the dome and its plate grow with the rest of
+   the UI. 26em ≈ 364 layout px, ≈ 637 device px at 175%.
+   ⚠️ BOTH SELECTORS, for the reason the base rule's comment gives: a lone
+   `[data-viewport='sm'] .sat-dome` is (0,2,0) and loses to `.sat-sky.live
+   .sat-dome` (0,3,0) for the whole of every live pass. */
+[data-viewport='sm'] .sat-dome,
+[data-viewport='sm'] .sat-sky.live .sat-dome,
+[data-viewport='xs'] .sat-dome,
+[data-viewport='xs'] .sat-sky.live .sat-dome {
+  max-width: min(100%, 26em);
 }
 /* The page scroller owns the COLUMN at these widths: the planning column, the
    schedule shell and the side column release their overflow to it. (The
@@ -16534,6 +16757,20 @@ button.sat-chip:disabled {
 [data-viewport='xs'] .sats-sched {
   overflow: visible;
 }
+/* …and the schedule goes back to CONTENT height here, which the base rule's
+   `flex: 1 1 0` cannot give it. `.sats-plan` is content-height at these widths
+   (nothing bounds it — the page scrolls), so a flex item with `flex-basis: 0`
+   has no definite free space to grow into and resolves to ZERO: measured, the
+   whole 42-row schedule vanished at a pinned 175% on 1600×900 while the column
+   around it kept its 596 px. The base rule's floor comes off with it for the
+   same reason — `min-height: min(9em, 100%)` against an indefinite height is
+   the 0-percentage trap twice over, and there is nothing here for a floor to
+   protect against. */
+[data-viewport='sm'] .sats-sched,
+[data-viewport='xs'] .sats-sched {
+  flex: 0 0 auto;
+  min-height: 0;
+}
 /* One column here, so the two graphics and the two radio cells stack rather
    than halving an already-narrow width. */
 [data-viewport='sm'] .sats-pass-graphics,
@@ -16542,10 +16779,30 @@ button.sat-chip:disabled {
 [data-viewport='xs'] .sats-radio {
   grid-template-columns: minmax(0, 1fr);
 }
-/* The arm bar carries the ■ stop and the ✕, and here the view is genuinely the
-   page scroller — so it sticks, with an opaque surface (the contract's rule for
-   sticky surfaces; --bg-elev exists in both themes). At md+ it is a
-   non-scrolling grid row and needs none of this. */
+/* …and the radio quadrant's cap and scroller come OFF here, for two reasons.
+   (1) The page owns the overflow at these widths, so a bounded box with its own
+   scroller inside it is the nested-scroller violation the rules above spend
+   three comments avoiding. (2) The cap would not merely be redundant, it would
+   be WRONG: `.sats-plan` is content-height here, so the `55%` term has no
+   definite height to resolve against and collapses — the same indefinite-
+   percentage trap that made `.sat-globe-box`'s `min(180px, 100%)` floor compute
+   to 0. Released explicitly rather than left to luck. */
+[data-viewport='sm'] .sats-radio,
+[data-viewport='xs'] .sats-radio {
+  max-height: none;
+  overflow: visible;
+}
+/* The arm bar carries the ■ stop and the ✕, and here the page genuinely scrolls
+   (`main.layout.single`, NOT `.sats-view` — see that rule) — so it sticks, with
+   an opaque surface (the contract's rule for sticky surfaces; --bg-elev exists
+   in both themes). At md+ it is a non-scrolling grid row and needs none of this.
+
+   ⚠️ THIS RULE SHIPPED DEAD ONCE AND THE TWO REASONS ARE BOTH IN `.sats-view`
+   ABOVE: a grid item's sticky containing block is its own auto-sized grid area
+   (zero travel), and `.sats-view`'s own `overflow-y: auto` made it the nearest
+   scroll container while `height: auto` meant it could never scroll. Both are
+   fixed there, not defended here. `panel-overflow.test.ts` computes all three
+   conditions together — a sticky rule alone proves nothing. */
 [data-viewport='sm'] .sats-armbar,
 [data-viewport='xs'] .sats-armbar {
   position: sticky;

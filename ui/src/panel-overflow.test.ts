@@ -235,7 +235,23 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
       winner('.sats-sched', 'overflow-y') ?? winner('.sats-sched', 'overflow'),
       'the shell must clip, never scroll — the inner scroller owns overflow',
     ).toBe('hidden')
-    expect(winner('.sats-sched', 'min-height')).toBe('0')
+  })
+  it('.sats-sched can never become a 0-px scroller', () => {
+    // MEASURED FAILURE, 2026-08-04, at the 1024×768 floor: on a 12-transmitter
+    // bird with the chooser's two disclosures open, `.sats-sched` shrank to 0.
+    // Its inner scroller then had a 0-px box, and a scroller you cannot scroll
+    // is not a scroller — the entire 48 h schedule was unreachable. `min-height:
+    // 0` here was what allowed it, and it was the wrong half of the idiom: the
+    // scroller INSIDE needs `min-height: 0` (asserted below), the shell needs a
+    // floor that yields.
+    const v = winner('.sats-sched', 'min-height')
+    expect(v, '.sats-sched declares no min-height — under pressure it shrinks to 0').not.toBeNull()
+    expect(
+      v!.replace(/\s+/g, ''),
+      `min-height is \`${v}\` — a bare floor under a bounded column is the contract's named ` +
+        'bug, and no floor at all is a dead scrollbar. The idiom is min(Xem, 100%): a few rows ' +
+        'when there is room, out of the way when the column itself is shorter than that.',
+    ).toBe('min(9em,100%)')
   })
   it('.sats-sched-strip is fit=content; .sats-sched-scroll is THE scroll owner', () => {
     expect(winner('.sats-sched-strip', 'flex')).toBe('0 0 auto')
@@ -252,13 +268,40 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
   })
   it('sm/xs: the page scroller owns the column, but the TABLE keeps its horizontal escape', () => {
     for (const vp of ['sm', 'xs']) {
-      for (const sel of [`[data-viewport='${vp}'] .sats-sched`, `[data-viewport='${vp}'] .sats-side`]) {
+      for (const sel of [
+        `[data-viewport='${vp}'] .sats-sched`,
+        `[data-viewport='${vp}'] .sats-side`,
+        `[data-viewport='${vp}'] .sats-plan`,
+        `[data-viewport='${vp}'] .sats-radio`,
+      ]) {
         expect(
           winner(sel, 'overflow'),
-          `${sel}: .sats-view is the page scroller at ${vp} — a bounded inner scroller here ` +
-            'is the one-scroll-owner violation the overhaul killed',
+          `${sel}: the PAGE scrolls at ${vp} (\`main.layout.single\`, not \`.sats-view\` — see ` +
+            'the sticky-travel guard) — a bounded inner scroller here is the one-scroll-owner ' +
+            'violation the overhaul killed',
         ).toBe('visible')
       }
+      // …and the two bounds that only make sense against a DEFINITE column
+      // height come off with the scrollers. Both would resolve their percentage
+      // against `.sats-plan`, which is content-height here — the indefinite-
+      // percentage trap that made `.sat-globe-box`'s floor compute to 0.
+      // MEASURED: `flex: 1 1 0` left the whole 42-row schedule at ZERO px at a
+      // pinned 175% on 1600×900 while the column around it kept its 596 px.
+      const sched = `[data-viewport='${vp}'] .sats-sched`
+      expect(
+        winner(sched, 'flex'),
+        `${sched}: the base rule's \`flex: 1 1 0\` has no definite free space to grow into here, ` +
+          'so the schedule resolves to 0 px and vanishes',
+      ).toBe('0 0 auto')
+      expect(
+        winner(sched, 'min-height'),
+        `${sched}: the base floor is a percentage of an indefinite height — release it`,
+      ).toBe('0')
+      expect(
+        winner(`[data-viewport='${vp}'] .sats-radio`, 'max-height'),
+        `[data-viewport='${vp}'] .sats-radio: the base cap's 55% has nothing definite to resolve ` +
+          'against here and collapses the box',
+      ).toBe('none')
       // The 11-column nowrap table's min-content (~700–800 px) exceeds these
       // widths while .sats-view keeps overflow-x hidden, so the table's OWN
       // container must own overflow-x — or Status/Needed/⏰/▶ Work are
@@ -296,15 +339,61 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
     expect(winner('.sats-plan', 'display')).toBe('flex')
     expect(winner('.sats-plan', 'flex-direction')).toBe('column')
     expect(winner('.sats-plan', 'min-height'), 'a flex column that cannot shrink is not bounded').toBe('0')
+    expect(winner('.sats-best', 'flex'), 'the strip cannot use surplus height').toBe('0 0 auto')
+    expect(
+      winner('.sats-sched', 'flex'),
+      'the schedule is the only grower — and its BASIS must be 0, not auto: with `auto` the ' +
+        "basis is the 42-row table's own height (~1,090 px), so this column's free space is " +
+        'always hugely negative and any shrinkable sibling gets squeezed by a number that has ' +
+        'nothing to do with what the column can hold',
+    ).toBe('1 1 0')
+  })
+
+  it('nothing in the planning column can be clipped with no way to reach it', () => {
+    // ⚠️ THE TRAP THIS REPLACES WAS REACHABLE IN TWO CLICKS, and it is measured,
+    // not imagined. `.sats-plan` used to be `overflow: hidden` over TWO
+    // fit-content children with only the schedule able to give. At the 1024×768
+    // floor, on a 12-transmitter bird with the chooser's "show all N" and "show N
+    // inactive" both open: the schedule went to 0 px (unreachable, above),
+    // `.sats-radio` grew to 1,123 px in a 637 px column and 667 px of it was
+    // CLIPPED — including the control that would have collapsed it again. Even at
+    // 1920×1080 the schedule went to 0 and 60 px of the chooser was clipped.
+    //
+    // Three computed conditions kill the class. Each is necessary: a cap without
+    // a scroller is still a clip, a scroller without a cap still starves the
+    // schedule, and neither can prove the column itself has an escape.
     expect(
       winner('.sats-plan', 'overflow-y') ?? winner('.sats-plan', 'overflow'),
-      'the planning column clips; its ONE scroller is .sats-sched-scroll inside it',
-    ).toBe('hidden')
-    expect(winner('.sats-best', 'flex'), 'the strip cannot use surplus height').toBe('0 0 auto')
-    expect(winner('.sats-sched', 'flex'), 'the schedule is the only grower').toBe('1 1 auto')
-    expect(winner('.sats-radio', 'flex'), 'the radio quadrant cannot use surplus height').toBe(
-      '0 0 auto',
-    )
+      'the planning column must own a backstop scroller: it holds two fit-content children ' +
+        '(`.sats-best`, `.sats-radio`) that cannot shrink to fit, and the contract forbids a ' +
+        'clipping box over unshrinkable descendants with no interposed scroller. It is DORMANT ' +
+        'at every swept size (measured 0 px of overflow at all ten, expanded chooser included).',
+    ).toMatch(/^(auto|scroll)$/)
+    expect(
+      winner('.sats-radio', 'flex'),
+      'the radio quadrant must be able to give before the column has to scroll',
+    ).toBe('0 1 auto')
+    const cap = winner('.sats-radio', 'max-height')
+    expect(
+      cap,
+      '.sats-radio declares no max-height — TP_ALIVE_CAP bounds the CARDS, not the box: two ' +
+        'clicks on the chooser take it past 1,100 px',
+    ).not.toBeNull()
+    expect(
+      cap!.replace(/\s+/g, ''),
+      `max-height is \`${cap}\` — a bare ceiling cannot yield when the column is shorter than ` +
+        'it. The idiom is min(Xem, share).',
+    ).toBe('min(28em,55%)')
+    expect(
+      winner('.sats-radio', 'overflow-y') ?? winner('.sats-radio', 'overflow'),
+      'a max-height without an overflow rule is a CLIP, which is the bug this cap was added to ' +
+        'fix — the capped box needs its own scroller',
+    ).toMatch(/^(auto|scroll)$/)
+    expect(
+      winner('.sats-radio', 'min-height'),
+      'a flex item with the default `min-height: auto` cannot shrink below its content, so the ' +
+        'cap would never bind',
+    ).toBe('0')
   })
 
   it('the radio quadrant is what BOUNDS the schedule — so it may never floor itself', () => {
@@ -314,15 +403,22 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
     // it eating the page is that a fit-content block sits under it in a bounded
     // column, so the window sets the row count instead of a constant.
     //
-    // That only works while the quadrant genuinely yields. A min-height here
-    // would drive the only shrinkable child — the schedule scroller, min-height
-    // 0 — to zero and then clip the quadrant itself, with no scroller anywhere
-    // in the chain. The bound on the quadrant's own height is a ROW COUNT in
-    // the component (TP_ALIVE_CAP), the DISCOVERY_ROW_CAP idiom.
-    for (const sel of ['.sats-radio', '.sats-radio-cell', '.sats-best']) {
+    // That only works while the quadrant genuinely yields. A min-height FLOOR
+    // here would drive the only shrinkable child — the schedule scroller,
+    // min-height 0 — to zero and then clip the quadrant itself. (`min-height: 0`
+    // on `.sats-radio` is the opposite of a floor and is asserted in the
+    // no-clip guard above: it is what lets the box shrink at all.)
+    for (const sel of ['.sats-radio-cell', '.sats-best']) {
       expect(winner(sel, 'min-height'), `${sel} must not floor its height`).toBeNull()
+    }
+    for (const sel of ['.sats-radio', '.sats-radio-cell', '.sats-best']) {
       expect(winner(sel, 'height'), `${sel} must not fix a height`).toBeNull()
     }
+    expect(
+      winner('.sats-radio', 'min-height'),
+      '.sats-radio must declare `min-height: 0` and nothing else — any positive floor is the ' +
+        'bug described above',
+    ).toBe('0')
     // `.sats-plan` is the exception and the opposite case: its `min-height: 0`
     // is what makes it shrinkable at all (asserted in the guard above), so a
     // floor is only forbidden here in the form of a fixed height.
@@ -404,8 +500,8 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
     // It carries the ■ stop, the ✕ and the five readiness gates. At md+ it is
     // grid row 2 of a bounded shell — nothing scrolls past it, so it needs no
     // sticky and must not have one (a sticky in a non-scrolling context is dead
-    // weight that later reads as a fix). At sm/xs `.sats-view` really is the page
-    // scroller, and there it sticks with an OPAQUE surface.
+    // weight that later reads as a fix). At sm/xs the page really does scroll
+    // (`main.layout.single`), and there it sticks with an OPAQUE surface.
     expect(winner('.sats-armbar', 'grid-row')).toBe('2')
     expect(winner('.sats-armbar', 'grid-column')).toBe('1 / -1')
     expect(winner('.sats-armbar', 'position'), 'no sticky at md+ — nothing scrolls past it').toBeNull()
@@ -419,6 +515,80 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
         `${sel}: a sticky surface needs an opaque background (contract rule)`,
       ).toContain('var(--bg')
     }
+  })
+
+  it('…and the sm/xs sticky has TRAVEL — the three conditions, not the declaration', () => {
+    // ⚠️ THIS GUARD EXISTS BECAUSE THE RULE ABOVE SHIPPED DEAD, and the guard
+    // above passed while it did. `position: sticky` is not a behaviour; it is a
+    // request that two properties of the ANCESTOR have to grant. Both were
+    // refused, so at a pinned 175% on 1600×900 the arm bar — the ■ stop and the
+    // ✕ — scrolled straight off the top. Measured in a real browser at that
+    // size, bar-top vs the scrollport across a 0/300/600 px scroll:
+    //     with .sats-view as grid + overflow-y:auto   47.6 → -252.4 → -552.4
+    //     with .sats-view as flex + overflow:visible  47.6 →   12.0 →   12.0
+    // The three conditions, all computed from this sheet:
+    //
+    //   1. THE STICKY IS DECLARED (the guard above).
+    //   2. THE PARENT IS NOT A GRID. A grid item's sticky containing block is its
+    //      own grid AREA; `.sats-view`'s tracks are `auto` at these widths, so the
+    //      area is exactly the item's height and the travel is zero. One column
+    //      means flex and grid lay out identically here, so this costs nothing.
+    //   3. THE PARENT IS NOT ITSELF A SCROLL CONTAINER. Sticky positions against
+    //      the NEAREST scroll container. `.sats-view` declared `overflow-y: auto`
+    //      AND `height: auto`, i.e. a scrollport that can never scroll — pinning
+    //      the bar to something that never moves. `visible` hands the job to
+    //      `main.layout.single`, which is the real page scroller.
+    for (const vp of ['sm', 'xs']) {
+      const view = `[data-viewport='${vp}'] .sats-view`
+      expect(
+        winner(view, 'display'),
+        `${view} is a grid: a grid item's sticky containing block is its own auto-sized grid ` +
+          'area, so the arm bar has ZERO travel and its sticky is decoration',
+      ).not.toBe('grid')
+      const of = winner(view, 'overflow')
+      const ofy = winner(view, 'overflow-y')
+      expect(
+        [of, ofy].some((v) => v != null && /^(auto|scroll)$/.test(v)),
+        `${view} declares a scrolling overflow (overflow: ${of}, overflow-y: ${ofy}). That makes ` +
+          'it the nearest scroll container for the arm bar — and with `height: auto` it can ' +
+          'never scroll, so the bar is pinned to a scrollport that never moves. This is exactly ' +
+          'how the sticky shipped dead.',
+      ).toBe(false)
+      expect(
+        winner(view, 'height'),
+        `${view} must stay content-height here — see the rule's own comment (a 100% height with ` +
+          'negative free space resolved every child to min-content)',
+      ).toBe('auto')
+    }
+  })
+
+  it('the arm bar has ONE trailing anchor, so the ■ stop stops moving under the cursor', () => {
+    // `.sats-tracking-badge` and `.sats-detail-close` BOTH declared
+    // `margin-left: auto`, and two auto margins on one flex line SPLIT the free
+    // space between them. Measured at the 1024×768 floor: the ■ stop sat 403.6
+    // effective px in from the bar's right edge, and because the badge's own text
+    // is re-rendered on the 2 s poll ("cmd az 214° el 46°"), it moved. That is
+    // the thing this bar's chosen-wrap-point design was built to prevent.
+    // Computed here as a cascade question between two DIFFERENT selectors that
+    // match the same element, which `winner` (one selector at a time) cannot ask.
+    const solo = decl('.sats-detail-close', 'margin-left')
+    const paired = decl('.sats-tracking-badge + .sats-detail-close', 'margin-left')
+    expect(decl('.sats-tracking-badge', 'margin-left')?.value, 'the badge is the anchor').toBe(
+      'auto',
+    )
+    expect(solo?.value, 'a lone ✕ (no track running) still needs its own auto margin').toBe('auto')
+    expect(
+      paired,
+      'nothing gives the ✕ back a fixed margin when it FOLLOWS the badge — so both carry ' +
+        '`margin-left: auto`, the free space splits, and neither goes flush right',
+    ).not.toBeNull()
+    expect(paired!.value, 'the ✕ must give its auto margin up beside the badge').toBe('0')
+    expect(
+      beats(paired!, solo!),
+      '`.sats-tracking-badge + .sats-detail-close` (0,2,0) must out-rank `.sats-detail-close` ' +
+        '(0,1,0) — and it must win on SPECIFICITY, not on sheet order, or moving either rule ' +
+        'silently restores the split',
+    ).toBe(true)
   })
 
   it('the pass column: the two graphics are ABREAST and both capped in --vh-eff', () => {
@@ -450,19 +620,72 @@ describe('Satellites schedule: a fit-content strip + ONE scroll owner (the disco
         '(0,3,0 vs 0,1,0) and the dome would be uncapped for the whole of every live pass',
     ).toBe(plain)
 
-    // The globe is capped the same way, and its floor YIELDS: it sits under a
-    // bounded column now, and a hard px floor there is the contract's named bug.
+    // THE CAP COEFFICIENT IS THE OPERATOR'S OWN NUMBER, and it is not free to
+    // drift: TAG_FS (SatellitesView.tsx) is DERIVED from it — the on-plate az/el
+    // is drawn in SVG viewBox units, so rendered px = unit × dome px / 248, and
+    // 12.3 × (0.31·904) / 248 = 13.9 px against 18.5 before, the −24.8% he asked
+    // for by name ("the actual aos, los and az, el text could be made smaller by
+    // 25%"). A round-1 build shipped 0.28 here while that arithmetic still said
+    // 0.31, which silently made the cut −32%. Computed rather than eyeballed.
+    const coef = Number(/([\d.]+)\s*\*\s*var\(--vh-eff/.exec(plain!)?.[1] ?? NaN)
+    expect(coef, `could not read a --vh-eff coefficient out of \`${plain}\``).toBeGreaterThan(0)
+    const TAG_FS = 12.3 // must equal SatellitesView.tsx's constant
+    const before = 10 * (458 / 248) // TAG_FS 10 on the pre-rebuild 458 px dome
+    const after = TAG_FS * ((coef * 904) / 248) // 904 = --vh-eff at the 1024×768 floor
+    expect(
+      1 - after / before,
+      `at ${coef}·--vh-eff the dome is ${(coef * 904).toFixed(0)} px at the floor and the az/el ` +
+        `plate lands at ${after.toFixed(1)} px — a ${((1 - after / before) * 100).toFixed(1)}% ` +
+        'cut. The instruction was 25%. Change the coefficient and TAG_FS together or not at all.',
+    ).toBeCloseTo(0.25, 2)
+
+    // The globe is capped the same way. It carries NO floor: `min-height: min(
+    // 180px, 100%)` was INERT — the percentage resolves against an `auto` grid
+    // row, i.e. an indefinite height, so it computed to 0 — and a real floor
+    // under this bounded column is the contract's named bug. Width +
+    // aspect-ratio already give a square that shrinks with the column.
     const g = winner('.sat-globe-box', 'width')
     expect(g!).toContain('var(--vh-eff')
     expect(
-      winner('.sat-globe-box', 'min-height')!.replace(/\s+/g, ''),
-      'a bare px floor under a bounded parent clips; the idiom is min(Xpx, 100%)',
-    ).toBe('min(180px,100%)')
+      winner('.sat-globe-box', 'min-height'),
+      'a floor here is either inert (a percentage against an indefinite grid row) or a clip ' +
+        '(a bare px value under a bounded column) — the box is sized by width + aspect-ratio',
+    ).toBeNull()
+    expect(winner('.sat-globe-box', 'aspect-ratio'), 'the globe letterboxes without it').toBe('1 / 1')
 
     // The passband plot grew with its column off a 320×102 viewBox — 224 px tall
     // at 1024×768 and 551 px at 3440×1440, the fastest-growing block in the
     // section. Capping the WIDTH is what caps the height.
     expect(winner('.sat-pb-plot', 'max-width'), 'the plot is unbounded again').toBe('300px')
+  })
+
+  it('at sm/xs the dome is capped in em, so UI zoom can actually enlarge the az/el', () => {
+    // `--vh-eff` is `innerHeight / --ui-zoom`, so `0.31 · --vh-eff` LAYOUT px is
+    // `0.31 · innerHeight` DEVICE px at every zoom: the dome is the one surface
+    // whose physical size does NOT change when the operator raises UI zoom. The
+    // az/el plate is SVG units scaled by the dome, so at a pinned 175% those
+    // numbers became the smallest type on screen — on the instrument a
+    // manual-rotor operator steers by, while everything around them grew 1.75×.
+    // At md+ that is disclosed and deliberate (the effective viewport at high
+    // zoom is genuinely short: 514 px at 175% on 1600×900). At sm/xs the PAGE
+    // scrolls, height is not the constraint, and `em` — which `zoom` does
+    // multiply — is the honest unit. Measured: dome 144 → 364 effective px there.
+    for (const vp of ['sm', 'xs']) {
+      const plain = winner(`[data-viewport='${vp}'] .sat-dome`, 'max-width')
+      const live = winner(`[data-viewport='${vp}'] .sat-sky.live .sat-dome`, 'max-width')
+      expect(plain, `[data-viewport='${vp}'] .sat-dome declares no cap of its own`).not.toBeNull()
+      expect(
+        plain!,
+        'a --vh-eff cap here is zoom-invariant in device px — the whole defect this rule fixes',
+      ).not.toContain('var(--vh-eff')
+      expect(plain!, 'the cap must be font-relative so `zoom` multiplies it').toContain('em')
+      expect(
+        live,
+        `[data-viewport='${vp}'] .sat-sky.live .sat-dome must carry the same cap: the plain form ` +
+          "is (0,2,0) and loses to the base sheet's `.sat-sky.live .sat-dome` (0,3,0) for the " +
+          'whole of every live pass — the exact way two earlier fixes shipped dead',
+      ).toBe(plain)
+    }
   })
 })
 

@@ -14,7 +14,12 @@ Satellites is an opt-in section. Turn it on in the first-run wizard or in
 ## The tour
 
 The section is laid out as a **pass console**: everything you need to work a pass
-is on one screen, and you scroll only for the things you use between passes.
+is on one screen, and you scroll only for the things you use between passes. From
+a 1200×750 window upward that is literal — the dome, its rise/set readout, the
+globe, the pass timeline and the log strip down to its **Log** button are all
+visible at once. At 1024×768, the smallest window Nexus supports, the last inch
+of the log strip sits just under the fold; see
+[what fits at which window size](#what-fits-at-which-window-size) below.
 
 Across the top, the **arm bar** says what is armed and what it is driving — the
 bird, which rig is bound, the readiness gates (pass, rotor, transponder, Doppler,
@@ -36,10 +41,35 @@ beside it showing where the bird is over the earth and whose grids its footprint
 crosses. Under them the pass timeline, then the **log strip**, then your Birds
 catalog — which is the one thing deliberately below the fold.
 
-**How many schedule rows you see** depends on the window: about seven at the
-1024×768 minimum, ten to eleven on a typical laptop, and twenty-five or more on a
-tall or ultrawide screen. The schedule is the only thing that grows, so every
-pixel the rest of the console gives back becomes another row.
+### What fits at which window size
+
+The console does not shrink its contents to fit; it tells you where the fold is.
+Measured with a full 42-pass schedule, mid-pass, with a track armed:
+
+| Window | Schedule rows | The whole pass set on screen? |
+|---|---|---|
+| 1024×768 (the supported minimum) | 5 | Almost — the **Log** button is 6 px under the fold, the note under it 36 px |
+| 1280×800 | 8 | Yes |
+| 1366×768 | 7 | Yes |
+| 1600×900 | 7 | Yes |
+| 1920×1080 | 16 | Yes |
+| 1200×1390 (tall) | 24 | Yes |
+| 3440×1440 (ultrawide) | 30 | Yes |
+
+The schedule is the only thing that grows, so every pixel the rest of the console
+gives back becomes another row — and the *"first ten lines"* worth of schedule
+arrives at about 900 px of window height.
+
+Two more honest notes about the 1024×768 minimum. The pass column scrolls by
+about an inch to reach the bottom of the log strip — it already scrolls to reach
+the Birds catalog, so this is the same flick of the wheel. And the schedule table
+is wider than its column there, so it scrolls sideways inside its own box — about
+an inch of it at 1024 wide, a few pixels at 1200–1280, and none at 1366 and up.
+
+Opening the transponder chooser's **show all N** costs schedule rows — the
+frequencies panel and the schedule share the column, and that is the trade the
+layout is built on. It stops growing at a little over half the column and scrolls
+inside itself after that, so it can never take the schedule away.
 
 **Frequencies** for each bird are listed so you know where to listen and where to
 transmit.
