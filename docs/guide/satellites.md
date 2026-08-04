@@ -1,16 +1,16 @@
 # Satellites
 
 The Satellites section answers "which bird can I work, and when?" for *your*
-grid. It predicts amateur-satellite passes over your location, keeps your
-favorites at the top, plots each pass, lists the working frequencies, and — if
-you have a rotator — can auto-track a bird across the sky through a pass.
+grid. It predicts amateur-satellite passes over your location, schedules your ★
+birds 48 h out, plots each pass, lists the working frequencies, and — if you
+have a rotator — can auto-track a bird across the sky through a pass.
 
 Satellites is an opt-in section. Turn it on in the first-run wizard or in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features). It needs
 your grid set in [Settings ▸ Station](settings-reference.md#station) to compute
 passes.
 
-<!-- TODO: capture screenshot — the Satellites pass list with a favorite starred and its polar plot -->
+![The Satellites pass console with BEIDOU-2 M4 open and nothing armed — the arm bar across the top carries only the bird, its NORAD number, an ALIVE badge and the ✕ that closes it. Down the left run the Next and Best 24 h passes, each with a ▶ Work this pass, then the 48 h favorites schedule under its "other birds overhead · 252 workable" disclosure, and the frequencies and transponder panels holding the bottom of the column — the transponder still set to "None — leave the dial to me", so the frequencies panel reads as instructions rather than a live dial. On the right the sky dome — the pass arc drawn with AOS at 273° W, LOS at 176° S and the bird at az 182° el 59° — sits beside the ground-track globe, above the pass timeline reading "IN PASS — 140 min to LOS", then the log strip with its Call, SENT/RCVD and Grid boxes, and the Birds catalog starting below the fold.](../img/manual/satellites-console.webp)
 
 ## The tour
 
@@ -85,8 +85,10 @@ for an at-a-glance next-passes list beside the map, and turn on the
 
 ### Star your favorites
 
-Click the **⭐** on a bird to favorite it. Favorites sort to the top of the pass
-list. The ISS is the easiest first target — favorite it and it leads the list.
+Click the **⭐** on a bird to favorite it. The 48 h schedule is your ★ birds —
+everything else overhead sits behind the **Other birds overhead** disclosure
+above it. The ISS is the easiest first target — star it and every ISS pass over
+you turns up in the schedule.
 
 ### Set a pass alarm
 
