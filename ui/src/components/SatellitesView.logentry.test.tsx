@@ -249,36 +249,68 @@ describe('Satellites — logging the contact you just made', () => {
     expect(document.querySelectorAll('.log-entry').length).toBe(1)
   })
 
-  it('sits with the Doppler readout, ahead of the transponder cards and the globe', async () => {
+  it('is a SIBLING of the detail card, in the pass column, above Birds', async () => {
+    // ⚠️ THIS ASSERTION INVERTED ON 2026-08-03, AND THE ARGUMENT MATTERS MORE
+    // THAN THE ASSERTION — read it before "fixing" it back.
+    //
+    // WHAT IT USED TO SAY. The section was one long scrolling column: Doppler
+    // readout → log → transponder cards → globe. Document order WAS scroll
+    // order, and the claim was that an operator with seconds between overs
+    // would never travel past two full-height square graphics to reach a form,
+    // so the form had to come before them.
+    //
+    // WHY THAT IS THE WRONG QUESTION NOW. The pass rebuild took the surfaces
+    // that argument was about OUT of this column entirely: the frequencies and
+    // the transponder chooser are in the planning column (`.sats-radio`,
+    // permanently on screen, never scrolled), and the globe sits beside the sky
+    // dome in one bounded row. Nothing the operator needs mid-pass is behind the
+    // form any more, so there is no travel to protect him from. What is left in
+    // the pass column is the pass, the log, and the Birds catalog — which is the
+    // one surface the operator himself put below the fold ("You can always
+    // scroll down").
+    //
+    // THE NEW INVARIANT IS STRONGER THAN AN ORDERING, AND IT IS A BUG FIX.
+    // LogEntry keeps every field in local state. Nested inside
+    // `{selected && detail && …}` — which is where it was — hitting ✕, pressing
+    // Escape, or clicking another bird UNMOUNTED it and destroyed a half-typed
+    // contact, mid-pass, between overs. It is a sibling of `.sats-detail` now,
+    // gated on the engine snapshot alone. `SatellitesView.remount.test.tsx`
+    // proves the consequence; this proves the structure that allows it.
     render(<SatellitesView focusSat="RS-44" snap={snap()} />)
     await screen.findByPlaceholderText('Call')
 
     const side = document.querySelector('.sats-side')!
     const panel = document.querySelector('.log-entry')!
-    const readout = document.querySelector('.sat-doppler')!
+    const wrap = document.querySelector('.sats-log')!
+    const detailCard = document.querySelector('.sats-detail')!
+    const birds = document.querySelector('.sats-favmgr')!
     const cards = document.querySelector('[data-testid="sat-tp-list"]')!
-    const globe = document.querySelector('[data-testid="sat-globe-box"]')!
 
     // ONE scroll owner: the strip lives in the column that already owns the
     // overflow and adds no scroller of its own.
     expect(side.contains(panel)).toBe(true)
-    expect(panel.closest('.sats-detail')).not.toBeNull()
+    expect(wrap.querySelector('.log-entry')).toBe(panel)
 
-    // DOCUMENT ORDER is the operator's scroll order. Readout → log → cards →
-    // globe: he types with the readout still on screen, and never travels past
-    // the two square graphics to reach the form.
+    // A SIBLING, NOT A DESCENDANT. This is the whole fix: nothing about which
+    // bird is open can unmount the form.
+    expect(panel.closest('.sats-detail'), 'the log is nested in the detail card again').toBeNull()
+    expect(wrap.parentElement).toBe(side)
+    expect(detailCard.parentElement).toBe(side)
+
+    // Pass card → log → Birds. Birds is the deliberate below-the-fold block.
     expect(
-      readout.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING,
-      'log strip is above the Doppler readout',
+      detailCard.compareDocumentPosition(wrap) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the log strip is above the pass card',
     ).toBeTruthy()
     expect(
-      panel.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
-      'transponder cards are above the log strip',
+      wrap.compareDocumentPosition(birds) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the Birds catalog is above the log strip',
     ).toBeTruthy()
-    expect(
-      panel.compareDocumentPosition(globe) & Node.DOCUMENT_POSITION_FOLLOWING,
-      'the globe is above the log strip',
-    ).toBeTruthy()
+
+    // The transponder chooser is in the OTHER column now — permanently on
+    // screen, never behind the form. That is what retires the old ordering.
+    expect(side.contains(cards), 'the chooser is back in the scrolling pass column').toBe(false)
+    expect(cards.closest('.sats-plan'), 'the chooser left the planning column').not.toBeNull()
   })
 
   it('asks for no park row — there is no POTA/SOTA reference on a bird', async () => {

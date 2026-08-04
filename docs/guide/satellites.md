@@ -13,13 +13,33 @@ Satellites is an opt-in section. Turn it on in the first-run wizard or in
 
 ## The tour
 
-**The pass list** shows upcoming passes over your QTH, favorites first. Each row
-reads like a plain-language prediction — for example *"ISS in 38 min · 62° · NW→SE
-· 9 min"*: time until AOS, maximum elevation, the direction it travels, and how
-long it's up.
+The section is laid out as a **pass console**: everything you need to work a pass
+is on one screen, and you scroll only for the things you use between passes.
 
-**The polar plot** draws the pass across the sky (horizon to zenith), so you can
-see where to point and how high it climbs.
+Across the top, the **arm bar** says what is armed and what it is driving — the
+bird, which rig is bound, the readiness gates (pass, rotor, transponder, Doppler,
+elements), the ■ that stops the track and the ✕ that closes the bird.
+
+**On the left, the planning column.** *Next* and *Best 24 h* lead with the two
+soonest workable passes and the two best ones, each with a ▶ Work this pass. Under
+them the **48 h schedule** for your ★ birds scrolls inside its own box — the rest
+of the page does not move when you scroll it — with the "other birds overhead"
+disclosure pinned above it so it never scrolls away. At the bottom sit the
+**frequencies** (the live Doppler-corrected dial and where you are inside the
+passband) and the **transponder chooser**. Those two stay put: picking a
+transponder is the most consequential thing you do here, so it is never behind a
+scroll.
+
+**On the right, the pass column.** The **sky dome** draws the pass in az/el with
+the AOS and LOS bearings on their marks, and the **ground-track globe** sits
+beside it showing where the bird is over the earth and whose grids its footprint
+crosses. Under them the pass timeline, then the **log strip**, then your Birds
+catalog — which is the one thing deliberately below the fold.
+
+**How many schedule rows you see** depends on the window: about seven at the
+1024×768 minimum, ten to eleven on a typical laptop, and twenty-five or more on a
+tall or ultrawide screen. The schedule is the only thing that grows, so every
+pixel the rest of the console gives back becomes another row.
 
 **Frequencies** for each bird are listed so you know where to listen and where to
 transmit.
@@ -68,11 +88,17 @@ you would be choosing your uplink.
 
 ### Log the contact without leaving the pass
 
-The log strip sits in the bird's detail column, directly under the Doppler
-readout — the same log strip the Phone and CW cockpits use, with the same
-callbook lookup, the same recall card and the same prior-contact history. It is
-there whether or not a pass is armed, and it stays there after the bird sets, so
-you can catch up on a contact once your hands are free.
+The log strip sits in the pass column under the sky dome and the pass timeline —
+the same log strip the Phone and CW cockpits use, with the same callbook lookup,
+the same recall card and the same prior-contact history. It is there whether or
+not a pass is armed, and it stays there after the bird sets, so you can catch up
+on a contact once your hands are free.
+
+**Nothing you do in the section can take a half-typed contact away from you.**
+Closing the bird with ✕ or Escape, clicking a different bird, arming a pass, AOS
+arriving, or Nexus losing its connection to SatNOGS mid-pass all leave the form
+exactly as you left it. (Through 0.28.1 they did not: the strip lived inside the
+bird's detail card, so any of those wiped what you had typed.)
 
 Type the call and press Enter **twice**. On a call the strip hasn't seen yet the
 first Enter runs the callbook lookup and fills the name and QTH; the second one
