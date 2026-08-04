@@ -209,9 +209,13 @@ mileage follows you.
 - **Memory scan is not built.** The CHIRP Skip flag survives a round-trip through
   import and export, but nothing in Nexus scans a bank and no field sets that
   flag.
-- **Recall reaches three cockpits only** — Phone, CW and Operate. An RTTY, PSK31
-  or SSTV memory is treated as digital and opens the FT8/FT4 Operate cockpit, not
-  the RTTY or SSTV cockpit.
+- **Recall reaches three cockpits only** — Phone, CW and Operate. An RTTY or PSK31
+  memory is treated as digital and opens the FT8/FT4 Operate cockpit, not the RTTY
+  cockpit. SSTV is not on that mode list, and no save path guesses it: however you
+  save one it comes out **Kind: Other**, so recall sends it to the **Phone**
+  cockpit in SSB, tuned to the frequency, with "set SSTV on the rig" in the toast.
+  Set the row's **Kind** to **Digital** in the editor and it opens Operate instead
+  — Kind is the override for a mode the list does not name.
 - **Phone recall commands USB, LSB and FM only.** An AM, WFM or DV memory tunes
   the dial and then tells you to set the mode on the rig rather than claim a mode
   Nexus did not command — a WWV or shortwave reference channel behaves this way.
