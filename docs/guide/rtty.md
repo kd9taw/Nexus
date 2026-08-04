@@ -85,11 +85,17 @@ out per character: above 75 prints solid, then progressively fainter at 50 and
 follows new copy while you are at the bottom; scroll up and it stays where you
 put it, so you can re-read a callsign mid-over.
 
-**Underneath the print**, the decoder is a Rust port of fldigi's receive path:
-mark/space baseband mixers into 1024-point overlap-add FFT filters, the W7AY
-SNR-optimized ATC slicer, straddle-point bit-clock recovery, and phase-difference
-AFC clamped so it can never cross onto the neighbouring tone (±45% of your shift
-— about ±76 Hz at 170). A signal-presence squelch gates the printed output, so an
+**Underneath the print**, the decoder is a Rust port of fldigi's receive path.
+Mark and space go through baseband mixers into 1024-point overlap-add FFT
+filters — one matched filter per tone, so what reaches the bit decision is your
+tone pair rather than the rest of the passband. The W7AY SNR-optimized ATC slicer
+leans each decision on whichever of the two tones currently has the better
+signal-to-noise, which is what holds copy together through the selective fading
+that takes one tone of a pair down. Straddle-point bit-clock recovery judges every
+bit at the middle of its window and re-centres on each character's start bit, so a
+sender running a little off 45.45 baud does not slide into garbage part-way down a
+line. Phase-difference AFC is clamped so it can never cross onto the neighbouring
+tone (±45% of your shift — about ±76 Hz at 170). A signal-presence squelch gates the printed output, so an
 armed decoder on a quiet band stays silent instead of streaming garbage. It runs
 in its own thread on a 100 ms drain and keeps decoding while you are on another
 section; the cockpit polls it twice a second while RTTY is the visible view, so
@@ -154,7 +160,8 @@ together.
    consecutive clean frames, which on a diddle preamble is a handful of
    characters. The pill shows the offset it settled on and gains its 🔒.
 4. If the copy is upside down — the classic all-garble against a strong signal —
-   turn on **Reverse (swap mark/space)** in Settings ▸ RTTY. There is no reverse
+   turn on **Reverse (swap mark/space)** in
+   [Settings ▸ Modes ▸ RTTY](settings-reference.md#rtty). There is no reverse
    button in the cockpit; the M and S cursors trading places on the waterfall are
    the only on-screen sign of which sense you are running.
 5. If the AFC locked onto the wrong signal, press **Re-tune** to drop and rebuild
@@ -208,7 +215,8 @@ and any class/section riding the comment field so nothing you copied is lost.
 
 ### Choose a keying backend
 
-Set this in Settings ▸ RTTY; the cockpit's pill shows which one is live.
+Set this in [Settings ▸ Modes ▸ RTTY](settings-reference.md#rtty); the cockpit's
+pill shows which one is live.
 
 - **AFSK** (default) plays a two-tone waveform through the same TX audio path
   FT8 uses, with the rig in a DATA submode on the LSB side (DATA-L / LSB-D /
@@ -254,9 +262,10 @@ wherever you are.
   chain into the next QSO.
 - **An unanswered auto CQ repeats indefinitely** — every 30 seconds, by design
   ("the operator owns stopping a run"). A bare repeat deliberately does not reset
-  the transmit watchdog, so the **Tx Watchdog** in Settings ▸ Operating (6
-  minutes by default) is the backstop that eventually disarms TX. Abort and Stop
-  TX are the immediate ones.
+  the transmit watchdog, so the **Tx Watchdog** in
+  [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4) (6 minutes
+  by default) is the backstop that eventually disarms TX. Abort and Stop TX are
+  the immediate ones.
 - **The report is always 599.** The `F3` macro sends it literally and the
   sequencer substitutes it; there is no field to change it and no signal-report
   control anywhere in the cockpit.
