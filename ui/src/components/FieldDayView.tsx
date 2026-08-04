@@ -233,7 +233,21 @@ function buildDupeSheetText(rows: LogRowMeta[]): string {
 // the grid scrolls internally when the sections overflow.
 const SECTIONS_BOARD_WRAP: CSSProperties = {
   flex: '1 1 auto',
-  minHeight: 0,
+  // THE FLOOR, AND IT BELONGS ON THIS BOX. This is the only flex-GROW child of the Field
+  // Day column — banner, header, operator row, score tiles, Bonuses and the log are all
+  // `flex: 0 0 auto` — so with `minHeight: 0` the board was the single unfloored absorber
+  // and paid for every sibling's growth down to nothing. Opening the 15-row Bonuses list
+  // at 1200×750 turned the board into a blank strip; `.fd-bonuses-list`'s 0.3×--vh-eff cap
+  // could never prevent that, because a cap bounds the LIST and says nothing about the
+  // height it does allow displacing someone. 180px is what the board already effectively
+  // reserved (the 120 that used to sit on SECTIONS_GRID, plus this box's 30px of vertical
+  // padding and the ~30px header), moved to the box the outer flex actually sizes.
+  //
+  // A HARD floor rather than a `min(Xem, share)` yielding one — legal ONLY because the
+  // column above now scrolls (`.fieldday { overflow-y: auto }`, styles.css ~7960); it is
+  // the same bargain `.cockpit-panes`' 18em floor states in cockpit-panes.css. Remove that
+  // valve and this floor becomes a clip. Computed in layout-single-deficit.test.tsx.
+  minHeight: 180,
   display: 'flex',
   flexDirection: 'column',
   padding: '14px 16px 16px',
@@ -248,7 +262,12 @@ const SECTIONS_HEADER: CSSProperties = {
 }
 const SECTIONS_GRID: CSSProperties = {
   flex: '1 1 auto',
-  minHeight: 120,
+  // NO floor: this box is the board's interposed SCROLLER, and its old 120px one was
+  // invisible to the outer column (which sizes the wrap, not this) while being unable to
+  // shrink — so the moment the wrap was squeezed the grid painted straight through the
+  // Bonuses section below it. The 120 moved up into SECTIONS_BOARD_WRAP's floor, where the
+  // column can see it; at that floor this grid still computes to ~120px and scrolls.
+  minHeight: 0,
   display: 'flex',
   flexWrap: 'wrap',
   alignContent: 'flex-start',

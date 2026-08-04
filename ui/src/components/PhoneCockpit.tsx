@@ -10,7 +10,7 @@ import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
-import { Splitter } from './Splitter'
+import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
@@ -816,6 +816,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
         defaultRst="59"
         exchange="terrestrial"
+        // The frame head above already reads LOG and is this pane's accessible name.
+        titled={false}
         onSpot={(call) => {
           setSpotCall(call)
           setSpotOpen(true)
@@ -1005,21 +1007,27 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           />
         )}
         <RotorStrip />
+        {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
+            '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
+            the glyph and the tooltip already say. The accessible name is explicit here rather
+            than left to the glyph — a screen reader must not be handed a bare bullet. */}
         <button
           type="button"
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
           disabled={recBusy}
+          aria-label={recording ? 'Stop recording this QSO' : 'Record QSO audio'}
           title={
             recording
-              ? 'Stop recording this QSO'
+              ? 'Recording — click to stop recording this QSO'
               : 'Record the received audio to a WAV in the recordings folder'
           }
         >
-          {recording ? '■ Recording' : '● Record QSO'}
+          {recording ? '■' : '●'}
         </button>
+        {/* No visible 'RX': the meter is a role="meter" already named "RX audio level", and
+            the label element keeps the same string as its tooltip. */}
         <label className="ph-rxmeter" title="RX audio level">
-          <span>RX</span>
           <LiveLevelMeter label="RX audio level" variant="compact" />
         </label>
       </CockpitHeader>
@@ -1048,7 +1056,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               </span>
             )
           })()}
-          <span className="ph-scope-head-label">Colors</span>
+          {/* No 'Colors' label: PalettePicker is a <select> that already carries
+              aria-label="Waterfall color palette (applies to all modes)" and the matching
+              tooltip, so the word was the third statement of the same thing on one row. */}
           <PalettePicker />
         </div>
         <div className="ph-scope-wrap" ref={scopeRef} title="Scroll here to tune the VFO">
@@ -1104,8 +1114,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         varName="--ph-scope-h"
         target={cockpitRef}
         storageKey="nexus.split.phone.scope"
-        minPx={100}
-        maxPx={420}
+        min={SCOPE_SPLIT_MIN}
+        max={SCOPE_SPLIT_MAX}
         defaultPct={22}
         label="scope height"
       />
@@ -1197,9 +1207,16 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             }
           }}
           disabled={!snap.radio.txAllowed}
+          // The last clause was a `.ph-ptt-hint` span below this row until 2026-08-04.
+          // `flex-basis: 100%` made it a whole line of the PINNED dock, so it cost its ~19px
+          // at every window size and no scroller could take it back — and its first half
+          // ("Hold the button or the Space bar") repeated this very tooltip. The row went;
+          // the sentence did not, because "you talk on the rig's mic" is what stops an
+          // operator keying up believing Nexus carries his audio. Pinned in
+          // PhoneCockpit.structure.test.tsx.
           title={
             snap.radio.txAllowed
-              ? "Hold to talk (or Space). Toggle 'Lock' for hands-free (then Enter keys/unkeys)."
+              ? "Hold to talk (or Space). Toggle 'Lock' for hands-free (then Enter keys/unkeys). You talk on the rig's mic."
               : 'TX locked — outside your license privileges (pick a band, or change your license in Settings)'
           }
         >
@@ -1209,7 +1226,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
-        <span className="ph-ptt-hint">Hold the button or the Space bar · you talk on the rig's mic</span>
       </div>
       </div>
 

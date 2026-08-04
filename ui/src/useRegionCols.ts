@@ -42,19 +42,36 @@ export function classifyRegionCols(width: number): RegionCols {
 }
 
 /**
- * Observe a pane region and keep `data-cols` on it in sync with its own width.
+ * Observe a pane region and keep `data-cols` + `data-flow` on it in sync with its own width.
  *
- * The hook OWNS the attribute — it writes it imperatively so the first paint is already
- * correct (useLayoutEffect runs before paint) and so no consumer can stamp a tier that
- * disagrees with the measurement. Consumers must NOT render `data-cols` themselves; they
- * use the returned `cols` for the parts of the layout that live in TSX (how many
- * `.cockpit-col` groups to render).
+ * TWO ATTRIBUTES, BECAUSE THERE ARE TWO FACTS, and conflating them was a shipped bug:
+ *
+ *   `data-cols` is a TRACK COUNT — min(measured tier, `maxCols`). It drives
+ *     `grid-template-columns` and nothing else, and it is a CONTENT budget, so it can be 1
+ *     on a 3440-wide window whenever the ⊞ Panels menu empties the other columns.
+ *   `data-flow` is the WIDTH CLAIM — 'stack' only when the region MEASURED narrow, 'fill'
+ *     otherwise. Everything the sheet does *because the region is narrow* hangs off this:
+ *     content-height rows, the region owning the scrollbar, `--cockpit-pane-flex: 0 0 auto`
+ *     collapsing fill panes to content height.
+ *
+ * They used to be one attribute, and the tier-1 rule justified itself as "the region is
+ * content-height and scrolls" — i.e. tier 1 == narrow, which is NOT what this function
+ * computes. Untick CW's decode/sent/aux on an ultrawide and `maxCols` drove the region to
+ * tier 1: the log pane went content-height and the whole surplus was left blank. So the
+ * cap now narrows the TEMPLATE and never the flow. ('stack' implies the measurement was
+ * tier 1, so cols = min(1, maxCols) = 1 — there is no wide 'stack' state.)
+ *
+ * The hook OWNS both attributes — it writes them imperatively so the first paint is already
+ * correct (useLayoutEffect runs before paint) and so no consumer can stamp a state that
+ * disagrees with the measurement. Consumers must NOT render either themselves; they use the
+ * returned `cols` for the parts of the layout that live in TSX (how many `.cockpit-col`
+ * groups to render).
  *
  * `maxCols` is how many column groups the cockpit CAN fill right now — Phone with no rig
  * connected (or with the rig panes hidden from the ⊞ Panels menu) has nothing to put in the
  * aux column, and a 3-track template with an empty middle is the "band of empty black"
  * complaint rebuilt. Capping here rather than in CSS keeps the invariant the grid depends
- * on: the number of `.cockpit-col` children always equals `cols`. Same collapse Operate
+ * on: the number of `.cockpit-col` groups never exceeds `cols`. Same collapse Operate
  * ships as `dataCols: 'one' | 'two'` (features/panelHost.ts).
  *
  * Resize bursts are collapsed to one measurement per frame; a hidden or mid-layout region
@@ -85,6 +102,8 @@ export function useRegionCols<T extends HTMLElement>(
       if (w >= 2) measured.current = classifyRegionCols(w)
       const next = Math.min(measured.current, maxCols) as RegionCols
       el.setAttribute('data-cols', String(next))
+      // The MEASUREMENT, uncapped: `maxCols` may narrow the template, never the flow.
+      el.setAttribute('data-flow', measured.current === 1 ? 'stack' : 'fill')
       setCols(next) // same value ⇒ React bails out, no re-render
     }
 

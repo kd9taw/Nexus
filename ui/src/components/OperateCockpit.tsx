@@ -923,8 +923,8 @@ export function OperateCockpit({
               varName="--cockpit-wf-h"
               target={bodyRef}
               storageKey="nexus.split.operate.waterfall"
-              minPx={88}
-              maxPx={420}
+              min={88}
+              max={420}
               defaultPct={22}
               label="waterfall height"
             />

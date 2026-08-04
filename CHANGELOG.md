@@ -5,6 +5,106 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed: the CW decode window is the pane the CW cockpit gives room to
+
+The decode transcript is the pane a CW operator actually works from, and it is declared the
+primary one — but at the window Nexus opens at it was showing **three lines**. The reason is
+arithmetic rather than a bug: at that width the cockpit runs two columns, so the Sent echo, the
+scope controls, the DSP toggles, the RX DSP levels, Band Activity and the Copilot all share the
+decode's column, and none of them can shrink. The transcript is the only pane that can, so it paid
+for all of them and sat on its floor while the column scrolled 191 px past the bottom.
+
+Four boxes that said what the pane frame already says once are gone, and **no type was made
+smaller** — no font size, no density setting, no UI zoom:
+
+- The **Sent** echo's own header, one label reading "SENT ▲" two lines under a frame head reading
+  **SENT**. The blue stripe down its left edge is what tells you at a glance that these are your
+  own transmissions, and that stays. Deleting the header is what let the strip come down from six
+  lines' worth of reserved height to four, showing the same number of lines of text as before.
+- The **Decode** pane's own header row. Its first word was "DECODE", under a frame head reading
+  **DECODE**. Everything else on that row — the AI badge, the words-per-minute readout, the AI
+  decoder switch, its status and **Clear** — moved up into the frame's own title bar, which had
+  been rendering empty on every pane in this cockpit. Same controls, same order, one less row
+  between you and the text.
+- **Two of the three rig-control panes.** Scope controls, DSP toggles and RX DSP levels were three
+  separate framed cards — three title bars, three sets of padding, three borders and three gaps —
+  wrapped around one row of buttons each. They are now one **Rig controls** card holding one
+  wrapping strip, and at the default width they sit on a single row. The ⊞ Panels menu is
+  unchanged: all three are still separate entries, each still switching its own group on and off,
+  each still explaining itself when your radio cannot feed it.
+
+Result at the default window: the unshrinkable stack in the decode's column falls from 513 px to
+406 px, what is left to scroll past falls from 191 px to 84 px — one short drag instead of two
+screens — and the transcript goes from three lines to four. On a wide window, where the aux panes
+get a column of their own, the decode keeps the whole gain.
+
+In the header, the four keyer back-end buttons — CAT, Serial, WinKeyer, Soundcard — become one
+dropdown, about 110 px wide where they stood nearly 300. That header also carries the band picker,
+the tuning strip, Tune, Stop TX, speed, pitch, macros, filter width, memories and the rotator, and
+on a 1024-wide screen its width is what wraps it onto extra rows. **Every word of the four
+explanations survives**: each is on its own menu entry, and the one for the back-end you are
+actually keying with is on the dropdown itself — including the soundcard warning about routing
+audio to the rig and keeping drive below ALC, which is the one that matters on the air.
+
+Stop TX, Tune and Esc are untouched: no control moved into a pane that the ⊞ menu can hide, and
+none changed what it stops.
+
+**Not done, deliberately.** Band Activity and the Copilot stay in the decode's column. Moving them
+next to the log form is the only change that would close the remaining 84 px, and the log column has
+no room to give — its own Log button sits 379 px inside a 392 px pane, so anything added above it
+puts the button back below the fold, which is the defect the previous change was written to fix.
+
+### Changed: the Phone cockpit's control column stops scrolling its own frame
+
+At low resolution the left-hand column of the Phone cockpit — Band Activity, the voice keyer and
+the rig-scope / DSP / RX-DSP strips — stands taller than the space it has, so the DSP buttons sit
+below the fold and you scroll a *control* column in the middle of a contact. Nothing was
+unreachable; it was simply further away than it needed to be.
+
+Two of those panes were drawing a second card inside the pane's card, and one was printing a
+paragraph that no longer needed a line of its own. Both are gone: the band strip's own border,
+padding and margin, and the voice keyer's. That is 60 px, plus 41 px for the keyer's note, out of a
+column that was over-full by 237 px at the window Nexus opens at — a bit over 40 % of the overflow,
+recovered without moving a single control and **without making any type smaller**.
+
+The band strip also stops printing "Band activity" one line under a pane head that already reads
+**BAND ACTIVITY**. The live spot count beside it is not the same thing and stays. This lands in the
+CW cockpit too, which frames the same strip.
+
+What the keyer's note said is not chrome and has not been dropped: **● records from your input
+device — often the rig's RX audio, not a mic** is the sentence that stops a slot going on the air
+with the wrong audio in it. It now rides both controls that start a recording — the ● button and an
+empty slot itself — so it reaches you where you are standing when it matters.
+
+In the header, three words that repeated the control beside them are gone: **Record QSO** next to
+the ● that records, **RX** next to a meter already announced as "RX audio level", and **Colors**
+next to a palette picker already announced as "Waterfall color palette". Every one of them keeps
+its name to a screen reader; what went was the printed duplicate, and with it about 120 px of a
+header row that wraps at small windows.
+
+### Changed: the log strip commits above the fold
+
+Reported at low resolution: "the Log button ends up below the fold with a half-typed QSO above
+it." Measured at the window Nexus opens at (1200×720), the strip stood 422 px inside a 392 px log
+pane — the **Log** button 30 px past the bottom edge, so committing a contact meant scrolling to
+find the button that commits it.
+
+Two boxes above it were saying what the pane already said. The pane's own head reads **LOG** and is
+its name to a screen reader; the strip printed "Log this QSO" again two lines below it. And the
+strip drew its own bordered, padded card *inside* the pane's card. Both are gone from the Phone and
+CW cockpits: 43 px off the top of the commit row, 56 px off the strip's height, and the button is
+inside the pane at every window from 1024×768 up. **No type is smaller** — the space came out of
+duplication, not out of the font.
+
+The Satellites section keeps its heading. It hosts the same strip with no title above it, so there
+the heading is the only thing naming the surface — this is a per-host decision, not a deletion.
+
+Also in the Phone cockpit: the hint line under **PUSH TO TALK** is gone from the pinned transmit
+dock, where it held a full line at every window size and repeated the button's own tooltip. The
+part that was not a repeat — *you talk on the rig's mic* — is now on the button itself.
+
 ## [0.28.2] — 2026-08-03
 
 ### Changed: the Satellites section is a pass console

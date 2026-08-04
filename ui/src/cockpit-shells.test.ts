@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import {
+  resolveClamp,
+  SCOPE_SPLIT_MAX,
+  SCOPE_SPLIT_MIN,
+  type SplitClamp,
+} from './components/Splitter'
 
 // Guards the DEFICIT VALVE (2026-07-30 layout assessment, mechanism C1/C2): every
 // non-Operate cockpit shell must resolve to `overflow-y: auto` so a genuine vertical
@@ -275,12 +281,47 @@ function winningValue<T>(
   return win && { value: win.value, selector: win.selector }
 }
 
+/** APRS's shell wears FOUR classes, and modelling all of them is the whole point
+ *  (AprsCockpit.tsx ~878, pinned below). `.layout.single.needed-panel` (styles.css ~12598)
+ *  and `.layout.single.aprs-cockpit` (~3523) BOTH match it and BOTH are (0,3,0), so the
+ *  later needed-panel rule is the real winner and APRS's own block never decided its
+ *  overflow at all. A chain naming only `aprs-cockpit` would report that block as the
+ *  winner and go green on a valve written where it can never fire — the dead-fix mechanism
+ *  this file exists for, one abstraction level up. */
+const APRS_CHAIN: Array<Set<string>> = [
+  new Set(['app']),
+  new Set(['shell']),
+  new Set(['layout', 'single', 'needed-panel', 'aprs-cockpit']),
+]
+
 const SHELLS: Array<[string, Array<Set<string>>]> = [
   ['.layout.single.phone-cockpit', shellChain('phone-cockpit')],
   ['.layout.single.cw-cockpit', shellChain('cw-cockpit')],
   ['.layout.single.rtty-cockpit', shellChain('rtty-cockpit')],
   ['.layout.single.sstv-view', shellChain('sstv-view')],
+  // APRS is the sixth cockpit and was ABSENT from this census until 2026-08-04: nothing had
+  // ever computed its shell, and it was the one surface in the tree with no deficit valve —
+  // its header (.np-head: the frequency picker, Re-tune, the TX arm latch, Monitor, both
+  // health chips and the internet control) is an unshrinkable wrapping strip sitting DIRECTLY
+  // against that clip, and the internet popover it hosts is `position: absolute` with the
+  // shell as its nearest non-visible ancestor, so the panel's lower rows had nowhere to go.
+  ['.layout.single.needed-panel.aprs-cockpit', APRS_CHAIN],
 ]
+
+it('the APRS shell still wears the class list this census reasons about', () => {
+  // The chain above is hand-modelled; a class list drifting in the component would leave it
+  // guarding a shell that no longer exists. Cheap pin, same technique as the splitter
+  // callers below (which read their own source) and layout-single-deficit.test.tsx.
+  const src = readFileSync(
+    fileURLToPath(new URL('./components/AprsCockpit.tsx', import.meta.url)),
+    'utf8',
+  )
+  expect(
+    src,
+    'AprsCockpit no longer roots on `layout single needed-panel aprs-cockpit` — the ' +
+      'APRS entry in SHELLS models a shell that is not rendered any more.',
+  ).toContain('className="layout single needed-panel aprs-cockpit"')
+})
 
 describe('cockpit shells are the deficit valve (winning overflow-y is auto)', () => {
   for (const [name, chain] of SHELLS) {
@@ -633,4 +674,342 @@ describe('Connect strip cap caps the PANES, not the grid track', () => {
     expect(v, '.connect-strip > .pane-frame: no max-height — the strip is unbounded').not.toBeNull()
     expect(v!, `cap is \`${v}\``).toContain('var(--vh-eff')
   })
+})
+
+/** A box whose computed overflow-y makes it a scroll container. */
+const SCROLLS = (v: string) => v === 'auto' || v === 'scroll'
+
+/** Final scrollbar-width a block computes (in-block declaration order). */
+function blockScrollbarWidth(body: string): string | null {
+  let v: string | null = null
+  for (const decl of body.split(';')) {
+    const m = /^\s*scrollbar-width\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+    if (m) v = m[1]
+  }
+  return v
+}
+
+/** The Connect grid's ancestor chain (ConnectView.tsx ~314: `<main class="layout single">`
+ *  → `.connect-shell` → `.connect`). Connect's shell carries no cockpit class. */
+const CONNECT_HOST: Array<Set<string>> = [
+  new Set(['app']),
+  new Set(['shell']),
+  new Set(['layout', 'single']),
+  new Set(['connect-shell']),
+  new Set(['connect']),
+]
+
+/** Every place the SHARED `.pane-frame`/`.pane-body` family actually mounts — Connect's
+ *  PaneFrame (rails + bottom strip) and CockpitPaneFrame (region columns, and the bare
+ *  shell children of the two region-less cockpits). */
+const PANE_HOSTS: Array<[string, Array<Set<string>>]> = [
+  ['Connect rail', CONNECT_HOST],
+  ['Connect bottom strip', [...CONNECT_HOST, new Set(['connect-strip'])]],
+  [
+    'Phone pane region',
+    [...shellChain('phone-cockpit'), new Set(['cockpit-panes']), new Set(['cockpit-col'])],
+  ],
+  [
+    'CW pane region',
+    [...shellChain('cw-cockpit'), new Set(['cockpit-panes']), new Set(['cockpit-col'])],
+  ],
+  ['RTTY (region-less, bare shell child)', shellChain('rtty-cockpit')],
+  ['SSTV (region-less, bare shell child)', shellChain('sstv-view')],
+]
+
+const paneBodyChain = (host: Array<Set<string>>) => [
+  ...host,
+  new Set(['pane-frame']),
+  new Set(['pane-body']),
+]
+
+describe('the shared pane body is the first legal fate of vertical deficit', () => {
+  // `.pane-body { flex:1; min-height:0; overflow:auto }` (styles.css ~1583) is the whole
+  // per-pane scroll contract — every cockpit and Connect depend on it, and CockpitPaneFrame
+  // refuses a className precisely so a pane cannot opt out. Yet nothing COMPUTED it: the
+  // shells' valve is guarded above, the region tiers in cockpit-panes.test.ts, and the only
+  // test that touched this block was a regex-presence match on `scrollbar-width: thin` in
+  // connectLayout.test.ts — the exact form CLAUDE.md forbids, because a dead selector passes
+  // it. A later `.phone-cockpit .pane-body { overflow: hidden }` is (0,2,0) against the base
+  // (0,1,0): every Phone pane would CLIP instead of scroll and the whole suite stayed green.
+  //
+  // Scope note, and it is a composition rather than a gap: this scan reads styles.css only,
+  // and the other sheet cannot reach these boxes at all — cockpit-panes.test.ts ('panes are
+  // sized by the grid, never by themselves') fails the build if cockpit-panes.css so much as
+  // names .pane-frame/.pane-head/.pane-body. Between the two, the family's cascade is closed.
+  for (const [name, host] of PANE_HOSTS) {
+    const chain = paneBodyChain(host)
+
+    it(`${name}: .pane-body resolves a scrolling overflow-y in every media context`, () => {
+      for (const ctx of mediaContexts(chain)) {
+        const win = winningOverflowY(chain, ctx)
+        expect(win, `${name}: no rule declares overflow on .pane-body at all`).not.toBeNull()
+        expect(
+          SCROLLS(win!.value),
+          `${name}${ctx ? ` (within \`${ctx}\`)` : ''}: the cascade winner is ` +
+            `\`${win!.selector} { overflow-y: ${win!.value} }\` — the pane CLIPS. Deficit inside a ` +
+            'pane has exactly one legal fate and this is it; with the body clipping, the pane ' +
+            'edge is a hard cut with no scrollbar, and neither the column valve nor the shell ' +
+            'valve can reach content inside a box that has no scroll extent.',
+        ).toBe(true)
+      }
+    })
+
+    it(`${name}: .pane-body keeps a visible scrollbar affordance`, () => {
+      // What the retired connectLayout regex meant to assert, computed: a scroller the
+      // operator cannot SEE reads as clipped content. `thin` is the shipped value; `none`
+      // is the failure this replaces a presence-match with a cascade winner to catch.
+      const win = winningValue(chain, blockScrollbarWidth)
+      expect(win, `${name}: no rule declares scrollbar-width on .pane-body`).not.toBeNull()
+      expect(
+        win!.value,
+        `${name}: the cascade winner is \`${win!.selector} { scrollbar-width: ${win!.value} }\` — ` +
+          'the pane scrolls with no visible affordance, which reads to the operator as content ' +
+          'that simply ends.',
+      ).not.toBe('none')
+    })
+  }
+})
+
+// ===========================================================================
+// The band-scope strip: who owns its size, and does the drag reach both ends
+// ===========================================================================
+// `.ph-scope-panel` is rendered by exactly two hosts (PhoneCockpit.tsx ~1027,
+// CwCockpit.tsx ~1203) and BOTH override the base rule's size at (0,2,0). The base's
+// `flex/height/min-height/max-height` were therefore dead — but a dead rule carrying a
+// px floor AND a px ceiling is a loaded gun: a third host rendering the strip without a
+// cockpit prefix would silently be pinned 120–220 px, at every window and every zoom.
+// So size is HOST-owned here, and these compute both halves of that claim.
+
+/** Final value of one longhand in a block (in-block declaration order). Anchored, so a
+ *  `height` probe never matches `min-height`/`max-height`. */
+function blockLonghand(prop: string): (body: string) => string | null {
+  const re = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`)
+  return (body: string) => {
+    let v: string | null = null
+    for (const decl of body.split(';')) {
+      const m = re.exec(decl)
+      if (m) v = m[1].replace(/\s+/g, ' ')
+    }
+    return v
+  }
+}
+
+/** A reference geometry a length is resolved against: `fontPx` is the strip's computed
+ *  font size (what `em` means) and `vhEff` is `--vh-eff` in CSS px (what the sheet's
+ *  `calc(f * var(--vh-eff))` caps mean). Two of these with different numbers is what
+ *  separates a geometry-relative clamp from a px constant that merely happens to agree
+ *  at one window size. */
+interface Geom {
+  fontPx: number
+  vhEff: number
+}
+
+/** Split a comma list at top level (parens-aware). */
+function splitTop(s: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (c === ',' && depth === 0) {
+      out.push(s.slice(start, i))
+      start = i + 1
+    }
+  }
+  out.push(s.slice(start))
+  return out
+}
+
+/** Resolve a CSS length THIS SHEET writes for the scope/waterfall strips to CSS px at
+ *  `g`. Handles `<n>px`, `<n>em`, `calc(<f> * var(--vh-eff…))` and `min()`/`max()` over
+ *  them. Anything else returns null — the caller then fails loudly rather than a guard
+ *  passing on a value it could not read. */
+function lengthPx(v: string, g: Geom): number | null {
+  const s = v.trim()
+  for (const [fn, pick] of [
+    ['min', Math.min],
+    ['max', Math.max],
+  ] as Array<[string, (...n: number[]) => number]>) {
+    const m = new RegExp(`^${fn}\\(([^]*)\\)$`).exec(s)
+    if (!m) continue
+    const parts = splitTop(m[1]).map((p) => lengthPx(p, g))
+    return parts.every((x) => x !== null) ? pick(...(parts as number[])) : null
+  }
+  let m = /^(-?[\d.]+)px$/.exec(s)
+  if (m) return parseFloat(m[1])
+  m = /^(-?[\d.]+)em$/.exec(s)
+  if (m) return parseFloat(m[1]) * g.fontPx
+  m = /^calc\(\s*(-?[\d.]+)\s*\*\s*var\(\s*--vh-eff\s*(?:,[^)]*)?\)\s*\)$/.exec(s)
+  if (m) return parseFloat(m[1]) * g.vhEff
+  return null
+}
+
+const SCOPE_HOSTS = ['phone-cockpit', 'cw-cockpit']
+const SIZE_PROPS = ['flex', 'height', 'min-height', 'max-height']
+
+describe('the band-scope strip is sized by its HOST, never by the shared base rule', () => {
+  for (const prop of SIZE_PROPS) {
+    it(`.ph-scope-panel (base) declares no ${prop}`, () => {
+      const v = finalDecl('.ph-scope-panel', prop)
+      expect(
+        v,
+        `\`.ph-scope-panel { ${prop}: ${v} }\` is a structural size on the SHARED base rule. ` +
+          'Both shipped hosts override it at (0,2,0), so it renders nowhere today — but it is ' +
+          'live for any future host that forgets the cockpit prefix, and a px floor/ceiling ' +
+          'pinned there is invisible until an operator reports it. The size belongs to the ' +
+          'cockpit rules below; the base keeps chrome only.',
+      ).toBeNull()
+    })
+  }
+
+  for (const shell of SCOPE_HOSTS) {
+    const chain = () => [...shellChain(shell), new Set(['ph-scope-panel'])]
+
+    it(`.${shell} .ph-scope-panel declares the whole size itself`, () => {
+      for (const prop of SIZE_PROPS.filter((p) => p !== 'height')) {
+        const win = winningValue(chain(), blockLonghand(prop))
+        expect(
+          win,
+          `.${shell} .ph-scope-panel: nothing declares ${prop}. With the base rule retired ` +
+            'the host is the only owner — an unfloored scope collapses to the drag basis alone.',
+        ).not.toBeNull()
+        expect(
+          win!.selector,
+          `.${shell} .ph-scope-panel ${prop} comes from \`${win!.selector}\` — the shared base ` +
+            'rule must not size this strip.',
+        ).not.toBe('.ph-scope-panel')
+      }
+    })
+
+    it(`.${shell} .ph-scope-panel clamps scale with the geometry (no px floor/ceiling)`, () => {
+      // A px clamp is the defect in one word: it means the same absolute height at
+      // 1440-tall and at 175%-pinned zoom, where the same strip is half the window.
+      for (const prop of ['min-height', 'max-height']) {
+        const v = winningValue(chain(), blockLonghand(prop))!.value
+        const a = lengthPx(v, { fontPx: 14, vhEff: 768 })
+        const b = lengthPx(v, { fontPx: 28, vhEff: 1536 })
+        expect(a, `.${shell} .ph-scope-panel ${prop} is \`${v}\` — unreadable as a length`).not.toBeNull()
+        expect(
+          b! / a!,
+          `.${shell} .ph-scope-panel ${prop} is \`${v}\`: doubling BOTH the font size and ` +
+            `--vh-eff leaves it at ${b}px (was ${a}px). A clamp that does not move with the ` +
+            'geometry is a px pin — the same absolute strip at 1440-tall and at 175% zoom.',
+        ).toBeCloseTo(2, 6)
+      }
+    })
+  }
+})
+
+describe('the RTTY waterfall floor YIELDS (RTTY is the one scope with no Splitter)', () => {
+  // `.rtty-cockpit .waterfall-wrap` shares the strip shape with `.ph-scope-panel`, and
+  // carried the same `min-height: 120px` — but RTTY gives the operator no drag handle,
+  // so on a short or pinned-zoom window that floor is unrecoverable: the strip simply
+  // takes its 120 px out of a window that has ~400 to spend. The shell valve keeps it
+  // from TRAPPING anything, which is why this is a share bug and not a safety bug.
+  const chain = [...shellChain('rtty-cockpit'), new Set(['waterfall-wrap'])]
+
+  it('resolves a min-height at all (the canvas needs real device pixels)', () => {
+    const win = winningValue(chain, blockLonghand('min-height'))
+    expect(win, '.rtty-cockpit .waterfall-wrap: nothing declares min-height').not.toBeNull()
+    // Not "delete the floor" — at a normal window the strip must still be a strip.
+    const v = win!.value
+    expect(
+      lengthPx(v, { fontPx: 14, vhEff: 768 }),
+      `.rtty-cockpit .waterfall-wrap min-height is \`${v}\` — at a 768 window the floor must ` +
+        'still keep a drawable strip (≥ 6em).',
+    ).toBeGreaterThanOrEqual(6 * 14)
+  })
+
+  it('never claims more than 30% of the effective viewport', () => {
+    const v = winningValue(chain, blockLonghand('min-height'))!.value
+    for (const vhEff of [1440, 768, 439, 384, 300]) {
+      const floor = lengthPx(v, { fontPx: 14, vhEff })
+      expect(floor, `min-height \`${v}\` is unreadable as a length`).not.toBeNull()
+      expect(
+        floor!,
+        `.rtty-cockpit .waterfall-wrap min-height is \`${v}\` = ${floor}px at --vh-eff ${vhEff} ` +
+          `— ${((100 * floor!) / vhEff).toFixed(0)}% of the window for a glance strip, and RTTY ` +
+          'has no Splitter to take it back. Write the floor to yield: min(Xem, share).',
+      ).toBeLessThanOrEqual(0.3 * vhEff)
+    }
+  })
+})
+
+describe("the scope Splitter's declared range is the range the sheet HONOURS", () => {
+  // The drag writes a flex-BASIS percentage; the sheet's min-height/max-height then clamp
+  // the rendered box. Where the two disagree the surplus travel is DEAD: the pointer
+  // moves, the variable moves, the panel does not. Phone declared 100 px and CW 90 px
+  // against a `min-height: 8em` (= 112 px at the 14 px body font), and both declared
+  // 420 px against `max-height: calc(0.45 * var(--vh-eff))` — 345.6 px on a 768-tall
+  // window (so the last ~74 px of the drag were inert there) and 648 px on a 1440-tall
+  // one (so 228 px of legal travel was unreachable).
+  //
+  // Computed on BOTH sides at three geometries: one point can be matched by a lucky
+  // constant, three cannot — only a clamp that actually tracks the geometry passes.
+  const GEOMS: Geom[] = [
+    { fontPx: 14, vhEff: 768 }, // the supported floor
+    { fontPx: 14, vhEff: 1440 }, // a tall display
+    { fontPx: 16, vhEff: 768 }, // the same window with a larger body font
+  ]
+  const DECLARED: Record<string, SplitClamp> = { SCOPE_SPLIT_MIN, SCOPE_SPLIT_MAX }
+
+  /** The `<Splitter …/>` that drives `varName`, as prop → source expression. */
+  function splitterProps(src: string, varName: string): Record<string, string> {
+    const at = src.indexOf(`varName="${varName}"`)
+    expect(at, `no <Splitter varName="${varName}" …> in the source`).toBeGreaterThan(-1)
+    const el = src.slice(src.lastIndexOf('<Splitter', at), src.indexOf('/>', at))
+    const out: Record<string, string> = {}
+    for (const m of el.matchAll(/(\w+)=\{([^{}]*)\}/g)) out[m[1]] = m[2].trim()
+    return out
+  }
+
+  /** Resolve a declared clamp to CSS px the way Splitter.tsx does: an exported
+   *  SplitClamp by name, else a px literal. */
+  function declaredPx(expr: string | undefined, g: Geom): number | null {
+    if (expr === undefined) return null
+    if (expr in DECLARED) return resolveClamp(DECLARED[expr], g)
+    const n = Number(expr)
+    return Number.isFinite(n) ? n : null
+  }
+
+  const CALLERS: Array<[string, string, string]> = [
+    ['phone-cockpit', './components/PhoneCockpit.tsx', '--ph-scope-h'],
+    ['cw-cockpit', './components/CwCockpit.tsx', '--cw-scope-h'],
+  ]
+  for (const [shell, file, varName] of CALLERS) {
+    const chain = [...shellChain(shell), new Set(['ph-scope-panel'])]
+    for (const [end, prop] of [
+      ['min', 'min-height'],
+      ['max', 'max-height'],
+    ]) {
+      it(`.${shell}: the splitter's ${end} equals the sheet's ${prop} at every geometry`, () => {
+        const props = splitterProps(
+          readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8'),
+          varName,
+        )
+        const sheet = winningValue(chain, blockLonghand(prop))
+        expect(sheet, `.${shell} .ph-scope-panel: nothing declares ${prop}`).not.toBeNull()
+        for (const g of GEOMS) {
+          const want = lengthPx(sheet!.value, g)
+          expect(want, `\`${sheet!.value}\` is unreadable as a length`).not.toBeNull()
+          const got = declaredPx(props[end], g)
+          expect(
+            got,
+            `${file} declares no readable \`${end}\` for the ${shell} scope splitter`,
+          ).not.toBeNull()
+          expect(
+            got!,
+            `${file} declares ${end}=${props[end]} → ${got}px, but \`${sheet!.selector} { ` +
+              `${prop}: ${sheet!.value} }\` honours ${want}px at font ${g.fontPx}px / --vh-eff ` +
+              `${g.vhEff}px. The ${Math.abs(got! - want!).toFixed(1)}px of disagreement is DEAD ` +
+              'TRAVEL at that end of the drag — declare the clamp in the sheet\'s own units ' +
+              '(SCOPE_SPLIT_MIN / SCOPE_SPLIT_MAX in Splitter.tsx).',
+          ).toBeCloseTo(want!, 6)
+        }
+      })
+    }
+  }
 })

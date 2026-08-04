@@ -27,9 +27,13 @@ describe('connect layout invariants', () => {
     expect(css).toMatch(/\.connect\s+\.pane-body\s+\.swx-strip\s*\{[^}]*grid-template-columns:\s*repeat\(2/)
   })
 
-  it('a pane body declares a visible scrollbar affordance', () => {
-    expect(css).toMatch(/\.pane-body\s*\{[^}]*scrollbar-width:\s*thin/)
-  })
+  // ('a pane body declares a visible scrollbar affordance' lived here — a regex-PRESENCE
+  //  match on `scrollbar-width: thin`, the exact form CLAUDE.md forbids: a dead selector
+  //  passes it, and it said nothing at all about the property the box actually turns on,
+  //  its `overflow`. Both are now cascade-COMPUTED for Connect's rail chain AND its bottom
+  //  strip chain, alongside every cockpit host of the shared frame family, in
+  //  cockpit-shells.test.ts — 'the shared pane body is the first legal fate of vertical
+  //  deficit'.)
 
   it('the map insight overlay mirrors .map-path (right edge, absolute, z 3–5)', () => {
     const block = css.match(/\.map-insights\s*\{([^}]*)\}/)?.[1] ?? ''

@@ -3467,7 +3467,23 @@ body.resizing {
   overflow-y: auto;
 }
 .layout.single > .panel {
+  /* DEFINITE height, deliberately — it is what bounds every inner scroller (.settings-scroll,
+     .log-scroll, .rp-results). Relax it to `min-height` and the wrapper above starts scrolling
+     instead, but each `flex: 1` child then contributes its MAX-CONTENT height to the panel's
+     intrinsic main size (Flexbox §9.9.1) and stops scrolling: Settings would grow one endless
+     page and the Logbook virtualizer, which measures .log-scroll, would mount every row. */
   height: 100%;
+  /* ...and because the height is definite, `.layout.single { overflow-y: auto }` above can
+     NEVER fire: a 100%-tall child makes scrollHeight equal clientHeight, so that valve is dead
+     by construction, not by content. The deficit therefore has to be owned HERE — the first of
+     the two legal fates in cockpit-panes.css, "a scrollbar inside the pane that overflowed" —
+     because `.panel { overflow: hidden }` would otherwise CLIP whatever the flex column could
+     not shrink. It clipped Logbook's "Log" submit under the open manual form and Program's
+     whole delivery row at 1024×768 (2026-08-04). Five views had escaped this rule one at a
+     time (the two :has() rules below, .aprs-cockpit, the triple-class cockpit shells, and
+     POTA's own overflow-y) before it was fixed at the base. overflow-x stays hidden.
+     Computed in layout-single-deficit.test.tsx. */
+  overflow-y: auto;
   max-width: 1100px;
   margin: 0 auto;
 }
@@ -3509,6 +3525,33 @@ body.resizing {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+}
+/* THE DEFICIT VALVE — and it has to be (0,4,0) to exist at all. APRS's <main> is
+   `layout single needed-panel aprs-cockpit`, so `.layout.single.needed-panel`
+   (~12598) matches it too and is ALSO (0,3,0); being later in the sheet, that rule —
+   not the block above — is what has actually been deciding APRS's overflow. Writing
+   `overflow-y: auto` into the block above would therefore have shipped dead, the exact
+   mechanism cockpit-shells.test.ts exists to catch, so the valve names both classes and
+   outranks needed-panel by specificity rather than by source order.
+
+   WHAT IT IS FOR. APRS was the one full view in the tree with no valve. Its header
+   (.np-head) is a WRAPPING control strip — frequency picker, Re-tune, the TX arm latch,
+   Monitor, both health chips, the internet control — with `min-height: auto`, so it
+   cannot shrink below its wrapped height, and it sits directly against the clip: the
+   only other child (.aprs-body) is `flex: 1` off a ZERO basis, so its scaled shrink
+   factor is 0 and it absorbs none of a deficit. Everything the header could not fit was
+   cut off with no scroller anywhere between it and the clip. Same for the internet
+   popover, which is `position: absolute` inside that strip with this shell as its
+   nearest non-visible ancestor: at 1024x768 under pinned zoom the header wraps deep
+   enough that the panel's Watched-calls row and note fell past the shell edge.
+
+   Y ONLY, deliberately: `.layout.single.needed-panel` keeps overflow-x hidden (a
+   horizontal scrollbar here would only ever be the rail's table escaping, and
+   `.aprs-rail .aprs-table` already scrolls itself), and the block above keeps the
+   definite-height flex column the map's canvas resolves against — a scroll container
+   is still a definite-height box, so the growth loop stays closed. */
+.layout.single.needed-panel.aprs-cockpit {
+  overflow-y: auto;
 }
 
 .panel {
@@ -5880,32 +5923,28 @@ select optgroup {
 .cw-cockpit .log-entry .le-row {
   margin-bottom: var(--space-1);
 }
-/* The header must NEVER be the item this column squeezes. It is the one child whose
-   min-height is not `auto` (it pins 44px for cross-mode alignment — see `.cockpit-header`),
-   and a non-auto min-height forfeits the flex automatic minimum size, so it was the only
-   child allowed to shrink below its own content. On a 1366x768 display (~85% fit-to-window
-   zoom ⇒ ~1607x900 effective px) the CW header legitimately wraps to 2–3 rows, but the
-   column's vertical deficit landed entirely here and crushed it back to the 44px floor —
-   the wrapped rows then rendered OUTSIDE the header's border box and the opaque
-   `.ph-scope-panel` that follows painted over them, hiding the keyer Speed slider AND
-   Tune / Stop TX / CAT. Pin flex-shrink so the wrapped rows keep their space; the column
-   already scrolls, and the scope below is operator-resizable (--cw-scope-h) to reclaim it.
-   No-op when the header fits one row (its content height is then exactly the 44px floor),
-   so wide displays are unaffected. Guarded by cw-header-shrink.test.ts.
+/* (THE HEADER CRUSH — the bug this cockpit surfaced, and where its repair now lives.
+   On a 1366x768 display (~85% fit-to-window zoom ⇒ ~1607x900 effective px) the CW header
+   legitimately wraps to 2–3 rows, the column's vertical deficit landed entirely on it, and
+   it was squeezed back to the 44px floor `.cockpit-header` used to pin: the wrapped rows
+   rendered OUTSIDE the header's border box and the opaque `.ph-scope-panel` that follows
+   painted over them, hiding the keyer Speed slider AND Tune / Stop TX / CAT. A stop control
+   under opaque paint.
 
-   Applied to every `overflow-y:auto` cockpit shell, not just CW: phone/rtty/sstv are the
-   identical flex-column-with-scroll structure and carry the same latent bug — CW only showed
-   it first because its header is the widest. DELIBERATELY EXCLUDES
-   `.layout.single.operate-cockpit`, which is `overflow:hidden` (styles.css ~10702): there the
-   squeeze CLIPS rather than covers, and pinning the header would push the bottom of a
-   NON-scrolling column out of view instead of fixing anything. Operate needs its own
-   treatment. */
-.cw-cockpit > .cockpit-header,
-.phone-cockpit > .cockpit-header,
-.rtty-cockpit > .cockpit-header,
-.sstv-view > .cockpit-header {
-  flex-shrink: 0;
-}
+   The cause was never CW's: a NON-AUTO min-height forfeits the CSS automatic minimum size
+   (flexbox §4.5, grid §6.6), so the header was the one child of the column allowed to shrink
+   below its own content. The first repair pinned `flex-shrink: 0` through a four-selector
+   allowlist here (cw / phone / rtty / sstv), which made protection per-host opt-in, could not
+   help a GRID host at all, and deliberately left Operate out — Operate survived only because
+   `.cockpit-body { flex:1; min-height:0 }` happens to absorb the deficit first, an accident of
+   its current children asserted nowhere.
+
+   The floor now sits on `.ch-identity` (the header's own content) instead, so the header's
+   min-height stays `auto` and the automatic minimum size protects it in EVERY host, present
+   and future, with no list to join — see `.cockpit-header`. The allowlist that stood here is
+   gone with it; cockpit-header-crush.test.ts computes the winning min-height for every host
+   that renders a CockpitHeader, Operate and Tempo included, and fails if a new one arrives
+   unregistered.) */
 .cw-bar {
   display: flex;
   align-items: center;
@@ -6096,6 +6135,37 @@ input.cw-pitch::-webkit-inner-spin-button {
    glance, so put it back. */
 .pane-body > .cw-sent-panel {
   border-left: 3px solid var(--accent, #4ea1ff);
+  /* A LOWER FLOOR THAN THE DECODE TRANSCRIPT, and it costs no visible line (2026-08-04
+     density pass). The echo's own head row — one span reading "SENT ▲" under a frame head
+     reading "Sent" — is deleted, and that row was ~26px of the 6em box, so 4em here shows the
+     same ~2.5 lines the 6em box showed WITH the row. The frame is fit="content" and
+     `.cw-decode-text` is `flex: 1 1 0` in a content-height column (it resolves to zero — see
+     the note above), so this floor IS the pane's height: 32px straight off an unshrinkable
+     sibling of the pane the cockpit exists for.
+     THE ROLE QUESTION, answered deliberately: the echo is a GLANCEABLE STRIP, not a
+     transcript. It confirms which call an F-key macro expanded to; it is empty at every
+     session start (panelHost's NOTHING_SENT_REASON); and it keeps its own scroller +
+     usePinnedScroll, so history is a scroll inside the strip rather than a taller box. Making
+     it a weight-1 FILL instead would floor it at `--cockpit-fill-min` — min(10em,100%) = 140px
+     — which is MORE than the 6em it has now, so "sharing" would take from DECODE, not give. */
+  min-height: 4em;
+}
+/* The three rig-control groups in ONE frame (CwCockpit "Rig controls"). One wrapping strip, so
+   at the tier-2 column width scope span / DSP toggles / NR + AGC sit on a single row and cost
+   one frame's chrome instead of three. Each group keeps its own label — a merged row is only
+   readable because every group says what it is. */
+.cw-rigctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+/* `.ph-dsp`'s own `margin: var(--space-2) 0` is zeroed by `.pane-body > .ph-dsp` when the strip
+   IS the pane body's child. Inside the merged frame it is a grandchild, so the frame rule no
+   longer reaches it and the margin would come back as a row break in a strip built not to have
+   one. Keyed on the strip, the same way the frame rule is keyed on the frame. */
+.cw-rigctl > .ph-dsp {
+  margin: 0;
 }
 .cw-decode-head {
   display: flex;
@@ -6170,9 +6240,9 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-sent-panel {
   border-left: 3px solid var(--accent, #4ea1ff);
 }
-.cw-sent-panel .cw-decode-label {
-  color: var(--accent, #4ea1ff);
-}
+/* (`.cw-sent-panel .cw-decode-label { color: accent }` deleted with the head row it tinted —
+   the SENT pane renders no `.cw-decode-label` any more, and the stripe above is what carries
+   "these are YOUR transmissions".) */
 /* (`.cw-sent-panel .cw-decode-text { flex: 0 0 auto; height: 4em }` deleted. The 4em strip
    existed so the echo could not steal DECODE's grow when both were flex children of one
    `.cw-lower` column. In the pane grid they are separate CELLS — nothing can be stolen —
@@ -6354,6 +6424,23 @@ input.cw-pitch::-webkit-inner-spin-button {
 .log-entry h2 {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-title);
+}
+/* CARD-IN-CARD. `.log-entry` carries no `panel` class, so the shipped `.pane-body > .panel`
+   flatten misses it and the strip draws its own bordered, padded, opaque card INSIDE the
+   pane frame's — the same miss `.pane-body > .rtty-stream` already documents. It cost 26px
+   of the pane's content height, 13 of them above the Log button, in a strip the operator
+   reported committing below the fold at the default window (LogEntry.density.test.tsx).
+   Keyed on the FRAME rather than on a cockpit — Phone and CW both render this strip through
+   CockpitPaneFrame, and any future host that frames it gets the flatten for free, exactly as
+   `.pane-body > .ph-dsp` is keyed. It is deliberately NOT `.log-entry`-wide: SatellitesView
+   renders this component unframed in `.sats-log`, where the card IS the strip's only frame.
+   (0,2,0), declared after `.cw-cockpit .log-entry` — the one other rule at that specificity
+   that could reach a framed strip — so source order carries it. Computed, not assumed, in
+   LogEntry.density.test.tsx. */
+.pane-body > .log-entry {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 /* Compact RX tuning strip in the Phone/CW cockpits — live freq + VFO step + direct MHz entry. */
 .tuning-strip {
@@ -7079,18 +7166,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding: 0 var(--space-4);
   font-size: 15px;
 }
-.phone-cockpit .ph-ptt-hint {
-  /* the hint is for the first few sessions; it does not need a line of its own forever */
-  font-size: var(--fs-micro);
-}
+/* (`.phone-cockpit .ph-ptt-hint` lived here. Its own comment said "the hint is for the first
+   few sessions; it does not need a line of its own forever" — and the 2026-08-04 density pass
+   took it at its word: the span is gone from the dock and its one non-duplicated clause, "you
+   talk on the rig's mic", is on the PTT button's title. Base rule deleted with it.) */
 /* Voice keyer: tighten the header and the gaps between its rows. No control is removed or made
    harder to hit — this is padding, not function. */
 .phone-cockpit .vk-head {
   margin-bottom: var(--space-1);
 }
-.phone-cockpit .vk-note {
-  margin: 0 0 var(--space-1);
-}
+/* (`.phone-cockpit .vk-note` retired with the paragraph — see the base rule's note.) */
 .ph-mode-badge {
   font-weight: 800;
   font-size: var(--fs-label);
@@ -7397,17 +7482,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* Phone bandscope: a horizontal real-time scope (panadapter trace + fast waterfall) with a
    rapid colored S-meter. Replaces the FT8 vertical waterfall in the Phone cockpit. */
 /* A WIDE, SHORT bandscope strip (~quarter screen, not a tall vertical block).
-   Sized against the EFFECTIVE viewport (--vh-eff = innerHeight/zoom): a raw 22vh
-   was proportional at 125% OS scale but wrong by the factor of the app's own UI
-   zoom — 86 device px (14% of the window) at the 900×600 minimum. Carries its own
-   panel chrome because it intentionally drops the `.panel` class (that class triggers
-   `.layout.single > .panel { height:100% }`, which is what made it full-height). */
+   CHROME ONLY — the SIZE belongs to the host cockpit (`.cw-cockpit .ph-scope-panel` /
+   `.phone-cockpit .ph-scope-panel`, both far below), because each host drives its own
+   Splitter variable and neither can share a basis with the other.
+   This rule used to carry `flex: 0 0 auto; height: calc(0.22 * var(--vh-eff));
+   min-height: 120px; max-height: 220px`. All four were DEAD — both shipped hosts
+   override them at (0,2,0) — but dead is not harmless when the corpse holds a px floor
+   AND a px ceiling: a third host rendering this strip without a cockpit prefix would
+   have been silently pinned 120–220px at every window and every zoom, and nothing on
+   screen would have said why. Retired rather than left as a trap; cockpit-shells.test.ts
+   fails the build if any structural size comes back here, and fails it again if either
+   host stops declaring its own.
+   Carries its own panel chrome because it intentionally drops the `.panel` class (that
+   class triggers `.layout.single > .panel { height:100% }`, which made it full-height). */
 .ph-scope-panel {
-  flex: 0 0 auto;
-  height: calc(0.22 * var(--vh-eff, 100vh));
-  min-height: 120px;
-  max-height: 220px;
-  /* Per-cockpit resizable heights land below (.cw-cockpit/.phone-cockpit overrides). */
   display: flex;
   flex-direction: column;
   padding: var(--space-2);
@@ -7728,11 +7816,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: var(--fs-label);
   color: var(--text-dim);
 }
-.ph-ptt-hint {
-  flex-basis: 100%;
-  font-size: var(--fs-micro);
-  color: var(--text-faint);
-}
 /* Field Day exchange prompt — what the operator reads aloud when they key up. */
 .ph-fd-give {
   display: inline-flex;
@@ -7768,6 +7851,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+/* CARD-IN-CARD, the same miss as `.pane-body > .bandstrip` above and for the same reason —
+   no `panel` class, so the shipped flatten walks past it. 26px of Phone's leading column,
+   and the keyer's ONLY host frames it. The sticky `.vk-head` below is unaffected: its
+   `top` is measured against the pane body's scrollport, not against this padding, and it
+   keeps its own opaque background, so the abort still parks flush and still occludes the
+   slots scrolling under it. Computed in PhoneCockpit.density.test.tsx. */
+.pane-body > .vk {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 .vk-head {
   display: flex;
   align-items: baseline;
@@ -7787,12 +7881,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
-.vk-note {
-  margin: 0 0 10px;
-  font-size: var(--fs-micro);
-  color: var(--text-faint);
-  line-height: 1.4;
-}
+/* (`.vk-note` lived here. The paragraph it styled — "● records from your INPUT DEVICE" —
+   was two permanent lines of the pane at every window; its warning is NOT chrome, so the
+   2026-08-04 density pass moved the sentence onto BOTH controls that start a recording
+   rather than dropping it. Rule retired with the last element that carried it.) */
 /* Field Day slot hint — only shown in FD mode (fdExchange set). */
 .vk-fd-hint {
   margin: 0 0 10px;
@@ -7917,6 +8009,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    =========================================================================== */
 .fieldday {
   min-width: 0;
+  /* THE COLUMN'S DEFICIT VALVE — the same fix `.layout.single > .panel` got on 2026-08-04,
+     for the same reason, in the view the three-pane workspace reaches instead. This column
+     is banner + header + operator row + score tiles + sections board + the Bonuses
+     disclosure + the log, and every one of them is `flex: 0 0 auto` except the board. Once
+     the board is at its floor (FieldDayView.tsx SECTIONS_BOARD_WRAP) the residual has
+     nowhere left to go, and `.panel { overflow: hidden }` would CLIP it — the log off the
+     bottom with no scrollbar in the chain, which is what opening Bonuses at 1200×750 did.
+     Wins over `.panel` on source order alone (both are (0,1,0); `.panel` is ~4400 lines
+     earlier), which is exactly how two fixes shipped dead here before — so it is COMPUTED,
+     not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
+  overflow-y: auto;
 }
 .fd-header {
   align-items: center;
@@ -8232,13 +8335,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: 2px;
   padding: var(--space-2) var(--space-3) var(--space-3);
   background: var(--bg-elev);
-  /* Fifteen bonus rows inside a `flex: 0 0 auto` section, inside `.panel { overflow:hidden }`
-     with no panel-level scroller: expanding Bonuses at 1200×750 added ~290 px of
-     un-shrinkable height, drove the ONLY shrinkable sibling (the Sections board) to zero —
-     the club-loved board turned into a blank strip — and took the residual off the bottom of
-     the log with no scrollbar anywhere in the chain. Cap the list against the effective
-     viewport (raw vh is blind to `.app { zoom }`) and let it own its own overflow: the
-     growth now stops here instead of travelling to the siblings. */
+  /* WHAT THIS CAP DOES, AND IT IS LESS THAN IT USED TO CLAIM. Fifteen bonus rows in a
+     `flex: 0 0 auto` section add ~290px of un-shrinkable height the moment Bonuses is
+     expanded. These two lines BOUND THE LIST'S OWN HEIGHT and give it its own scrollbar,
+     so the operator reaches all fifteen inside the list instead of scrolling ~290px of
+     checkboxes to get past them. That is the whole of it.
+     The wording here used to say "the growth now stops here instead of travelling to the
+     siblings", and the arithmetic never supported that: the cap is a fraction of the SAME
+     viewport the slack comes from, so opening Bonuses still takes up to 0.3H out of
+     whatever is shrinkable. It bounds this box; it cannot stop this box displacing anyone.
+     The Sections board went on being crushed to a blank strip underneath the claim.
+     WHAT ACTUALLY PROTECTS THE SIBLINGS is two rules elsewhere, and the pair is the
+     mechanism — either alone is worse than neither: `SECTIONS_BOARD_WRAP { min-height }`
+     (FieldDayView.tsx) is where the column stops shrinking the board, and
+     `.fieldday { overflow-y: auto }` (~7960) is where the residual past that floor goes.
+     Keep the cap against --vh-eff, not raw vh — raw vh is blind to `.app { zoom }`.
+     Computed in layout-single-deficit.test.tsx; the cap itself in panel-overflow.test.ts. */
   max-height: calc(0.3 * var(--vh-eff, 100vh));
   overflow-y: auto;
 }
@@ -9455,12 +9567,34 @@ select.settings-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+/* CARD-IN-CARD, and a doubled margin with it. `.bandstrip` carries no `panel` class, so the
+   shipped `.pane-body > .panel` flatten misses it and the strip draws its own bordered,
+   padded card inside the pane frame's — the same miss `.pane-body > .rtty-stream` and
+   `.pane-body > .log-entry` already document — while its own margin stacks on top of the
+   pane body's padding. 34px of a leading column that already overflows its track
+   (PhoneCockpit.density.test.tsx). Keyed on the FRAME rather than a cockpit, exactly as
+   `.pane-body > .ph-dsp` is: BOTH hosts frame this strip (PhoneCockpit "Band activity",
+   CwCockpit "Band activity"), so there is no unframed surface to protect and a future host
+   that frames it gets the flatten for free. (0,2,0) against a (0,1,0) base with no other
+   rule in the sheet reaching a `.bandstrip`; the winner is computed, not assumed. */
+.pane-body > .bandstrip {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
 .bandstrip-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: 6px;
 }
+/* `.bandstrip-title` no longer has anything to do with `.bandstrip`: the span it was named for
+   was deleted from BandStrip (the frame head one line above reads BAND ACTIVITY and is the
+   pane's accessible name in both framed hosts). The CLASS is still live, though — BandMap
+   renders it twice (BandMap.tsx:191 off-band-plan, :220 normal) for the ⧉ torn-off band-map
+   window's "Band map" heading, which is NOT framed and so has no head to duplicate. Retiring
+   the rule on a per-COMPONENT check left that heading unstyled at every size; the class-level
+   check is BandMap.title.test.tsx. The live spot count below is a different thing and stays. */
 .bandstrip-title {
   font-size: 11px;
   font-weight: 700;
@@ -11437,12 +11571,16 @@ select.settings-input {
   gap: var(--gap);
   flex-wrap: wrap;
   min-width: 0;
-  /* Consistent height across modes: FT8's 2-line tier tiles are the tallest
-     mode indicator, so pin the header to their height — CW's badge and Phone's
-     sideband group then sit at the same height and the header doesn't jog when
-     switching modes. (The mode-indicator CONTENTS legitimately differ per mode;
-     only the frame is aligned.) */
-  min-height: 44px;
+  /* NO min-height HERE, and that is the whole safety mechanism — see `.ch-identity`
+     below, which carries the cross-mode floor instead. A non-auto min-height on this
+     box forfeits the CSS automatic minimum size (flexbox §4.5, grid §6.6), which is
+     the only thing that stops a box being squeezed past its own content: with 44px
+     here the header was the one child of a cockpit column allowed to shrink below its
+     wrapped rows, and those rows then rendered OUTSIDE the border box under the opaque
+     panel that follows (the 1366x768 bug that buried the keyer Speed slider and
+     Tune / Stop TX / CAT — full story at `.cw-cockpit .log-entry` above).
+     Guarded by cockpit-header-crush.test.ts, which computes the winning min-height in
+     every host that renders a CockpitHeader and fails if any rule floors this box. */
 }
 .ch-identity {
   flex: 0 0 auto;
@@ -11450,6 +11588,16 @@ select.settings-input {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  /* THE CROSS-MODE ALIGNMENT FLOOR, and it lives here rather than on the header
+     because this box is CONTENT: it raises the header's content height instead of
+     overriding the header's minimum, so the header stays as tall as whatever it holds
+     in every host, flex or grid, with nothing to opt into. FT8's 2-line tier tiles are
+     the tallest mode indicator, so 44px is their height — CW's badge and Phone's
+     sideband group then sit at the same height and the header doesn't jog when
+     switching modes. (The mode-indicator CONTENTS legitimately differ per mode; only
+     the frame is aligned.) CockpitHeader renders this region unconditionally, so the
+     floor holds even for a cockpit that passes no indicator. */
+  min-height: 44px;
 }
 .ch-freq {
   flex: 0 0 auto;
@@ -14384,10 +14532,12 @@ button.cq-skiptx1.on {
   color: var(--text-faint);
 }
 
-/* POTA / SOTA view. */
+/* POTA / SOTA view. (It used to re-declare `overflow-y: auto` here to escape
+   `.panel { overflow: hidden }` — a fifth private escape from the same base rule, winning only
+   on source order at equal specificity. `.layout.single > .panel` now declares the identical
+   value at (0,2,0), and POTA renders nowhere else, so this one was dead and is gone.) */
 .pota-view {
   padding: var(--space-3);
-  overflow-y: auto;
 }
 .pota-body {
   display: grid;
@@ -17447,22 +17597,29 @@ button.sat-chip:disabled {
 }
 
 /* ── Memories — the saved-channel manager + the cockpit MEM strip ─────────────
-   The strip is deliberately HEIGHT-BOUNDED and wrapping: the old MemoryBank
-   header list grew the cockpit top bar with every saved channel (the reported
-   scroll bug). Chips wrap inside a two-row max-height and scroll internally,
-   so the header height is capped no matter how many favorites exist. */
+   The strip is deliberately HEIGHT-BOUNDED: the old MemoryBank header list grew
+   the cockpit top bar with every saved channel (the reported scroll bug). The
+   bound is now STRUCTURAL — one non-wrapping row plus a horizontal scroll — so
+   the header height is capped no matter how many favorites exist. */
 .mem-strip {
   display: flex;
-  /* ONE 26px row (density pass 2026-08 — the operator's "massive icons" header
+  /* ONE row (density pass 2026-08 — the operator's "massive icons" header
      complaint): chips never wrap, surplus chips scroll horizontally inside the
-     strip. Still hard-capped so the header-growth bug stays dead. */
+     strip. `nowrap` IS the header-growth bound — one row cannot grow with the
+     favorite count — so nothing needs a ceiling on top of it. The `max-height:
+     26px` that used to sit here was a leftover from the wrapping era and could
+     only ever clip: the row resolves to ~29px at the default root font (a
+     0.78rem ＋/≡ button, plus the 10px ::-webkit-scrollbar the horizontal scroll
+     reserves), and `overflow-y: hidden` gave the lost bottom no recovery. A
+     device-px ceiling over em/rem content is wrong in kind — the two sides scale
+     on different inputs (root font size, theme border width, UI zoom). Three
+     cockpit headers inherit this box; mem-strip-clip.test.tsx computes it. */
   flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-1);
   flex: 0 1 auto;
   min-width: 0;
   max-width: 40rem;
-  max-height: 26px;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -18234,8 +18391,18 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
   height: calc(0.22 * var(--vh-eff, 100vh));
-  min-height: 120px;
-  max-height: 220px;
+  /* A YIELDING FLOOR. `min-height: 120px` here was the one px pin left on a strip whose
+     height is otherwise a share of the window, and RTTY is the ONE scope in the tree
+     with no operator Splitter — so on a short or pinned-zoom window (a 768-tall display
+     at 175% is --vh-eff 439; at 200%, 384) the strip simply took 120px out of what the
+     window had and the operator had no handle to take it back. Written to yield, the
+     floor is 8em where there is room and never more than 28% of the effective viewport
+     where there is not. It is still a real floor: the canvas needs device pixels to
+     draw into, and a strip that shrinks to nothing is a decoder with no display.
+     (The old `max-height: 220px` went with it — a ceiling below the 22% share only
+     above a ~1000px window, which is exactly where a tall display should get its
+     proportional strip like every other size does. The share IS the bound.) */
+  min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
 }
 /* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
 .cockpit-ph-pill {

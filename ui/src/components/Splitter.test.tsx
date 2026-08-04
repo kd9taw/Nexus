@@ -53,8 +53,8 @@ describe('Splitter mount replay', () => {
         varName="--test-h"
         target={{ current: el }}
         storageKey="nexus.split.test.scope"
-        minPx={100}
-        maxPx={420}
+        min={100}
+        max={420}
         defaultPct={22}
         label="test"
       />,
@@ -73,8 +73,8 @@ describe('Splitter mount replay', () => {
         varName="--test-h"
         target={{ current: el }}
         storageKey="nexus.split.test.scope"
-        minPx={100}
-        maxPx={420}
+        min={100}
+        max={420}
         defaultPct={22}
         label="test"
       />,
