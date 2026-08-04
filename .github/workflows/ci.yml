@@ -485,7 +485,7 @@ jobs:
           m=/tmp/debcheck/usr/lib/Nexus/resources/deepcw/model.onnx
           [ -s "$m" ] || { echo "DeepCW model missing from the package"; exit 1; }
           echo "a7b3b4aa2610d3e88b8c7d4420eceee31be2d0ae595b3413264334f3ffb1eab5  $m" | sha256sum -c -
-          mv "$deb" "pi-out/${{ matrix.base }}/Nexus_${ver}_arm64_${{ matrix.base }}.deb"
+          mv "$deb" "pi-out/${{ matrix.base }}/Nexus_${ver}_pi_arm64_${{ matrix.base }}.deb"
           sha256sum pi-out/${{ matrix.base }}/*.deb
 
       - name: Upload .deb

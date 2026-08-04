@@ -101,7 +101,15 @@ jobs:
           m=/tmp/dc/usr/lib/Nexus/resources/deepcw/model.onnx
           [ -s "$m" ] || { echo "DeepCW model missing from the .deb"; exit 1; }
           echo "$MODEL_SHA  $m" | sha256sum -c -
-          mkdir -p out && cp "$deb" "$app" out/
+          mkdir -p out && cp "$app" out/
+          # NAME THE PC PACKAGE FOR THE MACHINE IT INSTALLS ON, not just its architecture
+          # (operator ask, 1.0.0). Tauri emits Nexus_<ver>_amd64.deb; the Pi jobs emit
+          # Nexus_<ver>_pi_arm64_<base>.deb. Someone scanning the release page should not have to
+          # know that amd64 means "PC" and arm64 means "Pi" to pick the right file. The AppImage
+          # keeps its name deliberately: it is one of the two SIGNED self-updating artifacts and
+          # is not a Debian package, so renaming it would churn the updater manifest for nothing.
+          ver=$(dpkg-deb -f "$deb" Version)
+          cp "$deb" "out/Nexus_${ver}_pc_amd64.deb"
           # The AppImage's updater signature, when the signing secrets were present.
           [ -f "$app.sig" ] && cp "$app.sig" out/ || echo "note: unsigned build (no signing secrets)"
           ( cd out && sha256sum ./* )
@@ -232,7 +240,7 @@ jobs:
           m=/tmp/debcheck/usr/lib/Nexus/resources/deepcw/model.onnx
           [ -s "$m" ] || { echo "DeepCW model missing from the package"; exit 1; }
           echo "$MODEL_SHA  $m" | sha256sum -c -
-          mv "$deb" "pi-out/${{ matrix.base }}/Nexus_${ver}_arm64_${{ matrix.base }}.deb"
+          mv "$deb" "pi-out/${{ matrix.base }}/Nexus_${ver}_pi_arm64_${{ matrix.base }}.deb"
           sha256sum pi-out/${{ matrix.base }}/*.deb
 
       - uses: actions/upload-artifact@v4
