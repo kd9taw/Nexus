@@ -21,7 +21,7 @@
 // Heavy children are stubbed: this asserts the SHELL's structure, not pane behaviour.
 // jsdom has no layout, so widths are stubbed the way useRegionCols.test.tsx does.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import type { AppSnapshot } from '../types'
 import type { CwPanelId, PanelLayoutApi } from '../features/panelState'
@@ -206,7 +206,10 @@ describe('CwCockpit pane-grid shell', () => {
   it('every operator-content block renders through a CockpitPaneFrame inside the region', async () => {
     decodeState.sent = ['CQ CQ DE KD9TAW K']
     await renderCockpit()
-    for (const id of ['decode', 'sent', 'bandActivity', 'copilot', 'dsp', 'rxdsp', 'log']) {
+    // `rigctl` is the MERGED rig-control frame (2026-08-04 density pass): scopeCtl, dsp and
+    // rxdsp are still three ⊞ ids with three menu entries, but they are three GROUPS inside
+    // one frame now, so the frame they render through is `rigctl`.
+    for (const id of ['decode', 'sent', 'bandActivity', 'copilot', 'rigctl', 'log']) {
       const pane = document.querySelector(`[data-pane="${id}"]`)
       expect(pane, `pane "${id}" missing`).not.toBeNull()
       expect(pane!.classList.contains('pane-frame'), `"${id}" is not a .pane-frame`).toBe(true)
@@ -228,6 +231,40 @@ describe('CwCockpit pane-grid shell', () => {
     await renderCockpit()
     const stub = document.querySelector('[data-pane="log"] [data-testid="log-stub"]')!
     expect(stub.getAttribute('data-titled')).toBe('false')
+  })
+
+  // ── THE MERGE MUST NOT COST THE OPERATOR A SWITCH (2026-08-04 density pass) ──────────
+  // Three frames became one, and the whole defence of that is that the ⊞ VOCABULARY did not
+  // change: scopeCtl / dsp / rxdsp are still three ids, three menu entries and three reason
+  // notes, each still gating exactly the group it names. A merge that quietly made them one
+  // switch would be taking a capability away, not deleting chrome — so the gating is driven
+  // one id at a time here rather than trusted.
+  it('the three ⊞ ids still gate their own groups independently inside the merged frame', async () => {
+    await renderCockpit()
+    const all = document.querySelector('[data-pane="rigctl"]')!
+    expect(all.querySelector('[aria-label="Rig DSP functions"]')).not.toBeNull()
+    expect(all.querySelector('[aria-label="RX DSP levels"]')).not.toBeNull()
+    cleanup()
+
+    // Untick DSP alone: its group goes, the RX DSP levels beside it stay.
+    await renderCockpit({ panels: fakePanels(['dsp']) })
+    const noDsp = document.querySelector('[data-pane="rigctl"]')!
+    expect(noDsp, 'the merged frame vanished when one of its three groups was hidden').not.toBeNull()
+    expect(noDsp.querySelector('[aria-label="Rig DSP functions"]')).toBeNull()
+    expect(noDsp.querySelector('[aria-label="RX DSP levels"]')).not.toBeNull()
+    cleanup()
+
+    // Untick RX DSP levels alone: the mirror.
+    await renderCockpit({ panels: fakePanels(['rxdsp']) })
+    const noLevels = document.querySelector('[data-pane="rigctl"]')!
+    expect(noLevels.querySelector('[aria-label="Rig DSP functions"]')).not.toBeNull()
+    expect(noLevels.querySelector('[aria-label="RX DSP levels"]')).toBeNull()
+    cleanup()
+
+    // Untick both (and the rig has no native scope in this fixture): the frame itself goes,
+    // rather than leaving a titled empty box — the "empty black box" complaint rebuilt.
+    await renderCockpit({ panels: fakePanels(['dsp', 'rxdsp']) })
+    expect(document.querySelector('[data-pane="rigctl"]')).toBeNull()
   })
 
   it('macros, the send bar and the TX meters live in the pinned dock — never in a pane', async () => {
@@ -279,8 +316,12 @@ describe('CwCockpit pane-grid shell', () => {
     expect(cols[0].querySelector('[data-pane="decode"]')).not.toBeNull()
     expect(cols[0].querySelector('[data-pane="sent"]')).not.toBeNull()
     expect(cols[0].querySelectorAll('.pane-frame').length).toBe(2)
-    expect(cols[1].querySelector('[data-pane="dsp"]')).not.toBeNull()
-    expect(cols[1].querySelector('[data-pane="rxdsp"]')).not.toBeNull()
+    // ONE frame for the three rig-control groups, and both groups the fixture rig can feed
+    // are inside it — the merge must not have dropped one on the way in.
+    const rig = cols[1].querySelector('[data-pane="rigctl"]')!
+    expect(rig).not.toBeNull()
+    expect(rig.querySelector('[aria-label="Rig DSP functions"]')).not.toBeNull()
+    expect(rig.querySelector('[aria-label="RX DSP levels"]')).not.toBeNull()
     expect(cols[1].querySelector('[data-pane="bandActivity"]')).not.toBeNull()
     expect(cols[1].querySelector('[data-pane="copilot"]')).not.toBeNull()
     expect(cols[2].querySelector('[data-pane="log"]')).not.toBeNull()
@@ -296,7 +337,7 @@ describe('CwCockpit pane-grid shell', () => {
     expect(cwDecode.dataset.fit).toBe('fill')
     expect(cwDecode.style.flex).toContain('3 1 0')
     expect((document.querySelector('[data-pane="sent"]') as HTMLElement).dataset.fit).toBe('content')
-    expect((document.querySelector('[data-pane="dsp"]') as HTMLElement).dataset.fit).toBe('content')
+    expect((document.querySelector('[data-pane="rigctl"]') as HTMLElement).dataset.fit).toBe('content')
   })
 
   // ── THE CONTEST-CATEGORY FOOTER IS ALWAYS PRESENT (feat/unassisted, merged 2026-08-01) ──
@@ -350,6 +391,38 @@ describe('CwCockpit pane-grid shell', () => {
     await frame()
     expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), 'log form remounted on 3→2').toBe(true)
     expect(document.querySelector('[data-pane="decode"]')!.isSameNode(decode0), 'decode transcript remounted on 3→2').toBe(true)
+  })
+
+  // ── THE MERGED FRAME STILL CHANGES COLUMNS ON A TIER FLIP, AND THAT MUST STAY COSMETIC ──
+  // Aux panes move between the `aux` and `main` column divs on a 2↔3 flip, so React unmounts
+  // and remounts them — documented and accepted since the rebuild, on the grounds that their
+  // state lives in CwCockpit rather than in the pane. The 2026-08-04 merge put three control
+  // groups (a range input among them) into ONE frame that moves, so that grounds is worth
+  // holding to a test rather than a comment: drag NR, flip the tier, the value is still there.
+  // (Fewer frames move than before — two became one — but the guard is about the value, not
+  // the count.)
+  it('a 2↔3 flip does not lose a rig-control value out of the merged frame', async () => {
+    await renderCockpit()
+    const region = document.querySelector('.cockpit-panes')!
+    stubWidth(region, 1200)
+    act(() => fire!())
+    await frame()
+    expect(region.getAttribute('data-cols')).toBe('2')
+    const nr = () => document.querySelector('[aria-label="Noise-reduction level"]') as HTMLInputElement
+    fireEvent.change(nr(), { target: { value: '72' } })
+    expect(nr().value).toBe('72')
+
+    stubWidth(region, 1800)
+    act(() => fire!())
+    await frame()
+    expect(region.getAttribute('data-cols')).toBe('3')
+    expect(nr(), 'the merged rig frame did not survive the flip').not.toBeNull()
+    expect(nr().value, 'the NR level was wiped by the tier flip — its state left the cockpit').toBe('72')
+    // …and the AGC choice with it (a pressed chip, not an input).
+    expect(
+      document.querySelector('[aria-label="AGC speed"] [aria-pressed="true"]'),
+      'the AGC selection was wiped by the tier flip',
+    ).not.toBeNull()
   })
 
   it('emptying the leading column from ⊞ Panels does not remount the log form', async () => {

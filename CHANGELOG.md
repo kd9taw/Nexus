@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: the CW decode window is the pane the CW cockpit gives room to
+
+The decode transcript is the pane a CW operator actually works from, and it is declared the
+primary one — but at the window Nexus opens at it was showing **three lines**. The reason is
+arithmetic rather than a bug: at that width the cockpit runs two columns, so the Sent echo, the
+scope controls, the DSP toggles, the RX DSP levels, Band Activity and the Copilot all share the
+decode's column, and none of them can shrink. The transcript is the only pane that can, so it paid
+for all of them and sat on its floor while the column scrolled 191 px past the bottom.
+
+Four boxes that said what the pane frame already says once are gone, and **no type was made
+smaller** — no font size, no density setting, no UI zoom:
+
+- The **Sent** echo's own header, one label reading "SENT ▲" two lines under a frame head reading
+  **SENT**. The blue stripe down its left edge is what tells you at a glance that these are your
+  own transmissions, and that stays. Deleting the header is what let the strip come down from six
+  lines' worth of reserved height to four, showing the same number of lines of text as before.
+- The **Decode** pane's own header row. Its first word was "DECODE", under a frame head reading
+  **DECODE**. Everything else on that row — the AI badge, the words-per-minute readout, the AI
+  decoder switch, its status and **Clear** — moved up into the frame's own title bar, which had
+  been rendering empty on every pane in this cockpit. Same controls, same order, one less row
+  between you and the text.
+- **Two of the three rig-control panes.** Scope controls, DSP toggles and RX DSP levels were three
+  separate framed cards — three title bars, three sets of padding, three borders and three gaps —
+  wrapped around one row of buttons each. They are now one **Rig controls** card holding one
+  wrapping strip, and at the default width they sit on a single row. The ⊞ Panels menu is
+  unchanged: all three are still separate entries, each still switching its own group on and off,
+  each still explaining itself when your radio cannot feed it.
+
+Result at the default window: the unshrinkable stack in the decode's column falls from 513 px to
+406 px, what is left to scroll past falls from 191 px to 84 px — one short drag instead of two
+screens — and the transcript goes from three lines to four. On a wide window, where the aux panes
+get a column of their own, the decode keeps the whole gain.
+
+In the header, the four keyer back-end buttons — CAT, Serial, WinKeyer, Soundcard — become one
+dropdown, about 110 px wide where they stood nearly 300. That header also carries the band picker,
+the tuning strip, Tune, Stop TX, speed, pitch, macros, filter width, memories and the rotator, and
+on a 1024-wide screen its width is what wraps it onto extra rows. **Every word of the four
+explanations survives**: each is on its own menu entry, and the one for the back-end you are
+actually keying with is on the dropdown itself — including the soundcard warning about routing
+audio to the rig and keeping drive below ALC, which is the one that matters on the air.
+
+Stop TX, Tune and Esc are untouched: no control moved into a pane that the ⊞ menu can hide, and
+none changed what it stops.
+
+**Not done, deliberately.** Band Activity and the Copilot stay in the decode's column. Moving them
+next to the log form is the only change that would close the remaining 84 px, and the log column has
+no room to give — its own Log button sits 379 px inside a 392 px pane, so anything added above it
+puts the button back below the fold, which is the defect the previous change was written to fix.
+
 ### Changed: the Phone cockpit's control column stops scrolling its own frame
 
 At low resolution the left-hand column of the Phone cockpit — Band Activity, the voice keyer and

@@ -88,6 +88,20 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
+/** What each CW keyer back-end IS, and what it needs to work — verbatim from the four option
+ *  buttons the header's keyer <select> replaced (2026-08-04 density pass). This is operating
+ *  information, not chrome: the soundcard entry is the one that stops an operator keying a tone
+ *  through SSB with nothing routed and the drive over ALC, so it is carried on the select AND
+ *  on each option rather than dropped with the buttons. */
+const KEYER_HELP = {
+  cat: 'CAT keyer — the rig generates CW (rig in CW). Zero extra hardware.',
+  serial:
+    "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean N1MM/fldigi method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
+  winkeyer: 'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings.',
+  soundcard:
+    "Soundcard keyer — a keyed audio tone through SSB (rig in USB). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
+} as const
+
 interface Props {
   snap: AppSnapshot
   theme: string
@@ -670,9 +684,11 @@ export function CwCockpit({
   const hasRxDspPane = shown('rxdsp') && canRxDsp
   const hasBandPane = shown('bandActivity') && onWorkSpot != null
   const hasCopilotPane = shown('copilot')
+  // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
+  // ANY of them can — each group is still gated on its own ⊞ id inside it.
+  const hasRigCtlPane = hasScopeCtlPane || hasDspPane || hasRxDspPane
   const mainPresent = hasDecodePane || hasSentPane
-  const auxPresent =
-    hasScopeCtlPane || hasDspPane || hasRxDspPane || hasBandPane || hasCopilotPane
+  const auxPresent = hasRigCtlPane || hasBandPane || hasCopilotPane
   // Three columns are decode+sent | aux | log, so the tier is only offered when BOTH the
   // leading (transcript) column and the aux column have something to hold — otherwise a
   // track would sit empty, the operator's "band of empty black" rebuilt. Same collapse
@@ -687,53 +703,65 @@ export function CwCockpit({
     mainPresent && auxPresent ? 3 : mainPresent || auxPresent ? 2 : 1,
   )
 
+  // DECODE's own head row is DELETED, and its controls render in the frame head's action
+  // cluster — which was rendering EMPTY on every CW pane (2026-08-04 density pass). The row's
+  // first span read "DECODE" two lines under a frame head reading "Decode"; that is the only
+  // thing actually gone. Everything else — the AI badge, the WPM readout, the AI switch, its
+  // status and Clear — is here, in the same left-to-right order, so the toggle still renders
+  // BEFORE the optional status text (the status coming and going must not shift the switch
+  // under the operator's pointer).
+  //
+  // WHY THE HEAD AND NOT SOMEWHERE SMALLER: DECODE is the column's only grower and it sits at
+  // its fill floor at the default window, so a row deleted from its BODY is a row the
+  // transcript gets. The frame head grows by the switch's 26px − the title's line box, and the
+  // body loses the whole 26px row plus the panel's gap: net transcript gain, computed in
+  // CwCockpit.density.test.tsx rather than asserted here.
+  const decodeActions = (
+    <>
+      <span className="cw-ai-beta">AI</span>
+      {decoded.wpm > 0 && <span className="cw-decode-wpm">{decoded.wpm} WPM</span>}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={snap.aiCw?.enabled ?? false}
+        className={`toggle${snap.aiCw?.enabled ? ' on' : ''}`}
+        onClick={() => void setAiCw(!(snap.aiCw?.enabled ?? false))}
+        title={
+          snap.aiCw?.enabled
+            ? 'AI decoder on — click for the classic pitch decoder'
+            : 'AI decoder off (classic pitch decoder) — click to turn AI on'
+        }
+      >
+        <span className="toggle-knob" />
+      </button>
+      {snap.aiCw?.enabled && snap.aiCw.status && (
+        <span className="cw-ai-status">{snap.aiCw.status}</span>
+      )}
+      <button
+        className="cw-decode-clear"
+        onClick={() => {
+          void cwClear()
+          setDecoded({ text: '', wpm: 0 })
+          setSent([])
+          // A wipe re-pins both panes (same as Operate's Erase): an emptied
+          // transcript must follow the next copy even if the operator had
+          // scrolled up before clearing.
+          decodePin.repin()
+          sentPin.repin()
+        }}
+        title="Clear the decoded + sent transcript"
+      >
+        Clear
+      </button>
+    </>
+  )
+
   const decodePane = hasDecodePane ? (
-    <CockpitPaneFrame title="Decode" paneId="decode" weight={3}>
+    <CockpitPaneFrame title="Decode" paneId="decode" weight={3} actions={decodeActions}>
       <div
         className="cw-decode panel"
         title="Live CW decode — the AI (neural-net) decoder reads the whole 400–1200 Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder."
       >
-        <div className="cw-decode-head">
-          <span className="cw-decode-label">DECODE</span>
-          <span className="cw-ai-beta">AI</span>
-          {decoded.wpm > 0 && <span className="cw-decode-wpm">{decoded.wpm} WPM</span>}
-          {/* Toggle is parked next to the label cluster on the LEFT and stays put — it must
-              render BEFORE the (optional) AI status, or the status's auto-margin would shove
-              the toggle to mid-row whenever the status text comes and goes. */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={snap.aiCw?.enabled ?? false}
-            className={`toggle${snap.aiCw?.enabled ? ' on' : ''}`}
-            onClick={() => void setAiCw(!(snap.aiCw?.enabled ?? false))}
-            title={
-              snap.aiCw?.enabled
-                ? 'AI decoder on — click for the classic pitch decoder'
-                : 'AI decoder off (classic pitch decoder) — click to turn AI on'
-            }
-          >
-            <span className="toggle-knob" />
-          </button>
-          {snap.aiCw?.enabled && snap.aiCw.status && (
-            <span className="cw-ai-status">{snap.aiCw.status}</span>
-          )}
-          <button
-            className="cw-decode-clear"
-            onClick={() => {
-              void cwClear()
-              setDecoded({ text: '', wpm: 0 })
-              setSent([])
-              // A wipe re-pins both panes (same as Operate's Erase): an emptied
-              // transcript must follow the next copy even if the operator had
-              // scrolled up before clearing.
-              decodePin.repin()
-              sentPin.repin()
-            }}
-            title="Clear the decoded + sent transcript"
-          >
-            Clear
-          </button>
-        </div>
         {/* The visible transcript animates character-by-character (typewriter) —
             aria-hidden so a screen reader doesn't announce every keystroke; the
             hidden role=log mirror below receives whole batches instead (a log
@@ -756,13 +784,16 @@ export function CwCockpit({
 
   const sentPane = hasSentPane ? (
     <CockpitPaneFrame title="Sent" paneId="sent" fit="content">
+      {/* No head row: it held ONE span reading "SENT ▲" under a frame head reading "Sent", and
+          what makes the echo readable as YOUR transmissions at a glance is the accent stripe
+          (`.pane-body > .cw-sent-panel`), which stays. Deleting it also lets the framed floor
+          come down from 6em to 4em with the SAME number of visible lines — the 26px the row
+          was taking is 26px the transcript gets back (styles.css, `.pane-body >
+          .cw-sent-panel`). */}
       <div
         className="cw-decode cw-sent-panel panel"
         title="What you've transmitted (F-key macros expanded to the real text)"
       >
-        <div className="cw-decode-head">
-          <span className="cw-decode-label">SENT ▲</span>
-        </div>
         <div className="cw-decode-text" ref={sentPin.ref} onScroll={sentPin.onScroll}>
           {sent.map((line, i) => (
             <div key={i} className="cw-sent-line">
@@ -774,16 +805,30 @@ export function CwCockpit({
     </CockpitPaneFrame>
   ) : null
 
-  /* Aux panes — the rig/DSP control strips plus the band + copilot boards. In the 3-column
+  /* Aux panes — ONE merged rig-control strip plus the band + copilot boards. In the 3-column
      tier they take the middle column; below that they append to the transcript column.
      civScope and flexScope are mutually exclusive (one scope feed), so at most one
-     "scopeCtl" frame renders. */
-  const auxPanes = (
-    <>
+     scope group renders.
+
+     THE THREE RIG STRIPS SHARE ONE FRAME (2026-08-04 density pass, the move Operate's
+     header-density pass made). Scope controls, DSP toggles and RX DSP levels are three
+     one-row control groups, and each was wrapped in its own [head + body padding + border +
+     column gap] — 44px of chrome around ~30px of chips, twice over. They are now one
+     `.cw-rigctl` wrapping strip inside one "Rig controls" frame, and at the tier-2 column
+     width they sit on ONE row.
+
+     THE ⊞ VOCABULARY IS UNCHANGED, deliberately: `scopeCtl`, `dsp` and `rxdsp` are still
+     three separate ids with three separate menu entries and three separate reason notes, each
+     still gating exactly the group it names. Merging the FRAMES is a layout decision; taking
+     an operator's three switches away and giving him one would be a different, worse change.
+     The frame itself carries `paneId="rigctl"`, which is NOT in CW_PANEL_IDS — the same
+     sanctioned spelling `assist` already uses for a frame the menu does not own. */
+  const rigCtlPane = hasRigCtlPane ? (
+    <CockpitPaneFrame title="Rig controls" paneId="rigctl" fit="content">
+      <div className="cw-rigctl">
       {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter:
           span sets the hardware sweep width, ref sets weak-signal visibility. Parity with Phone. */}
       {hasScopeCtlPane && civScope && (
-        <CockpitPaneFrame title="Rig scope controls" paneId="scopeCtl" fit="content">
           <div className="ph-rigscope" role="group" aria-label="Rig scope control">
             <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
               Rig&nbsp;scope
@@ -815,12 +860,10 @@ export function CwCockpit({
               <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} dB</span>
             </label>
           </div>
-        </CockpitPaneFrame>
       )}
 
       {/* FlexRadio SmartSDR panadapter controls — bandwidth + reference. Parity with Phone. */}
       {hasScopeCtlPane && flexScope && (
-        <CockpitPaneFrame title="Rig scope controls" paneId="scopeCtl" fit="content">
           <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
             <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
               Flex&nbsp;pan
@@ -852,12 +895,10 @@ export function CwCockpit({
               <span className="ph-power-val">{flexRefDbm} dBm</span>
             </label>
           </div>
-        </CockpitPaneFrame>
       )}
 
       {/* DSP toggles (NB/NR/Notch) — capability-gated; only funcs the rig reports render. */}
       {hasDspPane && (
-        <CockpitPaneFrame title="DSP toggles" paneId="dsp" fit="content">
           <div className="ph-dsp" role="group" aria-label="Rig DSP functions">
             <span className="ph-dsp-label">DSP</span>
             {cwDspFuncs.map((f) => {
@@ -880,13 +921,11 @@ export function CwCockpit({
               )
             })}
           </div>
-        </CockpitPaneFrame>
       )}
 
       {/* RX DSP levels — NR depth + AGC speed, each shown only when the rig reports it. Parity
           with the Phone cockpit; a CW op leans on AGC speed and NR depth heavily. */}
       {hasRxDspPane && (
-        <CockpitPaneFrame title="RX DSP levels" paneId="rxdsp" fit="content">
           <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if the tone gets watery">
@@ -925,8 +964,14 @@ export function CwCockpit({
               </div>
             )}
           </div>
-        </CockpitPaneFrame>
       )}
+      </div>
+    </CockpitPaneFrame>
+  ) : null
+
+  const auxPanes = (
+    <>
+      {rigCtlPane}
 
       {/* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */}
       {hasBandPane && onWorkSpot && (
@@ -1087,40 +1132,38 @@ export function CwCockpit({
           />
           <span className="cw-wpm-val">{wpm} WPM</span>
         </label>
-        <div className="cw-keyer" role="group" aria-label="CW keyer back-end">
-          <button
-            type="button"
-            className={`cw-keyer-opt${keyer === 'cat' ? ' active' : ''}`}
-            onClick={() => changeKeyer('cat')}
-            title="CAT keyer — the rig generates CW (rig in CW). Zero extra hardware."
+        {/* THE KEYER BACK-END, one select (2026-08-04 density pass — the move Operate's header
+            made with its DXped chips). Four always-visible option buttons stood ~292px wide in
+            a header that also carries the band picker, the tuning strip, Tune, Stop TX, speed,
+            pitch, macros, BW, memories and the rotator; at 1024 that width is what wraps the
+            header onto a second and third row, and a wrapped header is what pushes Stop TX
+            toward the shell's scrolling valve. ~110px now.
+            EVERY WORD OF THE FOUR TITLES SURVIVES: each is on its own <option>, and the title
+            of the SELECTED back-end is on the select itself, so the one an operator is
+            actually keying with is one hover away — including the soundcard warning, which is
+            the one that matters on the air (route audio to the rig, keep drive below ALC). */}
+        <label className="cw-wpm" title={KEYER_HELP[keyer]}>
+          <span>Keyer</span>
+          <select
+            className="settings-input cw-keyer-select"
+            value={keyer}
+            onChange={(e) => changeKeyer(e.target.value as typeof keyer)}
+            aria-label="CW keyer back-end"
           >
-            CAT
-          </button>
-          <button
-            type="button"
-            className={`cw-keyer-opt${keyer === 'serial' ? ' active' : ''}`}
-            onClick={() => changeKeyer('serial')}
-            title="Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean N1MM/fldigi method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW."
-          >
-            Serial
-          </button>
-          <button
-            type="button"
-            className={`cw-keyer-opt${keyer === 'winkeyer' ? ' active' : ''}`}
-            onClick={() => changeKeyer('winkeyer')}
-            title="K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings."
-          >
-            WinKeyer
-          </button>
-          <button
-            type="button"
-            className={`cw-keyer-opt${keyer === 'soundcard' ? ' active' : ''}`}
-            onClick={() => changeKeyer('soundcard')}
-            title="Soundcard keyer — a keyed audio tone through SSB (rig in USB). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options."
-          >
-            Soundcard
-          </button>
-        </div>
+            <option value="cat" title={KEYER_HELP.cat}>
+              CAT
+            </option>
+            <option value="serial" title={KEYER_HELP.serial}>
+              Serial
+            </option>
+            <option value="winkeyer" title={KEYER_HELP.winkeyer}>
+              WinKeyer
+            </option>
+            <option value="soundcard" title={KEYER_HELP.soundcard}>
+              Soundcard
+            </option>
+          </select>
+        </label>
         <label className="cw-wpm" title="Sidetone / zero-beat pitch (Hz) — the scope's dashed marker">
           <span>Pitch</span>
           <input

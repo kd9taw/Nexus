@@ -305,6 +305,20 @@ function expectUnexplained(label: string): HTMLInputElement {
 
 const pane = (id: string) => document.querySelector(`[data-pane="${id}"]`)
 
+/** CW's THREE RIG-CONTROL ENTRIES NO LONGER OWN A FRAME EACH. Since the 2026-08-04 density
+ *  pass the scope controls, the DSP toggles and the RX DSP levels are three groups inside ONE
+ *  "Rig controls" frame — the ids, the menu entries and the reason notes are unchanged, only
+ *  the boxes around them are. So "the pane this entry names is on screen" is located by the
+ *  group's own accessible name, which is the thing the operator actually sees appear. Phone
+ *  keeps a frame per entry and keeps using `pane()`. */
+const CW_RIG_GROUP: Record<string, string> = {
+  scopeCtl: '[aria-label="Rig scope control"], [aria-label="Flex panadapter control"]',
+  dsp: '[aria-label="Rig DSP functions"]',
+  rxdsp: '[aria-label="RX DSP levels"]',
+}
+const cwGroup = (id: keyof typeof CW_RIG_GROUP | string) =>
+  document.querySelector(`[data-pane="rigctl"] ${CW_RIG_GROUP[id].split(', ').join(', [data-pane="rigctl"] ')}`)
+
 describe('⊞ Panels — the rig-scope entry follows the scope that is actually streaming', () => {
   it('Phone, audio bandscope: listed, ticked, and it says what would bring it back', async () => {
     await openPhone()
@@ -331,7 +345,7 @@ describe('⊞ Panels — the rig-scope entry follows the scope that is actually 
   it('CW, audio bandscope: the same rule for its Scope Controls entry', async () => {
     await openCw()
     expectExplained('Scope Controls', NO_NATIVE_SCOPE_REASON)
-    expect(pane('scopeCtl')).toBeNull()
+    expect(cwGroup('scopeCtl')).toBeNull()
   })
 
   it.each(['civ', 'flex'])('CW, %s panadapter streaming: the reason is gone', async (src) => {
@@ -339,7 +353,7 @@ describe('⊞ Panels — the rig-scope entry follows the scope that is actually 
     await openCw()
     expectUnexplained('Scope Controls')
     expect(screen.queryByText(NO_NATIVE_SCOPE_REASON)).toBeNull()
-    expect(pane('scopeCtl')).not.toBeNull()
+    expect(cwGroup('scopeCtl')).not.toBeNull()
   })
 })
 
@@ -364,16 +378,16 @@ describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', 
     await openCw(BARE_RIG)
     expectExplained('DSP Toggles', NO_DSP_FUNCS_REASON)
     expectExplained('RX DSP Levels', NO_DSP_LEVELS_REASON)
-    expect(pane('dsp')).toBeNull()
-    expect(pane('rxdsp')).toBeNull()
+    expect(cwGroup('dsp')).toBeNull()
+    expect(cwGroup('rxdsp')).toBeNull()
   })
 
   it('CW, a rig that reports them: no reason on either, and both panes mount', async () => {
     await openCw()
     expectUnexplained('DSP Toggles')
     expectUnexplained('RX DSP Levels')
-    expect(pane('dsp')).not.toBeNull()
-    expect(pane('rxdsp')).not.toBeNull()
+    expect(cwGroup('dsp')).not.toBeNull()
+    expect(cwGroup('rxdsp')).not.toBeNull()
   })
 
   it('Phone: the two DSP entries are gated INDEPENDENTLY', async () => {

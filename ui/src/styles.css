@@ -6135,6 +6135,37 @@ input.cw-pitch::-webkit-inner-spin-button {
    glance, so put it back. */
 .pane-body > .cw-sent-panel {
   border-left: 3px solid var(--accent, #4ea1ff);
+  /* A LOWER FLOOR THAN THE DECODE TRANSCRIPT, and it costs no visible line (2026-08-04
+     density pass). The echo's own head row — one span reading "SENT ▲" under a frame head
+     reading "Sent" — is deleted, and that row was ~26px of the 6em box, so 4em here shows the
+     same ~2.5 lines the 6em box showed WITH the row. The frame is fit="content" and
+     `.cw-decode-text` is `flex: 1 1 0` in a content-height column (it resolves to zero — see
+     the note above), so this floor IS the pane's height: 32px straight off an unshrinkable
+     sibling of the pane the cockpit exists for.
+     THE ROLE QUESTION, answered deliberately: the echo is a GLANCEABLE STRIP, not a
+     transcript. It confirms which call an F-key macro expanded to; it is empty at every
+     session start (panelHost's NOTHING_SENT_REASON); and it keeps its own scroller +
+     usePinnedScroll, so history is a scroll inside the strip rather than a taller box. Making
+     it a weight-1 FILL instead would floor it at `--cockpit-fill-min` — min(10em,100%) = 140px
+     — which is MORE than the 6em it has now, so "sharing" would take from DECODE, not give. */
+  min-height: 4em;
+}
+/* The three rig-control groups in ONE frame (CwCockpit "Rig controls"). One wrapping strip, so
+   at the tier-2 column width scope span / DSP toggles / NR + AGC sit on a single row and cost
+   one frame's chrome instead of three. Each group keeps its own label — a merged row is only
+   readable because every group says what it is. */
+.cw-rigctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+/* `.ph-dsp`'s own `margin: var(--space-2) 0` is zeroed by `.pane-body > .ph-dsp` when the strip
+   IS the pane body's child. Inside the merged frame it is a grandchild, so the frame rule no
+   longer reaches it and the margin would come back as a row break in a strip built not to have
+   one. Keyed on the strip, the same way the frame rule is keyed on the frame. */
+.cw-rigctl > .ph-dsp {
+  margin: 0;
 }
 .cw-decode-head {
   display: flex;
@@ -6209,9 +6240,9 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-sent-panel {
   border-left: 3px solid var(--accent, #4ea1ff);
 }
-.cw-sent-panel .cw-decode-label {
-  color: var(--accent, #4ea1ff);
-}
+/* (`.cw-sent-panel .cw-decode-label { color: accent }` deleted with the head row it tinted —
+   the SENT pane renders no `.cw-decode-label` any more, and the stripe above is what carries
+   "these are YOUR transmissions".) */
 /* (`.cw-sent-panel .cw-decode-text { flex: 0 0 auto; height: 4em }` deleted. The 4em strip
    existed so the echo could not steal DECODE's grow when both were flex children of one
    `.cw-lower` column. In the pane grid they are separate CELLS — nothing can be stolen —
