@@ -6,7 +6,7 @@ Nexus has a dedicated Field Day workspace that covers ARRL Field Day (June) and 
 
 ## Event Switch and Date Rules
 
-In **Settings > Field Day**, choose between:
+In **Settings → Contesting ▸ Field Day Setup**, choose between:
 
 | Setting value | Event |
 |---|---|
@@ -31,7 +31,7 @@ The header reads **active** once the window opens and clears back to countdown i
 
 Run through this before the weekend. Most problems are discovered Saturday at 1759 UTC, not Friday evening.
 
-- [ ] **Verify fd_class and fd_section** in Settings > Field Day (e.g. `3A`, `WI`). They default to `1D` and `WI` respectively — update them to match your actual class and section. The export will be malformed if you leave both blank.
+- [ ] **Verify fd_class and fd_section** in Settings → Contesting ▸ Field Day Setup (e.g. `3A`, `WI`). They default to `1D` and `WI` respectively — update them to match your actual class and section. The export will be malformed if you leave both blank.
 - [ ] **Set power multiplier**: x5 (QRP/battery), x2 (≤100 W, the default), or x1 (>100 W). The engine clamps illegal values to the nearest legal tier.
 - [ ] **Configure N3FJP** (see [N3FJP Setup](#n3fjp-setup) below) and press **Test** to confirm the handshake before the event.
 - [ ] **Configure N1MM address** if your club runs N1MM dashboards (see [N1MM Broadcast](#n1mm-broadcast)).
@@ -163,7 +163,7 @@ N3FJP Field Day Contest Log is widely used by clubs as the master log. Nexus pus
 
 **In Nexus:**
 
-1. Open **Settings > Field Day > N3FJP**.
+1. Open **Settings → Contesting ▸ Field Day Setup > N3FJP**.
 2. Enter the N3FJP host (e.g. `192.168.1.50` or `localhost` if co-located).
 3. Leave the port at **1100** unless you changed it in N3FJP.
 4. Press **Test**. A successful test returns the program name and version string (e.g. `N3FJP Field Day Contest Log v6.6`). The button is disabled when the host field is blank.
@@ -178,7 +178,7 @@ Nexus emits a `<contactinfo>` XML UDP datagram for each new FD QSO, compatible w
 
 **Setup:**
 
-1. In **Settings > Field Day > N1MM Address**, enter the broadcast target, e.g. `192.168.1.255` or `192.168.1.50`.
+1. In **Settings → Contesting ▸ Field Day Setup > N1MM Address**, enter the broadcast target, e.g. `192.168.1.255` or `192.168.1.50`.
 2. If you omit the port, Nexus defaults to **port 12060** (the N1MM+ contactinfo default).
 3. Broadcast is disabled when the address field is empty.
 

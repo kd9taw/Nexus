@@ -96,7 +96,7 @@ Xiegu G90, with Hamlib bundled. Digirig and RIGblaster interfaces are recognised
 by name. Your licence class becomes a hard transmit lockout in every keying path,
 and opening the app never touches your rig.
 
-**Fifteen modes, nine of them transmitting.** FT8 and FT4 with a sequencer built
+**Fifteen modes, all of them transmitting.** FT8 and FT4 with a sequencer built
 to WSJT-X's behaviour and checked against a 207-row parity matrix, plus **Q65,
 FST4, FST4W, MSK144, JT65 and WSPR**, each keeping its own operating rhythm rather
 than inheriting FT8's. Add RTTY, SSTV, APRS, CW, SSB and FM, and the two Tempo

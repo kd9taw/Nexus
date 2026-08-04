@@ -338,5 +338,5 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
 - [Phone (SSB)](phone.md) — the FM side of the same radio, repeaters and CTCSS
 - [Connect — map + propagation](connect.md) — the full map, with everything this
   one deliberately leaves off
-- [Settings reference](settings-reference.md) — Rig/CAT, Audio, and the Features
-  toggles this section depends on
+- [Settings reference](settings-reference.md) — the Radio tab's Rig Control and
+  Audio fieldsets, and the Features toggles this section depends on

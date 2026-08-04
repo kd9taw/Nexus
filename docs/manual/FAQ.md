@@ -35,7 +35,7 @@ Yes. Nexus outputs the standard WSJT-X UDP datagram set on `127.0.0.1:2237` (Dec
 Yes, via two paths:
 
 - **UDP QsoLogged datagrams** go to `127.0.0.1:2237` just like WSJT-X. N1MM+, HRD, and Log4OM can receive these and log the contact on their side.
-- **CAT broker**: Nexus can serve a rigctld-compatible TCP broker (off by default; enable in Settings > Rig/CAT) so WSJT-X, N1MM+, and other loggers share the radio through Nexus. The broker handles `f/F`, `m/M`, `t/T`, `v/V`, `s`, `\dump_state`, `\chk_vfo`, `\get_powerstat`, and `q`. Genuinely unimplemented Hamlib commands (e.g. `L RFPOWER`) return `RPRT -11`.
+- **CAT broker**: Nexus can serve a rigctld-compatible TCP broker (off by default; enable in Settings → Radio ▸ Rig Control) so WSJT-X, N1MM+, and other loggers share the radio through Nexus. The broker handles `f/F`, `m/M`, `t/T`, `v/V`, `s`, `\dump_state`, `\chk_vfo`, `\get_powerstat`, and `q`. Genuinely unimplemented Hamlib commands (e.g. `L RFPOWER`) return `RPRT -11`.
 
 For Field Day specifically, Nexus pushes each contact to N3FJP over TCP (ADDDIRECT + CHECKLOG, default port 1100) and broadcasts N1MM+ contactinfo UDP datagrams (default port 12060). See [Field Day](Field-Day.md).
 
@@ -137,13 +137,13 @@ Confirmation syncs (LoTW download, eQSL InBox) are likewise triggered manually o
 
 ### How does the rig-detection "Detect my radio" button work?
 
-Click **Detect** in Settings > Rig/CAT. Nexus reads USB descriptors: if the bridge-chip vendor ID matches Silicon Labs CP210x, FTDI, WCH CH340, or Prolific PL2303, it provides an OS-aware driver hint. If the USB product string fuzzy-matches a known model name (e.g. `IC-7300`), it fills the Hamlib model number. It also attempts to pair the audio codec by matching USB product strings or falling back to any device whose name contains `USB Audio` or `USB Codec`. On generic-cable rigs (e.g. a CH340 cable reporting only "USB Serial") you get the serial port and audio suggestion but must select the rig model manually.
+Click **Detect** in Settings → Radio ▸ Rig Control. Nexus reads USB descriptors: if the bridge-chip vendor ID matches Silicon Labs CP210x, FTDI, WCH CH340, or Prolific PL2303, it provides an OS-aware driver hint. If the USB product string fuzzy-matches a known model name (e.g. `IC-7300`), it fills the Hamlib model number. It also attempts to pair the audio codec by matching USB product strings or falling back to any device whose name contains `USB Audio` or `USB Codec`. On generic-cable rigs (e.g. a CH340 cable reporting only "USB Serial") you get the serial port and audio suggestion but must select the rig model manually.
 
 ---
 
 ### Can I share the radio with WSJT-X while running Nexus?
 
-Yes — enable the **CAT broker** in Settings > Rig/CAT. Nexus listens on a configurable port (default 4532) as a rigctld-compatible TCP server. WSJT-X or any Hamlib NET rigctl client points at `localhost:4532` and Nexus proxies frequency, mode, and PTT commands through to the actual rig. The broker is off by default; enabling it while WSJT-X is already bound to the same port will conflict, so bring up Nexus first or change one of the port numbers.
+Yes — enable the **CAT broker** in Settings → Radio ▸ Rig Control. Nexus listens on a configurable port (default 4532) as a rigctld-compatible TCP server. WSJT-X or any Hamlib NET rigctl client points at `localhost:4532` and Nexus proxies frequency, mode, and PTT commands through to the actual rig. The broker is off by default; enabling it while WSJT-X is already bound to the same port will conflict, so bring up Nexus first or change one of the port numbers.
 
 In Companion source mode, Nexus can also ride an upstream WSJT-X or JTDX decode stream over UDP port 2237 without running its own modem, so both apps decode independently from the same audio stream piped from the rig.
 

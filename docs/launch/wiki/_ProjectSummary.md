@@ -64,7 +64,7 @@ decodes and earcons let you operate by ear. Nothing changes for sighted operator
   curated, Hamlib bundled, Digirig and RIGblaster recognised by name. Your licence
   class becomes a hard transmit lockout in every keying path. Opening the app
   never touches your rig.
-- **Fifteen modes, nine of them transmitting.** FT8 and FT4 plus **Q65, FST4,
+- **Fifteen modes, all of them transmitting.** FT8 and FT4 plus **Q65, FST4,
   FST4W, MSK144, JT65 and WSPR**, each keeping its own operating rhythm. Add RTTY,
   SSTV, APRS, CW, SSB and FM, and the two Tempo tiers. Every waveform was verified
   by having *stock WSJT-X* decode a transmission Nexus generated, rather than by

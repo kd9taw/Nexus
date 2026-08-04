@@ -56,7 +56,7 @@ setup* button): one scan reads your USB devices, fills the model, port, and
 paired sound device, and — if Windows is missing a USB-serial driver — shows the
 exact download link. Review what it filled, then **Save**.
 
-<!-- TODO: capture screenshot — Settings Rig/CAT tab with the Connection dropdown and Detect my radio button -->
+<!-- TODO: capture screenshot — Settings ▸ Radio ▸ Rig Control with the Connection dropdown and Detect my radio button -->
 
 ### Network (FlexRadio / remote)
 

@@ -23,7 +23,7 @@ Everything lives in **Settings ▸ Radio ▸ Rig Control ▸ Antenna rotator**:
 
 That's it — no separate daemon, no hand-run commands.
 
-<!-- TODO: capture screenshot — Antenna rotator model, port, and baud in the Rig/CAT tab -->
+<!-- TODO: capture screenshot — Antenna rotator model, port, and baud in the Radio tab’s Rig Control fieldset -->
 
 ### No hardware? Test with the dummy
 

@@ -44,7 +44,7 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
   Split Operation (Rig / Fake It), Hound mode, directed CQ, the Tx1–Tx6 panel, the F-key shortcuts,
   and the full WSJT-X UDP protocol, so JTAlert, GridTracker, and loggers see Nexus as a WSJT-X. A
   **Classic ↔ Roster** toggle gives you the stock layout or a modern sortable call roster.
-- **📻 Nine modes transmit, each with its own rhythm.** FT8, FT4, **Q65, FST4, FST4W, MSK144, JT65
+- **📻 Every mode transmits, each with its own rhythm.** FT8, FT4, **Q65, FST4, FST4W, MSK144, JT65
   and WSPR**, plus the two Tempo tiers. Every waveform was verified by generating a transmission in
   Nexus and having **stock WSJT-X decode it**, rather than by testing Nexus against its own decoder,
   since both halves come from the same vendored source and a shared misreading would pass unnoticed.

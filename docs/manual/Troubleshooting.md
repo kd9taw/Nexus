@@ -30,7 +30,7 @@ Seen on early builds where the embedded WebView2 runtime was missing.
 
 ### No CAT response — Test CAT fails or times out
 
-**Test CAT** (Settings → Rig/CAT) saves settings, restarts rigctld, waits 1300 ms, then reads the dial frequency. A failure means one of:
+**Test CAT** (Settings → Radio ▸ Rig Control) saves settings, restarts rigctld, waits 1300 ms, then reads the dial frequency. A failure means one of:
 
 1. **Wrong rig model** — confirm the Hamlib model number. The in-app list covers approximately 50 curated radios cross-referenced to Hamlib 4.7.1. For a rig that is not in the list, run an external `rigctld` for it and connect Nexus as **NET rigctl** (model 2).
 2. **Wrong COM port** — pick the correct serial port and hit **Refresh** to re-scan. Verify nothing else holds the port (WSJT-X, another logger, a leftover Nexus instance, a `rigctld.exe` from a previous session).
@@ -69,7 +69,7 @@ Nexus spawns rigctld internally and holds the COM port. To share the radio with 
 
 If you hear the band by ear but Nexus decodes nothing, check in order:
 
-1. **Audio input device** — Settings → Audio → **Input Device (RX)** must point at the sound card carrying your rig's receive audio. Hit **Refresh** after plugging in.
+1. **Audio input device** — Settings → Radio ▸ Audio → **Input Device (RX)** must point at the sound card carrying your rig's receive audio. Hit **Refresh** after plugging in.
 2. **RX level** — watch the level meter in the top bar. Aim for the green zone. Too low = nothing to decode; red/clipping = distortion.
 3. **Passband** — default decoder window is 200–2900 Hz. If you narrowed **F Low** / **F High** in Settings, signals outside the window are silently skipped. Restore defaults if unsure.
 4. **Decode depth** — default is **Deep** (depth 3). If you switched to Fast for CPU reasons, try Normal or Deep first.
@@ -225,7 +225,7 @@ If downstream apps receive nothing:
 
 N3FJP TCP push (ADDDIRECT + CHECKLOG) requires:
 - N3FJP running with its TCP API enabled (Settings → Application Program Interface in N3FJP).
-- N3FJP host and port (`1100` default) configured in Nexus Settings → Field Day.
+- N3FJP host and port (`1100` default) configured in Nexus Settings → Contesting ▸ Field Day Setup.
 - The host reachable on your LAN — firewall between the two machines will block it.
 
 Use the **Test N3FJP** button in Settings to send the `<CMD><PROGRAM></CMD>` handshake and confirm the connection before the event starts. Push failures are logged to stderr and the Connector log, not surfaced as a UI toast after the initial Test.

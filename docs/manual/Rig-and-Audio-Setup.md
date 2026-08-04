@@ -6,7 +6,7 @@ The full reference for CAT control, PTT configuration, audio device selection, a
 
 ## How "Detect My Radio" Works
 
-The **Detect my radio** button in Settings → Rig/CAT enumerates connected USB devices and attempts to fill the rig model, serial port, and audio device fields in a single action.
+The **Detect my radio** button in Settings → Radio ▸ Rig Control enumerates connected USB devices and attempts to fill the rig model, serial port, and audio device fields in a single action.
 
 **What auto-matches:**
 
@@ -59,7 +59,7 @@ On **Linux and macOS**, rigctld must be on PATH. The bundled binary is not distr
 
 ## Test CAT
 
-**Settings → Rig/CAT → Test CAT** runs this sequence:
+**Settings → Radio ▸ Rig Control → Test CAT** runs this sequence:
 
 1. Saves current settings to disk.
 2. Triggers a rigctld re-probe in the radio loop — Nexus spawns (or re-spawns) rigctld with the new model, port, and baud parameters.
@@ -109,7 +109,7 @@ If your rig rejects `PKTUSB`/`PKTLSB` (returns `RPRT -1`), the radio loop perfor
 
 ## The CAT Broker
 
-The CAT broker (Settings → Rig/CAT → CAT Broker, **off by default**) makes Nexus act as a rigctld-compatible TCP server so WSJT-X, N1MM+, and other loggers can share the radio through Nexus without competing on the serial port.
+The CAT broker (Settings → Radio ▸ Rig Control → CAT Broker, **off by default**) makes Nexus act as a rigctld-compatible TCP server so WSJT-X, N1MM+, and other loggers can share the radio through Nexus without competing on the serial port.
 
 - **Broker listen port:** default **4532** (configurable)
 - Commands handled: `f`/`F` (frequency), `m`/`M` (mode), `t`/`T` (PTT), `v`/`V` (VFO), `s` (split), `\dump_state`, `\chk_vfo`, `\get_powerstat`, `q`
@@ -179,7 +179,7 @@ Early access: validated per model as testers confirm; the IC-9700 is the first c
 
 ## Audio Device Selection
 
-In Settings → Audio, select:
+In Settings → Radio ▸ Audio, select:
 
 - **Input Device (RX)** — the sound card carrying your rig's received audio (the output side of your interface). This is what Nexus decodes.
 - **Output Device (TX)** — the sound card feeding audio into the rig's data/mic input (the input side of your interface). This is what Nexus transmits.
@@ -190,7 +190,7 @@ Leave either as **System default** to use the OS default device. For most USB in
 
 If your Flex's **DAX** audio channels don't appear in the Input/Output lists (so the waterfall stays blank and there's no decode) even though CAT control works, and another program like Fldigi *can* see them, the cause is almost always **Windows not enumerating the DAX devices to the normal audio APIs** — not a Nexus bug. The usual culprit is a **Remote Desktop (RDP) session with "remote audio" enabled**, which hides local playback/recording devices from the standard device list. Nexus and WSJT-X use the standard Windows audio device list; Fldigi reads WDM-KS devices directly, which is why it still sees them.
 
-Fix: in your RDP client, set audio to **Play on the remote computer** (or disable remote audio), reconnect, and confirm the DAX channels now appear under Settings → Audio. This also affects any WASAPI/MME-based app, not just Nexus.
+Fix: in your RDP client, set audio to **Play on the remote computer** (or disable remote audio), reconnect, and confirm the DAX channels now appear under Settings → Radio ▸ Audio. This also affects any WASAPI/MME-based app, not just Nexus.
 
 ### TX Level
 
