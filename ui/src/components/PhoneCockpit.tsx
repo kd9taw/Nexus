@@ -10,7 +10,7 @@ import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
-import { Splitter } from './Splitter'
+import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
@@ -1104,8 +1104,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         varName="--ph-scope-h"
         target={cockpitRef}
         storageKey="nexus.split.phone.scope"
-        minPx={100}
-        maxPx={420}
+        min={SCOPE_SPLIT_MIN}
+        max={SCOPE_SPLIT_MAX}
         defaultPct={22}
         label="scope height"
       />

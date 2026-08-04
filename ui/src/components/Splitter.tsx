@@ -26,14 +26,47 @@ interface Props {
    *  than at the three call sites, so a split fraction can never be shared between a
    *  window and a pop-out with a different aspect. */
   storageKey: string
-  /** Pixel clamps for the panel being sized. */
-  minPx: number
-  maxPx: number
+  /** Clamps for the panel being sized — the ends of the drag. See SplitClamp: a bare
+   *  number is CSS px, a function is resolved against the live geometry so a clamp the
+   *  SHEET writes in em / --vh-eff can be declared here in the same terms. */
+  min: SplitClamp
+  max: SplitClamp
   /** Default size as a percentage of the container (used until first drag). */
   defaultPct: number
   /** Accessible label for the separator. */
   label: string
 }
+
+/** The geometry a clamp may be expressed against. `fontPx` is the container's computed
+ *  font size (what an `em` in the sheet resolves to) and `vhEff` is `--vh-eff` in CSS px
+ *  (what the sheet's `calc(f * var(--vh-eff))` caps resolve to). */
+export interface SplitGeom {
+  fontPx: number
+  vhEff: number
+}
+
+/** A drag end: CSS px, or a function of the live geometry.
+ *
+ *  The function form exists because the CLAMPS THAT ACTUALLY BIND ARE IN THE SHEET, and
+ *  they are not px. `.phone-cockpit .ph-scope-panel` floors at `8em` and caps at
+ *  `calc(0.45 * var(--vh-eff))`; the call sites declared 100 px and 420 px. Both ends of
+ *  the drag were therefore DEAD TRAVEL — below 112 px and above 0.45·--vh-eff the
+ *  pointer moved the variable and the panel did not move at all, which reads to the
+ *  operator as a broken handle. A clamp written in the sheet's own units cannot drift
+ *  out of agreement with it; cockpit-shells.test.ts computes both sides and fails when
+ *  they do. */
+export type SplitClamp = number | ((g: SplitGeom) => number)
+
+export function resolveClamp(c: SplitClamp, g: SplitGeom): number {
+  return typeof c === 'function' ? c(g) : c
+}
+
+/** The clamps of the CW/Phone band-scope strip, in the sheet's units — kept here, beside
+ *  the resolver, because both cockpits declare the identical pair and the sheet rules
+ *  (`.cw-cockpit .ph-scope-panel` / `.phone-cockpit .ph-scope-panel`) are their only
+ *  other definition. */
+export const SCOPE_SPLIT_MIN: SplitClamp = (g) => 8 * g.fontPx
+export const SCOPE_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
 
 /** Load a persisted split percentage (NaN-safe; null = never customized). */
 function loadPct(storageKey: string): number | null {
@@ -62,7 +95,19 @@ export function clampSplitPct(pct: number, spanCss: number, minPx: number, maxPx
   return (clamped / spanCss) * 100
 }
 
-export function Splitter({ axis, varName, target, storageKey, minPx, maxPx, defaultPct, label }: Props) {
+/** The geometry `el` currently lives in, for resolving a SplitClamp. `--vh-eff` is
+ *  published on <html> by useViewport; the fallback matches its own formula so a
+ *  splitter still clamps sanely before the first stamp (and in tests). */
+function splitGeom(el: HTMLElement): SplitGeom {
+  const fontPx = parseFloat(getComputedStyle(el).fontSize)
+  const vh = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--vh-eff'))
+  return {
+    fontPx: Number.isFinite(fontPx) && fontPx > 0 ? fontPx : 16,
+    vhEff: Number.isFinite(vh) && vh > 0 ? vh : window.innerHeight / elZoom(el),
+  }
+}
+
+export function Splitter({ axis, varName, target, storageKey, min, max, defaultPct, label }: Props) {
   // Apply the persisted (or default) size once the target exists — CLAMPED against the
   // CURRENT container box. The mount used to replay the stored % raw, which is how a
   // scope dragged to max at one geometry reopened past its own drag cap at another
@@ -72,7 +117,13 @@ export function Splitter({ axis, varName, target, storageKey, minPx, maxPx, defa
     if (!el) return
     const rect = el.getBoundingClientRect()
     const span = (axis === 'y' ? rect.height : rect.width) / elZoom(el)
-    const pct = clampSplitPct(loadPct(storageKey) ?? defaultPct, span, minPx, maxPx)
+    const g = splitGeom(el)
+    const pct = clampSplitPct(
+      loadPct(storageKey) ?? defaultPct,
+      span,
+      resolveClamp(min, g),
+      resolveClamp(max, g),
+    )
     el.style.setProperty(varName, `${pct}%`)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -89,9 +140,13 @@ export function Splitter({ axis, varName, target, storageKey, minPx, maxPx, defa
     const z = elZoom(el)
     const span = (axis === 'y' ? rect.height : rect.width) / z
     if (span <= 0) return // hidden/zero-size container — never divide by it
+    // Resolved once per drag: --vh-eff and the font size cannot change mid-gesture.
+    const g = splitGeom(el)
+    const minCss = resolveClamp(min, g)
+    const maxCss = resolveClamp(max, g)
     const pctFor = (ev: PointerEvent) => {
       const px = (axis === 'y' ? ev.clientY - rect.top : ev.clientX - rect.left) / z
-      return clampSplitPct((px / span) * 100, span, minPx, maxPx)
+      return clampSplitPct((px / span) * 100, span, minCss, maxCss)
     }
     const move = (ev: PointerEvent) => {
       el.style.setProperty(varName, `${pctFor(ev)}%`)

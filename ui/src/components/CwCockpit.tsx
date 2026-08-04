@@ -11,7 +11,7 @@ import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { Splitter } from './Splitter'
+import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
 import { PanelsMenu } from './PanelsMenu'
 import {
   panelHost,
@@ -1263,8 +1263,8 @@ export function CwCockpit({
         varName="--cw-scope-h"
         target={cockpitRef}
         storageKey="nexus.split.cw.scope"
-        minPx={90}
-        maxPx={420}
+        min={SCOPE_SPLIT_MIN}
+        max={SCOPE_SPLIT_MAX}
         defaultPct={13}
         label="scope height"
       />

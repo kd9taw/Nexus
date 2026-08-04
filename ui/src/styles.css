@@ -7413,17 +7413,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* Phone bandscope: a horizontal real-time scope (panadapter trace + fast waterfall) with a
    rapid colored S-meter. Replaces the FT8 vertical waterfall in the Phone cockpit. */
 /* A WIDE, SHORT bandscope strip (~quarter screen, not a tall vertical block).
-   Sized against the EFFECTIVE viewport (--vh-eff = innerHeight/zoom): a raw 22vh
-   was proportional at 125% OS scale but wrong by the factor of the app's own UI
-   zoom — 86 device px (14% of the window) at the 900×600 minimum. Carries its own
-   panel chrome because it intentionally drops the `.panel` class (that class triggers
-   `.layout.single > .panel { height:100% }`, which is what made it full-height). */
+   CHROME ONLY — the SIZE belongs to the host cockpit (`.cw-cockpit .ph-scope-panel` /
+   `.phone-cockpit .ph-scope-panel`, both far below), because each host drives its own
+   Splitter variable and neither can share a basis with the other.
+   This rule used to carry `flex: 0 0 auto; height: calc(0.22 * var(--vh-eff));
+   min-height: 120px; max-height: 220px`. All four were DEAD — both shipped hosts
+   override them at (0,2,0) — but dead is not harmless when the corpse holds a px floor
+   AND a px ceiling: a third host rendering this strip without a cockpit prefix would
+   have been silently pinned 120–220px at every window and every zoom, and nothing on
+   screen would have said why. Retired rather than left as a trap; cockpit-shells.test.ts
+   fails the build if any structural size comes back here, and fails it again if either
+   host stops declaring its own.
+   Carries its own panel chrome because it intentionally drops the `.panel` class (that
+   class triggers `.layout.single > .panel { height:100% }`, which made it full-height). */
 .ph-scope-panel {
-  flex: 0 0 auto;
-  height: calc(0.22 * var(--vh-eff, 100vh));
-  min-height: 120px;
-  max-height: 220px;
-  /* Per-cockpit resizable heights land below (.cw-cockpit/.phone-cockpit overrides). */
   display: flex;
   flex-direction: column;
   padding: var(--space-2);
@@ -17995,8 +17998,18 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
   height: calc(0.22 * var(--vh-eff, 100vh));
-  min-height: 120px;
-  max-height: 220px;
+  /* A YIELDING FLOOR. `min-height: 120px` here was the one px pin left on a strip whose
+     height is otherwise a share of the window, and RTTY is the ONE scope in the tree
+     with no operator Splitter — so on a short or pinned-zoom window (a 768-tall display
+     at 175% is --vh-eff 439; at 200%, 384) the strip simply took 120px out of what the
+     window had and the operator had no handle to take it back. Written to yield, the
+     floor is 8em where there is room and never more than 28% of the effective viewport
+     where there is not. It is still a real floor: the canvas needs device pixels to
+     draw into, and a strip that shrinks to nothing is a decoder with no display.
+     (The old `max-height: 220px` went with it — a ceiling below the 22% share only
+     above a ~1000px window, which is exactly where a tall display should get its
+     proportional strip like every other size does. The share IS the bound.) */
+  min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
 }
 /* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
 .cockpit-ph-pill {
