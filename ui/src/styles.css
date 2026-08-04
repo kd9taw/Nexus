@@ -9588,9 +9588,20 @@ select.settings-input {
   justify-content: space-between;
   margin-bottom: 6px;
 }
-/* (`.bandstrip-title` lived here and is retired with the span it styled: the frame head one
-   line above reads BAND ACTIVITY and is the pane's accessible name in both hosts. The live
-   spot count below is NOT the same thing and stays.) */
+/* `.bandstrip-title` no longer has anything to do with `.bandstrip`: the span it was named for
+   was deleted from BandStrip (the frame head one line above reads BAND ACTIVITY and is the
+   pane's accessible name in both framed hosts). The CLASS is still live, though — BandMap
+   renders it twice (BandMap.tsx:191 off-band-plan, :220 normal) for the ⧉ torn-off band-map
+   window's "Band map" heading, which is NOT framed and so has no head to duplicate. Retiring
+   the rule on a per-COMPONENT check left that heading unstyled at every size; the class-level
+   check is BandMap.title.test.tsx. The live spot count below is a different thing and stays. */
+.bandstrip-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
 .bandstrip-count {
   font-size: 11px;
   color: var(--text-faint);
