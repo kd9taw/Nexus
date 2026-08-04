@@ -68,8 +68,17 @@ content wrapper inside `.pane-body` (the sanctioned place), never on the frame.
 
 ## 5. Pre-commit review sweep
 
-1. Mentally lay out at: 1200×750 (zoom 80), 1366×768, 1200×1390, 3440×1440, 900×600 (zoom 65),
-   and pinned 175% — nothing unreachable, nothing hoarding blank space at any of them.
+1. Mentally lay out at: 1024×768, 1280×800, 1366×768, 1200×750 (zoom 80), 1200×1390,
+   3440×1440, and pinned 175% — nothing unreachable, nothing hoarding blank space at any
+   of them.
+   **THE SUPPORTED FLOOR IS 1024×768** (operator ruling, 2026-08-03: "i dont care about
+   900x600, thats too low to care, people should buy something can can do at least
+   1024/768 or 1280"). Below that, do not contort a layout: Nexus is a station
+   application sharing a screen with a radio, and designing for a window smaller than any
+   shipping laptop costs density on every screen that matters. Smaller windows must still
+   not TRAP the operator — nothing unreachable, no dead scrollbar — but a design is not
+   required to stay uncompromised there, and "it fits at 900×600" is not a reason to
+   reject one that is better at 1024 and up.
 2. Any new/changed styles.css rule: recompute its cascade against the whole sheet — a later or
    more specific rule may silently win (the historical failure mode).
 3. If restructuring: behavior preservation is a review dimension of its own (PTT/send handlers,

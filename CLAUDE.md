@@ -154,6 +154,11 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   `--ui-zoom`; their boxes measure the real window).
 - Anything persisted that encodes a size/position/scale is **clamped on load** against the
   current window/monitors, not just at drag time.
+- **The supported floor is 1024×768** (operator, 2026-08-03). Design for 1024 and up; do not
+  contort a layout to fit smaller, and do not reject a better design because it is tight
+  below the floor. Smaller windows must still never TRAP the operator — nothing unreachable,
+  no dead scrollbar — but they are not a design target. Sweep sizes are in the `ui-layout`
+  skill.
 - Auto-following feeds use `usePinnedScroll` (never a bare `scrollTop = scrollHeight`);
   programmatic `focus()` uses `preventScroll` + `scrollIntoView({block:'nearest'})`.
 - Flex/grid growers must point at content that can actually stretch; a container that clips
