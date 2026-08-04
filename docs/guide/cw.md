@@ -11,7 +11,7 @@ not.
 CW is an opt-in section. Turn it on in the first-run wizard's "which modes?"
 step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
-![The CW cockpit at 1920×1080, receiving on 14.0310 MHz. Its header carries the Keyer dropdown set to CAT, the Speed slider at 22 WPM, Pitch and the MEM strip, with ⊞ Panels · 2 hidden, Tune and Stop TX on the row above the CW audio zero-beat scope. Below the scope the Decode pane holds the transcript, its title bar carrying the AI badge, the decoded 28 WPM, the AI switch and Clear; Band activity sits under it and the Log pane (WC1D, 599 sent and received) takes the right-hand column, with the eight F-key macros and the type-and-send field along the bottom.](../img/manual/cw-cockpit.webp)
+![The CW cockpit receiving on 14.0310 MHz. Its header carries the Keyer dropdown set to CAT, the Speed slider at 22 WPM, Pitch and the MEM strip, with ⊞ Panels · 2 hidden, Tune and Stop TX on the row above the CW audio zero-beat scope. Below the scope the Decode pane holds the transcript, its title bar carrying the AI badge, the decoded 28 WPM, the AI switch and Clear; Band activity sits under it and the Log pane (WC1D, 599 sent and received) takes the right-hand column, with the eight F-key macros and the type-and-send field along the bottom.](../img/manual/cw-cockpit.webp)
 
 ## The tour
 

@@ -19,7 +19,7 @@ The tabs, in the order they appear:
 The panel header carries the **build stamp** (confirm a fresh install actually
 took) and a **Check for updates** button.
 
-![The Settings panel with the Radio tab open. The eight tabs — Station, Radio, Modes, Frequencies, Spots & Alerts, Logging & Connectors, Contesting, Appearance — run across the top, and the panel header carries the build stamp and Check for updates. Under them the Radios roster lists three configured rigs: a Yaesu FTDX10 on COM3 badged ACTIVE, an Icom IC-9700 on COM6 and a 991a on a CP2105 bridge, each with Edit / Make active / Remove and a row of band chips lighting the bands it covers — 160 m through 2 m for the Yaesu, 2 m and 70 cm for the 9700, 6 m and 2 m for the 991a. + Add radio closes the roster and Save sits at the bottom right; the rest of the tab continues below the fold.](../img/manual/settings-radio.webp)
+![The Settings panel with the Radio tab open. The eight tabs — Station, Radio, Modes, Frequencies, Spots & Alerts, Logging & Connectors, Contesting, Appearance — run across the top, and the panel header carries the build stamp and Check for updates. Under them the Radios roster lists three configured rigs: a Yaesu FTDX10 on COM3 badged ACTIVE, an Icom IC-9700 on COM6 and a 991a on a CP2105 bridge, the two inactive rigs carrying Edit / Make active / Remove while the active one shows only its name and the ACTIVE badge, each with a row of band chips lighting the bands it covers — 160 m through 2 m for the Yaesu, 2 m and 70 cm for the 9700, 6 m and 2 m for the 991a. + Add radio closes the roster and Save sits at the bottom right; the rest of the tab continues below the fold.](../img/manual/settings-radio.webp)
 
 ---
 
