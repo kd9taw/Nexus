@@ -22,9 +22,14 @@ interface Props {
   onSetTune?: (on: boolean) => void
   onHaltTx?: () => void
   onSetHoldTxFreq?: (on: boolean) => void
-  /** The active tier decodes but cannot transmit (Q65 / MSK144 / FST4 / FST4W /
-   * JT65 / WSPR). The engine already refuses to arm TX or start a CQ run on
-   * these; this disables the controls so the strip does not OFFER a run it
+  /** The active tier decodes but cannot transmit. NO SHIPPED TIER IS RX-ONLY TODAY —
+   * `RX_ONLY_TIERS` (types.ts) is empty, so this is always false and the mechanism is
+   * dormant. It is kept because it is the lever a mode gets pinned to when its TX path
+   * breaks: JT65 sat in that list for 0.19.17 only, to contain a Windows crash on Call
+   * CQ. Do not re-list Q65 / MSK144 / FST4 / FST4W / JT65 / WSPR here on the strength
+   * of an old comment — they all transmit.
+   * The engine already refuses to arm TX or start a CQ run on an rx-only tier;
+   * this disables the controls so the strip does not OFFER a run it
    * cannot make happen — the failure that made "Call CQ" on MSK144 look like it
    * was transmitting. Stop TX stays live: disarming is always allowed. */
   rxOnly?: boolean

@@ -4631,9 +4631,8 @@ export function SettingsPanel({
               </label>
             </div>
             <span className="settings-hint">
-              The classic weak-signal and moonbounce mode. Nexus decodes JT65 and does not
-              transmit it. Messages are the older 22-character format, not the 37-character one
-              FT8 and friends use.
+              The classic weak-signal and moonbounce mode, decoded and transmitted. Messages are
+              the older 22-character format, not the 37-character one FT8 and friends use.
             </span>
           </fieldset>
           )}
