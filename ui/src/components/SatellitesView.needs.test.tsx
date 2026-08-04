@@ -16,9 +16,7 @@
 //    lane under the rail (sample grids + "+N more", counts complete).
 //  - Uplink sideband: what the radio's TX (split) VFO will be commanded to is SHOWN in
 //    the Doppler readout and the transponder chooser — display only, engine owns the
-//    command. No claim when the ENGINE commands nothing; matching legs are NOT themselves
-//    a reason for silence, and gating the chooser note on them hid it for the FM/FM and
-//    USB/USB birds the engine speaks for.
+//    command. No claim when the legs share a mode (nothing is commanded).
 //  - Working-state order: passband strip and transponder chooser sit TOGETHER, above
 //    the globe — the two controls used together are never separated by a hemisphere.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -306,12 +304,9 @@ describe('the uplink sideband display', () => {
     expect(tx?.getAttribute('title')).toMatch(/TX/i)
   })
 
-  it('claims nothing when the engine commands nothing', async () => {
-    // The engine says nothing (txMode null on the wire — no uplink leg it
-    // owns), and the record's legs match: no claim anywhere. Matching legs are
-    // NOT themselves a reason for null — the transmit VFO carries its own mode,
-    // so the engine states it either way — which is why this drives the DTO
-    // value directly rather than inferring it from the record.
+  it('claims nothing when the legs share a mode — nothing is commanded', async () => {
+    // The engine says nothing (txMode null on the wire — same-mode legs), and
+    // the record agrees: no claim anywhere.
     api.getSatTrackStatus.mockImplementation(() => Promise.resolve(liveStatus({ txMode: null })))
     const d = detail()
     d.transmitters[2] = { ...d.transmitters[2], uplinkMode: 'USB', downlinkMode: 'USB' }
@@ -323,7 +318,7 @@ describe('the uplink sideband display', () => {
 
   it('never claims a command the engine is not sending — record swap, engine silent', async () => {
     // The record's legs DIFFER (LSB up / USB down) but the engine's answer is
-    // null — a downlink-only mapping, Doppler off, or the operator took the
+    // null — a downlink-only mapping, a CW downlink, or the operator took the
     // mode back. The readout must not show a TX mode, and the chooser note
     // must not read as a command ("is set to") — this display re-deriving the
     // command from the record is exactly how the UI claimed a write the radio
@@ -336,48 +331,6 @@ describe('the uplink sideband display', () => {
     const line = await screen.findByTestId('sat-tp-txmode')
     expect(line.textContent).not.toMatch(/is set to/)
     expect(line.textContent).toMatch(/not being commanded/)
-  })
-
-  it('the chooser names the commanded TX mode even when the two legs MATCH', async () => {
-    // The bird shapes the engine newly speaks for are exactly the ones whose
-    // legs match — an FM/FM transceiver, a non-inverting USB/USB linear — and
-    // the note was gated on the RECORD's legs DIFFERING. So the `X` frame
-    // reached the radio with nothing on screen saying so, on the very birds
-    // this change is for. The gate is the ENGINE's answer now.
-    api.getSatTrackStatus.mockImplementation(() =>
-      Promise.resolve(liveStatus({ txMode: 'FM', inverting: false })),
-    )
-    const d = detail()
-    d.transmitters[2] = { ...d.transmitters[2], uplinkMode: 'FM', downlinkMode: 'FM' }
-    api.getSatDetail.mockImplementation(() => Promise.resolve(d))
-    render(<SatellitesView focusSat="RS-44" />)
-    fireEvent.click(await screen.findByLabelText('Work SSB/CW linear transponder'))
-    const line = await screen.findByTestId('sat-tp-txmode')
-    expect(line.textContent).toMatch(/is set to/)
-    expect(line.textContent).toMatch(/FM/)
-  })
-
-  it('never renders a sentence with a hole when the record declares no downlink mode', async () => {
-    // The gate on this note used to be `txSwapMode != null`, which is only
-    // non-null when the record's `downlinkMode` is — so the "the downlink
-    // stays X" clause could not render empty. Gating on the ENGINE's answer
-    // instead (the fix for birds whose legs MATCH) dropped that guarantee: a
-    // transmitter with no declared downlink mode is ordinary, the engine still
-    // commands an uplink mode for it, and the note read "the downlink stays
-    // while Doppler runs this pass."
-    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(liveStatus()))
-    const d = detail()
-    d.transmitters[2] = { ...d.transmitters[2], downlinkMode: null }
-    api.getSatDetail.mockImplementation(() => Promise.resolve(d))
-    render(<SatellitesView focusSat="RS-44" />)
-    fireEvent.click(await screen.findByLabelText('Work SSB/CW linear transponder'))
-    const line = await screen.findByTestId('sat-tp-txmode')
-    // The command is still stated — that is the whole point of the new gate…
-    expect(line.textContent).toMatch(/is set to/)
-    expect(line.textContent).toMatch(/LSB/)
-    // …and the clause that has nothing to say simply is not there.
-    expect(line.textContent).not.toMatch(/stays\s+while/)
-    expect(line.textContent).not.toMatch(/downlink stays/)
   })
 
   it('the transponder chooser says what the TX sideband will be set to', async () => {

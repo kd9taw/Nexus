@@ -397,12 +397,6 @@ pub(crate) mod tests_support {
         /// CI-V mode bytes per band (`06` on the selected band).
         pub main_mode: u8,
         pub sub_mode: u8,
-        /// The DATA submode flag per band (`1A 06` on the selected band) — the
-        /// other half of "PKTUSB": base sideband in `*_mode`, DATA here. Modelled
-        /// PER BAND because that is what makes an uplink's DATA write provable —
-        /// a sequence that set it on the wrong band would look identical without.
-        pub main_data: bool,
-        pub sub_data: bool,
         /// NAK `16 5A` like a single-band rig (IC-7300) — honest "no such mode".
         pub no_satmode: bool,
         /// Fault injection — NAK the next N Main selects (`07 D0`): the
@@ -455,8 +449,6 @@ pub(crate) mod tests_support {
                         unselected_hz: 0,
                         main_mode: 0x01, // USB
                         sub_mode: 0x05,  // FM — the 9700's Sub-band default
-                        main_data: false,
-                        sub_data: false,
                         no_satmode: false,
                         nak_main_select: 0,
                         nak_satmode_set: 0,
@@ -543,24 +535,6 @@ pub(crate) mod tests_support {
                             }
                             None
                         }
-                        // The DATA submode (`1A 06`): set (on + filter bytes) or
-                        // read. Like `06`, it acts on the SELECTED band — which
-                        // is why a DATA write aimed at the uplink has to move the
-                        // selection to Sub and hand it back.
-                        (0x1A, Some(0x06)) => match f.data.get(1) {
-                            Some(&v) => {
-                                if r.sel_sub {
-                                    r.sub_data = v != 0;
-                                } else {
-                                    r.main_data = v != 0;
-                                }
-                                None
-                            }
-                            None => {
-                                let on = if r.sel_sub { r.sub_data } else { r.main_data };
-                                Some((0x1A, vec![0x06, u8::from(on), 0x00]))
-                            }
-                        },
                         // [MAIN/SUB] band selection; the A/B forms just ack.
                         (0x07, Some(0xD0)) => {
                             if r.nak_main_select > 0 {

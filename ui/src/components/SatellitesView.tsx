@@ -908,15 +908,13 @@ function DopplerReadout({
    * "not confirmed for this radio" is the wrong sentence (and the wrong fix)
    * when confirmation would change nothing on this bird. */
   undrivableUplink: boolean
-  /** The mode the ENGINE declares for the TX (split) leg — the DTO's
+  /** The sideband the ENGINE declares for the TX (split) leg — the DTO's
    * `txMode`, i.e. `Engine::sat_tx_mode`'s own per-tick answer, so this shows
-   * exactly what the radio loop writes and nothing else. Answered for every
-   * held bird in every operating section, whether or not the legs differ: the
-   * transmit VFO carries its own mode. Null = the engine commands nothing (a
-   * mapping without the uplink, a transponder with no uplink leg, Doppler off,
-   * or the operator took the mode back) — and then nothing is claimed. Never
-   * derived from the SatNOGS record here: a second derivation of the command is
-   * how a display claims a write the radio never gets. */
+   * exactly what the radio loop writes and nothing else. Null = the engine
+   * commands nothing (legs share a mode, a mapping without the uplink,
+   * Doppler off, or the operator took the mode back) — and then nothing is
+   * claimed. Never derived from the SatNOGS record here: a second derivation
+   * of the command is how a display claims a write the radio never gets. */
   txMode?: string | null
 }) {
   const any = rotor.downlinkHz != null || rotor.uplinkHz != null
@@ -980,13 +978,7 @@ function DopplerReadout({
               {txMode != null && (
                 <span
                   className="sat-dop-txmode"
-                  // NOT "this bird's uplink runs ${txMode}" — the token is
-                  // ours, not the record's. It is your operating section's own
-                  // form (PKTUSB, PKTLSB, CW, CWR, RTTY…) put on the side the
-                  // transponder's sense calls for; SatNOGS says nothing about
-                  // which DATA submode your rig wants. Claiming the bird runs
-                  // it is a claim about the satellite we cannot make.
-                  title={`The TX (split) VFO's mode — your uplink is commanded ${txMode} for this pass. Your operating section decides the form and the transponder decides the side; the transmit VFO carries its own mode, so it is set whether or not it differs from the downlink. Commanded by the engine with the Doppler tuning; shown here so the mode your uplink is in is never a surprise.`}
+                  title={`The TX (split) VFO's sideband — this bird's uplink runs ${txMode} while the downlink does not, and the radio's TX leg is set to match. Commanded by the engine with the Doppler tuning; shown here so a swapped sideband is never a surprise.`}
                 >
                   {' '}
                   {txMode}
@@ -2361,19 +2353,13 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
   // The ADIF mode the section's log strip records a contact as, and the report
   // format that follows from it. Station state only — see adifModeFromStation.
   const logMode = adifModeFromStation(snap?.radio.sideband)
-  // The RECORD's per-leg sidebands differing (SatNOGS data) — used only for
-  // the pre-arm FORECAST wording and for the "not being commanded" sentence,
-  // both of which quote the record because there is no engine answer to quote.
-  //
-  // ⚠️ IT IS NOT THE GATE ON THE NOTE ANY MORE. It was, and that silenced the
-  // note for exactly the bird shapes the engine newly speaks for — an FM/FM
-  // transceiver, a non-inverting USB/USB linear — whose legs MATCH. What the
-  // engine commands is the DTO's `txMode` (its own answer), never re-derived
-  // from the record: the two disagree exactly where it matters (a
-  // downlink-only mapping, Doppler off, an operator take-back — and, in the
-  // other direction, every section whose form is a DATA submode or the rig's
-  // CW/RTTY mode, which the record never names), and the display must not
-  // claim a command the radio never gets.
+  // The RECORD's per-leg sidebands differing (SatNOGS data) — used only to
+  // decide whether the chooser's TX-sideband note renders at all, and for the
+  // pre-arm FORECAST wording. What the engine actually commands is the DTO's
+  // `txMode` (its own answer), never re-derived from the record: the two
+  // disagree exactly where it matters (CW/data downlinks, a downlink-only
+  // mapping, an operator take-back), and the display must not claim a
+  // command the radio never gets.
   const txSwapMode =
     heldT?.uplinkMode != null &&
     heldT.downlinkMode != null &&
@@ -3506,57 +3492,37 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 {/* Display only — the engine owns the command. With a live
                     track the ENGINE's declared answer (DTO txMode) is the
                     only thing phrased as a command; when it says nothing, so
-                    do we (a downlink-only mapping, Doppler off or an operator
-                    take-back all mean no X write, whatever the SatNOGS
-                    record's per-leg modes say). With no track there is no
-                    command to claim yet — the record data reads as a
-                    forecast, conditions stated.
-
-                    ⚠️ THE GATE IS THE ENGINE'S ANSWER FIRST, the record's
-                    differing legs only as a fallback. Gating the whole block
-                    on differing legs hid this note for every bird whose legs
-                    MATCH — an FM/FM transceiver, a non-inverting USB/USB
-                    linear — which is exactly the set the engine newly states
-                    a mode for. The command was reaching the radio with
-                    nothing on screen saying so. */}
-                {heldT != null && (detailTrack?.txMode != null || txSwapMode != null) && (
+                    do we (a downlink-only mapping, a CW/data downlink or an
+                    operator take-back all mean no X write, whatever the
+                    SatNOGS record's per-leg modes say). With no track there
+                    is no command to claim yet — the record data reads as a
+                    forecast, conditions stated. */}
+                {heldT != null && txSwapMode != null && (
                   <div className="sat-tp-txmode" data-testid="sat-tp-txmode">
-                    {detailTrack != null && detailTrack.txMode != null ? (
-                      // ⚠️ THE DOWNLINK CLAUSE IS CONDITIONAL, and that is a
-                      // hole this gate opened. The old gate was `txSwapMode !=
-                      // null`, which is only non-null when
-                      // `heldT.downlinkMode` is — so the clause could not
-                      // render empty. The engine's answer carries no such
-                      // guarantee: a record with no declared downlink mode is
-                      // ordinary (`downlink_class` reads absent as USB and
-                      // works the bird anyway), and it rendered "the downlink
-                      // stays  while Doppler runs this pass".
-                      <>
-                        TX mode: the uplink (split) VFO is set to{' '}
-                        <b>{detailTrack.txMode}</b>
-                        {heldT.downlinkMode != null ? (
-                          <> — the downlink stays {heldT.downlinkMode} while Doppler runs</>
-                        ) : (
-                          <> while Doppler runs</>
-                        )}{' '}
-                        this pass.
-                      </>
-                    ) : detailTrack != null ? (
-                      // The component KNOWS the cause — name the live one
-                      // instead of an enumeration whose first entry
-                      // ("Doppler off") is false in the default state, one
-                      // row under "correcting the downlink".
-                      <>
-                        This bird lists {txSwapMode} up / {heldT.downlinkMode} down
-                        (SatNOGS) — the TX sideband is not being commanded for this pass
-                        (
-                        {!dopplerOn
-                          ? 'Doppler correction is off'
-                          : !detailTrack.dopplerUplink
-                            ? 'Doppler is not driving the uplink on this radio'
-                            : 'you took the mode back for this pass'}
-                        ).
-                      </>
+                    {detailTrack != null ? (
+                      detailTrack.txMode != null ? (
+                        <>
+                          TX sideband: the uplink (split) VFO is set to{' '}
+                          <b>{detailTrack.txMode}</b> — the downlink stays{' '}
+                          {heldT.downlinkMode} while Doppler runs this pass.
+                        </>
+                      ) : (
+                        // The component KNOWS the cause — name the live one
+                        // instead of an enumeration whose first entry
+                        // ("Doppler off") is false in the default state, one
+                        // row under "correcting the downlink".
+                        <>
+                          This bird lists {txSwapMode} up / {heldT.downlinkMode} down
+                          (SatNOGS) — the TX sideband is not being commanded for this
+                          pass (
+                          {!dopplerOn
+                            ? 'Doppler correction is off'
+                            : !detailTrack.dopplerUplink
+                              ? 'Doppler is not driving the uplink on this radio'
+                              : 'the legs share a sideband, or the mode is yours'}
+                          ).
+                        </>
+                      )
                     ) : (
                       <>
                         TX sideband: this bird runs {txSwapMode} up /{' '}
