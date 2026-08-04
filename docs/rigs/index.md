@@ -34,7 +34,7 @@ brand-specific page yet. If you run one and want notes added, open an issue.
 
 ## The two connection types
 
-Everything in **Settings ▸ Rig / CAT** comes down to one choice — the
+Everything in **Settings ▸ Radio ▸ Rig Control** comes down to one choice — the
 **Connection** dropdown:
 
 ### Serial (USB / COM) — most rigs

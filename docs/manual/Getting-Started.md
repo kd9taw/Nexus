@@ -36,7 +36,7 @@ On the first launch Nexus shows a one-time setup wizard (stored under localStora
 The wizard is a three-step flow — **Station** (callsign + grid), **Rig**
 (detect-my-radio, connection, audio), then **Goals** (goal cards, operating
 modes, license class). Every step is skippable, and you can re-run the wizard
-any time from Settings ▸ Features ▸ "Re-run setup…".
+any time from Settings ▸ Appearance ▸ Features ▸ "Re-run setup…".
 
 **Goals** — Five goal cards appear:
 

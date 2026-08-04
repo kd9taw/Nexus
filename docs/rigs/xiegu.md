@@ -21,7 +21,7 @@ reads the model from the USB descriptor and pairs the built-in audio codec —
 much like a modern Icom.
 
 1. Plug in over USB-C and power on.
-2. **Settings ▸ Rig / CAT ▸ Detect my radio** — it should fill the model, port,
+2. **Settings ▸ Radio ▸ Rig Control ▸ Detect my radio** — it should fill the model, port,
    and the radio's built-in audio device.
 3. Set **Baud** to match the rig's CI-V / CAT menu.
 4. **Save**, then **Test CAT**.
@@ -44,7 +44,7 @@ the model yourself:
 4. **Audio is separate** — the G90 and X5105 have no USB audio codec, so you
    need an external interface (a Xiegu **CE-19** data adapter or a
    **Digirig**-class interface). Select that interface as your input/output
-   device in **Settings ▸ Audio**.
+   device in **Settings ▸ Radio ▸ Audio**.
 5. Set **Baud** to match the rig's menu, **Save**, then **Test CAT**.
 
 <!-- TODO: capture screenshot — Xiegu G90 with CP210x port detected and model picked manually -->

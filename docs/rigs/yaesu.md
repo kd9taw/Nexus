@@ -14,7 +14,7 @@ bridge and a USB Audio Codec over a single cable.
 ## Quick setup
 
 1. Plug the rig into USB and power it on.
-2. **Settings ▸ Rig / CAT ▸ Detect my radio.** Nexus fills the serial port, the
+2. **Settings ▸ Radio ▸ Rig Control ▸ Detect my radio.** Nexus fills the serial port, the
    paired USB Audio Codec, and — on Windows, if the Silicon Labs CP210x driver
    is missing — a one-click driver link.
 3. If Detect couldn't read the model from USB (common on Yaesu — the bridge

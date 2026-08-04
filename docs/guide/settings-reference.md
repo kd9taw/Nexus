@@ -412,8 +412,7 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
 
 JT65 transmits and receives. Its messages are the older 22-character format, not
 the 37-character one FT8 and friends use — nothing downstream cares, decodes are
-just shorter. (The fieldset's in-app note still says Nexus does not transmit
-JT65; that text predates 0.20.0 and the mode reports `tx: true`.)
+just shorter.
 
 ### MSK144 — meteor scatter
 

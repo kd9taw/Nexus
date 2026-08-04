@@ -14,7 +14,7 @@ hand.
 
 ## Setup
 
-Everything lives in **Settings ▸ Rig / CAT ▸ Antenna rotator**:
+Everything lives in **Settings ▸ Radio ▸ Rig Control ▸ Antenna rotator**:
 
 1. Pick your **rotator model** from the dropdown.
 2. Set its **serial port** (COM7, `/dev/ttyUSB1`, …) and **baud** (GS-232

@@ -85,8 +85,8 @@ decoder runs every RX slot regardless of TX state.
 WW Digi). **Q65, FST4, FST4W, MSK144, JT65 and WSPR have since shipped and transmit**, each
 keeping its own operating rhythm rather than inheriting FT8's — MSK144 waits twelve transmit
 periods before giving up where FT8 waits three, and WSPR and FST4W never touch the QSO
-sequencer at all. Per-QSO WAV save has shipped too — Settings ▸ Operating ▸ Save received
-audio.
+sequencer at all. Per-QSO WAV save has shipped too — Settings ▸ Logging & Connectors ▸ Save
+received audio.
 
 ## The CW cockpit
 

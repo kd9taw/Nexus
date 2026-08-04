@@ -19,7 +19,7 @@ and [Integrations](manual/Integrations.md) guides go deeper on their own areas.
 
 ### The radio isn't found by Detect
 
-**Detect my radio** (Settings ▸ Rig / CAT, and in the wizard) enumerates USB
+**Detect my radio** (Settings ▸ Radio ▸ Rig Control, and in the wizard) enumerates USB
 devices and scans for FlexRadios on the LAN. If it finds nothing:
 
 - Make sure the rig is **plugged in and powered on**, then click Detect again.
@@ -68,7 +68,7 @@ waits ~1.3 s, and reads the dial frequency. A real frequency back (e.g.
    or start Nexus with the rig already powered on. Slow serial rigs are otherwise
    handled fine once connected.
 
-<!-- TODO: capture screenshot — Settings ▸ Rig / CAT after a successful Test CAT, showing the read-back dial frequency -->
+<!-- TODO: capture screenshot — Settings ▸ Radio ▸ Rig Control after a successful Test CAT, showing the read-back dial frequency -->
 
 ### The rig won't change mode when I switch sections (FTDX10-class)
 
@@ -113,7 +113,7 @@ listening there. SmartSDR CAT must be running for the Flex path to work.
 
 ### Picking the right devices
 
-In **Settings ▸ Audio** there are two device pickers, and getting them right fixes
+In **Settings ▸ Radio ▸ Audio** there are two device pickers, and getting them right fixes
 most audio problems:
 
 - **Input (RX)** — the sound card carrying your rig's *received* audio. This is
@@ -129,7 +129,7 @@ or pick the same device by hand. **Refresh** re-scans after you plug something i
 
 Flex users route audio through SmartSDR's **DAX** virtual devices, not a physical
 sound card. Use **⚡ Pair DAX audio** in the wizard (or select the DAX devices
-manually in Settings ▸ Audio).
+manually in Settings ▸ Radio ▸ Audio).
 
 ### My recording captured the band, not my voice
 
@@ -144,7 +144,7 @@ understanding *why*:
 - **QSO recording** in the Phone cockpit streams the **received** audio to a WAV
   by design — it's meant to capture the contact you're hearing, not your transmit.
 
-**Headphone monitor** (Settings ▸ Audio ▸ Headphone monitor): plays the exact
+**Headphone monitor** (Settings ▸ Radio ▸ Audio ▸ Headphone monitor): plays the exact
 audio the decoder hears — for level/RFI diagnosis and listening to the band.
 If you enable it and hear nothing, check the audio-status line: Nexus refuses
 to open the monitor on the rig's TX output device (monitoring into the TX
@@ -159,7 +159,7 @@ that.
 
 If you can hear signals by ear but Nexus decodes nothing, check in order:
 
-1. **Input device** — Settings ▸ Audio ▸ Input (RX) must point at the rig's
+1. **Input device** — Settings ▸ Radio ▸ Audio ▸ Input (RX) must point at the rig's
    receive audio. **Refresh** after plugging in.
 2. **Level** — watch the level meter in the top bar. Aim for the green zone. Too
    low and there's nothing to decode; red is clipping and distorts everything.

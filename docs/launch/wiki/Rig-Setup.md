@@ -25,7 +25,7 @@ software guard in every TX path).
 
 ## The fast path: Detect my radio
 
-For almost every rig the quickest setup is **Settings ▸ Rig / CAT ▸ Detect my
+For almost every rig the quickest setup is **Settings ▸ Radio ▸ Rig Control ▸ Detect my
 radio**. One scan reads your USB devices *and* finds FlexRadios on the LAN, then
 fills the model, port, and paired audio in one click — and if Windows is missing a
 USB-serial driver, it shows the exact download link. Review what it filled, then
@@ -138,7 +138,7 @@ cabling groups:
 - **G90 / X5105** — behind a bare **CP210x** bridge that reports only its chip
   name, so Detect fills the port (and driver link) but leaves the **model empty** —
   pick it yourself. **Audio is separate**: these have no USB codec, so you need an
-  external interface (Xiegu CE-19, Digirig-class) selected in **Settings ▸ Audio**.
+  external interface (Xiegu CE-19, Digirig-class) selected in **Settings ▸ Radio ▸ Audio**.
 
 **Field status:** supported via the Icom backend but **not yet bench-verified** —
 field reports genuinely valuable.
@@ -150,7 +150,7 @@ field reports genuinely valuable.
 ## Rotators
 
 Nexus drives rotators through Hamlib's `rotctld` — bundled and launched for you,
-the same way CAT is. In **Settings ▸ Rig / CAT ▸ Antenna rotator**, pick the model,
+the same way CAT is. In **Settings ▸ Radio ▸ Rig Control ▸ Antenna rotator**, pick the model,
 set the serial port and baud (GS-232 defaults to 9600), and **Save**. Curated
 models include Yaesu GS-232A/B, SPID Rot2Prog, EasyComm II/III, Hy-Gain, Green
 Heron RT-21, M2 RC2800, and more.
