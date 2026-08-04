@@ -3526,6 +3526,33 @@ body.resizing {
   overflow: hidden;
   min-height: 0;
 }
+/* THE DEFICIT VALVE — and it has to be (0,4,0) to exist at all. APRS's <main> is
+   `layout single needed-panel aprs-cockpit`, so `.layout.single.needed-panel`
+   (~12598) matches it too and is ALSO (0,3,0); being later in the sheet, that rule —
+   not the block above — is what has actually been deciding APRS's overflow. Writing
+   `overflow-y: auto` into the block above would therefore have shipped dead, the exact
+   mechanism cockpit-shells.test.ts exists to catch, so the valve names both classes and
+   outranks needed-panel by specificity rather than by source order.
+
+   WHAT IT IS FOR. APRS was the one full view in the tree with no valve. Its header
+   (.np-head) is a WRAPPING control strip — frequency picker, Re-tune, the TX arm latch,
+   Monitor, both health chips, the internet control — with `min-height: auto`, so it
+   cannot shrink below its wrapped height, and it sits directly against the clip: the
+   only other child (.aprs-body) is `flex: 1` off a ZERO basis, so its scaled shrink
+   factor is 0 and it absorbs none of a deficit. Everything the header could not fit was
+   cut off with no scroller anywhere between it and the clip. Same for the internet
+   popover, which is `position: absolute` inside that strip with this shell as its
+   nearest non-visible ancestor: at 1024x768 under pinned zoom the header wraps deep
+   enough that the panel's Watched-calls row and note fell past the shell edge.
+
+   Y ONLY, deliberately: `.layout.single.needed-panel` keeps overflow-x hidden (a
+   horizontal scrollbar here would only ever be the rail's table escaping, and
+   `.aprs-rail .aprs-table` already scrolls itself), and the block above keeps the
+   definite-height flex column the map's canvas resolves against — a scroll container
+   is still a definite-height box, so the growth loop stays closed. */
+.layout.single.needed-panel.aprs-cockpit {
+  overflow-y: auto;
+}
 
 .panel {
   background: var(--panel);

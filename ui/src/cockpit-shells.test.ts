@@ -281,12 +281,47 @@ function winningValue<T>(
   return win && { value: win.value, selector: win.selector }
 }
 
+/** APRS's shell wears FOUR classes, and modelling all of them is the whole point
+ *  (AprsCockpit.tsx ~878, pinned below). `.layout.single.needed-panel` (styles.css ~12598)
+ *  and `.layout.single.aprs-cockpit` (~3523) BOTH match it and BOTH are (0,3,0), so the
+ *  later needed-panel rule is the real winner and APRS's own block never decided its
+ *  overflow at all. A chain naming only `aprs-cockpit` would report that block as the
+ *  winner and go green on a valve written where it can never fire — the dead-fix mechanism
+ *  this file exists for, one abstraction level up. */
+const APRS_CHAIN: Array<Set<string>> = [
+  new Set(['app']),
+  new Set(['shell']),
+  new Set(['layout', 'single', 'needed-panel', 'aprs-cockpit']),
+]
+
 const SHELLS: Array<[string, Array<Set<string>>]> = [
   ['.layout.single.phone-cockpit', shellChain('phone-cockpit')],
   ['.layout.single.cw-cockpit', shellChain('cw-cockpit')],
   ['.layout.single.rtty-cockpit', shellChain('rtty-cockpit')],
   ['.layout.single.sstv-view', shellChain('sstv-view')],
+  // APRS is the sixth cockpit and was ABSENT from this census until 2026-08-04: nothing had
+  // ever computed its shell, and it was the one surface in the tree with no deficit valve —
+  // its header (.np-head: the frequency picker, Re-tune, the TX arm latch, Monitor, both
+  // health chips and the internet control) is an unshrinkable wrapping strip sitting DIRECTLY
+  // against that clip, and the internet popover it hosts is `position: absolute` with the
+  // shell as its nearest non-visible ancestor, so the panel's lower rows had nowhere to go.
+  ['.layout.single.needed-panel.aprs-cockpit', APRS_CHAIN],
 ]
+
+it('the APRS shell still wears the class list this census reasons about', () => {
+  // The chain above is hand-modelled; a class list drifting in the component would leave it
+  // guarding a shell that no longer exists. Cheap pin, same technique as the splitter
+  // callers below (which read their own source) and layout-single-deficit.test.tsx.
+  const src = readFileSync(
+    fileURLToPath(new URL('./components/AprsCockpit.tsx', import.meta.url)),
+    'utf8',
+  )
+  expect(
+    src,
+    'AprsCockpit no longer roots on `layout single needed-panel aprs-cockpit` — the ' +
+      'APRS entry in SHELLS models a shell that is not rendered any more.',
+  ).toContain('className="layout single needed-panel aprs-cockpit"')
+})
 
 describe('cockpit shells are the deficit valve (winning overflow-y is auto)', () => {
   for (const [name, chain] of SHELLS) {
