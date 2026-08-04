@@ -502,7 +502,15 @@ export function LogEntry({
     // "EN52/EN53" or free text, which it does not. Filling the field with a value the
     // strip refuses is how a callbook came to disable the Log button over a square the
     // operator never typed. Blanks-only is unchanged: a typed square still wins.
-    if (r.grid && isValidLoggedGrid(r.grid)) setLogGrid((v) => (v.trim() ? v : r.grid ?? ''))
+    // …AND ONLY WHERE THE BOX EXISTS. The reason to filter is that a value the strip
+    // will then REFUSE must not arrive on its own; that reason lives entirely in
+    // `asksForGrid`. Applying it in the terrestrial exchanges too changed what their
+    // records carry — a callbook grid that is not a 4/6/8 locator stopped reaching
+    // the record — for cockpits with no Grid box, no `gridBlocked` and nothing to
+    // strand. Those strips were explicitly out of scope for this change, so they keep
+    // taking the callbook's answer exactly as they did.
+    if (r.grid && (!asksForGrid || isValidLoggedGrid(r.grid)))
+      setLogGrid((v) => (v.trim() ? v : r.grid ?? ''))
     if (r.state) setLogState((v) => (v.trim() ? v : r.state ?? ''))
     if (r.country) setLogCountry((v) => (v.trim() ? v : r.country ?? ''))
     setLogImage(r.image ?? null) // display-only; no operator value to preserve
@@ -916,7 +924,7 @@ export function LogEntry({
             It also costs nothing here, which is the whole reason the first attempt
             was refused: this row already wraps at both measured widths, and Grid
             fits in the slack a wrapped line leaves. In the QTH row it did not —
-            that row is a single full line at 611 px, so Grid pushed it to two and
+            that row is a single full line at a 611 px column, so Grid pushed it to two and
             made the satellite strip TALLER than the park row it replaced (+52 vs
             −48). Measured in a real layout engine, and its two halves are pinned:
             LogEntry.test.tsx › 'sits in the EXCHANGE row' and 'the QTH row is

@@ -495,8 +495,15 @@ describe('Grid joins the exchange row without re-arming the sideways overflow', 
     // point of putting Grid in this row was that it costs NOTHING.
     //
     // Measured against real layout (headless Chrome, the section's own
-    // wrappers): parent 499px → 451px at 340, and 368px → 320px at the 611px
-    // column a 1366-wide window gives. Both DOWN by the whole park row.
+    // wrappers): parent 499px → 451px at 340, and 368px → 320px at a 611px
+    // column. Both DOWN by the whole park row.
+    //
+    // ⚠️ DO NOT restate 611px as "what a 1366-wide window gives" — that
+    // derivation was published and was wrong. `.sats-view` sits BEHIND
+    // `.mode-nav` (88px + 1px border) and INSIDE `main.layout.single`
+    // (padding var(--gap) a side), none of which the arithmetic included.
+    // These are column widths, which is what this test controls; the
+    // window width that produces one is a separate measurement.
     const cap = Number(/^(\d+(?:\.\d+)?)px$/.exec(winner('.le-grid', 'max-width')!.trim())![1])
     const basis = /^1\s+1\s+(\d+(?:\.\d+)?)em$/.exec(
       decl('.le-row .settings-input', 'flex')!.value.replace(/\s+/g, ' ').trim(),

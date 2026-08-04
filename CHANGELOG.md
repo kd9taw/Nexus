@@ -40,9 +40,13 @@ scored on.
 It sits with the reports rather than down with QTH because that is what it is on a satellite:
 something the other operator says in the same breath as his report, read and typed in the same
 moment. It also costs the strip nothing there — that row already wraps, and the box lands in the
-space the wrap leaves. **The whole strip is 48 px shorter than before**, at both the width a
-1366-wide window gives this column (368 → 320 px) and at the layout's narrow floor (499 → 451 px):
-the park row below came out and nothing took its place.
+space the wrap leaves. **The whole strip is 48 px shorter than before** across the ordinary range
+of window widths: the park row below came out and nothing took its place.
+
+One honest exception, because it is measurable and somebody will meet it: in a narrow band of
+window widths the Grid box does not fit the space the wrap leaves and takes a line of its own,
+and there the strip is 4 px *taller* than before rather than 48 px shorter. It is a band, not a
+threshold — wider and narrower windows both get the full saving.
 
 The callbook still fills the box when it is blank, and it will **not** overwrite a square you
 typed. Nexus takes a **4-, 6- or 8-character** locator (`EN52`, `EN52XA`, `EN52XA25`) — every
