@@ -8,9 +8,9 @@ programming cable; **CHIRP** does that, free, for about a thousand models, and
 this section builds the CSV CHIRP imports. It is deliberately not a repeater
 directory: no map, no polling, no browsing for its own sake.
 
-Program is an opt-in section. It is on under the **Just getting started**,
-**POTA / SOTA** and **6m / VHF** goal profiles and off under DX chasing and
-contesting; turn it on either way in
+Program ships on: it is enabled under the **Just getting started**,
+**POTA / SOTA** and **6m / VHF** goal profiles and wherever no goal profile was
+chosen, and off only under DX chasing and contesting; it toggles either way in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the Program section on a wide window: fetched results on the left showing FM rows plus one badged DMR row and one OFF-AIR row, a six-channel list built on the right, the whole delivery row visible under it -->
@@ -31,9 +31,11 @@ characters, outlined in red until it is a real one. **City** takes free text
 ("Gatlinburg, TN") and geocodes it on an explicit **Search** click — never per
 keystroke — offering up to five OpenStreetMap candidates to pick from; a single
 match is picked for you, and no match says "No places matched — try 'City,
-State'". **Recent** holds the last five origins that answered, with their
-resolved coordinates, so a place you program often is one click to select — then
-you press Fetch, which is always yours to press.
+State'". The candidate you pick becomes the point the search runs from, not your
+station grid, so programming for a town you have never been to is the same job
+as programming for home. **Recent** holds the last five origins that answered,
+with their resolved coordinates, so a place you program often is one click to
+select — then you press Fetch, which is always yours to press.
 
 **Radius** is chips at 10, 25, 50, 100 and 200 miles plus **Auto**, which is the
 "radius from the selected bands' realistic repeater reach": 25 mi for 70 cm and
@@ -42,13 +44,15 @@ selected, and 50 with no band chip lit. Auto prints the number it resolved to
 beside the chips, so it never moves the search without telling you.
 
 **Fetch repeaters** is the one filled accent button on the screen and the only
-control that goes to the network. After a fetch, the line beside it says which
-directory answered and how old the data is — "RepeaterBook · 3h ago", "hearham ·
-2d ago" — and adds "stale (fetch failed, cached data shown)" when you are
-looking at cache because the fetch did not land. Directory data caches for seven
-days per source and a RepeaterBook state re-tries at most every 15 minutes, so
-repeated fetches from the same spot are free and instant; a directory does not
-change hourly and this one does not pretend to.
+control that pulls repeater data; the City **Search** click is the section's
+only other network call, so nothing here reaches out unless you pressed
+something. After a fetch, the line beside it says which directory answered and
+how old the data is — "RepeaterBook · 3h ago", "hearham · 2d ago" — and adds
+"stale (fetch failed, cached data shown)" when you are looking at cache because
+the fetch did not land. Directory data caches for seven days per source and a
+RepeaterBook state re-tries at most every 15 minutes, so repeated fetches from
+the same spot are free and instant; a directory does not change hourly and this
+one does not pretend to.
 
 **Where the data comes from.** With no token, hearham.com — an open, no-account
 directory pulled whole (~22,000 rows worldwide) and cached. Add your own
@@ -151,46 +155,45 @@ list is empty:
 
 <!-- TODO: capture screenshot — the "Flash with CHIRP" dialog open over a built channel list, showing the three numbered steps, the Get CHIRP link, the "Don't show this again" tick and the Save the CSV button -->
 
-### Program for somewhere you are not
-
-Set **City**, type "Gatlinburg, TN", press **Search**, and pick the right
-candidate from the list OpenStreetMap returns — the search runs from that point,
-not from your station grid. The origin lands in **Recent** once it has answered,
-so a place you program for every year comes back as one chip with its
-coordinates already resolved.
-
 ### Star one machine onto the cockpit strip
 
-For the machine you actually want on the radio in front of you, skip the builder
-entirely: press ☆ on its result row. That saves it to Memories as a proper FM
-channel — shift, offset and access tone — and puts it on the MEM strip in the
-Phone, CW and Operate cockpits, named the way it is said out loud (`W9ABC 94`).
-Starring a machine Memories already holds stars *that* row rather than adding a
-second one, and pressing ★ again only takes it off the cockpit strip; the
-channel stays in Memories. A star saves the machine's coordinates too, so
-Memories shows distance and bearing recomputed from wherever you are operating
-today.
+1. Press ☆ on the result row of the machine you actually want on the radio in
+   front of you. Starring skips the channel list and the export entirely.
+2. Nexus saves it to Memories as a proper FM channel — shift, offset and access
+   tone — named the way it is said out loud (`W9ABC 94`), and puts it on the MEM
+   strip in the Phone, CW and Operate cockpits. Starring a machine Memories
+   already holds stars *that* row rather than adding a second one.
+3. Recall it from the MEM strip when you want it. The star saves the machine's
+   coordinates too, so Memories shows distance and bearing recomputed from
+   wherever you are operating today.
+4. Press ★ again when you are done with it: that only takes it off the cockpit
+   strip, and the channel stays in Memories.
 
 ### Tune the rig to a repeater now
 
-With CAT up, every FM row grows a **Tune** button: "Tune your CAT rig to this
-repeater now (FM + shift + offset + tone)". It is one step, not a QSY followed
-by fixing the tone — the machine's frequency, its exact shift and offset, and
-its CTCSS tone all land together, on FM, routed to the radio you have mapped for
-FM on that band. Naming FM explicitly is what makes it correct when you arrive
-from a data section, since a repeater is inaudible in a data mode. Nexus
-confirms what it did ("Tuned 146.9400 FM — −0.60 MHz · tone 103.5"), and
-refuses in plain words when it cannot: "This radio doesn't cover 146.9400 MHz,
-so it can't work that repeater." **Tuning is all it does — nothing here arms
-transmit**, and you stay in Program.
+1. Press **Tune** on an FM result row — it is there whenever CAT is up: "Tune
+   your CAT rig to this repeater now (FM + shift + offset + tone)".
+2. The machine's frequency, its exact shift and offset, and its CTCSS tone all
+   land together, on FM, routed to the radio you have mapped for FM on that
+   band. It is one step, not a QSY followed by fixing the tone, and naming FM
+   explicitly is what makes it correct when you arrive from a data section,
+   since a repeater is inaudible in a data mode.
+3. Read what Nexus confirms — "Tuned 146.9400 FM — −0.60 MHz · tone 103.5" — or
+   the refusal in plain words when the rig cannot get there: "This radio doesn't
+   cover 146.9400 MHz, so it can't work that repeater."
+4. **Tuning is all it does — nothing here arms transmit**, and you stay in
+   Program with the rig sitting on the repeater.
 
 ### Keep the list inside Nexus
 
-**Save to Memory Bank** writes the whole list into Memories in one go and
-reports what happened — "6 channels saved to Memories (2 already there) — star ★
-the ones you want on the cockpit MEM strip". Use it when the channels are for
-operating from Nexus rather than for a handheld; use ☆ on a result row when it
-is one machine and you want it starred immediately.
+Use this when the channels are for operating from Nexus rather than for a
+handheld; ☆ on a result row is the one-machine version.
+
+1. Build the channel list, then press **Save to Memory Bank**.
+2. Read what it reports — "6 channels saved to Memories (2 already there) —
+   star ★ the ones you want on the cockpit MEM strip".
+3. In [Memories](memories.md), star the channels you want reachable from a
+   cockpit MEM strip.
 
 ## Honest limits
 
@@ -227,10 +230,11 @@ is one machine and you want it starred immediately.
 - **One list, not named projects.** There is a single working list, auto-saved;
   the file format holds many, but nothing in the UI creates, names or switches
   between them.
-- **Nothing refreshes itself.** Fetch is the only network call, cached data can
-  be up to seven days old, and there is no bundled offline directory — a first
-  fetch with no network and no cache fails with the reason and a **Retry**
-  button rather than showing an empty list.
+- **Nothing refreshes itself.** Fetch and the City **Search** click are the only
+  network calls and both wait on a press, cached data can be up to seven days
+  old, and there is no bundled offline directory — a first fetch with no network
+  and no cache fails with the reason and a **Retry** button rather than showing
+  an empty list.
 - **hearham is the default source and it is incomplete in places.** The
   missing-band note catches the case where a whole major band is absent; it
   cannot tell you about the individual machines a directory never listed. A
