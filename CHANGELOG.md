@@ -5,6 +5,29 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed: the log strip commits above the fold
+
+Reported at low resolution: "the Log button ends up below the fold with a half-typed QSO above
+it." Measured at the window Nexus opens at (1200×720), the strip stood 422 px inside a 392 px log
+pane — the **Log** button 30 px past the bottom edge, so committing a contact meant scrolling to
+find the button that commits it.
+
+Two boxes above it were saying what the pane already said. The pane's own head reads **LOG** and is
+its name to a screen reader; the strip printed "Log this QSO" again two lines below it. And the
+strip drew its own bordered, padded card *inside* the pane's card. Both are gone from the Phone and
+CW cockpits: 43 px off the top of the commit row, 56 px off the strip's height, and the button is
+inside the pane at every window from 1024×768 up. **No type is smaller** — the space came out of
+duplication, not out of the font.
+
+The Satellites section keeps its heading. It hosts the same strip with no title above it, so there
+the heading is the only thing naming the surface — this is a per-host decision, not a deletion.
+
+Also in the Phone cockpit: the hint line under **PUSH TO TALK** is gone from the pinned transmit
+dock, where it held a full line at every window size and repeated the button's own tooltip. The
+part that was not a repeat — *you talk on the rig's mic* — is now on the button itself.
+
 ## [0.28.2] — 2026-08-03
 
 ### Changed: the Satellites section is a pass console

@@ -996,6 +996,8 @@ export function CwCockpit({
         mode="CW"
         defaultRst="599"
         exchange="terrestrial"
+        // The frame head above already reads LOG and is this pane's accessible name.
+        titled={false}
         onSpot={(call) => {
           setSpotCall(call)
           setSpotOpen(true)

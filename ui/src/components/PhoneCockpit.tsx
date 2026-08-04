@@ -816,6 +816,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
         defaultRst="59"
         exchange="terrestrial"
+        // The frame head above already reads LOG and is this pane's accessible name.
+        titled={false}
         onSpot={(call) => {
           setSpotCall(call)
           setSpotOpen(true)
@@ -1197,9 +1199,16 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             }
           }}
           disabled={!snap.radio.txAllowed}
+          // The last clause was a `.ph-ptt-hint` span below this row until 2026-08-04.
+          // `flex-basis: 100%` made it a whole line of the PINNED dock, so it cost its ~19px
+          // at every window size and no scroller could take it back — and its first half
+          // ("Hold the button or the Space bar") repeated this very tooltip. The row went;
+          // the sentence did not, because "you talk on the rig's mic" is what stops an
+          // operator keying up believing Nexus carries his audio. Pinned in
+          // PhoneCockpit.structure.test.tsx.
           title={
             snap.radio.txAllowed
-              ? "Hold to talk (or Space). Toggle 'Lock' for hands-free (then Enter keys/unkeys)."
+              ? "Hold to talk (or Space). Toggle 'Lock' for hands-free (then Enter keys/unkeys). You talk on the rig's mic."
               : 'TX locked — outside your license privileges (pick a band, or change your license in Settings)'
           }
         >
@@ -1209,7 +1218,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
-        <span className="ph-ptt-hint">Hold the button or the Space bar · you talk on the rig's mic</span>
       </div>
       </div>
 

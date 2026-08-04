@@ -132,6 +132,20 @@ interface Props {
    * Must be 'CW' or 'PH' when fieldDay is active.
    */
   fdMode?: 'CW' | 'PH'
+  /**
+   * Does this strip render its OWN "Log this QSO" heading? Default true — today's
+   * behaviour, unchanged, for every host that does not say otherwise.
+   *
+   * A host that already names the surface passes false: the Phone and CW cockpits frame
+   * this component in a CockpitPaneFrame whose head reads "LOG" two lines above, and is
+   * the frame's accessible name, so the heading said the same thing twice and cost ~30px
+   * off the top of a strip whose Log button was already below the fold at the default
+   * window. SatellitesView hosts it in a plain `.sats-log` div with NO title of its own,
+   * which is why this is a prop and not a deletion — deleting the heading outright would
+   * leave that surface untitled. LogEntry.density.test.tsx pins both halves.
+   * (The Field Day variant below has never had a heading, on the same reasoning.)
+   */
+  titled?: boolean
 }
 
 /**
@@ -155,6 +169,7 @@ export function LogEntry({
   cwLive,
   fieldDay,
   fdMode,
+  titled = true,
 }: Props) {
   const fdActive = fieldDay != null
   // Does this cockpit's exchange carry a park/summit reference? See `exchange`.
@@ -852,7 +867,7 @@ export function LogEntry({
 
   return (
     <div className="log-entry">
-      <h2>Log this QSO</h2>
+      {titled && <h2>Log this QSO</h2>}
 
       {hunt && (
         <div className={`le-hunt-chip${huntMatches ? ' match' : ''}`} title="This QSO will be tagged with the hunted park reference when you log it (matched by callsign).">
@@ -1209,7 +1224,18 @@ export function LogEntry({
           instead (operator: several logged by accident, 2026-08-02). Here it is a deliberate
           reach, directly under the line that states what will be written, and Spot stays beside
           it — that adjacency is why spotting happens at all. Plain in-flow row: the pane body is
-          the scroller, this adds no sticky/fixed positioning and no second scroll owner. */}
+          the scroller, this adds no sticky/fixed positioning and no second scroll owner.
+
+          `position: sticky; bottom: 0` WAS PROPOSED FOR THIS ROW (2026-08-04 density review) and
+          refused — and NOT for the scroll-owner reason above, which does not apply: sticky inside
+          an existing `overflow: auto` box adds no second scroller. It is refused because this row
+          is not the last block in the strip. RecallPanel follows it, so an opaque sticky commit
+          row parks Log over the recall card — its QRZ link included — for the whole scroll, and a
+          reach for something underneath commits a contact instead. That is the 2026-08-02 accident
+          again, from a fixed screen band rather than a wrapping row. It would also cut Log loose
+          from the "logs to the shared logbook as …" line above it, which is the placement's whole
+          point. The fold problem it was aimed at was answered by deleting chrome instead: the
+          heading and the card-in-card padding, 43px of it above this row (LogEntry.density.test). */}
       <div className="le-row le-actions">
         <button
           type="button"

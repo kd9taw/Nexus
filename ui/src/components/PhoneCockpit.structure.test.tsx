@@ -53,7 +53,14 @@ vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cock
 vi.mock('./PhoneScope', () => ({ PhoneScope: () => <div data-testid="scope-stub" /> }))
 vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stub" /> }))
 vi.mock('./VoiceKeyer', () => ({ VoiceKeyer: () => <div data-testid="vk-stub" /> }))
-vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// The stub reports `titled` so this suite can see the ONE prop that is a placement decision
+// rather than log behaviour: whether the strip draws its own heading under a frame head that
+// already says LOG. The strip's own half is in LogEntry.density.test.tsx.
+vi.mock('./LogEntry', () => ({
+  LogEntry: (p: { titled?: boolean }) => (
+    <div data-testid="log-stub" data-titled={String(p.titled ?? true)} />
+  ),
+}))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 
 /** The observed element's callback, so a test can fire a resize the way the browser
@@ -193,6 +200,16 @@ describe('PhoneCockpit pane-grid shell', () => {
     ).not.toBeNull()
   })
 
+  it('the log pane tells the strip the frame already titles it', () => {
+    // The frame head reads LOG and is the pane's accessible name; the strip's own
+    // "Log this QSO" said it again ~30px above a Log button that was already below the
+    // fold at the default window. `titled` defaults TRUE, so a host that stops passing it
+    // silently gets the duplicate back — hence the assertion here and not in the strip.
+    renderCockpit()
+    const stub = document.querySelector('[data-pane="log"] [data-testid="log-stub"]')!
+    expect(stub.getAttribute('data-titled')).toBe('false')
+  })
+
   it('PTT lives in the pinned TX dock — never inside a pane or the region', () => {
     renderCockpit()
     const ptt = document.querySelector('.ph-ptt')
@@ -208,6 +225,26 @@ describe('PhoneCockpit pane-grid shell', () => {
     // And the dock comes AFTER the region in the DOM (pinned at the bottom).
     const region = document.querySelector('.cockpit-panes')!
     expect(region.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the PTT hint owns no line of the pinned dock, and its sentence is on the button', () => {
+    // DENSITY (2026-08-04). `.ph-ptt-hint` was `flex-basis: 100%` — a whole line of its own
+    // inside the PINNED dock, so it cost its ~19px at EVERY window size and no scroller could
+    // ever take it back. Its first clause ("Hold the button or the Space bar") is what the
+    // button's own title already said, twice on one row.
+    //
+    // ITS SECOND CLAUSE IS NOT CHROME. "you talk on the rig's mic" is the sentence that stops
+    // an operator keying up believing Nexus carries his audio — an on-air failure mode, not
+    // 19px. So the row may go only if the sentence lands on the control, and that is what is
+    // asserted here rather than the deletion alone.
+    renderCockpit()
+    expect(
+      document.querySelector('.ph-ptt-hint'),
+      'the hint still owns a line of the pinned dock',
+    ).toBeNull()
+    const title = document.querySelector('.ph-ptt')!.getAttribute('title') ?? ''
+    expect(title, 'the mic sentence did not survive the row it lived on').toMatch(/rig's mic/i)
+    expect(title, 'how to key is no longer stated anywhere on the control').toMatch(/space/i)
   })
 
   it("⊞ Panels 'removed' still hides exactly the pane it names", () => {

@@ -71,7 +71,14 @@ vi.mock('../api', () => ({
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
 vi.mock('./PhoneScope', () => ({ PhoneScope: () => <div data-testid="scope-stub" /> }))
 vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stub" /> }))
-vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// The stub reports `titled` so this suite can see the ONE prop that is a placement decision
+// rather than log behaviour: whether the strip draws its own heading under a frame head that
+// already says LOG. The strip's own half is in LogEntry.density.test.tsx.
+vi.mock('./LogEntry', () => ({
+  LogEntry: (p: { titled?: boolean }) => (
+    <div data-testid="log-stub" data-titled={String(p.titled ?? true)} />
+  ),
+}))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 
 /** The observed element's callback, so a test can fire a resize the way the browser does. */
@@ -211,6 +218,16 @@ describe('CwCockpit pane-grid shell', () => {
     expect(
       document.querySelector('[data-pane="bandActivity"] [data-testid="bandstrip-stub"]'),
     ).not.toBeNull()
+  })
+
+  it('the log pane tells the strip the frame already titles it', async () => {
+    // The frame head reads LOG and is the pane's accessible name; the strip's own
+    // "Log this QSO" said it again ~30px above a Log button that was already below the
+    // fold at the default window. `titled` defaults TRUE, so a host that stops passing it
+    // silently gets the duplicate back — hence the assertion here and not in the strip.
+    await renderCockpit()
+    const stub = document.querySelector('[data-pane="log"] [data-testid="log-stub"]')!
+    expect(stub.getAttribute('data-titled')).toBe('false')
   })
 
   it('macros, the send bar and the TX meters live in the pinned dock — never in a pane', async () => {

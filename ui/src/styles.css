@@ -6394,6 +6394,23 @@ input.cw-pitch::-webkit-inner-spin-button {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-title);
 }
+/* CARD-IN-CARD. `.log-entry` carries no `panel` class, so the shipped `.pane-body > .panel`
+   flatten misses it and the strip draws its own bordered, padded, opaque card INSIDE the
+   pane frame's — the same miss `.pane-body > .rtty-stream` already documents. It cost 26px
+   of the pane's content height, 13 of them above the Log button, in a strip the operator
+   reported committing below the fold at the default window (LogEntry.density.test.tsx).
+   Keyed on the FRAME rather than on a cockpit — Phone and CW both render this strip through
+   CockpitPaneFrame, and any future host that frames it gets the flatten for free, exactly as
+   `.pane-body > .ph-dsp` is keyed. It is deliberately NOT `.log-entry`-wide: SatellitesView
+   renders this component unframed in `.sats-log`, where the card IS the strip's only frame.
+   (0,2,0), declared after `.cw-cockpit .log-entry` — the one other rule at that specificity
+   that could reach a framed strip — so source order carries it. Computed, not assumed, in
+   LogEntry.density.test.tsx. */
+.pane-body > .log-entry {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 /* Compact RX tuning strip in the Phone/CW cockpits — live freq + VFO step + direct MHz entry. */
 .tuning-strip {
   display: inline-flex;
@@ -7118,10 +7135,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding: 0 var(--space-4);
   font-size: 15px;
 }
-.phone-cockpit .ph-ptt-hint {
-  /* the hint is for the first few sessions; it does not need a line of its own forever */
-  font-size: var(--fs-micro);
-}
+/* (`.phone-cockpit .ph-ptt-hint` lived here. Its own comment said "the hint is for the first
+   few sessions; it does not need a line of its own forever" — and the 2026-08-04 density pass
+   took it at its word: the span is gone from the dock and its one non-duplicated clause, "you
+   talk on the rig's mic", is on the PTT button's title. Base rule deleted with it.) */
 /* Voice keyer: tighten the header and the gaps between its rows. No control is removed or made
    harder to hit — this is padding, not function. */
 .phone-cockpit .vk-head {
@@ -7769,11 +7786,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: 6px;
   font-size: var(--fs-label);
   color: var(--text-dim);
-}
-.ph-ptt-hint {
-  flex-basis: 100%;
-  font-size: var(--fs-micro);
-  color: var(--text-faint);
 }
 /* Field Day exchange prompt — what the operator reads aloud when they key up. */
 .ph-fd-give {
