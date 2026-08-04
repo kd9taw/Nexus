@@ -5896,32 +5896,28 @@ select optgroup {
 .cw-cockpit .log-entry .le-row {
   margin-bottom: var(--space-1);
 }
-/* The header must NEVER be the item this column squeezes. It is the one child whose
-   min-height is not `auto` (it pins 44px for cross-mode alignment — see `.cockpit-header`),
-   and a non-auto min-height forfeits the flex automatic minimum size, so it was the only
-   child allowed to shrink below its own content. On a 1366x768 display (~85% fit-to-window
-   zoom ⇒ ~1607x900 effective px) the CW header legitimately wraps to 2–3 rows, but the
-   column's vertical deficit landed entirely here and crushed it back to the 44px floor —
-   the wrapped rows then rendered OUTSIDE the header's border box and the opaque
-   `.ph-scope-panel` that follows painted over them, hiding the keyer Speed slider AND
-   Tune / Stop TX / CAT. Pin flex-shrink so the wrapped rows keep their space; the column
-   already scrolls, and the scope below is operator-resizable (--cw-scope-h) to reclaim it.
-   No-op when the header fits one row (its content height is then exactly the 44px floor),
-   so wide displays are unaffected. Guarded by cw-header-shrink.test.ts.
+/* (THE HEADER CRUSH — the bug this cockpit surfaced, and where its repair now lives.
+   On a 1366x768 display (~85% fit-to-window zoom ⇒ ~1607x900 effective px) the CW header
+   legitimately wraps to 2–3 rows, the column's vertical deficit landed entirely on it, and
+   it was squeezed back to the 44px floor `.cockpit-header` used to pin: the wrapped rows
+   rendered OUTSIDE the header's border box and the opaque `.ph-scope-panel` that follows
+   painted over them, hiding the keyer Speed slider AND Tune / Stop TX / CAT. A stop control
+   under opaque paint.
 
-   Applied to every `overflow-y:auto` cockpit shell, not just CW: phone/rtty/sstv are the
-   identical flex-column-with-scroll structure and carry the same latent bug — CW only showed
-   it first because its header is the widest. DELIBERATELY EXCLUDES
-   `.layout.single.operate-cockpit`, which is `overflow:hidden` (styles.css ~10702): there the
-   squeeze CLIPS rather than covers, and pinning the header would push the bottom of a
-   NON-scrolling column out of view instead of fixing anything. Operate needs its own
-   treatment. */
-.cw-cockpit > .cockpit-header,
-.phone-cockpit > .cockpit-header,
-.rtty-cockpit > .cockpit-header,
-.sstv-view > .cockpit-header {
-  flex-shrink: 0;
-}
+   The cause was never CW's: a NON-AUTO min-height forfeits the CSS automatic minimum size
+   (flexbox §4.5, grid §6.6), so the header was the one child of the column allowed to shrink
+   below its own content. The first repair pinned `flex-shrink: 0` through a four-selector
+   allowlist here (cw / phone / rtty / sstv), which made protection per-host opt-in, could not
+   help a GRID host at all, and deliberately left Operate out — Operate survived only because
+   `.cockpit-body { flex:1; min-height:0 }` happens to absorb the deficit first, an accident of
+   its current children asserted nowhere.
+
+   The floor now sits on `.ch-identity` (the header's own content) instead, so the header's
+   min-height stays `auto` and the automatic minimum size protects it in EVERY host, present
+   and future, with no list to join — see `.cockpit-header`. The allowlist that stood here is
+   gone with it; cockpit-header-crush.test.ts computes the winning min-height for every host
+   that renders a CockpitHeader, Operate and Tempo included, and fails if a new one arrives
+   unregistered.) */
 .cw-bar {
   display: flex;
   align-items: center;
@@ -11456,12 +11452,16 @@ select.settings-input {
   gap: var(--gap);
   flex-wrap: wrap;
   min-width: 0;
-  /* Consistent height across modes: FT8's 2-line tier tiles are the tallest
-     mode indicator, so pin the header to their height — CW's badge and Phone's
-     sideband group then sit at the same height and the header doesn't jog when
-     switching modes. (The mode-indicator CONTENTS legitimately differ per mode;
-     only the frame is aligned.) */
-  min-height: 44px;
+  /* NO min-height HERE, and that is the whole safety mechanism — see `.ch-identity`
+     below, which carries the cross-mode floor instead. A non-auto min-height on this
+     box forfeits the CSS automatic minimum size (flexbox §4.5, grid §6.6), which is
+     the only thing that stops a box being squeezed past its own content: with 44px
+     here the header was the one child of a cockpit column allowed to shrink below its
+     wrapped rows, and those rows then rendered OUTSIDE the border box under the opaque
+     panel that follows (the 1366x768 bug that buried the keyer Speed slider and
+     Tune / Stop TX / CAT — full story at `.cw-cockpit .log-entry` above).
+     Guarded by cockpit-header-crush.test.ts, which computes the winning min-height in
+     every host that renders a CockpitHeader and fails if any rule floors this box. */
 }
 .ch-identity {
   flex: 0 0 auto;
@@ -11469,6 +11469,16 @@ select.settings-input {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  /* THE CROSS-MODE ALIGNMENT FLOOR, and it lives here rather than on the header
+     because this box is CONTENT: it raises the header's content height instead of
+     overriding the header's minimum, so the header stays as tall as whatever it holds
+     in every host, flex or grid, with nothing to opt into. FT8's 2-line tier tiles are
+     the tallest mode indicator, so 44px is their height — CW's badge and Phone's
+     sideband group then sit at the same height and the header doesn't jog when
+     switching modes. (The mode-indicator CONTENTS legitimately differ per mode; only
+     the frame is aligned.) CockpitHeader renders this region unconditionally, so the
+     floor holds even for a cockpit that passes no indicator. */
+  min-height: 44px;
 }
 .ch-freq {
   flex: 0 0 auto;
