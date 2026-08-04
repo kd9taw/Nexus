@@ -5,6 +5,30 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.1] — 2026-08-03
+
+### Fixed: the IC-9700 no longer flips in and out of satellite mode during a pass
+
+Reported on the bench: with native CI-V control the radio switched "from single frequency to the
+double frequency sat mode back and forth aggressivly". 0.27.0 tracked the same pass cleanly on the
+same rig.
+
+0.28.0 began stating the uplink VFO's mode for every held bird, where before it only did so when
+the uplink and downlink sidebands differed. On a Main/Sub Icom that mode write selects the Sub
+band, and the Sub selection is bound up with the rig's satellite mode — so birds that had never
+touched that path started driving it every few seconds. Reverted whole: the CI-V split path is
+back to exactly what shipped in 0.27.0.
+
+What comes back with it: on an FM bird the uplink VFO keeps whatever sideband the previous bird
+left there, because the mode is only sent when it differs from the downlink's. That is the 0.27.0
+behaviour, and it is being worked on again from what the radio actually does rather than from
+what the engine believes.
+
+### Made smaller: the Satellites log strip
+
+It shares a scrolling column with the sky dome, and at full size it pushed the dome off the top.
+Now compact enough to log a station while still watching where the bird is.
+
 ## [0.28.0] — 2026-08-03
 
 ### Added: log a contact from the Satellites section
