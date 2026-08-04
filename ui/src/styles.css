@@ -7959,6 +7959,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    =========================================================================== */
 .fieldday {
   min-width: 0;
+  /* THE COLUMN'S DEFICIT VALVE — the same fix `.layout.single > .panel` got on 2026-08-04,
+     for the same reason, in the view the three-pane workspace reaches instead. This column
+     is banner + header + operator row + score tiles + sections board + the Bonuses
+     disclosure + the log, and every one of them is `flex: 0 0 auto` except the board. Once
+     the board is at its floor (FieldDayView.tsx SECTIONS_BOARD_WRAP) the residual has
+     nowhere left to go, and `.panel { overflow: hidden }` would CLIP it — the log off the
+     bottom with no scrollbar in the chain, which is what opening Bonuses at 1200×750 did.
+     Wins over `.panel` on source order alone (both are (0,1,0); `.panel` is ~4400 lines
+     earlier), which is exactly how two fixes shipped dead here before — so it is COMPUTED,
+     not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
+  overflow-y: auto;
 }
 .fd-header {
   align-items: center;
@@ -8274,13 +8285,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: 2px;
   padding: var(--space-2) var(--space-3) var(--space-3);
   background: var(--bg-elev);
-  /* Fifteen bonus rows inside a `flex: 0 0 auto` section, inside `.panel { overflow:hidden }`
-     with no panel-level scroller: expanding Bonuses at 1200×750 added ~290 px of
-     un-shrinkable height, drove the ONLY shrinkable sibling (the Sections board) to zero —
-     the club-loved board turned into a blank strip — and took the residual off the bottom of
-     the log with no scrollbar anywhere in the chain. Cap the list against the effective
-     viewport (raw vh is blind to `.app { zoom }`) and let it own its own overflow: the
-     growth now stops here instead of travelling to the siblings. */
+  /* WHAT THIS CAP DOES, AND IT IS LESS THAN IT USED TO CLAIM. Fifteen bonus rows in a
+     `flex: 0 0 auto` section add ~290px of un-shrinkable height the moment Bonuses is
+     expanded. These two lines BOUND THE LIST'S OWN HEIGHT and give it its own scrollbar,
+     so the operator reaches all fifteen inside the list instead of scrolling ~290px of
+     checkboxes to get past them. That is the whole of it.
+     The wording here used to say "the growth now stops here instead of travelling to the
+     siblings", and the arithmetic never supported that: the cap is a fraction of the SAME
+     viewport the slack comes from, so opening Bonuses still takes up to 0.3H out of
+     whatever is shrinkable. It bounds this box; it cannot stop this box displacing anyone.
+     The Sections board went on being crushed to a blank strip underneath the claim.
+     WHAT ACTUALLY PROTECTS THE SIBLINGS is two rules elsewhere, and the pair is the
+     mechanism — either alone is worse than neither: `SECTIONS_BOARD_WRAP { min-height }`
+     (FieldDayView.tsx) is where the column stops shrinking the board, and
+     `.fieldday { overflow-y: auto }` (~7960) is where the residual past that floor goes.
+     Keep the cap against --vh-eff, not raw vh — raw vh is blind to `.app { zoom }`.
+     Computed in layout-single-deficit.test.tsx; the cap itself in panel-overflow.test.ts. */
   max-height: calc(0.3 * var(--vh-eff, 100vh));
   overflow-y: auto;
 }

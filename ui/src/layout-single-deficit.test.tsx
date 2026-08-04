@@ -48,12 +48,16 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Logbook } from './components/Logbook'
 import { RadioProgView } from './components/RadioProgView'
+import { FieldDayView } from './components/FieldDayView'
+import type { FieldDayStatus } from './types'
 import { classifyViewport } from './useViewport'
 
 vi.mock('./api', () => {
   const fn = () => vi.fn().mockResolvedValue(undefined)
   return {
     getLog: vi.fn().mockResolvedValue([]),
+    getSettings: vi.fn().mockResolvedValue(null),
+    setSettings: fn(), exportLog: fn(), openPanelWindow: fn(),
     deleteQso: fn(), editQso: fn(), exportGeneralLog: fn(), importAdif: fn(),
     logQso: fn(), markQslSent: fn(), purgeLog: fn(), qrzLookup: fn(),
     syncLotwReport: fn(), uploadLotwReport: fn(), qrzPushQso: fn(),
@@ -334,5 +338,113 @@ describe('the .panel-rooted views of .layout.single, as a class', () => {
       ).toBe('100%')
       panel.parentElement!.remove()
     }
+  })
+})
+
+// ── the same defect class, in the THREE-PANE workspace ──────────────────────────────────
+//
+// Field Day is not a `.layout.single` view — it mounts as `.layout[data-three-pane]` →
+// `.grid-center` → `<section class="conversation panel fieldday">` — but it is the same
+// `.panel { overflow: hidden }` trap with the same fix shape, so it is computed with the
+// same machinery rather than a second copy of it.
+//
+// THE DEFECT (2026-08-04). The Field Day column is: banner, header, operator row, score
+// tiles, sections board, the Bonuses disclosure, the log. Every one of them is
+// `flex: 0 0 auto` EXCEPT the sections board (`SECTIONS_BOARD_WRAP { flex: 1 1 auto;
+// minHeight: 0 }`), which made the board the column's single unfloored absorber: it paid
+// for every sibling's growth all the way down to zero, and past zero `.panel`'s clip ate
+// the rest. `.fd-bonuses-list`'s `max-height: calc(0.3 * var(--vh-eff))` was written as the
+// fix and carried a comment claiming "the growth now stops here instead of travelling to
+// the siblings" — but a cap is a fraction of the SAME viewport the slack comes from, so it
+// bounds the list's own height and does nothing about that height displacing anyone. Open
+// Bonuses at 1200×750 and the club-loved sections board still went to a blank strip, with
+// the residual off the bottom of the log and no scrollbar anywhere in the chain.
+//
+// THE TWO HALVES, and neither works alone. A floor on the board with no valve above it
+// converts the crush into a CLIP (strictly worse); a valve with no floor never fires,
+// because an unfloored `flex: 1 1 auto` child shrinks to zero before the column can
+// overflow. So: the board carries the floor, and `.fieldday` owns the deficit past it.
+//
+// WHAT THIS CANNOT PROVE: jsdom does not lay out, so "the board keeps 180px" is not
+// verified here — what is verified is that the floor exists on the box the outer flex
+// actually sizes, that nothing inside it competes for that floor, and that the deficit the
+// floor creates has somewhere to go.
+describe('Field Day: opening Bonuses must not pay for itself out of the sections board', () => {
+  const FD: FieldDayStatus = {
+    myClass: '2A',
+    mySection: 'WI',
+    running: false,
+    state: 'Idle',
+    qsoCount: 0,
+    sections: 0,
+    points: 0,
+    log: [],
+  }
+
+  /** The view inside the real three-pane chain App.tsx mounts it in (App.tsx ~2042/2075). */
+  function mountFieldDay() {
+    return render(
+      <main className="layout" data-three-pane>
+        <div className="grid-center">
+          <FieldDayView fieldDay={FD} onSetMode={() => {}} />
+        </div>
+      </main>,
+    )
+  }
+
+  it('the log the open Bonuses list pushes down has a legal fate at every viewport class', async () => {
+    // The subject is the LOG HEAD, deliberately: the bonus rows themselves sit in
+    // `.fd-bonuses-list`, which scrolls, so a walk started there stops at the list's own
+    // scroller and reports success no matter how broken the column is. The log head is the
+    // displaced sibling — `flex: 0 0 auto`, no scroller of its own — so it asks the real
+    // question the cap never answered.
+    const trapped: string[] = []
+    for (const vp of ['xs', 'sm', 'md', 'lg', 'xl'] as const) {
+      document.documentElement.setAttribute('data-viewport', vp)
+      const { getByRole, container } = mountFieldDay()
+      getByRole('button', { name: /Bonuses/ }).click()
+      await waitFor(() => getByRole('group', { name: 'Claimed FD bonuses' }))
+      const head = container.querySelector('.fd-log-head')!
+      const { fate, at } = deficitFate(head, container.querySelector('main.layout')!)
+      if (fate !== 'scroll') trapped.push(`[data-viewport='${vp}'] → ${fate} at ${at}`)
+      cleanup()
+    }
+    expect(
+      trapped,
+      'With Bonuses open the log is pushed below the fold and its deficit is owned by ' +
+        `nothing that can be scrolled:\n  ${trapped.join('\n  ')}\n` +
+        '`.fd-bonuses-list { max-height: calc(0.3 * var(--vh-eff)) }` cannot fix this — it ' +
+        'caps the LIST, not the displacement. The column needs the valve.',
+    ).toEqual([])
+  })
+
+  /** The board wrap, and the grid inside it (header + grid; the grid is the scrolling one). */
+  function boardBoxes() {
+    const { container } = mountFieldDay()
+    const wrap = container.querySelector<HTMLElement>('[aria-label="Worked sections board"]')!
+    return { wrap, grid: wrap.lastElementChild as HTMLElement }
+  }
+  const px = (v: string) => parseFloat(v) || 0
+
+  it('the sections board carries the floor the column stops shrinking at', () => {
+    const board = boardBoxes().wrap
+    expect(
+      px(board.style.minHeight),
+      `SECTIONS_BOARD_WRAP declares min-height: ${board.style.minHeight || '(none)'}. It is the ` +
+        'ONLY flex-grow child of the Field Day column, so with no floor it is where every ' +
+        "sibling's growth is charged — the operator's blank-strip sections board. The floor " +
+        'must be on THIS box: it is the one the outer flex sizes.',
+    ).toBeGreaterThan(0)
+  })
+
+  it("the board's own scroller does not compete for that floor", () => {
+    const grid = boardBoxes().grid
+    expect(
+      px(grid.style.minHeight),
+      `SECTIONS_GRID declares min-height: ${grid.style.minHeight || '(none)'}. This box is the ` +
+        'board\'s interposed SCROLLER; a hard floor on it is invisible to the outer column ' +
+        'and cannot shrink, so once the wrap is squeezed the grid paints straight through ' +
+        'the Bonuses section below it. The floor belongs on the wrap, which yields to it.',
+    ).toBe(0)
   })
 })
