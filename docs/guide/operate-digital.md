@@ -12,11 +12,12 @@ This is the cockpit you land in when the mode switch (top of the left rail) is
 set to **FT8/FT4**. Flip it to **Tempo** for the TempoFast/TempoDeep chat cockpit, covered
 [at the end of this page](#the-tempo-chat-layer-tempofasttempodeep).
 
-<!-- TODO: capture screenshot — the Operate cockpit — waterfall, Band Activity, QSO strip -->
+![The Operate cockpit in Classic layout, receiving on 20 m FT8: the 14.0740 MHz rig readout and the mode row run across the top, a full-width waterfall sits beneath them, and the QSO strip — Call CQ, S&P, TX On, Tune, Stop TX, Hold Tx — runs under that, reading "TX — listening". Three columns fill the bottom: Band Activity scrolling at the left, the RX Frequency decodes above the Tx1–Tx6 message panel with DX Call and DX Grid in the centre, and a Stations list of callers with Work and QRZ buttons at the right.](../img/manual/operate-classic.webp)
 
 ## The tour
 
-**Waterfall + decode feed.** The waterfall renders on the right rail by default.
+**Waterfall + decode feed.** The waterfall spans the full width of the cockpit
+by default, between the rig controls and the QSO strip.
 Drag the dividers between panes to resize it (double-click a divider to reset),
 or use the ⊞ menu to show and hide panes; **Reset pane sizes** in
 [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) restores the
@@ -38,7 +39,8 @@ annotations stock WSJT-X never had:
 - a teal **L** mark on calls known to upload to LoTW (populate the users list in
   [Settings ▸ Logging & Connectors](settings-reference.md#lotw-users-list)).
 
-**The QSO strip** sits below with your transmit controls — **TX On/Off**,
+**The QSO strip** sits directly under the waterfall, above the decode panes,
+carrying your transmit controls — **TX On/Off**,
 **Tune**, **Stop TX**, **Hold Tx** — beside **Call CQ** and **S&P**. (These live
 in the QSO strip in this view; Phone and CW keep the cluster in the top bar.)
 
@@ -54,7 +56,7 @@ in the QSO strip in this view; Phone and CW keep the cluster in the top bar.)
 Use Classic when you want the familiar WSJT-X message-by-message control; use
 Roster when you're scanning a busy band for the one call worth working.
 
-<!-- TODO: capture screenshot — the Classic ↔ Roster toggle, roster layout shown -->
+![The same cockpit with the toggle flipped from Classic to Roster. The Tx1–Tx6 message panel is gone, replaced by a wide sortable Call Roster — one row per station with CALL, NEED, COUNTRY, GRID, DIST, BRG, SNR and AGE columns, sorted by NEED so the GRID and POTA rows sit above the CNF ones, with "Needed only" and "Hide worked" both ticked. Band Activity and the RX Frequency decodes move into a narrow column on the right.](../img/manual/operate-roster.webp)
 
 ## Core workflows
 
