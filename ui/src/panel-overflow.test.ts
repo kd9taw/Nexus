@@ -450,14 +450,14 @@ describeLe('log-entry rows wrap instead of overflowing the pane', () => {
   })
 })
 
-describe('Grid joins the QTH row without re-arming the sideways overflow', () => {
+describe('Grid joins the exchange row without re-arming the sideways overflow', () => {
   // The descope of the first Grid attempt named a REAL concern: the strip already
   // wraps at 24em, and a new field in a wrapping row is a new chance to overflow.
   // The answer is the same one `.le-state`/`.le-country` use — a narrow,
-  // non-growing, shrinkable-to-nothing field — and these guards COMPUTE that it
-  // survives the cascade rather than merely existing (`.le-row .settings-input`
-  // is more specific and would otherwise win, which is exactly how a dead fix
-  // ships).
+  // NON-GROWING and non-shrinking field, so a wrapping row moves it to the next
+  // line rather than squeezing it — and these guards COMPUTE that it survives the
+  // cascade rather than merely existing (`.le-row .settings-input` is more
+  // specific and would otherwise win, which is exactly how a dead fix ships).
   it('.le-grid neither grows nor shrinks, and BEATS the row default that would grow it', () => {
     const grid = decl('.le-grid', 'flex')
     const rowDefault = decl('.le-row .settings-input', 'flex')
@@ -480,6 +480,38 @@ describe('Grid joins the QTH row without re-arming the sideways overflow', () =>
     const px = Number(/^(\d+(?:\.\d+)?)px$/.exec(cap!.trim())?.[1] ?? NaN)
     expect(px, `max-width is \`${cap}\` — express the cap in px like its row neighbours`).toBeGreaterThan(0)
     expect(px, 'a field wider than the 24em pane floor is a sideways overflow by itself').toBeLessThan(24 * 16)
+  })
+
+  it('.le-grid fits the LINE BUDGET that keeps it off a new row of its own', () => {
+    // THE NUMBER THE HEIGHT FIX RESTS ON, computed from this sheet rather than
+    // trusted. Grid shares the exchange row's last wrapped line with Name and
+    // Clear. At the two-column floor (.sats-view's `minmax(340px, …)`) that line
+    // is 296px wide: 340 − 18 (.sats-detail border+padding) − 26 (.log-entry
+    // border+padding). Name is `.le-row .settings-input`'s 9em basis at the
+    // input's own 14px font = 126px; Clear measures 61px; two 8px gaps. What is
+    // left for Grid is 93px, and a cap over it wraps Clear onto a FOURTH line:
+    // measured at 94px the strip goes 451 → 491, handing back 40 of the 48px the
+    // park row's removal bought. Not a regression at that width, but the whole
+    // point of putting Grid in this row was that it costs NOTHING.
+    //
+    // Measured against real layout (headless Chrome, the section's own
+    // wrappers): parent 499px → 451px at 340, and 368px → 320px at the 611px
+    // column a 1366-wide window gives. Both DOWN by the whole park row.
+    const cap = Number(/^(\d+(?:\.\d+)?)px$/.exec(winner('.le-grid', 'max-width')!.trim())![1])
+    const basis = /^1\s+1\s+(\d+(?:\.\d+)?)em$/.exec(
+      decl('.le-row .settings-input', 'flex')!.value.replace(/\s+/g, ' ').trim(),
+    )
+    expect(basis, "the row default's wrap basis is no longer an em length — re-derive the budget").not.toBeNull()
+    const nameBasis = Number(basis![1]) * 14 // .settings-input sets font-size: 14px
+    const gap = 8 // --space-2 at --space-scale: 1
+    const CLEAR_BTN = 61 // measured
+    const line = 340 - 18 - 26
+    expect(
+      cap,
+      `.le-grid is ${cap}px; the last wrapped line has ${line - nameBasis - CLEAR_BTN - 2 * gap}px ` +
+        'left after Name and Clear. Over it, Clear wraps onto a FOURTH line (measured at 94px: ' +
+        '451 → 491) and hands 40 of the park row\'s 48px straight back — re-measure before raising it.',
+    ).toBeLessThanOrEqual(line - nameBasis - CLEAR_BTN - 2 * gap)
   })
 
   it('.le-grid keeps the released intrinsic floor — it does not re-declare min-width', () => {

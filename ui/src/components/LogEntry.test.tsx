@@ -341,8 +341,9 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
 // `LogEntry` is shared by three consumers (Phone, CW, Satellites) and staying
 // shared is the constraint ("Lets not reinvent anything"). So the consumer names
 // its EXCHANGE and the strip renders that — no fork, and no pile of optional
-// booleans. The grid is deliberately NOT what `exchange` gates: it belongs to
-// every consumer (see the suite below).
+// booleans. TWO fields hang off it, and they are the two halves of one sentence
+// about what the stations pass each other: terrestrial has a park reference and
+// no grid, satellite has a grid and no park.
 describe('LogEntry — the exchange each consumer asks for', () => {
   function renderAs(exchange: 'terrestrial' | 'satellite') {
     render(
@@ -382,13 +383,12 @@ describe('LogEntry — the exchange each consumer asks for', () => {
   it('everything else about the strip is identical across the two exchanges', () => {
     // The proof this is one shared component and not a fork: the call field, the
     // reports, the callbook lookup, the notes, the other-radio override and the
-    // commit row are the same in both. Only the park row differs.
+    // commit row are the same in both. Only the two exchange fields differ.
     const SURFACE = [
       '.le-call',
       '.le-rst',
       '.le-name',
       '.le-qth',
-      '.le-grid',
       '.le-state',
       '.le-country',
       '.le-comment',
@@ -405,6 +405,27 @@ describe('LogEntry — the exchange each consumer asks for', () => {
     cleanup()
     renderAs('satellite')
     expect(surface()).toEqual(terrestrial)
+  })
+
+  it('the QTH row is BYTE-FOR-BYTE the same four fields in both exchanges', () => {
+    // The height claim's structural half. Grid was first put in this row, where
+    // it does not fit: at the Satellites column's real width the four fields are
+    // a single full line, so a fifth pushed it to two (+52 px) and made the
+    // satellite strip TALLER than the park row it had just removed (−48). It
+    // moved to the exchange row, where the wrap leaves slack. Nothing here may
+    // change without re-measuring — the numbers are in the CHANGELOG.
+    const qthRow = () =>
+      Array.from(document.querySelectorAll('.le-row'))
+        .find((r) => r.querySelector('.le-qth'))!
+        .querySelectorAll('input, select, textarea')
+    for (const ex of ['terrestrial', 'satellite'] as const) {
+      renderAs(ex)
+      expect(
+        Array.from(qthRow(), (n) => n.className.split(/\s+/).find((c) => c.startsWith('le-'))),
+        `the QTH row changed in the ${ex} exchange`,
+      ).toEqual(['le-qth', 'le-state', 'le-country', 'le-comment'])
+      cleanup()
+    }
   })
 
   it('satellite: a pending hunt fires no park lookup — not even the live directory fetch', async () => {
@@ -447,14 +468,17 @@ describe('LogEntry — the grid the other station passed you', () => {
   // GAP 1. `logGrid` has always reached the RECORD and printed in the summary
   // line and the recall card — but it could only ever be written by a callbook
   // lookup. There was no input, so the square a station passed ON AIR could not
-  // be entered at all. On a bird that is most of the contact (grid-for-grid is
-  // the whole exchange, and Satellite VUCC is scored on it); on 2 m/6 m and in
-  // VHF contests it is the exchange too; and a rover or /P station is exactly
-  // the one whose callbook square is WRONG. So the field belongs to every
-  // consumer, not to the satellite exchange alone — the same argument that put
-  // State and Country here (hear it on air, fix it here, not in the logbook
-  // afterwards).
-  function renderStd(exchange: 'terrestrial' | 'satellite' = 'terrestrial') {
+  // be entered at all. On a bird that is most of the contact: grid-for-grid IS
+  // the satellite exchange, and Satellite VUCC is scored on it.
+  //
+  // THE SATELLITE EXCHANGE ONLY, for now. The case for Phone and CW is good and
+  // is NOT settled against — a wrong callbook square is uncorrectable there
+  // today, and those are the cockpits that meet the rovers and /P activations
+  // whose square is wrong most often. What stops it here is height, not merit:
+  // the field costs each of those strips a wrapped line (+52 px measured), and
+  // the operator's instruction for this change was "keep focused on sat". The
+  // open question is recorded in the CHANGELOG and in the `exchange` prop doc.
+  function renderStd(exchange: 'terrestrial' | 'satellite' = 'satellite') {
     render(
       <LogEntry
         snap={snap}
@@ -475,12 +499,31 @@ describe('LogEntry — the grid the other station passed you', () => {
     mockedQrz.mockResolvedValue(null as never)
   })
 
-  it('is typeable in BOTH exchanges — grid-for-grid on a bird, VHF/contest grids terrestrially', () => {
-    for (const ex of ['terrestrial', 'satellite'] as const) {
-      renderStd(ex)
-      expect(gridInput(), `no Grid input in the ${ex} exchange`).toBeTruthy()
-      cleanup()
-    }
+  it('is asked for in the satellite exchange and nowhere else', () => {
+    renderStd('satellite')
+    expect(gridInput(), 'no Grid input on a bird, where the grid IS the exchange').toBeTruthy()
+    cleanup()
+    renderStd('terrestrial')
+    expect(
+      screen.queryByPlaceholderText('Grid'),
+      'Phone and CW grew a Grid field — that is +52 px on two strips nobody asked us to touch',
+    ).toBeNull()
+  })
+
+  it('sits in the EXCHANGE row, beside the reports — not in the QTH row', () => {
+    // Where it goes is the whole of the height fix, so it is pinned at the DOM
+    // and not left to the eye. Beside the reports because that is what it IS on
+    // a bird: something the other operator says in the same breath as the
+    // report, read and typed at the same moment — and because that row already
+    // wraps, so the field lands in slack instead of buying a new line. In the
+    // QTH row it bought one (measured: 44 → 96 px at the section's real width).
+    renderStd('satellite')
+    const rows = Array.from(document.querySelectorAll('.le-row'))
+    const gridRow = rows.find((r) => r.contains(gridInput()))!
+    expect(gridRow.querySelector('.le-call'), 'Grid is not in the exchange row').not.toBeNull()
+    expect(gridRow.querySelector('.le-rst'), 'Grid is not beside the reports').not.toBeNull()
+    expect(gridRow.querySelector('.le-qth'), 'Grid landed back in the QTH row').toBeNull()
+    expect(rows.indexOf(gridRow), 'the exchange row is the first row').toBe(0)
   })
 
   it('the typed square reaches the RECORD, not just the screen', () => {
@@ -526,6 +569,7 @@ describe('LogEntry — the grid the other station passed you', () => {
     expect(why, 'nothing tells the operator why Log went dead').not.toBeNull()
     expect(why!.textContent).toMatch(/EN52/)
     expect(why!.textContent).toMatch(/EN52XA/)
+    expect(why!.textContent, 'the message still names only 4 and 6').toMatch(/EN52XA25/)
     // The field itself is marked, so the eye lands on it and not on the button.
     expect(gridInput().classList.contains('invalid')).toBe(true)
 
@@ -537,22 +581,73 @@ describe('LogEntry — the grid the other station passed you', () => {
     expect(mockedLogQso.mock.calls[0][0].grid).toBe('EN52')
   })
 
-  it('refuses the same nonsense the rest of the app refuses, and nothing more', () => {
-    // One locator parser for the whole app (`ui/src/grid.ts` isValidGrid — the
-    // strict persist-side check the setup wizard already gates on), not a second
-    // one here. 8-character extended locators are refused, which is that
-    // helper's existing ruling ("extended precision is not stored") and is
-    // stated in the guide.
+  it('ENTER does not commit a malformed locator either — the keyboard is the real path', () => {
+    // The disabled button is the visible half of the gate; `logIt`'s own early
+    // return is the load-bearing half, and it had no test. Enter reaches `logIt`
+    // straight from any field (`onEnter`), never touching the button's
+    // `disabled`, so with that block deleted every other assertion here still
+    // passes while EN5 goes into the log — and Enter is how an operator commits
+    // mid-pass, one hand on the rotator. Pinned on the keyboard, at the field.
     renderStd()
     fireEvent.change(callInput(), { target: { value: 'w1aw' } })
-    for (const bad of ['EN5', 'EN52X', '1234', 'ZZ99', 'EN52YZ', 'EN52XA99']) {
+    fireEvent.change(gridInput(), { target: { value: 'EN5' } })
+    fireEvent.keyDown(gridInput(), { key: 'Enter' })
+    expect(mockedLogQso, 'Enter committed a malformed locator').not.toHaveBeenCalled()
+    // Same key, same field, once the square is a square.
+    fireEvent.change(gridInput(), { target: { value: 'EN52' } })
+    fireEvent.keyDown(gridInput(), { key: 'Enter' })
+    expect(mockedLogQso).toHaveBeenCalledTimes(1)
+    expect(mockedLogQso.mock.calls[0][0].grid).toBe('EN52')
+  })
+
+  it('takes every length ADIF carries — 4, 6 AND 8 — and refuses the rest', () => {
+    // `isValidLoggedGrid` (ui/src/grid.ts), the RECORD-side ruling. It is the
+    // same alphabet as `isValidGrid` with the extended pair on the end, not a
+    // second parser, and the two are deliberately different questions:
+    // `isValidGrid` still gates the operator's OWN square at 4/6 (the setup
+    // wizard, the programming workbench), because that is what Nexus stores.
+    // A square you were PASSED goes to ADIF's GRIDSQUARE, which carries 8 — and
+    // 8 is what the VHF/microwave and satellite operators who pass grids use.
+    renderStd()
+    fireEvent.change(callInput(), { target: { value: 'w1aw' } })
+    for (const bad of ['EN5', 'EN52X', '1234', 'ZZ99', 'EN52YZ', 'EN52XA9', 'EN52XA99X']) {
       fireEvent.change(gridInput(), { target: { value: bad } })
       expect(logBtn().disabled, `${bad} was accepted`).toBe(true)
     }
-    for (const good of ['EN52', 'EN52XA', 'RR73', 'IO91WM']) {
+    for (const good of ['EN52', 'EN52XA', 'RR73', 'IO91WM', 'FN31PR99', 'EN52XA25']) {
       fireEvent.change(gridInput(), { target: { value: good } })
       expect(logBtn().disabled, `${good} was refused`).toBe(false)
     }
+    fireEvent.change(gridInput(), { target: { value: 'FN31PR99' } })
+    fireEvent.click(logBtn())
+    expect(mockedLogQso.mock.calls[0][0].grid, 'the 8-char square was dropped').toBe('FN31PR99')
+  })
+
+  it('a callbook square NEVER holds the Log button — the operator did not type it', async () => {
+    // THE STRAND. QRZ answers `grid` with whatever the operator put in their
+    // profile: an 8-character extended locator (probed live: FN31PR99, now
+    // accepted), but also a rover's "EN52/EN53" and plain free text. The strip
+    // filled the field with it and then refused it, disabling Log over a value
+    // nobody typed — on a QSO that logged fine before the field existed, and
+    // mid-pass, when there is no second chance at the contact.
+    //
+    // Closed at the seam the bad value enters: the callbook fills the field only
+    // when what it returned IS a locator. Screen blank, record blank — no lie in
+    // either direction, and the gate is left free to do its real job on what the
+    // operator types.
+    renderStd()
+    fireEvent.change(callInput(), { target: { value: 'w1aw' } })
+    mockedQrz.mockResolvedValueOnce({ call: 'W1AW', grid: 'EN52/EN53', name: 'Rover' } as never)
+    fireEvent.click(screen.getByRole('button', { name: 'Lookup' }))
+
+    // The lookup landed (it filled the blank Name) and left the grid alone.
+    await waitFor(() =>
+      expect((screen.getByPlaceholderText('Name') as HTMLInputElement).value).toBe('Rover'),
+    )
+    expect(gridInput().value, 'the callbook wrote a non-locator into the field').toBe('')
+    expect(logBtn().disabled, 'a callbook value disabled Log').toBe(false)
+    fireEvent.click(logBtn())
+    expect(mockedLogQso.mock.calls[0][0].grid).toBeNull()
   })
 
   it('a later callbook lookup never overwrites the square the operator typed', async () => {

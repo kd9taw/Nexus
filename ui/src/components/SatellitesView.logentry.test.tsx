@@ -319,6 +319,103 @@ describe('Satellites — logging the contact you just made', () => {
     expect(lastLoggedRecord().grid).toBe('FN31PR')
   })
 
+  // ---- NO PARK REACHES A SATELLITE RECORD, BY ANY PATH ----
+  //
+  // Removing the park ROW is not the same as removing the park. A pending
+  // POTA/SOTA hunt is snapshot state that arrives whatever section the operator
+  // is in, and the strip used to latch its reference into `logParkRef`. The
+  // commit then asked "does this differ from the pending hunt?" and sent it as
+  // `ota` when it did — which is exactly what a STALE latch looks like once the
+  // hunt has ended or moved to another park. The record leaves as ADIF
+  // SIG/SIG_INFO: a satellite contact filed as a park contact, with nothing on
+  // screen to reveal, edit or clear it. That is worse than the visible row.
+  //
+  // Asserting on the RECORD in both cases, from the section, with the hunt in
+  // the state that produces the stale latch — a chip check would pass while the
+  // wire lied.
+  const huntSnap = (hunt: unknown) =>
+    snap({}, { hunt: hunt as never, mycall: 'KD9TAW' })
+
+  async function logFromSection(call: string) {
+    const field = await screen.findByPlaceholderText('Call')
+    await act(async () => {
+      fireEvent.change(field, { target: { value: call } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    })
+    await waitFor(() => expect(api.logQso).toHaveBeenCalled())
+    return lastLoggedRecord()
+  }
+
+  it('carries no park reference after a hunt ENDS mid-pass', async () => {
+    const { rerender } = render(
+      <SatellitesView focusSat="RS-44" snap={huntSnap({ program: 'POTA', reference: 'K-1234', call: 'W1AW' })} />,
+    )
+    await screen.findByPlaceholderText('Call')
+    // The activator logs out / the engine clears the pend: hunt gone, any latched
+    // reference now differs from "no hunt at all" and reads as an explicit entry.
+    await act(async () => {
+      rerender(<SatellitesView focusSat="RS-44" snap={huntSnap(null)} />)
+    })
+    const rec = await logFromSection('W1AW')
+    expect(rec.ota ?? null, 'a park reference rode onto a satellite contact').toBeNull()
+    expect(JSON.stringify(rec)).not.toContain('K-1234')
+  })
+
+  it('carries no park reference after a hunt SWITCHES to another park', async () => {
+    const { rerender } = render(
+      <SatellitesView focusSat="RS-44" snap={huntSnap({ program: 'POTA', reference: 'K-1234', call: 'W1AW' })} />,
+    )
+    await screen.findByPlaceholderText('Call')
+    await act(async () => {
+      rerender(
+        <SatellitesView focusSat="RS-44" snap={huntSnap({ program: 'POTA', reference: 'K-9999', call: 'W1AW' })} />,
+      )
+    })
+    const rec = await logFromSection('W1AW')
+    expect(rec.ota ?? null, 'a park reference rode onto a satellite contact').toBeNull()
+    expect(JSON.stringify(rec)).not.toContain('K-1234')
+    expect(JSON.stringify(rec)).not.toContain('K-9999')
+  })
+
+  it('carries no park reference while a hunt is still LIVE and matching', async () => {
+    // The third state, for completeness: the engine's callsign auto-tag owns
+    // this one, and the strip must not double-report it either.
+    render(
+      <SatellitesView focusSat="RS-44" snap={huntSnap({ program: 'POTA', reference: 'K-1234', call: 'W1AW' })} />,
+    )
+    const rec = await logFromSection('W1AW')
+    expect(rec.ota ?? null).toBeNull()
+    expect(JSON.stringify(rec)).not.toContain('K-1234')
+  })
+
+  it('a callbook square the operator never typed cannot strand him mid-pass', async () => {
+    // QRZ answers `grid` with whatever is in the profile. An 8-character
+    // extended locator (probed live: FN31PR99) filled the field, failed the
+    // strip's 4/6 check and DISABLED Log — on a pass, over a value nobody typed.
+    // 8 is a legal ADIF GRIDSQUARE, so it is accepted and logged whole.
+    api.qrzLookup.mockResolvedValueOnce({ call: 'W1AW', grid: 'FN31PR99', name: 'Hiram' } as never)
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    const call = await screen.findByPlaceholderText('Call')
+    await act(async () => {
+      fireEvent.change(call, { target: { value: 'W1AW' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Lookup' }))
+    })
+    await waitFor(() =>
+      expect((screen.getByPlaceholderText('Grid') as HTMLInputElement).value).toBe('FN31PR99'),
+    )
+    const btn = screen.getByRole('button', { name: 'Log' }) as HTMLButtonElement
+    expect(btn.disabled, 'the callbook locked the operator out of his own log').toBe(false)
+    await act(async () => {
+      fireEvent.click(btn)
+    })
+    await waitFor(() => expect(api.logQso).toHaveBeenCalled())
+    expect(lastLoggedRecord().grid).toBe('FN31PR99')
+  })
+
   it('logs an ORDINARY contact — no satellite fields reach the record', async () => {
     // THE DESCOPE, pinned. The panel answers "somewhere to log without leaving
     // the section" and nothing more: satellite tagging (ADIF PROP_MODE +

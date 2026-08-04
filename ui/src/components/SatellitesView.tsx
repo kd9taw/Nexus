@@ -3360,9 +3360,14 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             {snap && (
               <div className="sats-log">
                 {/* `exchange="satellite"`: what the two stations pass each other
-                    through a bird. Grid-for-grid, and no park/summit reference —
-                    the strip renders no POTA/SOTA row here (operator, 0.28.1),
-                    which is one prop rather than a fork of the shared component. */}
+                    through a bird. It decides two fields and only two — a Grid
+                    box beside the reports (grid-for-grid IS the exchange here),
+                    and no POTA/SOTA row (operator, 0.28.1: "that section still
+                    has a pota/sota section, which is shouldnt"). One prop, not a
+                    fork of the shared component. Net effect on this column,
+                    measured: the strip is 48 px SHORTER than 0.28.1's, which is
+                    what he asked for one message earlier — "make it smaller so
+                    the logging and az/el map are visable together". */}
                 <LogEntry
                   snap={snap}
                   mode={logMode}
