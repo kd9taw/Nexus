@@ -1,18 +1,30 @@
 # CW Cockpit
 
-Nexus ships a complete casual/ragchew CW operating surface: three keyer back-ends, eight F-key macros with live token expansion, a narrow AF scope for zero-beating, and privilege-gated transmit — all wired into the same CAT/PTT infrastructure the digital and phone modes share.
+Nexus ships a complete casual/ragchew CW operating surface: four keyer back-ends, eight F-key macros with live token expansion, a narrow AF scope for zero-beating, and privilege-gated transmit — all wired into the same CAT/PTT infrastructure the digital and phone modes share.
 
 ---
 
 ## Choosing a Keyer Back-End
 
-Nexus offers three keyer back-ends. Select between them in **Settings → CW**.
+Nexus offers four keyer back-ends. Pick one from the **Keyer** dropdown in the CW cockpit's header
+— as of 1.0.0 they are a single dropdown there, not four buttons and not a Settings tab. Each
+back-end's own port settings still live in Settings.
 
 ### CAT (default)
 
 The rig generates the actual Morse. Nexus sends the character string to Hamlib via `send_morse`; Hamlib drives the rig's internal keyer over CAT. Speed is synchronized to the rig via the Hamlib `KEYSPD` parameter and is pushed to the rig only when it changes.
 
 **When to use:** your rig has a stable internal keyer and you want its sidetone and QSK timing. This is the most reliable path on any Hamlib-supported rig.
+
+### Serial keyline
+
+Nexus toggles **DTR or RTS** on a serial port into the rig's KEY jack; the rig is in CW and shapes
+the signal itself. This is the N1MM/fldigi method, and it is the clean answer for a rig that has no
+CAT CW keying. Set the keyline port and which line to use in **Settings ▸ CW**. The service holds
+the port open for the session (`crates/tempo-audio/src/service.rs:1515-1518`).
+
+**When to use:** your rig has a key jack and no usable CAT keyer, and you want the rig's own
+timing and QSK rather than software-generated audio.
 
 ### Soundcard
 
@@ -69,18 +81,42 @@ The scope view window (300–1100 Hz) is fixed in this version and is not user-c
 
 ## Eight F-Key Macros
 
-Nexus ships eight fixed macros, fired by `F1`–`F8` or the corresponding on-screen buttons:
+Eight macros are fired by `F1`–`F8` or the corresponding on-screen buttons. **Which eight depends
+on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:470`):
 
-| Key | Default label | Typical content |
+1. a saved **macro profile**, if one is active — see *Custom macro profiles* below;
+2. otherwise the **Field Day set**, whenever Field Day mode is on;
+3. otherwise the **default set**.
+
+### The default set
+
+| Key | Label | Content |
 |---|---|---|
 | `F1` | CQ | `CQ CQ DE {MYCALL} {MYCALL} K` |
-| `F2` | Answer | `! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? !` |
-| `F3` | 73 | `! 73 ES TU DE {MYCALL} SK` |
-| `F4` | My Call | `{MYCALL}` |
-| `F5` | His Call | `! ` |
-| `F6` | AGN | `AGN AGN` |
-| `F7` | RR FB | `RR FB` |
-| `F8` | ? | `?` |
+| `F2` | Call | `! DE {MYCALL} {MYCALL} K` |
+| `F3` | Reply | `! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? KN` |
+| `F4` | 73 | `! DE {MYCALL} TU 73 SK` |
+| `F5` | My Call | `{MYCALL}` |
+| `F6` | His Call | `! ` |
+| `F7` | AGN | `AGN AGN` |
+| `F8` | ? | `? ` |
+
+**`F3` sends the report and `F4` ends the contact.**
+
+### The Field Day set
+
+Active whenever Field Day mode is on. `{EXCH}` expands to your class and section.
+
+| Key | Label | Content |
+|---|---|---|
+| `F1` | CQ FD | `CQ FD DE {MYCALL} {MYCALL} K` |
+| `F2` | Call | `! DE {MYCALL} K` |
+| `F3` | Exch | `! DE {MYCALL} {EXCH} {EXCH} K` |
+| `F4` | TU | `! TU {EXCH} DE {MYCALL} K` |
+| `F5` | My Call | `{MYCALL}` |
+| `F6` | His Call | `! ` |
+| `F7` | AGN | `AGN AGN` |
+| `F8` | ? | `? ` |
 
 ### Macro Tokens
 
@@ -90,13 +126,21 @@ Nexus ships eight fixed macros, fired by `F1`–`F8` or the corresponding on-scr
 | `{NAME}` | Your name (`op_name` in Settings; empty by default until set) |
 | `{MYGRID}` | Your Maidenhead grid square |
 | `{RST}` | `5NN` (hardcoded 599 with cut numbers: 9→N, 0→T) |
+| `{EXCH}` | Your Field Day exchange — class and section (Field Day macro set only) |
 | `!` | The worked callsign (the callsign prefilled by a Needed-board click or typed by you) |
 
 If `{NAME}` or `!` is empty, the token collapses and surrounding whitespace is normalized — no double-space appears mid-message.
 
 **RST note:** the RST token always sends `5NN`. There is no serial-number field and no per-QSO RST input; the CW cockpit is casual/ragchew only by design.
 
-**Macros are fixed in source code.** There is no UI for editing or saving custom macro text in this version.
+### Custom macro profiles
+
+Macro text is editable and savable. A **macro profile** is a named set of all eight; save as many
+as you like and switch the active one from the CW cockpit (`ui/src/types.ts`, `cwProfiles`). An
+active profile takes precedence over both built-in sets above, Field Day included.
+
+**RST stays `5NN` regardless.** There is no serial-number field and no per-QSO RST input — the CW
+cockpit is casual/ragchew by design, and a profile does not change that.
 
 ---
 

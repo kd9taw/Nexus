@@ -6,19 +6,24 @@ The Needed board ranks every station currently on the air by what it is worth to
 
 ## What the Board Ranks
 
-Nine need types are recognized. Each carries a fixed numeric priority tier that determines row sort order and color:
+Eleven need tags are recognized. Each carries a fixed numeric priority tier that determines row
+sort order and color (`ui/src/features/needs.ts`, `NEED_TIER`):
 
-| Need type | Priority |
+| Need tag | Priority |
 |-----------|----------|
-| ATNO — all-time new DXCC entity | 100 |
-| New CQ zone (WAZ) | 70 |
-| New grid (Maidenhead square) | 60 |
-| New band-slot | 50 |
-| New mode | 30 |
-| Confirmation opportunity | 10 |
-| Active DXpedition chip | +15 bump within tier |
-| POTA activator chip | 0 (award tier drives ranking) |
-| SOTA activator chip | 0 (award tier drives ranking) |
+| `Wanted` — on your wanted list | 120 |
+| `NewEntity` — ATNO, an all-time new DXCC entity | 100 |
+| `NewZone` — new CQ zone (WAZ) | 70 |
+| `NewState` — new state (WAS) | 60 |
+| `NewGrid` — new Maidenhead square | 55 |
+| `NewBand` — new band-slot | 50 |
+| `NewMode` — new mode class | 30 |
+| `Confirm` — confirmation opportunity | 10 |
+| `Dxped` — active DXpedition chip | 0 |
+| `Pota` — POTA activator chip | 0 |
+| `Sota` — SOTA activator chip | 0 |
+
+The chips at 0 do not rank a row on their own; the award tag alongside them does.
 
 DXpedition, POTA, and SOTA are chips appended to a row that already has an award tier; the chip itself is priority-neutral. The +15 DXpedition bump *can* cross a tier boundary where adjacent tiers sit only 10 points apart — a DXpedition-bumped New band (50 + 15 = 65) outranks a plain New grid (60).
 
