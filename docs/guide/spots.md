@@ -8,8 +8,9 @@ worked it in 1998, and nothing carries an evidence line; you get the report as i
 arrived, a column to sort it by, and the same single-click work-it path the
 Needed board has.
 
-Spots is an opt-in section: the first-run Goals step turns it on under **DX
-chasing & awards**, **Contesting** and **Everything (expert)**, and
+Spots is on by default: the first-run Goals step keeps it on under **DX
+chasing & awards**, **Contesting** and **Everything (expert)** and leaves it off
+under the other three profiles, and
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features) turns it on
 or off any time. It describes itself there as "Every cluster/RBN spot on the air
 — the raw firehose, filter by band/mode."
@@ -60,7 +61,8 @@ stays fresh instead of filling the screen.
 **Sorting.** Six of the eight headings are buttons — Age, Call, Entity, Band,
 Freq, Mode. Click to sort, click the same one again to reverse it; an arrow marks
 the active column. Band sorts by frequency, because a band column ordered by
-frequency reads the way a band map does. Ties break newest-first. Spotter and
+frequency reads the way a band map does. Ties break by age in the sort's own
+direction — newest first ascending, oldest first once you reverse it. Spotter and
 Comment don't sort.
 
 **The filter drawer** opens from the Filter button and holds four things:
@@ -106,8 +108,8 @@ when you quit.
    frequency wins over the tier's default dial — click an FT4 spot and the decoder
    is on FT4, not left on FT8.
 3. If the freshest comment for that call names a listening offset — `UP 2`,
-   `DN 1.5`, `QSX 7.205` — rig split is pre-set so your transmit lands where the DX
-   is listening.
+   `DN 1.5`, or `QSX 14025.5` (an absolute listening frequency in kHz) — rig split
+   is pre-set so your transmit lands where the DX is listening.
 4. On a CW or Phone row the callsign is prefilled in the log strip; a toast
    confirms "▶ *CALL* — *mode band*, ready to log".
 5. If the matching cockpit is switched off (CW, Phone and RTTY are all opt-in),
