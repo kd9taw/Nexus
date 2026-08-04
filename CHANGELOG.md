@@ -29,6 +29,29 @@ what the engine believes.
 It shares a scrolling column with the sky dome, and at full size it pushed the dome off the top.
 Now compact enough to log a station while still watching where the bird is.
 
+### Added: the grid square is a field you can type
+
+Every log strip — Phone, CW and Satellites — now has a **Grid** box beside QTH. The square was
+already in the record and already on the callsign card, but only a callbook could ever write it,
+so a locator a station passed you **on the air** could not be entered at all.
+
+On a bird that is most of the contact: satellite work is grid-for-grid, and the grid is what
+Satellite VUCC is scored on. It matters terrestrially too — grids are the exchange on 2 m and 6 m
+and in the VHF contests — and it matters most for exactly the stations whose callbook is wrong: a
+rover or a portable operator tells you where he *is*, not where he lives.
+
+The callbook still fills the box when it is blank, and it will **not** overwrite a square you
+typed. Nexus takes a 4- or 6-character locator (`EN52`, `EN52XA`); anything else holds the **Log**
+button until you fix it or clear it, and says so on the line above the button. A blank grid is not
+an error — most HF contacts have none.
+
+### Removed: the POTA/SOTA row in the Satellites section
+
+There is no park on a satellite. The section now asks the shared log strip for a satellite
+exchange, so the program picker and the park search are not built there at all — which also gives
+the sky dome back the space they were taking in that column. The Phone and CW strips are
+unchanged: hunting an activator is part of the exchange there, and the park row stays.
+
 ## [0.28.0] — 2026-08-03
 
 ### Added: log a contact from the Satellites section

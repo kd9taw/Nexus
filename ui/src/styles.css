@@ -6499,8 +6499,16 @@ input.cw-pitch::-webkit-inner-spin-button {
   max-width: 80px;
   flex: 0 0 auto !important;
 }
-/* State + Country sit beside QTH. Both are narrow and non-growing so adding them does not
-   squeeze the Comment field, which is the one that genuinely needs the room. */
+/* Grid + State + Country sit beside QTH. All three are narrow and non-growing so adding them
+   does not squeeze the Comment field, which is the one that genuinely needs the room.
+   `!important` is load-bearing on the flex, not decoration: `.le-row .settings-input` is
+   (0,2,0) and would otherwise out-specify these (0,1,0) rules and grow them like Comment.
+   The caps are far below the 24em pane floor, so none of these can ever be the item that
+   overflows a wrapping row — computed in panel-overflow.test.ts. */
+.le-grid {
+  max-width: 90px;
+  flex: 0 0 auto !important;
+}
 .le-state {
   max-width: 90px;
   flex: 0 0 auto !important;

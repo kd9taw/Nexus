@@ -235,11 +235,15 @@ describe('Satellites — logging the contact you just made', () => {
     const panel = strip.closest('.log-entry')
     expect(panel, 'the log strip is not the shared LogEntry').not.toBeNull()
     expect(panel!.querySelector('.le-log-btn'), 'no commit row').not.toBeNull()
-    // Two features nothing but LogEntry has: the POTA/SOTA park row and the
-    // other-radio override. Their presence is the proof this is the cockpits'
-    // strip rather than a lookalike built for this section.
-    expect(panel!.querySelector('.le-park-prog'), 'no park row').not.toBeNull()
+    // Three features nothing but LogEntry has: the other-radio override, the
+    // callbook lookup and the private notes box. Their presence is the proof this
+    // is the cockpits' strip rather than a lookalike built for this section.
+    // (The park row used to stand here as the fourth. It is gone from this
+    // section on purpose — see 'asks for no park row' below — so it can no longer
+    // be the evidence.)
     expect(panel!.querySelector('.le-override-toggle'), 'no other-radio override').not.toBeNull()
+    expect(panel!.querySelector('.le-lookup'), 'no callbook lookup').not.toBeNull()
+    expect(panel!.querySelector('.le-notes'), 'no notes box').not.toBeNull()
 
     // Exactly one of them. Two log panels in one column is the bug this test exists to catch.
     expect(document.querySelectorAll('.log-entry').length).toBe(1)
@@ -275,6 +279,44 @@ describe('Satellites — logging the contact you just made', () => {
       panel.compareDocumentPosition(globe) & Node.DOCUMENT_POSITION_FOLLOWING,
       'the globe is above the log strip',
     ).toBeTruthy()
+  })
+
+  it('asks for no park row — there is no POTA/SOTA reference on a bird', async () => {
+    // Operator, 0.28.1: "that section still has a pota/sota section, which is
+    // shouldnt". NOT ASKED FOR rather than hidden: the section passes
+    // `exchange="satellite"`, an exchange with no park in it, so the picker, the
+    // reference search and the park-detail chip are never rendered — and they
+    // take no vertical space in a column already shared with the sky dome (the
+    // same column he asked to make smaller one message earlier).
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    const panel = (await screen.findByPlaceholderText('Call')).closest('.log-entry')!
+    expect(panel.querySelector('.le-park-row'), 'the POTA/SOTA row is still here').toBeNull()
+    expect(panel.querySelector('.le-park-prog')).toBeNull()
+    expect(panel.querySelector('.le-park-search')).toBeNull()
+    expect(screen.queryByPlaceholderText(/^Park \(/)).toBeNull()
+    expect(screen.queryByPlaceholderText(/^Summit \(/)).toBeNull()
+  })
+
+  it('takes the GRID the station passed you, and it reaches the record', async () => {
+    // Operator, same message: "what about the sat, gridsquares features to log".
+    // Grid-for-grid IS the satellite exchange — on a bird it is most of the
+    // contact. The field was state-only before this: callbook-filled, printed in
+    // the summary line, and impossible to TYPE, so a square passed on air could
+    // not be logged at all. Asserted on the RECORD, never on the display.
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    const call = await screen.findByPlaceholderText('Call')
+    const grid = screen.getByPlaceholderText('Grid')
+    await act(async () => {
+      fireEvent.change(call, { target: { value: 'W1AW' } })
+    })
+    await act(async () => {
+      fireEvent.change(grid, { target: { value: 'fn31pr' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    })
+    await waitFor(() => expect(api.logQso).toHaveBeenCalled())
+    expect(lastLoggedRecord().grid).toBe('FN31PR')
   })
 
   it('logs an ORDINARY contact — no satellite fields reach the record', async () => {

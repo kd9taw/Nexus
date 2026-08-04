@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
-import { fdLogManual, logQso } from '../api'
+import { fdLogManual, logQso, qrzLookup, lookupPark } from '../api'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 // The FD log + standard-log seams matter here; the other api functions are imported by the
@@ -21,6 +21,8 @@ vi.mock('../api', () => ({
 
 const mockedFdLog = vi.mocked(fdLogManual)
 const mockedLogQso = vi.mocked(logQso)
+const mockedQrz = vi.mocked(qrzLookup)
+const mockedLookupPark = vi.mocked(lookupPark)
 
 const snap = {
   radio: { band: '20m', dialMhz: 14.2 },
@@ -39,7 +41,16 @@ const fieldDay = {
 } as unknown as FieldDayStatus
 
 function renderFd() {
-  render(<LogEntry snap={snap} mode="PH" defaultRst="59" fieldDay={fieldDay} fdMode="PH" />)
+  render(
+    <LogEntry
+      snap={snap}
+      mode="PH"
+      defaultRst="59"
+      exchange="terrestrial"
+      fieldDay={fieldDay}
+      fdMode="PH"
+    />,
+  )
 }
 
 const call = () => screen.getByPlaceholderText('W1AW')
@@ -87,7 +98,16 @@ describe('LogEntry Field Day exchange gate', () => {
 
 describe('LogEntry standard variant — State + Country', () => {
   function renderStd() {
-    render(<LogEntry snap={snap} mode="PH" defaultRst="59" fieldDay={null} fdMode={undefined} />)
+    render(
+      <LogEntry
+        snap={snap}
+        mode="PH"
+        defaultRst="59"
+        exchange="terrestrial"
+        fieldDay={null}
+        fdMode={undefined}
+      />,
+    )
   }
 
   it('shows editable State and Country fields in the main area', () => {
@@ -122,6 +142,7 @@ describe('LogEntry standard variant — the accidental-log guard', () => {
         snap={snap}
         mode="SSB"
         defaultRst="59"
+        exchange="terrestrial"
         onSpot={() => {}}
         fieldDay={null}
         fdMode={undefined}
@@ -169,7 +190,16 @@ describe('LogEntry standard variant — the accidental-log guard', () => {
 describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC time)', () => {
   // snap.radio is the LIVE (HF) rig: 20m / 14.2 MHz. mode="SSB" is the cockpit's live mode.
   function renderStd() {
-    render(<LogEntry snap={snap} mode="SSB" defaultRst="59" fieldDay={null} fdMode={undefined} />)
+    render(
+      <LogEntry
+        snap={snap}
+        mode="SSB"
+        defaultRst="59"
+        exchange="terrestrial"
+        fieldDay={null}
+        fdMode={undefined}
+      />,
+    )
   }
   const overrideToggle = () => screen.getByRole('button', { name: /another radio/i })
   const logBtn = () => screen.getByRole('button', { name: 'Log' })
@@ -266,7 +296,16 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
       radio: { band: '', dialMhz: 10489.55 },
       hunt: null,
     } as unknown as AppSnapshot
-    render(<LogEntry snap={noBand} mode="SSB" defaultRst="59" fieldDay={null} fdMode={undefined} />)
+    render(
+      <LogEntry
+        snap={noBand}
+        mode="SSB"
+        defaultRst="59"
+        exchange="terrestrial"
+        fieldDay={null}
+        fdMode={undefined}
+      />,
+    )
     const hint = screen.getByText(/Logs to the shared logbook/).textContent ?? ''
     expect(hint).toContain('as SSB · 10489.550 MHz')
     expect(hint).not.toMatch(/·\s+·/)
@@ -289,5 +328,264 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
     expect(modes).toContain('SSB')
     expect(modes).not.toContain('USB')
     expect(modes).not.toContain('LSB')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// THE EXCHANGE — one prop, and the one thing it decides.
+//
+// Operator, 0.28.1, on the Satellites section: "that section still has a
+// pota/sota section, which is shouldnt and what about the sat, gridsquares
+// features to log".
+//
+// `LogEntry` is shared by three consumers (Phone, CW, Satellites) and staying
+// shared is the constraint ("Lets not reinvent anything"). So the consumer names
+// its EXCHANGE and the strip renders that — no fork, and no pile of optional
+// booleans. The grid is deliberately NOT what `exchange` gates: it belongs to
+// every consumer (see the suite below).
+describe('LogEntry — the exchange each consumer asks for', () => {
+  function renderAs(exchange: 'terrestrial' | 'satellite') {
+    render(
+      <LogEntry
+        snap={snap}
+        mode="SSB"
+        defaultRst="59"
+        exchange={exchange}
+        fieldDay={null}
+        fdMode={undefined}
+      />,
+    )
+  }
+
+  it('terrestrial (Phone + CW): the POTA/SOTA row is part of the exchange', () => {
+    // Hunting an activator IS part of the exchange on HF/VHF: the park reference
+    // goes to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF). Nothing here changed.
+    renderAs('terrestrial')
+    expect(document.querySelector('.le-park-row'), 'the park row went missing').not.toBeNull()
+    expect(document.querySelector('.le-park-prog')).not.toBeNull()
+    expect(screen.getByPlaceholderText(/^Park \(/)).toBeTruthy()
+  })
+
+  it('satellite: the park row is NOT ASKED FOR — not hidden, not rendered', () => {
+    // There is no park on a bird. "Not asked for" rather than "hidden": the
+    // section passes an exchange that has no park in it, so there is no picker,
+    // no reference search and no park-detail chip to suppress — and no vertical
+    // space taken in a column the operator shares with the sky dome.
+    renderAs('satellite')
+    expect(document.querySelector('.le-park-row'), 'the park row is still rendered').toBeNull()
+    expect(document.querySelector('.le-park-prog')).toBeNull()
+    expect(document.querySelector('.le-park-search')).toBeNull()
+    expect(screen.queryByPlaceholderText(/^Park \(/)).toBeNull()
+    expect(screen.queryByPlaceholderText(/^Summit \(/)).toBeNull()
+  })
+
+  it('everything else about the strip is identical across the two exchanges', () => {
+    // The proof this is one shared component and not a fork: the call field, the
+    // reports, the callbook lookup, the notes, the other-radio override and the
+    // commit row are the same in both. Only the park row differs.
+    const SURFACE = [
+      '.le-call',
+      '.le-rst',
+      '.le-name',
+      '.le-qth',
+      '.le-grid',
+      '.le-state',
+      '.le-country',
+      '.le-comment',
+      '.le-notes',
+      '.le-lookup',
+      '.le-override-toggle',
+      '.le-log-btn',
+    ]
+    const surface = () => SURFACE.filter((s) => document.querySelector(s) != null)
+
+    renderAs('terrestrial')
+    const terrestrial = surface()
+    expect(terrestrial, 'the shared surface itself moved').toEqual(SURFACE)
+    cleanup()
+    renderAs('satellite')
+    expect(surface()).toEqual(terrestrial)
+  })
+
+  it('satellite: a pending hunt fires no park lookup — not even the live directory fetch', async () => {
+    // A pending POTA hunt still PREFILLS the park reference in every exchange
+    // (the hunt chip stays: the engine tags by callsign whichever strip logs the
+    // contact). Without the exchange guard on that effect, the Satellites section
+    // would debounce a local lookup and then a LIVE POTA-directory fetch — network
+    // traffic mid-pass for a chip it does not render.
+    const hunted = {
+      radio: { band: '20m', dialMhz: 14.2 },
+      hunt: { program: 'POTA', reference: 'K-1234', call: 'W1AW' },
+    } as unknown as AppSnapshot
+    const renderHunt = (exchange: 'terrestrial' | 'satellite') =>
+      render(
+        <LogEntry
+          snap={hunted}
+          mode="SSB"
+          defaultRst="59"
+          exchange={exchange}
+          fieldDay={null}
+          fdMode={undefined}
+        />,
+      )
+
+    // Positive control first: terrestrial DOES look the prefilled park up, which
+    // also proves the 250 ms debounce has fired by the time we check the other.
+    mockedLookupPark.mockClear()
+    renderHunt('terrestrial')
+    await waitFor(() => expect(mockedLookupPark).toHaveBeenCalledWith('K-1234'))
+    cleanup()
+
+    mockedLookupPark.mockClear()
+    renderHunt('satellite')
+    await new Promise((r) => setTimeout(r, 400)) // well past the 250 ms debounce
+    expect(mockedLookupPark, 'the satellite exchange looked a park up anyway').not.toHaveBeenCalled()
+  })
+})
+
+describe('LogEntry — the grid the other station passed you', () => {
+  // GAP 1. `logGrid` has always reached the RECORD and printed in the summary
+  // line and the recall card — but it could only ever be written by a callbook
+  // lookup. There was no input, so the square a station passed ON AIR could not
+  // be entered at all. On a bird that is most of the contact (grid-for-grid is
+  // the whole exchange, and Satellite VUCC is scored on it); on 2 m/6 m and in
+  // VHF contests it is the exchange too; and a rover or /P station is exactly
+  // the one whose callbook square is WRONG. So the field belongs to every
+  // consumer, not to the satellite exchange alone — the same argument that put
+  // State and Country here (hear it on air, fix it here, not in the logbook
+  // afterwards).
+  function renderStd(exchange: 'terrestrial' | 'satellite' = 'terrestrial') {
+    render(
+      <LogEntry
+        snap={snap}
+        mode="SSB"
+        defaultRst="59"
+        exchange={exchange}
+        fieldDay={null}
+        fdMode={undefined}
+      />,
+    )
+  }
+  const gridInput = () => screen.getByPlaceholderText('Grid') as HTMLInputElement
+  const callInput = () => screen.getByPlaceholderText('Call') as HTMLInputElement
+  const logBtn = () => screen.getByRole('button', { name: 'Log' }) as HTMLButtonElement
+
+  beforeEach(() => {
+    mockedQrz.mockReset()
+    mockedQrz.mockResolvedValue(null as never)
+  })
+
+  it('is typeable in BOTH exchanges — grid-for-grid on a bird, VHF/contest grids terrestrially', () => {
+    for (const ex of ['terrestrial', 'satellite'] as const) {
+      renderStd(ex)
+      expect(gridInput(), `no Grid input in the ${ex} exchange`).toBeTruthy()
+      cleanup()
+    }
+  })
+
+  it('the typed square reaches the RECORD, not just the screen', () => {
+    // Asserting on what `logQso` receives. The display is not what LoTW reads.
+    renderStd()
+    fireEvent.change(callInput(), { target: { value: 'w1aw' } })
+    fireEvent.change(gridInput(), { target: { value: 'fn31pr' } })
+    fireEvent.click(logBtn())
+    expect(mockedLogQso).toHaveBeenCalledTimes(1)
+    expect(mockedLogQso.mock.calls[0][0].grid).toBe('FN31PR')
+  })
+
+  it('uppercases as typed, so case is never why a locator is refused', () => {
+    renderStd()
+    fireEvent.change(gridInput(), { target: { value: 'en52' } })
+    expect(gridInput().value).toBe('EN52')
+  })
+
+  it('a blank grid is no error — the record simply carries none', () => {
+    renderStd()
+    fireEvent.change(callInput(), { target: { value: 'w1aw' } })
+    expect(logBtn().disabled).toBe(false)
+    fireEvent.click(logBtn())
+    expect(mockedLogQso.mock.calls[0][0].grid).toBeNull()
+  })
+
+  it('REFUSES the commit on a malformed locator, and names the forms it takes', () => {
+    // A QSO record is permanent and cannot be repaired after upload, and a wrong
+    // square is a wrong VUCC credit — so "EN5" does not go in. Refused at the
+    // commit rather than silently dropped: dropping a value the operator can see
+    // on screen makes the screen lie. Same shape as the two gates this component
+    // already has (the FD section code, the override frequency).
+    renderStd()
+    fireEvent.change(callInput(), { target: { value: 'w1aw' } })
+    fireEvent.change(gridInput(), { target: { value: 'EN5' } })
+    expect(logBtn().disabled, 'a malformed locator still commits').toBe(true)
+    fireEvent.click(logBtn())
+    expect(mockedLogQso).not.toHaveBeenCalled()
+
+    // And it SAYS which forms it takes — a disabled button with no reason is a
+    // dead end mid-pass.
+    const why = document.querySelector('.le-grid-warn')
+    expect(why, 'nothing tells the operator why Log went dead').not.toBeNull()
+    expect(why!.textContent).toMatch(/EN52/)
+    expect(why!.textContent).toMatch(/EN52XA/)
+    // The field itself is marked, so the eye lands on it and not on the button.
+    expect(gridInput().classList.contains('invalid')).toBe(true)
+
+    // Fix it → it commits, carrying the square.
+    fireEvent.change(gridInput(), { target: { value: 'EN52' } })
+    expect(logBtn().disabled).toBe(false)
+    expect(document.querySelector('.le-grid-warn')).toBeNull()
+    fireEvent.click(logBtn())
+    expect(mockedLogQso.mock.calls[0][0].grid).toBe('EN52')
+  })
+
+  it('refuses the same nonsense the rest of the app refuses, and nothing more', () => {
+    // One locator parser for the whole app (`ui/src/grid.ts` isValidGrid — the
+    // strict persist-side check the setup wizard already gates on), not a second
+    // one here. 8-character extended locators are refused, which is that
+    // helper's existing ruling ("extended precision is not stored") and is
+    // stated in the guide.
+    renderStd()
+    fireEvent.change(callInput(), { target: { value: 'w1aw' } })
+    for (const bad of ['EN5', 'EN52X', '1234', 'ZZ99', 'EN52YZ', 'EN52XA99']) {
+      fireEvent.change(gridInput(), { target: { value: bad } })
+      expect(logBtn().disabled, `${bad} was accepted`).toBe(true)
+    }
+    for (const good of ['EN52', 'EN52XA', 'RR73', 'IO91WM']) {
+      fireEvent.change(gridInput(), { target: { value: good } })
+      expect(logBtn().disabled, `${good} was refused`).toBe(false)
+    }
+  })
+
+  it('a later callbook lookup never overwrites the square the operator typed', async () => {
+    // The one that matters on a bird: a rover passes you where he IS, and his
+    // callbook says where he LIVES. The autofill is blanks-only (LogEntry
+    // `lookup`) — pinned here so a refactor cannot quietly make the callbook win.
+    renderStd()
+    fireEvent.change(callInput(), { target: { value: 'w1aw' } })
+    fireEvent.change(gridInput(), { target: { value: 'EN52XA' } })
+
+    mockedQrz.mockResolvedValueOnce({
+      call: 'W1AW',
+      grid: 'FN31PR',
+      name: 'Hiram',
+    } as never)
+    fireEvent.click(screen.getByRole('button', { name: 'Lookup' }))
+
+    // The lookup DID land (it filled the blank Name), and left the grid alone.
+    await waitFor(() =>
+      expect((screen.getByPlaceholderText('Name') as HTMLInputElement).value).toBe('Hiram'),
+    )
+    expect(gridInput().value, 'the callbook clobbered the operator-typed square').toBe('EN52XA')
+
+    fireEvent.click(logBtn())
+    expect(mockedLogQso.mock.calls[0][0].grid).toBe('EN52XA')
+  })
+
+  it('still fills a BLANK grid from the callbook — the autofill is outranked, not disabled', async () => {
+    // The mirror of the test above: blanks-only means blanks ARE filled.
+    renderStd()
+    fireEvent.change(callInput(), { target: { value: 'w1aw' } })
+    mockedQrz.mockResolvedValueOnce({ call: 'W1AW', grid: 'FN31PR' } as never)
+    fireEvent.click(screen.getByRole('button', { name: 'Lookup' }))
+    await waitFor(() => expect(gridInput().value).toBe('FN31PR'))
   })
 })

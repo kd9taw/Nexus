@@ -3359,7 +3359,16 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 owns the overflow. Document order is pinned by a test. */}
             {snap && (
               <div className="sats-log">
-                <LogEntry snap={snap} mode={logMode} defaultRst={logMode === 'CW' ? '599' : '59'} />
+                {/* `exchange="satellite"`: what the two stations pass each other
+                    through a bird. Grid-for-grid, and no park/summit reference —
+                    the strip renders no POTA/SOTA row here (operator, 0.28.1),
+                    which is one prop rather than a fork of the shared component. */}
+                <LogEntry
+                  snap={snap}
+                  mode={logMode}
+                  defaultRst={logMode === 'CW' ? '599' : '59'}
+                  exchange="satellite"
+                />
                 <p className="sats-log-note">
                   Logs an ordinary contact from your dial, exactly as the Phone and CW log
                   panels do. It is <b>not</b> tagged as a satellite QSO: Nexus does not write
