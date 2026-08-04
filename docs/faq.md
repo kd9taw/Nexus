@@ -51,8 +51,8 @@ NVIS, polar, and rough paths. Details in [protocols/tempodeep.md](protocols/temp
 ### Are the TempoFast/TempoDeep performance numbers proven?
 
 The modes work on the air: first TempoFast decode 2026-07-21, first two-station QSO
-2026-07-26. The **numbers** come from AWGN and Rayleigh-fading bench sweeps, re-checked
-in the test suite and the Windows cross-build, rather than from the air.
+on 6 m 2026-07-26. The **numbers** come from AWGN and Rayleigh-fading bench sweeps,
+re-checked in the test suite and the Windows cross-build, rather than from the air.
 Decode-rate-versus-SNR on real bands is the project's #1 remaining gate, and on-air
 reports are what close it. Every dB figure Nexus publishes is labeled "simulated" for
 exactly this reason.
@@ -65,16 +65,24 @@ surprises (false decodes, retransmissions that combined, stations you saw that o
 didn't). Field reports are the single most useful contribution right now. Use the
 issue tracker at <https://sourceforge.net/projects/nexus-ham-radio>.
 
+One thing worth checking before you try: read the clock in the top bar at **both**
+ends. A few tenths of a second of UTC error is invisible on FT8 and is fatal to
+Tempo.
+
 ---
 
 ## Setup and safety
 
 ### Do I need to install Hamlib, WebView2, or drivers first?
 
-No. Hamlib (for CAT and rotator control) and the WebView2 runtime are **bundled** in
-the installer, so Nexus works on a bare PC with no separate installs. If Windows is
-missing a USB bridge-chip driver for your rig's interface, the first-run wizard
-detects that and gives you the right download link.
+On **Windows**, no. Hamlib (for CAT and rotator control) and the WebView2 runtime are
+**bundled** in the installer, so Nexus works on a bare PC with no separate installs.
+If Windows is missing a USB bridge-chip driver for your rig's interface, the
+first-run wizard detects that and gives you the right download link.
+
+On **Linux and the Raspberry Pi**, CAT uses the system Hamlib instead of a bundled
+copy: the `.deb` pulls `libhamlib-utils` in automatically, and AppImage users run
+`sudo apt install libhamlib-utils` once.
 
 ### Will Nexus transmit on its own?
 
@@ -113,7 +121,7 @@ status:
 - **Xiegu:** supported via Hamlib CAT (e.g. the G90), but **not yet verified on
   hardware** in Nexus. If you run one, a field report is welcome.
 
-### Why is the download about 200 MB?
+### Why is the download about 210 MB?
 
 Because everything is bundled: the WebView2 runtime, Hamlib (CAT + rotator), and the
 whole DSP stack. That is the tradeoff for working offline on a bare PC with no
@@ -168,7 +176,8 @@ and 64-bit **Raspberry Pi OS** on a Pi 3, 4 or 5 gets its own `.deb` per base �
 three platforms build from the same tree and ship together every release. CAT on Linux
 uses the system Hamlib rather than a bundled copy; the `.deb` pulls `libhamlib-utils` in
 for you and AppImage users run `sudo apt install libhamlib-utils` once. On a slower Pi,
-**Settings ▸ Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
+**Settings ▸ Modes ▸ Digital (FT8/FT4) ▸ Decode depth ▸ Fast** keeps FT8 and FT4
+decoding in real time.
 
 **macOS does not ship.** The codebase is cross-platform Rust and Tauri, so it is a
 packaging and testing job rather than a port. If you want it, say so on the issue

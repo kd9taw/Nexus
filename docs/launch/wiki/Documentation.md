@@ -21,7 +21,9 @@ New here? Start with [Quick Start](Quick-Start), [Install](Install), and
 
 ## Section guides
 
-The per-section reference — pick the section you're working in.
+The per-section reference — pick the section you're working in. All eighteen pages
+are indexed at
+[docs/guide](https://github.com/kd9taw/Nexus/blob/main/docs/guide/index.md).
 
 ### Operating
 
@@ -30,15 +32,21 @@ The per-section reference — pick the section you're working in.
 | [Operate — FT8 / FT4 digital](https://github.com/kd9taw/Nexus/blob/main/docs/guide/operate-digital.md) | The digital cockpit: WSJT-X-grade sequencing, country / worked-before flags, one-click "work it", and the Tempo TempoFast/TempoDeep chat layer |
 | [Phone (SSB / FM)](https://github.com/kd9taw/Nexus/blob/main/docs/guide/phone.md) | The traditional rig panel: live dial read-back, colored bandscope, voice keyer, QSO recording |
 | [CW](https://github.com/kd9taw/Nexus/blob/main/docs/guide/cw.md) | The keyboard CW station: keyer back-ends, F-key macros, live decoder |
+| [RTTY](https://github.com/kd9taw/Nexus/blob/main/docs/guide/rtty.md) | A 45.45 baud Baudot teleprinter: per-character decode confidence, a click-to-net waterfall, macros, and AFSK or true FSK keying |
+| [SSTV](https://github.com/kd9taw/Nexus/blob/main/docs/guide/sstv.md) | Receive-first slow-scan — pictures decode themselves into a local gallery, and transmit is always an explicit **Send** |
+| [APRS](https://github.com/kd9taw/Nexus/blob/main/docs/guide/aprs.md) | A 2 m AFSK-1200 packet monitor with its own map, plus position beacons, short messages, and the receive-only iGate |
+| [Memories](https://github.com/kd9taw/Nexus/blob/main/docs/guide/memories.md) | The saved-channel bank behind the cockpit MEM strip: one click tunes the rig, applies the shift and tone, and opens the cockpit that mode belongs in |
 
 ### DX & awards
 
 | Guide | What it covers |
 |---|---|
 | [Needed — DX on the air now](https://github.com/kd9taw/Nexus/blob/main/docs/guide/needed-dx.md) | Every station ranked by value to *your* log, each row carrying the evidence |
+| [Spots](https://github.com/kd9taw/Nexus/blob/main/docs/guide/spots.md) | The same cluster and RBN traffic raw: the last twenty minutes, unranked and unscored, sorted however you like |
 | [DXpeditions](https://github.com/kd9taw/Nexus/blob/main/docs/guide/dxpeditions.md) | Active and upcoming expeditions, your modelled best window per day, wake-me alarms |
 | [Logbook & QSL](https://github.com/kd9taw/Nexus/blob/main/docs/guide/logbook-qsl.md) | The ADIF logbook, confirmation sources, and the LoTW / QRZ / ClubLog / eQSL / HRDLog connectors |
 | [Awards & Journey](https://github.com/kd9taw/Nexus/blob/main/docs/guide/awards-journey.md) | Offline DXCC / Challenge / Honor Roll / WAS / WAZ, plus the local-only Journey layer |
+| [Stats](https://github.com/kd9taw/Nexus/blob/main/docs/guide/stats.md) | The same logbook counted rather than judged: QSOs by band, mode, year, hour, entity and confirmation |
 
 ### Propagation & satellites
 
@@ -57,7 +65,8 @@ The per-section reference — pick the section you're working in.
 
 | Guide | What it covers |
 |---|---|
-| [Settings reference](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md) | A walk through every Settings tab, field by field |
+| [Program](https://github.com/kd9taw/Nexus/blob/main/docs/guide/program.md) | The radio-programming workbench: the repeaters around a location become a channel list, and the list becomes a CHIRP CSV |
+| [Settings reference](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md) | A walk through all eight Settings tabs, field by field |
 
 ---
 

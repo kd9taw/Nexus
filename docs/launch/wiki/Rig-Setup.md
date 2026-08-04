@@ -118,8 +118,9 @@ and off by default**, and it is **not yet confirmed on hardware here** — if
 decodes stop after you switch it on, switch it back off and the Hamlib CAT path
 above is unchanged underneath.
 
-**RIGCTLD TCP Port = 4532.** In **Settings ▸ Rig ▸ Advanced**, the **RIGCTLD TCP
-Port** should be the default **4532** (Hamlib's standard). If a Flex connects for
+**rigctld TCP Port = 4532.** In **Settings ▸ Radio ▸ Rig Control ▸ Advanced** (a
+collapsed group), the **rigctld TCP Port** should be the default **4532** (Hamlib's
+standard). If a Flex connects for
 one operator but not another — a "can't reach the radio's CAT link" error — check
 this is 4532; a non-default value left over from a multi-radio setup is the usual
 cause. (Only change it deliberately when running two radios at once.)
@@ -158,7 +159,7 @@ Heron RT-21, M2 RC2800, and more.
 **No hardware?** Choose **Dummy (testing — no hardware)** and Save to exercise the
 whole compass and satellite-track UI with nothing attached.
 
-Once answering, rotator control appears in the Connect compass pane, a compact
+Once answering, rotator control appears in the Connect **Rotor** pane, a compact
 RotorStrip in every cockpit (shows **"ROTOR —"** when configured but not
 answering), and a ↗ on Needed-board rows. Paired with the Satellites section it
 **arms → prepositions → tracks** a pass across the sky (azimuth-only fallback on

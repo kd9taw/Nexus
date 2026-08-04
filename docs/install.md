@@ -12,7 +12,8 @@ come here for the complete picture.
 
 - **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **64-bit Raspberry Pi**
   (Pi 3/4/5). All three build from the same tree and ship together every release.
-  macOS does not ship yet.
+  macOS does not ship yet. On a slower Pi, **Settings ▸ Modes ▸ Digital (FT8/FT4) ▸
+  Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
 - **A radio with CAT + audio**, or a network rig (FlexRadio, remote `rigctld`).
   You can install and explore without a radio — the wizard and every panel open —
   but you need a rig connected to transmit.
@@ -125,11 +126,12 @@ header against the release you installed.
 
 ## Uninstalling
 
-Uninstall from **Settings ▸ Apps ▸ Installed apps** (or the Start-menu
-uninstaller) like any Windows program. Uninstalling removes the program files but
-**leaves your data** — settings and logbook — in place, so reinstalling later
-picks up exactly where you left off. If you want a truly clean removal, delete the
-data folders below by hand after uninstalling.
+On Windows, uninstall from **Settings ▸ Apps ▸ Installed apps** (or the Start-menu
+uninstaller) like any other program. On Linux and the Pi, remove the package with
+your package manager (`apt remove`), or delete the AppImage file. Every route removes
+the program files but **leaves your data** — settings and logbook — in place, so
+reinstalling later picks up exactly where you left off. If you want a truly clean
+removal, delete the data folders below by hand after uninstalling.
 
 ---
 
@@ -145,6 +147,11 @@ app's original name.
 | **Logbook** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.4 — **this is the file to back up** |
 | Received-audio recordings | `%APPDATA%\tempo\recordings\` | `~/.config/tempo/recordings/` | Only if you enable audio saving; can get large |
 | UI state | `%LOCALAPPDATA%\com.kd9taw.tempo\` | the webview's own store for `com.kd9taw.tempo` | Theme, UI scale, panel layout, wizard-seen flag, board filters |
+
+Running a second instance against a second radio puts its settings in a
+profile-suffixed folder beside the first (`tempo-<profile>`), and both instances
+share the one `log.adi`. `NEXUS_DATA_DIR` moves that shared logbook somewhere else —
+a NAS or a synced folder — for a multi-PC shack.
 
 Two things worth understanding:
 
@@ -167,12 +174,13 @@ Secret Service keyring on Linux and the Pi) and are never written to config or l
 
 Before a reinstall, a PC migration, or just periodically, copy:
 
-- `%APPDATA%\tempo\log.adi` — your logbook (**the important one**)
-- `%APPDATA%\tempo\settings.json` — your rig/station config, to save re-entering it
+- `log.adi` — your logbook (**the important one**)
+- `settings.json` — your rig/station config, to save re-entering it
 
-To restore, install Nexus, then drop those files back into `%APPDATA%\tempo\`
-before launching. Online-service credentials will need to be re-entered from
-Settings, since they don't leave the origin machine's keychain.
+Both live in `%APPDATA%\tempo\` on Windows and `~/.config/tempo/` on Linux and the
+Pi. To restore, install Nexus, then drop those files back into that folder before
+launching. Online-service credentials will need to be re-entered from Settings,
+since they don't leave the origin machine's keychain.
 
 ---
 
