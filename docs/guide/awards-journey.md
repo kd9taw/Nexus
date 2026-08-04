@@ -1,26 +1,36 @@
 # Awards & Journey
 
-This section has two tabs under one roof: **Awards**, the offline tracker for the
-official programs (DXCC, Challenge, Honor Roll, WAS, WAZ), and **Journey**, a
-local-only achievement layer that turns your log into progress you can feel —
-firsts, ladders, collections, and personal bests. Both read straight from your
-[logbook](logbook-qsl.md); neither needs an account or a network.
+This section has two tabs under one roof: **Official Awards**, the offline
+tracker for the official programs (DXCC, Challenge, Honor Roll, WAS, WAZ, VUCC,
+IOTA), and **Journey**, a local-only achievement layer that turns your log into
+progress you can feel — firsts, ladders, collections, and personal bests. Both
+read straight from your [logbook](logbook-qsl.md); neither needs an account or a
+network.
 
 Awards is an opt-in section, nudged on after your first QSO. Turn it on any time
 in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
-<!-- TODO: capture screenshot — the Awards tab — DXCC slots, Honor Roll countdown, WAS/WAZ -->
+![The Official Awards tab, its ten award cards wrapped onto two rows: DXCC 233/100, Honor Roll 233/340, Challenge, a 53% confirmed rate, 5-Band DXCC and WAZ across the top, then WAS, VUCC, Sat VUCC and IOTA below — WAS and VUCC outlined as achieved, Sat VUCC still 0 of 100 with one grid worked via satellite. Under the cards a DXCC-by-band chart runs 160 m down to 6 m beside a "Confirm for a new one (46)" list, each entity chipped with the bands it is waiting on a confirmation for.](../img/manual/awards-official.webp)
 
 ## Awards — the official programs
 
 Awards are **computed offline** from cty.dat entity resolution — no upload
 required to *see* where you stand:
 
-- **DXCC** with per-band and per-mode slots,
+- **DXCC** with per-band and per-mode slots, and **5-Band DXCC**,
 - **DXCC Challenge**,
-- **Honor Roll**, with a current-entity denominator and an "N to #1" countdown,
-- **WAS** (Worked All States),
-- **WAZ** (Worked All Zones).
+- **Honor Roll**, with a current-entity denominator and a countdown —
+  confirmations still needed to get in, then "N to #1" once you're in,
+- **WAS** (Worked All States), with the 5BWAS count beside it,
+- **WAZ** (Worked All Zones),
+- **VUCC**, with satellite grids kept on their own **Sat VUCC** card — Nexus
+  doesn't tag a satellite contact as one, so that card only moves for records
+  you tagged yourself ([Satellites](satellites.md) explains why),
+- **IOTA** (Islands On The Air).
+
+Under the cards, DXCC is broken out **by band**, and the chase lists start with
+**Confirm for a new one** — entities you have worked but not confirmed, chipped
+with the bands each is waiting on.
 
 **Confirmation handling is source-aware** — a distinction most loggers blur.
 **eQSL confirmations never count toward LoTW-grade awards**; the `confirmed` and
