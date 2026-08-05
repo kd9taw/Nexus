@@ -898,6 +898,42 @@ impl Rig {
     }
 }
 
+/// LAST-DITCH TEARDOWN UNKEY — the backstop for "the operator must always be able to stop a
+/// transmission".
+///
+/// `run_radio` drops PTT on its error RETURN, but only that exit path reaches the line. A panic
+/// unwinding past it, the thread being torn down, or any later restructuring of the loop skips it
+/// entirely, and the `catch_unwind` in src-tauri cannot see the rig. Every other resource this
+/// crate owns already had a destructor (`RigctldProc`, `FskKeyer`, `WinKeyer`, `SerialKeyer`,
+/// `FlexDax`, `FlexSpectrum`, `DecodeWorker`) — the one that is RADIATING did not, so a radio-thread
+/// panic mid-over left the carrier up until the operator reached the rig.
+///
+/// GATED ON `keyed`, deliberately. `keyed` is fail-safe (a key-down ATTEMPT sets it; a failed unkey
+/// never clears it), so it is exactly "we believe this radio may be transmitting". An unconditional
+/// teardown unkey would instead make every idle and every read-only monitor rig send a keying
+/// command on drop, and when the stream has already been dropped by a failed command
+/// `ensure_connected` would open a fresh TCP connection just to send it.
+///
+/// It cannot fight the normal path: every teardown that unkeys first leaves `keyed == false`, so
+/// this is a no-op there, and a second unkey at the radio is idempotent anyway.
+///
+/// IT CAN BLOCK, and that is the accepted trade. A CAT unkey over a live stream is bounded by the
+/// 700 ms `PTT_DEADLINE_MS`; if a prior failure dropped the stream, `ensure_connected` reconnects
+/// first and `TcpStream::connect` is bounded only by the OS (immediate against a refused localhost
+/// rigctld — the usual case — but longer for a network rig that has gone away). A teardown that
+/// waits is better than a radio that keeps transmitting.
+impl Drop for Rig {
+    fn drop(&mut self) {
+        if !self.keyed {
+            return;
+        }
+        // Best-effort, result discarded: a Drop must never panic. (`ptt` itself is panic-free —
+        // the whole path propagates I/O errors with `?`, and the diag sink swallows a poisoned
+        // lock rather than unwrapping it.)
+        let _ = self.ptt(false);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1435,6 +1471,59 @@ mod tests {
         let (addr, _log) = mock_rigctld(|_l| "RPRT -1\n".to_string());
         let mut rig = Rig::rigctld(&addr);
         assert!(rig.ptt(true).is_err());
+    }
+
+    #[test]
+    fn a_panicking_thread_still_drops_ptt() {
+        // THE UN-DROPPED RIG. `run_radio` unkeys only on its error RETURN (service.rs) — a panic
+        // unwinding past it, or any other teardown of the radio thread, never reaches that line,
+        // and the catch_unwind in src-tauri cannot see the rig. Every other owned resource here
+        // has a Drop (RigctldProc, FskKeyer, WinKeyer, SerialKeyer, FlexDax, FlexSpectrum,
+        // DecodeWorker); the rig — the one that is RADIATING — did not, so the carrier stayed up
+        // until the operator walked to the radio. The rig's own destructor is the only backstop
+        // that survives EVERY exit path.
+        //
+        // (The panic below prints a "thread panicked" line to stderr. That is the test working.)
+        let (addr, log) = mock_rigctld(ok_reply(14_074_000));
+        let h = std::thread::spawn(move || {
+            let mut rig = Rig::rigctld(&addr);
+            rig.ptt(true).expect("mock rig keys");
+            panic!("radio thread died mid-over");
+        });
+        assert!(h.join().is_err(), "the thread really panicked");
+        // The unwind drops the Rig BEFORE join returns, and the mock logs each line before it
+        // answers, so `ptt(false)` cannot return until "T 0" is already in the log — no race.
+        let sent = log.lock().unwrap().clone();
+        assert!(sent.iter().any(|l| l.trim() == "T 1"), "keyed: {sent:?}");
+        assert!(
+            sent.iter().any(|l| l.trim() == "T 0"),
+            "PTT was NEVER dropped when the thread panicked — the radio is still \
+             transmitting: {sent:?}"
+        );
+    }
+
+    #[test]
+    fn dropping_a_rig_that_was_never_keyed_sends_nothing() {
+        // The teardown unkey is gated on `keyed` deliberately. An UNCONDITIONAL one would make
+        // every Rig drop — every read-only monitor rig in the dual-radio pool, every teardown of
+        // an idle radio — send a keying command, and when the stream is already closed
+        // `ensure_connected` would sit on a `TcpStream::connect` to a rig that may be gone. Only
+        // a rig we believe is radiating is worth that.
+        let (addr, log) = mock_rigctld(ok_reply(14_074_000));
+        {
+            let mut rig = Rig::rigctld(&addr);
+            assert_eq!(rig.read_freq().unwrap(), 14_074_000);
+        }
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            !sent.iter().any(|l| l.trim().starts_with('T')),
+            "an idle rig sent a keying command at teardown: {sent:?}"
+        );
+
+        // And a VOX rig — no CAT channel at all — tears down quietly whatever its keyed state.
+        let mut vox = Rig::vox();
+        vox.ptt(true).unwrap();
+        drop(vox);
     }
 
     #[test]
