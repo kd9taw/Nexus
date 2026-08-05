@@ -1148,6 +1148,18 @@ export function Logbook({
               anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. There is no undo — export an
               ADIF backup first if you might want it.
             </p>
+            {/* The sync cursors are the non-obvious half of a purge, and getting it wrong cost an
+                operator his whole confirmation history: each cursor means "I already hold every
+                confirmation matched up to this date", which is a lie about an empty log. Purging
+                clears them so the next pull is the full one the empty log needs — but that pull is
+                far larger than a routine sync, and an operator who is not told that reads the wait
+                as a hang. Says what happens, not what used to go wrong. */}
+            <p className="purge-warn">
+              It also resets your <strong>LoTW and eQSL sync position</strong>, so the next sync re-downloads
+              your whole confirmation history instead of only recent matches. That is what brings your
+              confirmations back after a purge — but it takes considerably longer than a routine sync, so
+              give it time to finish.
+            </p>
             <label className="purge-field">
               <span>
                 Type <strong>{PURGE_WORD}</strong> to confirm

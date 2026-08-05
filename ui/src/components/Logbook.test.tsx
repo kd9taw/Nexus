@@ -77,3 +77,48 @@ describe('Logbook virtualization', () => {
     expect(container.textContent).toContain('K4999ABC')
   })
 })
+
+// The purge dialog must warn that a purge also resets the LoTW/eQSL sync cursors. That coupling is
+// the non-obvious half of a purge and it cost an operator his whole confirmation history: he purged,
+// re-synced, and got 816 of 26,007 QSOs back confirmed, because the cursor still claimed he held
+// everything matched up to the old date. The code now clears the cursors, so the pull is correct —
+// but it is a FULL history download, far slower than a routine sync, and an operator who is not
+// warned reads that wait as a hang. Renders the real dialog and reads the real text: a
+// source-grep test would pass on prose that never reaches the screen.
+describe('purge confirmation dialog', () => {
+  it('warns that purging resets the LoTW/eQSL sync position', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+
+    // The button is disabled on an empty log, so this also proves the log actually loaded.
+    const btn = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Purge log',
+    ) as HTMLButtonElement
+    expect(btn).toBeTruthy()
+    expect(btn.disabled).toBe(false)
+    btn.click()
+
+    const dialog = await waitFor(() => {
+      const d = container.querySelector('.purge-confirm')
+      expect(d).not.toBeNull()
+      return d as HTMLElement
+    })
+    const text = dialog.textContent ?? ''
+
+    // The irreversibility warning that was always there — a regression here matters as much.
+    expect(text).toMatch(/permanently deletes/i)
+    expect(text).toMatch(/no undo/i)
+
+    // The new coupling warning: it must name BOTH services and say a full re-download follows.
+    // Asserting the meaning, not one phrasing, so a reword does not red the suite falsely.
+    expect(text).toMatch(/LoTW/)
+    expect(text).toMatch(/eQSL/)
+    expect(text).toMatch(/sync position|sync cursor/i)
+    expect(text).toMatch(/re-?downloads?[^.]*confirmation history/i)
+    // And that it sets the expectation about duration — the whole point of telling them.
+    expect(text).toMatch(/longer|slower/i)
+  })
+})
