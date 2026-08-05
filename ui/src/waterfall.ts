@@ -11,32 +11,6 @@ import { sampleLut, type ColormapName } from './colormaps'
  * ~0 dBr rather than a fabricated full-scale range). */
 export const MIN_SPAN = 1e-6
 
-/**
- * Span of the spectrum row's intensity axis, in dB. A row value is LINEAR IN dB: `0` is
- * `-WF_DB_SPAN` dBFS and `1` is full scale.
- *
- * ⚠️ MIRRORS `tempo_core::spectrum::DB_SPAN` (crates/tempo-core/src/spectrum.rs) — the producer
- * is what puts values on this axis, and this is the only way a consumer turns one back into dB.
- * The two must move together.
- *
- * Before 2026-08-04 the axis was amplitude-linear against each row's own loudest bin, and dB
- * was recovered with `20·log10(a/b)`. Every such call site is now `spanDb`; a stray `log10` on
- * a row value is a bug that will not throw, it will just print a wrong number at the operator.
- */
-export const WF_DB_SPAN = 120
-
-/** dB between two values on the row's intensity axis — the display-value → dB conversion.
- *  `spanDb(floor, ceil)` is the dynamic range a `{floor, ceil}` AGC window covers. */
-export function spanDb(floor: number, ceil: number): number {
-  return (ceil - floor) * WF_DB_SPAN
-}
-
-/** A display-value delta for `db` dB on the row's intensity axis — the inverse of `spanDb`,
- *  for clamps that are naturally stated in dB (PhoneScope's minimum visual span). */
-export function dbToSpan(db: number): number {
-  return db / WF_DB_SPAN
-}
-
 function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x
 }
@@ -416,31 +390,4 @@ export function tuneTarget(
   if (ctrlKey) return 'both'
   if (shiftKey) return 'tx'
   return 'rx'
-}
-
-/**
- * Span of a spectrum row's intensity axis, in dB.
- *
- * A row value is LINEAR IN dB: `0.0` is `WF_DB_SPAN` dB below full scale, `1.0` is full scale.
- * That is what makes equal dB steps equal palette steps — WSJT-X does the same, converting to
- * dB (`flat4.f90:18-20`) and indexing its palette linearly in dB (`plotter.cpp:194-197`).
- *
- * ⚠️ MIRRORS `tempo_core::spectrum::DB_SPAN`. The producer bakes the axis; this number is the
- * only way back from a display value to dB. The two must move together.
- *
- * ⚠️ A display value is a LEVEL, not a magnitude — so thresholds relative to the noise floor are
- * ADDITIVE here, never multiplicative. `floor * 2` was "6 dB up" on the old amplitude axis and is
- * meaningless on this one (see `dbAbove`, and `tuneSnap.ts` for what it silently broke).
- */
-export const WF_DB_SPAN = 120
-
-/** dB between two display values (`ceil - floor` expressed in dB). */
-export function displaySpanDb(floor: number, ceil: number): number {
-  return (ceil - floor) * WF_DB_SPAN
-}
-
-/** The display value `db` dB above `level` — the axis-correct form of an old `level * mult`
- *  threshold (`mult` → `20·log10(mult)` dB). Not clamped: callers compare, they don't render. */
-export function dbAbove(level: number, db: number): number {
-  return level + db / WF_DB_SPAN
 }
