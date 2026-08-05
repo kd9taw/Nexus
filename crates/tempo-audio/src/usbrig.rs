@@ -201,7 +201,12 @@ fn model_tokens(name: &str) -> Vec<String> {
 /// USB rigs report their model there (e.g. `"IC-705"`); generic bridges report only
 /// the chip (e.g. `"CP2102 USB to UART Bridge"`) → `None`. Picks the LONGEST model
 /// token that appears in the haystack so "K3S" beats "K3" and "IC-7610" beats noise.
-/// Skips the Hamlib built-ins (Dummy/NET/FLRig, model ≤ 4) — never a physical USB rig.
+///
+/// **The corpus is narrower than the catalog, and deliberately.** Two kinds of entry are
+/// skipped because neither can ever BE the USB device in front of us, so any token of theirs
+/// that matches is a false positive by construction: the Hamlib built-ins (Dummy/NET/FLRig,
+/// model ≤ 4), and the software-served profiles ([`crate::rigmodels::is_software_cat_profile`]
+/// — where the program is the rig, reached over TCP or a virtual COM pair).
 pub fn match_rig_model(product: &str, manufacturer: &str) -> Option<(u32, &'static str)> {
     let hay = normalize(&format!("{manufacturer} {product}"));
     if hay.is_empty() {
@@ -209,7 +214,7 @@ pub fn match_rig_model(product: &str, manufacturer: &str) -> Option<(u32, &'stat
     }
     let mut best: Option<(usize, u32, &'static str)> = None;
     for (model, name) in rig_models() {
-        if model <= 4 {
+        if model <= 4 || crate::rigmodels::is_software_cat_profile(model) {
             continue;
         }
         for tok in model_tokens(name) {
@@ -528,6 +533,68 @@ mod tests {
         );
         assert_eq!(match_rig_model("USB-Serial Controller", "Prolific"), None);
         assert_eq!(match_rig_model("", ""), None);
+    }
+
+    /// ⚠️ A CATALOG ENTRY IS ALSO AUTO-DETECT CORPUS. Adding the SDR-console profiles put
+    /// their names into `model_tokens`, which is a SUBSTRING match against
+    /// `manufacturer + product` — so `LITE`, `SDR`, `HPSDR`, `ANAN`, `APACHE`, `HERMES` and
+    /// `FLEX` became live claims about USB hardware. Measured on the shipped build: a
+    /// **Digirig Lite** (a cable this crate already recognises by name, `match_interface`)
+    /// came back as model 2054 "Thetis", and an SDRplay RSPdx as 2056 "SDR Console".
+    ///
+    /// That is not one wrong label. `detect_rigs` feeds `suggested_model` straight into the
+    /// Rig Model field, and `port_prober::candidates_from` treats a name match as the
+    /// "exact, trusted" candidate and DISCARDS the operator's configured model — so an
+    /// IC-7300 behind a Digirig Lite would sweep every baud as a Thetis.
+    ///
+    /// None of these profiles is a USB device at all: the program IS the rig, reached over
+    /// TCP or a virtual COM pair. They are excluded from the corpus by
+    /// [`crate::rigmodels::is_software_cat_profile`] — the names stay as written, because the
+    /// names are what an HL2 owner reads in the dropdown.
+    #[test]
+    fn a_software_cat_profile_is_never_matched_from_a_usb_descriptor() {
+        // The three measured false positives.
+        assert_eq!(
+            match_rig_model("Digirig Lite", "Digirig"),
+            None,
+            "a Digirig Lite is a cable, not a Thetis"
+        );
+        assert_eq!(match_rig_model("SDRplay RSPdx", "SDRplay Ltd"), None);
+        assert_eq!(match_rig_model("RS-HFIQ SDR", ""), None);
+        // The tokens each new name contributed, one product string apiece.
+        for (product, maker) in [
+            ("ANAN-7000DLE", "Apache Labs"),
+            ("Hermes Lite 2", "Hermes"),
+            ("HPSDR interface", ""),
+            ("FLEX control cable", ""),
+        ] {
+            assert_eq!(
+                match_rig_model(product, maker),
+                None,
+                "{maker} {product} must not resolve to an SDR-program profile"
+            );
+        }
+        // The corpus still does its job for the radios that DO name themselves on USB.
+        assert_eq!(
+            match_rig_model("IC-705", "Icom Inc.").map(|(m, _)| m),
+            Some(3085)
+        );
+        assert_eq!(
+            match_rig_model("FTDX10", "Yaesu").map(|(m, _)| m),
+            Some(1042)
+        );
+    }
+
+    /// The second consumer, and the more damaging one: a name match here REPLACES the
+    /// operator's configured `fallback_model` with a "trusted" one. An IC-7300 wired through
+    /// a Digirig Lite must still be probed as an IC-7300.
+    #[test]
+    fn a_digirig_lite_does_not_hijack_the_configured_model_in_the_port_sweep() {
+        let ports = [port("COM7", 0x10C4, "Digirig Lite", "Digirig")];
+        let cands = crate::port_prober::candidates_from(&ports, 3073);
+        assert_eq!(cands.len(), 1, "one port, one candidate: {cands:?}");
+        assert_eq!(cands[0].model, 3073, "the operator's own model: {cands:?}");
+        assert!(!cands[0].seeded, "still the trusted-model branch: {cands:?}");
     }
 
     fn port(name: &str, vid: u16, product: &str, maker: &str) -> UsbPort {

@@ -177,3 +177,24 @@ describe('the Connection row tells an SDR operator it is for them', () => {
     expect(network.textContent).not.toMatch(/FlexRadio/i)
   })
 })
+
+describe('the port hint tells the truth about TCI', () => {
+  // The hint shipped as "the TCI Server box … which is a WebSocket protocol Nexus can't
+  // drive". Nexus does drive it: `rigmodels::extended_rig_models` ships (7, "TCI (SunSDR /
+  // ExpertSDR)") and the bundled libhamlib-4.dll carries `tci1x.c` (default 127.0.0.1:50001).
+  // The reporting operator's port IS 50001 — so he can tick "Show all models", find the TCI
+  // entry, and have just been told by us that it cannot work. The hint's real job is
+  // narrower and still true: 50001 is a TCI port, not a CAT port, so it is the wrong number
+  // for THIS field.
+  it('does not deny a model the build ships', async () => {
+    await openRadioTab(networkRadio(2054, 'Thetis (Hermes Lite 2 / ANAN / HPSDR)'))
+    const text = screen.getByText(/Running an SDR program/).textContent ?? ''
+    expect(text).not.toMatch(/can'?t drive|cannot drive|unsupported/i)
+    // Names the route that exists, so "not this box" doesn't read as "not possible".
+    expect(text).toMatch(/TCI/)
+    expect(text).toMatch(/model 7|\(7\)/)
+    // …while still steering this field to the CAT port.
+    expect(text).toMatch(/13013/)
+    expect(text).toMatch(/50001/)
+  })
+})

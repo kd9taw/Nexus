@@ -222,6 +222,36 @@ pub fn rig_model_name(model: u32) -> Option<&'static str> {
         .map(|(_, name)| name)
 }
 
+/// Catalog entries where **the program is the rig**: CAT is served by an application on a PC
+/// (or by the radio's own Ethernet API), over TCP or a virtual COM pair. None of them is ever
+/// a USB device that enumerates with a descriptor.
+///
+/// ⚠️ **THIS IS WHAT KEEPS A NAME OUT OF THE USB AUTO-DETECT CORPUS.** A catalog name is not
+/// only dropdown text: [`crate::usbrig::match_rig_model`] tokenises every VERIFIED-tier name
+/// and substring-matches the tokens against `manufacturer + product`. Adding the SDR-program
+/// profiles therefore made `LITE`, `SDR`, `HPSDR`, `ANAN`, `APACHE`, `HERMES` and `FLEX` live
+/// claims about USB hardware, and a **Digirig Lite** — a cable [`crate::usbrig::match_interface`]
+/// recognises by that exact string — started resolving to 2054 "Thetis", an SDRplay RSPdx to
+/// 2056 "SDR Console". Both consumers act on it: `detect_rigs` writes `suggested_model` into
+/// the Rig Model field, and `port_prober::candidates_from` takes a name match as its "exact,
+/// trusted" candidate and drops the operator's configured model.
+///
+/// The fix is membership, not naming — the names are the whole point of the profiles, and an
+/// HL2 owner has to be able to read his hardware in one.
+///
+/// - `2036` / `23005` — FlexRadio 6000: Ethernet radio, CAT served by the SmartSDR CAT app.
+/// - `2054` / `2048` / `2040` / `2056` — Thetis / PowerSDR / piHPSDR / SDR Console.
+/// - `5` / `7` / `2051` — TRX-Manager, TCI, SDRuno. These sit in `extended_rig_models`, which
+///   `match_rig_model` does not read today. They are listed anyway because a TIER MOVE is
+///   exactly how this bug arrived: 2040 was promoted out of the extended tier in the same
+///   commit, and `5`'s tokens include the bare words `RIG` and `CONTROL`.
+///
+/// (Hamlib's Dummy/NET/FLRig — models ≤ 4 — are excluded by `match_rig_model` separately;
+/// they are not radios at all rather than software-served ones.)
+pub(crate) fn is_software_cat_profile(model: u32) -> bool {
+    matches!(model, 5 | 7 | 2036 | 2040 | 2048 | 2051 | 2054 | 2056 | 23005)
+}
+
 /// Recognise a CAT server that **names itself** in the greeting it sends on connect, and
 /// return `(program name, the catalog model written for it)`.
 ///
@@ -305,13 +335,17 @@ pub(crate) fn is_slow_serial_rig(model: u32) -> bool {
         // BACKEND: Hamlib's caps for both declare `.timeout = 800, .retry = 10`
         // (`rigs/kenwood/flex6xxx.c`), so one transaction can legitimately run ~8 s inside
         // Hamlib while the 700 ms deadline out here fires at 0.7 s and reports "reply
-        // incomplete" for a program that was going to answer. Over TCP `is_network()` already
-        // grants the long window; the com0com route is the one that needed this.
+        // incomplete" for a program that was going to answer. THE COM0COM ROUTE IS THE ONLY
+        // ONE THAT NEEDS THIS — and it is [`is_slow_serial_link`], which takes the connection
+        // kind, that holds that line. (It did not, and could not, when this entry was added:
+        // the classification was connection-blind, and `service.rs`'s FAST S-METER POLL is
+        // gated on it with no `is_network()` in front — so an ANAN on TCP silently dropped to
+        // half the S-meter rate.)
         | 2048 | 2054
     )
 }
 
-/// A serial CAT link that needs the LONG (2.5 s) command deadline: a known slow-backend
+/// A **serial** CAT link that needs the LONG (2.5 s) command deadline: a known slow-backend
 /// rig ([`is_slow_serial_rig`]) — or ANY rig on a slow configured baud (≤ 19200). At
 /// 19200 a multi-frame Hamlib transaction (the Icom DATA-mode set: mode + data-mode
 /// frames, each echoed on the CI-V bus, plus per-frame rig processing and Hamlib's own
@@ -320,8 +354,19 @@ pub(crate) fn is_slow_serial_rig(model: u32) -> bool {
 /// without the mode (the IC-7610 @ 19200 "rig has no PKTUSB mode" report; 19200 is that
 /// rig's CI-V default that the "Auto" USB baud tracks). Baud 0 = "backend default" is
 /// NOT slow — every affected slow-default model is already in the model list.
+///
+/// `rig_conn` is load-bearing, not decoration: **a network link is never a slow serial link**,
+/// and neither input the rest of this function reads means anything over TCP — the model may
+/// be an SDR program that is only slow through a com0com pair, and `baud` is a stale serial
+/// field the network path never uses. Answering that question connection-blind is how the
+/// fast S-meter poll (`service.rs`) halved its rate for a TCP Thetis/ANAN: three of the four
+/// callers wrote `t.is_network() || is_slow_serial_link(…)` and the fourth had no `t` to ask.
+/// The connection now comes in, so there is nothing left to remember.
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
-pub(crate) fn is_slow_serial_link(model: u32, baud: u32) -> bool {
+pub(crate) fn is_slow_serial_link(model: u32, baud: u32, rig_conn: &str) -> bool {
+    if rig_conn.eq_ignore_ascii_case("network") {
+        return false;
+    }
     is_slow_serial_rig(model) || (1..=19_200).contains(&baud)
 }
 
@@ -439,27 +484,57 @@ mod tests {
     fn slow_serial_link_adds_low_baud_on_any_model() {
         // The model-based slow set stays slow at ANY configured baud.
         assert!(
-            is_slow_serial_link(3088, 115_200),
+            is_slow_serial_link(3088, 115_200, "serial"),
             "Xiegu is slow per model"
         );
         // ANY rig at ≤ 19200 baud is a slow link — the IC-7610 case: 19200 is that
         // rig's CI-V default (tracked by the "Auto" USB baud), and Hamlib's multi-frame
         // Icom DATA-mode set outlasts the 700 ms fast deadline there, which the mode
         // retry then misread as "rig has no PKTUSB mode".
-        assert!(is_slow_serial_link(3078, 19_200), "IC-7610 @ 19200");
+        assert!(is_slow_serial_link(3078, 19_200, "serial"), "IC-7610 @ 19200");
         assert!(
-            is_slow_serial_link(1042, 9_600),
+            is_slow_serial_link(1042, 9_600, "serial"),
             "even a Yaesu on a slow line"
         );
         // Fast rigs on fast serial keep the short deadline — unaffected.
         assert!(
-            !is_slow_serial_link(3078, 115_200),
+            !is_slow_serial_link(3078, 115_200, "serial"),
             "IC-7610 @ 115200 is fast"
         );
-        assert!(!is_slow_serial_link(1042, 38_400));
+        assert!(!is_slow_serial_link(1042, 38_400, "serial"));
         // Baud 0 = "backend default" — not slow (the slow-default models are already
         // in the model list above).
-        assert!(!is_slow_serial_link(3078, 0));
+        assert!(!is_slow_serial_link(3078, 0, "serial"));
+    }
+
+    /// A SERIAL question may not be answered about a NETWORK link. The slow-backend entries
+    /// for PowerSDR/Thetis were added for the com0com route, and their own comment said TCP
+    /// was already covered — but `service.rs`'s FAST S-METER POLL is gated on
+    /// `is_slow_serial_link` with no `is_network()` in front of it, so adding 2048/2054 halved
+    /// the S-meter rate for an ANAN or a Hermes Lite 2 reached over TCP, which is how most of
+    /// them are reached. Same for the `baud <= 19200` arm: `baud` is a serial field the
+    /// network path never uses, so a stale 9600 in it must not slow a TCP link either.
+    #[test]
+    fn a_network_cat_link_is_never_a_slow_serial_link() {
+        // The route the entries were added FOR: a virtual COM pair. Still slow.
+        assert!(
+            is_slow_serial_link(2054, 38_400, "serial"),
+            "Thetis over com0com: Hamlib caps are timeout 800 × retry 10"
+        );
+        assert!(is_slow_serial_link(2048, 38_400, "serial"), "PowerSDR too");
+        // The route most of them actually take. Not a serial link at all.
+        assert!(
+            !is_slow_serial_link(2054, 38_400, "network"),
+            "a TCP Thetis keeps the fast S-meter cadence"
+        );
+        assert!(!is_slow_serial_link(2048, 38_400, "network"));
+        // …including on a stale low baud left over from a serial config.
+        assert!(!is_slow_serial_link(3078, 9_600, "network"));
+        // Case-insensitive, like every other `rig_conn` comparison in the crate.
+        assert!(!is_slow_serial_link(2054, 9_600, "Network"));
+        // Anything that is not the network kind is treated as serial — an unknown value must
+        // fail SAFE (long deadline), never strand a slow rig on the 700 ms one.
+        assert!(is_slow_serial_link(2054, 38_400, ""));
     }
 
     #[test]

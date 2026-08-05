@@ -226,8 +226,18 @@ fn host_is_this_machine(host: &str) -> bool {
         || h.starts_with("127.")
 }
 
-/// **Case (c).** Nexus connects to rigctld, and rigctld connects to the rig: one local port
-/// cannot be both ends of that chain. Pure config, so it is answerable before any socket.
+/// **Case (c).** A rigctld **we are about to spawn** cannot both bind this local port and
+/// dial the rig at it: it would be its own rig. Pure config, so it needs no socket of its own
+/// — but it is only ASKABLE once the probe has said the port is free.
+///
+/// ⚠️ **CALL THIS ONLY ON THE SPAWN PATH** — after [`crate::rigctld_server::probe_cat_port`]
+/// has ruled out a rigctld already listening. Run ahead of the probe it is a false positive on
+/// the one configuration the coexist branch exists for: when SOMEONE ELSE'S rigctld already
+/// owns that port, the two ends are the same endpoint on purpose. That is the setup our own
+/// manual prescribes for a rig outside the curated table (Getting-Started / FAQ /
+/// troubleshooting: run an external `rigctld`, select **NET rigctl (model 2)**, Network
+/// Address `127.0.0.1:4532`, rigctld TCP Port the shipped-default 4532), and a guard placed
+/// before the probe took its CAT away and silently degraded keying to VOX.
 ///
 /// Nothing checked this. `tempo_app::settings::validate_radio_ports` de-duplicates
 /// `rigctld_port`/`rotctld_port` BETWEEN radios and against the broker, and never looks
@@ -922,7 +932,7 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
             rig.set_slow_transport(
                 network
                     || native_civ_addr(t).is_some()
-                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
+                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud, &t.rig_conn),
             );
             let ok = probe_cat(&mut rig, t.rigctld_port).ok;
             (rig, Some(proc), ok)
@@ -3534,8 +3544,12 @@ impl RadioLoop {
             // Gated exactly like the fast dial read, PLUS:
             //  - the heavy poll must have PROVEN STRENGTH works (`smeter_supported ==
             //    Some(true)`) — capability probing and give-up accounting stay heavy-poll-owned;
-            //  - never on a slow serial link (a read there can block to 2500 ms; the heavy
-            //    cadence is the honest ceiling on such links);
+            //  - never on a slow SERIAL link (a read there can block to 2500 ms; the heavy
+            //    cadence is the honest ceiling on such links). This is the ONE caller of
+            //    `is_slow_serial_link` with no `is_network()` in front of it — a network CAT
+            //    link is not a slow serial link however its (unused) baud field reads, and the
+            //    connection is passed in so the classifier says so rather than this call site
+            //    having to remember;
             //  - never on a tick that already issued the dial read (`last_freq_poll == now`),
             //    so at most ONE blocking CAT read lands per 20 ms loop tick — the two fast
             //    reads interleave on adjacent ticks instead of stacking on one.
@@ -3546,7 +3560,11 @@ impl RadioLoop {
                 && self.cat_ok != Some(false)
                 && self.freq_misses == 0
                 && self.smeter_supported == Some(true)
-                && !crate::rigmodels::is_slow_serial_link(self.applied.rig_model, self.applied.baud)
+                && !crate::rigmodels::is_slow_serial_link(
+                    self.applied.rig_model,
+                    self.applied.baud,
+                    &self.applied.rig_conn,
+                )
                 && self.last_freq_poll != now
                 && now - self.last_smeter_poll >= SMETER_FAST_POLL_MS
             {
@@ -6436,11 +6454,6 @@ fn open_cat(
             ),
         );
     }
-    // Misconfig, caught before any socket: one local port cannot be both the rigctld we
-    // connect to and the rig rigctld connects to. See `cat_port_conflict`.
-    if let Some(msg) = cat_port_conflict(t) {
-        return (Rig::vox(), None, CatProbe::status(Some(false), msg));
-    }
     // Is a rigctld already here (e.g. WSJT-X launched one)? Ask, and READ THE ANSWER — the
     // old probe accepted any bytes at all, so an SDR console's CAT greeting passed for a
     // rigctld handshake. Skipped entirely on a dual-radio SWITCH that reuses the port of the
@@ -6456,7 +6469,8 @@ fn open_cat(
             // Auto-coexist: connect THROUGH it instead of fighting for the serial port.
             let mut rig = Rig::with_control(Some(addr.clone()), ptt_mode);
             rig.set_slow_transport(
-                t.is_network() || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
+                t.is_network()
+                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud, &t.rig_conn),
             ); // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long command deadline
             let mut probe = finish_cat_open(&mut rig, t);
             probe.detail = format!(
@@ -6483,6 +6497,14 @@ fn open_cat(
         // Nothing there — the normal path. Launch our own below.
         crate::rigctld_server::PortReply::Silent => {}
     }
+    // Nothing holds the port, so we are about to SPAWN — and only NOW is the both-ends check
+    // a fact rather than a false positive: our own daemon would have to bind :rigctld_port
+    // and then dial the rig at that same local port, i.e. at itself. Above this line the same
+    // config is the DOCUMENTED external-rigctld station (NET rigctl, one endpoint on purpose),
+    // which the coexist branch has already served. See `cat_port_conflict`.
+    if let Some(msg) = cat_port_conflict(t) {
+        return (Rig::vox(), None, CatProbe::status(Some(false), msg));
+    }
     // A network rig (Flex/SmartSDR or a remote rig) → point rigctld at host:port over TCP
     // (no serial device, no baud); else the serial port + baud as before.
     let (rig_target, network) = if t.is_network() {
@@ -6498,7 +6520,7 @@ fn open_cat(
             rig.set_slow_transport(
                 network
                     || native_civ_addr(t).is_some()
-                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
+                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud, &t.rig_conn),
             ); // network chains + the native daemon + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
@@ -10577,16 +10599,41 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || crate::rigctld_server::serve(listener, backend));
 
-        // open_rig must SHARE it (no spawn), not fight for the serial port.
-        let t = cat_transport(port, None);
-        let (_rig, proc, probe) = open_rig(&t, true);
-        let (ok, detail) = (probe.ok, probe.detail);
-        assert!(
-            proc.is_none(),
-            "shared the existing rigctld — did not spawn one"
-        );
-        assert_eq!(ok, Some(true), "connected through it: {detail}");
-        assert!(detail.contains("Sharing"), "got: {detail}");
+        // open_rig must SHARE it (no spawn), not fight for the serial port — and it must do
+        // that for BOTH shapes a coexisting station takes.
+        //
+        // ⚠️ THE SECOND SHAPE IS WHAT OUR OWN DOCS TELL OPERATORS TO BUILD
+        // (`docs/manual/Getting-Started.md`, `docs/manual/FAQ.md`, `docs/troubleshooting.md`):
+        // for a rig outside the curated table, run an external `rigctld` and select **NET
+        // rigctl (model 2)** — Connection Network, Network Address `127.0.0.1:<port>`, and
+        // rigctld TCP Port that SAME `<port>` (4532, the shipped default, in the real setup).
+        // There the two "ends" are one endpoint ON PURPOSE: the external daemon is both the
+        // rigctld we connect to and the thing that owns the rig. `cat_port_conflict` reads
+        // exactly like a misconfiguration and must not be consulted until we are about to
+        // SPAWN.
+        //
+        // This test ran only the FIRST shape for its whole life, where `cat_transport` leaves
+        // `rig_conn = "serial"` and `rig_addr` empty — so `cat_port_conflict` returned `None`
+        // whatever it did, and a guard placed ahead of the probe killed the documented setup
+        // without reddening anything.
+        let serial = cat_transport(port, None);
+        let mut documented = cat_transport(port, None);
+        documented.rig_model = 2; // NET rigctl — what the docs say to select
+        documented.rig_conn = "network".into();
+        documented.rig_addr = format!("127.0.0.1:{port}");
+        for (what, t) in [
+            ("a serial rig", serial),
+            ("the documented NET rigctl setup", documented),
+        ] {
+            let (_rig, proc, probe) = open_rig(&t, true);
+            let (ok, detail) = (probe.ok, probe.detail);
+            assert!(
+                proc.is_none(),
+                "{what}: shared the existing rigctld — did not spawn one"
+            );
+            assert_eq!(ok, Some(true), "{what}: connected through it: {detail}");
+            assert!(detail.contains("Sharing"), "{what}: got: {detail}");
+        }
     }
 
     /// The exact greeting the field-report operator's Thetis sent (2.10.3.13 on a Hermes
@@ -10678,9 +10725,9 @@ mod tests {
         assert!(!foreign_cat_port_message("127.0.0.1:4532", "hello", 0).contains("';'"));
     }
 
-    /// Case (c): pure config, checkable before any socket. Nexus connects to rigctld and
-    /// rigctld connects to the rig — one port cannot be both ends. `validate_radio_ports`
-    /// de-duplicates ports BETWEEN radios and never looked inside a radio's own `rig_addr`.
+    /// Case (c): pure config, no socket of its own. A rigctld WE spawn cannot both bind the
+    /// port and dial the rig at it. `validate_radio_ports` de-duplicates ports BETWEEN radios
+    /// and never looked inside a radio's own `rig_addr`.
     #[test]
     fn a_local_rig_address_may_not_reuse_the_rigctld_port() {
         let mut t = cat_transport(50001, None);
@@ -10716,6 +10763,26 @@ mod tests {
             cat_port_conflict(&serial),
             None,
             "serial: rig_addr is unused"
+        );
+
+        // …and it still REACHES the operator on the path where it is true: nothing listening,
+        // so `open_cat` is about to spawn a daemon that would dial itself. (The companion
+        // guard is `open_rig_coexists_with_an_existing_rigctld`, where the identical config
+        // with an external rigctld ON that port must come out CONNECTED, not conflicted.)
+        let free = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port() // released on drop
+        };
+        let mut spawning = cat_transport(free, None);
+        spawning.rig_conn = "network".into();
+        spawning.rig_addr = format!("127.0.0.1:{free}");
+        let (_rig, proc, probe) = open_rig(&spawning, true);
+        assert!(proc.is_none(), "never spawns into its own port");
+        assert_eq!(probe.ok, Some(false));
+        assert!(
+            probe.detail.contains("both on port"),
+            "the spawn path still says so: {}",
+            probe.detail
         );
     }
 

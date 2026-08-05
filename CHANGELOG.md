@@ -92,7 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   / HPSDR)**, **PowerSDR / mRX PS (Apache ANAN / legacy FLEX)**, **piHPSDR / OpenHPSDR (Hermes
   Lite 2 / ANAN)** and **SDR Console**, each named for the program you launched. PowerSDR is
   no longer filed under FlexRadio, and no longer described as a TS-2000 emulation, which it
-  never was.
+  never was. These four are list entries only: a program is not a USB device, so Detect and
+  the CAT port auto-test never suggest one and never replace the model you configured.
 
   **Nexus mistook a rig's CAT port for a rigctld.** Before starting its own copy of Hamlib's
   rigctld, Nexus checks whether one is already running so it can share it rather than fight
@@ -104,10 +105,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written for that program. If you are on a FlexRadio profile it also spells out what that
   profile is costing you. **Nothing is changed for you** — the message says what to set.
 
-  **Both ends of the chain on one port.** Nexus connects to rigctld, and rigctld connects to
-  your rig, so a single port cannot be both — and nothing checked. Setting the rig's address
-  and the rigctld port to the same number is now caught before anything is launched, with both
-  numbers read back so you can see the collision instead of being told about it.
+  **Both ends of the chain on one port.** When Nexus starts its *own* rigctld, that daemon
+  binds a port and then dials your rig — it cannot dial the port it is listening on, and
+  nothing checked. Giving the rig's Network Address and the rigctld TCP Port the same number
+  is now caught before that daemon is launched, with both numbers read back so you can see the
+  collision instead of being told about it. It is checked at that moment and no earlier, on
+  purpose: when a rigctld **you** started is already on that port — the setup the manual
+  prescribes for a radio outside the rig list (**NET rigctl**, Network Address
+  `127.0.0.1:4532`, rigctld TCP Port 4532) — the two ends genuinely are one endpoint, and
+  Nexus shares it exactly as it always has.
 
   What this does *not* do: recognition is by greeting, and only Thetis and PowerSDR announce
   themselves. piHPSDR, SmartSDR CAT and rigctld itself all stay silent until spoken to, and

@@ -2858,13 +2858,21 @@ export function SettingsPanel({
                   {/* Where an SDR operator finds the real number. Nothing here is a default —
                       every one of these programs lets the operator move the port, and the
                       Thetis field report was a rig served on a port that is Thetis's TCI
-                      default, not its CAT default. Read the port out of the program. */}
+                      default, not its CAT default. Read the port out of the program.
+
+                      ⚠️ The TCI sentence says only that 50001 is the wrong box for THIS field.
+                      It may not say Nexus can't drive TCI — it can: `rigmodels` ships
+                      (7, "TCI (SunSDR / ExpertSDR)") and the bundled libhamlib-4.dll carries
+                      tci1x.c (its own default is 127.0.0.1:50001). The reporting operator's
+                      port was 50001, and "Show all models" puts that entry in front of him. */}
                   <span className="settings-hint">
                     Running an SDR program? Read the port out of the program, don't guess it:{' '}
                     <strong>Thetis</strong> → Setup ▸ Serial/Network/Midi CAT ▸{' '}
                     <em>TCP/IP CAT Server</em> (its own box, factory 13013 — <em>not</em> the
-                    TCI Server box next to it, factory 50001, which is a WebSocket protocol
-                    Nexus can't drive); <strong>SmartSDR CAT</strong> → 5002;{' '}
+                    TCI Server box next to it, factory 50001: TCI is a separate protocol with
+                    its own Hamlib model, "TCI (SunSDR / ExpertSDR)" (model 7, under Show all
+                    models, beta in Hamlib), so 50001 is not a CAT port and the CAT server
+                    above is the route we recommend); <strong>SmartSDR CAT</strong> → 5002;{' '}
                     <strong>piHPSDR</strong> → 19090. Whatever it shows, type that.
                   </span>
                 </label>
