@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan } from './waterfall'
+import { agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -88,6 +88,102 @@ describe('applyGainZero (manual contrast)', () => {
   it('never returns a degenerate window (ceil > floor)', () => {
     const r = applyGainZero(0.5, 0.5, 1, 1) // zero span + max gain
     expect(r.ceil).toBeGreaterThan(r.floor)
+  })
+
+  it('Zero is an ABSOLUTE dB trim of the black point, not a fraction of the window', () => {
+    // The composition bug (2026-08-05). `parkFloor` already puts the black point AT the noise
+    // floor; Zero then shifted it AGAIN by half the PARKED window, which is ≥ WF_MIN_WINDOW_DB
+    // and grows with the loudest station in view. The two were written independently and nobody
+    // multiplied them out.
+    //
+    // The property that makes them compose: Zero's authority is a fixed number of dB, so the
+    // same slider position means the same thing on a quiet band and a contest.
+    for (const zero of [-1, -0.5, 0.25, 1]) {
+      const narrow = applyGainZero(0.3, 0.3 + dbToSpan(24), 0, zero) // the parked minimum
+      const wide = applyGainZero(0.3, 0.3 + dbToSpan(48), 0, zero) // six +30 dB stations in view
+      expect(spanDb(0.3, narrow.floor)).toBeCloseTo(zero * WF_ZERO_TRIM_DB, 6)
+      expect(spanDb(0.3, wide.floor)).toBeCloseTo(zero * WF_ZERO_TRIM_DB, 6)
+      // ...and it is the SAME shift on both, which is the whole fix. Under `zero * span * 0.5`
+      // these were 12 dB and 24 dB apart at zero=+1.
+      expect(narrow.floor).toBeCloseTo(wide.floor, 12)
+    }
+    // Direction and window-width behavior are unchanged: Zero SLIDES the window, never squeezes it.
+    const slid = applyGainZero(0.3, 0.3 + dbToSpan(24), 0, 1)
+    expect(spanDb(slid.floor, slid.ceil)).toBeCloseTo(24, 6)
+  })
+
+  it('the composed black point (park + Zero) stays inside a bound the operator can reason about', () => {
+    // WHAT THE BUG COST, stated as the invariant that was missing: after BOTH stages, the black
+    // point is at most WF_PARK_DB + WF_ZERO_TRIM_DB above the measured noise floor — 7 dB, not
+    // the 12.7 dB a persisted zero=+1 produced on a busy band, and not the 24.1 dB a 48 dB
+    // window would have produced.
+    const noise = 0.3
+    for (const windowDb of [24, 30, 48]) {
+      const parked = parkFloor(noise, noise + dbToSpan(windowDb))
+      for (const zero of [-1, 0, 0.5, 1]) {
+        const d = applyGainZero(parked.floor, parked.ceil, 0, zero)
+        expect(spanDb(noise, d.floor)).toBeLessThanOrEqual(WF_PARK_DB + WF_ZERO_TRIM_DB + 1e-9)
+        expect(spanDb(noise, d.floor)).toBeGreaterThanOrEqual(WF_PARK_DB - WF_ZERO_TRIM_DB - 1e-9)
+      }
+    }
+  })
+
+  it('THE HARM: a persisted Zero must not delete an ordinary station from the display', () => {
+    // The repro, in the operator's terms. `nexus.waterfall.zero` is ONE app-wide key
+    // (Waterfall.tsx GAIN_KEY/ZERO_KEY), so a slider dragged right once — before the park
+    // existed, when it meant something else — rides Operate, RTTY, SSTV and every popped-out
+    // waterfall forever. Under `zero * span * 0.5` that put the black point 12.7 dB over the
+    // noise on a busy band and a **-11 dB SNR** station, which decodes without trouble, rendered
+    // bit-identical to the background: measured LUT 40 at zero=+0.5 and LUT 0 at zero=+1.
+    //
+    // Scene: the same producer model the park test uses, minimal — 512 bins over 0-4000 Hz,
+    // ENL-2 speckle on a -76.3 dBFS floor, 8-FSK emitters at a per-bin excess of SNR + 22.3 dB.
+    const BINS = 512
+    const HZ = (i: number) => ((i + 0.5) * 4000) / BINS
+    const disp = (d: number) => Math.min(1, Math.max(0, (d + WF_DB_SPAN) / WF_DB_SPAN))
+    const noiseDb = (hz: number) => (hz >= 3300 || hz <= 200 ? -116.3 : -76.3)
+    let s = 0x9e3779b9
+    const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0), s / 4294967296)
+    const rows: number[][] = []
+    for (let r = 0; r < 40; r++) {
+      const p = new Float64Array(BINS)
+      for (let i = 0; i < BINS; i++)
+        p[i] = 10 ** (noiseDb(HZ(i)) / 10) * -0.5 * (Math.log(rnd() || 1e-9) + Math.log(rnd() || 1e-9))
+      // one ordinary station at -11 dB SNR, plus a dozen others so the band is not empty
+      for (const t of [{ hz: 1300, snr: -11 }, ...Array.from({ length: 12 }, (_, k) => ({ hz: 1900 + k * 60, snr: -14 + k }))]) {
+        const i = Math.round((t.hz - 25 + 6.25 * (Math.floor(rnd() * 8) + 0.5)) / (4000 / BINS) - 0.5)
+        p[i] += 10 ** ((noiseDb(HZ(i)) - 0.9 + t.snr + 22.3) / 10)
+      }
+      rows.push(Array.from(p, (v) => disp(10 * Math.log10(Math.max(v, 1e-30)))))
+    }
+    const vLo = Math.floor(200 / (4000 / BINS))
+    const vHi = Math.ceil(3000 / (4000 / BINS))
+    /** Mean over rows of the station's brightest tone bin — the column the operator reads. */
+    const stationLut = (zero: number) => {
+      let sum = 0
+      for (const row of rows) {
+        const a = agcRange(row.slice(vLo, vHi), WF_FLOOR_PCT)
+        const p = parkFloor(a.floor, a.ceil)
+        const { floor, ceil } = applyGainZero(p.floor, p.ceil, 0, zero)
+        let best = 0
+        for (let t = 0; t < 8; t++) {
+          const i = Math.round((1300 - 25 + 6.25 * (t + 0.5)) / (4000 / BINS) - 0.5)
+          const v = normalize(row[i], floor, ceil)
+          best = Math.max(best, v >= 1 ? 255 : Math.round(v * 255))
+        }
+        sum += best
+      }
+      return sum / rows.length
+    }
+    // Centred: the parked default, station plainly drawn.
+    expect(stationLut(0)).toBeGreaterThan(80)
+    // Dragged right — dimmer, deliberately, but still a station and not the background.
+    // Under the old composition these were 40 and 0.
+    expect(stationLut(0.5)).toBeGreaterThan(50)
+    expect(stationLut(1)).toBeGreaterThan(30)
+    // Monotone and honest: right really does bury, it just cannot bury this far.
+    expect(stationLut(1)).toBeLessThan(stationLut(0.5))
+    expect(stationLut(0.5)).toBeLessThan(stationLut(0))
   })
 })
 
@@ -628,5 +724,217 @@ describe('the parked black point (WF_FLOOR_PCT / WF_PARK_DB / parkFloor)', () =>
     expect(after.sig[-18]).toBeGreaterThan(after.sig[-21])
     expect(after.sig[-11]).toBeGreaterThan(after.sig[-18])
     expect(after.sig[-1]).toBeGreaterThan(after.sig[-11])
+  })
+})
+
+describe('flattenRow (spectral flattening)', () => {
+  const flat = (row: number[]) => {
+    const out = new Float32Array(row.length)
+    flattenRow(row, out)
+    return Array.from(out)
+  }
+  /** A display value for `dbfs` on the row's intensity axis. */
+  const disp = (dbfs: number) => Math.min(1, Math.max(0, (dbfs + WF_DB_SPAN) / WF_DB_SPAN))
+
+  it('removes a linear tilt, and holds the row at its own level', () => {
+    // 512 bins sloping 15 dB across the row — the pathological rig. No noise, so the
+    // percentile IS the tilt and the assertion is exact rather than statistical.
+    const n = 512
+    const row = Array.from({ length: n }, (_, i) => disp(-80 + 15 * (i / (n - 1) - 0.5)))
+    const out = flat(row)
+    const db = (v: number) => v * WF_DB_SPAN - WF_DB_SPAN
+    const lo = db(out[20])
+    const hi = db(out[n - 21])
+    expect(Math.abs(hi - lo)).toBeLessThan(1) // 15 dB of tilt → under 1 dB of residual
+    // …and the LEVEL is untouched: the flattened row sits where the sloped one averaged.
+    const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
+    expect(spanDb(mean(row), mean(out))).toBeCloseTo(0, 0)
+  })
+
+  it('leaves a narrow carrier standing — it flattens SHAPE, not signals', () => {
+    const n = 512
+    const row = Array.from({ length: n }, () => disp(-80))
+    row[200] = disp(-50) // a 30 dB carrier in one bin
+    const out = flat(row)
+    // The carrier keeps its full excess over the flattened noise.
+    expect(spanDb(out[190], out[200])).toBeGreaterThan(29)
+    // And its NEIGHBOURS are not dented: a baseline that followed the signal would dig a
+    // trough either side of it, which is how a flattener eats the thing it is displaying.
+    expect(Math.abs(spanDb(out[190], out[210]))).toBeLessThan(0.5)
+  })
+
+  it('PRESERVES THE SSB STOPBAND CLIFF instead of lifting it into fake band noise', () => {
+    // Every SSB/DATA filter leaves a ~40 dB dead cliff above ~3.3 kHz, and it is ~17% of a
+    // 0–4000 Hz row. A flattener that treats it as tilt makes digital silence read as live
+    // band. This is the specific reason the baseline here is local + excursion-clamped rather
+    // than the global low-order polynomial `flat4.f90` fits (measured on the modelled scenes,
+    // a faithful quartic port lifts a 32.8 dB cliff to 13.0 dB deep and leaves the effective
+    // park spread over −20…+9 dB, worse than no flattening at all).
+    const n = 512
+    const hz = (i: number) => ((i + 0.5) * 4000) / n
+    const row = Array.from({ length: n }, (_, i) => disp(hz(i) > 3300 ? -120 : -80))
+    const out = flat(row)
+    const cliffDb = spanDb(out[500], out[200]) // stopband → passband
+    expect(cliffDb).toBeGreaterThan(35) // essentially the whole 40 dB survives
+  })
+
+  it('never moves any bin by more than the excursion cap', () => {
+    // The bound on what a legitimately sloped spectrum — or a broadband signal — can lose.
+    const n = 512
+    const row = Array.from({ length: n }, (_, i) => disp(-100 + 60 * (i / (n - 1))))
+    const out = flat(row)
+    for (let i = 0; i < n; i++) {
+      if (out[i] <= 0 || out[i] >= 1) continue // clamped at an axis rail, not a flattener move
+      expect(Math.abs(spanDb(row[i], out[i]))).toBeLessThanOrEqual(2 * WF_FLATTEN_MAX_DB + 0.01)
+    }
+  })
+
+  it('passes a too-short or all-dead row through untouched', () => {
+    // (`out` is a Float32Array, so "untouched" is exact to float32, not bit-identical f64.)
+    const short = [0.1, 0.2, 0.3, 0.4]
+    flat(short).forEach((v, i) => expect(v).toBeCloseTo(short[i], 6))
+    const flatRow = new Array(512).fill(0.5)
+    expect(flat(flatRow)).toEqual(flatRow) // nothing to remove → identity
+  })
+
+  it('passes non-finite bins through and still flattens around them', () => {
+    const n = 512
+    const row = Array.from({ length: n }, (_, i) => disp(-80 + 15 * (i / (n - 1) - 0.5)))
+    row[100] = NaN
+    const out = flat(row)
+    expect(Number.isNaN(out[100])).toBe(true)
+    expect(Math.abs(spanDb(out[20], out[n - 21]))).toBeLessThan(1)
+  })
+
+  it('MEASURES criterion 1: the effective park stops drifting with occupancy and tilt', () => {
+    // THE HEADLINE NUMBER, and the reason this change exists.
+    //
+    // `parkFloor` puts the black point WF_PARK_DB above `WF_FLOOR_PCT`'s median — but that is
+    // the median of the WHOLE VISIBLE ROW, not of the noise. So the EFFECTIVE park — the dB a
+    // signal at frequency f must exceed its LOCAL noise median to be drawn at all — drifts with
+    // band occupancy and, far worse, with the rig's passband tilt. On a 15 dB-tilt rig it ran
+    // from −5 dB at the loud end (a bright noisy field: the operator's report) to +10 at the
+    // quiet end (signals silently not drawn), so WHICH STATION SURVIVES was decided by where it
+    // sat in the passband rather than by its SNR.
+    //
+    // ⚠️ THIS TEST CANNOT PASS WITH THE FLATTENER REMOVED, by construction: it runs the SAME
+    // scenes through the SAME chain twice, once flattened and once not, and asserts the
+    // unflattened arm FAILS the band the flattened arm must hold. Delete the `flattenRow` call
+    // and the two arms become identical, so the `raw` expectations below go red. That is the
+    // null control — a park assertion on its own would pass on a dead band with no flattener
+    // at all, which is exactly the shape of guard that shipped vacuous here on 2026-08-05.
+    const BINS = 512
+    const HZ = (i: number) => ((i + 0.5) * 4000) / BINS
+    const BIN = (hz: number) => Math.round(hz / (4000 / BINS) - 0.5)
+    const dispOf = (dbfs: number) => Math.min(1, Math.max(0, (dbfs + WF_DB_SPAN) / WF_DB_SPAN))
+    // Noise mean: −76.3 dBFS with `tilt` dB of passband slope, and the SSB filter's dead
+    // cliff outside 200–3300 Hz. Same scene family as the parked-black-point test above.
+    const noiseDb = (hz: number, tilt: number) =>
+      hz >= 3300 || hz <= 200
+        ? -116.3
+        : -76.3 + tilt * (0.5 - Math.min(1, Math.max(0, (hz - 300) / 2500)))
+    const stationHz = (n: number) => {
+      const out: number[] = []
+      for (let hz = 420; out.length < n && hz < 2950; hz += 55) out.push(hz)
+      return out
+    }
+    const build = (tilt: number, nSta: number, rows: number) => {
+      let s = 0x9e3779b9
+      const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0), s / 4294967296)
+      const speckle = () => -0.5 * (Math.log(rnd() || 1e-9) + Math.log(rnd() || 1e-9))
+      const stations = stationHz(nSta).map((hz, k) => ({ hz, snr: -18 + (k % 22) }))
+      const out: number[][] = []
+      for (let r = 0; r < rows; r++) {
+        const p = new Float64Array(BINS)
+        for (let i = 0; i < BINS; i++) p[i] = 10 ** (noiseDb(HZ(i), tilt) / 10) * speckle()
+        for (const t of stations) {
+          // 8-FSK: one 6.25 Hz tone of the 50 Hz group at a time.
+          const i = BIN(t.hz - 25 + 6.25 * (Math.floor(rnd() * 8) + 0.5))
+          p[i] += 10 ** ((noiseDb(t.hz, tilt) - 0.9 + t.snr + 22.3) / 10)
+        }
+        out.push(Array.from(p, (v) => dispOf(10 * Math.log10(Math.max(v, 1e-30)))))
+      }
+      return { rows: out, stations }
+    }
+    const median = (a: number[]) => {
+      const b = [...a].sort((x, y) => x - y)
+      return b[Math.min(b.length - 1, Math.round(0.5 * (b.length - 1)))]
+    }
+    const vLo = BIN(200)
+    const vHi = BIN(3000)
+    /** Effective park across the visible passband: min / max over the noise-only bins. */
+    const effPark = (tilt: number, nSta: number, flatten: boolean) => {
+      const { rows, stations } = build(tilt, nSta, 240)
+      const buf = new Float32Array(BINS)
+      const perBin: number[][] = Array.from({ length: BINS }, () => [])
+      const floors: number[] = []
+      for (const raw of rows) {
+        let r: ArrayLike<number> = raw
+        if (flatten) {
+          flattenRow(raw, buf)
+          r = buf
+        }
+        const win: number[] = []
+        for (let i = vLo; i < vHi; i++) win.push(r[i])
+        const { floor, ceil } = agcRange(win, WF_FLOOR_PCT)
+        floors.push(parkFloor(floor, ceil).floor)
+        for (let i = vLo; i < vHi; i++) perBin[i].push(r[i])
+      }
+      const dispFloor = median(floors)
+      const eff: number[] = []
+      for (let i = vLo; i < vHi; i++) {
+        const hz = HZ(i)
+        if (hz < 260 || hz > 3250) continue
+        if (stations.some((t) => Math.abs(hz - t.hz) < 45)) continue
+        eff.push(spanDb(median(perBin[i]), dispFloor))
+      }
+      return { min: Math.min(...eff), max: Math.max(...eff) }
+    }
+
+    const SCENES: [string, number, number][] = [
+      ['dead', 0, 0],
+      ['20 stations', 0, 20],
+      ['contest', 0, 40],
+      ['+5 dB tilt', 5, 20],
+      ['+15 dB tilt', 15, 20],
+    ]
+    // Measured (600 rows, p05/mean/p95 of the effective park in dB, WF_PARK_DB = 2):
+    //   scene        before                after
+    //   dead          1.8 / 2.0 /  2.3      1.7 / 2.1 / 2.4
+    //   20 stations   2.3 / 2.5 /  2.8      1.9 / 2.4 / 2.9
+    //   contest       2.6 / 2.9 /  3.3      2.5 / 2.9 / 3.3
+    //   +5 dB tilt   −0.0 / 3.5 /  5.0      2.0 / 2.4 / 2.8
+    //   +15 dB tilt  −5.0 / 5.6 /  9.9      1.3 / 2.5 / 3.0
+    // The band below is min/max over 240 rows, so it is wider than the p05/p95 figures — the
+    // per-bin medians carry their own sampling error at this row count.
+    for (const [name, tilt, nSta] of SCENES) {
+      const on = effPark(tilt, nSta, true)
+      expect(on.max, `${name}: the black point must stay near WF_PARK_DB everywhere`).toBeLessThan(
+        WF_PARK_DB + 2,
+      )
+      expect(on.min, `${name}: and must not fall below it either — that is the bright field`).toBeGreaterThan(
+        WF_PARK_DB - 2,
+      )
+    }
+    // THE NULL CONTROL. Without flattening the two tilted scenes blow the same band apart —
+    // so a `flattenRow` that did nothing would fail here rather than passing silently.
+    const rawTilt15 = effPark(15, 20, false)
+    expect(
+      rawTilt15.max - rawTilt15.min,
+      'UNFLATTENED, 15 dB of passband tilt must still spread the effective park — if this ' +
+        'passes, the scene has no tilt in it and the assertions above prove nothing',
+    ).toBeGreaterThan(10)
+    const flatTilt15 = effPark(15, 20, true)
+    expect(flatTilt15.max - flatTilt15.min).toBeLessThan(rawTilt15.max - rawTilt15.min - 10)
+    const rawTilt5 = effPark(5, 20, false)
+    expect(rawTilt5.max).toBeGreaterThan(WF_PARK_DB + 2) // the +5 dB scene fails the bar too
+  })
+
+  it('segments stay much wider than a signal', () => {
+    // The premise that lets a percentile anchor ignore stations: at 16 segments over a
+    // 512-bin 0–4000 Hz row a segment is 250 Hz — five FT8 signals wide. Narrower segments
+    // make the baseline follow signals and subtract them from themselves.
+    const segHz = 4000 / WF_FLATTEN_SEGMENTS
+    expect(segHz).toBeGreaterThan(4 * 50)
   })
 })

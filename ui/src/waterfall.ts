@@ -93,11 +93,53 @@ export function normalize(mag: number, floor: number, ceil: number): number {
 }
 
 /**
+ * dB the Zero slider may move the black point at either extreme — an ABSOLUTE trim, not a
+ * fraction of the display window.
+ *
+ * This is WSJT-X's own authority for the same control, converted: `plotter.cpp:194` maps
+ * `y1 = 10·gain·y + m_plotZero` into a 0-254 palette index, so at unity gain the palette
+ * spends 10 indices per dB, and `widegraph.ui`'s zeroSlider runs -50..+50 — ±5 dB, and
+ * WINDOW-INDEPENDENT, because it is added in index space after the scaling.
+ *
+ * ⚠️ THE REASON THIS IS A CONSTANT AND NOT `span * 0.5` (the 2026-08-05 fix). "±½ the display
+ * window" was a defensible shift while the floor was the 5th percentile of the row. Once
+ * `parkFloor` put the black point AT the noise floor by construction, the two composed and
+ * nobody checked the composition: the shift is taken from the PARKED window, which is at
+ * least `WF_MIN_WINDOW_DB` (24 dB) and grows with the loudest station in view, so a persisted
+ * right-of-centre Zero stacked a large, band-dependent offset on top of the park.
+ *
+ * Measured on the modelled busy band (25 stations, `WF_PARK_DB` 2), black point above the
+ * noise median and the palette index each probe reached:
+ *
+ *   zero        old (±½ window)                 new (±5 dB trim)
+ *   +0.25       noise +3.7 dB   -21:  9  -11: 72     noise +2.0 dB   -21: 26  -11: 91
+ *   +0.5        noise +6.7 dB   -21:  0  -11: 40     noise +3.2 dB   -21: 13  -11: 77
+ *   +1.0        noise +12.7 dB  -21:  0  -11:  0     noise +5.7 dB   -21:  1  -11: 51
+ *
+ * At the right-hand stop the old composition deleted a **-11 dB SNR** station — an ordinary,
+ * comfortably decodable signal — rendering it bit-identical to the background on Operate,
+ * RTTY, SSTV and every popped-out waterfall at once, because `nexus.waterfall.zero` is one
+ * app-wide key. The operator cannot see a station that stopped being drawn.
+ *
+ * And the old form was not merely large, it was DYNAMIC: the shift scaled with the parked
+ * window, which the p99.5 ceiling widens when strong signals appear. With zero persisted at
+ * +0.5, the black point measured noise +6.4 dB on a quiet band and noise +12.6 dB once six
+ * +30 dB stations were in view — weak signals went dark exactly when the band got good, which
+ * reads as propagation, not as a display setting. The trim below is flat at +2.9/+3.0 dB
+ * across that whole sweep.
+ */
+export const WF_ZERO_TRIM_DB = 5
+
+/**
  * Apply the operator's manual contrast knobs to an auto-AGC `{floor, ceil}` window
- * (WSJT-X "Gain"/"Zero" sliders). `zero`∈[-1,1] shifts the noise-floor baseline
- * (brightness); `gain`∈[-1,1] narrows (>0, more contrast) or widens (<0, flatter) the
- * dynamic-range window. Both `0` = pure auto-AGC (identity), so the sliders only ever
- * adjust the automatic display rather than replacing it.
+ * (WSJT-X "Gain"/"Zero" sliders). `zero`∈[-1,1] trims the black point up to
+ * ±`WF_ZERO_TRIM_DB` (brightness); `gain`∈[-1,1] narrows (>0, more contrast) or widens (<0,
+ * flatter) the dynamic-range window. Both `0` = pure auto-AGC (identity), so the sliders only
+ * ever adjust the automatic display rather than replacing it.
+ *
+ * The window WIDTH rides with the shifted floor (`c = f + span`), so Zero slides the window
+ * rather than squeezing it — unchanged, and the reason `parkFloor`'s minimum-window guarantee
+ * survives the operator's knobs.
  */
 export function applyGainZero(
   floor: number,
@@ -106,7 +148,9 @@ export function applyGainZero(
   zero: number,
 ): { floor: number; ceil: number } {
   const span = Math.max(ceil - floor, MIN_SPAN)
-  const f = floor + zero * span * 0.5 // ±½ span floor shift
+  // ADDITIVE on the dB axis (see WF_DB_SPAN), and a fixed dB — never a fraction of `span`,
+  // which is what let this stack on the park. See WF_ZERO_TRIM_DB.
+  const f = floor + dbToSpan(zero * WF_ZERO_TRIM_DB)
   // gain>0 → 0.4×span (punchy); gain<0 → 2×span (flat). gain=0 → unchanged.
   const widthFactor = gain >= 0 ? 1 - 0.6 * gain : 1 - gain
   let c = f + span * widthFactor
@@ -163,10 +207,34 @@ export const WF_FLOOR_PCT = 0.5
  * (2) `WF_FLOOR_PCT`'s median is the whole visible row's, not the noise's, so band occupancy and
  *     passband tilt push the EFFECTIVE park well past this constant: measured 3.3 dB on a dead
  *     band, 4.4 with 20 stations, 6.4 with 5 dB of tilt, 11.2 with 15 dB.
- * The real fixes are spectral flattening (kills the tilt term — WSJT-X runs `flat4` on every row
- * and we run nothing) and a SOFT KNEE below the park instead of a hard clamp, so a sub-park
- * column still accumulates contrast over the ~105 rows an FT8 over lasts rather than rendering
- * bit-identical to the background. Until then this constant is doing a job it cannot fully do.
+ * The real fix for (2) is spectral flattening (kills the tilt term — WSJT-X runs `flat4` on
+ * every row), which is `flattenRow` below.
+ *
+ * ⚠️ THE SECOND "REAL FIX" NAMED HERE — a SOFT KNEE below the park instead of the hard clamp,
+ * so a sub-park column accumulates contrast over the ~105 rows an over lasts — WAS MODELLED AND
+ * REFUTED (2026-08-05). It is written down because it is the obvious idea and it will be had
+ * again. The premise is true: the clamp does destroy sub-park structure, and an unclamped map
+ * scores 6.2 LUT of column separation against the clamp's 4.3. What is false is that a knee can
+ * recover it at a price worth paying. Measured on this scene, the marginal value of one palette
+ * index of slope at level `d` above the parked floor — separation bought per unit of background
+ * brightness paid, `[P(sig>d) − P(no-sig>d)] / P(background>d)`:
+ *
+ *   d = −5 dB  0.035    d = −1 dB  0.132    d = +2 dB  0.885    d = +5 dB  1.602
+ *   d = −2 dB  0.074    d =  0 dB  0.221    d = +4 dB  1.457    d = +6 dB  2.318
+ *
+ * It rises monotonically. Below the park is the WORST place on the axis to spend a palette
+ * index — 55% of every background pixel lives below −2 dB and almost none of the signal's
+ * distinguishing mass does — so every knee shape (linear segment, γ=2/3/4 compressive, softplus
+ * soft-clip, and a slope-preserving variant that costs the above-park contrast nothing) came out
+ * DOMINATED by simply moving `WF_PARK_DB`: at matched background brightness the plain clamp gave
+ * equal or better separation on all four of column separation, the guard's max-over-tones metric,
+ * %-black and luminance-integrated ΔL*. The best of them (16 indices over a 2 dB knee, slope
+ * preserving) landed ON the park frontier, moved the guard metric 8.6 → 8.6, and cost 68% → 50%
+ * black and +68% inter-row twinkle — i.e. it bought nothing and re-created the bright, restless
+ * field the operator complained about. A knee is a reparametrisation of the park, not a new
+ * degree of freedom. The lever that DOES move weak-signal separation is palette indices per dB
+ * (`WF_MIN_WINDOW_DB`), and it is nearly free in blackness: 24 → 20 dB took the guard metric
+ * 8.6 → 10.2 and %-black 68.1 → 68.0.
  */
 export const WF_PARK_DB = 2
 
@@ -205,6 +273,235 @@ export function parkFloor(
 ): { floor: number; ceil: number } {
   const f = floor + dbToSpan(parkDb)
   return { floor: f, ceil: Math.max(ceil, f + dbToSpan(minWindowDb), f + MIN_SPAN) }
+}
+
+/**
+ * Segments `flattenRow` splits the row into to estimate the baseline. 16 over a 512-bin
+ * 0–4000 Hz row is 32 bins / 250 Hz each: short enough to track a filter's curvature, long
+ * enough that the 10th percentile of a segment is a noise statistic (WSJT-X uses 10 over its
+ * ~2000-px `swide`, a comparable width).
+ *
+ * ⚠️ The segment must stay MUCH WIDER THAN A SIGNAL. At 250 Hz it is 5 FT8 signals wide, so a
+ * station cannot pull its own segment's baseline up. Raise this (narrower segments) and the
+ * baseline starts following signals and subtracting them from themselves.
+ */
+export const WF_FLATTEN_SEGMENTS = 16
+
+/**
+ * Percentile of each segment taken as that segment's noise level. WSJT-X's `npct`
+ * (`flat4.f90:13`), and the whole reason a baseline can be fitted through a band full of
+ * stations: a rank statistic this low is unmoved until a segment is >90% occupied, where a mean
+ * (or a median) is dragged up by every carrier in it.
+ */
+export const WF_FLATTEN_PCT = 0.1
+
+/**
+ * Maximum dB the baseline may depart from its own median — the whole difference between
+ * flattening a rig's passband and eating the rig's FILTER.
+ *
+ * A segment further BELOW the median than this is not tilt, it is a dead segment: the SSB/DATA
+ * filter's ~40 dB stopband above ~3.3 kHz, which is ~17% of every 0–4000 Hz row. Such a segment
+ * is HELD at its nearest live neighbour rather than anchoring the baseline, so the cliff passes
+ * through the flattener intact (measured: 32.8 dB deep before, 32.7 after) instead of being
+ * lifted into something that reads like live band.
+ *
+ * ⚠️ THIS IS WHERE A FAITHFUL `flat4` PORT FAILS ON OUR ROW, and it is measured, not assumed. A
+ * single low-order polynomial fitted across the whole row cannot ignore a 40 dB cliff inside its
+ * own domain: the quartic bends to chase it and the wiggle contaminates the passband. Measured
+ * on the same five scenes, a faithful port leaves the effective park spread over −20…+9 dB —
+ * WORSE than no flattening at all — and lifts the stopband to 13 dB deep. Locality is what fixes
+ * that, so the baseline here is piecewise-linear between segment anchors rather than a global
+ * fit. The `flat4` IDEA (per-segment low percentile, low-order baseline, subtract) is kept
+ * whole; only the global polynomial is dropped, because our row has something in it that
+ * WSJT-X's `swide` does not carry into the fit the same way.
+ *
+ * The cap also bounds the damage to a legitimately sloped spectrum: nothing broadband can lose
+ * more than 20 dB of its own shape, whatever it is.
+ */
+export const WF_FLATTEN_MAX_DB = 10
+
+/**
+ * Remove the row's smooth spectral SHAPE — the rig's passband tilt and filter curvature — while
+ * leaving every narrow feature, and its overall level, alone. `out` is a caller-owned scratch of
+ * the row's length; nothing else is allocated per row beyond three small fixed arrays.
+ *
+ * WHY, and it is the headline number of the parked black point. `parkFloor` puts the black point
+ * `WF_PARK_DB` above `WF_FLOOR_PCT`'s median — but that is the median of the WHOLE VISIBLE ROW,
+ * not of the noise, so any tilt in the row shows up as a black point that is too high at the
+ * quiet end of the band and too low at the loud end. It is the same picture from both ends of the
+ * operator's sentence: the loud end keeps a bright noisy field, and at the quiet end signals stop
+ * being drawn at all. Measured on the five scenes below, the EFFECTIVE park (dB from the LOCAL
+ * noise median up to the black point, which is the excess a signal there needs to be drawn):
+ *
+ * | scene       | before (p05/mean/p95) | after            |
+ * |-------------|-----------------------|------------------|
+ * | dead        |  1.8 / 2.0 / 2.3      | 1.8 / 2.1 / 2.4  |
+ * | 20 stations |  2.3 / 2.5 / 2.8      | 1.9 / 2.4 / 2.8  |
+ * | contest     |  2.6 / 2.9 / 3.3      | 2.3 / 2.8 / 3.1  |
+ * | +5 dB tilt  | −0.0 / 3.5 / 5.0      | 2.0 / 2.4 / 2.8  |
+ * | +15 dB tilt | −5.0 / 5.6 / 9.9      | 1.5 / 2.4 / 3.0  |
+ *
+ * A 15 dB-tilt rig went from a 15 dB SPREAD in what a signal must be to survive — decided by
+ * where it sits in the passband rather than by its SNR — to 1.5 dB. That ordering inversion is
+ * the real bug: a +2 dB signal at the hot end outdrew a +6 dB signal mid-band.
+ *
+ * HOW (WSJT-X's `flat4.f90`, whose structure this keeps and whose global polynomial it does not
+ * — see `WF_FLATTEN_MAX_DB`):
+ *  1. split the row into `WF_FLATTEN_SEGMENTS` equal segments;
+ *  2. each segment's `WF_FLATTEN_PCT` percentile is its anchor — the rank statistic is what stops
+ *     stations dragging the baseline up (`flat4` then keeps every point at-or-below that value
+ *     and least-squares a quartic through them; the percentile itself is the same estimator with
+ *     the fit's smoothing supplied by the piecewise-linear interpolation instead);
+ *  3. a segment more than `WF_FLATTEN_MAX_DB` below the anchor median is DEAD (filter stopband)
+ *     and inherits its nearest live neighbour, so the cliff is preserved, not ramped across;
+ *  4. the baseline is linear between segment CENTERS and flat outside the outermost two;
+ *  5. subtract it, holding the anchor median fixed — so this removes SHAPE, never LEVEL, and the
+ *     dB axis keeps the absolute reference `power_to_display` gave it.
+ *
+ * ⚠️ EACH ANCHOR IS ESTIMATED OVER TWICE ITS SEGMENT'S WIDTH — but only into LIVE neighbours —
+ * and that overlap is not tidiness, it is weak-signal margin. A percentile is a noisy estimator
+ * and its error is CORRELATED across the whole segment it lifts, so a segment that happened to
+ * draw low gets its grain brightened as one block. Measured against a null control (the same
+ * scene with the decode-floor station removed, same noise draws, 1500 rows): no flattening
+ * separates the station from its own absence by 2.9 LUT on a dead band, DISJOINT segments only
+ * 1.4 — the flattener was spending half the margin on its own estimator noise — and the ×2
+ * window 2.3. ×3 buys nothing further (2.2).
+ *
+ * The live-clip is why this takes two passes. A window that simply straddles the cliff reports
+ * the STOPBAND, so the segments beside it get a baseline ~10 dB too low and the band edge stops
+ * being flattened: with an unclipped ×2 window the 15 dB-tilt scene's park p05 fell to −0.3 dB
+ * (the bottom 300 Hz kept a bright field), against 1.7 clipped. Pass 1 is disjoint and decides
+ * live/dead; pass 2 widens only where the neighbour is live.
+ *
+ * NO STATE, no EMA — and the EMA was tried, not assumed. Smoothing the anchors across rows
+ * (α 0.25 and 0.10) leaves that separation at 1.4 and 0.6, i.e. it does not help and on a tilted
+ * band it hurts: the per-row baseline error is correlated with the row's own noise draw, so the
+ * AGC — which re-measures that same row's median — already cancels part of it, and an EMA breaks
+ * the cancellation while keeping the variance. Widening the estimator's window attacks the
+ * variance itself, which is the term that actually costs.
+ *
+ * ⚠️ DISPLAY PATH ONLY, and specifically only the FT waterfall's. A flattened row is no longer a
+ * calibrated absolute spectrum, and two consumers need one: PhoneScope and MiniSpectrum draw a
+ * TRACE whose shape IS the rig's passband ("is my audio alive"), and `tuneSnap.ts::detectSignal`
+ * — which MOVES THE RADIO — thresholds a click against a percentile of the row it is handed.
+ * Neither is on this path: `flattenRow` is called from `Waterfall.tsx` and nowhere else, and
+ * `detectSignal` is reached only through `clickTuneTarget`, imported only by `PhoneScope.tsx`.
+ * Putting this in the producer (`tempo_core::spectrum`) would have reached all of them.
+ *
+ * Non-finite bins are ignored when estimating and passed through unchanged; a row too short to
+ * segment, or one with no live segment at all, is copied through untouched.
+ */
+export function flattenRow(row: ArrayLike<number>, out: Float32Array): void {
+  const n = Math.min(row.length, out.length)
+  const nseg = WF_FLATTEN_SEGMENTS
+  const copy = () => {
+    for (let i = 0; i < n; i++) out[i] = row[i]
+  }
+  // Too short to estimate 16 percentiles worth believing (8 samples each) — pass it through.
+  if (n < nseg * 8) {
+    copy()
+    return
+  }
+  const segLen = n / nseg
+  const anchors = new Float64Array(nseg)
+  const centers = new Float64Array(nseg)
+  const scratch = new Float64Array(Math.ceil(2 * segLen) + 2)
+  const live: boolean[] = new Array(nseg).fill(false)
+  const segLo = (g: number) => Math.round(g * segLen)
+  const segHi = (g: number) => (g === nseg - 1 ? n : Math.round((g + 1) * segLen))
+  /** The `WF_FLATTEN_PCT` percentile of the finite bins in `[ia, ib)`, or NaN if there are none. */
+  const anchorOver = (ia: number, ib: number): number => {
+    let m = 0
+    for (let i = ia; i < ib; i++) {
+      const v = row[i]
+      if (Number.isFinite(v)) scratch[m++] = v
+    }
+    if (m === 0) return NaN
+    const seg = scratch.subarray(0, m)
+    seg.sort()
+    return seg[Math.min(m - 1, Math.round(WF_FLATTEN_PCT * (m - 1)))]
+  }
+  // PASS 1 — a disjoint per-segment percentile, whose only job is to decide which segments
+  // are live. It must be disjoint: a window that reaches into the stopband reports the
+  // stopband, and then the segment beside the cliff is misjudged.
+  for (let g = 0; g < nseg; g++) {
+    centers[g] = (segLo(g) + segHi(g) - 1) / 2
+    const a = anchorOver(segLo(g), segHi(g))
+    if (Number.isFinite(a)) {
+      anchors[g] = a
+      live[g] = true
+    }
+  }
+  // Median of the live anchors — the level the flattened row is held at.
+  const finite: number[] = []
+  for (let g = 0; g < nseg; g++) if (live[g]) finite.push(anchors[g])
+  if (finite.length === 0) {
+    copy()
+    return
+  }
+  finite.sort((a, b) => a - b)
+  const med = percentile(finite, 0.5)
+  const lim = dbToSpan(WF_FLATTEN_MAX_DB)
+  // A segment far BELOW the median is dead (the filter's stopband), not tilt: it must not
+  // anchor the baseline, or the ramp toward it eats the cliff and the passband edge with it.
+  for (let g = 0; g < nseg; g++) if (live[g] && anchors[g] < med - lim) live[g] = false
+  let anyLive = false
+  for (let g = 0; g < nseg; g++) anyLive = anyLive || live[g]
+  if (!anyLive) {
+    copy()
+    return
+  }
+  // PASS 2 — re-estimate each live anchor over a window widened half a segment into each
+  // LIVE neighbour. That halves the estimator's variance in the interior (see the overlap
+  // note above) while never letting a dead segment's bins into anybody's anchor.
+  for (let g = 0; g < nseg; g++) {
+    if (!live[g]) continue
+    const ia = g > 0 && live[g - 1] ? Math.round((g - 0.5) * segLen) : segLo(g)
+    const ib = g < nseg - 1 && live[g + 1] ? Math.min(n, Math.round((g + 1.5) * segLen)) : segHi(g)
+    const a = anchorOver(ia, ib)
+    if (Number.isFinite(a)) anchors[g] = a
+  }
+  for (let g = 0; g < nseg; g++) {
+    if (live[g]) continue
+    for (let d = 1; d < nseg; d++) {
+      if (g - d >= 0 && live[g - d]) {
+        anchors[g] = anchors[g - d]
+        break
+      }
+      if (g + d < nseg && live[g + d]) {
+        anchors[g] = anchors[g + d]
+        break
+      }
+    }
+  }
+  // The LEVEL the flattened row is held at is the MEAN of the anchors, not `med`.
+  // `med` is the right statistic for the two THRESHOLDS above — a rank statistic is what
+  // makes them robust — but it is the wrong one to subtract, because a single order
+  // statistic hops between neighbouring anchors from row to row: measured, using `med` as
+  // the level shifted the whole row by up to ±1.5 dB per row on a tilted band. That is a
+  // level that breathes, which is exactly the failure the absolute dB axis was introduced
+  // to end. Averaging 16 anchors cuts that jitter by four and costs one loop.
+  let level = 0
+  for (let g = 0; g < nseg; g++) {
+    if (anchors[g] > med + lim) anchors[g] = med + lim
+    else if (anchors[g] < med - lim) anchors[g] = med - lim
+    level += anchors[g]
+  }
+  level /= nseg
+  // Piecewise-linear between segment centers, held flat outside the outermost two.
+  let g = 0
+  for (let i = 0; i < n; i++) {
+    let base: number
+    if (i <= centers[0]) base = anchors[0]
+    else if (i >= centers[nseg - 1]) base = anchors[nseg - 1]
+    else {
+      while (g < nseg - 2 && i > centers[g + 1]) g++
+      const f = (i - centers[g]) / (centers[g + 1] - centers[g])
+      base = anchors[g] * (1 - f) + anchors[g + 1] * f
+    }
+    const v = row[i]
+    out[i] = Number.isFinite(v) ? clamp01(v - base + level) : v
+  }
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   agcRange,
   applyGainZero,
   bakeLut,
+  flattenRow,
   isRfScopeSource,
   normalize,
   parkFloor,
@@ -287,6 +288,9 @@ export function Waterfall({
     // Reused per-column resample scratch (device width) — no per-row garbage.
     let magBuf: Float32Array | null = null
     let magBufW = 0
+    // Reused FLATTENED-row scratch (bin count) — same reason. `flattenRow` writes here and
+    // every downstream read in drawRow is of this buffer, never of the raw DTO row.
+    let flatBuf: Float32Array | null = null
     const retained = (Wd: number, wfHd: number): ImageData => {
       if (!retBuf || !retImg || retW !== Wd || retH !== wfHd) {
         retBuf = new Uint8ClampedArray(Wd * wfHd * 4)
@@ -445,6 +449,27 @@ export function Waterfall({
       const rowLo = spec.loHz ?? F_MIN
       const rowHi = spec.hiHz ?? F_MAX
 
+      // FLATTEN FIRST — before anything measures, draws or stores this row. `flattenRow`
+      // removes the rig's passband tilt and filter curvature and nothing else, which is what
+      // lets the parked black point below be stated as an absolute number of dB over the noise
+      // rather than over "the median of whatever is in view". Without it the effective park
+      // drifts to 10 dB at the quiet end of a 15 dB-tilt passband and goes NEGATIVE at the loud
+      // end — a bright field and deleted signals at once, and which signal survives decided by
+      // where it sits in the passband instead of by its SNR.
+      //
+      // Every downstream read is of `frow`, deliberately: the AGC, the history ring (which is
+      // what every cold path re-renders from) and the live blit must all describe the same
+      // picture, or a zoom/palette/resize would repaint the accumulated waterfall differently
+      // from the way it was drawn.
+      //
+      // NOT in the producer. `tuneSnap.ts::detectSignal` thresholds a click against a
+      // percentile of the row it is handed and then MOVES THE RADIO; PhoneScope/MiniSpectrum
+      // draw a trace whose shape IS the rig's passband. Flattening at the source would have
+      // reached all three. See `flattenRow`'s header.
+      if (!flatBuf || flatBuf.length !== nBins) flatBuf = new Float32Array(nBins)
+      flattenRow(row, flatBuf)
+      const frow = flatBuf
+
       // visual-AGC over the VISIBLE window only, EMA-smoothed across frames.
       //
       // The window used to be fitted to the WHOLE row, and that is not a detail: the row spans
@@ -457,7 +482,7 @@ export function Waterfall({
       const binHz = (rowHi - rowLo) / nBins
       const vLo = Math.max(0, Math.floor((viewLoRef.current - rowLo) / binHz))
       const vHi = Math.min(nBins, Math.ceil((viewHiRef.current - rowLo) / binHz))
-      const visible = vHi - vLo >= 8 ? row.slice(vLo, vHi) : row
+      const visible = vHi - vLo >= 8 ? frow.slice(vLo, vHi) : frow
       const { floor, ceil } = agcRange(visible, WF_FLOOR_PCT)
       if (!agcInit) {
         agcFloor = floor
@@ -496,7 +521,7 @@ export function Waterfall({
       // OWN frequency span (carried in the DTO) — the ring is what every cold path
       // (palette recolor, zoom, resize, scrollback) re-renders from.
       const tRow = new Float32Array(nBins)
-      for (let b = 0; b < nBins; b++) tRow[b] = normalize(row[b], dispFloor, dispCeil)
+      for (let b = 0; b < nBins; b++) tRow[b] = normalize(frow[b], dispFloor, dispCeil)
       historyRef.current.push(tRow, rowLo, rowHi, Date.now())
 
       // PAUSED: history keeps accumulating (nothing is lost) but the VIEW is frozen —
@@ -536,7 +561,7 @@ export function Waterfall({
         magBufW = Wd
       }
       const mag = magBuf
-      resampleRow(row, rowLo, rowHi, vlo, vhi, mag)
+      resampleRow(frow, rowLo, rowHi, vlo, vhi, mag)
       const base = (wfHd - 1) * Wd * 4
       for (let x = 0; x < Wd; x++) {
         const v = mag[x]
@@ -788,9 +813,12 @@ export function Waterfall({
             }}
           />
         </label>
-        {/* WSJT-X's plotZero. Center is NOT "off" — it is the parked default (noise median
-            +3 dB, see WF_PARK_DB); left brings the noise floor back up into the palette,
-            right pushes it further under. */}
+        {/* WSJT-X's plotZero, and its authority too: an absolute ±WF_ZERO_TRIM_DB trim of the
+            black point, NOT a fraction of the display window. Center is NOT "off" — it is the
+            parked default (noise median + WF_PARK_DB); left brings the noise floor back up into
+            the palette, right pushes it further under. This value is persisted app-wide, so
+            whatever it can do it does on every waterfall at once — see WF_ZERO_TRIM_DB for what
+            the un-bounded form did to an ordinary station. */}
         <label
           className="wf-knob"
           title="Zero — where the black point sits relative to the noise floor. Center = the default (background black); left shows more of the noise, right buries it deeper."
