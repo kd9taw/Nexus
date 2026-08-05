@@ -216,9 +216,10 @@ pub type SharedSource = Arc<Mutex<Box<dyn SignalSource>>>;
 /// freely — so one contained panic poisoned the lock and every later job then
 /// panicked at this acquisition (inside `catch_unwind`), re-creating the exact
 /// "deaf but looks alive" failure the containment was added to stop. Poison
-/// also reached `snapshot()` (the `source_label` read) UNDER the engine guard,
-/// taking the UI and the mode switch with it. A stale decode is caught by the
-/// CRC; a deaf receiver is caught by nothing.
+/// also reached this lock's callers UNDER the engine guard — `snapshot()` took
+/// it for the `source_label` read until that label was cached (see
+/// [`Engine::install_source`]), and the mode switch still swaps the box under
+/// it. A stale decode is caught by the CRC; a deaf receiver is caught by nothing.
 pub fn source_lock(s: &SharedSource) -> std::sync::MutexGuard<'_, Box<dyn SignalSource>> {
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -932,6 +933,10 @@ pub struct Engine {
     /// is stable for the engine's lifetime; a tier/source switch swaps the boxed
     /// contents under the lock.
     source: SharedSource,
+    /// The decoder's display label, CACHED so [`snapshot`](Engine::snapshot) never
+    /// touches [`source`](Self::source)'s lock. Written ONLY by
+    /// [`install_source`](Engine::install_source) — see there for why.
+    source_label: String,
     /// Decode-context generation. Bumped by [`clear_decode_context`] (band QSY /
     /// tier / source / mode switch) so a decode that was in flight across the switch
     /// lands as stale and is dropped by [`apply_decode_result`] — its slot indices
@@ -2622,6 +2627,10 @@ impl Engine {
         let mut app = AppState::new(&settings.mycall, &settings.mygrid);
         app.set_radio(settings.dial_mhz, &settings.band, &settings.sideband);
         app.set_implicit_ack(settings.chat_implicit_ack);
+        // Default native source = FT8, with its label taken here so the cache and
+        // the box can never disagree about the starting decoder.
+        let default_source = NativeSource::from_kind(modes::ModeKind::Ft8);
+        let default_source_label = default_source.label();
         // Derive the TX-slot parity + audio offsets from settings (read before
         // `settings` is moved into the struct).
         let tx_parity = if settings.tx_even { 0 } else { 1 };
@@ -2657,9 +2666,8 @@ impl Engine {
             last_decodes: Vec::new(),
             harq_rescues: 0,
             // Default native source = FT8 (matches the default link tier).
-            source: Arc::new(Mutex::new(Box::new(NativeSource::from_kind(
-                modes::ModeKind::Ft8,
-            )))),
+            source: Arc::new(Mutex::new(Box::new(default_source))),
+            source_label: default_source_label,
             decode_epoch: 0,
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
@@ -3188,7 +3196,7 @@ impl Engine {
                 // inside is the load-bearing part: a decode already dispatched at the
                 // OLD period would otherwise land after the swap and be folded in
                 // with slot indices that no longer mean anything.
-                *source_lock(&self.source) = Box::new(NativeSource::from_kind(kind));
+                self.install_source(Box::new(NativeSource::from_kind(kind)));
                 self.clear_decode_context();
             }
         }
@@ -6738,7 +6746,7 @@ impl Engine {
                 // Swap the boxed decoder UNDER the lock (waits for any decode in
                 // flight) so the stable serialization mutex is preserved and no
                 // job can be reading the old mode as it's replaced.
-                *source_lock(&self.source) = Box::new(NativeSource::from_kind(kind));
+                self.install_source(Box::new(NativeSource::from_kind(kind)));
             }
         }
         // WSJT-X-style: switching the mode moves the rig to the NEW mode's dial for the
@@ -6776,6 +6784,29 @@ impl Engine {
         }
     }
 
+    /// Replace the boxed decoder UNDER its lock and refresh the cached display
+    /// label in the same step. THE ONLY place the box is ever swapped.
+    ///
+    /// ⭐ WHY THE LABEL IS CACHED — a lock convoy, not a cosmetic tidy-up.
+    /// [`snapshot`](Self::snapshot) used to call `source_lock(&self.source).label()`
+    /// just to fill in a display string. A decode holds that lock for its ENTIRE
+    /// duration (13.5 s measured for a 5 s + 15 s MSK144 slot at shipped defaults),
+    /// while `snapshot` runs under the ENGINE mutex and the UI polls it every
+    /// 300 ms. So a decode in flight parked the engine mutex, and with it the radio
+    /// loop — the thread that consumes `take_slot_tx_abort()`. Stop TX and Escape
+    /// set the abort flag, nothing consumed it, and the operator watched an over
+    /// run on for up to ~10.5 s of a 14.7 s MSK144 over. The waterfall froze from
+    /// the same blocked loop. Every tier pays this scaled by its decode time.
+    ///
+    /// Routing every swap through here is what keeps the cache honest: the label
+    /// is derived from the box that is about to be installed, so a new swap site
+    /// cannot forget it. The lock IS taken here — this is the swap path, which
+    /// already waits out any decode in flight, and that is unchanged.
+    fn install_source(&mut self, src: Box<dyn SignalSource>) {
+        self.source_label = src.label();
+        *source_lock(&self.source) = src;
+    }
+
     /// The active RX signal source.
     pub fn source_kind(&self) -> SourceKind {
         self.source_kind
@@ -6794,13 +6825,13 @@ impl Engine {
                 let mode_kind = self
                     .tier_mode_kind(self.tier())
                     .unwrap_or(modes::ModeKind::TempoFast);
-                *source_lock(&self.source) = Box::new(NativeSource::from_kind(mode_kind));
+                self.install_source(Box::new(NativeSource::from_kind(mode_kind)));
             }
             SourceKind::Companion => {
                 let addr = &self.settings.companion_addr;
                 let sock = WsjtxUdpSource::bind(addr)
                     .map_err(|e| format!("Can't listen on {addr} for WSJT-X UDP: {e}"))?;
-                *source_lock(&self.source) = Box::new(sock);
+                self.install_source(Box::new(sock));
             }
         }
         self.source_kind = kind;
@@ -10642,7 +10673,11 @@ impl Engine {
         s.radio.hold_tx_freq = self.hold_tx_freq;
         s.radio.clock_offset_ms = self.station.clock_offset_ms;
         s.radio.source = self.source_kind;
-        s.radio.source_label = source_lock(&self.source).label();
+        // ⚠️ THE CACHE, NOT THE LOCK. Reading `source_lock(&self.source).label()`
+        // here put this 300 ms UI poll — which holds the ENGINE mutex — behind the
+        // whole of any decode in flight, parking the radio loop and with it Stop TX.
+        // See `install_source`, which is the only writer.
+        s.radio.source_label = self.source_label.clone();
         // Multi-radio switcher summaries (dual-radio). Left empty for a single-radio station (the
         // UI then renders no switcher). The active radio carries the live state we just filled into
         // `s.radio`; the others show their last-known tune (they're not connected in the active-only
@@ -16014,6 +16049,52 @@ mod tests {
         assert_eq!(e.snapshot().radio.source_label, "Native (FT4)");
     }
 
+    /// ⭐ THE LOCK CONVOY. `snapshot()` must NEVER wait on the decoder lock.
+    ///
+    /// A decode holds that lock for its whole duration (13.5 s measured for an
+    /// MSK144-15 slot at shipped defaults). `snapshot()` runs under the ENGINE
+    /// mutex and the UI polls it every 300 ms, so one `source_lock()` inside it
+    /// parks the engine mutex behind the decode — and with it the radio loop,
+    /// which is the thread that consumes `take_slot_tx_abort()`. Stop TX then
+    /// reads as dead for up to a whole over, the waterfall freezes, and the app
+    /// looks hung. The abort flag was never lost; the loop simply could not run.
+    ///
+    /// This test reproduces the CONVOY, not the fix's shape: a spawned thread
+    /// holds the real decoder lock (standing in for a decode in flight) while
+    /// the snapshot path is called from another. Before the label was cached
+    /// this blocked for the full hold.
+    #[test]
+    fn snapshot_never_waits_on_a_decode_holding_the_source_lock() {
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let e = Engine::new("KD9TAW", "EN52", 0);
+        let src = e.source.clone();
+        let (held_tx, held_rx) = mpsc::channel();
+        // Stands in for a long decode: hold the decoder lock, unhurried.
+        let holder = std::thread::spawn(move || {
+            let _g = source_lock(&src);
+            held_tx.send(()).expect("signal that the lock is held");
+            std::thread::sleep(Duration::from_millis(2000));
+        });
+        held_rx.recv().expect("decoder lock is held");
+
+        let t0 = Instant::now();
+        let snap = e.snapshot();
+        let waited = t0.elapsed();
+        holder.join().expect("holder thread");
+
+        assert!(
+            waited < Duration::from_millis(300),
+            "snapshot blocked {waited:?} behind a decode holding the source lock — \
+             that is the convoy that parks the radio loop and delays Stop TX"
+        );
+        assert_eq!(
+            snap.radio.source_label, "Native (FT8)",
+            "and the cached label is still the truth while the decoder is busy"
+        );
+    }
+
     #[test]
     fn source_choice_is_recorded_in_settings_and_survives_a_form_save() {
         let mut e = Engine::with_settings(Settings {
@@ -19114,7 +19195,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
         let flags = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        *e.source.lock().unwrap() = Box::new(FlagRecorder(flags.clone()));
+        e.install_source(Box::new(FlagRecorder(flags.clone())));
         let frame = vec![0.0f32; 1024];
         e.ingest(&frame, 3); // boundary: authoritative full-audio pass
         e.ingest_early(&frame, 4); // early partial pass
@@ -19294,7 +19375,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
         let hits = std::sync::Arc::new(std::sync::Mutex::new(0u32));
-        *e.source.lock().unwrap() = Box::new(Recorder(hits.clone()));
+        e.install_source(Box::new(Recorder(hits.clone())));
         // Switch tiers: the recorder is swapped out for a real NativeSource(FT4).
         e.set_tier(Tier::Ft4);
         let job = e.build_decode_job(
@@ -25184,6 +25265,7 @@ mod tests {
         e.set_tier(Tier::Q65);
         assert_eq!(e.active_slot_secs(), 30.0);
         let epoch_before = e.decode_epoch;
+        let label_before = e.snapshot().radio.source_label;
 
         s.q65_period_s = 60;
         e.apply_settings(s);
@@ -25191,6 +25273,14 @@ mod tests {
             e.active_slot_secs(),
             60.0,
             "the reported period follows Settings"
+        );
+        // The CACHED label has to follow the rebuild too — `snapshot()` no longer
+        // asks the decoder what it is, so a swap that skipped `install_source`
+        // would leave the cockpit naming a decoder that is no longer running.
+        assert_ne!(
+            e.snapshot().radio.source_label,
+            label_before,
+            "the cached source label must track the rebuilt decoder"
         );
         assert_ne!(
             e.decode_epoch, epoch_before,
@@ -25209,6 +25299,7 @@ mod tests {
         e.set_tier(Tier::Jt65);
         let epoch_before = e.decode_epoch;
         let slot_before = e.active_slot_secs();
+        let label_before = e.snapshot().radio.source_label;
 
         let mut s = e.settings().clone();
         s.jt65_submode = 1; // JT65B — same 60 s period, different tone spacing
@@ -25218,6 +25309,13 @@ mod tests {
         assert_ne!(
             e.decode_epoch, epoch_before,
             "a submode-only change still has to reach the decoder"
+        );
+        // Same for the cached label: a submode-only swap has no other symptom, so
+        // a stale cache here would name JT65A while JT65B decodes.
+        assert_ne!(
+            e.snapshot().radio.source_label,
+            label_before,
+            "the cached source label must track a submode-only rebuild"
         );
     }
 
@@ -25312,7 +25410,7 @@ mod tests {
         // which discards the error — so the app decoded nothing for the rest of the
         // session while the waterfall (fed separately) kept painting.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        *e.source.lock().unwrap() = Box::new(PanickingSource);
+        e.install_source(Box::new(PanickingSource));
         let frame = vec![0.0f32; e.active_frame_samples()];
 
         // Silence the panic hook so the expected panic does not spam test output.
