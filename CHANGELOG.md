@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FT8 decodes the station answering your CQ when you transmit off your receive frequency.**
+  WSJT-X gives its deepest decoding two frequency windows, not one: around where you listen, and
+  around where you transmit. The second exists because a caller normally answers on *your*
+  transmit frequency, and with "Hold Tx Freq" on those are different places. Nexus only ever had
+  the first, so the one signal in the slot you most want was the one decoded with the least help.
+  Measured on a caller 900 Hz away from the receive marker: 12 of 12 recovered with the window,
+  0 of 12 without. Nothing changes for operators who transmit and receive on the same frequency —
+  the two windows land on top of each other, which is what WSJT-X computes too.
+- **The FT8 early decode no longer costs twice what it should.** WSJT-X runs the peek at
+  11.8 seconds deliberately cheap — a higher sync threshold and none of the a-priori passes —
+  because the real decode re-reads the same audio at the end of the period anyway. Nexus was
+  running the full-price decoder there. On the reference off-air recording that peek took 540 ms
+  where it now takes 265 ms, and it returned the *same thirteen* signals either way. That matters
+  beyond CPU: an early pass still running when the period ends makes the whole period's decode get
+  dropped, which on a slower machine reads as a dead band. What the cheaper pass does give up is
+  the a-priori recoveries — a station finishing a QSO with you, a few dB below the ordinary
+  threshold, now arrives at the end of the period instead of three seconds early. The
+  authoritative decode at the period boundary is unchanged, and it is the one the log and the
+  roster are built from.
+
 - **The FT waterfall.** It looked, in the operator's words, "so 8 bit" — and that turned out to be
   four separate causes stacked on one surface, all now fixed. The intensity axis was linear in
   *amplitude* against a reference that moved every 20 ms, which left the noise floor about 15 of

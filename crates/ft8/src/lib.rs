@@ -104,7 +104,9 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
 ///
 /// This is the a7-inert legacy entry: it delegates to [`decode_frame_a7`] with a constant
 /// `nutc = 0` AND `a7_final = false`. Callers that thread real slot time (the engine) use
-/// [`decode_frame_a7`] to get WSJT-X's iaptype=7 recovery.
+/// [`decode_frame_a7`] to get WSJT-X's iaptype=7 recovery. It also pins the two
+/// pass-shape inputs at their unsplit/full-frame values (`nftx = nfqso`, `partial =
+/// false`), so this entry decodes exactly as it did before those existed.
 ///
 /// `a7_final = false` is load-bearing, not tidiness. A constant `nutc` alone is NOT inert:
 /// it stops the prior-slot table rolling over (so replay no-ops, as intended), but with
@@ -145,8 +147,10 @@ pub fn decode_frame(
         hiscall,
         nqso_progress,
         nfqso,
+        nfqso, // nftx: no split — the two deep-AP windows collapse to one
         0,
         true,
+        false, // full frame, not the early partial pass
         ap,
         ap_cq_only,
     )
@@ -165,6 +169,27 @@ pub fn decode_frame(
 /// `a7_final` is `true` on the authoritative full-audio (slot-boundary) pass —
 /// direct decodes are saved into the a7 table and the replay runs — and
 /// `false` on an early partial pass (slot bookkeeping only).
+///
+/// `nftx` is the operator's TX audio offset — WSJT-X's `nftx`
+/// (`mainwindow.cpp:3722`). Upstream's deep AP (iaptype ≥ 3) fires in TWO
+/// windows, `nfqso ± napwid` **and** `nftx ± napwid` (`ft8b.f90:305` skips a
+/// candidate only when it is outside both), because a station answering your CQ
+/// usually answers on *your* transmit frequency. Pass `nfqso` (or 0) when RX and
+/// TX are not split; the windows then coincide, which is what upstream computes
+/// too.
+///
+/// `partial` marks WSJT-X's **early** decode (`nzhsym = 41`,
+/// `mainwindow.cpp:1878`, `m_earlyDecode` at `mainwindow.h:533`) rather than the
+/// full-frame pass (`nzhsym = 50`, `mainwindow.cpp:1877/1678`). Upstream makes
+/// that pass deliberately cheap — sync threshold 2.0 instead of 1.3
+/// (`ft8_decode.f90:178`) and the AP passes 5-8 switched off (`ft8b.f90:275`,
+/// `if(nzhsym.lt.50) npasses=4`) — because the authoritative pass re-decodes the
+/// same audio moments later. It does **not** change how much audio is read.
+///
+/// `partial` is NOT `!a7_final`: the F6 review re-decode is `a7_final = false`
+/// over the retained FULL audio, and running it at `partial = true` would kill
+/// its AP passes — a regression in the one path the operator invokes
+/// deliberately to dig harder.
 ///
 /// `ap` / `ap_cq_only` are the operator AP controls — see [`decode_frame`].
 /// `ap = false` also disables the a7 replay (a7 is an a-priori technique;
@@ -185,8 +210,10 @@ pub fn decode_frame_a7(
     hiscall: &str,
     nqso_progress: i32,
     nfqso: i32,
+    nftx: i32,
     nutc: i32,
     a7_final: bool,
+    partial: bool,
     ap: bool,
     ap_cq_only: bool,
 ) -> Vec<Decode> {
@@ -211,6 +238,10 @@ pub fn decode_frame_a7(
                 hisc.as_ptr(),
                 nqso_progress,
                 nfqso,
+                nftx,
+                // WSJT-X's m_earlyDecode / m_hsymStop for FT8 (mainwindow.h:533,
+                // mainwindow.cpp:1678). The wrapper treats anything but 41 as 50.
+                if partial { 41 } else { 50 },
                 nutc,
                 a7_final as i32,
                 ap as i32,
@@ -321,7 +352,9 @@ mod tests {
         // Direct decode on the full band; the final pass seeds the a7 table.
         let msg_a = "KD9TAW W1AW FN31";
         let fa = frame_with_floor(msg_a, 1500.0, 0x2452_1057);
-        let decs_a = decode_frame_a7(&fa, 200, 2900, 3, "", "", 0, 0, 15, true, true, false);
+        let decs_a = decode_frame_a7(
+            &fa, 200, 2900, 3, "", "", 0, 0, 0, 15, true, false, true, false,
+        );
         assert!(
             decs_a.iter().any(|d| d.message == msg_a),
             "slot A must direct-decode; got {decs_a:?}"
@@ -332,7 +365,9 @@ mod tests {
         // sync8 cannot see it. Only the a7 replay reaches 1500 Hz.
         let msg_b = "KD9TAW W1AW R-10";
         let fb = frame_with_floor(msg_b, 1500.0, 0x0BAD_5EED);
-        let decs_b = decode_frame_a7(&fb, 2000, 2900, 3, "", "", 0, 0, 45, true, true, false);
+        let decs_b = decode_frame_a7(
+            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 45, true, false, true, false,
+        );
         let a7 = decs_b.iter().find(|d| d.message == msg_b);
         assert!(
             a7.is_some(),
@@ -349,7 +384,9 @@ mod tests {
         // After a reset the table is empty: the same out-of-band continuation
         // at the next odd slot must NOT decode (nothing left to replay).
         a7_reset();
-        let decs_c = decode_frame_a7(&fb, 2000, 2900, 3, "", "", 0, 0, 75, true, true, false);
+        let decs_c = decode_frame_a7(
+            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 75, true, false, true, false,
+        );
         assert!(
             !decs_c.iter().any(|d| d.message == msg_b),
             "a7_reset must drop the prior-slot table; got {decs_c:?}"
@@ -362,12 +399,16 @@ mod tests {
         // NOT appear. (This phase lives inside this test, not its own #[test]:
         // the a7 table is process-global state and a sibling test would
         // interleave with it.)
-        let decs_d = decode_frame_a7(&fa, 200, 2900, 3, "", "", 0, 0, 105, true, true, false);
+        let decs_d = decode_frame_a7(
+            &fa, 200, 2900, 3, "", "", 0, 0, 0, 105, true, false, true, false,
+        );
         assert!(
             decs_d.iter().any(|d| d.message == msg_a),
             "re-seed slot must direct-decode; got {decs_d:?}"
         );
-        let decs_e = decode_frame_a7(&fb, 2000, 2900, 3, "", "", 0, 0, 135, true, false, false);
+        let decs_e = decode_frame_a7(
+            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 135, true, false, false, false,
+        );
         assert!(
             !decs_e.iter().any(|d| d.message == msg_b),
             "ap = false must suppress the a7 cross-cycle replay; got {decs_e:?}"

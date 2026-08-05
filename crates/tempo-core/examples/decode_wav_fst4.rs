@@ -88,9 +88,11 @@ fn decode_file(path: &str, kind: ModeKind, period_s: usize) -> Result<usize, Str
             hiscall: "",
             nqso_progress: 0,
             nfqso: 0,
+            nftx: 0,
             frame_time_ms: (slot as i64) * (period_s as i64) * 1000,
             ap: true, // stock (FT8/FT4 AP controls; inert for FST4)
             ap_cq_only: false,
+            partial: false,
         };
         let mut decs = src.decode(&req);
         decs.sort_by(|a, b| {

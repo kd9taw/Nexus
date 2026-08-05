@@ -589,10 +589,18 @@ extern "C" {
         mycall: *const c_char,
         hiscall: *const c_char,
         nqso_progress: c_int,
-        nfqso: c_int,     // QSO/RX freq (Hz); deep AP + sync center; 0/oob ⇒ band mid
-        nutc: c_int,      // a7 slot key: slot UTC seconds-of-day (slot*15); see libtempo.h
-        la7final: c_int,  // 1 = authoritative pass (a7 save + replay); 0 = early pass
-        lft8apon: c_int,  // nonzero = AP on (WSJT-X "Enable AP"); 0 also skips the a7 replay
+        nfqso: c_int, // QSO/RX freq (Hz); deep AP + sync center; 0/oob ⇒ band mid
+        // TX freq (Hz) — WSJT-X nftx (mainwindow.cpp:3722); the SECOND deep-AP
+        // window (ft8b.f90:305 needs a candidate outside BOTH to skip it).
+        // 0/oob ⇒ nfqso, i.e. one window, which is right when RX/TX aren't split.
+        nftx: c_int,
+        // Half-symbol count for this pass — WSJT-X nzhsym (mainwindow.cpp:1877-1879).
+        // 50 = full frame; 41 = the early partial pass (syncmin 2.0, AP passes off).
+        // Never changes how much audio is read. Anything but 41 ⇒ 50.
+        nzhsym: c_int,
+        nutc: c_int,     // a7 slot key: slot UTC seconds-of-day (slot*15); see libtempo.h
+        la7final: c_int, // 1 = authoritative pass (a7 save + replay); 0 = early pass
+        lft8apon: c_int, // nonzero = AP on (WSJT-X "Enable AP"); 0 also skips the a7 replay
         lapcqonly: c_int, // nonzero = AP restricted to the CQ hypothesis (iaptype 1)
         out: *mut Ft8DecodeT,
         max_out: c_int,

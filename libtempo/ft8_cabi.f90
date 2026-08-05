@@ -379,6 +379,41 @@ contains
   !                   nfqso. The deep a-priori passes (iaptype>=3, the MyCall+
   !                   DxCall masks) only fire within napwid of this, and sync8
   !                   prioritizes near it. Pass 0 / out-of-band ⇒ band center.
+  !   nftx_in       : TX audio freq (Hz) — WSJT-X's nftx (mainwindow.cpp:3722,
+  !                   `dec_data.params.nftx = ui->TxFreqSpinBox->value()`), the
+  !                   SECOND deep-AP window. ft8b.f90:305 cycles a candidate
+  !                   only when it is outside BOTH nfqso±napwid AND nftx±napwid,
+  !                   so upstream deep-AP coverage is two windows, not one — the
+  !                   second exists because a station answering your CQ usually
+  !                   answers ON your TX frequency. Pass 0 / out-of-band ⇒ nfqso
+  !                   (the two windows collapse into one, which is exactly right
+  !                   when the operator has not split RX from TX).
+  !   nzhsym_in     : half-symbol frame count for this pass — WSJT-X's nzhsym
+  !                   (mainwindow.cpp:1877-1879). 50 = the full 14.4 s frame
+  !                   (m_hsymStop, mainwindow.cpp:1678); 41 = the 11.808 s EARLY
+  !                   partial pass (m_earlyDecode, mainwindow.h:533). It is a
+  !                   decoder-cost control, not a buffer length: sync8 is always
+  !                   handed the full NPTS (ft8_decode.f90:194) and nothing here
+  !                   truncates dd. At 41 upstream runs a deliberately CHEAP
+  !                   pass — syncmin 2.0 instead of 1.3 (ft8_decode.f90:178) and
+  !                   npasses clamped to 4, i.e. the AP passes 5-8 are OFF
+  !                   (ft8b.f90:275, `if(nzhsym.lt.50) npasses=4`) — because the
+  !                   authoritative pass re-decodes the same audio 2.6 s later.
+  !                   Measured A/B on decode_bench (FT8, 12 signals/slot, 8
+  !                   slots, ndepth 3): the early pass costs p50 362 ms at 50 and
+  !                   89 ms at 41 — 4.1x — while the BOUNDARY pass finds the same
+  !                   11.9 decodes/slot either way. The early pass itself does
+  !                   give up a little (11.8 -> 11.2 decodes/slot); that is the
+  !                   trade upstream makes on purpose, and it is safe here for
+  !                   the same reason it is safe there — the boundary pass is an
+  !                   independent full re-decode, so an early miss is recovered
+  !                   3.2 s later rather than lost. What it buys is an early pass
+  !                   that cannot overrun the slot: an early decode still running
+  !                   at the boundary makes the WHOLE period get dropped.
+  !                   Anything other than 41 is treated as 50. Upstream's third
+  !                   value, 47, is its residual-carry pass (ft8_decode.f90:
+  !                   125-158) which this wrapper deliberately does not
+  !                   implement — see the `dd` assignment below.
   !   nutc          : slot key = slot UTC seconds-of-day (0..86399; slot*15 for
   !                   FT8). Keys the a7 cross-cycle table: parity = mod(nutc/5,2)
   !                   and a nutc change rolls the per-parity table over. A nutc
@@ -406,11 +441,12 @@ contains
   ! NOT thread-safe (the modem keeps process-global SAVE state + FFTW plans).
   !-------------------------------------------------------------------------
   function ft8_decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, &
-       nqso_progress, nfqso_in, nutc, la7final, lft8apon_in, lapcqonly_in, &
-       out, max_out) result(ndec) &
+       nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
+       lft8apon_in, lapcqonly_in, out, max_out) result(ndec) &
        bind(C, name="ft8_decode_frame")
     integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
     integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in
+    integer(c_int), value,  intent(in)  :: nftx_in, nzhsym_in
     integer(c_int), value,  intent(in)  :: nutc, la7final, max_out
     integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in
     character(kind=c_char), intent(in)  :: mycall(*)
@@ -428,7 +464,7 @@ contains
     character(len=12) :: mycall12, hiscall12
     character(len=12) :: call_1, call_2
     character(len=4)  :: grid4
-    integer :: ncontest, nfqso, nftx, ndepth_l, ndeep, npass, ipass
+    integer :: ncontest, nfqso, nftx, nzhsym, ndepth_l, ndeep, npass, ipass
     integer :: maxc, ncand, icand, id, n, j, ib
     integer :: iaptype, nharderrors, nbadcrc, iappass
     integer :: nsnr, ndecodes, n2, napwid
@@ -440,27 +476,105 @@ contains
     ndec = 0
     if (max_out <= 0) return
 
+    ! DELIBERATE DIVERGENCE, DOCUMENTED NOT CLOSED — the final-pass subtraction.
+    ! Upstream's boundary pass does NOT start from raw audio: ft8_decode.f90:
+    ! 148-158 splices the saved residual `dd1` (the early decodes already
+    ! subtracted, with refined DT — lrefinedt=.true. at :128) over the first
+    ! 47*3456 samples, keeps only the last 0.864 s fresh, carries ndecodes =
+    ! ndec_early (:117) and so never re-searches or re-reports what the early
+    ! pass already found. Every call here is an independent full re-decode from
+    ! raw audio (ndecodes/allmessages are reset below); duplicate suppression
+    ! happens a layer up, at ingest.
+    !
+    ! Kept on purpose. The trade cuts both ways: upstream's boundary pass starts
+    ! one DT-REFINED subtraction level deeper (ft8b's inline one is not —
+    ! ft8b.f90:475, `subtractft8(dd0,itone,f1,xdt,.false.)`), so a weak signal
+    ! under a strong one surfaces on their pass 1 where ours needs pass 2; but
+    ! an early FALSE decode is subtracted from upstream's boundary audio and the
+    ! real signal beneath it is then unrecoverable, where we always re-decode
+    ! from raw. Adopting upstream's scheme would need persistent cross-call
+    ! dd1/ndec_early/lsubtracted/itone_save state, which would have to join
+    ! tempo_ctx_t or become exactly the cross-chain contamination vector that
+    ! type exists to prevent — a large change to the most safety-critical file
+    ! in the modem, buying a sensitivity gain nobody has yet measured. Do not
+    ! "close" this for symmetry. If it is ever revisited, the cheap 80% is
+    ! making ft8b's inline subtraction DT-refined (one literal, ft8b.f90:475),
+    ! which is a decode-behaviour change on its own and needs its own numbers.
     dd(1:F8_NMAX) = real(iwave(1:F8_NMAX))
     call c_to_fstr12(mycall,  mycall12)
     call c_to_fstr12(hiscall, hiscall12)
 
     ndepth_l = ndepth
     if (ndepth_l <= 0) ndepth_l = 3
+    ! DELIBERATE DIVERGENCE, DOCUMENTED NOT CLOSED. Upstream derives ncontest
+    ! from the operator's Special Operating Activity — decoder.f90:103,
+    ! `ncontest=iand(params%nexp_decode,7)`, built at mainwindow.cpp:3796-3802
+    ! from int(m_specOp) — with values 0 NONE / 1 NA_VHF / 2 EU_VHF / 3 FIELD
+    ! DAY / 4 RTTY / 5 WW_DIGI / 6 FOX / 7 HOUND / 8 ARRL_DIGI (ft8b.f90:
+    ! 294-302). We pass the literal 0, and Nexus HAS both live consumers: Field
+    ! Day (Mode::FieldDay transmits the i3=3 exchange, so ncontest should be 3)
+    ! and Hound (SpecialOp::Hound, ncontest 7 — and ft8b.f90:266 gives Hounds AP
+    ! unconditionally, `if(lapon.or.ncontest.eq.7)`). The measured cost is real:
+    ! ~1.5-2 dB on the Field Day exchange, because at ncontest=0 the AP masks
+    ! (ft8b.f90:315-413) assert i3=1 message-type bits against an i3=3 message.
+    !
+    ! It is not closed here because making ncontest RUNTIME STATE trips two
+    ! things that a one-line change would ship silently:
+    !   1. ft8b.f90:51 `if(first.or.(ncontest.ne.ncontest0))` re-runs
+    !      `mcq=2*mcq-1` (and its seven siblings). The transform is NOT
+    !      idempotent — 0/1 -> -1/+1 on the first fire, then -3/+1 on the second
+    !      — so the first entry into or out of Field Day would corrupt every CQ
+    !      AP mask for the life of the process. Fixing it means editing a
+    !      vendored file (move the +-1 mapping under `first` only; it has no
+    !      ncontest dependence). See also the class-1 note at the top of this
+    !      module, which files this exact hazard.
+    !   2. It re-opens the rover ruling. ft8b.f90:443-470 documents dropping
+    !      upstream's '/R' filter SPECIFICALLY because ncontest is the constant 0
+    !      here, and says taking upstream's gated version would then be correct.
+    !      That was an operator decision (2026-07-27, "We need to be able to work
+    !      rovers"), so it is an operator question, not a refactor.
     ncontest  = 0
     ! Center deep AP + sync on the operator's QSO/RX freq when supplied; else the
-    ! band midpoint (legacy behavior). nftx mirrors it (no separate TX freq here).
+    ! band midpoint (legacy behavior).
     if (nfqso_in >= nfa .and. nfqso_in <= nfb) then
        nfqso = nfqso_in
     else
        nfqso = (nfa + nfb) / 2
     end if
-    nftx      = nfqso
+    ! Second deep-AP window: the operator's TX offset (mainwindow.cpp:3722).
+    ! Same in-band guard as nfqso; out of band (or the caller passing 0 because
+    ! it has no split) collapses it onto nfqso, which is byte-for-byte the
+    ! behavior that shipped before this parameter existed.
+    if (nftx_in >= nfa .and. nftx_in <= nfb) then
+       nftx = nftx_in
+    else
+       nftx = nfqso
+    end if
+    ! 41 = the early partial pass, anything else = the full frame. See the
+    ! header block; consumed by syncmin below and by ft8b (npasses).
+    if (nzhsym_in == 41) then
+       nzhsym = 41
+    else
+       nzhsym = 50
+    end if
     ! Operator AP controls (the decode-config surface). lft8apon is consumed
     ! twice: by ft8b (AP passes 5-8) and by the a7 replay gate below — AP off
     ! must silence BOTH a-priori paths. lapcqonly rides into ft8b only.
     lft8apon  = (lft8apon_in /= 0)
     lapcqonly = (lapcqonly_in /= 0)
     nagain    = .false.
+    ! DELIBERATE DIVERGENCE, MEASURED AND KEPT. Upstream sets napwid=50 for FT8
+    ! unconditionally (mainwindow.cpp:3776). Ours is 75, and that is a GAIN, not
+    ! an accident: measured 12 seeds/point on "KD9TAW W1AW RR73" at
+    ! nqso_progress=4 with AP armed, at carriers 60 Hz and 70 Hz off nfqso (i.e.
+    ! inside 75 but outside 50), 75 recovers ~2 dB deeper than 50 — 12/12 vs
+    ! 6/12 at -21 dB at 60 Hz — while a 90 Hz control outside BOTH windows is
+    ! identical under either setting, which is what pins the difference on
+    ! napwid. False-alarm cost 0/200 noise-only frames at both values. Narrowing
+    ! to 50 for symmetry would be a pure regression. The only other reader is
+    ! ft8b.f90:421-423, whose branch sets maxosd=2 over the initializer of 2 at
+    ! :418 and is therefore DEAD in current upstream — do not reason about
+    ! napwid from it.
     napwid    = 75
 
     call ft8apset(mycall12, hiscall12, ncontest, apsym, aph10)
@@ -511,6 +625,10 @@ contains
        newdat  = .true.
        syncmin = 1.3
        if (ndepth_l <= 2) syncmin = 1.6
+       ! The early pass searches only strongly-synced candidates
+       ! (ft8_decode.f90:178). Half of what makes upstream's early pass cheap;
+       ! the other half is ft8b's npasses clamp, driven by the same nzhsym.
+       if (nzhsym == 41) syncmin = 2.0
        if (ipass == 1) then
           lsubtract = .true.
           ndeep = ndepth_l
@@ -537,7 +655,7 @@ contains
           if (ib > F8_NH1) ib = F8_NH1
           xbase = 10.0 ** (0.1 * (sbase(ib) - 40.0))
           msg37 = ' '
-          call ft8b(dd, newdat, nqso_progress, nfqso, nftx, ndeep, 50, lft8apon, &
+          call ft8b(dd, newdat, nqso_progress, nfqso, nftx, ndeep, nzhsym, lft8apon, &
                lapcqonly, napwid, lsubtract, nagain, ncontest, iaptype, mycall12, &
                hiscall12, f1, xdt, xbase, apsym, aph10, nharderrors, dmin, &
                nbadcrc, iappass, msg37, xsnr, itone)

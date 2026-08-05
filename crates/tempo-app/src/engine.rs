@@ -554,6 +554,19 @@ impl DecodePass {
     fn a7_final(self) -> bool {
         matches!(self, DecodePass::Boundary)
     }
+
+    /// This pass runs over a PARTIAL, tail-zeroed frame — WSJT-X's early decode
+    /// (`nzhsym = 41`, `mainwindow.cpp:1878`), which upstream deliberately runs
+    /// cheap because the boundary pass re-decodes the same audio moments later.
+    ///
+    /// **Not `!a7_final`**, and the difference is load-bearing: `Redecode` is
+    /// also `a7_final = false`, but it is the F6 review decode over the RETAINED
+    /// FULL audio. Deriving this from `a7_final` would silently raise the sync
+    /// floor and switch off the AP passes on the one path the operator invokes
+    /// deliberately to dig harder.
+    fn is_partial(self) -> bool {
+        matches!(self, DecodePass::Early)
+    }
 }
 
 /// Which decode path the job runs — decided under the engine lock in
@@ -583,6 +596,11 @@ pub struct DecodeJob {
     hiscall: String,
     nqso_progress: i32,
     nfqso: i32,
+    /// WSJT-X's `nftx` — the operator's TX audio offset, which is a DIFFERENT
+    /// frequency from `nfqso` whenever "Hold Tx Freq" is on. It is the second
+    /// deep-AP window (`ft8b.f90:305`), so a station answering our CQ on our own
+    /// transmit frequency still gets the deep AP masks. Native branch only.
+    nftx: i32,
     /// Operator AP controls (settings `ap_decode` / `ap_cq_only`): WSJT-X
     /// "Enable AP" — consumed by FT8 (ft8b lft8apon + the a7 replay) — and the
     /// CQ-only AP restriction (FT8 + FT4 lapcqonly). Native branch only.
@@ -766,6 +784,7 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         hiscall,
         nqso_progress,
         nfqso,
+        nftx,
         ap,
         ap_cq_only,
         frame_time_ms,
@@ -811,9 +830,11 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
                 hiscall: &hiscall,
                 nqso_progress,
                 nfqso,
+                nftx,
                 frame_time_ms,
                 ap,
                 ap_cq_only,
+                partial: pass.is_partial(),
             };
             src.decode_a7(&req, pass.a7_final())
         }
@@ -11746,6 +11767,7 @@ impl Engine {
                 hiscall: String::new(),
                 nqso_progress: 0,
                 nfqso: 0,
+                nftx: 0,
                 ap: true, // ignored: companion decodes arrive pre-made over UDP
                 ap_cq_only: false,
                 frame_time_ms: 0,
@@ -11769,6 +11791,7 @@ impl Engine {
                 hiscall: String::new(),
                 nqso_progress: 0,
                 nfqso: 0,
+                nftx: 0,
                 ap: true, // ignored: DX1's robust path has no WSJT-X AP machinery
                 ap_cq_only: false,
                 frame_time_ms: 0,
@@ -11817,6 +11840,16 @@ impl Engine {
         // WSJT-X nfqso = the freq we're working/listening on. Centers the deep
         // AP passes + sync there so the gain follows the worked station.
         let nfqso = self.rx_offset_hz as i32;
+        // WSJT-X nftx = where WE transmit (mainwindow.cpp:3722,
+        // `dec_data.params.nftx = ui->TxFreqSpinBox->value()`), which is a
+        // DIFFERENT frequency from nfqso whenever "Hold Tx Freq" is on — and
+        // holding is routine, so this is the ordinary case, not a corner. It is
+        // the second deep-AP window (ft8b.f90:305 skips a candidate for the
+        // iaptype>=3 masks only when it is outside BOTH nfqso±napwid AND
+        // nftx±napwid), and it exists because the station answering our CQ
+        // usually answers ON our transmit frequency — i.e. it protects the
+        // single most valuable signal in the slot.
+        let nftx = self.tx_offset_hz as i32;
         // Single decode: collapse the search band to nfqso ± 25 Hz — WSJT-X's
         // own "decode this one station" window (decoder.f90's double-click
         // redecode: nfa=max(nfa,nfqso-25), nfb=min(nfb,nfqso+25)). Host-side
@@ -11855,6 +11888,12 @@ impl Engine {
             hiscall: ap_hiscall,
             nqso_progress: ap_progress,
             nfqso,
+            // Rides through unclamped: the C ABI ignores an nftx outside
+            // [nfa,nfb] and folds it onto nfqso. That is right under the
+            // single-decode collapse above too — sync8 cannot produce a
+            // candidate outside the search band, so a second AP window out
+            // there could never match anything anyway.
+            nftx,
             // Operator AP controls — ride into DecodeRequest → the FFI. The
             // defaults (true, false) are stock WSJT-X; the settings only let
             // the operator deviate deliberately.

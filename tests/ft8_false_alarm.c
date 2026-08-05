@@ -111,9 +111,17 @@ int main(int argc, char **argv) {
         /* lft8apon=1 / lapcqonly=0: AP fully armed, every hypothesis live —
          * the worst case this gate exists to measure. Do not "fix" a
          * regression here by turning AP off; that hides the false decode
-         * instead of removing it. */
+         * instead of removing it.
+         *
+         * nftx is deliberately SPLIT from nfqso (2400 vs 1500). Deep AP fires
+         * in both nfqso+-napwid and nftx+-napwid (ft8b.f90:305), so an unsplit
+         * nftx would collapse them and leave HALF the armed AP surface
+         * untested — which is what "fully armed" has to mean now that nftx is
+         * a real operator frequency and not a copy of nfqso. Measures 0/200
+         * either way; keep the split so it stays measured. */
         int ndec = ft8_decode_frame(iwave, 200, 2900, 3, mycall, hiscall,
-                                    nqso_progress, nfqso, /*nutc*/0, /*la7final*/1,
+                                    nqso_progress, nfqso, /*nftx*/2400, /*nzhsym*/50,
+                                    /*nutc*/0, /*la7final*/1,
                                     /*lft8apon*/1, /*lapcqonly*/0,
                                     out, MAXOUT);
         if (ndec < 0) {

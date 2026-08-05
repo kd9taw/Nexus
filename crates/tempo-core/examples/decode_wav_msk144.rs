@@ -88,9 +88,11 @@ fn decode_file(
             hiscall: "",
             nqso_progress: 0,
             nfqso: 1500,
+            nftx: 1500,
             frame_time_ms,
             ap: true, // stock (FT8/FT4 AP controls; inert for MSK144)
             ap_cq_only: false,
+            partial: false,
         };
         let mut decs = src.decode(&req);
         decs.sort_by(|a, b| {

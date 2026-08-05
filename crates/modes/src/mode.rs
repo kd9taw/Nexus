@@ -451,14 +451,28 @@ pub trait Mode: Send + Sync {
         ap_cq_only: bool,
     ) -> Vec<Decode>;
 
-    /// [`decode_frame`](Mode::decode_frame) plus the cross-cycle a-priori flag.
+    /// [`decode_frame`](Mode::decode_frame) plus the cross-cycle a-priori flag
+    /// and the two WSJT-X pass-shape inputs.
     ///
     /// `a7_final` marks the authoritative full-audio (slot-boundary) pass: for
     /// FT8 it gates WSJT-X's a7 cross-cycle replay (iaptype=7), which recovers
     /// QSO continuations remembered from the previous same-parity slot (keyed
     /// on `frame_time_ms`). The early partial pass sets it `false` (slot
-    /// bookkeeping only). Modes without a cross-cycle path ignore the flag —
-    /// this default delegates to [`decode_frame`](Mode::decode_frame).
+    /// bookkeeping only).
+    ///
+    /// `nftx` is the operator's TX audio offset — WSJT-X's `nftx`
+    /// (`mainwindow.cpp:3722`), the SECOND deep-AP window alongside `nfqso`
+    /// (`ft8b.f90:305`). Pass `nfqso` when RX and TX are not split.
+    ///
+    /// `partial` marks WSJT-X's early decode (`nzhsym = 41`,
+    /// `mainwindow.cpp:1878`), which upstream runs deliberately cheap — a higher
+    /// sync floor and no AP passes — because the authoritative pass re-decodes
+    /// the same audio moments later. It is NOT `!a7_final`: the F6 review
+    /// re-decode is also `a7_final = false` but runs over the retained FULL
+    /// audio, and must keep its AP passes.
+    ///
+    /// Modes without a cross-cycle path ignore all three — this default
+    /// delegates to [`decode_frame`](Mode::decode_frame).
     #[allow(clippy::too_many_arguments)] // mirrors the modem decode ABI
     fn decode_frame_a7(
         &self,
@@ -470,8 +484,10 @@ pub trait Mode: Send + Sync {
         hiscall: &str,
         nqso_progress: i32,
         nfqso: i32,
+        _nftx: i32,
         frame_time_ms: i64,
         _a7_final: bool,
+        _partial: bool,
         ap: bool,
         ap_cq_only: bool,
     ) -> Vec<Decode> {
@@ -605,8 +621,10 @@ impl Mode for Ft8Mode {
         hiscall: &str,
         nqso_progress: i32,
         nfqso: i32,
+        nftx: i32,
         frame_time_ms: i64,
         a7_final: bool,
+        partial: bool,
         ap: bool,
         ap_cq_only: bool,
     ) -> Vec<Decode> {
@@ -625,8 +643,10 @@ impl Mode for Ft8Mode {
             hiscall,
             nqso_progress,
             nfqso,
+            nftx,
             nutc,
             a7_final,
+            partial,
             ap,
             ap_cq_only,
         )

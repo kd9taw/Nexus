@@ -128,6 +128,7 @@ int main(void) {
 
         ft8_a7_reset();
         int ndec = ft8_decode_frame(iwave, 200, 2900, 3, "", "", 0, 0,
+                                    /*nftx*/0, /*nzhsym*/50,
                                     /*nutc*/0, /*la7final*/1,
                                     /*lft8apon*/1, /*lapcqonly*/0, out, MAXOUT);
         if (ndec < 0) {

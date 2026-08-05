@@ -2,7 +2,7 @@
 //! frames the no-context path misses — exercising the SAME golden WSJT-X decoder
 //! the engine feeds real MyCall/DxCall/nQSOProgress/nfqso into.
 
-use ft8::{decode_frame, encode, gen_wave, NMAX, SAMPLE_RATE};
+use ft8::{decode_frame, decode_frame_a7, encode, gen_wave, NMAX, SAMPLE_RATE};
 
 /// Unit-variance Gaussian (LCG + Box-Muller) — matches tempo-core's `Awgn` so the
 /// SNR convention is identical, without a cross-crate dep.
@@ -197,6 +197,152 @@ fn nfqso_steers_deep_ap_to_an_off_center_carrier() {
     assert!(
         steered > centered,
         "steering nfqso must strictly out-recover band-center ({steered} vs {centered})"
+    );
+}
+
+/// a7-inert decode (constant `nutc`, `a7_final = false` — see `decode_frame`'s
+/// doc for why both are load-bearing) with the two pass-shape inputs exposed.
+#[allow(clippy::too_many_arguments)]
+fn decode_shaped(
+    iwave: &[i16],
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    nftx: i32,
+    partial: bool,
+) -> Vec<ft8::Decode> {
+    decode_frame_a7(
+        iwave,
+        200,
+        2900,
+        3,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        0,
+        false,
+        partial,
+        true,
+        false,
+    )
+}
+
+/// WSJT-X's deep AP fires in TWO windows, not one: `nfqso ± napwid` **and**
+/// `nftx ± napwid`. `ft8b.f90:305` cycles a candidate only when it is outside
+/// BOTH, and `mainwindow.cpp:3722` feeds nftx straight from the Tx-frequency
+/// spin box — so whenever the operator has "Hold Tx Freq" on and RX/TX are
+/// split, upstream still gets the deep masks on its own transmit frequency.
+/// That is not a corner case: it is where the station answering your CQ calls.
+///
+/// The control here is tighter than
+/// [`nfqso_steers_deep_ap_to_an_off_center_carrier`]'s: nfqso is IDENTICAL in
+/// both arms (so sync8's own nfqso weighting is held constant) and only nftx
+/// moves. If nftx does not reach ft8b, the two arms are the same decode and the
+/// off-window carrier is unrecoverable in both.
+#[test]
+fn nftx_opens_a_second_deep_ap_window_on_the_tx_offset() {
+    let msg = "KD9TAW W1AW RR73"; // needs iaptype 6 — gated by the napwid windows
+    let nfqso = 1500i32; // where we listen
+    let f0 = 2400.0f32; // the caller answers 900 Hz away, on OUR tx offset
+    let seeds = 12u64;
+    let (mut split, mut collapsed) = (0u32, 0u32);
+    for seed in 0..seeds {
+        let iwave = noisy_frame_at(msg, -22.0, seed, f0);
+        // Hold Tx Freq on: we transmit at 2400 while listening at 1500.
+        if decode_shaped(&iwave, "KD9TAW", "W1AW", 3, nfqso, f0 as i32, false)
+            .iter()
+            .any(|d| d.message == msg)
+        {
+            split += 1;
+        }
+        // nftx collapsed onto nfqso — one window, which is what shipped before
+        // this parameter existed and what an unsplit operator still gets.
+        if decode_shaped(&iwave, "KD9TAW", "W1AW", 3, nfqso, nfqso, false)
+            .iter()
+            .any(|d| d.message == msg)
+        {
+            collapsed += 1;
+        }
+    }
+    assert!(
+        split >= 9,
+        "the tx-offset window must recover the caller answering on our tx freq \
+         ({split}/{seeds}) — nftx is not reaching ft8b.f90:305"
+    );
+    assert!(
+        collapsed <= 1,
+        "with both windows on nfqso, a 900 Hz-away caller must NOT deep-AP \
+         ({collapsed}/{seeds}) — the arms are not actually differing"
+    );
+}
+
+/// WSJT-X's EARLY decode is a deliberately CHEAP pass, and the cheapness is the
+/// point: it runs 2.6 s before the boundary pass re-decodes the same audio, and
+/// an early pass that overruns is what makes the boundary decode land late and
+/// cost the whole period. Upstream buys that with two mechanisms, both keyed on
+/// the same `nzhsym = 41` (`mainwindow.cpp:1878`, `m_earlyDecode` at
+/// `mainwindow.h:533`): the sync floor rises 1.3 → 2.0 (`ft8_decode.f90:178`)
+/// and the AP passes 5-8 are switched off outright (`ft8b.f90:275`,
+/// `if(nzhsym.lt.50) npasses=4`).
+///
+/// So this is the observable, and it is a NEGATIVE on purpose: a frame that only
+/// the deep AP masks can reach must NOT come back from the early pass, while the
+/// identical audio on the full-frame pass must. Paired with a strong signal that
+/// survives both, which is what separates "upstream's cheap pass" from "the
+/// early pass is broken".
+#[test]
+fn the_early_pass_drops_the_ap_passes_exactly_as_wsjtx_does() {
+    let msg = "KD9TAW W1AW RR73"; // recoverable at -22 dB ONLY via iaptype 6
+    let loud = "CQ W9XYZ EN52"; // ordinary strong signal, no AP needed
+    let seeds = 12u64;
+    let (mut full_ap, mut early_ap) = (0u32, 0u32);
+    let (mut full_loud, mut early_loud) = (0u32, 0u32);
+    for seed in 0..seeds {
+        let iwave = noisy_frame(msg, -22.0, seed);
+        if decode_shaped(&iwave, "KD9TAW", "W1AW", 3, 1500, 1500, false)
+            .iter()
+            .any(|d| d.message == msg)
+        {
+            full_ap += 1;
+        }
+        if decode_shaped(&iwave, "KD9TAW", "W1AW", 3, 1500, 1500, true)
+            .iter()
+            .any(|d| d.message == msg)
+        {
+            early_ap += 1;
+        }
+
+        let strong = noisy_frame(loud, 0.0, seed);
+        if decode_shaped(&strong, "", "", 0, 1500, 1500, false)
+            .iter()
+            .any(|d| d.message == loud)
+        {
+            full_loud += 1;
+        }
+        if decode_shaped(&strong, "", "", 0, 1500, 1500, true)
+            .iter()
+            .any(|d| d.message == loud)
+        {
+            early_loud += 1;
+        }
+    }
+    assert!(
+        full_ap >= 9,
+        "the full-frame pass must still deep-AP this frame ({full_ap}/{seeds})"
+    );
+    assert_eq!(
+        early_ap, 0,
+        "the early pass must run NO AP passes ({early_ap}/{seeds}) — nzhsym is \
+         not reaching ft8b's npasses clamp (ft8b.f90:275)"
+    );
+    assert_eq!(
+        (full_loud, early_loud),
+        (seeds as u32, seeds as u32),
+        "a strong signal must decode on BOTH passes — the early pass is cheaper, \
+         not broken"
     );
 }
 

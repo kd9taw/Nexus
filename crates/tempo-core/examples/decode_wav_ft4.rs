@@ -97,9 +97,11 @@ fn decode_file(path: &str) -> Result<usize, String> {
             hiscall: "",
             nqso_progress: 0,
             nfqso: 0,
+            nftx: 0,
             frame_time_ms: (slot as i64) * 7_500, // FT4 slot key
             ap: true,                             // stock (FT4 consumes only ap_cq_only)
             ap_cq_only: false,                    // stock: all AP hypotheses
+            partial: false,                       // full slot audio
         };
         let mut decs = src.decode(&req);
         decs.sort_by(|a, b| {

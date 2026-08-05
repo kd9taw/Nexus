@@ -301,7 +301,7 @@ fn main() {
                                 w
                             };
                             let iw = capture_to_i16(&win);
-                            let req = req_for(&iw, ndepth, s as i64 * 15_000);
+                            let req = req_for(&iw, ndepth, s as i64 * 15_000, !a7f);
                             let _g = gate.lock().unwrap();
                             let _ = ctx.scoped(|| src.decode_a7(&req, a7f));
                         });
@@ -348,7 +348,12 @@ fn main() {
                 win.extend_from_slice(&audio[s + 1][..sh.min(cap)]);
                 win.truncate(cap);
                 let iw = capture_to_i16(&win[..frame_len.min(win.len())]);
-                let req = req_for(&iw, ndepth, s as i64 * (kind.slot_secs() * 1000.0) as i64);
+                let req = req_for(
+                    &iw,
+                    ndepth,
+                    s as i64 * (kind.slot_secs() * 1000.0) as i64,
+                    false,
+                );
                 total += src.decode_a7(&req, true).len();
             }
             println!(
@@ -403,7 +408,7 @@ fn main() {
     // would otherwise land in p95.
     for warm in 0..2 {
         let iw = capture_to_i16(&slots_audio[warm % slots_audio.len()]);
-        let req = req_for(&iw, ndepth, 0);
+        let req = req_for(&iw, ndepth, 0, false);
         let _ = src.decode_a7(&req, true);
     }
 
@@ -414,7 +419,7 @@ fn main() {
         // --- Early pass: partial audio at the front, a7_final = false. --------
         let ef = early_frame(audio, early_n);
         let iw = capture_to_i16(&ef);
-        let req = req_for(&iw, ndepth, frame_time_ms);
+        let req = req_for(&iw, ndepth, frame_time_ms, true);
         let t = Instant::now();
         let mut inner = 0f64;
         let d = if use_ctx {
@@ -436,7 +441,7 @@ fn main() {
 
         // --- Boundary pass: full audio, a7_final = true. ----------------------
         let iw = capture_to_i16(audio);
-        let req = req_for(&iw, ndepth, frame_time_ms);
+        let req = req_for(&iw, ndepth, frame_time_ms, false);
         let t = Instant::now();
         let mut inner = 0f64;
         let d = if use_ctx {
@@ -469,7 +474,15 @@ fn main() {
     }
 }
 
-fn req_for<'a>(iwave: &'a [i16], ndepth: i32, frame_time_ms: i64) -> DecodeRequest<'a> {
+/// `partial` marks the EARLY pass (WSJT-X `nzhsym = 41`), which the FT8 decoder
+/// runs deliberately cheap — a higher sync floor and no AP passes. Setting it is
+/// what makes the `early` timing below the one production actually pays.
+fn req_for<'a>(
+    iwave: &'a [i16],
+    ndepth: i32,
+    frame_time_ms: i64,
+    partial: bool,
+) -> DecodeRequest<'a> {
     // Shipped engine defaults — engine.rs::build_decode_job (nfa/nfb/ndepth/nfqso).
     DecodeRequest {
         iwave,
@@ -480,8 +493,10 @@ fn req_for<'a>(iwave: &'a [i16], ndepth: i32, frame_time_ms: i64) -> DecodeReque
         hiscall: "",
         nqso_progress: 0,
         nfqso: 0,
+        nftx: 0,
         frame_time_ms,
         ap: true,          // stock: AP on (engine ap_decode default)
         ap_cq_only: false, // stock: all AP hypotheses
+        partial,
     }
 }

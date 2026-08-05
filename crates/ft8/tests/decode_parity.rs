@@ -115,6 +115,47 @@ fn decodes_real_wsjtx_sample() {
     assert!(d3.iter().any(|x| x.snr <= -15), "expected a ≤−15 dB decode");
 }
 
+/// EXPLORATION ONLY (ignored): what the early pass actually costs, on the real
+/// off-air sample, over the exact buffer `service.rs` feeds it — the first
+/// 11.808 s (WSJT-X's `m_earlyDecode = 41` half-symbols, `mainwindow.h:533`) at
+/// the front of a zero-tail-padded full-length frame. Prints wall time and
+/// decode count for the early pass shape (`partial = true`: sync floor 2.0 and
+/// no AP passes) against the full-frame shape over the same audio.
+///
+/// This is where the CHANGELOG's early-pass numbers come from; re-run it rather
+/// than trusting them, they are machine-specific. Run with:
+///   cargo test -p ft8 --release --test decode_parity explore_early_pass_cost -- --ignored --nocapture
+#[test]
+#[ignore]
+fn explore_early_pass_cost() {
+    use std::time::Instant;
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ft8_sample.wav");
+    let mut s = read_wav_i16(path);
+    s.resize(NMAX, 0);
+    // RxRing::frame_latest_padded at the 11.8 s early dispatch: 41*3456 samples
+    // of audio at the front, silence behind.
+    let mut early = vec![0i16; NMAX];
+    let n = 41 * 3456;
+    early[..n].copy_from_slice(&s[..n]);
+
+    for (label, partial) in [
+        ("early shape (nzhsym=41)", true),
+        ("full  shape (nzhsym=50)", false),
+    ] {
+        let mut best = f64::MAX;
+        let mut ndec = 0usize;
+        for _ in 0..3 {
+            let t = Instant::now();
+            let d = ft8::decode_frame_a7(
+                &early, 200, 2900, 3, "", "", 0, 0, 0, 0, false, partial, true, false,
+            );
+            best = best.min(t.elapsed().as_secs_f64() * 1e3);
+            ndec = d.len();
+        }
+        println!("{label}: {ndec:2} decodes, {best:7.1} ms (best of 3)");
+    }
+}
+
 /// Decode rate vs SNR brackets WSJT-X's published FT8 AWGN threshold (~−21 dB):
 /// strong well above it, ~50% near it, mostly gone below — and monotonic.
 #[test]

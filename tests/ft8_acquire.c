@@ -6,8 +6,8 @@
  *     ft8_encode -> ft8_gen_wave at a distinct f0 -> place at 0.5 s TX start
  *   sum the three signals, add AWGN, convert to int16 ->
  *   ft8_decode_frame(iwave, nfa=200, nfb=2900, ndepth=3, mycall="", hiscall="",
- *                    nqso_progress=0, nfqso=0, nutc=0, la7final=1,
- *                    lft8apon=1, lapcqonly=0, out, MAXOUT)
+ *                    nqso_progress=0, nfqso=0, nftx=0, nzhsym=50, nutc=0,
+ *                    la7final=1, lft8apon=1, lapcqonly=0, out, MAXOUT)
  *
  * PASS if all three transmitted messages are recovered. This proves the
  * native FT8 path (ft8apset -> sync8 -> ft8b, with ft8b's internal multi-pass
@@ -85,7 +85,8 @@ int main(void) {
         iwave[i] = (int16_t)lrintf(v);
     }
 
-    int ndec = ft8_decode_frame(iwave, 200, 2900, 3, "", "", 0, 0, /*nutc*/0, /*la7final*/1,
+    int ndec = ft8_decode_frame(iwave, 200, 2900, 3, "", "", 0, 0,
+                                /*nftx*/0, /*nzhsym*/50, /*nutc*/0, /*la7final*/1,
                                 /*lft8apon*/1, /*lapcqonly*/0, out, MAXOUT);
     printf("ft8_decode_frame returned %d decode(s)\n", ndec);
     if (ndec < 0) {

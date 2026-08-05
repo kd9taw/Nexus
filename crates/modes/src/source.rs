@@ -34,6 +34,14 @@ pub struct DecodeRequest<'a> {
     /// QSO/RX audio frequency (Hz) being worked — WSJT-X's nfqso; centers the
     /// deep AP passes + sync for FT8/FT4. 0 / out-of-band ⇒ band center.
     pub nfqso: i32,
+    /// TX audio frequency (Hz) — WSJT-X's nftx (`mainwindow.cpp:3722`), i.e. the
+    /// operator's transmit offset, which is independent of `nfqso` whenever
+    /// "Hold Tx Freq" is on. It is the SECOND deep-AP window: `ft8b.f90:305`
+    /// skips a candidate for the iaptype ≥ 3 masks only when it is outside BOTH
+    /// `nfqso ± napwid` and `nftx ± napwid`, because the station answering your
+    /// CQ usually answers on *your* transmit frequency. FT8 only. Equal to
+    /// `nfqso` (or 0) ⇒ one window, which is exactly right when RX/TX coincide.
+    pub nftx: i32,
     /// Monotonic ms timestamp for this frame (cross-frame IR-HARQ keying; FT1).
     /// 0 disables cross-frame combining.
     pub frame_time_ms: i64,
@@ -45,6 +53,20 @@ pub struct DecodeRequest<'a> {
     /// Restrict AP to the CQ hypothesis (ft8b/ft4_decode `lapcqonly`,
     /// iaptype 1). Consumed by FT8 AND FT4. `false` is stock.
     pub ap_cq_only: bool,
+    /// This is WSJT-X's EARLY decode over a partial, tail-zeroed frame
+    /// (`nzhsym = 41`, `mainwindow.cpp:1878`) rather than the full-frame pass
+    /// (`nzhsym = 50`, `mainwindow.cpp:1877`). Upstream runs the early pass
+    /// deliberately cheap — sync floor 2.0 instead of 1.3
+    /// (`ft8_decode.f90:178`) and the AP passes 5-8 off (`ft8b.f90:275`) —
+    /// because the authoritative boundary pass re-decodes the same audio a
+    /// couple of seconds later, and a slow early pass is what makes the
+    /// boundary decode land late and cost the whole period. FT8 only.
+    ///
+    /// **Not the inverse of `decode_a7`'s `a7_final`.** Three passes exist, not
+    /// two: Boundary is `a7_final`, Early is `partial`, and the F6 review
+    /// re-decode is NEITHER — it runs over the retained FULL audio and must
+    /// keep the deep passes it is invoked to get.
+    pub partial: bool,
 }
 
 impl<'a> DecodeRequest<'a> {
@@ -59,9 +81,11 @@ impl<'a> DecodeRequest<'a> {
             hiscall: "",
             nqso_progress: 0,
             nfqso: 0, // band center (no QSO freq)
+            nftx: 0,  // no split — the deep-AP windows coincide with nfqso
             frame_time_ms: 0,
             ap: true,          // stock WSJT-X: AP on
             ap_cq_only: false, // stock WSJT-X: all AP hypotheses
+            partial: false,    // full frame
         }
     }
 }
@@ -164,8 +188,10 @@ impl SignalSource for NativeSource {
             req.hiscall,
             req.nqso_progress,
             req.nfqso,
+            req.nftx,
             req.frame_time_ms,
             a7_final,
+            req.partial,
             req.ap,
             req.ap_cq_only,
         );

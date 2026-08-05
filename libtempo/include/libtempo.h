@@ -226,6 +226,19 @@ typedef struct {
  *   nqso_progress : QSO progress index (AP pass schedule)
  *   nfqso         : QSO/RX audio freq (Hz) being worked (WSJT-X nfqso); the deep
  *                   AP passes + sync center on it. 0 / out of [nfa,nfb] = band mid
+ *   nftx          : TX audio freq (Hz) — WSJT-X nftx (mainwindow.cpp:3722). The
+ *                   SECOND deep-AP window: ft8b.f90:305 skips a candidate only
+ *                   when it is outside BOTH nfqso+-napwid AND nftx+-napwid, so
+ *                   a station answering your CQ on YOUR tx frequency still gets
+ *                   the deep AP masks. 0 / out of [nfa,nfb] = same as nfqso,
+ *                   which is right whenever RX and TX are not split.
+ *   nzhsym        : half-symbol count for this pass — WSJT-X nzhsym
+ *                   (mainwindow.cpp:1877-1879). 50 = full 14.4 s frame; 41 =
+ *                   the 11.808 s EARLY partial pass, which upstream runs
+ *                   deliberately cheap: sync threshold 2.0 instead of 1.3
+ *                   (ft8_decode.f90:178) and the AP passes 5-8 OFF
+ *                   (ft8b.f90:275). It does NOT change how much audio is read —
+ *                   always FT8_NMAX. Any value other than 41 is treated as 50.
  *   nutc          : slot key for the a7 cross-cycle AP table = slot UTC
  *                   seconds-of-day (slot*15 for FT8; 0..86399). A new nutc rolls
  *                   the per-parity prior-slot table; parity = mod(nutc/5,2).
@@ -254,7 +267,7 @@ typedef struct {
 int ft8_decode_frame(const int16_t *iwave /*[FT8_NMAX]*/,
                      int nfa, int nfb, int ndepth,
                      const char *mycall, const char *hiscall,
-                     int nqso_progress, int nfqso,
+                     int nqso_progress, int nfqso, int nftx, int nzhsym,
                      int nutc, int la7final,
                      int lft8apon, int lapcqonly,
                      ft8_decode_t *out, int max_out);
