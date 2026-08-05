@@ -596,6 +596,23 @@ pub struct RadioStatus {
     /// tuning). While true the radio plays a continuous f0 sine instead of slots.
     #[serde(default)]
     pub tuning: bool,
+    /// ⭐ WHO HOLDS THE TRANSMITTER, or `None` when nobody does — the UI's copy of
+    /// [`Engine::tx_owner`], carrying its [`TxOwner::busy_reason`] verbatim.
+    ///
+    /// This exists because the UI was GUESSING. A "may I move the VFO?" gate written as
+    /// `!transmitting && !tuning` is a partial reimplementation of the arbiter, and it knows
+    /// only two of its seven owners: `transmitting` is written solely by the FT slot-TX path,
+    /// so manual PTT, the voice keyer, CW, RTTY and SSTV are all invisible to it. That let the
+    /// dial move under a held mic key (2026-08-05). The soundcard modes were covered by
+    /// accident downstream via `tx_until_ms`; manual PTT is DELIBERATELY not
+    /// (`tempo_audio::service` — "a section/mode change must always reach the rig"), so there
+    /// is no backstop and the UI gate is the only thing standing there.
+    ///
+    /// ⚠️ NEW TX GATES IN THE UI READ THIS FIELD. Do not add another flag pair and re-derive
+    /// the answer — that is the bug this field exists to end. `Some(_)` means the transmitter
+    /// is busy AND carries the sentence to show the operator; there is nothing to look up.
+    #[serde(default)]
+    pub tx_busy_reason: Option<String>,
     /// Whether the transmit watchdog has tripped (continuous-TX limit reached)
     /// and auto-halted transmit. Cleared by re-enabling TX.
     #[serde(default)]

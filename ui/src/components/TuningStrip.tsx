@@ -70,7 +70,7 @@ export function TuningStrip({
   useWheelTune(readoutRef, {
     dialMhz: dial,
     sideband: snap.radio.sideband || 'USB',
-    enabled: catOk && !snap.radio.transmitting,
+    enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
     stepHz: step,
     sensitivity,
     onSnap,

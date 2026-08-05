@@ -198,6 +198,19 @@ describe('the wheel may never move the VFO under a live transmitter', () => {
     ['CAT is down', { catOk: false }],
     ['a slot TX is on the air', { transmitting: true }],
     ['a tune carrier is keyed', { tuning: true }],
+    // ⭐ THE FIVE THE OLD GATE WAS BLIND TO. `!transmitting && !tuning` reimplemented
+    // `Engine::tx_owner()` and knew 2 of its 7 owners: `transmitting` is written ONLY by the
+    // FT slot-TX path, so a held mic key, the voice keyer, CW, RTTY and SSTV all read as
+    // "transmitter free". The soundcard modes are covered by accident downstream via
+    // `tx_until_ms`; MANUAL PTT IS DELIBERATELY NOT ("a section/mode change must always reach
+    // the rig"), so nothing backstopped this and one notch on the 1 MHz digit moved the VFO —
+    // and could carry across a band edge, which halts the over and re-commands mode — under a
+    // keyed transmitter.
+    ['the mic PTT is held', { txBusyReason: 'Mic PTT is held — release it first' }],
+    ['the voice keyer is playing', { txBusyReason: 'A voice message is transmitting — stop it first' }],
+    ['CW is sending', { txBusyReason: 'CW is sending — stop it first' }],
+    ['RTTY is transmitting', { txBusyReason: 'RTTY is transmitting — stop it first' }],
+    ['SSTV is transmitting', { txBusyReason: 'An SSTV image is transmitting — stop it first' }],
   ] as const) {
     it(`refuses a digit notch while ${what}`, () => {
       const { container } = mount({ digitTune: true, wheelTune: true, wheelStepHz: 100 }, snapWith(over))

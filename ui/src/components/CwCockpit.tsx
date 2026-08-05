@@ -244,7 +244,7 @@ export function CwCockpit({
   useWheelTune(scopeRef, {
     dialMhz: snap.radio.dialMhz,
     sideband: snap.radio.sideband || 'USB',
-    enabled: catOk && !snap.radio.transmitting,
+    enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
     stepHz: tuneStep,
     sensitivity: wheelSensitivity,
     onSnap,
@@ -255,7 +255,7 @@ export function CwCockpit({
   // policy is applied separately by the engine).
   const onScopeTune = useScopeTune({
     sideband: snap.radio.sideband || 'USB',
-    enabled: catOk && !snap.radio.transmitting,
+    enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
     onSnap,
   })
   // The scope's click/box math needs a CW-CLASSIFIED mode string (settings.sideband is
@@ -1282,7 +1282,7 @@ export function CwCockpit({
           filterWidthHz={filterHz ?? 500}
           pitchHz={pitch}
           cwPitchRefDial={keyer !== 'soundcard'}
-          interactive={catOk && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+          interactive={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
         />
       </section>
       <Splitter

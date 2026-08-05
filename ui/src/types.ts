@@ -1043,6 +1043,14 @@ export interface RadioStatus {
   txAllowed: boolean
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
+  /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's
+   * `tx_owner()` arbiter, carrying the sentence to show the operator.
+   *
+   * ⚠️ EVERY UI GATE THAT ASKS "may I move/act on the radio right now?" READS THIS.
+   * Do NOT write `!transmitting && !tuning` — that pair knows only 2 of the 7 owners
+   * (`transmitting` is set solely by the FT slot-TX path), so it is blind to manual PTT,
+   * the voice keyer, CW, RTTY and SSTV. It let the dial move under a held mic key. */
+  txBusyReason?: string | null
   /** True if the TX watchdog has auto-halted transmit (needs a re-enable). */
   txWatchdog: boolean
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */

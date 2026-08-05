@@ -316,7 +316,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   useWheelTune(scopeRef, {
     dialMhz: snap.radio.dialMhz,
     sideband: snap.radio.sideband || 'USB',
-    enabled: snap.radio.catOk === true && !snap.radio.transmitting,
+    enabled: snap.radio.catOk === true && !snap.radio.txBusyReason && !snap.radio.transmitting,
     stepHz: tuneStep,
     sensitivity: wheelSensitivity,
     onSnap,
@@ -343,7 +343,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // and reports the final dial; this hook just commands it.
   const onScopeTune = useScopeTune({
     sideband: commandedMode,
-    enabled: catOk && !snap.radio.transmitting,
+    enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
     onSnap,
   })
 
@@ -1106,7 +1106,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
             onTune={onScopeTune}
             filterWidthHz={filterHz ?? 2400}
-            interactive={catOk && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+            interactive={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
           />
         </div>
       </section>

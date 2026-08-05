@@ -79,6 +79,7 @@
     "tuning": false,
     "txAlc": null,
     "txAllowed": true,
+    "txBusyReason": null,
     "txCompDb": null,
     "txCycleAuto": true,
     "txEnabled": false,

@@ -127,12 +127,27 @@ export function CockpitHeader({
   // today (the nudge buttons, the scope wheel, and the non-digit parts of the readout).
   //
   // Disabled while CAT is down or the transmitter is up — never move the VFO under a live over.
-  // `radio.tuning` is in the gate because a keyed tune carrier is a transmission that
-  // `radio.transmitting` (the FT slot-TX indicator) does not report.
+  //
+  // ⚠️ `radio.txBusyReason` IS THE GATE, and `transmitting`/`tuning` are kept only as a
+  // belt-and-braces for a snapshot too old to carry it. Those two flags alone were the bug
+  // (2026-08-05): they reimplement `Engine::tx_owner()` and know 2 of its 7 owners, because
+  // `transmitting` is written ONLY by the FT slot-TX path. A held mic key, the voice keyer, CW,
+  // RTTY and SSTV all read as "transmitter free" through them. The soundcard modes happen to be
+  // caught downstream by `tx_until_ms`; manual PTT is DELIBERATELY not (`tempo_audio::service`:
+  // "a section/mode change must always reach the rig"), so this gate was the only thing there
+  // and it was open. One notch on the 1 MHz digit then moves the VFO under a keyed
+  // transmitter — and if it carries across a band edge, halts the over and re-commands mode too.
+  //
+  // Do NOT re-derive this from flags. Ask the arbiter; it ships the reason with the answer.
   const tuneBy = useWheelTune(readoutRef, {
     dialMhz: dial,
     sideband: radio.sideband || 'USB',
-    enabled: (wheelTune || digitTune) && catOk && !radio.transmitting && !radio.tuning,
+    enabled:
+      (wheelTune || digitTune) &&
+      catOk &&
+      !radio.txBusyReason &&
+      !radio.transmitting &&
+      !radio.tuning,
     stepHz: wheelStepHz,
     sensitivity: wheelSensitivity,
     resolveStepHz: digitTune

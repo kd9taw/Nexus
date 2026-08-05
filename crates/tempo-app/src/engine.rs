@@ -10735,6 +10735,8 @@ impl Engine {
         s.radio.qso_recording = self.qso_recording;
         s.radio.tx_allowed = self.tx_allowed();
         s.radio.tuning = self.tuning;
+        // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
+        s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;

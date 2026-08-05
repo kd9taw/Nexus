@@ -238,6 +238,9 @@ impl AppState {
                 band: "20m".to_string(),
                 sideband: "USB".to_string(),
                 transmitting: false,
+                // Nobody holds the transmitter at construction — the engine recomputes this
+                // from `tx_owner()` every snapshot.
+                tx_busy_reason: None,
                 slot: 0,
                 next_slot_ms: 0,
                 // Optimistic until the engine has seen decodes to judge from
