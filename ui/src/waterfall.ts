@@ -140,15 +140,35 @@ export const WF_FLOOR_PCT = 0.5
  * busy band, 0% of the field black. The operator's report is that picture ("the back is dark and
  * not over noisy" — 2026-08-05).
  *
- * ⚠️ 3 dB, and NOT MORE, and the reason is weak signals. A display bin is 7.81 Hz of a 2500 Hz
- * SNR reference and the peak-hold over ~3 raw FFT bins biases the noise up, so a signal's per-bin
- * excess over the noise median is `SNR + 24.6 dB`: the FT8 decode floor of -21 dB SNR is only
- * +3.6 dB/bin. Parking at +6 puts the black point ABOVE it and deletes exactly the signals FT8
- * exists to dig out — a worse product than the noisy background, and invisible to the operator
- * because he cannot see what stopped being drawn. Measured column brightness of a -21 dB SNR
- * station on a busy band: LUT 38 at +3 dB parking, LUT 8 at +6, LUT 0 at +10.
+ * ⚠️ 2 dB, and the number that sets the ceiling is the FT8 DECODE FLOOR. This was 3, justified by
+ * a per-bin excess of `SNR + 24.6 dB` which made -21 dB SNR "+3.6 dB/bin", comfortably above a
+ * 3 dB park. That calibration was 2.3 dB optimistic. Measured against the real producer:
+ * analytic peak-raw-bin / mean-raw-bin-noise is SNR + 24.54 dB, but `power_spectrum`'s peak-hold
+ * over ~3 raw bins lifts the DISPLAYED noise median 1.67 dB and Hann scalloping costs a tone
+ * ~0.6 dB — net **SNR + 22.3**. So -21 dB SNR is **+1.3 dB/bin**, and a 3 dB park sits ABOVE the
+ * signal it was chosen to protect. The old comment's own rule selected the wrong number.
+ *
+ * Measured on the guard's scene, decode-floor station vs THE SAME SCENE WITHOUT IT:
+ *   park 3 dB → 78.4% of the field black, but the station leads its own absence by 9 LUT — i.e.
+ *               most of what was being called "the signal" is the bright tail of the grain.
+ *   park 2 dB → 68.0% black, station LUT 44 against grain p95 36, leads its absence by >12.
+ * Two points of blackness bought back a signal that FT8 exists to dig out. That is the right
+ * side of the trade: the operator can SEE a background that is not dark enough and ask for more,
+ * and can never see a station that stopped being drawn.
+ *
+ * ⚠️ AND 2 dB IS STILL OPTIMISTIC, on two counts that are known and not yet fixed.
+ * (1) Real FT8 is 8-FSK and the 270 ms averaging window spans ~1.7 symbols, so its power is
+ *     divided across the bins its tones visited — measured 4.5-6.6 dB dimmer than the constant
+ *     carrier every number above assumes. Real excess ≈ SNR + 16.5.
+ * (2) `WF_FLOOR_PCT`'s median is the whole visible row's, not the noise's, so band occupancy and
+ *     passband tilt push the EFFECTIVE park well past this constant: measured 3.3 dB on a dead
+ *     band, 4.4 with 20 stations, 6.4 with 5 dB of tilt, 11.2 with 15 dB.
+ * The real fixes are spectral flattening (kills the tilt term — WSJT-X runs `flat4` on every row
+ * and we run nothing) and a SOFT KNEE below the park instead of a hard clamp, so a sub-park
+ * column still accumulates contrast over the ~105 rows an FT8 over lasts rather than rendering
+ * bit-identical to the background. Until then this constant is doing a job it cannot fully do.
  */
-export const WF_PARK_DB = 3
+export const WF_PARK_DB = 2
 
 /**
  * Minimum dB the display window may cover. Same clamp PhoneScope (`MIN_DYN_DB`) and
