@@ -599,9 +599,14 @@ impl Logbook {
     /// QSL-sent state from disk. That makes the shared log a monotonic union: before this
     /// instance rewrites the whole file, it has folded in whatever the other instance wrote, so
     /// a confirmation or upload stamp is never clobbered. Call before any full-file `save`.
+    ///
+    /// Matched on EXACT identity (call / band / mode-class / the exact contact second),
+    /// not on the report matcher's UTC-day key: these rows are our own `save()` output,
+    /// so both sides carry the same timestamp, and the day key mis-paired two contacts
+    /// with one station inside a day — see [`crate::reconcile::merge_own_disk`].
     pub fn reconcile_disk(&mut self, text: &str) {
         let incoming = parse_adif(text);
-        crate::reconcile::merge_and_add(&mut self.records, incoming);
+        crate::reconcile::merge_own_disk(&mut self.records, incoming);
     }
 
     /// Stamp park/summit references from an external OTA log (pota.app hunter or
@@ -1828,6 +1833,97 @@ mod tests {
             Some(UploadOutcome::Accepted),
             "B's own ClubLog stamp is NOT clobbered"
         );
+    }
+
+    /// Build the two-instance divergence the recovery has to survive: the shared file
+    /// holds A's contact (award-confirmed) AND B's own later contact, while B's MEMORY
+    /// holds only its own — B appended without re-reading. Returns (B's logbook, disk text).
+    fn two_instance_same_station(a_when: u64, b_when: u64) -> (Logbook, String) {
+        let mut a_row = rec("W1AW", "20m", a_when);
+        a_row.mode = "FT8".into();
+        a_row.award_confirmed = true;
+        a_row.confirmed = true;
+        a_row.qsl_rcvd.lotw = true;
+        let mut b_row = rec("W1AW", "20m", b_when);
+        b_row.mode = "FT8".into();
+
+        let disk = adif_header() + &adif_record(&a_row) + &adif_record(&b_row);
+        let mut mem = Logbook::new();
+        mem.add(b_row); // B's memory: ONLY its own, later QSO
+        (mem, disk)
+    }
+
+    fn assert_both_survive_confirmation_on_the_right_row(mem: &Logbook, a_when: u64, b_when: u64) {
+        let mut times: Vec<u64> = mem.records().iter().map(|r| r.when_unix).collect();
+        times.sort_unstable();
+        assert_eq!(
+            times,
+            vec![a_when, b_when],
+            "both QSOs survive with their OWN timestamps (day-keyed matching folded A's row \
+             onto B's and re-appended B's as a second copy)"
+        );
+        let a = mem
+            .records()
+            .iter()
+            .find(|r| r.when_unix == a_when)
+            .expect("A's QSO");
+        let b = mem
+            .records()
+            .iter()
+            .find(|r| r.when_unix == b_when)
+            .expect("B's QSO");
+        assert!(
+            a.award_confirmed && a.qsl_rcvd.lotw,
+            "the confirmation stays on the contact it was earned by"
+        );
+        assert!(
+            !b.award_confirmed && !b.qsl_rcvd.lotw,
+            "and is NOT folded onto the other contact with that station"
+        );
+    }
+
+    #[test]
+    fn reconcile_disk_pairs_our_own_rows_by_exact_time_not_by_utc_day() {
+        // Two QSOs with ONE station on ONE band inside ONE UTC day — routine FT8.
+        // The report matcher buckets by UTC DAY, so recovering our own file paired A's
+        // 06:00 row with B's 18:00 row: the confirmation landed on the wrong contact,
+        // the 06:00 QSO vanished and the 18:00 QSO was duplicated.
+        let day = 20_000u64 * 86_400;
+        let (mut mem, disk) = two_instance_same_station(day + 6 * 3600, day + 18 * 3600);
+        mem.reconcile_disk(&disk);
+        assert_both_survive_confirmation_on_the_right_row(&mem, day + 6 * 3600, day + 18 * 3600);
+    }
+
+    #[test]
+    fn reconcile_disk_pairs_our_own_rows_across_adjacent_days() {
+        // Same defect one day apart: the ±1-day midnight tolerance (right for a report
+        // whose timestamps legitimately differ) pairs two of OUR OWN rows that differ by
+        // 30 hours. Nothing about our own file needs that tolerance — we wrote both.
+        let a_when = 20_000u64 * 86_400 + 6 * 3600; // day N, 06:00
+        let b_when = 20_001u64 * 86_400 + 12 * 3600; // day N+1, 12:00
+        let (mut mem, disk) = two_instance_same_station(a_when, b_when);
+        mem.reconcile_disk(&disk);
+        assert_both_survive_confirmation_on_the_right_row(&mem, a_when, b_when);
+    }
+
+    #[test]
+    fn reconcile_disk_does_not_resurrect_a_deleted_qso() {
+        // The operator deleted a mis-logged contact; the recovery runs BEFORE the rewrite
+        // that persists the deletion, so the row is still on disk. Exact-identity matching
+        // must not treat "gone from memory" as "new on disk" — the caller's contract is
+        // that our copy still holds the record being changed, and the delete happens after.
+        let day = 20_000u64 * 86_400;
+        let (mut mem, disk) = two_instance_same_station(day + 6 * 3600, day + 18 * 3600);
+        mem.reconcile_disk(&disk); // fold in A's row while we still hold ours
+        assert_eq!(mem.len(), 2);
+        let i = mem
+            .records()
+            .iter()
+            .position(|r| r.when_unix == day + 18 * 3600)
+            .unwrap();
+        assert!(mem.delete(i));
+        assert_eq!(mem.len(), 1, "the deleted QSO is gone and stays gone");
+        assert_eq!(mem.records()[0].when_unix, day + 6 * 3600);
     }
 
     #[test]

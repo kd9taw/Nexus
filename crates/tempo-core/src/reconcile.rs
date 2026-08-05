@@ -93,17 +93,43 @@ fn fmt_day(unix: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Index local QSOs by match key; each bucket reversed so `pop()` consumes in log
+/// Identity of one of OUR OWN records: the same call / band / mode-CLASS as [`key`],
+/// but the **exact** contact second instead of the UTC day. Used only when the
+/// "incoming" rows came from our own [`crate::logbook::Logbook::save`] — there both
+/// sides carry the same `when_unix` to the second, so no tolerance is wanted and any
+/// tolerance is a hazard (see [`merge_own_disk`]). Mode stays CLASS-keyed because
+/// spelling is the one thing that legitimately drifts between our own writes
+/// (a row stored `MFSK` by an older build reads back `FT4` today); two genuinely
+/// distinct contacts with one station on one band in one mode class cannot share a
+/// second, so class costs no discrimination here.
+fn exact_key(r: &QsoRecord) -> Key {
+    (
+        r.call.to_ascii_uppercase(),
+        r.band.to_ascii_lowercase(),
+        mode_class(&r.mode),
+        r.when_unix,
+    )
+}
+
+/// Index local QSOs by `key_of`; each bucket reversed so `pop()` consumes in log
 /// order (oldest first), so two same-key contacts reconcile against distinct rows.
-fn build_buckets(local: &[QsoRecord]) -> HashMap<Key, Vec<usize>> {
+fn build_buckets_by(
+    local: &[QsoRecord],
+    key_of: impl Fn(&QsoRecord) -> Key,
+) -> HashMap<Key, Vec<usize>> {
     let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
     for (i, r) in local.iter().enumerate() {
-        buckets.entry(key(r)).or_default().push(i);
+        buckets.entry(key_of(r)).or_default().push(i);
     }
     for v in buckets.values_mut() {
         v.reverse();
     }
     buckets
+}
+
+/// Index local QSOs by the fuzzy report key ([`key`]).
+fn build_buckets(local: &[QsoRecord]) -> HashMap<Key, Vec<usize>> {
+    build_buckets_by(local, key)
 }
 
 /// Consume-once lookup of the local QSO matching `inc`: exact UTC day preferred,
@@ -233,10 +259,51 @@ pub fn merge_and_add(
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut buckets = build_buckets(local);
+    merge_pass(local, incoming, &mut buckets, take_match)
+}
+
+/// Two-way merge of OUR OWN on-disk log back into memory — the two-instance recovery
+/// behind [`crate::logbook::Logbook::reconcile_disk`]. Same consume-once shape as
+/// [`merge_and_add`] (match → monotonic upgrade, no match → append), but matched on
+/// [`exact_key`]: call / band / mode-class / **the exact contact second**.
+///
+/// # Why not the report matcher
+///
+/// [`merge_and_add`]'s key is deliberately fuzzy — UTC day with a ±1-day midnight
+/// tolerance — because a LoTW/eQSL/QRZ report's timestamps are the OTHER side's and
+/// legitimately differ from ours. The rows here are not a report: they came out of our
+/// own `save()` and carry our own `when_unix` to the second. Applied to them the
+/// tolerance is not slack, it is a mis-pairing: with two contacts with one station on
+/// one band inside a day (routine FT8), whenever file order and memory order diverge —
+/// another instance appended a QSO we never loaded — the day bucket paired the wrong
+/// two rows. Observed: memory holding only the 18:00 contact, disk holding 06:00
+/// (award-confirmed) and 18:00, recovered to *two* 18:00 rows with the confirmation on
+/// the wrong contact and the 06:00 QSO gone. Exact identity cannot pair them; a row
+/// that fails to match is genuinely a row we do not hold, which is exactly what the
+/// recovery exists to append.
+pub fn merge_own_disk(
+    local: &mut Vec<QsoRecord>,
+    incoming: Vec<QsoRecord>,
+) -> (Vec<QsoRecord>, ReconcileSummary) {
+    let mut buckets = build_buckets_by(local, exact_key);
+    merge_pass(local, incoming, &mut buckets, |b, inc| {
+        b.get_mut(&exact_key(inc)).and_then(|v| v.pop())
+    })
+}
+
+/// The shared body of the two-way merges: each incoming row consumes at most one local
+/// QSO via `take` and upgrades it monotonically, or is appended as new. `take` is the
+/// whole difference between them — a fuzzy report key vs. our own exact identity.
+fn merge_pass(
+    local: &mut Vec<QsoRecord>,
+    incoming: Vec<QsoRecord>,
+    buckets: &mut HashMap<Key, Vec<usize>>,
+    take: impl Fn(&mut HashMap<Key, Vec<usize>>, &QsoRecord) -> Option<usize>,
+) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut sum = ReconcileSummary::default();
     let mut added = Vec::new();
     for inc in incoming {
-        match take_match(&mut buckets, &inc) {
+        match take(buckets, &inc) {
             Some(i) => apply_match(&mut local[i], &inc, &mut sum),
             None => {
                 // New contact from the download — append it. Do NOT re-index it into the
@@ -244,7 +311,7 @@ pub fn merge_and_add(
                 // (consume-once, exactly like `reconcile`). Re-indexing broke re-sync
                 // idempotency — the appended slot got popped by a same-key row, leaving its
                 // twin to re-append on every fetch (phantom-duplicate accretion). Because
-                // `build_buckets` rebuilds from the grown log next sync, each row then pops
+                // the buckets are rebuilt from the grown log next sync, each row then pops
                 // its own match and nothing re-adds.
                 added.push(inc.clone());
                 local.push(inc);
@@ -690,5 +757,153 @@ mod tests {
             "re-sync of the same batch adds no phantom"
         );
         assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn merge_add_still_tolerates_a_download_timestamp_that_differs() {
+        // THE REASON the download/report matcher is fuzzy, pinned: a QRZ/LoTW copy of our
+        // QSO carries the OTHER side's clock. Hours off inside the day, and across midnight,
+        // must still be the SAME contact — matched and upgraded, never appended as a phantom.
+        // (`merge_own_disk` is exact precisely because its rows are not this.)
+        let mut logged = rec("W1AW", "20m", "FT8", 20_000);
+        logged.when_unix = 20_000 * 86_400 + 6 * 3600; // we logged 06:00
+        let mut log = vec![logged];
+
+        let mut same_day = rec("W1AW", "20m", "FT8", 20_000);
+        same_day.when_unix = 20_000 * 86_400 + 18 * 3600; // they report 18:00
+        same_day.confirmed = true;
+        let (added, sum) = merge_and_add(&mut log, vec![same_day]);
+        assert!(
+            added.is_empty(),
+            "a re-timed row is the same QSO, not a new one"
+        );
+        assert_eq!((log.len(), sum.matched), (1, 1));
+        assert!(log[0].confirmed);
+
+        // ...and across the midnight boundary (the ±1-day tolerance).
+        let mut next_day = rec("W1AW", "20m", "FT8", 20_001);
+        next_day.when_unix = 20_001 * 86_400 + 60;
+        next_day.award_confirmed = true;
+        let (added2, sum2) = merge_and_add(&mut log, vec![next_day]);
+        assert!(added2.is_empty(), "±1-day tolerance still matches");
+        assert_eq!((log.len(), sum2.matched), (1, 1));
+        assert!(log[0].award_confirmed);
+    }
+
+    // ---- merge_own_disk (recover OUR OWN file before a full rewrite) ----
+
+    #[test]
+    fn merge_own_disk_pairs_by_the_exact_second_not_the_utc_day() {
+        // Two QSOs with one station on one band inside one UTC day (routine FT8). Another
+        // instance appended the 06:00 one — award-confirmed — after we loaded, so our memory
+        // holds ONLY the 18:00 one and disk order differs from memory order. The day-keyed
+        // report matcher popped our 18:00 slot for the incoming 06:00 row: the confirmation
+        // landed on the wrong contact, the 06:00 QSO was lost and the 18:00 one duplicated.
+        let day = 20_000 * 86_400;
+        let mut early = rec("W1AW", "20m", "FT8", 20_000);
+        early.when_unix = day + 6 * 3600;
+        early.award_confirmed = true;
+        early.confirmed = true;
+        let mut late = rec("W1AW", "20m", "FT8", 20_000);
+        late.when_unix = day + 18 * 3600;
+
+        let mut mem = vec![late.clone()];
+        let (added, sum) = merge_own_disk(&mut mem, vec![early.clone(), late.clone()]);
+        assert_eq!(added.len(), 1, "only the row we lack is new");
+        assert_eq!(added[0].when_unix, day + 6 * 3600);
+        assert_eq!(sum.matched, 1, "our own 18:00 row matched itself");
+
+        let mut times: Vec<u64> = mem.iter().map(|r| r.when_unix).collect();
+        times.sort_unstable();
+        assert_eq!(times, vec![day + 6 * 3600, day + 18 * 3600]);
+        let got_early = mem.iter().find(|r| r.when_unix == day + 6 * 3600).unwrap();
+        let got_late = mem.iter().find(|r| r.when_unix == day + 18 * 3600).unwrap();
+        assert!(
+            got_early.award_confirmed,
+            "confirmation on the contact that earned it"
+        );
+        assert!(
+            !got_late.award_confirmed,
+            "and not folded onto the other one"
+        );
+
+        // Idempotent: recovering the same file again adds nothing (each row pops its own
+        // exact match out of the regrown log).
+        let (added2, _) = merge_own_disk(&mut mem, vec![early, late]);
+        assert!(added2.is_empty());
+        assert_eq!(mem.len(), 2);
+    }
+
+    #[test]
+    fn merge_own_disk_pairs_across_adjacent_days() {
+        // The same defect 30 hours apart: the report matcher's ±1-day midnight tolerance
+        // paired two of OUR OWN rows. Our own file never needs that tolerance.
+        let mut early = rec("W1AW", "20m", "FT8", 20_000);
+        early.when_unix = 20_000 * 86_400 + 6 * 3600;
+        early.award_confirmed = true;
+        let mut late = rec("W1AW", "20m", "FT8", 20_001);
+        late.when_unix = 20_001 * 86_400 + 12 * 3600;
+
+        let mut mem = vec![late.clone()];
+        merge_own_disk(&mut mem, vec![early, late]);
+        let mut times: Vec<u64> = mem.iter().map(|r| r.when_unix).collect();
+        times.sort_unstable();
+        assert_eq!(
+            times,
+            vec![20_000 * 86_400 + 6 * 3600, 20_001 * 86_400 + 12 * 3600]
+        );
+        assert!(mem.iter().filter(|r| r.award_confirmed).count() == 1);
+        assert!(
+            mem.iter()
+                .find(|r| r.when_unix == 20_000 * 86_400 + 6 * 3600)
+                .unwrap()
+                .award_confirmed
+        );
+    }
+
+    #[test]
+    fn merge_own_disk_unions_state_and_survives_mode_spelling_drift() {
+        // Same contact, same second, spelled MFSK on disk (written by an older build) and
+        // FT4 in memory — the one thing that legitimately drifts between OUR OWN writes, so
+        // the key stays mode-CLASS. It must upgrade in place, not append a twin.
+        let mut mine = rec("DL1ABC", "20m", "FT4", 20_000);
+        mine.upload.clublog = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 50,
+            detail: None,
+        });
+        let mut theirs = rec("DL1ABC", "20m", "MFSK", 20_000);
+        theirs.award_confirmed = true;
+        theirs.confirmed = true;
+
+        let mut mem = vec![mine];
+        let (added, sum) = merge_own_disk(&mut mem, vec![theirs]);
+        assert!(added.is_empty(), "MFSK/FT4 is one QSO, not two");
+        assert_eq!((mem.len(), sum.matched), (1, 1));
+        assert!(
+            mem[0].award_confirmed,
+            "the other instance's confirmation folded in"
+        );
+        assert!(
+            mem[0].upload.clublog.is_some(),
+            "our own upload stamp is not clobbered"
+        );
+    }
+
+    #[test]
+    fn merge_own_disk_keeps_two_records_that_share_a_second() {
+        // Date-only imports park at midnight, so two rows CAN share an exact key. They are
+        // still distinct records: consume-once pairs them one-for-one and adds nothing.
+        let mut mem = vec![
+            rec("K5AA", "20m", "CW", 20_000),
+            rec("K5AA", "20m", "CW", 20_000),
+        ];
+        let disk = vec![
+            rec("K5AA", "20m", "CW", 20_000),
+            rec("K5AA", "20m", "CW", 20_000),
+        ];
+        let (added, sum) = merge_own_disk(&mut mem, disk);
+        assert!(added.is_empty(), "two on disk, two in memory — nothing new");
+        assert_eq!((mem.len(), sum.matched), (2, 2));
     }
 }
