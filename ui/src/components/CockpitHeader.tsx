@@ -1,7 +1,8 @@
 import { useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { AppSnapshot } from '../types'
-import { bandLabelForMhz } from '../band'
+import { bandLabelForMhz, bandRangeForLabel } from '../band'
+import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
 
@@ -40,6 +41,12 @@ export interface CockpitHeaderProps {
   onCommitDial?: (mhz: number) => void
   /** Enable mouse-wheel tuning over the readout (Phone/CW). */
   wheelTune?: boolean
+  /** PER-DIGIT wheel tuning on the readout (operator request): hover the 100 Hz digit and one
+   * notch moves 100 Hz, hover the 1 MHz digit and one notch moves 1 MHz, carrying like a real
+   * VFO. Opt-in per cockpit so it reaches the five MAIN dials and nothing else — the readouts
+   * that live inside scrollable lists (TopBar, Settings, the memory rows) reach FrequencyReadout
+   * through FrequencyControl instead and must keep their page scroll. */
+  digitTune?: boolean
   /** Wheel step (Hz), shared with the scope wheel-tune selector. */
   wheelStepHz?: number
   /** Wheel sensitivity (Settings). */
@@ -71,6 +78,18 @@ export interface CockpitHeaderProps {
   catStatus?: ReactNode
 }
 
+/** The refusal message for a wheeled target off the band plan, naming the edge it hit — the
+ *  direction of travel picks which end of the CURRENT band to quote. Falls back to the bare
+ *  refusal when the dial is already off-plan (there is no "current band" to name an edge of). */
+function edgeMessage(dialMhz: number, targetMhz: number): string {
+  const bare = `${targetMhz.toFixed(4)} MHz is outside the band plan`
+  const label = bandLabelForMhz(dialMhz)
+  const range = label ? bandRangeForLabel(label) : null
+  if (!range) return bare
+  const edge = targetMhz > dialMhz ? range.hi : range.lo
+  return `${bare} — ${label} ${targetMhz > dialMhz ? 'ends' : 'starts'} at ${edge.toFixed(4)} MHz`
+}
+
 export function CockpitHeader({
   snap,
   onSnap,
@@ -78,6 +97,7 @@ export function CockpitHeader({
   bandControl,
   onCommitDial,
   wheelTune = false,
+  digitTune = false,
   wheelStepHz = 100,
   wheelSensitivity,
   frequencyExtras,
@@ -96,13 +116,42 @@ export function CockpitHeader({
   const dial = radio.dialMhz
   const readoutRef = useRef<HTMLDivElement>(null)
 
-  // Wheel tuning over the readout (Phone/CW hunting). Disabled while transmitting or CAT-down.
-  useWheelTune(readoutRef, {
+  // Wheel tuning over the readout (Phone/CW hunting) AND per-digit tuning, on ONE listener.
+  //
+  // WHY ONE. The digit hit regions render inside `.ch-readout`, the element this listener is on,
+  // so a handler of their own would see every event twice — and with two optimistic targets and
+  // two coalescers the two writes race, latest wins, and the digit's move is the one silently
+  // discarded (measured). Here the digit under the pointer only chooses the STEP for that event,
+  // so there is still one accumulator, one target and one flush: double-handling is
+  // unrepresentable rather than guarded, and the selected step keeps driving everything it drives
+  // today (the nudge buttons, the scope wheel, and the non-digit parts of the readout).
+  //
+  // Disabled while CAT is down or the transmitter is up — never move the VFO under a live over.
+  // `radio.tuning` is in the gate because a keyed tune carrier is a transmission that
+  // `radio.transmitting` (the FT slot-TX indicator) does not report.
+  const tuneBy = useWheelTune(readoutRef, {
     dialMhz: dial,
     sideband: radio.sideband || 'USB',
-    enabled: wheelTune && catOk && !radio.transmitting,
+    enabled: (wheelTune || digitTune) && catOk && !radio.transmitting && !radio.tuning,
     stepHz: wheelStepHz,
     sensitivity: wheelSensitivity,
+    resolveStepHz: digitTune
+      ? (t) => {
+          const dec = (t as Element | null)?.closest?.('[data-decade]')?.getAttribute('data-decade')
+          // A digit: exactly its decade, so `target += 10**n` gives VFO carry for free.
+          if (dec != null) return 10 ** Number(dec)
+          // Not a digit (the '.', the MHz unit, the band chip, the wrapper's own padding): the
+          // selected step where the operator already has it, and DECLINE otherwise so the
+          // cockpits without uniform wheel-tune keep their page scroll everywhere but the digits.
+          return wheelTune ? wheelStepHz : null
+        }
+      : undefined,
+    // The operator accepted VFO carry past a band edge ON THE CONDITION that the edge is visible.
+    // Refusing in silence was right for a 100 Hz creep and wrong for a 1 MHz digit notch, which
+    // lands off the plan on the first click — say it, as the nudge buttons and typed entry already
+    // do (Radix routes an error toast to the assertive live region, so it is spoken too), and NAME
+    // THE EDGE he hit: "you cannot go to 15.0740" alone leaves him guessing where the wall is.
+    onEdge: (mhz) => pushToast(edgeMessage(dial, mhz), 'error', 3000),
     onSnap,
   })
 
@@ -113,7 +162,13 @@ export function CockpitHeader({
       <div className="ch-identity">{modeIndicator}</div>
 
       <div className="ch-freq">
-        <div className="ch-readout" ref={readoutRef} title={wheelTune ? 'Scroll to tune' : undefined}>
+        <div
+          className="ch-readout"
+          ref={readoutRef}
+          title={
+            digitTune ? 'Scroll a digit to tune it' : wheelTune ? 'Scroll to tune' : undefined
+          }
+        >
           <FrequencyReadout
             dialMhz={dial}
             size="hero"
@@ -121,6 +176,8 @@ export function CockpitHeader({
             disabled={!catOk}
             txBlocked={!bandLabelForMhz(dial)}
             onCommit={onCommitDial}
+            digitTune={digitTune}
+            onTuneHz={tuneBy}
           />
         </div>
         {frequencyExtras && <div className="ch-freq-extras">{frequencyExtras}</div>}

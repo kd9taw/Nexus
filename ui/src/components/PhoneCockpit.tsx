@@ -879,6 +879,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           ) : undefined
         }
         wheelTune
+        digitTune
         wheelStepHz={tuneStep}
         wheelSensitivity={wheelSensitivity}
         frequencyExtras={

@@ -698,6 +698,7 @@ export function OperateCockpit({
           />
         }
         onCommitDial={commitDial}
+        digitTune
         actions={
           <>
             <div

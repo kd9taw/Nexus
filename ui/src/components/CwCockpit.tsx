@@ -1083,6 +1083,7 @@ export function CwCockpit({
           ) : undefined
         }
         wheelTune
+        digitTune
         wheelStepHz={tuneStep}
         wheelSensitivity={wheelSensitivity}
         frequencyExtras={

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 import type { AppSnapshot } from './types'
 import { setFrequency } from './api'
@@ -13,6 +13,13 @@ const PX_PER_STEP = 100
 /** Cap on whole steps a SINGLE wheel event may apply, so one violent flick of an energetic /
  * high-res mouse can't lurch the dial many steps at once. Excess is discarded, not carried. */
 const MAX_STEPS_PER_EVENT = 8
+/** …and the same cap in Hz, because the step count alone stopped protecting anything once a
+ * step could be a DECADE. It was written when a step was ≤5 kHz (8 × 5 kHz = 40 kHz); the
+ * identical flick on a 10 MHz digit would be 80 MHz of dial. 500 kHz is above every
+ * uniform-tuning worst case (5 kHz × Shift ×10 × 8 = 400 kHz), so selector-step tuning is
+ * bit-for-bit unchanged. ONE whole step always applies — a 10 MHz notch IS 10 MHz, which is the
+ * operator's decision; only the MULTIPLE is bounded. */
+const MAX_HZ_PER_EVENT = 500_000
 
 interface WheelTuneOpts {
   /** Current rig dial (MHz) from the snapshot — the seed for a fresh wheel burst. */
@@ -28,6 +35,21 @@ interface WheelTuneOpts {
   sensitivity?: number
   /** Receive a fresh snapshot from the flushed set_frequency so the UI updates promptly. */
   onSnap?: (s: AppSnapshot) => void
+  /** PER-EVENT step override, resolved from the wheel event's target: the Hz ONE notch here
+   * moves, or `null` to DECLINE the event entirely (no tune, no `preventDefault` — the page keeps
+   * its scroll). Omit ⇒ every event uses `stepHz`, exactly as before.
+   *
+   * This is what keeps per-digit tuning on ONE listener. The digits live inside the element this
+   * hook already listens on, so a second listener means two optimistic targets and two coalescers
+   * racing on one dial (measured: the digit's 1 kHz and the strip's 100 Hz both flush, latest
+   * wins, the digit move is silently erased). Resolving the step per event makes that
+   * unrepresentable: the digit under the pointer only changes the INCREMENT on the same target,
+   * so carry still falls out of `target += 10**n`. */
+  resolveStepHz?: (target: EventTarget | null) => number | null
+  /** The flush refused a target that is off the band plan. Fires ONCE per burst (not once per
+   * ~120 ms flush against the edge), so the caller can SAY so: silence was right for a 100 Hz
+   * creep and is wrong for a 1 MHz digit notch, which lands here on the first click. */
+  onEdge?: (mhz: number) => void
 }
 
 /**
@@ -38,10 +60,18 @@ interface WheelTuneOpts {
  * dial. Rapid input is COALESCED — steps accumulate against an optimistic target and a single CAT
  * `set_frequency` is flushed at most every ~120 ms — so fast scrolling never queues a backlog of
  * slow CAT writes. The optimistic target self-corrects from the snapshot dial whenever wheeling
- * pauses, and stops silently at a band edge (no toast spam). NON-passive listener so it can
- * `preventDefault()` the page scroll (React's `onWheel` is passive).
+ * pauses, and stops at a band edge — reported once per burst through `onEdge`, never once per
+ * flush. NON-passive listener so it can `preventDefault()` the page scroll (React's `onWheel` is
+ * passive).
+ *
+ * `resolveStepHz` lets ONE listener serve two mechanisms (the selected step and per-digit
+ * tuning); `stepHz` alone is the original behavior, unchanged. Returns an Hz applier so a
+ * keyboard equivalent can share the same optimistic target instead of racing it.
  */
-export function useWheelTune(ref: RefObject<HTMLElement | null>, opts: WheelTuneOpts): void {
+export function useWheelTune(
+  ref: RefObject<HTMLElement | null>,
+  opts: WheelTuneOpts,
+): (deltaHz: number) => void {
   // The listener attaches once; a ref keeps it reading the latest props each event.
   const stateRef = useRef(opts)
   stateRef.current = opts
@@ -49,45 +79,87 @@ export function useWheelTune(ref: RefObject<HTMLElement | null>, opts: WheelTune
   const accumRef = useRef(0) // sub-step scroll accumulator (pixel-equivalents)
   const lastWheelRef = useRef(0)
   const timerRef = useRef<number | null>(null)
+  const edgeSaidRef = useRef(false) // band edge already reported for THIS burst
+
+  // Hoisted out of the effect so the keyboard applier below shares the ONE flush — a second
+  // copy is a second coalescer, which is the whole failure mode this hook exists to avoid.
+  const flush = useCallback(() => {
+    timerRef.current = null
+    const t = targetHzRef.current
+    if (t == null) return
+    const { sideband, onSnap, enabled, onEdge } = stateRef.current
+    // Re-check the gate HERE, not only at event time. The flush lands up to FLUSH_MS after the
+    // last notch, so a burst that ends just as the operator keys up would otherwise put a CAT
+    // set_frequency out DURING a live over — and with a digit step that can be a band change,
+    // which halts the over on the engine side.
+    if (!enabled) {
+      targetHzRef.current = null
+      return
+    }
+    const mhz = Math.round(t) / 1e6
+    const band = bandLabelForMhz(mhz)
+    if (!band) {
+      // Wheeled past a band edge — stop there and re-seed from the live dial on the next burst,
+      // rather than issuing CAT writes every ~120 ms against the edge. REPORTED once per burst
+      // (never once per flush, which is the toast spam the silence was protecting against): the
+      // operator accepted VFO carry on the condition that the edge is visible.
+      targetHzRef.current = null
+      if (!edgeSaidRef.current) {
+        edgeSaidRef.current = true
+        onEdge?.(mhz)
+      }
+      return
+    }
+    void setFrequency(mhz, band, sideband || 'USB')
+      .then((s) => s && onSnap?.(s))
+      .catch(() => {})
+  }, [])
+
+  /** Seed the optimistic target for a fresh burst (or one resumed after a pause) from the live
+   *  dial, so any drift between where we aimed and where the rig actually landed self-corrects.
+   *  ONE clock for both callers: `WheelEvent.timeStamp` and `performance.now()` are the same
+   *  DOMHighResTimeStamp timeline in a browser but NOT under jsdom's fake timers, and a hook
+   *  whose two entry points measure idleness against different clocks re-seeds mid-burst. */
+  const seed = useCallback(() => {
+    const now = performance.now()
+    const idle = now - lastWheelRef.current > IDLE_RESEED_MS
+    lastWheelRef.current = now
+    if (targetHzRef.current == null || idle) {
+      targetHzRef.current = Math.round(stateRef.current.dialMhz * 1e6)
+      accumRef.current = 0
+      if (idle) edgeSaidRef.current = false
+    }
+  }, [])
+
+  /** Apply a signed Hz delta through the SAME target and coalescer as the wheel — the keyboard's
+   *  route in (the readout's ←/→ digit selection + ↑/↓ spin). Never give the keyboard a writer
+   *  of its own: two optimistic targets on one dial is exactly the bug above. */
+  const tuneBy = useCallback(
+    (deltaHz: number) => {
+      if (!stateRef.current.enabled || !deltaHz) return
+      seed()
+      targetHzRef.current = (targetHzRef.current ?? 0) + deltaHz
+      if (timerRef.current == null) timerRef.current = window.setTimeout(flush, FLUSH_MS)
+    },
+    [flush, seed],
+  )
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
 
-    const flush = () => {
-      timerRef.current = null
-      const t = targetHzRef.current
-      if (t == null) return
-      const { sideband, onSnap } = stateRef.current
-      const mhz = Math.round(t) / 1e6
-      const band = bandLabelForMhz(mhz)
-      if (!band) {
-        // Wheeled past a band edge — stop there silently and re-seed from the live dial on the next
-        // burst, rather than toast-spamming (or issuing CAT writes) every ~120 ms against the edge.
-        targetHzRef.current = null
-        return
-      }
-      void setFrequency(mhz, band, sideband || 'USB')
-        .then((s) => s && onSnap?.(s))
-        .catch(() => {})
-    }
-
     const onWheel = (e: WheelEvent) => {
-      const { enabled, dialMhz, stepHz } = stateRef.current
+      const { enabled, stepHz, resolveStepHz } = stateRef.current
       if (!enabled) return
       // Direction from the dominant axis: Shift+wheel arrives as horizontal scroll on Chromium.
       const raw = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
       if (raw === 0) return
+      // What is under the pointer decides the step. `null` = not a tuning target at all (the '.',
+      // the MHz unit, the band chip, the wrapper's padding) — leave the event to the page.
+      const step = resolveStepHz ? resolveStepHz(e.target) : stepHz
+      if (step == null) return
       e.preventDefault()
-      const now = e.timeStamp
-      const idle = now - lastWheelRef.current > IDLE_RESEED_MS
-      lastWheelRef.current = now
-      // Fresh burst (or resumed after a pause): seed the optimistic target from the live dial so any
-      // drift between where we aimed and where the rig actually landed self-corrects.
-      if (targetHzRef.current == null || idle) {
-        targetHzRef.current = Math.round(dialMhz * 1e6)
-        accumRef.current = 0
-      }
+      seed()
       // Normalize to pixel-equivalents so a trackpad's dozens of tiny events don't lurch the dial;
       // a line/page-mode mouse wheel maps ~one notch → one step. The notch/page multipliers stay on
       // the BASE PX_PER_STEP; sensitivity scales the per-step THRESHOLD, so every mouse type damps
@@ -101,9 +173,13 @@ export function useWheelTune(ref: RefObject<HTMLElement | null>, opts: WheelTune
       // Consume all whole steps from the accumulator (no residue lurch), but APPLY at most the cap
       // so a single violent flick can't jump many steps; the capped-away steps are discarded.
       accumRef.current -= rawSteps * effPx
-      const steps = Math.max(-MAX_STEPS_PER_EVENT, Math.min(MAX_STEPS_PER_EVENT, rawSteps))
+      const eff = step * (e.shiftKey ? 10 : 1)
+      // Cap in Hz as well as in steps — see MAX_HZ_PER_EVENT. At most one whole step survives a
+      // decade-sized step; uniform tuning never reaches the Hz cap, so it keeps all 8.
+      const cap = Math.max(1, Math.min(MAX_STEPS_PER_EVENT, Math.floor(MAX_HZ_PER_EVENT / eff)))
+      const steps = Math.max(-cap, Math.min(cap, rawSteps))
       // Scroll up (negative delta) tunes UP, so negate: -steps × step.
-      targetHzRef.current += -steps * stepHz * (e.shiftKey ? 10 : 1)
+      targetHzRef.current = (targetHzRef.current ?? 0) + -steps * eff
       if (timerRef.current == null) timerRef.current = window.setTimeout(flush, FLUSH_MS)
     }
 
@@ -112,5 +188,7 @@ export function useWheelTune(ref: RefObject<HTMLElement | null>, opts: WheelTune
       el.removeEventListener('wheel', onWheel)
       if (timerRef.current != null) window.clearTimeout(timerRef.current)
     }
-  }, [ref])
+  }, [ref, flush, seed])
+
+  return tuneBy
 }

@@ -363,6 +363,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             )
           }
           onCommitDial={onSetFrequency ? commitDial : undefined}
+          digitTune={onSetFrequency != null}
           actions={
             host && panels ? (
               <PanelsMenu

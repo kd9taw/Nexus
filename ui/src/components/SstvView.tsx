@@ -810,6 +810,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             )
           }
           onCommitDial={onSetFrequency ? commitDial : undefined}
+          digitTune={onSetFrequency != null}
           actions={
             host && panels ? (
               <PanelsMenu

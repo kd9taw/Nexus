@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { announce } from '../announce'
 
 /** Format a dial frequency (MHz) for DISPLAY — 4 decimals (100 Hz resolution). */
 export function formatDialMhz(mhz: number): string {
@@ -6,6 +7,41 @@ export function formatDialMhz(mhz: number): string {
 }
 /** "Essentially unchanged" tolerance for a committed edit (MHz) — 5 Hz. Skips a no-op QSY. */
 const UNCHANGED_EPS = 5e-6
+
+/** One character of a formatted dial plus the DECADE (power of ten, in Hz) that one wheel notch
+ *  on it moves. `decade: null` = not a digit (the decimal point) — inert by construction. */
+export interface DialDigit {
+  ch: string
+  decade: number | null
+}
+
+/**
+ * Tag each digit of a formatted dial with its decade, read off the STRING'S OWN SHAPE.
+ *
+ * Never a fixed index: the integer part is 1 char on 160 m (`1.8340`) and 4 on 23 cm
+ * (`1296.1740`), so "the 1 MHz digit is at index 1" is wrong on almost every band. The digit
+ * immediately left of the '.' is 10^6 Hz; each step left is one decade up, each step right of
+ * the '.' one decade down. `formatDialMhz` is 4 decimals, so 10^2 (100 Hz) is the finest digit
+ * that exists.
+ */
+export function dialDigits(text: string): DialDigit[] {
+  const dot = text.indexOf('.')
+  const intLen = dot < 0 ? text.length : dot
+  return [...text].map((ch, i) =>
+    ch < '0' || ch > '9'
+      ? { ch, decade: null }
+      : { ch, decade: i < intLen ? 6 + (intLen - 1 - i) : 6 - (i - intLen) },
+  )
+}
+
+/** Keys the per-digit keyboard equivalent claims (and therefore must not let bubble). */
+const ARROW_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']
+
+/** A decade as the operator reads it — the label on the hover tooltip and the announcement. */
+function stepLabel(decade: number): string {
+  const hz = 10 ** decade
+  return hz >= 1e6 ? `${hz / 1e6} MHz` : hz >= 1e3 ? `${hz / 1e3} kHz` : `${hz} Hz`
+}
 
 interface Props {
   dialMhz: number
@@ -25,6 +61,20 @@ interface Props {
   title?: string
   /** Disable entry (e.g. CAT down) — still shows the number, just not clickable. */
   disabled?: boolean
+  /** PER-DIGIT tuning (the main dial only). Each digit becomes its own hit region carrying
+   * `data-decade` — the power of ten in Hz one wheel notch on it moves — and the readout gains
+   * Left/Right digit selection + Up/Down stepping for the keyboard.
+   *
+   * OFF by default, and that is load-bearing: the WHEEL listener lives in the PARENT (one
+   * listener, one coalescer — see CockpitHeader), and the readouts the operator excluded
+   * (TopBar, Settings, the memory rows) sit inside scrollable lists where capturing the wheel
+   * would trap normal page scrolling. With it off this renders the single text node it always
+   * did, byte for byte. */
+  digitTune?: boolean
+  /** Apply a signed Hz delta — the KEYBOARD half of per-digit tuning. Route it through the same
+   * coalesced target the wheel uses (CockpitHeader passes `useWheelTune`'s applier): two
+   * optimistic targets on one dial is the failure this whole design avoids. */
+  onTuneHz?: (hz: number) => void
 }
 
 /**
@@ -43,10 +93,26 @@ export function FrequencyReadout({
   txBlocked = false,
   title,
   disabled = false,
+  digitTune = false,
+  onTuneHz,
 }: Props) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const canEdit = editable && !disabled
+  const text = formatDialMhz(dialMhz)
+  const digits = digitTune ? dialDigits(text) : null
+  // The digit the KEYBOARD spins (the wheel takes the one under the pointer instead). null until
+  // the operator asks for one, so a mouse user never sees a selection they did not make.
+  const [selDecade, setSelDecade] = useState<number | null>(null)
+  // Announce the DIAL, never the digit: a spin that reads "four… five… six" is a stutter, and
+  // the bus already coalesces a burst into one utterance (announce.ts). Fires off the committed
+  // dial, so it says where the rig actually landed, not where we aimed.
+  const kbTunedRef = useRef(false)
+  useEffect(() => {
+    if (!kbTunedRef.current) return
+    kbTunedRef.current = false
+    announce(`${formatDialMhz(dialMhz)} megahertz`)
+  }, [dialMhz])
 
   const startEdit = () => {
     if (!canEdit) return
@@ -60,6 +126,34 @@ export function FrequencyReadout({
     setEditing(false)
     // Skip a no-op commit (opened + Enter/blur without changing) so it never fires a spurious QSY.
     if (Number.isFinite(v) && v > 0 && Math.abs(v - dialMhz) >= UNCHANGED_EPS) onCommit?.(v)
+  }
+
+  // ── The keyboard equivalent of hover-and-scroll ───────────────────────────────────────────
+  // A screen-reader user cannot hover. The readout is ALREADY one tab stop when editable, and it
+  // stays one: ARIA gives `button` presentational children, so nine focusable digits inside it
+  // would be both a violation and nine tab stops ahead of Stop TX in every cockpit header
+  // (PanelsMenu.tsx:139 records what that costs). Left/Right pick the digit, Up/Down spin it.
+  const decades = digits?.flatMap((d) => (d.decade == null ? [] : [d.decade])) ?? [] // high→low
+  const canTuneDigits = canEdit && digits != null && onTuneHz != null && decades.length > 0
+  const stepDigit = (key: string) => {
+    if (!canTuneDigits) return
+    const hi = decades[0]
+    const lo = decades[decades.length - 1]
+    // No selection yet ⇒ the finest digit shown (100 Hz — the display floor, and the strip's
+    // default step). The FIRST arrow only selects; it never also moves the selection.
+    const cur = selDecade == null ? lo : Math.min(hi, Math.max(lo, selDecade))
+    if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      const next =
+        selDecade == null ? cur : Math.min(hi, Math.max(lo, cur + (key === 'ArrowLeft' ? 1 : -1)))
+      setSelDecade(next)
+      announce(`${stepLabel(next)} digit`)
+      return
+    }
+    setSelDecade(cur)
+    kbTunedRef.current = true
+    // Exactly `10 ** decade` Hz — the carry a real VFO does falls out of the arithmetic
+    // (14.1990 + 1 kHz = 14.2000), with no digit-by-digit logic to get wrong.
+    onTuneHz(10 ** cur * (key === 'ArrowUp' ? 1 : -1))
   }
 
   if (editing) {
@@ -93,11 +187,27 @@ export function FrequencyReadout({
   return (
     <span
       className={`readout ${size}${txBlocked ? ' blocked' : ''}${canEdit ? ' editable' : ''}`}
-      title={title ?? (canEdit ? 'Click to enter a frequency (MHz)' : 'Dial frequency (MHz)')}
+      title={
+        title ??
+        (canTuneDigits
+          ? 'Scroll a digit to tune it (100 Hz … 10 MHz) · ←/→ pick a digit, ↑/↓ spin it · click to type a frequency (MHz)'
+          : canEdit
+            ? 'Click to enter a frequency (MHz)'
+            : 'Dial frequency (MHz)')
+      }
       role={canEdit ? 'button' : undefined}
       tabIndex={canEdit ? 0 : undefined}
       onClick={startEdit}
       onKeyDown={(e) => {
+        if (canTuneDigits && ARROW_KEYS.includes(e.key)) {
+          e.preventDefault()
+          // Same reason as the Space guard below: an arrow this readout handled must never ALSO
+          // reach the cockpit's window-level shortcuts. Arrows are free there today (CW uses
+          // PageUp/PageDown for WPM, Phone uses Space) — that is luck, not a contract.
+          e.stopPropagation()
+          stepDigit(e.key)
+          return
+        }
         if (canEdit && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault()
           // CRITICAL: stop Space from reaching the Phone cockpit's window-level spacebar-PTT — the
@@ -109,7 +219,26 @@ export function FrequencyReadout({
         }
       }}
     >
-      <span className="readout-val">{formatDialMhz(dialMhz)}</span>
+      <span className="readout-val">
+        {/* One `.map()` inside ONE JSX expression: no whitespace text nodes between the digits,
+            which is the only way span-splitting could open a visible gap. The '.' stays a bare
+            string child — smaller DOM, and it is deliberately not a hit region. */}
+        {digits
+          ? digits.map((d, i) =>
+              d.decade == null ? (
+                d.ch
+              ) : (
+                <span
+                  key={i}
+                  className={`readout-digit${d.decade === selDecade ? ' sel' : ''}`}
+                  data-decade={d.decade}
+                >
+                  {d.ch}
+                </span>
+              ),
+            )
+          : text}
+      </span>
       <span className="readout-unit">MHz</span>
       {band && <span className="band-chip active">{band}</span>}
     </span>

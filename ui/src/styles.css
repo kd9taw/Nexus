@@ -4093,6 +4093,27 @@ select optgroup {
 .readout.blocked .readout-val {
   color: var(--tx);
 }
+/* Per-digit tuning hit regions (the main dial only — CockpitHeader passes digitTune).
+   NOTHING here may affect layout: `.readout-val` is tabular-nums precisely so the digits don't
+   jitter while tuning, and a padding / font-weight / transform on hover is the classic way that
+   jitter comes back. Background, radius, box-shadow and cursor are paint-only; the advance width
+   of every glyph is untouched, so splitting the number into spans costs zero layout.
+   The tint is mixed from `currentColor`, NOT from a colour of its own, so it follows the ink —
+   accent normally, and `--tx` red when `.readout.blocked` says the dial is off the band plan.
+   That red is the operator's band-edge cue; a `color` here would override it in both
+   directions. `ns-resize` is the same "scroll here to tune" idiom as .tuning-readout-wheel. */
+.readout-digit {
+  cursor: ns-resize;
+  border-radius: 2px;
+}
+.readout-digit:hover {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+/* The digit the KEYBOARD spins (←/→ selection) — the sighted half of the a11y equivalent. */
+.readout-digit.sel {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  box-shadow: inset 0 -0.12em 0 var(--focus-ring);
+}
 .readout-unit {
   font-size: 11px;
   color: var(--text-faint);
