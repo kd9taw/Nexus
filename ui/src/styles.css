@@ -18689,19 +18689,26 @@ button.sat-chip:disabled {
   flex-direction: column;
   gap: var(--space-3);
 }
-/* Drop zone doubles as the live cover-crop preview stage. */
+/* Drop zone doubles as the live cover-crop preview stage — but only the LOADED state
+   earns height. Empty, it is one affordance sitting directly above a file picker that
+   does the same job, and it was reserving 160px of dashed box to say so (operator,
+   2026-08-04: "the drop image section is massive… this is valuable real estate").
+   Empty it is now a slim strip; loaded it grows to the preview, which is the pixel-exact
+   cover crop of what actually goes on the air and is worth every pixel it takes. */
 .sstv-tx-drop {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 160px;
-  padding: var(--space-4);
+  min-height: 3.5em;
+  padding: var(--space-2) var(--space-3);
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-2, rgba(0, 0, 0, 0.2));
 }
 .sstv-tx-drop.loaded {
   border-style: solid;
+  min-height: 0;
+  padding: var(--space-2);
 }
 /* Native-resolution preview (pixel-exact "what you send"), upscaled crisp. */
 .sstv-tx-preview {

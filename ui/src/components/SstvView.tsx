@@ -11,7 +11,10 @@ import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../featur
 import {
   getLicensedBandPlan,
   getSstvState,
+  haltTx,
   setOperatingMode,
+  setRfPower,
+  setTune,
   sstvArm,
   sstvAutoArm,
   sstvSend,
@@ -460,6 +463,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // band pickers. Feeds BOTH the band picker and the idle caption: the caption used
   // to hardcode two frequencies while this list, already in hand, held a dozen.
   const [plan, setPlan] = useState<BandChannel[]>([])
+  // RF drive, %, pushed to the rig only once the operator touches it — the same contract
+  // as the Phone cockpit's slider. Deliberately not read back from CAT: no rig reports
+  // drive reliably, and a wrong read-back here would move the operator's power for them.
+  const [txPower, setTxPower] = useState(100)
   useEffect(() => {
     void getLicensedBandPlan('sstv').then(setPlan).catch(() => {})
   }, [])
@@ -750,6 +757,25 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           snap={snap}
           onSnap={onSnap}
           onSetTxEnabled={onSetTxEnabled}
+          // THE CORE RADIO CONTROLS. SSTV shipped with only the TX-enable latch, so an
+          // operator had no drive control, no Tune to set it against, and no Stop TX in the
+          // place every other cockpit puts one (operator, 2026-08-04). Drive matters more
+          // here than anywhere: SSTV carries the picture in the AUDIO, so overdriving past
+          // ALC does not just splatter, it visibly wrecks the image at the far end.
+          // The view's own pinned Stop stays — it is the TX-locked one the stop-line census
+          // pins (stop-line.test.tsx) — this adds the familiar header one beside it.
+          power={{
+            value: txPower,
+            unit: '%',
+            onChange: (pct: number) => {
+              setTxPower(pct)
+              void setRfPower(pct / 100)
+            },
+            label: 'Power',
+            title: 'RF output power — set it against a Tune carrier, below ALC',
+          }}
+          onTune={(on) => void setTune(on).then((st) => onSnap?.(st))}
+          onStopTx={() => void haltTx()}
           modeIndicator={
             <span
               className="cw-mode-badge"
