@@ -107,7 +107,7 @@ fn scene(lead_s: f64, dt_s: f64, snr_db: f32, seed: u64) -> Vec<f32> {
 fn decodes(lead_s: f64, dt_s: f64, snr_db: f32, trials: u32) -> u32 {
     (0..trials)
         .filter(|t| {
-            let w = scene(lead_s, dt_s, snr_db, 0x9E37_79B9 ^ u64::from(*t) * 0x1_0001);
+            let w = scene(lead_s, dt_s, snr_db, 0x9E37_79B9 ^ (u64::from(*t) * 0x1_0001));
             // The ABI takes i16 at 12 kHz. gen_wave is ~unit-scale, so 8000 keeps headroom for
             // signal + noise without clipping the loud cells of the sweep.
             let iwave: Vec<i16> = w.iter().map(|&v| (v * 8000.0) as i16).collect();
