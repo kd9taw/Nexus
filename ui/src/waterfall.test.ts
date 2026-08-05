@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan } from './waterfall'
+import { agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -418,5 +418,143 @@ describe('the dB intensity axis (WF_DB_SPAN / spanDb / dbToSpan)', () => {
     // Equal dB steps are equal LUT steps — 25.5 of 256 levels per dB-tenth of the window.
     const step = (a: number, b: number) => Math.round(at(b) * 255) - Math.round(at(a) * 255)
     expect(step(0, 10)).toBe(step(30, 40))
+  })
+})
+
+describe('the parked black point (WF_FLOOR_PCT / WF_PARK_DB / parkFloor)', () => {
+  it('lifts the floor by exactly parkDb on the dB axis, and never multiplicatively', () => {
+    for (const floor of [0.1, 0.5, 0.9]) {
+      const p = parkFloor(floor, floor + dbToSpan(40), 3, 0)
+      expect(spanDb(floor, p.floor)).toBeCloseTo(3, 10)
+      // Position-independent: the same 3 dB wherever the floor sits. `floor * k` is the trap
+      // this axis sets (see WF_DB_SPAN) and it would give a different lift at every level.
+      expect(p.floor - floor).toBeCloseTo(dbToSpan(3), 12)
+    }
+  })
+
+  it('holds a minimum window, and leaves a wider one alone', () => {
+    // Quiet band: p99.5 is only 5 dB over the parked floor → widened to the clamp, so the
+    // first station to key up has somewhere to go instead of slamming to LUT 255.
+    const narrow = parkFloor(0.4, 0.4 + dbToSpan(5), 3, 24)
+    expect(spanDb(narrow.floor, narrow.ceil)).toBeCloseTo(24, 6)
+    // Busy band: a 40 dB window is already wider than the clamp and is untouched.
+    const wide = parkFloor(0.4, 0.4 + dbToSpan(40), 3, 24)
+    expect(spanDb(wide.floor, wide.ceil)).toBeCloseTo(40 - 3, 6)
+    // Never degenerate, even asked for nothing.
+    const deg = parkFloor(0.4, 0.2, 0, 0)
+    expect(deg.ceil).toBeGreaterThan(deg.floor)
+  })
+
+  it('MEASURES the operator report: an empty band renders dark, and a weak signal survives', () => {
+    // 2026-08-05: "too much noise in the areas without a frequency ... the back is dark and not
+    // over noisy, while the signal itself looks good". Two requirements pulling opposite ways, so
+    // this test asserts BOTH against real palette indices — the perceptual claim is modelled but
+    // every number below is computed by the shipping helpers, not asserted by eye.
+    //
+    // Scene: the row the FT waterfall actually gets. 512 bins over 0-4000 Hz, a -76 dBFS noise
+    // floor with 5 dB of passband tilt (measured on the WSJT-X reference captures), the ~40 dB
+    // dead cliff every SSB filter leaves above 3.3 kHz, twelve stations, and probe tones at a
+    // known per-bin excess over the noise median.
+    //
+    // Calibration for the probes: a display bin is 7.81 Hz against WSJT-X's 2500 Hz SNR
+    // reference and `power_spectrum` peak-holds ~3 raw FFT bins, so per-bin excess = SNR + 24.6
+    // dB. -21 dB SNR — what FT8 can still decode — is +3.6 dB/bin. That is the number the black
+    // point must not cross, and it is why WF_PARK_DB is 3 and not 6.
+    const BINS = 512
+    const HZ = (i: number) => ((i + 0.5) * 4000) / BINS
+    let s = 0x9e3779b9
+    const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0), s / 4294967296)
+    // Mean of two exponentials ≈ ENL 2 (3.4 dB rms per bin); the shipping chain measures ~3.85.
+    const speckle = () => -0.5 * (Math.log(rnd() || 1e-9) + Math.log(rnd() || 1e-9))
+    const disp = (dbfs: number) => Math.min(1, Math.max(0, (dbfs + WF_DB_SPAN) / WF_DB_SPAN))
+    const noiseMeanDb = (hz: number) =>
+      hz >= 3300 || hz <= 200 ? -116.3 : -76.3 + 5 * (0.5 - Math.min(1, Math.max(0, (hz - 300) / 2500)))
+    const EXCESS = (snr: number) => snr + 24.6
+    const probes = [-21, -18, -11, -1].map((snr, k) => ({ hz: 700 + k * 300, snr }))
+    const stations = Array.from({ length: 12 }, (_, k) => ({ hz: 1900 + k * 60, snr: -14 + k }))
+    const near = (hz: number, f: number) => Math.abs(hz - f) < 45
+
+    const rows: number[][] = []
+    for (let r = 0; r < 60; r++) {
+      const p = new Float64Array(BINS)
+      for (let i = 0; i < BINS; i++) p[i] = 10 ** (noiseMeanDb(HZ(i)) / 10) * speckle()
+      for (const t of [...probes, ...stations]) {
+        // FT8 is 8-FSK: one 6.25 Hz tone of the 50 Hz group is on at a time.
+        const i = Math.round((t.hz - 25 + 6.25 * (Math.floor(rnd() * 8) + 0.5)) / (4000 / BINS) - 0.5)
+        p[i] += 10 ** ((noiseMeanDb(HZ(i)) - 0.9 + EXCESS(t.snr)) / 10)
+      }
+      rows.push(Array.from(p, (v) => disp(10 * Math.log10(Math.max(v, 1e-30)))))
+    }
+    // Background = visible passband bins clear of every emitter.
+    const bgBins: number[] = []
+    for (let i = 0; i < BINS; i++) {
+      const hz = HZ(i)
+      if (hz < 340 || hz > 2780) continue
+      if ([...probes, ...stations].some((t) => near(hz, t.hz))) continue
+      bgBins.push(i)
+    }
+    const lutOf = (v: number, floor: number, ceil: number) => {
+      const t = normalize(v, floor, ceil)
+      return t >= 1 ? 255 : Math.round(t * 255)
+    }
+    const pctl = (a: number[], q: number) => {
+      const b = [...a].sort((x, y) => x - y)
+      return b[Math.min(b.length - 1, Math.round(q * (b.length - 1)))]
+    }
+    /** Run one display chain over the scene → background stats + each probe's column. */
+    const run = (chain: (row: number[]) => { floor: number; ceil: number }) => {
+      const bg: number[] = []
+      const sig = new Map(probes.map((p) => [p.snr, [] as number[]]))
+      for (const row of rows) {
+        const { floor, ceil } = chain(row)
+        for (const i of bgBins) bg.push(lutOf(row[i], floor, ceil))
+        for (const p of probes) {
+          let best = 0
+          for (let t = 0; t < 8; t++) {
+            const i = Math.round((p.hz - 25 + 6.25 * (t + 0.5)) / (4000 / BINS) - 0.5)
+            best = Math.max(best, lutOf(row[i], floor, ceil))
+          }
+          sig.get(p.snr)!.push(best)
+        }
+      }
+      const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
+      return {
+        med: pctl(bg, 0.5),
+        p95: pctl(bg, 0.95),
+        blackPct: (100 * bg.filter((v) => v === 0).length) / bg.length,
+        sig: Object.fromEntries(probes.map((p) => [p.snr, Math.round(mean(sig.get(p.snr)!))])) as
+          Record<number, number>,
+      }
+    }
+    // View window = the default "Std" 200–3000 Hz.
+    const vLo = Math.floor(200 / (4000 / BINS))
+    const vHi = Math.ceil(3000 / (4000 / BINS))
+
+    // BEFORE — the shipping chain until 2026-08-05: whole-row AGC at the 5th percentile, no park.
+    const before = run((row) => agcRange(row))
+    // AFTER — visible-window AGC at the median, floor parked, minimum window (Waterfall.tsx).
+    const after = run((row) => {
+      const { floor, ceil } = agcRange(row.slice(vLo, vHi), WF_FLOOR_PCT)
+      return parkFloor(floor, ceil)
+    })
+
+    // (a) THE BACKGROUND. Before: the noise sat in the bright half of the palette and NOTHING
+    //     was black — the operator's "over noisy". After: the noise median is the palette floor.
+    expect(before.med).toBeGreaterThan(140)
+    expect(before.blackPct).toBeLessThan(1)
+    expect(after.med).toBe(0)
+    expect(after.blackPct).toBeGreaterThan(70)
+    // and the residual grain is a dark trace, not a field: p95 well inside the bottom eighth.
+    expect(after.p95).toBeLessThan(32)
+
+    // (b) THE SIGNALS. The whole risk of (a) is buying it by deleting weak signals, so assert
+    //     the FT8 decode floor explicitly: a -21 dB SNR station must still be drawn, and must
+    //     lead the brightest 5% of the grain by more than it did before.
+    expect(after.sig[-21]).toBeGreaterThan(20)
+    expect(after.sig[-21] - after.p95).toBeGreaterThan(before.sig[-21] - before.p95)
+    // Strength ordering survives: louder is brighter, at every step.
+    expect(after.sig[-18]).toBeGreaterThan(after.sig[-21])
+    expect(after.sig[-11]).toBeGreaterThan(after.sig[-18])
+    expect(after.sig[-1]).toBeGreaterThan(after.sig[-11])
   })
 })

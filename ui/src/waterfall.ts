@@ -115,6 +115,79 @@ export function applyGainZero(
 }
 
 /**
+ * Percentile `agcRange` takes as the row's NOISE LEVEL for the parked-floor chain below:
+ * the MEDIAN, not a low tail.
+ *
+ * A low percentile is not a noise statistic you can park against — it is a statistic of the
+ * distribution's LEFT TAIL, and three unrelated things move that tail without moving the noise:
+ * the 15% of every row that sits in the rig's SSB stopband (the row spans 0-4000 Hz, every
+ * filter cuts by ~3.3 kHz, and a 40 dB cliff owns the bottom 5% outright), the passband tilt,
+ * and band occupancy. Measured over the modelled scenes, `loPct` 0.05 lands anywhere from
+ * -10 to -44 dB relative to the passband noise median; `loPct` 0.5 lands within 0.7 dB of it on a
+ * dead band, a busy band and a contest alike, within 1.1 dB with 15 dB of passband tilt, and
+ * within 2.5 dB with the stopband in view (the "Full" 200-4000 Hz zoom).
+ * That stability is the entire reason the offset below can be stated in absolute dB at all.
+ */
+export const WF_FLOOR_PCT = 0.5
+
+/**
+ * dB ABOVE the row's noise median at which `parkFloor` puts the black point — WSJT-X's
+ * `plotZero` (`plotter.cpp:194`), expressed against a measured floor instead of a manual one.
+ *
+ * The floor was previously the 5th percentile, i.e. 95% of the noise population rendered as
+ * visible palette gradient, and the dB intensity axis (2026-08-04) gave that population enough
+ * tonal resolution to read as a bright dancing field: measured noise median LUT 176 of 255 on a
+ * busy band, 0% of the field black. The operator's report is that picture ("the back is dark and
+ * not over noisy" — 2026-08-05).
+ *
+ * ⚠️ 3 dB, and NOT MORE, and the reason is weak signals. A display bin is 7.81 Hz of a 2500 Hz
+ * SNR reference and the peak-hold over ~3 raw FFT bins biases the noise up, so a signal's per-bin
+ * excess over the noise median is `SNR + 24.6 dB`: the FT8 decode floor of -21 dB SNR is only
+ * +3.6 dB/bin. Parking at +6 puts the black point ABOVE it and deletes exactly the signals FT8
+ * exists to dig out — a worse product than the noisy background, and invisible to the operator
+ * because he cannot see what stopped being drawn. Measured column brightness of a -21 dB SNR
+ * station on a busy band: LUT 38 at +3 dB parking, LUT 8 at +6, LUT 0 at +10.
+ */
+export const WF_PARK_DB = 3
+
+/**
+ * Minimum dB the display window may cover. Same clamp PhoneScope (`MIN_DYN_DB`) and
+ * MiniSpectrum already carry at 10 dB; the FT waterfall was the one surface without one.
+ *
+ * Parking the floor is what makes it load-bearing here: the window becomes
+ * `[noise median + 3 dB, p99.5]`, and on a signal-free band that is only 4.9 dB wide (measured),
+ * so the first station to key up would slam straight to LUT 255 with no strength discrimination
+ * at all. 24 dB rather than 10 because 10 still saturates every signal above about -14 dB SNR.
+ * The cost is real and is the reason this is a named constant: on a QUIET band the clamp widens
+ * the window from ~18 to 24 dB, which dims a -21 dB SNR station from LUT 57 to LUT 41.
+ */
+export const WF_MIN_WINDOW_DB = 24
+
+/**
+ * Park an auto-AGC `{floor, ceil}` window: lift the black point `parkDb` dB above the measured
+ * noise level (so the noise-only part of the band clamps to the palette floor instead of
+ * rendering as gradient) and hold the window at least `minWindowDb` wide.
+ *
+ * Both operations are ADDITIVE on this axis (see `WF_DB_SPAN`) — a dB offset here is
+ * `dbToSpan(db)`, never a multiply. Runs BEFORE `applyGainZero`, so the operator's Zero knob
+ * still slides ±½ window around this default rather than replacing it.
+ *
+ * ⚠️ Deliberately NOT folded into `agcRange`'s defaults. `agcRange` is shared with PhoneScope
+ * and MiniSpectrum, which draw a TRACE from the same values — clamping their noise to the
+ * palette/plot floor would flatten the trace onto the baseline, which is the one thing those
+ * two surfaces exist to show ("is my audio alive").
+ */
+export function parkFloor(
+  floor: number,
+  ceil: number,
+  parkDb = WF_PARK_DB,
+  minWindowDb = WF_MIN_WINDOW_DB,
+): { floor: number; ceil: number } {
+  const f = floor + dbToSpan(parkDb)
+  return { floor: f, ceil: Math.max(ceil, f + dbToSpan(minWindowDb), f + MIN_SPAN) }
+}
+
+/**
  * Resample one spectrum row onto `out.length` output pixels spanning [`viewLoHz`,
  * `viewHiHz`] — the ONE bin→pixel mapping every waterfall surface uses, live and
  * re-rendered alike.

@@ -7,9 +7,11 @@ import {
   bakeLut,
   isRfScopeSource,
   normalize,
+  parkFloor,
   resampleRow,
   resolveColormap,
   WATERFALL_ZOOMS,
+  WF_FLOOR_PCT,
   coerceZoomSpan,
   zoomRange,
   MIN_SPAN,
@@ -439,8 +441,24 @@ export function Waterfall({
       // Guard against a stale buffer if a resize is mid-flight.
       if (Wd > canvas.width || wfHd > canvas.height) return
 
-      // visual-AGC: percentile floor/ceil of this row, EMA-smoothed across frames.
-      const { floor, ceil } = agcRange(row)
+      const nBins = row.length
+      const rowLo = spec.loHz ?? F_MIN
+      const rowHi = spec.hiHz ?? F_MAX
+
+      // visual-AGC over the VISIBLE window only, EMA-smoothed across frames.
+      //
+      // The window used to be fitted to the WHOLE row, and that is not a detail: the row spans
+      // 0–4000 Hz while the default view draws 200–3000, and every SSB/DATA filter leaves a ~40 dB
+      // dead cliff above ~3.3 kHz. So ~15% of the row sat 40 dB below anything drawn, the 5th
+      // percentile landed INSIDE it, and ~38 dB of the window was spent bridging digital silence to
+      // the noise floor — which is what put the noise at mid-palette. PhoneScope.tsx:414-419 has
+      // done it over the visible window since it was written, for the same reason (a loud signal
+      // outside the view must not compress what is shown); this is that fix, arriving late.
+      const binHz = (rowHi - rowLo) / nBins
+      const vLo = Math.max(0, Math.floor((viewLoRef.current - rowLo) / binHz))
+      const vHi = Math.min(nBins, Math.ceil((viewHiRef.current - rowLo) / binHz))
+      const visible = vHi - vLo >= 8 ? row.slice(vLo, vHi) : row
+      const { floor, ceil } = agcRange(visible, WF_FLOOR_PCT)
       if (!agcInit) {
         agcFloor = floor
         agcCeil = ceil
@@ -449,11 +467,14 @@ export function Waterfall({
         agcFloor += (floor - agcFloor) * AGC_ALPHA
         agcCeil += (ceil - agcCeil) * AGC_ALPHA
       }
-      // Apply the operator's manual gain (contrast) / zero (baseline) on top of the
-      // smoothed auto-AGC. Both 0 → display window == auto window (no change).
+      // Park the black point WF_PARK_DB above the measured noise median and hold a minimum
+      // window (see parkFloor) — the default that makes an empty band read black instead of a
+      // bright dancing field. Then the operator's manual gain (contrast) / zero (baseline) on
+      // top: both 0 → exactly this default, and Zero still slides ±½ window either side of it.
+      const parked = parkFloor(agcFloor, agcCeil)
       ;({ floor: dispFloor, ceil: dispCeil } = applyGainZero(
-        agcFloor,
-        agcCeil,
+        parked.floor,
+        parked.ceil,
         gainRef.current,
         zeroRef.current,
       ))
@@ -474,9 +495,6 @@ export function Waterfall({
       // Append the row to the RETAINED HISTORY as normalized intensities over the ROW's
       // OWN frequency span (carried in the DTO) — the ring is what every cold path
       // (palette recolor, zoom, resize, scrollback) re-renders from.
-      const nBins = row.length
-      const rowLo = spec.loHz ?? F_MIN
-      const rowHi = spec.hiHz ?? F_MAX
       const tRow = new Float32Array(nBins)
       for (let b = 0; b < nBins; b++) tRow[b] = normalize(row[b], dispFloor, dispCeil)
       historyRef.current.push(tRow, rowLo, rowHi, Date.now())
@@ -770,7 +788,13 @@ export function Waterfall({
             }}
           />
         </label>
-        <label className="wf-knob" title="Zero — reference level / brightness baseline. Center = auto.">
+        {/* WSJT-X's plotZero. Center is NOT "off" — it is the parked default (noise median
+            +3 dB, see WF_PARK_DB); left brings the noise floor back up into the palette,
+            right pushes it further under. */}
+        <label
+          className="wf-knob"
+          title="Zero — where the black point sits relative to the noise floor. Center = the default (background black); left shows more of the noise, right buries it deeper."
+        >
           <span>Z</span>
           <input
             type="range"

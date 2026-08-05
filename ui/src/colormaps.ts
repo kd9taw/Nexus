@@ -37,7 +37,24 @@ const STOPS: Record<ColormapName, string[]> = {
   // Turbo with a BLACK noise floor (operator preference): the canonical low stop is a dark
   // maroon-purple (#30123b) which tinted the waterfall background; force it to black so the
   // floor reads black and the low end interpolates black→blue.
-  turbo: ['#000000', '#4145ab', '#4675ed', '#39a2fc', '#1bcfd4', '#24eca6', '#61fc6c', '#a4fc3b', '#d1e834', '#f9ba38', '#fb7e21', '#e4460a', '#b11901', '#7a0403'],
+  //
+  // #0a0c22/#1d2060 are a DARK RUN, not decoration, and they are the palette's half of "the back
+  // is dark and not over noisy" (operator 2026-08-05). Stops are EVENLY SPACED, so with 14 of them
+  // each segment was 19.6 LUT indices and stop[1] `#4145ab` is L*34.6 — black→L*34.6 in 19.6
+  // indices, 2.68 L*/index through the bottom octave, ~11× inferno's. Parking the waterfall's
+  // black point (`WF_PARK_DB`) puts the residual noise grain around LUT 20, and at 2.68 L*/index
+  // that grain rendered as saturated blue at L*35 on a field that was otherwise black: darkness
+  // achieved, calmness not. Two dark stops move L*≥5 from index 2 to 19 and L*≥10 from 3 to 24 —
+  // WSJT-X's own Default.pal is 18/25, so this is their long dark bottom, not a new idea.
+  // Measured on the shipping chain over a modelled busy band: the grain (background p95, LUT 25)
+  // goes L* 40.6 → 10.8 and a −21 dB SNR station (LUT 35) goes L* 49.1 → 17.8. Absolute contrast
+  // is roughly held (ΔL* 8.5 → 7.0, both far above a ~2 JND); RELATIVE contrast — what decides
+  // whether a streak reads against its own background — triples, 21% → 65% of the grain's own
+  // lightness. The alternative of a THIRD dark stop was measured and rejected: it takes the grain
+  // to L* 2 but the same station to L* 11, and the contrast with it.
+  // The hue sequence and the endpoint are untouched; the top-end fall (turbo is not
+  // luminance-monotonic — see SEQUENTIAL) is a separate, deliberate non-change.
+  turbo: ['#000000', '#0a0c22', '#1d2060', '#4145ab', '#4675ed', '#39a2fc', '#1bcfd4', '#24eca6', '#61fc6c', '#a4fc3b', '#d1e834', '#f9ba38', '#fb7e21', '#e4460a', '#b11901', '#7a0403'],
   'sdr-green': ['#000000', '#002800', '#005800', '#009000', '#30d030', '#b8ffb8'],
   'amber-crt': ['#000000', '#1a0e00', '#4a2c00', '#8a5a00', '#d09000', '#ffc233', '#fff0c8'],
   blue: ['#000010', '#001440', '#003078', '#0058b0', '#2090e0', '#80c8ff', '#ffffff'],
