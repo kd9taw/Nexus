@@ -5,12 +5,16 @@
 //     so they go LOUD (prominent + beep + long TTL) with concrete guidance.
 //   - Tropo lifts are real openings but last hours — an informative quiet toast.
 //   - Anything unclassified keeps the old generic one-liner, quiet.
-// Local/scatter activity never reaches here at all: on VHF every rung of the
-// detector's open gate carries a DX distance (≥500/700 km), so groundwave and
+// Local/scatter activity never reaches here at all: on VHF all three rungs of the
+// detector's open gate carry a DX distance (≥500/700 km), so groundwave and
 // routine scatter are dropped before an opening exists — see `raw_open` in
-// crates/propagation/src/opening.rs. (Until 2026-08-05 that claim was false:
-// two 6 m decodes at 111 km and 199 km satisfied a distance-blind station-count
-// rung and this file cheerfully told the operator to point SE right now.)
+// crates/propagation/src/opening.rs. That claim was false until 2026-08-05, and
+// it took two passes to make true: first two 6 m decodes at 111 km and 199 km
+// satisfied a distance-blind station-count rung in `op_gate`, and after that was
+// removed `regional_gate` was still a pure census — twelve stations, three local
+// ears, two-way pairs, band-specificity, and not one question about distance.
+// Both are fixed; this file cheerfully told the operator to point SE right now
+// for as long as either stood.
 import type { OpeningView } from './types'
 
 /// The backend's `Confidence::Strong` cut (propagation/src/engine.rs

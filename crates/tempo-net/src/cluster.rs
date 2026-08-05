@@ -291,6 +291,30 @@ fn is_login_prompt(s: &str) -> bool {
         || tail.ends_with("callsign:")
 }
 
+/// How many corroborating voices one spot carries. A memory ceiling, nothing more:
+/// a busy DX in a pileup is re-spotted by every skimmer that hears it, and without a
+/// bound one row's `corroborators` would grow to the size of the skimmer network.
+/// Which voices survive it is [`VoiceRank`]'s job, never arrival order — see
+/// [`SpotBuffer::push_at_ranked`].
+pub const CORROBORATOR_CAP: usize = 8;
+
+/// Ranks one spotter callsign as ADMISSION EVIDENCE, higher = keep first, for the
+/// moment [`CORROBORATOR_CAP`] forces a choice.
+///
+/// The buffer owns no geography — the consumer that knows where the operator is
+/// installs this at the push site (`spotter_evidence_rank` in src-tauri). It exists
+/// because the cap is not a neutral trim: the Needed board admits a spot on whether
+/// SOMEONE NEAR THE OPERATOR heard it, so evicting the near voice deletes the very
+/// evidence the row is judged on, and the row then fails a gate it should pass.
+pub type VoiceRank = fn(&str) -> u8;
+
+/// The ranking for a consumer that has no locality question to ask: every voice equal,
+/// so the cap falls back to arrival order. What [`SpotBuffer::push`]/[`SpotBuffer::push_at`]
+/// use.
+pub fn flat_voice_rank(_spotter: &str) -> u8 {
+    0
+}
+
 /// A buffer of recent spots, deduped by (DX callsign, ~frequency) so a station
 /// spotted on CW *and* SSB keeps BOTH opportunities (a single dedup-by-call would
 /// let the high-rate RBN CW firehose overwrite the rarer human SSB entry). Retention
@@ -315,17 +339,29 @@ impl SpotBuffer {
         }
     }
     /// Add a spot stamped now; a prior spot of the same DX call is replaced.
-    pub fn push(&mut self, mut spot: ClusterSpot) {
+    /// Corroborators past [`CORROBORATOR_CAP`] fall in arrival order — a consumer
+    /// with a locality gate must use [`push_ranked`](Self::push_ranked) instead.
+    pub fn push(&mut self, spot: ClusterSpot) {
+        self.push_ranked(spot, flat_voice_rank);
+    }
+    /// As [`push`](Self::push), with the [`VoiceRank`] that decides which voices
+    /// survive [`CORROBORATOR_CAP`].
+    pub fn push_ranked(&mut self, mut spot: ClusterSpot, rank: VoiceRank) {
         if spot.received_unix == 0 {
             spot.received_unix = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
         }
-        self.push_at(Instant::now(), spot);
+        self.push_at_ranked(Instant::now(), spot, rank);
     }
     /// As [`push`](Self::push) with an explicit timestamp (for tests).
-    pub fn push_at(&mut self, at: Instant, mut spot: ClusterSpot) {
+    pub fn push_at(&mut self, at: Instant, spot: ClusterSpot) {
+        self.push_at_ranked(at, spot, flat_voice_rank);
+    }
+    /// As [`push_at`](Self::push_at) with an explicit [`VoiceRank`] — the full form
+    /// both the live feeds and the tests go through.
+    pub fn push_at_ranked(&mut self, at: Instant, mut spot: ClusterSpot, rank: VoiceRank) {
         // Same-station key: same call AND within MERGE_KHZ of each other. A 1 kHz ROUNDED
         // key split two skimmers' small calibration disagreement about ONE CW carrier
         // (e.g. 50313.4 vs 50313.6 → buckets 50313 vs 50314) into two single-voice rows that
@@ -374,7 +410,24 @@ impl SpotBuffer {
                 })
                 .collect();
             spot.corroborators.append(&mut set);
-            spot.corroborators.truncate(8);
+            // WHICH voices the cap keeps is the whole point (operator 2026-08-05, "I would
+            // want spots to show up for almost all those spotted in the US"). The carried
+            // list runs oldest-first with the just-superseded spotter appended LAST, so a
+            // plain `truncate` kept the EIGHT OLDEST and deleted the newest voice every
+            // time. Once eight foreign skimmers were banked, a North-American spotter
+            // survived only while it was the newest row's `spotter` field — the next
+            // foreign spot demoted it into the carried list at position 9 and dropped it.
+            // That is a false NEGATIVE on exactly the busy pileup where a local spotter
+            // matters most: the row is admitted on whether anyone near the operator heard
+            // it, so evicting the near voice deletes the evidence and closes the gate.
+            //
+            // Rank first, then trim: `sort_by_key` is STABLE, so voices of equal rank keep
+            // their arrival order and a flat ranking is bit-identical to the old trim.
+            if spot.corroborators.len() > CORROBORATOR_CAP {
+                spot.corroborators
+                    .sort_by_key(|c| std::cmp::Reverse(rank(c)));
+                spot.corroborators.truncate(CORROBORATOR_CAP);
+            }
         }
         self.spots.push_back((at, spot));
         // Age-based retention is PRIMARY: drop spots older than `max_age` so a sparse
@@ -953,6 +1006,93 @@ mod tests {
         assert!(
             !s.corroborators.contains(&"K9LC".to_string()),
             "self excluded"
+        );
+    }
+
+    /// REGRESSION (operator 2026-08-05, "I would want spots to show up for almost
+    /// all those spotted in the US"): a lone LOCAL voice must survive a pileup of
+    /// foreign ones.
+    ///
+    /// The Needed board admits an HF spot on whether anyone on the operator's
+    /// continent heard it. The carried voice list runs oldest-first with the
+    /// just-superseded spotter appended LAST, so the old `truncate(8)` kept the
+    /// eight OLDEST and deleted the newest: once eight foreign skimmers were banked,
+    /// a North-American spotter lived only while it was the newest row's `spotter`
+    /// field, and the next foreign spot deleted it. The gate then read no local
+    /// voice and dropped a row it exists to keep — a false negative on exactly the
+    /// busy pileup where a local spotter matters most.
+    #[test]
+    fn a_local_voice_survives_a_pileup_of_foreign_ones() {
+        // Stand-in for src-tauri's `spotter_evidence_rank`: US calls are the
+        // evidence the gate can use, everything else is rankable but expendable.
+        fn rank(sp: &str) -> u8 {
+            u8::from(sp.starts_with('W') || sp.starts_with('K') || sp.starts_with('N'))
+        }
+        let mk = |spotter: &str| ClusterSpot {
+            spotter: spotter.into(),
+            dx_call: "JI2XLN".into(),
+            freq_khz: 14025.0,
+            comment: "CW".into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: true,
+        };
+        // The order is the defect: the pileup banks the cap FIRST, so the local
+        // voice arrives with every slot already taken.
+        let foreign = |i: usize| format!("{}{i}", if i.is_multiple_of(2) { "DL" } else { "JA" });
+        let mut b = SpotBuffer::new(100);
+        for i in 0..20 {
+            b.push_ranked(mk(&foreign(i)), rank);
+        }
+        // A US skimmer copies the JA station — the row the operator wants.
+        b.push_ranked(mk("W3LPL"), rank);
+        // …and the pileup keeps going. Each of these used to push W3LPL one place
+        // further down a list trimmed from the front; the FIRST one was enough.
+        for i in 20..60 {
+            b.push_ranked(mk(&foreign(i)), rank);
+        }
+        let s = &b.recent()[0];
+        assert_eq!(s.spotter, "JA59", "newest spot still wins the row");
+        assert!(
+            s.corroborators.iter().any(|c| c == "W3LPL"),
+            "the one local voice must survive the cap: {:?}",
+            s.corroborators
+        );
+        assert_eq!(
+            s.corroborators.len(),
+            CORROBORATOR_CAP,
+            "…and the cap still bounds the list"
+        );
+    }
+
+    /// The cap must stay a MEMORY ceiling, not a filter: with a flat ranking
+    /// (`push`/`push_at`, and any consumer with no locality question) the trim is
+    /// exactly what it always was.
+    #[test]
+    fn a_flat_ranking_leaves_the_corroborator_trim_unchanged() {
+        let mk = |spotter: &str| ClusterSpot {
+            spotter: spotter.into(),
+            dx_call: "DX1AA".into(),
+            freq_khz: 14025.0,
+            comment: "CW".into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: true,
+        };
+        let mut b = SpotBuffer::new(100);
+        for i in 0..12 {
+            b.push(mk(&format!("SP{i:02}")));
+        }
+        let s = &b.recent()[0];
+        assert_eq!(s.spotter, "SP11");
+        // Oldest-first carry order, capped — the pre-existing behaviour.
+        assert_eq!(
+            s.corroborators,
+            (0..CORROBORATOR_CAP)
+                .map(|i| format!("SP{i:02}"))
+                .collect::<Vec<_>>()
         );
     }
 

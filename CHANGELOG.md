@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Needed board hid US-spotted rows on exactly the pileups where a US spotter matters.**
+  An HF spot reaches the board when someone on your continent heard the DX — a JA station a
+  Kansas skimmer copied says something about a path from your QTH; the same station heard only
+  in Europe and Japan does not. Nexus keeps a list of the other stations that reported each DX,
+  capped at eight so a busy pileup cannot grow it without limit, and it was keeping the eight
+  that arrived *first*. So the moment a ninth reporter came in, the newest voice was the one
+  thrown away — and on a pileup being re-spotted from Europe and Asia several times a minute,
+  the single North-American skimmer was gone within seconds of arriving. The board then saw no
+  local report and dropped a row you asked to keep. The cap now keeps the reports that answer
+  the question the board is asking — the ones near you first, then the ones on your continent —
+  so one US skimmer is enough no matter how loud the rest of the world is.
+
+- **Changing digital mode could make a dead 6 m band alert again.** The opening detector times
+  your own decodes by the slot clock, and that clock is renumbered whenever the transmit period
+  changes — 15 seconds on FT8, 7.5 on FT4, 4 on FT1. Stations already in your heard list survive
+  a mode change carrying their old numbering, and read against the new clock they could compute
+  as "decoded this instant". An hour-old decode became the freshest evidence on the band, which
+  is the same stale-evidence fault that made 6 m alert on nothing and stay latched. Entries
+  numbered under a clock that no longer exists are now dropped rather than guessed at; anything
+  still on the air is re-decoded within a slot or two.
+
+- **6 m could still open on activity that never left the neighbourhood.** The tightening that
+  removed distance-blind evidence from the opening gate missed one path: the regional gate, which
+  fires on a band-wide surge near you and asked four questions — how many stations, how many
+  local receivers, how many two-way contacts, how band-specific — without ever asking how far
+  anything went. A busy evening of local 6 m FT8 among a dozen neighbours answers all four the
+  same way a sporadic-E opening does. That gate now also requires at least one path past 500 km,
+  either one of yours or one a nearby receiver copied. HF is untouched: an F2 opening's paths are
+  continent-scale by definition, so a distance test there would only add noise.
+
+- **The openings log under-counted the stations in a VHF opening.** Confining the 6 m/2 m open
+  gate to the last ten minutes — so a ninety-minute-old decode can no longer prop a gate open —
+  was also applied to the station census the display and the openings log show. A forty-minute
+  Es episode with thirty distinct stations, never more than a handful in any one ten-minute
+  window, was journalled as about a quarter of the stations it actually carried. The gate keeps
+  its ten-minute window; the counts are the whole episode again.
+
 - **Purging the logbook left the LoTW and eQSL sync positions behind, so the next sync brought
   back a sliver of your confirmations.** An operator purged a 26,000-QSO log, re-synced, and his
   awards card read "3% — 816 of 26,007 QSOs confirmed": DXCC 131 against LoTW's 249, the

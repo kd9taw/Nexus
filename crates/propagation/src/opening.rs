@@ -316,9 +316,14 @@ impl BandFeatures {
         // two stations on 6 m" the entire test. Two decodes at 111 km and 199 km
         // (groundwave) opened the band, and the anomaly gate could not stop it:
         // with `sigma_floor` 0.05 spots/min a dead band scores z = 2 × (spots in
-        // the last 10 min), so those same two spots put z at exactly z_open. Every
-        // rung that survives is one the ≥500/700 km geometry independently earns.
+        // the last 10 min), so those same two spots put z at exactly z_open.
         // The census fields are untouched — `project_opening` still displays them.
+        //
+        // On VHF that now holds for the WHOLE gate, not just this branch: every one
+        // of the three rungs below carries a ≥500/700 km path, `regional_gate`
+        // included (it did not until 2026-08-05, and the claim that it did was
+        // written here while it was false). HF is unchanged — an F2 census needs no
+        // distance term, its paths are continent-scale by construction.
         //
         // The anomaly-z gate above still applies to every rung, so routine scatter
         // (baseline, no spike) can't fabricate an open even at DX distance.
@@ -337,7 +342,24 @@ impl BandFeatures {
         // a DENOMINATOR fix, not a threshold relax — a uniform contest surge still
         // drives every band's share below `min_regional_cross_band_share`, so contest
         // rejection is preserved and this gate is left as-is.
+        //
+        // …except for the DISTANCE term on VHF, added 2026-08-05. Every condition
+        // above is a census — how many stations, how many local ears, how many
+        // two-way pairs, how band-specific — and not one of them asks how far anything
+        // was. On HF that is right. On VHF it made a busy evening of local 6 m FT8
+        // among a dozen neighbours indistinguishable from an Es opening, which is the
+        // same "I tune and hear nothing" the operator reported and the same defect the
+        // census rungs were removed from `op_gate` for. ONE ≥500 km path is enough
+        // here — the four census conditions are doing the heavy lifting, this only has
+        // to prove the surge is not entirely local — and it is read from the
+        // 10-minute-fresh gate sets, so it cannot be satisfied by a stale sample.
+        // Either anchor counts: operator-anchored (`unique_far_short_dx`) or a near
+        // ear copying a DX-length far↔far path (`unique_near_dx_rx`), which is the
+        // receive-only case where the operator isn't on the band at all.
+        let vhf_regional_distance =
+            !vhf || self.unique_far_short_dx >= 1 || self.unique_near_dx_rx >= 1;
         let regional_gate = cfg.regional_scope
+            && vhf_regional_distance
             && self.unique_stations >= cfg.min_regional_stations
             && self.unique_near_rx >= cfg.min_regional_near_rx
             && self.reciprocal_pairs_regional >= cfg.min_regional_reciprocal
@@ -591,12 +613,22 @@ pub fn band_features(
     // phenomenon whose evidence is a census, not an instant, and narrowing the
     // 5-receiver / 3-transmitter bar to 10 minutes would drop real HF openings.
     //
-    // Scope is the five sets the gate reads (`far_rx`/`far_tx`/`far_dx`/
-    // `far_short_dx` for `op_gate`, `near_dx_rx` for the VHF-only
-    // `regional_dx_gate`). `near_rx`, `all_stations` and the geometry pools are
-    // untouched: they feed the band-agnostic `regional_gate` census and the
-    // classifier, which are about the shape of the last two hours, not about
-    // whether the band is open this minute.
+    // Scope is the THREE sets a VHF gate actually reads: `far_dx` + `far_short_dx`
+    // (`op_gate`'s VHF rungs) and `near_dx_rx` (`regional_dx_gate`).
+    //
+    // `far_rx`/`far_tx` are deliberately NOT confined, and that is not an oversight:
+    // on VHF `op_gate` never reads them (it takes the distance branch), so narrowing
+    // them bought the gate nothing and cost the DISPLAY everything — they are the
+    // census `project_opening` shows and the `peak_stations` the openings journal
+    // records — and that journal is `unique_far_rx + unique_far_tx`, so confining both
+    // halves scales the recorded figure by the fraction of an episode that fits in one
+    // 10-minute window: a 40-minute Es episode with 30 stations each way, never more
+    // than 8 of them at once, journals ~16 in place of ~60. That is the operator's own
+    // before/after instrument. On HF they ARE gate inputs, and there `gate_fresh` is
+    // always true, so nothing changes.
+    // `near_rx`, `all_stations` and the geometry pools are likewise untouched: they
+    // feed the `regional_gate` census and the classifier, which are about the shape of
+    // the last two hours, not about whether the band is open this minute.
     let vhf = band.is_vhf();
 
     for s in band_spots {
@@ -619,37 +651,45 @@ pub fn band_features(
         // suppress the very skip-hole it should drive).
         let geo_grid: Option<&str> = match side {
             Side::HeardMe => {
-                if let Some(c) = s.far_call(me_call).filter(|_| gate_fresh) {
+                if let Some(c) = s.far_call(me_call) {
                     let cu = c.to_ascii_uppercase();
                     // The far station here is the RECEIVER that heard me → its own grid.
                     let d = s
                         .rx_grid
                         .as_deref()
                         .and_then(|g| grid_distance_km(me_grid, g));
-                    if d.is_some_and(|d| d >= cfg.vhf_dx_km) {
-                        far_dx.insert(cu.clone());
+                    // Gate rungs only: fresh on VHF, whole window on HF.
+                    if gate_fresh {
+                        if d.is_some_and(|d| d >= cfg.vhf_dx_km) {
+                            far_dx.insert(cu.clone());
+                        }
+                        if d.is_some_and(|d| d >= cfg.vhf_short_km) {
+                            far_short_dx.insert(cu.clone());
+                        }
                     }
-                    if d.is_some_and(|d| d >= cfg.vhf_short_km) {
-                        far_short_dx.insert(cu.clone());
-                    }
+                    // Census: the whole window on every band (display + journal).
                     far_rx.insert(cu);
                 }
                 s.rx_grid.as_deref()
             }
             Side::IHeard => {
-                if let Some(c) = s.far_call(me_call).filter(|_| gate_fresh) {
+                if let Some(c) = s.far_call(me_call) {
                     let cu = c.to_ascii_uppercase();
                     // The far station here is the TRANSMITTER I heard → its own grid.
                     let d = s
                         .tx_grid
                         .as_deref()
                         .and_then(|g| grid_distance_km(me_grid, g));
-                    if d.is_some_and(|d| d >= cfg.vhf_dx_km) {
-                        far_dx.insert(cu.clone());
+                    // Gate rungs only — see the HeardMe arm.
+                    if gate_fresh {
+                        if d.is_some_and(|d| d >= cfg.vhf_dx_km) {
+                            far_dx.insert(cu.clone());
+                        }
+                        if d.is_some_and(|d| d >= cfg.vhf_short_km) {
+                            far_short_dx.insert(cu.clone());
+                        }
                     }
-                    if d.is_some_and(|d| d >= cfg.vhf_short_km) {
-                        far_short_dx.insert(cu.clone());
-                    }
+                    // Census: the whole window on every band (display + journal).
                     far_tx.insert(cu);
                 }
                 s.tx_grid.as_deref()
@@ -2007,6 +2047,8 @@ mod tests {
         f.unique_near_rx = 4; // a real collection of local endpoints
         f.reciprocal_pairs_regional = 4;
         f.cross_band_share = 0.7;
+        // …and the surge reaches past 500 km, which the VHF regional gate now requires.
+        f.unique_far_short_dx = 1;
         // v1 default (regional_scope off): regional spots can't open (no op far counts).
         assert!(
             !f.raw_open(&cfg),
@@ -2014,6 +2056,32 @@ mod tests {
         );
         cfg.regional_scope = true;
         assert!(f.raw_open(&cfg), "opens with the regional gate enabled");
+        // ONE ≥500 km path is the VHF distance term, and it is a REQUIREMENT: the
+        // four census conditions alone describe a busy evening of local 6 m FT8
+        // among a dozen neighbours just as well as they describe an Es opening.
+        let mut all_local = f.clone();
+        all_local.unique_far_short_dx = 0;
+        assert!(
+            !all_local.raw_open(&cfg),
+            "a regional surge with no path past 500 km is not an opening"
+        );
+        // Either anchor satisfies it — including the receive-only one, where the
+        // operator is parked on another band and a near ear is copying the DX.
+        let mut near_ear = all_local.clone();
+        near_ear.unique_near_dx_rx = 1;
+        assert!(near_ear.raw_open(&cfg));
+        // HF is untouched: an F2 census's paths are continent-scale by construction,
+        // so the same distance-free surge still opens 20 m.
+        let mut hf = BandFeatures::empty(Band::B20);
+        hf.anomaly_z = 6.0;
+        hf.unique_stations = 15;
+        hf.unique_near_rx = 4;
+        hf.reciprocal_pairs_regional = 4;
+        hf.cross_band_share = 0.7;
+        assert!(
+            hf.raw_open(&cfg),
+            "the VHF distance term must not reach the HF census"
+        );
         // One loud station heard by many: many stations, but no two-way pairs.
         let mut one_loud = f.clone();
         one_loud.reciprocal_pairs_regional = 0;
@@ -2245,6 +2313,107 @@ mod tests {
         assert!(bf.anomaly_z >= 8.0 * cfg.z_open, "z={}", bf.anomaly_z);
         assert!(bf.unique_far_dx >= 12, "far_dx={}", bf.unique_far_dx);
         assert!(bf.unique_far_short_dx >= 13, "{}", bf.unique_far_short_dx);
+    }
+
+    /// THE TRUE POSITIVE for the regional gate's new VHF distance term (2026-08-05):
+    /// real near-region Es data satisfies it comfortably, and a purely local surge —
+    /// the thing that reads identically to every one of the four census conditions —
+    /// does not.
+    ///
+    /// Both sides go through `band_features` over real geometry rather than setting
+    /// the field: the term is only worth adding if genuine regional evidence earns it.
+    #[test]
+    fn a_real_regional_es_burst_earns_the_vhf_distance_term_a_local_one_does_not() {
+        let cfg = OpeningConfig::default();
+        // Three distinct receivers near EN52 (EN61 ≈ 200 km, EN50 ≈ 180 km, EM59
+        // ≈ 190 km), each copying transmitters 900–2000 km out. This is what the
+        // PSK Reporter near-region feed carries during 6 m Es.
+        let near = ["EN61", "EN50", "EM59"];
+        let far = ["FN42", "FM18", "DM43", "EM12", "FN31", "DN70"];
+        let mut es = Vec::new();
+        for (i, fg) in far.iter().enumerate() {
+            es.push(far_far(
+                &format!("W{i}DX"),
+                fg,
+                &format!("N{}RX", i % 3),
+                near[i % 3],
+                Band::B6,
+                (i as i64) * 20,
+            ));
+        }
+        let bs: Vec<&PathSpot> = es.iter().collect();
+        let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
+        assert!(
+            bf.unique_near_dx_rx >= 1,
+            "a real regional Es burst earns the distance term: near_dx_rx={}",
+            bf.unique_near_dx_rx
+        );
+
+        // The same shape of traffic, entirely local: a busy 6 m FT8 evening among
+        // neighbours. Every census condition the regional gate asks about looks the
+        // same; every path is short.
+        let mut local = Vec::new();
+        for i in 0..6 {
+            local.push(far_far(
+                &format!("W{i}LOC"),
+                near[i % 3],
+                &format!("N{}RX", (i + 1) % 3),
+                near[(i + 1) % 3],
+                Band::B6,
+                (i as i64) * 20,
+            ));
+        }
+        let bs: Vec<&PathSpot> = local.iter().collect();
+        let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
+        assert_eq!(bf.unique_near_dx_rx, 0, "no DX-length path anywhere");
+        assert_eq!(bf.unique_far_short_dx, 0, "…and none operator-anchored");
+    }
+
+    /// REGRESSION (2026-08-05, the same day's own fix): confining the VHF gate's
+    /// evidence to the last ten minutes must not shrink the DISPLAY census.
+    ///
+    /// `far_rx`/`far_tx` are what `project_opening` shows and what the openings
+    /// journal records as `peak_stations` — and on VHF `op_gate` never reads them, it
+    /// takes the distance branch. Confining them therefore bought the gate nothing
+    /// and made a 40-minute Es episode journal about a quarter of the stations it had
+    /// journalled, which is exactly the instrument the operator was offered for
+    /// checking this work.
+    #[test]
+    fn the_vhf_freshness_window_narrows_the_gate_not_the_display_census() {
+        let cfg = OpeningConfig::default();
+        // A 40-minute 6 m episode: twelve distinct stations, of which only the last
+        // two fall inside the 10-minute gate window.
+        let grids = [
+            "FN42", "FM18", "DM43", "EM12", "FN31", "DN70", "EM28", "EN90", "FN03", "EM85", "EM74",
+            "EM63",
+        ];
+        let spots: Vec<PathSpot> = grids
+            .iter()
+            .enumerate()
+            .map(|(i, g)| i_heard(&format!("W{i}ES"), g, Band::B6, 2400 - (i as i64) * 200))
+            .collect();
+        let bs: Vec<&PathSpot> = spots.iter().collect();
+        let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
+        assert_eq!(
+            bf.unique_far_tx,
+            grids.len(),
+            "the display census counts the whole window"
+        );
+        // …while the gate's own rungs see only what is live now (measured: 2 of 12).
+        assert_eq!(
+            bf.unique_far_dx, 2,
+            "the DX rung stays confined to the short window"
+        );
+        assert_eq!(bf.unique_far_short_dx, 2);
+        // HF reads far_tx as a GATE input, and there nothing is confined at all.
+        let hf: Vec<PathSpot> = grids
+            .iter()
+            .enumerate()
+            .map(|(i, g)| i_heard(&format!("W{i}F2"), g, Band::B20, 2400 - (i as i64) * 200))
+            .collect();
+        let bs: Vec<&PathSpot> = hf.iter().collect();
+        let bf = band_features(Band::B20, &bs, ME, ME_GRID, NOW, &cfg);
+        assert_eq!(bf.unique_far_tx, grids.len());
     }
 
     #[test]
