@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 import type { AppSnapshot } from './types'
 import { setFrequency } from './api'
-import { bandLabelForMhz } from './band'
+import { bandLabelForMhz, bandRangeForLabel } from './band'
 
 /** Trailing-flush window: at most one CAT write per this many ms while the wheel spins. */
 const FLUSH_MS = 120
@@ -77,6 +77,12 @@ export function useWheelTune(
   stateRef.current = opts
   const targetHzRef = useRef<number | null>(null) // optimistic dial while a burst is in flight
   const accumRef = useRef(0) // sub-step scroll accumulator (pixel-equivalents)
+  /** The step `accumRef` was filled AT. One accumulator serves every decade, so without this a
+   *  partial gesture on the 100 Hz digit completes a step on whatever digit the pointer moved to:
+   *  measured 0.6 of a notch at 100 Hz + 0.6 at 100 kHz = a full 100 kHz QSY, and 24.074 from
+   *  14.074 on the 10 MHz digit. Pixels are an expression of intent AT A SCALE; they do not
+   *  transfer. Adversarial pass, 2026-08-05. */
+  const accumStepRef = useRef<number | null>(null)
   const lastWheelRef = useRef(0)
   const timerRef = useRef<number | null>(null)
   const edgeSaidRef = useRef(false) // band edge already reported for THIS burst
@@ -127,8 +133,49 @@ export function useWheelTune(
     if (targetHzRef.current == null || idle) {
       targetHzRef.current = Math.round(stateRef.current.dialMhz * 1e6)
       accumRef.current = 0
+      accumStepRef.current = null
       if (idle) edgeSaidRef.current = false
     }
+  }, [])
+
+  /** Clamp `hz` into the band the burst started in, so a fast spin cannot walk THROUGH the band
+   *  plan. `flush()` alone was checking only the FINAL accumulated target, so 7 notches of a
+   *  1 MHz digit inside one 120 ms window went out as ONE write from 7.074 to 14.074 — a 7 MHz
+   *  cross-band QSY still carrying 40 m's LSB, where the same notches delivered slowly are each
+   *  refused. Speed alone decided whether it happened.
+   *
+   *  The consequences are larger than the frequency: `Engine::tune_dial` sees a band change and
+   *  runs `halt_tx_for_context_change`, `clear_decode_context`, `clear_stations`, `reset_ft8_a7`,
+   *  and auto radio routing can hand the QSY to a DIFFERENT RIG — all from one wheel nudge.
+   *
+   *  Clamping rather than discarding also fixes the sibling defect: a flick that overshoots the
+   *  edge used to throw the WHOLE burst away, so a quick three notches toward the top of the band
+   *  moved the dial nowhere while the same three delivered slowly moved it to the edge.
+   *  Returns the clamped Hz and whether the edge was hit. */
+  const clampToBand = useCallback((hz: number, fromHz: number): { hz: number; hitEdge: boolean } => {
+    const range = bandRangeForLabel(bandLabelForMhz(fromHz / 1e6))
+    if (!range) return { hz, hitEdge: false } // started off-plan (60 m channels, out-of-band RX)
+    const lo = Math.round(range.lo * 1e6)
+    const hi = Math.round(range.hi * 1e6)
+    if (hz < lo) return { hz: lo, hitEdge: true }
+    if (hz > hi) return { hz: hi, hitEdge: true }
+    return { hz, hitEdge: false }
+  }, [])
+
+  /** Say the edge ONCE per arrival at it, and only when the dial actually MOVED there.
+   *
+   * ⚠️ VALUE-BASED, NOT FLAG-BASED, and that is deliberate. `edgeSaidRef` alone is reset by
+   * `seed()` after `IDLE_RESEED_MS` of wall-clock idleness — correctly, because a genuinely new
+   * burst should be allowed to report again. But wall-clock idleness is not something a caller
+   * leaning on the edge controls, so a flag-only guard reported twice for one continuous gesture
+   * whenever real time slipped past 400 ms between notches (seen in test, and a slow machine mid
+   * band-change would do it on the air). Once the dial IS at the edge, `from === hz` for every
+   * further notch, so there is nothing to say and nothing to double-say. */
+  const reportEdge = useCallback((hz: number, from: number, hitEdge: boolean) => {
+    if (!hitEdge || hz === from) return // already parked on the edge — silence, not a repeat
+    if (edgeSaidRef.current) return
+    edgeSaidRef.current = true
+    stateRef.current.onEdge?.(hz / 1e6)
   }, [])
 
   /** Apply a signed Hz delta through the SAME target and coalescer as the wheel — the keyboard's
@@ -138,10 +185,13 @@ export function useWheelTune(
     (deltaHz: number) => {
       if (!stateRef.current.enabled || !deltaHz) return
       seed()
-      targetHzRef.current = (targetHzRef.current ?? 0) + deltaHz
+      const from = targetHzRef.current ?? 0
+      const { hz, hitEdge } = clampToBand(from + deltaHz, from)
+      targetHzRef.current = hz
+      reportEdge(hz, from, hitEdge)
       if (timerRef.current == null) timerRef.current = window.setTimeout(flush, FLUSH_MS)
     },
-    [flush, seed],
+    [flush, seed, clampToBand, reportEdge],
   )
 
   useEffect(() => {
@@ -165,6 +215,11 @@ export function useWheelTune(
       // the BASE PX_PER_STEP; sensitivity scales the per-step THRESHOLD, so every mouse type damps
       // consistently (a higher threshold = more scroll per step = less sensitive).
       const px = e.deltaMode === 1 ? raw * PX_PER_STEP : e.deltaMode === 2 ? raw * PX_PER_STEP * 8 : raw
+      // Residue belongs to the decade that produced it — see `accumStepRef`.
+      if (accumStepRef.current !== step) {
+        accumRef.current = 0
+        accumStepRef.current = step
+      }
       accumRef.current += px
       const sens = Math.max(0.2, Math.min(4, stateRef.current.sensitivity ?? 1))
       const effPx = PX_PER_STEP / sens
@@ -179,7 +234,10 @@ export function useWheelTune(
       const cap = Math.max(1, Math.min(MAX_STEPS_PER_EVENT, Math.floor(MAX_HZ_PER_EVENT / eff)))
       const steps = Math.max(-cap, Math.min(cap, rawSteps))
       // Scroll up (negative delta) tunes UP, so negate: -steps × step.
-      targetHzRef.current = (targetHzRef.current ?? 0) + -steps * eff
+      const from = targetHzRef.current ?? 0
+      const { hz, hitEdge } = clampToBand(from + -steps * eff, from)
+      targetHzRef.current = hz
+      reportEdge(hz, from, hitEdge)
       if (timerRef.current == null) timerRef.current = window.setTimeout(flush, FLUSH_MS)
     }
 
@@ -188,7 +246,7 @@ export function useWheelTune(
       el.removeEventListener('wheel', onWheel)
       if (timerRef.current != null) window.clearTimeout(timerRef.current)
     }
-  }, [ref, flush, seed])
+  }, [ref, flush, seed, clampToBand, reportEdge])
 
   return tuneBy
 }

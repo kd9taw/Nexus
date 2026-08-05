@@ -109,11 +109,17 @@ describe('per-digit wheel tuning on the shared main dial', () => {
     const { container } = mount({ digitTune: true, wheelTune: true, wheelStepHz: 100 })
     wheelUp(digit(container, 6))
     vi.advanceTimersByTime(120)
-    // 15.074 is off the (stubbed) band plan, so the CAT write is refused — and SAID, which is the
-    // operator's condition for accepting carry. What must never happen is silence.
-    expect(mockSetFreq).not.toHaveBeenCalled()
+    // ⚠️ CHANGED 2026-08-05. 15.074 is off the band plan, and this USED to assert that the whole
+    // notch was thrown away (`mockSetFreq` never called) while a toast named 15.0740. That was
+    // the F3 defect from the per-digit adversarial pass: a flick toward the edge moved the dial
+    // NOWHERE, while the same notch delivered slowly moved it. A real VFO stops AT the edge.
+    // The dial now goes to 14.3500 and the toast names where it stopped, not a frequency the
+    // radio never visited. The operator's condition — the edge is never silent — is unchanged
+    // and still asserted.
+    expect(mockSetFreq).toHaveBeenCalledTimes(1)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.35, 6)
     expect(mockToast).toHaveBeenCalledTimes(1)
-    expect(String(mockToast.mock.calls[0][0])).toContain('15.0740')
+    expect(String(mockToast.mock.calls[0][0])).toContain('14.3500')
     expect(mockToast.mock.calls[0][1]).toBe('error')
   })
 
@@ -125,7 +131,7 @@ describe('per-digit wheel tuning on the shared main dial', () => {
     vi.advanceTimersByTime(120)
     const msg = String(mockToast.mock.calls[0][0])
     expect(msg).toContain('20m')
-    expect(msg).toContain('14.3500') // the edge he hit, named
+    expect(msg).toContain('14.3500') // the edge he hit — and, since the clamp, where he now IS
   })
 
   it('names the LOWER edge when carry walks off the bottom', () => {
