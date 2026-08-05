@@ -739,6 +739,81 @@ pub fn near_me_radius_km(band: Band) -> f64 {
     }
 }
 
+/// The HF half of the same "local to me" question [`near_me_radius_km`] answers
+/// for reception reports — but asked of a cluster/RBN spot, whose only locality
+/// evidence is WHO HEARD IT.
+///
+/// Returns the spotters re-ordered LOCAL-FIRST, or `None` when not one of them is
+/// on the operator's continent — in which case the spot is not evidence about a
+/// path from the operator's QTH and must not reach the Needed board. Pass the
+/// spot's spotter plus its corroborators; any single local one admits the row,
+/// because one is all it takes to prove the DX was audible on this side.
+///
+/// **The rule is CONTINENT, not a radius, and that is deliberate.** cty.dat gives
+/// one representative point per entity, so *every* US callsign resolves to the
+/// same spot in Missouri: measured against EN52, a spotter-side radius threshold
+/// anywhere between ~4500 and ~6000 km keeps and drops exactly the same spots as
+/// "same continent" (46% of a real day's board-window rows, either way) while
+/// dressing a lookup table up as a measurement. Worse, mixing the precise
+/// [`skimmer_grid`] distance in where it exists would be actively wrong: it would
+/// drop `W6YX` (2868 km), `NG7M` (1911 km) and `WA7LNW` (2163 km) — the genuinely
+/// Pacific-facing skimmers whose reception is the best evidence a JA path is open
+/// — while admitting an entity-resolved W-call at its fictional 597 km. F2
+/// footprints are continent-scale; the continent is the honest unit.
+///
+/// VHF is NOT routed through here and keeps its much stricter precise-grid rule
+/// (`get_need_alerts`): Es patches run 100–400 km, so a continent is meaningless
+/// there.
+///
+/// Measured on RBN's own published archive for 2026-08-03 — 258,237 real spots,
+/// 23,960 board windows (15 min × DX call × band), operator at EN52:
+/// - of North-American DX windows **93% are kept** — the operator's "almost all
+///   those spotted in the US" — while EU-DX falls to 15% and AS-DX to 12%;
+/// - `JI2XLN`, the reported symptom, was spotted 363 times that day from EU (197),
+///   AS (149), NA (11), AF (5) and OC (1); it loses most of its board windows and
+///   keeps the ones a North-American skimmer actually copied;
+/// - **78% of everything dropped** was dropped while ≥10 North-American skimmers
+///   were demonstrably live on that same band in that same window. That is
+///   positive evidence of a closed path, not a coverage gap;
+/// - the honest cost is the other **7% (857 windows)** where NO North-American
+///   skimmer was on the band at all, so absence proves nothing — concentrated on
+///   80 m (392), 60 m (92), 12 m (70), 30 m (67) and 160 m (55). If the operator
+///   ever reports a MISSING row rather than an unwanted one, that is where to
+///   look first, and the fix would be to require same-band local coverage before
+///   the gate is allowed to exclude.
+///
+/// Every spotter in that archive resolved (0 unresolvable), so the fail-closed
+/// branch below is a guard, not a routine path.
+pub fn hf_admit_spotters<'a>(spotters: &[&'a str], my_call: &str) -> Option<Vec<&'a str>> {
+    // Unknown OPERATOR continent (blank/garbage callsign) → fail OPEN. We cannot
+    // judge locality at all, and an empty Needed board is a worse answer than an
+    // unfiltered one.
+    let Some(mine) = spotter_continent(my_call) else {
+        return Some(spotters.to_vec());
+    };
+    let local = |sp: &&str| spotter_continent(sp) == Some(mine);
+    if !spotters.iter().any(local) {
+        return None;
+    }
+    let mut out = spotters.to_vec();
+    // Local spotters LEAD. `get_need_alerts` prints the first three into the
+    // evidence line, and a row admitted by a Kansas skimmer that reads "spotted by
+    // JI1HFJ via cluster/RBN" is the operator's original complaint all over again.
+    // Stable, so the true spotter still precedes its corroborators within a group.
+    out.sort_by_key(|sp| !local(sp));
+    Some(out)
+}
+
+/// A spotter's continent, normalising the RBN reporter suffix first (`W3LPL-#` →
+/// `W3LPL`) — cty.dat has no idea what `-#` is. `None` for a call that doesn't
+/// resolve, which the gate treats as "cannot prove locality" (fail closed), the
+/// same posture the VHF gate takes for a skimmer with no known grid.
+fn spotter_continent(call: &str) -> Option<&'static str> {
+    dxcc::resolve(&skimmer_base(call))
+        .map(|i| i.cont)
+        .filter(|c| !c.is_empty())
+}
+
 /// On VHF the TRANSMITTER must also be FAR — beyond groundwave/local-tropo range —
 /// before its reception near the operator means "the band is open". Without this,
 /// the local 6 m station 50 km away (heard by every nearby receiver via groundwave,
@@ -1169,6 +1244,60 @@ mod tests {
             calls.contains(&"W0HF"),
             "same distance on 20m kept (band-aware)"
         );
+    }
+
+    /// REGRESSION (operator 2026-08-05): "I am noticing that I am getting spots
+    /// from JI prefix, which is Japan, showing up in my needed now. The initial
+    /// intention was to only show those spots that were heard geographically close
+    /// to me on the HF bands. For example, I would want spots to show up for
+    /// almost all those spotted in the US."
+    ///
+    /// The constraint is on WHERE THE SPOT WAS HEARD, not where the DX is — so the
+    /// two halves below are equally load-bearing. A JA station heard only in
+    /// Japan/Europe says nothing about a path from EN52; the SAME JA station heard
+    /// by a US skimmer is real Pacific-path evidence and the operator explicitly
+    /// wants it.
+    ///
+    /// The board had no HF spotter rule at all: `get_need_alerts`' only locality
+    /// gate was `if band.is_vhf()`, and its own comment ("HF keeps the
+    /// continent-wide cluster") described a filter that was never written.
+    ///
+    /// Callsigns are real 2026-08-03 RBN skimmers; on that day `JI2XLN` on 20 m/17 m
+    /// was spotted 26 times between 15:45Z and 18:18Z, every one of them from EU or
+    /// AS, while ~50 North-American skimmers were demonstrably listening on that
+    /// band in the same windows and not one copied it.
+    #[test]
+    fn hf_spot_needs_a_spotter_on_the_operators_continent() {
+        // Heard only from the far side of the planet → not evidence for EN52.
+        assert!(
+            hf_admit_spotters(&["DL8LAS", "ES2RR", "BD8CS"], "KD9TAW").is_none(),
+            "a JA station heard only in EU/AS is not workable-from-here evidence"
+        );
+        // …the same DX copied by ONE US skimmer → KEPT. NG7M (Utah) was the nearest
+        // locatable JI-spotter that whole day.
+        let kept = hf_admit_spotters(&["DL8LAS", "NG7M", "ES2RR"], "KD9TAW")
+            .expect("a US spotter admits the row — the operator asked for this one");
+        assert_eq!(
+            kept[0], "NG7M",
+            "the LOCAL spotter must lead the evidence line: admitting on a US \
+             skimmer and then printing \"spotted by DL8LAS\" is the same bug the \
+             operator reported, just one line further down"
+        );
+        assert!(kept.contains(&"DL8LAS"), "corroborators are kept, just demoted");
+
+        // Sanity on the operator's own side of the rule.
+        assert!(hf_admit_spotters(&["W3LPL", "VE6WZ"], "KD9TAW").is_some());
+        // A non-US operator gets the same rule against THEIR continent — this is
+        // "near me", not "near the USA".
+        assert!(hf_admit_spotters(&["W3LPL"], "DL8LAS").is_none());
+        assert!(hf_admit_spotters(&["ES2RR"], "DL8LAS").is_some());
+
+        // An unresolvable OPERATOR callsign fails OPEN: we cannot judge locality,
+        // and a blank Needed board is a worse answer than an unfiltered one.
+        assert!(hf_admit_spotters(&["DL8LAS"], "").is_some());
+        // An unresolvable SPOTTER fails closed — it cannot prove locality, the same
+        // posture the VHF gate takes for a skimmer with no known grid.
+        assert!(hf_admit_spotters(&["...."], "KD9TAW").is_none());
     }
 
     #[test]

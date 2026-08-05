@@ -10338,22 +10338,29 @@ async fn get_need_alerts(
             let Some(band) = propagation::Band::from_mhz(freq) else {
                 continue; // off the band plan → skip
             };
-            // VHF locality gate (weak-signal-sleuth principle): a 6m/4m/2m cluster
-            // spot is only WORKABLE-FROM-HERE evidence when the SPOTTER is inside
-            // the operator's Es-patch radius — a Florida skimmer hearing a 6 m CW
-            // beacon must never become a Wisconsin "contact to work". Applied
-            // BEFORE the mode-class filter so CW and SSB spots gate identically;
-            // spotters with no known grid can't prove locality → dropped on VHF.
-            // HF keeps the continent-wide cluster (F2 footprints span it).
+            // ALL independent voices for this DX: the current spotter + the
+            // spotters whose earlier reports the buffer's dedup replaced.
+            // push_at's filter guarantees spotter ∉ corroborators (and no dupes
+            // within), so this needs no re-dedup. The HF arm below may REORDER it
+            // — it is also what feeds the evidence line.
+            let mut voices: Vec<&str> = std::iter::once(cs.spotter.as_str())
+                .chain(cs.corroborators.iter().map(|c| c.as_str()))
+                .collect();
+            // LOCALITY GATE (weak-signal-sleuth principle): a cluster spot is only
+            // WORKABLE-FROM-HERE evidence when someone NEAR THE OPERATOR heard it.
+            // Applied BEFORE the mode-class filter so CW and SSB spots gate
+            // identically. The two bands ask the question at different scales
+            // because the propagation does: an Es patch is 100–400 km across, an
+            // F2 footprint spans a continent.
             if band.is_vhf() {
-                // ALL independent voices for this DX (current spotter + the
-                // spotters whose earlier reports the buffer's dedup replaced):
-                // count how many are inside the Es-patch radius. VHF needs >= 2
-                // — the PSKR path has required two near receivers all along,
-                // but a single near RBN skimmer could still sneak a 6 m CW spot
-                // through here (the last uncorroborated hole, the 4U1UN case).
-                let near_spotters: Vec<&str> = std::iter::once(cs.spotter.as_str())
-                    .chain(cs.corroborators.iter().map(|c| c.as_str()))
+                // VHF: how many voices are inside the operator's Es-patch radius,
+                // by the skimmer's precise published grid. Needs >= 2 — the PSKR
+                // path has required two near receivers all along, but a single
+                // near RBN skimmer could still sneak a 6 m CW spot through here
+                // (the last uncorroborated hole, the 4U1UN case). A spotter with
+                // no known grid can't prove locality → doesn't count.
+                let near_spotters = voices
+                    .iter()
                     .filter(|sp| match (propagation::skimmer_grid(sp), me_ll) {
                         (Some(g), Some(me)) => propagation::geo::maidenhead_to_latlon(g)
                             .is_some_and(|rx| {
@@ -10362,8 +10369,8 @@ async fn get_need_alerts(
                             }),
                         _ => false,
                     })
-                    .collect();
-                if near_spotters.len() < 2 {
+                    .count();
+                if near_spotters < 2 {
                     continue;
                 }
                 // …and the DX must be propagation-FAR, not a groundwave local (the
@@ -10390,6 +10397,27 @@ async fn get_need_alerts(
                 if !dx_far {
                     continue;
                 }
+            } else {
+                // HF: at least one voice on the operator's OWN CONTINENT, and that
+                // one leads the evidence line. (Operator 2026-08-05: "I am getting
+                // spots from JI prefix, which is Japan… the initial intention was to
+                // only show those spots that were heard geographically close to me
+                // on the HF bands… I would want spots to show up for almost all
+                // those spotted in the US.") The constraint is on where the spot was
+                // HEARD, not where the DX is: a JA station a US skimmer copied is
+                // exactly what he wants and survives this; a JA station only Japan
+                // and Europe heard says nothing about a path from EN52 and does not.
+                //
+                // This is the gate the two "HF keeps the continent-wide cluster"
+                // comments (here and in `get_propagation`) always described and that
+                // was never actually written — the board's only locality test was
+                // `is_vhf`, so on HF the raw worldwide firehose went straight to the
+                // scorer. Continent rather than a radius, and the reasoning + the
+                // measured cost live on `hf_admit_spotters`.
+                let Some(ordered) = propagation::hf_admit_spotters(&voices, &snap.mycall) else {
+                    continue;
+                };
+                voices = ordered;
             }
             let class = propagation::classify_spot_mode(freq);
             // PRIVILEGE GATE (operator 2026-07-22, "LU6HL on 7.140 shouldn't show"): a station
@@ -10415,13 +10443,10 @@ async fn get_need_alerts(
             if surface {
                 // Evidence line: who spotted it (RBN/cluster path). Cluster
                 // lines age out of the buffer at 15 min, so "recently" is the
-                // honest stamp without per-spot wall-clock plumbing.
-                // push_at's filter guarantees spotter ∉ corroborators (and no
-                // dupes within) — no re-dedup needed here.
-                let spotters: Vec<&str> = std::iter::once(cs.spotter.as_str())
-                    .chain(cs.corroborators.iter().map(|c| c.as_str()))
-                    .take(3)
-                    .collect();
+                // honest stamp without per-spot wall-clock plumbing. On HF
+                // `voices` has been reordered so the spotter that ADMITTED the
+                // row (the one on the operator's continent) is named first.
+                let spotters: Vec<&str> = voices.iter().copied().take(3).collect();
                 heard.push(propagation::Heard {
                     call: cs.dx_call.to_ascii_uppercase(),
                     band: band.label().to_string(),

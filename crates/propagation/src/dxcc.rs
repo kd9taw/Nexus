@@ -26,6 +26,22 @@ pub struct DxccInfo {
     pub lat: f64,
     pub lon: f64,
     pub cq_zone: u8,
+    /// Continent code from cty.dat's `Cont` field — one of `AF`/`AS`/`EU`/`NA`/
+    /// `OC`/`SA` (empty only if the file ever omits it).
+    ///
+    /// This is the coarse locality unit for HF, where an entity CENTROID is far
+    /// too coarse to threshold on: every US callsign resolves to one point in
+    /// Missouri, so "distance to the spotter" is 597 km for a Utah skimmer and a
+    /// Florida skimmer alike, and any radius between ~4500 and ~6000 km is
+    /// numerically identical to "same continent" while pretending to be a
+    /// measurement. See [`crate::needalert::hf_admit_spotters`].
+    ///
+    /// Do NOT substitute a CQ-zone→continent mapping: measured against 258,237
+    /// real RBN spots (2026-08-03) this field agreed with RBN's own `de_cont` on
+    /// every single one, while zone-derived continents were 6.5% wrong — CQ zone
+    /// 20 spans both, so Bulgaria, Romania and Greece (some of the busiest EU
+    /// skimmers) come out as Asia.
+    pub cont: &'static str,
     /// `true` for ARRL DXCC entities; `false` for WAE/CQ-only entities (Sicily,
     /// European Turkey, African Italy, Shetland, Bear Island, Vienna Intl Ctr —
     /// valid contest multipliers but NOT DXCC). The CQ zone is still valid for
@@ -40,6 +56,8 @@ struct Entity {
     lon: f64,
     /// Default CQ zone (cty.dat header field 2); 0 if unparsed.
     cq_zone: u8,
+    /// Continent code (cty.dat header field 4) — see [`DxccInfo::cont`].
+    cont: String,
     /// `false` if the primary-prefix field is `*`-marked (WAE/CQ-only, non-DXCC).
     is_dxcc: bool,
 }
@@ -83,6 +101,7 @@ fn parse_cty(text: &str) -> Resolver {
             }
             let name = parts[0].trim().to_string();
             let cq_zone = parts[1].trim().parse::<u8>().unwrap_or(0);
+            let cont = parts[3].trim().to_ascii_uppercase();
             let lat = parts[4].trim().parse::<f64>().unwrap_or(0.0);
             // cty.dat longitude is West-positive → negate to East-positive.
             let lon = -parts[5].trim().parse::<f64>().unwrap_or(0.0);
@@ -98,6 +117,7 @@ fn parse_cty(text: &str) -> Resolver {
                 lat,
                 lon,
                 cq_zone,
+                cont,
                 is_dxcc,
             });
             cur = Some((entities.len() - 1) as u32);
@@ -195,6 +215,7 @@ fn info(r: &'static Resolver, i: u32, zone_override: Option<u8>) -> DxccInfo {
         lat: e.lat,
         lon: e.lon,
         cq_zone: zone_override.unwrap_or(e.cq_zone),
+        cont: e.cont.as_str(),
         is_dxcc: e.is_dxcc,
     }
 }
