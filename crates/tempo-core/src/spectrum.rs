@@ -30,14 +30,23 @@
 //!   the full width every cycle. WSJT-X has no per-frame normalization anywhere — it fits and
 //!   subtracts a baseline and leaves the scale absolute.
 //!
-//! Deliberately NOT changed here: there is still no temporal averaging (WSJT-X sums
-//! `m_waterfallAvg` = 5 spectra per drawn row, `widegraph.cpp:160-172`). Its frames span 1.365 s
-//! stepped 288 ms, so one of its rows integrates ~2.5 s; ours is a single 171 ms snapshot, which
-//! is why our noise floor is grainier than theirs. That grain is the price of the liveliness the
-//! operator asked for on 2026-08-01 ("smoothed out to remove response"), when the window was
-//! HALVED for exactly this reason — averaging it back would undo that. On the dB axis the same
-//! grain reads as film grain rather than the hard-quantized dither it was before, because there
-//! are now ~90 palette levels at the noise floor instead of ~15 to render it in.
+//! Temporal averaging is NOT done here — it is done where the frames are, in
+//! [`tempo_app::engine::SpectrumFeed`], which returns the mean of every frame published since
+//! the last read (~6 at the FT waterfall's cadence, against WSJT-X's `m_waterfallAvg` default of
+//! 5, `widegraph.cpp:160-172`). This module's job is one frame's axis.
+//!
+//! That split is deliberate, and it is what lets the display be smooth AND live. WSJT-X buys its
+//! calm floor with window LENGTH — 1.365 s frames stepped 288 ms, ~2.5 s integrated per drawn
+//! row. Buying it that way here is exactly what the operator rejected on 2026-08-01 ("smoothed
+//! out to remove response"), when [`FFT_N`] was HALVED because a Hann-weighted window is the
+//! display's smear: a signal edge cannot appear until a whole window has passed. Averaging
+//! already-published 171 ms frames adds no such lag — the newest frame is in every mean — so the
+//! edge still snaps while the floor settles. The frames overlap 88%, so six of them buy roughly
+//! ENL 1.7 rather than 6; that is a real reduction in the boil, not a claim of WSJT-X parity.
+//!
+//! On the dB axis the remaining grain reads as film grain rather than the hard-quantized dither
+//! it was before, because there are now ~90 palette levels at the noise floor instead of ~15 to
+//! render it in.
 
 /// Goertzel power estimate at frequency `f` (Hz) over `samples` at `sr` (Hz).
 fn goertzel(samples: &[f32], sr: f32, f: f32) -> f32 {
@@ -89,11 +98,32 @@ pub const DB_SPAN: f32 = 120.0;
 /// This is the axis's ABSOLUTE reference — it does not move with the signal.
 const FULL_SCALE_POWER: f32 = ((FFT_N / 4) * (FFT_N / 4)) as f32;
 
-/// One raw bin's power → its 0..1 display value on the dB axis (see [`DB_SPAN`]).
-/// Silence (p = 0) floors at 0.0 rather than producing -inf.
-fn db_display(power: f32) -> f32 {
-    let db = 10.0 * (power / FULL_SCALE_POWER).max(1e-30).log10();
+/// Linear power, RELATIVE TO FULL SCALE, → its 0..1 display value on the dB axis
+/// (see [`DB_SPAN`]). Silence (p = 0) floors at 0.0 rather than producing -inf.
+///
+/// This and [`display_to_power`] are the axis, and they are exact inverses. Everything that
+/// converts between the two domains goes through this pair so the definition cannot drift.
+pub fn power_to_display(power_ratio: f32) -> f32 {
+    let db = 10.0 * power_ratio.max(1e-30).log10();
     ((db + DB_SPAN) / DB_SPAN).clamp(0.0, 1.0)
+}
+
+/// A 0..1 display value → the linear power ratio it encodes. The inverse of
+/// [`power_to_display`].
+///
+/// ⚠️ ARITHMETIC ON A ROW MUST COME THROUGH HERE. A row value is linear in dB, i.e. a LOGARITHM,
+/// so adding or averaging the values themselves is a geometric mean of the powers — a different
+/// and wrong operation, and one that reads plausibly instead of failing. Averaging a waterfall
+/// row (`tempo_app::engine::SpectrumFeed`) converts to power, averages, and converts back;
+/// WSJT-X does the same, summing its linear-power `s[i]` and taking dB only at the draw
+/// (`widegraph.cpp:160-172` then `flat4.f90:18-20`).
+pub fn display_to_power(display: f32) -> f32 {
+    10f32.powf((display - 1.0) * DB_SPAN / 10.0)
+}
+
+/// One raw bin's power → its 0..1 display value on the dB axis (see [`DB_SPAN`]).
+fn db_display(power: f32) -> f32 {
+    power_to_display(power / FULL_SCALE_POWER)
 }
 
 /// Hann window coefficient for sample `i` of an `FFT_N`-length frame (reduces spectral leakage so a

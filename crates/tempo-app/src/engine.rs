@@ -31,12 +31,104 @@ use tempo_core::{channel, spectrum, tempo_fast, tx};
 /// engine mutex, every long hold of that mutex froze the waterfall — see
 /// [`Engine::spectrum_feed`] for the operator report that led here and the exact holder.
 ///
-/// The lock is taken only to move a `Spectrum` in or clone one out, so a reader can never wait
-/// on anything but another such move.
+/// A READER'S LOCK HOLD IS STILL JUST A CLONE. The audio slot averages (see [`RowAverage`]),
+/// and every bit of that arithmetic happens on PUBLISH — the reader clones a mean that is
+/// already computed. So a reader waits at most for one publisher's row, never for a fold over
+/// the frames it is about to receive.
 #[derive(Default)]
 struct FeedRows {
-    audio: Option<(Spectrum, Instant)>,
+    audio: Option<RowAverage>,
     rf: Option<(Spectrum, Instant)>,
+}
+
+/// The audio slot: the running POWER mean of every frame published since the last read.
+///
+/// WHY (operator, 2026-08-03: the waterfall "looks so 8 bit"). The producer publishes every
+/// 20 ms (`tempo_audio::rxdsp::TICK_MS`); the FT waterfall reads every 120 ms. As a
+/// latest-value slot this DISCARDED five of every six frames, so each drawn row was one 171 ms
+/// FFT snapshot at ~1 effective look and the noise floor boiled rather than grained. WSJT-X
+/// does the opposite: `widegraph.cpp` dataSink2 sums `m_waterfallAvg` consecutive spectra into
+/// `splot[]` and divides by the count before drawing (default 5, widegraph.cpp:66). Averaging
+/// the frames we already had costs nothing and is the same operation.
+///
+/// The window is "frames since the last read", so it self-tunes to whatever cadence the reader
+/// runs at (~6 at the FT surfaces' 120 ms, ~24 under reduced motion's 480 ms) with no coupling
+/// between the two sides.
+///
+/// THE MEAN IS TAKEN IN POWER, and getting there costs a conversion. `Spectrum::row` is LINEAR
+/// IN dB (`tempo_core::spectrum`, 2026-08-04) — a logarithm. Averaging the values themselves
+/// would be a geometric mean of the powers: a different operation, biased low, and one that
+/// looks plausible on screen instead of failing. So each frame goes through
+/// [`spectrum::display_to_power`] on the way in and the mean comes back through
+/// [`spectrum::power_to_display`]. WSJT-X does the same in the other order — it sums linear
+/// power (`s[i] = 1000·gain·|X|²`, symspec.f90) and takes dB only at the draw (flat4.f90:18-20).
+struct RowAverage {
+    /// Running per-bin sum of the frames in this window, in LINEAR POWER (not display values).
+    sum: Vec<f32>,
+    /// Frames in `sum`. Zeroed by a read, which opens the next window.
+    n: u32,
+    /// The mean of those frames, back on the display axis — recomputed on every publish so a
+    /// read is a clone, and retained across a read so a reader that outruns the producer repeats
+    /// a row instead of blanking (exactly what the latest-value slot did in that case).
+    mean: Spectrum,
+    /// When the most recent frame was published. This is the freshness clock the precedence
+    /// rule in [`SpectrumFeed::row`] reads, unchanged — a read does not touch it.
+    at: Instant,
+}
+
+impl RowAverage {
+    /// Open a window on `row` — its own values verbatim as the mean, so a one-frame window is
+    /// bit-identical to the frame (the dB↔power round trip is not exact in f32, and the
+    /// byte-stable row digest in `tempo_audio::rxdsp` reads a one-frame window).
+    fn start(row: Spectrum) -> Self {
+        Self {
+            sum: row
+                .row
+                .iter()
+                .map(|v| spectrum::display_to_power(*v))
+                .collect(),
+            n: 1,
+            mean: row,
+            at: Instant::now(),
+        }
+    }
+
+    /// Fold one published frame in.
+    fn push(&mut self, row: Spectrum) {
+        // Restart rather than blend when the frames stop describing the same picture: a span or
+        // bin-count change (zoom, device swap, a capture closing to an empty row) would smear
+        // frequencies that were never together, and a source change is a different instrument
+        // entirely. The frame cap is the no-reader guard — see [`SpectrumFeed::MAX_AVG_FRAMES`].
+        if self.n == 0
+            || self.n >= SpectrumFeed::MAX_AVG_FRAMES
+            || row.row.len() != self.sum.len()
+            || row.lo_hz != self.mean.lo_hz
+            || row.hi_hz != self.mean.hi_hz
+            || row.source != self.mean.source
+        {
+            *self = Self::start(row);
+            return;
+        }
+        for (s, v) in self.sum.iter_mut().zip(&row.row) {
+            *s += spectrum::display_to_power(*v);
+        }
+        self.n += 1;
+        let n = self.n as f32;
+        // In place: `mean.row` and `sum` are the same length on this path, so the steady state
+        // allocates nothing.
+        for (m, p) in self.mean.row.iter_mut().zip(&self.sum) {
+            *m = spectrum::power_to_display(p / n);
+        }
+        self.at = Instant::now();
+    }
+
+    /// Hand the mean to a reader and open the next window. `n = 0` is the whole reset: `sum` is
+    /// overwritten by the next `push`, and `mean` deliberately survives so an unfed read repeats
+    /// it. Nothing here divides.
+    fn take(&mut self) -> Spectrum {
+        self.n = 0;
+        self.mean.clone()
+    }
 }
 
 #[derive(Clone, Default)]
@@ -45,13 +137,33 @@ pub struct SpectrumFeed {
 }
 
 impl SpectrumFeed {
-    /// Publish the audio-FFT row (the rx-dsp thread).
+    /// Ceiling on the frames one averaging window may hold.
+    ///
+    /// It only bites when NOBODY is reading the audio slot — a native panadapter is winning the
+    /// precedence below, or no waterfall is on screen — because a read closes the window. Left
+    /// uncapped, the sum would run for hours: f32 precision decays as it grows, and the reader
+    /// that eventually returns would get an integration seconds long. 32 frames is 640 ms at the
+    /// 20 ms producer tick, comfortably above every reader cadence in the UI (50 / 120 / 480 ms
+    /// rows), so a real reader never meets it.
+    const MAX_AVG_FRAMES: u32 = 32;
+
+    /// Publish the audio-FFT row (the rx-dsp thread) into the running average.
     pub fn publish_audio(&self, row: Spectrum) {
         if let Ok(mut g) = self.rows.lock() {
-            g.audio = Some((row, Instant::now()));
+            match g.audio.as_mut() {
+                Some(avg) => avg.push(row),
+                None => g.audio = Some(RowAverage::start(row)),
+            }
         }
     }
     /// Publish a NATIVE RF panadapter row (Flex VITA-49 / Icom CI-V scope).
+    ///
+    /// A LATEST-VALUE SLOT, deliberately — this one is not averaged. Power averaging is only
+    /// correct on a linear power/amplitude row, and these are not: Flex sends `bin / u16::MAX`
+    /// of SmartSDR's display-scaled FFT (`flexspectrum::fft_to_row`) and CI-V sends
+    /// `byte / 160` of the rig's scope display HEIGHT (`civ::scope`), both already dB-mapped by
+    /// the radio. Squaring a log axis and rooting it back is the same mistake as averaging dB,
+    /// and the rig owns that picture's scaling anyway.
     pub fn publish_rf(&self, row: Spectrum) {
         if let Ok(mut g) = self.rows.lock() {
             g.rf = Some((row, Instant::now()));
@@ -67,40 +179,52 @@ impl SpectrumFeed {
     /// `Engine::spectrum_row`: a native RF row wins while its rows are fresh (< 1 s), else the
     /// audio row while fresh (< 2 s). `None` only before anything has ever been published —
     /// the Companion/UDP path, which has no local capture and computes on demand.
+    ///
+    /// The audio branch now hands back the MEAN of the frames published since the previous read
+    /// and opens the next window; freshness is still judged on the most recent PUBLISH, so a
+    /// dead capture goes quiet on exactly the schedule it always did.
     pub fn row(&self) -> Option<Spectrum> {
-        let g = self.rows.lock().ok()?;
+        let mut g = self.rows.lock().ok()?;
         if let Some((spec, at)) = &g.rf {
             if at.elapsed() < std::time::Duration::from_secs(1) && !spec.row.is_empty() {
                 return Some(spec.clone());
             }
         }
-        if let Some((spec, at)) = &g.audio {
-            if at.elapsed() < std::time::Duration::from_secs(2) {
-                return Some(spec.clone());
-            }
-            // STALE, but the capture path HAS published before: go quiet. Returning None here
-            // would send the reader to the engine's Companion fallback, which computes a row
-            // from the last decoded buffer — a non-empty row redrawn at 8-20 Hz, i.e. the
-            // frozen-ghost streak this whole change exists to remove. An empty row stops the
-            // waterfall cleanly, which is the honest failure.
-            return Some(Spectrum {
-                row: Vec::new(),
-                lo_hz: spec.lo_hz,
-                hi_hz: spec.hi_hz,
-                source: spec.source.clone(),
-            });
+        let audio = g.audio.as_mut()?;
+        if audio.at.elapsed() < std::time::Duration::from_secs(2) {
+            return Some(audio.take());
         }
-        None
+        // STALE, but the capture path HAS published before: go quiet. Returning None here
+        // would send the reader to the engine's Companion fallback, which computes a row
+        // from the last decoded buffer — a non-empty row redrawn at 8-20 Hz, i.e. the
+        // frozen-ghost streak this whole change exists to remove. An empty row stops the
+        // waterfall cleanly, which is the honest failure.
+        Some(Spectrum {
+            row: Vec::new(),
+            lo_hz: audio.mean.lo_hz,
+            hi_hz: audio.mean.hi_hz,
+            source: audio.mean.source.clone(),
+        })
     }
 
     /// Test-only: backdate the audio stamp to simulate a capture stream that went silent.
     #[cfg(test)]
     pub fn backdate_audio_for_test(&self, by: std::time::Duration) {
         if let Ok(mut g) = self.rows.lock() {
-            if let Some((_, at)) = g.audio.as_mut() {
-                *at = Instant::now() - by;
+            if let Some(avg) = g.audio.as_mut() {
+                avg.at = Instant::now() - by;
             }
         }
+    }
+
+    /// Test-only: frames in the audio slot's open averaging window.
+    #[cfg(test)]
+    pub fn audio_frames_pending_for_test(&self) -> u32 {
+        self.rows
+            .lock()
+            .ok()
+            .and_then(|g| g.audio.as_ref().map(|a| a.n))
+            .unwrap_or(0)
     }
 }
 
@@ -19672,6 +19796,246 @@ mod tests {
     #[test]
     fn an_unfed_feed_returns_none_so_the_companion_path_can_compute() {
         assert!(SpectrumFeed::default().row().is_none());
+    }
+
+    /// The mean of some display values, taken in POWER — computed here from the axis primitives
+    /// rather than from `RowAverage`'s own arithmetic, so this is an independent expectation.
+    #[cfg(test)]
+    fn power_mean(vals: &[f32]) -> f32 {
+        let sum: f32 = vals.iter().map(|v| spectrum::display_to_power(*v)).sum();
+        spectrum::power_to_display(sum / vals.len() as f32)
+    }
+
+    /// WSJT-X AVERAGES the frames between drawn rows; we DISCARDED them.
+    ///
+    /// `widegraph.cpp` dataSink2 sums `m_waterfallAvg` consecutive spectra into `splot[]` and
+    /// divides by the count before drawing (default 5, widegraph.cpp:66, operator-settable).
+    /// Nexus's producer publishes every 20 ms (`tempo_audio::rxdsp::TICK_MS`) and the FT
+    /// waterfall reads every 120 ms, so five of every six frames went on the floor: each drawn
+    /// row was ONE 171 ms FFT snapshot at ~1 effective look, and the noise floor BOILED frame to
+    /// frame instead of graining (operator, 2026-08-03: the waterfall "looks so 8 bit").
+    ///
+    /// A read now returns the MEAN of every frame published since the previous read — ~6 at the
+    /// FT cadence, close to WSJT-X's default of 5, and it self-tunes if the read rate changes.
+    ///
+    /// THE MEAN IS TAKEN IN POWER. `Spectrum::row` is LINEAR IN dB (`tempo_core::spectrum`,
+    /// 2026-08-04), so the values are logarithms; averaging them directly is a geometric mean of
+    /// the powers, which is a different operation and biased low. WSJT-X sums linear power
+    /// (`s[i] = 1000·gain·|X|²`) and takes dB only at the draw. `the_average_is_not_taken_on_the
+    /// _dB_values_themselves` below pins the difference so a "simplification" back to a plain
+    /// mean fails instead of quietly dimming the display.
+    #[test]
+    fn a_read_returns_the_mean_of_the_frames_published_since_the_last_read() {
+        let feed = SpectrumFeed::default();
+        // Descending, so the LOUDEST frame is not the last one — a latest-value slot and a mean
+        // are then nowhere near each other.
+        let amps = [0.8f32, 0.6, 0.4, 0.2];
+        for a in amps {
+            feed.publish_audio(Spectrum {
+                row: vec![a, a * 0.5],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
+        }
+        let row = feed.row().expect("published").row;
+
+        let want0 = power_mean(&amps);
+        let want1 = power_mean(&amps.map(|a| a * 0.5));
+        assert!(
+            (row[0] - want0).abs() < 1e-6,
+            "bin 0 must be the POWER mean of the four frames: got {}, want {want0}",
+            row[0]
+        );
+        assert!(
+            (row[1] - want1).abs() < 1e-6,
+            "bin 1 must be the POWER mean of the four frames: got {}, want {want1}",
+            row[1]
+        );
+        assert!(
+            (row[0] - 0.2).abs() > 0.4,
+            "and it must NOT be the last frame ({}) — that discard is the whole bug",
+            row[0]
+        );
+
+        // The read closes the window: the next frame stands alone until the read after it.
+        feed.publish_audio(Spectrum {
+            row: vec![0.5, 0.5],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+        assert_eq!(
+            feed.row().expect("published").row,
+            vec![0.5, 0.5],
+            "a read opens a fresh averaging window — it does not keep folding in old frames"
+        );
+    }
+
+    /// ⭐ THE DOMAIN PIN. Averaging the row values THEMSELVES is the wrong operation, and it is
+    /// the one a later reader is most likely to "simplify" back to — a plain mean of a row that
+    /// is documented 0..1 looks obviously right.
+    ///
+    /// It is not, because `Spectrum::row` is linear in dB (`tempo_core::spectrum`, 2026-08-04):
+    /// the values are logarithms, so their arithmetic mean is the GEOMETRIC mean of the powers.
+    /// It is biased low, and it fails silently — the waterfall just draws dimmer and flatter than
+    /// the signal really is, which is the same class of wrongness the operator reported in the
+    /// first place. This test exists so that change is loud.
+    #[test]
+    fn the_average_is_not_taken_on_the_db_values_themselves() {
+        let feed = SpectrumFeed::default();
+        let frames = [0.9f32, 0.3];
+        for v in frames {
+            feed.publish_audio(Spectrum {
+                row: vec![v],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
+        }
+        let got = feed.row().expect("published").row[0];
+
+        // A power average of two frames 72 dB apart sits just under the LOUD one (down 3 dB at
+        // most); the mean of the dB values sits halfway between them.
+        let naive = frames.iter().sum::<f32>() / frames.len() as f32;
+        assert!(
+            (got - power_mean(&frames)).abs() < 1e-6,
+            "the power mean is the contract (got {got})"
+        );
+        assert!(
+            (got - naive).abs() * spectrum::DB_SPAN > 20.0,
+            "the power mean and the dB-value mean must be far apart here, or this test proves \
+             nothing: got {got} vs naive {naive}"
+        );
+        assert!(
+            got > frames[0] - 3.5 / spectrum::DB_SPAN,
+            "averaging power keeps a loud frame loud — it lands within ~3 dB of the louder of \
+             the two ({got} vs {}), not halfway down to the quiet one",
+            frames[0]
+        );
+    }
+
+    /// A read with NO frame published since the last one must repeat the last mean, never divide
+    /// by zero and never blank. The UI polls faster than the producer publishes whenever the
+    /// operator's row cadence is short or two scope surfaces poll at once; today's latest-value
+    /// slot repeats itself in exactly that case, and repeating is what keeps the waterfall from
+    /// flickering a hole into itself.
+    #[test]
+    fn a_read_with_no_new_frame_repeats_the_last_mean() {
+        let feed = SpectrumFeed::default();
+        for a in [0.2f32, 0.8] {
+            feed.publish_audio(Spectrum {
+                row: vec![a],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
+        }
+        let first = feed.row().expect("published").row;
+        let second = feed.row().expect("still published, nothing new").row;
+        assert_eq!(
+            first, second,
+            "an unfed read repeats the mean it last handed out"
+        );
+        assert!(
+            (first[0] - power_mean(&[0.2, 0.8])).abs() < 1e-6,
+            "and that mean is still the power mean, got {}",
+            first[0]
+        );
+    }
+
+    /// A span/bin-count change (zoom, device swap, a capture closing to an empty row) means the
+    /// pending frames describe a DIFFERENT picture. Restart the window rather than average across
+    /// the seam — blending two spans would smear frequencies that were never together.
+    #[test]
+    fn a_geometry_change_restarts_the_average_instead_of_blending_two_pictures() {
+        let feed = SpectrumFeed::default();
+        for a in [0.2f32, 0.8] {
+            feed.publish_audio(Spectrum {
+                row: vec![a, a],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
+        }
+        // Same bin count, different span.
+        feed.publish_audio(Spectrum {
+            row: vec![0.4, 0.4],
+            lo_hz: 500.0,
+            hi_hz: 2500.0,
+            source: "audio".into(),
+        });
+        let row = feed.row().expect("published");
+        assert_eq!(
+            row.row,
+            vec![0.4, 0.4],
+            "the new span stands alone — no frames from the old one folded in"
+        );
+        assert_eq!((row.lo_hz, row.hi_hz), (500.0, 2500.0));
+
+        // Bin count change (a capture closing publishes an EMPTY row).
+        feed.publish_audio(Spectrum {
+            row: Vec::new(),
+            lo_hz: 500.0,
+            hi_hz: 2500.0,
+            source: "audio".into(),
+        });
+        assert!(
+            feed.row().expect("published").row.is_empty(),
+            "an empty row is not averaged against the 2-bin frames before it"
+        );
+    }
+
+    /// The RF panadapter slot stays a LATEST-VALUE slot, deliberately.
+    ///
+    /// Power averaging is only correct on a linear-power/amplitude row. The native rows are not
+    /// one: Flex publishes `bin / u16::MAX` of SmartSDR's own display-scaled FFT
+    /// (`flexspectrum::fft_to_row`) and CI-V publishes `byte / 160` of the rig's scope display
+    /// HEIGHT (`civ::scope`, `POINT_MAX`) — both already dB-mapped by the radio. Squaring those
+    /// and taking a root back is arithmetic on a log axis, which is the same mistake as averaging
+    /// dB. The rig owns that picture's scaling; we show it as sent.
+    #[test]
+    fn the_native_rf_row_is_not_averaged() {
+        let feed = SpectrumFeed::default();
+        for v in [0.2f32, 0.8] {
+            feed.publish_rf(Spectrum {
+                row: vec![v],
+                lo_hz: 144_000_000.0,
+                hi_hz: 144_200_000.0,
+                source: "civ".into(),
+            });
+        }
+        assert_eq!(
+            feed.row().expect("published").row,
+            vec![0.8],
+            "the native row is shown as the rig sent it, not power-averaged on its dB axis"
+        );
+    }
+
+    /// Nobody reading the audio slot (a native panadapter is driving the display, or no
+    /// waterfall is on screen) must not grow an unbounded average: the sum would lose f32
+    /// precision and the row would become an ever-longer, ever-staler integration the moment the
+    /// reader came back. The window is capped; the cap only bites when nobody reads.
+    #[test]
+    fn an_unread_audio_slot_caps_its_averaging_window() {
+        let feed = SpectrumFeed::default();
+        for _ in 0..(SpectrumFeed::MAX_AVG_FRAMES * 4) {
+            feed.publish_audio(Spectrum {
+                row: vec![0.5],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
+        }
+        assert!(
+            feed.audio_frames_pending_for_test() <= SpectrumFeed::MAX_AVG_FRAMES,
+            "the pending window must stay capped, got {}",
+            feed.audio_frames_pending_for_test()
+        );
+        assert!(
+            (feed.row().expect("published").row[0] - 0.5).abs() < 1e-6,
+            "and the capped mean is still correct for a steady input"
+        );
     }
 
     #[test]
