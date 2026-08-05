@@ -4402,6 +4402,22 @@ impl RadioLoop {
         if let Some(t) = self.tx_until_ms {
             if now >= t {
                 if !self.manual_ptt_applied {
+                    // ⚠️ FLUSH BEFORE THE UNKEY, OR THE DEADLINE DOES NOTHING ON VOX. Dropping
+                    // CAT PTT is not what stops a VOX rig — the AUDIO is. Queued playback keeps
+                    // the transmitter up on its own, so without this the over runs past its
+                    // deadline by however much is still in the ring, and the slot clamp
+                    // (9a690772) that exists to stop an over crossing the boundary was a no-op
+                    // on every VOX station.
+                    //
+                    // This is the same defect 8c2c7d47 fixed on the Stop TX path ("make Stop TX
+                    // flush queued audio so a VOX rig actually stops"); the clamp was added
+                    // afterwards as a NEW unkey trigger and did not inherit the flush. Any future
+                    // path that ends an over must do both — that is the whole lesson.
+                    //
+                    // Inside the `!manual_ptt_applied` arm deliberately: while the operator holds
+                    // the mic the over is theirs to end, and a voice/CW tail expiring must not
+                    // cut it. That is the same condition the unkey already respects.
+                    backend.flush_output();
                     let _ = rig.ptt(false);
                 }
                 self.tx_until_ms = None;
@@ -9601,6 +9617,52 @@ mod tests {
         assert!(!rig.keyed, "PTT dropped immediately on Stop TX");
         assert!(state.tx_until_ms.is_none(), "TX hold cleared");
         assert!(backend.flush_calls > 0, "queued TX audio was flushed");
+    }
+
+    #[test]
+    fn the_deadline_expiry_flushes_queued_audio_so_the_clamp_works_on_vox() {
+        // ⭐ THE SLOT CLAMP IS ONLY AS GOOD AS THE FLUSH. `tx_deadline_ms` (9a690772) bounds an
+        // over to its slot so it can never cross the boundary — but the expiry path dropped CAT
+        // PTT and left the audio ring playing. On a VOX rig CAT PTT is not what holds the
+        // transmitter up; the AUDIO is. So the clamp did nothing at all on every VOX station,
+        // and MSK144 — which fills its whole period and has the least margin of any mode — is
+        // exactly where that shows.
+        //
+        // This is the SAME defect `stop_tx_flushes_queued_audio_on_a_vox_rig_with_no_deadline`
+        // pins on the Stop TX path (8c2c7d47). The clamp arrived later as a new unkey trigger
+        // and did not inherit the flush. Two triggers, one requirement: ending an over means
+        // flush AND unkey, never one of them.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let _ = rig.ptt(true);
+        let mut state = loop_state();
+        // A deadline already in the past: this tick is the one that expires it. No Stop TX, no
+        // halt — the ONLY thing ending this over is the clamp.
+        state.tx_until_ms = Some(50.0);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        assert!(state.tx_until_ms.is_none(), "the deadline expired");
+        assert!(
+            backend.flush_calls > 0,
+            "the deadline expiry must FLUSH, not just unkey — on a VOX rig the queued audio is \
+             what keeps the transmitter up, so without this the clamp cannot stop an over \
+             crossing the slot boundary"
+        );
     }
 
     #[test]
