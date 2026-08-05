@@ -37,10 +37,25 @@ pub const TX_TAIL_MS: f64 = 250.0;
 /// transport — converted directly into slot overrun.
 ///
 /// FT8 and FT4 hide that: 12.64 s of audio in a 15 s slot and 5.04 s in 7.5 s
-/// leave ~2.11 s and ~2.21 s of slack, more than any single CAT stall. **FT1 has
-/// 214 ms** — 3.536 s of audio (99 symbols x 3000/7 samples at 12 kHz) plus the
-/// 250 ms tail in a 4.0 s slot, roughly ten times less headroom, so it crosses
-/// whenever the key is later than that. The 4 s period is by design (operator,
+/// leave ~2.11 s and ~2.21 s of slack, more than any single CAT stall.
+///
+/// ⚠️ **FT1 HAS −250 ms, AND IS THEREFORE CLAMPED ON EVERY OVER, AT EVERY PHASE — INCLUDING ONE
+/// KEYED EXACTLY ON THE BOUNDARY.** An earlier version of this doc said "214 ms", computed from
+/// FT1's TONE length (99 symbols x 3000/7 samples = 3.5357 s). That is not what the deadline is
+/// sized from. `tempo_fast::gen_wave` returns a FIXED NMAX = 48000-sample (4.0000 s) buffer —
+/// tones plus trailing zeros, and `Ft1Mode::gen_wave` shifts the lead-in WITHIN it rather than
+/// prepending, precisely to keep the length at 4.0000 s (crates/modes/src/mode.rs). The hold is
+/// sized from `w.len()`, so the real arithmetic is 4.000 + 0.250 = 4.250 in a 4.000 s period.
+/// FT1's effective post-tone tail is a fixed **64.2 ms** (tones end at 0.400 + 3.5357 = 3.9357 s;
+/// the clamp drops PTT at 4.000 s).
+///
+/// ⚠️ **THAT 64 ms IS AN ON-AIR HAZARD AND IS NOT YET RESOLVED.** The device output ring carries
+/// soundcard latency L; at the clamped deadline the last L ms is still unrendered. **Any output
+/// latency above ~64 ms cuts FT1's RF mid-tone**, and cpal buffers of 20-100 ms are ordinary.
+/// The underlying arithmetic is lead(0.400) + tones(3.5357) + tail(0.250) = 4.186 > 4.000; the
+/// 0.400 s lead is protocol-critical and on-air-verified (KD9TAW/N9UM, 6 m, 2026-07-26), so FT1
+/// cannot have both a full lead and a full tail. Which to shorten is the operator's call about
+/// his own protocol, not a WSJT-X parity question — flagged, not silently changed. The 4 s period is by design (operator,
 /// 2026-08-04: "ft1 has a designed 4 sec timing… but it should still follow strict
 /// wsjtx based aspects of the transmission"); the missing bound was the defect.
 ///
@@ -254,8 +269,8 @@ pub fn slot_tx_phase(
                     // deadline from the key (rather than the tick's stale clock) stopped us
                     // unkeying early; it also means keying latency lands wholly on the far end of
                     // the over, and nothing was stopping that from running past the boundary. See
-                    // [`tx_deadline_ms`] — this is WSJT-X's clamp, and FT1's 214 ms of slack is
-                    // where the absence showed.
+                    // [`tx_deadline_ms`] — this is WSJT-X's clamp, and FT1 is where the absence
+                    // showed: its buffer FILLS its period, so it is clamped on every over.
         let period_ms = eng.active_slot_secs() * 1000.0;
         SlotAction {
             tx_until_ms: Some(tx_deadline_ms(keyed_ms, secs as f64 * 1000.0, period_ms)),
@@ -363,9 +378,17 @@ mod tests {
     // and a bound that only bites at some phases would be a coin-flip test. The
     // arithmetic is the whole of the fix, so it is tested where it is decidable.
 
-    /// FT1: 99 symbols x 3000/7 samples at 12 kHz.
-    const FT1_AUDIO_MS: f64 = 99.0 * (3000.0 / 7.0) / 12_000.0 * 1000.0;
+    /// ⚠️ WHAT PRODUCTION ACTUALLY PASSES: `w.len()` of the FIXED NMAX = 48000-sample buffer
+    /// `tempo_fast::gen_wave` returns — 4.0000 s, tones PLUS trailing zeros. It is NOT the
+    /// 3.5357 s tone length; using that here was the error behind the "214 ms of slack" claim,
+    /// and it made `an_on_time_ft1_over_keeps_its_whole_tail` assert a case that cannot occur.
+    const FT1_AUDIO_MS: f64 = 48_000.0 / 12_000.0 * 1000.0;
+    /// The tone length, for the tests that are about where the SIGNAL ends rather than the buffer.
+    const FT1_TONES_MS: f64 = 99.0 * (3000.0 / 7.0) / 12_000.0 * 1000.0;
     const FT1_PERIOD_MS: f64 = 4_000.0;
+    /// FT1's lead-in, shifted WITHIN the fixed buffer (crates/modes/src/mode.rs) — on-air-verified
+    /// as protocol-critical, which is why the tail cannot simply be taken from it.
+    const FT1_LEAD_MS: f64 = 400.0;
 
     #[test]
     fn an_ft1_over_keyed_late_still_ends_at_the_boundary() {
@@ -386,15 +409,31 @@ mod tests {
     }
 
     #[test]
-    fn an_on_time_ft1_over_keeps_its_whole_tail() {
-        // The clamp must not become a tax on the normal case: keyed at the boundary,
-        // FT1 fits with 214 ms to spare and nothing is taken off the tail.
+    fn even_a_perfectly_on_time_ft1_over_is_clamped_and_keeps_only_64ms_of_tail() {
+        // ⚠️ THIS TEST ASSERTED THE OPPOSITE AND WAS WRONG. It claimed FT1 "fits with 214 ms to
+        // spare and nothing is taken off the tail" — a case that CANNOT OCCUR, because it was
+        // computed from FT1's 3.5357 s TONE length while production sizes the hold from the
+        // FIXED 4.0000 s buffer. There is no unclamped FT1 over at any phase.
+        //
+        // What is actually true, and what an operator should know: FT1's buffer fills its whole
+        // period, so the clamp fires on every over and the effective post-tone tail is a fixed
+        // 64.2 ms. That is the margin protecting the end of the signal from soundcard latency,
+        // and it is thin — see the hazard note on `tx_deadline_ms`.
         let slot_start = 1_000_000.0 * FT1_PERIOD_MS;
         let got = tx_deadline_ms(slot_start, FT1_AUDIO_MS, FT1_PERIOD_MS);
-        assert_eq!(got, slot_start + FT1_AUDIO_MS + TX_TAIL_MS);
+        assert_eq!(
+            got,
+            slot_start + FT1_PERIOD_MS,
+            "an on-time FT1 over is STILL clamped — 4.000 s of buffer + 250 ms tail in a 4.000 s \
+             period leaves -250 ms, not the +214 ms this test used to claim"
+        );
+        // The tail that actually survives, measured from where the TONES end.
+        let tone_end = slot_start + FT1_LEAD_MS + FT1_TONES_MS;
+        let tail_ms = got - tone_end;
         assert!(
-            got < slot_start + FT1_PERIOD_MS,
-            "and stays inside the slot"
+            (tail_ms - 64.2).abs() < 0.5,
+            "FT1's real post-tone tail is ~64.2 ms, got {tail_ms:.1} — if this moved, the \
+             soundcard-latency hazard moved with it"
         );
     }
 

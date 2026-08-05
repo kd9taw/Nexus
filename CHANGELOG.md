@@ -55,8 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receiving in. The transmit deadline had no slot bound, so any delay in keying the radio — a slow
   CAT link can spend a full second — pushed the end of the over out with it. WSJT-X clamps the
   window to the period and can never cross it; Nexus now does the same, for every mode. FT8 and
-  FT4 were never affected in practice: they carry over two seconds of slack where FT1 carries 214
-  milliseconds. FT1's 4-second timing is unchanged.
+  FT4 were never affected in practice: they carry over two seconds of slack. FT1 carries none at
+  all — its transmit buffer fills its whole 4-second period, so every FT1 over now ends exactly at
+  the slot boundary and about 64 milliseconds of quiet tail is what protects the end of the signal.
+  FT1's 4-second timing is unchanged. (An earlier draft of this entry said FT1 had 214 milliseconds
+  of slack; that was measured from the tones rather than the buffer actually sent, and was wrong.)
 - **The QRZ link on the callsign card** only appeared once a callbook lookup had already
   succeeded, which withheld it in exactly the cases you want it — no QRZ subscription, no
   credentials, a lookup that failed, or a callsign QRZ has never heard of. Opening the page only

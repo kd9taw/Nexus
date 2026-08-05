@@ -2037,9 +2037,12 @@ impl RadioLoop {
         }
         let dial = self.cur_dial;
         let md = self.cur_md.clone();
-        if dial != 0 && dial != self.last_dial && rig.set_freq(dial).is_ok() {
-            self.last_dial = dial;
-        }
+        // ⭐ MODE BEFORE DIAL, and this is the site that matters most: `ensure_commanded` is the
+        // lazy one-shot assert that fires IMMEDIATELY BEFORE A KEY-UP on a read-only launch. A
+        // dial written in the outgoing mode's convention is reinterpreted when the mode lands, so
+        // the inverted order here put the radio on the wrong frequency in the instant before it
+        // transmitted. Same root cause as the two retune paths — see the long note there.
+        let mode_changed = !md.trim().is_empty() && md != self.last_mode;
         if !md.trim().is_empty() {
             match rig.set_mode(&md, passband_for(&md)) {
                 Ok(()) => {
@@ -2048,9 +2051,14 @@ impl RadioLoop {
                 }
                 Err(_) => { /* ladder retries; latch stays open */ }
             }
-        } else {
-            // No mode policy yet (first tick hasn't derived one) — nothing to assert.
         }
+        // `|| mode_changed`: `set_mode` alone shifts a pitch-offset rig, so the dial must be
+        // re-asserted in the destination convention even when the number itself has not changed.
+        if dial != 0 && (dial != self.last_dial || mode_changed) && rig.set_freq(dial).is_ok() {
+            self.last_dial = dial;
+        }
+        // (No mode policy yet on the first tick — `md` is empty and nothing is asserted; the
+        // latch stays open so a later tick with a derived policy still fires this once.)
     }
 
     /// May the loop START a transmission on the active `rig` this tick?
@@ -2126,7 +2134,21 @@ impl RadioLoop {
             Ok(()) => {
                 self.last_dial = dial;
                 self.dial_fail_count = 0;
-                self.dial_giveup = None;
+                // ⚠️ CLEAR THE GIVE-UP ONLY FOR THE DIAL THAT WAS GIVEN UP ON. This used to clear
+                // on ANY success, which means an HF-only rig that refused 144.390 forgot the
+                // refusal the moment a routine 14.250 push succeeded — and then spent the whole
+                // DIAL_SET_MAX_TRIES budget again on the next attempt, which is precisely the
+                // CAT storm the give-up exists to stop. Succeeding on a DIFFERENT frequency is
+                // no evidence at all about the one the radio cannot reach.
+                //
+                // Latent since the give-up was written; surfaced 2026-08-05 when the mode-before-
+                // dial fix started re-asserting the dial on a mode change, which turned "rarely
+                // pushed while given up" into "pushed every switch". An explicit operator retune
+                // still clears it unconditionally in the force path above — that is the case where
+                // the operator may have just switched to a radio that CAN reach it.
+                if self.dial_giveup == Some(dial) {
+                    self.dial_giveup = None;
+                }
                 // The rig ACKNOWLEDGED the dial — report it DONE so a pending
                 // satellite-binding leg can confirm (a no-op for every other
                 // QSY). Gated on a real control channel: a control-less Rig
@@ -2730,22 +2752,31 @@ impl RadioLoop {
                     // switched to a radio that CAN reach it, so a re-click must always try again.
                     self.dial_giveup = None;
                     self.dial_fail_count = 0;
-                    if dial != self.last_dial {
-                        match self.push_dial(rig, dial, engine) {
-                            // A refused DIAL outranks any mode note produced below: "the radio
-                            // refused 144.390 MHz" is the answer to the operator's question, and a
-                            // cheerful "rig set to FM" beside a dial that never moved is how this
-                            // bug stayed invisible in the first place.
-                            Some(note) => dial_note = Some(note),
-                            None => retuned = true,
-                        }
-                    }
+                    // ⭐ MODE FIRST, THEN THE DIAL. A frequency written over CAT is a number in
+                    // the CURRENT mode's convention, and on a Yaesu with CW FREQ DISPLAY = PITCH
+                    // OFFSET the CW convention differs from SSB by the CW pitch. Writing the dial
+                    // while the rig is still in the OUTGOING mode and changing the mode after means
+                    // the number is REINTERPRETED the instant the mode lands — the rig physically
+                    // moves by the pitch. Field report, v1.0.0 on an FTDX10 (2026-08-05): every
+                    // CW↔Phone cockpit switch shifted the dial 650 Hz, his rig's CW pitch, in
+                    // alternating directions. Nothing here adds 650 — we never even READ CW pitch
+                    // over CAT. The rig did it, because we asked in the wrong order.
+                    //
+                    // It ACCUMULATED: the shifted dial comes back on the next poll, is adopted as
+                    // an operator-knob QSY (`observe_rig_freq` → `record_dial`), and is then banked
+                    // into the per-mode frequency memory — so the next switch starts from the
+                    // corrupted value. 650 Hz per switch, unbounded. (The privilege re-check in
+                    // `recall_dial_memory` kept the walk inside his licensed segment.)
+                    //
+                    // Ordering alone is NOT enough — see the dial push below.
+                    // WSJT-X has no such window: `Configuration.cpp:947` and `:3552` both emit one
+                    // `cached_rig_state_` carrying frequency AND mode together.
+                    let mode_changed = !md.trim().is_empty() && md != self.last_mode;
                     if !md.trim().is_empty() {
                         // A dial-only QSY (wheel/nudge) re-enters this force path with the SAME mode;
                         // skip the diagnostic mode read-back then, so continuous wheel-tuning doesn't
                         // fire an extra `w MD0;` round-trip per ~120 ms flush. The mode is still
                         // re-asserted (an explicit same-mode re-click must still command the rig).
-                        let mode_changed = md != self.last_mode;
                         match rig.set_mode(&md, passband_for(&md)) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
@@ -2767,13 +2798,17 @@ impl RadioLoop {
                             }
                         }
                     }
-                } else {
-                    // `dial_giveup` stops a frequency the radio has REFUSED from being re-sent on
-                    // every tick — the HF-only-rig-on-2 m storm, and the same shape as
-                    // `mode_giveup` below.
-                    if dial != self.last_dial && self.dial_giveup != Some(dial) {
+                    // `|| mode_changed` is the OTHER half of the fix and it is not optional: the
+                    // rig shifts its dial on the mode change whether or not we then write one, so a
+                    // switch whose recalled dial happens to equal the current one would leave the
+                    // shift standing and let the read-back adopt it. One corruption event instead
+                    // of a walk — still wrong. This does NOT weaken the guard the `dial !=
+                    // last_dial` test exists for (never re-slam a freq the operator may have just
+                    // hand-tuned): that protects a dial-only re-entry with the SAME mode, and
+                    // `mode_changed` is false there.
+                    if dial != self.last_dial || mode_changed {
                         match self.push_dial(rig, dial, engine) {
-                            // A refused DIAL outranks any mode note produced below: "the radio
+                            // A refused DIAL outranks any mode note produced above: "the radio
                             // refused 144.390 MHz" is the answer to the operator's question, and a
                             // cheerful "rig set to FM" beside a dial that never moved is how this
                             // bug stayed invisible in the first place.
@@ -2781,10 +2816,17 @@ impl RadioLoop {
                             None => retuned = true,
                         }
                     }
+                } else {
+                    // `dial_giveup` stops a frequency the radio has REFUSED from being re-sent on
+                    // every tick — the HF-only-rig-on-2 m storm, and the same shape as
+                    // `mode_giveup` below.
+                    // MODE FIRST HERE TOO — same reason as the force path above: a dial written
+                    // in the outgoing mode's convention is reinterpreted when the mode lands.
+                    let mode_changed = md != self.last_mode;
                     // Apply the section's mode — unless it's the one we already gave up on
                     // (rig kept rejecting it). `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
-                    if md != self.last_mode && self.mode_giveup.as_deref() != Some(md.as_str()) {
+                    if mode_changed && self.mode_giveup.as_deref() != Some(md.as_str()) {
                         match rig.set_mode(&md, retry_passband(&md, self.mode_fail_count)) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
@@ -2835,6 +2877,19 @@ impl RadioLoop {
                                     retune_note = Some(mode_giveup_note(&md, saw_reject, fallback));
                                 }
                             }
+                        }
+                    }
+                    // …and the dial AFTER the mode. `|| mode_changed` for the same reason as the
+                    // force path: `set_mode` alone shifts a pitch-offset rig, so a mode change
+                    // whose dial is unchanged must still re-assert the dial in the DESTINATION
+                    // mode's convention, or the shift stands and the read-back adopts it.
+                    // `dial_giveup` still stops a frequency the radio has REFUSED from being
+                    // re-sent every tick — the HF-only-rig-on-2 m storm.
+                    if (dial != self.last_dial || mode_changed) && self.dial_giveup != Some(dial) {
+                        match self.push_dial(rig, dial, engine) {
+                            // A refused DIAL outranks any mode note produced above.
+                            Some(note) => dial_note = Some(note),
+                            None => retuned = true,
                         }
                     }
                 }
@@ -8538,6 +8593,80 @@ mod tests {
             outgoing_log: yaesu_log,
             incoming_log: icom_log,
         }
+    }
+
+    #[test]
+    fn the_mode_is_commanded_before_the_dial_on_a_cockpit_switch() {
+        // ⭐ FIELD REPORT, v1.0.0 on an FTDX10 (2026-08-05): moving CW→Phone added 650 Hz to the
+        // remembered Phone dial and moved the rig there; Phone→CW subtracted 650 from the CW dial.
+        // 650 is his rig's CW PITCH, and nothing in our code adds it — we never even READ CW pitch
+        // over CAT. The rig does it: a Yaesu with CW FREQ DISPLAY = PITCH OFFSET treats CAT
+        // frequency in DISPLAY units, and the CW display convention differs from SSB by the pitch.
+        //
+        // We write the dial while the rig is still in the OLD mode and change the mode after, so
+        // the number we just wrote is REINTERPRETED the instant the mode lands. The dial must be
+        // written in the DESTINATION mode's convention — which means the mode goes first. This is
+        // correct for every rig, not a Yaesu special case: WSJT-X never has a window where the
+        // frequency is written and the mode is not (Configuration.cpp:947 and :3552 both emit one
+        // cached_rig_state_ carrying frequency AND mode together).
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // Settle the Phone state onto the rig first, so what we measure is the SWITCH.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        seen.lock().unwrap().clear();
+
+        engine.lock().unwrap().set_operating_mode("cw", true); // the cockpit switch
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        let lines = seen.lock().unwrap().clone();
+        let mode_at = lines.iter().position(|l| l.starts_with("M "));
+        let freq_at = lines.iter().position(|l| l.starts_with("F "));
+        assert!(
+            mode_at.is_some(),
+            "scene guard: the switch must command a mode at all — saw {lines:?}"
+        );
+        assert!(
+            freq_at.is_some(),
+            "the dial must be re-asserted when the MODE changed, even if the number is unchanged: \
+             otherwise set_mode alone shifts the rig and nothing puts it back — saw {lines:?}"
+        );
+        assert!(
+            mode_at < freq_at,
+            "the MODE must reach the rig BEFORE the dial, or the dial is written in the outgoing \
+             mode's convention and the rig reinterprets it — saw {lines:?}"
+        );
     }
 
     #[test]
