@@ -16,6 +16,52 @@ use crate::rig::Rig;
 /// drain + relay release so the start of RX isn't clipped by our own carrier.
 pub const TX_TAIL_MS: f64 = 250.0;
 
+/// The PTT-hold deadline for an over keyed at `keyed_ms`, **bounded by the slot it
+/// was keyed in**.
+///
+/// ⭐ THIS BOUND IS WSJT-X'S, AND WE HAD NOTHING LIKE IT. Upstream computes no
+/// deadline at all: it clamps the window to the period and re-tests position
+/// continuously, every GUI tick (mainwindow.cpp):
+///
+/// ```text
+/// double tx1=0.0;
+/// double tx2=txDuration;
+/// if(tx2>m_TRperiod) tx2=m_TRperiod;        // clamped to the period
+/// m_bTxTime = (t2p >= tx1) and (t2p < tx2); // t2p = position WITHIN the period
+/// ```
+///
+/// Because `t2p` is slot-relative and `tx2` is clamped, **an upstream over can
+/// never cross the boundary** however late keying starts. Ours was an ABSOLUTE
+/// deadline `keyed + audio + tail` with no slot term, so keying latency — a
+/// blocking CAT exchange can spend a full 700 ms deadline, 2500 ms on a slow
+/// transport — converted directly into slot overrun.
+///
+/// FT8 and FT4 hide that: 12.64 s of audio in a 15 s slot and 5.04 s in 7.5 s
+/// leave ~2.11 s and ~2.21 s of slack, more than any single CAT stall. **FT1 has
+/// 214 ms** — 3.536 s of audio (99 symbols x 3000/7 samples at 12 kHz) plus the
+/// 250 ms tail in a 4.0 s slot, roughly ten times less headroom, so it crosses
+/// whenever the key is later than that. The 4 s period is by design (operator,
+/// 2026-08-04: "ft1 has a designed 4 sec timing… but it should still follow strict
+/// wsjtx based aspects of the transmission"); the missing bound was the defect.
+///
+/// The boundary is derived from `keyed_ms` rather than from a caller-supplied slot
+/// index so it cannot disagree with the instant it bounds — same arithmetic as
+/// `SlotClock::next_boundary_ms`, and the same "position within the period"
+/// semantics upstream uses.
+///
+/// Clamping can only make PTT drop EARLIER, never later, so it cannot weaken the
+/// transmit-path safety invariants. Floored at `keyed_ms` so a hold is never
+/// negative: an over keyed past its own boundary releases at once rather than
+/// carrying a deadline in the past.
+pub fn tx_deadline_ms(keyed_ms: f64, audio_ms: f64, period_ms: f64) -> f64 {
+    let natural_end = keyed_ms + audio_ms + TX_TAIL_MS;
+    if period_ms.is_nan() || period_ms <= 0.0 {
+        return natural_end; // no period to bound against
+    }
+    let boundary = (keyed_ms / period_ms).floor() * period_ms + period_ms;
+    natural_end.min(boundary).max(keyed_ms)
+}
+
 /// What a slot did, for the caller to thread back into loop state + reporting.
 pub struct SlotAction {
     /// Set when we transmitted: hold PTT until this Unix-ms deadline.
@@ -204,8 +250,15 @@ pub fn slot_tx_phase(
             backend.play(w);
         }
         rx.clear(); // our just-started carrier must not be decoded next boundary
+                    // The bound the re-read above deliberately does NOT provide. Measuring the
+                    // deadline from the key (rather than the tick's stale clock) stopped us
+                    // unkeying early; it also means keying latency lands wholly on the far end of
+                    // the over, and nothing was stopping that from running past the boundary. See
+                    // [`tx_deadline_ms`] — this is WSJT-X's clamp, and FT1's 214 ms of slack is
+                    // where the absence showed.
+        let period_ms = eng.active_slot_secs() * 1000.0;
         SlotAction {
-            tx_until_ms: Some(keyed_ms + secs as f64 * 1000.0 + TX_TAIL_MS),
+            tx_until_ms: Some(tx_deadline_ms(keyed_ms, secs as f64 * 1000.0, period_ms)),
             did_rx,
             rx_frame,
             tx_this_slot: true,
@@ -252,7 +305,28 @@ mod tests {
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx)
         eng.broadcast("CQ TEST W9XYZ EN37");
+        align_to_slot_start(&mut eng, 0);
         eng
+    }
+
+    /// Steer the engine's clock so an over keyed *now* starts just after a slot
+    /// boundary, plus `skew_ms` of PC-clock error rounded to whole periods.
+    ///
+    /// ⚠️ WHY THE BASIS TESTS NEED THIS. Their deadline is built from a re-read of the
+    /// real clock, so without steering, the over's PHASE within its slot is whatever
+    /// time the suite happened to run at. Since [`tx_deadline_ms`] bounds the deadline
+    /// at the boundary, an unaligned run truncates it at some phases and not others —
+    /// which would turn "the basis is the key, not the stale tick" into a coin flip
+    /// that passes ~14% of the time (FT8 leaves 2.11 s of slack in 15 s). Aligning
+    /// keeps the clamp a no-op so those assertions still measure what they were
+    /// written to measure. `offset ≡ now (mod period)` is what puts the steered clock
+    /// on a boundary; adding whole periods preserves the congruence, which is how a
+    /// large skew and a known phase coexist.
+    fn align_to_slot_start(eng: &mut Engine, skew_ms: i64) {
+        let period_ms = eng.active_slot_secs() * 1000.0;
+        let phase = now_unix_ms().rem_euclid(period_ms);
+        let whole = (skew_ms as f64 / period_ms).round() * period_ms;
+        eng.set_clock_offset_ms(Some((phase + whole) as i64));
     }
 
     /// A throwaway rigctld that answers every command with `RPRT 0` — but only
@@ -280,6 +354,97 @@ mod tests {
             }
         });
         addr
+    }
+
+    // ── WSJT-X's slot clamp ──────────────────────────────────────────────────
+    // These drive [`tx_deadline_ms`] directly rather than through `slot_tx_phase`,
+    // because the deadline there is built from a re-read of the REAL clock: the
+    // phase of the over within its slot would be whatever time the suite ran at,
+    // and a bound that only bites at some phases would be a coin-flip test. The
+    // arithmetic is the whole of the fix, so it is tested where it is decidable.
+
+    /// FT1: 99 symbols x 3000/7 samples at 12 kHz.
+    const FT1_AUDIO_MS: f64 = 99.0 * (3000.0 / 7.0) / 12_000.0 * 1000.0;
+    const FT1_PERIOD_MS: f64 = 4_000.0;
+
+    #[test]
+    fn an_ft1_over_keyed_late_still_ends_at_the_boundary() {
+        // THE DEFECT. FT1 leaves 214 ms of slack (3535.7 ms of audio + a 250 ms tail
+        // in a 4 s slot), which is less than one blocking CAT exchange. Keyed 500 ms
+        // into the slot, the unclamped deadline runs 286 ms into the NEXT period —
+        // transmitting over the slot we are supposed to be receiving in.
+        let slot_start = 1_000_000.0 * FT1_PERIOD_MS; // a real boundary
+        let keyed = slot_start + 500.0;
+        let unclamped = keyed + FT1_AUDIO_MS + TX_TAIL_MS;
+        assert!(
+            unclamped > slot_start + FT1_PERIOD_MS,
+            "the scenario must actually overrun, else this test proves nothing"
+        );
+        let got = tx_deadline_ms(keyed, FT1_AUDIO_MS, FT1_PERIOD_MS);
+        assert_eq!(got, slot_start + FT1_PERIOD_MS, "must end AT the boundary");
+        assert!(got < unclamped, "and that is earlier than it used to unkey");
+    }
+
+    #[test]
+    fn an_on_time_ft1_over_keeps_its_whole_tail() {
+        // The clamp must not become a tax on the normal case: keyed at the boundary,
+        // FT1 fits with 214 ms to spare and nothing is taken off the tail.
+        let slot_start = 1_000_000.0 * FT1_PERIOD_MS;
+        let got = tx_deadline_ms(slot_start, FT1_AUDIO_MS, FT1_PERIOD_MS);
+        assert_eq!(got, slot_start + FT1_AUDIO_MS + TX_TAIL_MS);
+        assert!(
+            got < slot_start + FT1_PERIOD_MS,
+            "and stays inside the slot"
+        );
+    }
+
+    #[test]
+    fn no_tier_can_key_past_its_own_boundary_at_any_phase() {
+        // The bound is upstream's and applies to every mode, not only the one that
+        // exposed it. FT8 12.64 s / 15 s and FT4 5.04 s / 7.5 s have enough slack to
+        // absorb an ordinary stall, but a pathological one must not put THEM into the
+        // next period either — the clamp is what makes that unrepresentable.
+        for (audio_ms, period_ms, name) in [
+            (FT1_AUDIO_MS, FT1_PERIOD_MS, "FT1"),
+            (12_640.0, 15_000.0, "FT8"),
+            (5_040.0, 7_500.0, "FT4"),
+            (14_688.0, 15_000.0, "MSK144-15"),
+        ] {
+            let slot_start = 1_000.0 * period_ms;
+            // Every 10 ms of phase across a whole slot.
+            let mut phase = 0.0;
+            while phase < period_ms {
+                let keyed = slot_start + phase;
+                let got = tx_deadline_ms(keyed, audio_ms, period_ms);
+                assert!(
+                    got <= slot_start + period_ms,
+                    "{name} keyed at phase {phase} ms held PTT {:.1} ms past its boundary",
+                    got - (slot_start + period_ms),
+                );
+                assert!(got >= keyed, "{name} produced a deadline before the key");
+                phase += 10.0;
+            }
+        }
+    }
+
+    #[test]
+    fn an_over_keyed_past_its_boundary_releases_at_once() {
+        // Degenerate, but it must not produce a deadline in the past: a hold the loop
+        // reads as already expired is fine, a negative one is not.
+        let slot_start = 1_000_000.0 * FT1_PERIOD_MS;
+        let keyed = slot_start + FT1_PERIOD_MS; // exactly the next boundary
+        let got = tx_deadline_ms(keyed, FT1_AUDIO_MS, FT1_PERIOD_MS);
+        assert!(got >= keyed, "never a deadline before the key");
+    }
+
+    #[test]
+    fn a_nonsense_period_falls_back_to_the_unbounded_deadline() {
+        // A zero/NaN period must not silently unkey us instantly — better to hold as
+        // we always did than to cut every over on a bad reading.
+        let keyed = 4_000_000.0;
+        let natural = keyed + FT1_AUDIO_MS + TX_TAIL_MS;
+        assert_eq!(tx_deadline_ms(keyed, FT1_AUDIO_MS, 0.0), natural);
+        assert_eq!(tx_deadline_ms(keyed, FT1_AUDIO_MS, f64::NAN), natural);
     }
 
     #[test]
@@ -377,10 +542,12 @@ mod tests {
         // on a DIFFERENT timebase and shifts it by the whole offset — silently, and
         // worst on exactly the badly-synced machines the steering exists to rescue.
         // A 90 s skew is ordinary on a PC that has never talked to an NTP server.
-        const OFFSET_MS: i64 = 90_000; // PC clock 90 s AHEAD of true UTC
+        const OFFSET_MS: i64 = 90_000; // PC clock ~90 s AHEAD of true UTC
         const CAT_STALL_MS: f64 = 400.0;
         let mut eng = armed_engine();
-        eng.set_clock_offset_ms(Some(OFFSET_MS));
+        // Whole periods, so the skew stays ~90 s while the steered clock still lands
+        // on a boundary — see `align_to_slot_start`. 90 s is six whole FT8 periods.
+        align_to_slot_start(&mut eng, OFFSET_MS);
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
