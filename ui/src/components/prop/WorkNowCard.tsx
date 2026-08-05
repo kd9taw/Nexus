@@ -27,7 +27,16 @@ export function WorkNowCard({
 }) {
   const need = needMeta(card.need)
   const [details, setDetails] = useState(false)
-  const timing = win?.outlook[0] ? bandTiming(win.outlook[0].hourly, Date.now()) : ''
+  // Headline this card with ITS OWN band. `win.best`/`win.outlook[0]` rank every HF band
+  // on the PATH, so they are a cross-band answer on a per-band card: a 20m card read
+  // "Best shot: 60m" (field report 2026-08-05) — a band this expedition may never have
+  // announced, since the window sweep never receives the announced list. The sibling
+  // cards already cover the other bands, so the cross-band line was redundant too.
+  // If our band is absent (the caller truncates the outlook to 4), fall back to the
+  // backend's own per-band `windowHint` — never show another band's window under this
+  // band's heading, which is the reported bug in miniature.
+  const own = win?.outlook.find((o) => o.band === card.band)
+  const timing = own ? bandTiming(own.hourly, Date.now()) : ''
   return (
     <div className={`worknow-card${card.status === 'WorkNow' ? ' is-worknow' : ''}`}>
       <div className="wn-top">
@@ -66,9 +75,9 @@ export function WorkNowCard({
           {card.octant} · {Math.round(card.distanceKm).toLocaleString()} km
         </span>
       </div>
-      {win?.best ? (
+      {win && own ? (
         <div className="wn-window">
-          Best shot: {win.best}
+          Best shot: {own.band} {own.workability} {own.window}
           {timing ? ` · ${timing}` : ''}
           <span className="cp-engine">{win.engine === 'p533' ? 'P.533' : 'modelled'}</span>
           <button

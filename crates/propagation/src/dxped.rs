@@ -626,6 +626,21 @@ impl DxpeditionTracker {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        // A CHASE headline must not name a band the award will never credit. 60 m earns
+        // NO ARRL DXCC credit of any kind (see [`crate::awards::earns_dxcc_credit`] — one
+        // rule, one home), and it is a poor DXpedition band besides: secondary,
+        // channelised, and single-channel receivers rule out the split that runs a pileup.
+        // DEMOTE it rather than drop it — some operations really do announce 60 m
+        // (3C2MD ran 5.357), and `bands` here is the announced list, so dropping would
+        // delete a band the DXpedition itself promised. It keeps its true score and its
+        // real window in `outlook`, which is what the 24 h × band heat-map draws; it just
+        // never becomes the one-line "best shot". Demoted by exactly ONE place, not to the
+        // back: the `truncate(4)` below would otherwise delete it from the card outright.
+        //
+        // The ordering itself lives in [`crate::predict::rank_for_chase`] — the SAME call the
+        // WORK NOW board's window sweep makes — so the two chase surfaces cannot drift into
+        // two different answers to one award question.
+        crate::predict::rank_for_chase(&mut outlook);
         outlook.truncate(4);
 
         let best = match outlook.first() {

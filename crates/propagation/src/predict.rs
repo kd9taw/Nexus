@@ -37,6 +37,55 @@ pub struct PathPrediction {
     pub muf_hourly: Vec<f32>,
 }
 
+impl PathPrediction {
+    /// Re-rank this prediction for a **DX-chase** headline — see [`rank_for_chase`].
+    ///
+    /// Opt-in, and deliberately NOT applied inside [`PathPredictor::predict`]: the same
+    /// prediction feeds "which bands are open right now" surfaces (`get_path_outlook`,
+    /// [`band_outlook_ring`]) where 60 m is a perfectly good answer and demoting it would
+    /// be a lie. Only a caller that knows it is answering "what should I CHASE" may apply it.
+    pub fn demote_award_ineligible(&mut self) {
+        rank_for_chase(&mut self.bands);
+    }
+}
+
+/// Order `bands` (already sorted best-first) for a **DX-chase** recommendation: give the
+/// headline slot to the best band that can actually earn ARRL DXCC credit, and leave every
+/// other band exactly where its score put it.
+///
+/// The operator's point (2026-08-05), and it is an award fact, not a propagation one: 60 m
+/// earns no DXCC credit of any kind (see [`crate::awards::earns_dxcc_credit`] — one rule,
+/// one home), and most DXpeditions do not even run it (secondary, channelised, and a
+/// single-channel receiver rules out the split that runs a pileup). Headlining it to someone
+/// chasing DXCC recommends a band the award cannot count.
+///
+/// **The rule is only "it may not be the HEADLINE"**, which is the whole of the complaint —
+/// not "it ranks last". An earlier draft sank it below every workable creditable band; that
+/// is worse, because callers `truncate(4)` this array, so on a night with four open bands the
+/// demotion would delete 60 m from the card altogether. Displacing exactly one position keeps
+/// it adjacent to the headline, with its true score and its real window, for the operator who
+/// wants that contact for its own sake — some operations really do announce 60 m (3C2MD ran
+/// 5.357), and `calendar_outlook`'s list IS the announced one.
+///
+/// "Workable" is ≥ [`Workability::Fair`] (0.30) — the same line the outlook window and the
+/// chase alarm already use. If nothing creditable clears it, the order is left alone and 60 m
+/// leads honestly: it really is the best shot, and saying so beats naming a closed band.
+///
+/// A band whose label does not parse cannot be shown to earn credit, so it never takes the
+/// headline either — that slot should not go to a band we failed to identify.
+///
+/// Idempotent (after one pass the headline is already creditable, so the rotate is a no-op).
+pub fn rank_for_chase(bands: &mut [BandOutlook]) {
+    const USABLE: f32 = 0.30;
+    let creditable_and_workable = |b: &BandOutlook| {
+        b.score >= USABLE && Band::from_label(&b.band).is_some_and(crate::awards::earns_dxcc_credit)
+    };
+    if let Some(i) = bands.iter().position(creditable_and_workable) {
+        // Move that band to the front; everything it passes keeps its relative order.
+        bands[..=i].rotate_right(1);
+    }
+}
+
 /// A per-path HF predictor. Implementors are interchangeable; the fusion/UI layer
 /// depends on the trait, never a concrete engine, so the offline path always
 /// degrades to [`HeuristicEngine`] and VOACAP is a drop-in upgrade.
@@ -229,6 +278,184 @@ mod tests {
     use crate::geo::maidenhead_to_latlon;
 
     const MIDNIGHT_UTC: i64 = 1_718_886_000 - 13 * 3600; // ~2024-06-20 00:00 UTC
+
+    /// A real scene, not a synthetic one: the operator's own QTH to C6 (Bahamas), one of
+    /// the operations on the board he reported. At SFI 70 / Kp 0 the physics genuinely
+    /// puts 60 m on top (0.800 vs 80 m 0.720 and 40 m 0.711) even WITH the `band_ceiling`
+    /// arm — so this exercises the award rule, not the scoring fix.
+    const C6_BAHAMAS: (f64, f64) = (25.03, -77.40);
+    const FIELD_T0: i64 = 1_785_888_000; // 2026-08-05 00:00 UTC
+
+    fn quiet_low_flux() -> SpaceWx {
+        SpaceWx {
+            sfi: 70.0,
+            kp: 0.0,
+            ..Default::default()
+        }
+    }
+
+    fn labels(p: &PathPrediction) -> Vec<String> {
+        p.bands.iter().map(|b| b.band.clone()).collect()
+    }
+
+    /// FIELD REPORT 2026-08-05, the AWARD half: "for true chasing, 60 m is not an eligible
+    /// band for DXCC, so many DXpeditions don't even run it." Correct, and stronger than
+    /// stated — ARRL excludes 60 m from the award programme outright.
+    ///
+    /// NON-VACUITY — delete the `rotate_right` in [`rank_for_chase`] and this goes red:
+    /// measured 2026-08-05, EN52 → C6 at SFI 70 / Kp 0 the raw engine order is
+    /// `60m 0.800, 80m 0.720, 40m 0.711, …`, so the card headlines a band that can never
+    /// earn DXCC credit.
+    #[test]
+    fn chase_headline_is_never_a_band_the_award_cannot_credit() {
+        let me = maidenhead_to_latlon("EN52");
+        let eng = HeuristicEngine::new(me);
+        let wx = quiet_low_flux();
+        let mut p = eng.predict(C6_BAHAMAS, FIELD_T0, &wx);
+
+        // Precondition: this scene really is one where 60 m leads on physics alone.
+        assert_eq!(
+            p.bands[0].band,
+            "60m",
+            "scene no longer exercises the rule; raw order was {:?}",
+            labels(&p)
+        );
+        let sixty_before = p.bands.iter().find(|b| b.band == "60m").unwrap().clone();
+
+        p.demote_award_ineligible();
+
+        assert_ne!(p.bands[0].band, "60m", "60 m still headlines a chase card");
+        assert!(
+            p.bands[0].score >= 0.30,
+            "the headline must be a workable band, got {} {}",
+            p.bands[0].band,
+            p.bands[0].score
+        );
+
+        // Demoted, NOT deleted, NOT rescored — and still adjacent to the headline so a
+        // `truncate(4)` on the card cannot drop it.
+        let sixty_at = p.bands.iter().position(|b| b.band == "60m");
+        assert_eq!(sixty_at, Some(1), "60 m must stay next to the headline");
+        let sixty_after = &p.bands[1];
+        assert_eq!(
+            sixty_after.score, sixty_before.score,
+            "score must be untouched"
+        );
+        assert_eq!(
+            sixty_after.window, sixty_before.window,
+            "window must survive"
+        );
+        assert_eq!(p.bands.len(), labels(&p).len(), "no band may be dropped");
+    }
+
+    /// The demotion displaces ONE position and preserves every other band's score order —
+    /// it is not a re-sort. (The naive version WAS a re-sort, pushing 60 m below even
+    /// CLOSED bands; with the callers' `truncate(4)` that deleted it from the card, which
+    /// is the one thing the rule must never do.)
+    #[test]
+    fn demotion_preserves_the_rest_of_the_score_order() {
+        let eng = HeuristicEngine::new(maidenhead_to_latlon("EN52"));
+        let wx = quiet_low_flux();
+        let mut p = eng.predict(C6_BAHAMAS, FIELD_T0, &wx);
+        let without_sixty: Vec<String> = labels(&p).into_iter().filter(|b| b != "60m").collect();
+        p.demote_award_ineligible();
+        let after: Vec<String> = labels(&p).into_iter().filter(|b| b != "60m").collect();
+        assert_eq!(
+            without_sixty, after,
+            "only 60 m may move; the rest keep their score order"
+        );
+    }
+
+    /// If nothing creditable is workable, 60 m leads honestly — recommending a closed band
+    /// instead would be a worse answer, not a more compliant one.
+    #[test]
+    fn ineligible_band_still_leads_when_nothing_creditable_is_open() {
+        let mut bands = vec![
+            mk("60m", 0.62),
+            mk("80m", 0.11),
+            mk("40m", 0.05),
+            mk("20m", 0.00),
+        ];
+        rank_for_chase(&mut bands);
+        assert_eq!(bands[0].band, "60m");
+        // ...and it yields the moment something creditable clears the 0.30 line.
+        bands[1].score = 0.31;
+        rank_for_chase(&mut bands);
+        assert_eq!(bands[0].band, "80m");
+        assert_eq!(bands[1].band, "60m");
+    }
+
+    #[test]
+    fn rank_for_chase_is_idempotent_and_total() {
+        let mut once = vec![mk("60m", 0.80), mk("80m", 0.72), mk("40m", 0.71)];
+        rank_for_chase(&mut once);
+        let after_one = once.clone();
+        rank_for_chase(&mut once);
+        assert_eq!(
+            labels_of(&once),
+            labels_of(&after_one),
+            "second pass must be a no-op"
+        );
+        // An empty list and an all-ineligible list must both be safe.
+        rank_for_chase(&mut []);
+        let mut only_sixty = vec![mk("60m", 0.9)];
+        rank_for_chase(&mut only_sixty);
+        assert_eq!(only_sixty[0].band, "60m");
+        // An unparseable label never takes the headline.
+        let mut junk = vec![mk("60m", 0.9), mk("not-a-band", 0.95), mk("40m", 0.5)];
+        rank_for_chase(&mut junk);
+        assert_eq!(junk[0].band, "40m");
+    }
+
+    /// ⭐ THE BLAST-RADIUS GUARD. The demotion is opt-in and must NOT leak into
+    /// [`PathPredictor::predict`] itself, because the same prediction feeds the
+    /// "which bands are open right now" surfaces (`get_path_outlook`,
+    /// [`band_outlook_ring`]) — there 60 m is a legitimate answer and hiding it
+    /// would be a lie. `predict()` stays pure score order.
+    #[test]
+    fn predict_itself_is_not_award_filtered() {
+        let eng = HeuristicEngine::new(maidenhead_to_latlon("EN52"));
+        let p = eng.predict(C6_BAHAMAS, FIELD_T0, &quiet_low_flux());
+        assert_eq!(
+            p.bands[0].band, "60m",
+            "predict() must rank on physics alone, not award eligibility"
+        );
+        for w in p.bands.windows(2) {
+            assert!(w[0].score >= w[1].score, "predict() stays score-sorted");
+        }
+        // The ring aggregator is built on predict() and must keep 60 m too.
+        let me = maidenhead_to_latlon("EN52").unwrap();
+        let ring = band_outlook_ring(
+            &HeuristicEngine::new(Some(me)),
+            me,
+            9000.0,
+            8,
+            FIELD_T0,
+            &quiet_low_flux(),
+        );
+        assert!(
+            ring.bands.iter().any(|b| b.band == "60m"),
+            "the general band ladder must still offer 60 m"
+        );
+    }
+
+    fn labels_of(v: &[BandOutlook]) -> Vec<String> {
+        v.iter().map(|b| b.band.clone()).collect()
+    }
+
+    fn mk(band: &str, score: f32) -> BandOutlook {
+        BandOutlook {
+            band: band.to_string(),
+            workability: Workability::from_score(score).label().to_string(),
+            score,
+            window: "0000–0100Z".to_string(),
+            grayline: false,
+            hourly: vec![score; 24],
+            reliability: 0.0,
+            mode_now: Vec::new(),
+            mode_hourly: Vec::new(),
+        }
+    }
 
     #[test]
     fn predicts_per_hf_band_best_first_excluding_vhf() {

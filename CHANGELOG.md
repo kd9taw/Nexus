@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The DXpedition board recommended 60 m for everything, on every card.** An operator with 60 m
+  enabled saw all eleven WORK NOW cards read "Best shot: **60m**" — the 12 m card, the 20 m card,
+  the 160 m card, all of them. The windows differed per expedition, so the path modelling was
+  running; only the band was stuck. Three separate faults, now all fixed.
+  **The model had no ceiling for 60 m.** Every band carries a "how hard is real DX here even when
+  the band is open" cap; 160/80/40 m had one and 60 m had been missed, so it alone was allowed a
+  perfect score. That matters at night, when the model's other discriminators go quiet and the cap
+  becomes the whole of the ranking — 60 m scored an identical 0.939 on paths from 2,214 km to
+  11,589 km and won them all. It now sits at 0.80, between 80 m and 40 m where it belongs, and a
+  test refuses any future band added without a cap. **This also repairs the general band ladder** in
+  Connect, the globe and the map, where 60 m had been reading as the single best band for every
+  operator on Earth at every hour of the day.
+  **A card now reports its own band.** Each card covers one band, but the "best shot" line was
+  ranking every band on the path — so a 20 m card would headline 60 m, a band that expedition may
+  never have announced. Each card now shows the window for the band it is actually about, and says
+  so plainly when that band has no opening.
+  **And nothing chasing DXCC leads with 60 m any more.** 60 m earns no ARRL DXCC credit of any
+  kind — not Mixed, not per-band, not the Challenge — and most DXpeditions do not run it: it is
+  secondary, channelised, and a single-channel receiver rules out the split that runs a pileup. So
+  the headline on a chase now goes to the best band that can actually earn you credit. 60 m is
+  demoted, never hidden: it keeps its true score and its real window right beside the headline, and
+  if it is genuinely the only thing open it still leads and says so. Where the question is not
+  chasing — "which bands are open right now", in Connect and on the map — 60 m is left exactly
+  where the physics puts it, because there it is a perfectly good answer.
+
 - **Linux: the audio device list finally reads like your own machine, and shows all of it.**
   An operator with eight sound cards — an FTDX10 among them — was offered one card, named
   `hw:CARD=Device,DEV=0`, while his system, `aplay -l`, KDE, pavucontrol and WSJT-X all called his

@@ -57,7 +57,11 @@ const CHALLENGE_BANDS: &[Band] = &[
 /// Reported by a field user via the DXpedition board (2026-08-05): the code asserted the
 /// opposite, so anyone with 60 m contacts saw an inflated DXCC total and could believe an entity
 /// was confirmed that ARRL will never credit.
-fn earns_dxcc_credit(b: Band) -> bool {
+///
+/// Shared with the CHASE ranker ([`crate::predict::rank_for_chase`]) and the DXpedition tracker
+/// so the award rule has ONE home: the logbook must not credit a 60 m QSO and the board must not
+/// *recommend* one, and those are the same fact stated once, not two lists that drift apart.
+pub(crate) fn earns_dxcc_credit(b: Band) -> bool {
     !matches!(b, Band::B60 | Band::B4)
 }
 

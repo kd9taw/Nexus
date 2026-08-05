@@ -407,13 +407,24 @@ impl PathModel {
     }
 
     /// Greyline bonus (≥1) on the low bands when either end is on the terminator.
+    ///
+    /// ⚠️ KNOWN GAP, DELIBERATELY LEFT — this table omits `B60` exactly as
+    /// [`band_ceiling`] did, and 60 m (5.36 MHz, between 80 m's 0.8 and 40 m's 0.6)
+    /// should carry roughly 0.7. It is NOT fixed here because, unlike the ceiling
+    /// omission, this one is currently inert: it *understates* 60 m, and the 0.80
+    /// ceiling binds first on every path where it would apply, so today's ranking is
+    /// identical either way (measured 2026-08-05). Closing it is a calibration change
+    /// that also has to teach `outlook_24h`'s `low_band` window label about 60 m, and
+    /// it RAISES 60 m — so it wants its own measurement and its own decision rather
+    /// than a free ride on a bug fix. `low_band_ceilings_rise_with_frequency` guards
+    /// the ceiling ramp; it does not cover this table.
     fn greyline(&self, me: (f64, f64), dx: (f64, f64), band: Band, unix: i64) -> f64 {
         let bw = match band {
             Band::B160 => 1.0,
             Band::B80 => 0.8,
             Band::B40 => 0.6,
             Band::B30 => 0.3,
-            _ => 0.0,
+            _ => 0.0, // ⚠️ 60 m lands here — see the note above, not an oversight
         };
         if bw == 0.0 {
             return 1.0;
@@ -431,10 +442,30 @@ impl PathModel {
 /// Max achievable likelihood per band — a lumped "how hard is DX on this band
 /// even when it's open" ceiling (antenna size, atmospheric noise, residual
 /// absorption). Low bands cap below "Excellent"; mid/high bands are uncapped.
+/// ⚠️ EVERY band below 30 m MUST have an arm here. At night `path_muf` is the hard
+/// constant `fof2_floor · muf_obliquity_max` (9.6 MHz) on any path over 3000 km, and
+/// absorption is daylight-gated to exactly zero — so the score of every band under it
+/// collapses to this ceiling, and an omitted band lands on `_ => 1.0` and out-ranks every
+/// capped one on every path on Earth. 60 m did exactly that (field report 2026-08-05: all
+/// 11 WORK NOW cards read "Best shot: 60m", score 0.93894 to three decimals on 7 of 8
+/// paths spanning 2,214–11,509 km). The `low_band_ceilings_rise_with_frequency` test is
+/// the guard: it fails on the next omission rather than shipping it.
 fn band_ceiling(band: Band) -> f64 {
     match band {
         Band::B160 => 0.55, // tops out at "Good" — top-band DX is hard
         Band::B80 => 0.72,
+        // Harder DX than either neighbour despite sitting between them: secondary,
+        // channelised, no split (so no DXpedition pileup), and the WRC-15 segment is
+        // 9.15 W ERP. Placed on the ramp, not above it.
+        //
+        // WHY 0.80 AND NOT NEARBY — counterfactual over the 8 field-report paths, and it
+        // is EXACT rather than sampled: this is a per-sample constant and `outlook_24h`
+        // takes a max, so `max_i min(raw_i, c) ≡ min(max_i raw_i, c)` — capping the
+        // reported peak is algebraically identical to adding the arm.
+        //   1.00 (no arm) → 60m tops 7/8   0.85 → 40m 7/8 (VP9 still reads 60m)
+        //   0.80          → 40m 8/8        0.78 → 40m 8/8
+        // 0.80 has margin on both sides; 0.85 does not.
+        Band::B60 => 0.80,
         Band::B40 => 0.88,
         _ => 1.0,
     }
@@ -558,5 +589,149 @@ mod tests {
         assert_eq!(m.score(p("JN58"), Band::B6, NOON_UTC, &wx), 0.0);
         let unknown = PathModel::new(None);
         assert_eq!(unknown.score(p("JN58"), Band::B20, NOON_UTC, &wx), 0.0);
+    }
+
+    /// The operator's real WORK NOW board, 2026-08-05 (entity centroids from the
+    /// screenshot): 11 operations on the air, 2,214–11,509 km, all eight modelled here.
+    const FIELD_REPORT_PATHS: &[(&str, (f64, f64))] = &[
+        ("OH0ERF Aland", (60.20, 20.00)),
+        ("KH0 Marianas", (15.20, 145.75)),
+        ("J3 Grenada", (12.12, -61.68)),
+        ("VP9 Bermuda", (32.32, -64.75)),
+        ("C6 Bahamas", (25.03, -77.40)),
+        ("T2 Tuvalu", (-8.52, 179.20)),
+        ("E51KEE S.Cook", (-21.21, -159.78)),
+        ("9Y Trinidad", (10.65, -61.40)),
+    ];
+
+    fn hf_bands() -> Vec<Band> {
+        Band::ALL.iter().copied().filter(|b| !b.is_vhf()).collect()
+    }
+
+    /// Peak-ranked bands on one path, best first.
+    fn ranked(m: &PathModel, dx: (f64, f64), t: i64, wx: &SpaceWx) -> Vec<(String, f32)> {
+        let mut v: Vec<(String, f32)> = hf_bands()
+            .into_iter()
+            .map(|b| {
+                let o = m.outlook_24h(dx, b, t, wx);
+                (o.band, o.score)
+            })
+            .collect();
+        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        v
+    }
+
+    /// FIELD REPORT 2026-08-05 — every WORK NOW card read "Best shot: **60m**", on
+    /// every operation, whatever the card's own band. The windows differed per path,
+    /// so the per-path modelling was running; only the BAND was stuck.
+    ///
+    /// Cause: [`band_ceiling`] had no `B60` arm, so 60 m fell through to `_ => 1.0`
+    /// while its neighbours were capped — and at night the score of every band under
+    /// the 9.6 MHz MUF floor IS its ceiling, so 60 m was the argmax of a constant table.
+    ///
+    /// NON-VACUITY — delete the `Band::B60 => 0.80` arm and this goes red with the
+    /// numbers the operator saw (measured 2026-08-05, EN52 / SFI 150 / Kp 2):
+    ///   OH0ERF KH0 J3 T2 E51KEE 9Y → 60m **0.93894** (identical to 5 dp on all six),
+    ///   VP9 → 60m 0.884, C6 → 40m 0.880. 60 m topped 7 of 8.
+    /// With the arm: 40m 0.880 on 7 of 8 (VP9 0.836), 60m 0.800 second or third.
+    #[test]
+    fn sixty_m_does_not_top_every_dxpedition_path() {
+        let m = PathModel::new(Some(p("EN52")));
+        let t = 1_785_888_000; // 2026-08-05 00:00 UTC
+        let wx = SpaceWx {
+            sfi: 150.0,
+            kp: 2.0,
+            ..Default::default()
+        };
+        for (name, dx) in FIELD_REPORT_PATHS {
+            let r = ranked(&m, *dx, t, &wx);
+            assert_ne!(
+                r[0].0,
+                "60m",
+                "{name}: 60 m headlines the card again — ranking was {:?}",
+                &r[..4]
+            );
+        }
+    }
+
+    /// THE STRUCTURAL GUARD, and the reason the 60 m bug was possible at all:
+    /// [`band_ceiling`] is the whole ranking below the night MUF floor, so a band
+    /// missing from it does not merely score oddly — it out-ranks every band that IS
+    /// listed, on every path. The table is a ramp, so require the ramp: a ceiling may
+    /// never DROP as frequency rises. An omitted low band lands on `_ => 1.0` and
+    /// breaks that immediately.
+    ///
+    /// NON-VACUITY: without the `B60` arm, 60 m (5.36 MHz) reads 1.0 between 80 m's
+    /// 0.72 and 40 m's 0.88 — red on the 60 m → 40 m step.
+    #[test]
+    fn low_band_ceilings_rise_with_frequency() {
+        let mut prev: Option<(Band, f64)> = None;
+        for b in Band::ALL {
+            let c = band_ceiling(b);
+            if let Some((pb, pc)) = prev {
+                assert!(
+                    c >= pc,
+                    "band_ceiling falls with frequency: {} ({} MHz) = {pc} but the band \
+                     ABOVE it, {} ({} MHz), = {c}. The suspect is {} — a band with no arm \
+                     takes `_ => 1.0` and out-ranks every capped band on every path.",
+                    pb.label(),
+                    pb.center_mhz(),
+                    b.label(),
+                    b.center_mhz(),
+                    pb.label()
+                );
+            }
+            prev = Some((b, c));
+        }
+    }
+
+    /// Standing invariant, NOT a repro for the 60 m bug (it passed before the fix too):
+    /// no single band may own the instantaneous ranking. `advisor.rs` carries the same
+    /// invariant for the observed-spot path after the "always 10 m" bug; this is the
+    /// modelled path's copy, and it is what would have caught the 60 m regression had
+    /// the 24 h-peak headline not been a separate constant (see the module note there).
+    ///
+    /// Measured 2026-08-05 over 4 QTHs × 8 paths × 24 h: 4–9 distinct winners, the
+    /// biggest share 96/192 (50 %) at PM95/SFI 70. Thresholds sit clear of that.
+    #[test]
+    fn no_single_band_owns_the_instantaneous_ranking() {
+        use std::collections::BTreeMap;
+        let t0 = 1_785_888_000;
+        for &(sfi, kp) in &[(70.0f32, 0.0f32), (150.0, 2.0), (220.0, 5.0)] {
+            let wx = SpaceWx {
+                sfi,
+                kp,
+                ..Default::default()
+            };
+            for grid in ["EN52", "JN58", "PM95", "GG66"] {
+                let m = PathModel::new(Some(p(grid)));
+                let mut wins: BTreeMap<&'static str, usize> = BTreeMap::new();
+                let mut n = 0usize;
+                for h in 0..24i64 {
+                    for (_, dx) in FIELD_REPORT_PATHS {
+                        let best = hf_bands()
+                            .into_iter()
+                            .map(|b| (b, m.score(*dx, b, t0 + h * 3600, &wx)))
+                            .fold(None::<(Band, f32)>, |acc, x| match acc {
+                                Some(a) if a.1 >= x.1 => Some(a),
+                                _ => Some(x),
+                            })
+                            .unwrap();
+                        *wins.entry(best.0.label()).or_default() += 1;
+                        n += 1;
+                    }
+                }
+                let top = wins.values().copied().max().unwrap();
+                assert!(
+                    wins.len() >= 4,
+                    "{grid} SFI {sfi}: only {} distinct best-bands over 8 paths × 24 h — {wins:?}",
+                    wins.len()
+                );
+                assert!(
+                    top * 5 <= n * 3,
+                    "{grid} SFI {sfi}: one band won {top}/{n} — {wins:?}"
+                );
+            }
+        }
     }
 }

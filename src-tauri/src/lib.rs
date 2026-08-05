@@ -2623,6 +2623,15 @@ async fn get_dxped_windows(
             .into_iter()
             .map(|(call, dx, start_unix, end_unix)| {
                 let mut p = eng.predict(dx, t, &wx);
+                // This is a CHASE surface, so a band the award will never credit must not
+                // become the headline — 60 m earns no ARRL DXCC credit of any kind, and
+                // most DXpeditions do not run it. Applied HERE and not inside `predict()`
+                // deliberately: the same call feeds `get_path_outlook` and
+                // `band_outlook_ring`, which answer "which bands are open right now" — a
+                // different question, where 60 m is a legitimate answer and demoting it
+                // would be a lie. Only a caller that knows it is ranking chases may do it.
+                // Must precede `truncate`, or the demoted band falls off the card entirely.
+                p.demote_award_ineligible();
                 p.bands.truncate(4);
                 let best_line = |p: &propagation::PathPrediction| {
                     p.bands
@@ -2640,9 +2649,11 @@ async fn get_dxped_windows(
                         .map(|n| {
                             let dt = t + n * 86_400;
                             let dp = if n == 0 {
-                                p.clone()
+                                p.clone() // already ranked for chase above
                             } else {
-                                eng.predict(dx, dt, &wx)
+                                let mut d = eng.predict(dx, dt, &wx);
+                                d.demote_award_ineligible();
+                                d
                             };
                             DxpedDayBest {
                                 day_unix: dt,
