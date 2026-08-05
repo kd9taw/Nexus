@@ -503,7 +503,29 @@ export function SettingsPanel({
   const [selectedProfile, setSelectedProfile] = useState('')
   const [newProfileName, setNewProfileName] = useState('')
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
-  const [audio, setAudio] = useState<AudioDevices>({ input: [], output: [] })
+  // Device NAMES (the values stored in settings and resolved at open time) kept separate
+  // from their display labels — the same split `applyPorts` uses for serial ports above.
+  // Every option builder, `includes()` guard and DAX matcher below therefore keeps working
+  // on plain strings; only what the operator READS comes from the label map.
+  const [audio, setAudio] = useState<{ input: string[]; output: string[] }>({ input: [], output: [] })
+  // Device name -> human label, kept PER DIRECTION. On Windows/macOS they are the same
+  // string; on Linux the name is an ALSA PCM name and the label is the card description —
+  // and one PCM can legitimately read differently in the two lists, because the label
+  // shortens only where its card is unambiguous within that list. On the reported machine
+  // `plughw:CARD=Generic,DEV=0` is the card's only capture entry ("HD-Audio Generic") but
+  // one of two playback entries ("HD-Audio Generic, ALC1220 Analog"). A single merged map
+  // showed the output's label in the input picker (caught by the new picker test).
+  const [audioLabels, setAudioLabels] = useState<{
+    input: Record<string, string>
+    output: Record<string, string>
+  }>({ input: {}, output: {} })
+  const applyAudio = (d: AudioDevices) => {
+    setAudio({ input: d.input.map((x) => x.name), output: d.output.map((x) => x.name) })
+    setAudioLabels({
+      input: Object.fromEntries(d.input.map((x) => [x.name, x.label])),
+      output: Object.fromEntries(d.output.map((x) => [x.name, x.label])),
+    })
+  }
   const [portsLoading, setPortsLoading] = useState(false)
   const [audioLoading, setAudioLoading] = useState(false)
   const [detected, setDetected] = useState<DetectedRig[]>([])
@@ -660,7 +682,7 @@ export function SettingsPanel({
       .then((b) => mounted && setBandPlan(b))
       .catch(() => {})
     getAudioDevices()
-      .then((d) => mounted && setAudio(d))
+      .then((d) => mounted && applyAudio(d))
       .catch(() => {})
     return () => {
       mounted = false
@@ -678,7 +700,7 @@ export function SettingsPanel({
   const refreshAudio = () => {
     setAudioLoading(true)
     getAudioDevices()
-      .then(setAudio)
+      .then(applyAudio)
       .catch(() => {})
       .finally(() => setAudioLoading(false))
   }
@@ -1810,6 +1832,15 @@ export function SettingsPanel({
     ? [form.voiceMicDevice, ...audio.input]
     : audio.input
 
+  // What one option READS. An enumerated device shows its human label; the stored-but-
+  // unenumerated value the builders above keep selectable now SAYS it is missing — a
+  // saved device that has gone (rig off, USB port moved, ALSA card renumbered, another
+  // app holding it) used to look exactly like a working choice right up until the radio
+  // refused to start. Since that case is now a visible error at open time rather than a
+  // silent fall back to the laptop mic, it is worth catching here, before he goes on air.
+  const audioLabel = (name: string, kind: 'input' | 'output') =>
+    audio[kind].includes(name) ? (audioLabels[kind][name] ?? name) : `${name} — not detected`
+
   // Frequencies tab: last-wins override lookup for the stock table, plus
   // duplicate band+mode keys (flagged in the editor — the last row wins).
   const overrides = form.workingFrequencies ?? []
@@ -2239,7 +2270,7 @@ export function SettingsPanel({
                       {' · '}
                       {r.rigConn === 'network' ? r.rigAddr || 'no address' : r.serialPort || 'no COM port'}
                       {' · audio '}
-                      {r.audioIn || 'default'}
+                      {r.audioIn ? (audioLabels.input[r.audioIn] ?? r.audioIn) : 'default'}
                       {' · rigctld :'}
                       {r.rigctldPort}
                     </div>
@@ -2647,7 +2678,12 @@ export function SettingsPanel({
                               : r.civSide === false
                                 ? ' · second port, not CI-V'
                                 : ''}
-                            {r.suggestedAudio ? ` · ${r.suggestedAudio}` : ''}
+                            {/* The suggestion is a device NAME (that is what gets stored);
+                                show its human label so the Linux row reads
+                                "USB AUDIO CODEC", not "plughw:CARD=CODEC,DEV=0". */}
+                            {r.suggestedAudio
+                              ? ` · ${audioLabels.input[r.suggestedAudio] ?? r.suggestedAudio}`
+                              : ''}
                           </span>
                           {/* A recognised interface is a CABLE, not a radio. Say so plainly and
                               tell the operator what is still theirs to choose — the rig — rather
@@ -3829,7 +3865,7 @@ export function SettingsPanel({
                     <option value="">System default</option>
                     {audioInOptions.map((d) => (
                       <option key={d} value={d}>
-                        {d}
+                        {audioLabel(d, 'input')}
                       </option>
                     ))}
                   </select>
@@ -3856,7 +3892,7 @@ export function SettingsPanel({
                   <option value="">System default</option>
                   {audioOutOptions.map((d) => (
                     <option key={d} value={d}>
-                      {d}
+                      {audioLabel(d, 'output')}
                     </option>
                   ))}
                 </select>
@@ -3973,7 +4009,7 @@ export function SettingsPanel({
                   <option value="">System default</option>
                   {monitorOutOptions.map((d) => (
                     <option key={d} value={d}>
-                      {d}
+                      {audioLabel(d, 'output')}
                     </option>
                   ))}
                 </select>
@@ -4969,7 +5005,7 @@ export function SettingsPanel({
                   <option value="">Same as audio input (default)</option>
                   {voiceMicOptions.map((d) => (
                     <option key={d} value={d}>
-                      {d}
+                      {audioLabel(d, 'input')}
                     </option>
                   ))}
                 </select>

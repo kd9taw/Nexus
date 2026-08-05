@@ -483,19 +483,36 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
 /// dedicated thread. Opens the default sound devices, sets the rig, then each
 /// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
 /// decodes the captured frame into the engine.
-pub fn run_radio(engine: Arc<Mutex<Engine>>, cfg: RadioConfig) -> Result<(), String> {
-    let in_name = (!cfg.audio_in.is_empty()).then_some(cfg.audio_in.as_str());
-    let out_name = (!cfg.audio_out.is_empty()).then_some(cfg.audio_out.as_str());
-    let mut backend = match CpalBackend::open(in_name, out_name) {
+pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(), String> {
+    let in_name = (!cfg.audio_in.is_empty()).then(|| cfg.audio_in.clone());
+    let out_name = (!cfg.audio_out.is_empty()).then(|| cfg.audio_out.clone());
+    let mut backend = match CpalBackend::open(in_name.as_deref(), out_name.as_deref()) {
         Ok(b) => b,
         Err(e) => {
             // Surface a sound-card open failure to the UI (which would otherwise
-            // see only a silent, blank waterfall) before the loop bails out.
+            // see only a silent, blank waterfall).
             {
                 let mut eng = engine_lock(&engine);
                 eng.set_audio_error(Some(format!("Sound card failed to open: {e}")));
             }
-            return Err(e);
+            // ⚠️ Do NOT die here when a device was NAMED. `CpalBackend::open` became strict
+            // about a configured-but-unresolvable device (device.rs `resolve_configured`),
+            // and this `Err` is what src-tauri turns into "RADIO ENGINE STOPPED — TX/RX is
+            // dead until you restart Nexus": there is no supervisor and no restart. Strict
+            // + that = a BRICK for the commonest workflow of all, the rig switched on after
+            // the app. So fall back to the system default ONCE, keep the loop alive, and
+            // leave the banner up saying which device failed.
+            if in_name.is_none() && out_name.is_none() {
+                return Err(e); // nothing was named — the machine has no usable sound card
+            }
+            let b = CpalBackend::open(None, None)?;
+            // Record what is ACTUALLY open. The first loop tick then sees the live settings
+            // still asking for the named device, differs, and re-attempts the strict open —
+            // so a codec that was busy for a moment (PipeWire, another app) recovers by
+            // itself and clears the banner, with no restart and no re-picking.
+            cfg.audio_in.clear();
+            cfg.audio_out.clear();
+            b
         }
     };
     backend.set_tx_level(cfg.tx_level);

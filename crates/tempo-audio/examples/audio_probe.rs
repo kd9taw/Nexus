@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use tempo_app::settings::Settings;
+use tempo_audio::audiodev::AudioDevice;
 use tempo_audio::backend::AudioBackend;
 use tempo_audio::device::{available_devices, CpalBackend};
 
@@ -44,8 +45,8 @@ struct Chain {
 /// Settings. Format: `--devices IN:OUT,IN:OUT` using the indices this tool prints.
 fn profiles_from_indices(
     spec: &str,
-    ins: &[String],
-    outs: &[String],
+    ins: &[AudioDevice],
+    outs: &[AudioDevice],
 ) -> Result<Vec<tempo_app::settings::RadioProfile>, String> {
     let mut out = Vec::new();
     for (n, pair) in spec.split(',').enumerate() {
@@ -68,8 +69,9 @@ fn profiles_from_indices(
             id: n as u32 + 1,
             name: format!("probe{}", n + 1),
             enabled: true,
-            audio_in: ind.clone(),
-            audio_out: outd.clone(),
+            // The NAME, never the label — this is written into settings.json.
+            audio_in: ind.name.clone(),
+            audio_out: outd.name.clone(),
             ..Default::default()
         });
     }
@@ -139,11 +141,11 @@ fn main() {
                 // Print the lists first so the operator can read off the right indices.
                 println!("\ninput devices:");
                 for (i, d) in ins.iter().enumerate() {
-                    println!("  [{i}] {d}");
+                    println!("  [{i}] {} ({})", d.label, d.name);
                 }
                 println!("output devices:");
                 for (i, d) in outs.iter().enumerate() {
-                    println!("  [{i}] {d}");
+                    println!("  [{i}] {} ({})", d.label, d.name);
                 }
                 eprintln!("\n--devices: {e}");
                 std::process::exit(2);
@@ -170,19 +172,21 @@ fn main() {
         std::process::exit(2);
     }
 
+    // Label first (what the operator reads and what pairing matches), then the name that
+    // actually lands in settings.json — on Linux those differ.
     println!("\ninput devices:");
     for (i, d) in ins.iter().enumerate() {
-        println!("  [{i}] {d}");
+        println!("  [{i}] {} ({})", d.label, d.name);
     }
     println!("output devices:");
     for (i, d) in outs.iter().enumerate() {
-        println!("  [{i}] {d}");
+        println!("  [{i}] {} ({})", d.label, d.name);
     }
 
-    // Pre-flight. `CpalBackend::open` falls back to the SYSTEM DEFAULT device when a name
-    // matches nothing, so an unresolvable (or blank) name would quietly point both chains at
-    // one device and the probe would report a PASS it did not earn. Refuse instead — the same
-    // no-silent-fallback rule `CaptureStream::open` enforces for the voice mic.
+    // Pre-flight. A blank name means the SYSTEM DEFAULT, which would quietly point both
+    // chains at one device and report a PASS the probe did not earn; an unresolvable one is
+    // now an `Err` from `CpalBackend::open`, but naming it here is a far clearer message.
+    // Refuse both — the same no-silent-fallback rule `CaptureStream::open` enforces.
     let mut refused = false;
     for p in &radios {
         for (kind, want, list) in [
@@ -192,7 +196,7 @@ fn main() {
             if want.is_empty() {
                 println!("\nREFUSED: {} has no audio {kind} device set.", p.name);
                 refused = true;
-            } else if let Some(i) = list.iter().position(|d| d == want) {
+            } else if let Some(i) = list.iter().position(|d| d.name == want) {
                 println!("\n{} audio {kind}: {want:?} → device [{i}]", p.name);
             } else {
                 println!(

@@ -388,6 +388,9 @@ the crates below. Pull in the full transitive license set with `cargo about` /
   installer before applying it) — MIT OR Apache-2.0.
 - **tauri-plugin-opener** (open a URL / file in the system handler) — MIT OR Apache-2.0.
 - **cpal** (sound-card audio transport) — MIT OR Apache-2.0.
+- **alsa** (Linux only: reading ALSA's PCM device hints, so the audio picker can show the
+  card description the operator's own system shows — cpal keeps only the raw PCM name) —
+  Apache-2.0 OR MIT. Already present as cpal's own dependency at the same version.
 - **serialport** (serial CAT / RTS-DTR keying) — MPL-2.0.
 - **sgp4** (SGP4/SDP4 orbital propagation for satellite geometry) — MIT.
 - **keyring** (OS-native credential vault for LoTW / QRZ / ClubLog / eQSL

@@ -4946,6 +4946,7 @@ dependencies = [
 name = "tempo-audio"
 version = "0.2.0"
 dependencies = [
+ "alsa",
  "cpal",
  "deepcw",
  "hound",

@@ -117,7 +117,22 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
   const [serialPort, setSerialPort] = useState(() => settings?.serialPort ?? '')
   const [audioIn, setAudioIn] = useState(() => settings?.audioIn ?? '')
   const [audioOut, setAudioOut] = useState(() => settings?.audioOut ?? '')
-  const [audio, setAudio] = useState<AudioDevices>({ input: [], output: [] })
+  // Device NAMES (what gets stored) kept apart from their display labels — the Settings
+  // panel does the same, so the dedupe/DAX code below keeps working on plain strings.
+  const [audio, setAudio] = useState<{ input: string[]; output: string[] }>({ input: [], output: [] })
+  // Per direction, not merged: one ALSA PCM can read differently in the two lists (its
+  // label shortens only where its card is unambiguous within that list).
+  const [audioLabels, setAudioLabels] = useState<{
+    input: Record<string, string>
+    output: Record<string, string>
+  }>({ input: {}, output: {} })
+  const applyAudio = (d: AudioDevices) => {
+    setAudio({ input: d.input.map((x) => x.name), output: d.output.map((x) => x.name) })
+    setAudioLabels({
+      input: Object.fromEntries(d.input.map((x) => [x.name, x.label])),
+      output: Object.fromEntries(d.output.map((x) => [x.name, x.label])),
+    })
+  }
   const [detected, setDetected] = useState<DetectedRig[] | null>(null)
   const [detectedFlex, setDetectedFlex] = useState<{ model: string; nickname: string; ip: string }[]>([])
   const [detecting, setDetecting] = useState(false)
@@ -128,7 +143,7 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
   useEffect(() => {
     if (step !== 1) return
     getAudioDevices()
-      .then(setAudio)
+      .then(applyAudio)
       .catch(() => {})
   }, [step])
 
@@ -208,6 +223,10 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
 
   const gridState = mygrid.trim() === '' ? 'empty' : gridOk(mygrid) ? 'ok' : 'bad'
   const dax = findDaxDevices(audio.input, audio.output)
+  // Same rule as Settings: show the human label, and say plainly when a saved device is
+  // not on this machine (that is now a visible error at open time, not a silent fallback).
+  const audioLabel = (name: string, kind: 'input' | 'output') =>
+    audio[kind].includes(name) ? (audioLabels[kind][name] ?? name) : `${name} — not detected`
 
   const runDetect = () => {
     setDetecting(true)
@@ -477,7 +496,7 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
                     a blank select that can only LOSE the saved routing is a trap. */}
                 {[...new Set([...(audioIn ? [audioIn] : []), ...audio.input])].map((d) => (
                   <option key={d} value={d}>
-                    {d}
+                    {audioLabel(d, 'input')}
                   </option>
                 ))}
               </select>
@@ -488,7 +507,7 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
                 <option value="">System default</option>
                 {[...new Set([...(audioOut ? [audioOut] : []), ...audio.output])].map((d) => (
                   <option key={d} value={d}>
-                    {d}
+                    {audioLabel(d, 'output')}
                   </option>
                 ))}
               </select>

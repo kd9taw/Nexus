@@ -13,6 +13,7 @@
 //!    Rigs behind a generic bridge report only the chip name → no rig match (just a
 //!    driver hint), which is the honest result.
 
+use crate::audiodev::AudioDevice;
 use crate::rigmodels::rig_models;
 
 /// A known USB-serial bridge-chip family (by USB vendor id).
@@ -355,8 +356,8 @@ pub struct DetectedRig {
 /// the matching/pairing is testable; the command layer supplies the live enumeration.
 pub fn detect_rigs(
     ports: &[crate::ports::UsbPort],
-    audio_in: &[String],
-    audio_out: &[String],
+    audio_in: &[AudioDevice],
+    audio_out: &[AudioDevice],
     os: HostOs,
 ) -> Vec<DetectedRig> {
     ports
@@ -388,20 +389,39 @@ pub fn detect_rigs(
 }
 
 /// Pick the sound device most likely to be this rig's USB-Audio CODEC: prefer a
-/// device whose name references the rig's product/model, else a generic "USB Audio
-/// CODEC" (the near-universal FT8 rig-audio device name). `None` if neither.
-fn pair_audio(product: &str, audio: &[String]) -> Option<String> {
+/// device whose name references the rig's product/model, else the most specific generic
+/// "USB Audio CODEC" match (the near-universal FT8 rig-audio device name). `None` if
+/// neither. Returns the device's `name` — the STORABLE string, never the label.
+///
+/// The matching runs against the operator-facing `label`, which is why this works on Linux
+/// at all: cpal names an ALSA device `plughw:CARD=CODEC,DEV=0`, which no pattern here has
+/// ever matched, so zero-config rig-audio pairing silently did nothing on every Linux box
+/// until the picker started carrying descriptions alongside names.
+fn pair_audio(product: &str, audio: &[AudioDevice]) -> Option<String> {
     let pn = normalize(product);
     if !pn.is_empty() {
-        if let Some(a) = audio.iter().find(|a| normalize(a).contains(&pn)) {
-            return Some(a.clone());
+        // Product pass: label AND name. On Linux the ALSA card id is often derived from
+        // the USB product string ("plughw:CARD=FTDX10,DEV=0"), so the name is a second
+        // real signal rather than noise.
+        if let Some(a) = audio
+            .iter()
+            .find(|a| normalize(&format!("{} {}", a.label, a.name)).contains(&pn))
+        {
+            return Some(a.name.clone());
         }
     }
-    audio.iter().find(|a| is_generic_rig_codec(a)).cloned()
+    // Generic fallback: LABEL ONLY, and by TIER. This pass also fills audioOut, where a
+    // false positive is the "TX out the PC speakers" class, so it stays narrow.
+    audio
+        .iter()
+        .filter_map(|a| generic_codec_tier(&a.label).map(|t| (t, a)))
+        .min_by_key(|(t, _)| *t)
+        .map(|(_, a)| a.name.clone())
 }
 
-/// Does this sound-device name look like a rig-audio USB codec rather than the PC's own
-/// speakers/mic? Used only as the FALLBACK, after a product-name match fails.
+/// How specifically does this sound-device name look like a rig-audio USB codec? Lower is
+/// more specific; `None` = not a rig codec at all. Used only as the FALLBACK, after a
+/// product-name match fails.
 ///
 /// "USB AUDIO CODEC" is the near-universal name for a radio's built-in codec and for most
 /// RigBlaster models. It is NOT what an outboard interface cable presents: a Digirig Mobile
@@ -409,20 +429,34 @@ fn pair_audio(product: &str, audio: &[String]) -> Option<String> {
 /// "USB Audio Device", so neither existing pattern matched and Detect paired nothing — the
 /// operator had to find the device by hand with no hint which of several it was.
 ///
+/// ⚠️ **Tiered, not a flat OR** — the flat version took the FIRST device matching ANY
+/// pattern, which is list order. On the reported 8-card Linux box the input list runs
+/// "…USB Audio Device… USB AUDIO CODEC", so once labels became real the broad
+/// `USB AUDIO DEVICE` pattern would have paired card 3 instead of the FTDX10: pairing
+/// nothing would have become pairing the WRONG thing, which is worse. Ranking fixes that
+/// on Windows too, though only where 2+ generic USB audio devices exist — and there
+/// today's answer is arbitrary list order anyway.
+///
 /// Deliberately conservative. Every pattern here still contains "USB", so a built-in laptop
 /// mic/speaker (Realtek, "Microphone Array", HDMI) can never win the fallback; and because this
 /// only runs after the product-name pass, a rig that DOES name itself is unaffected.
-fn is_generic_rig_codec(name: &str) -> bool {
+fn generic_codec_tier(name: &str) -> Option<u8> {
     let n = name.to_ascii_uppercase();
-    n.contains("USB AUDIO CODEC")
-        || n.contains("USB CODEC")
+    if n.contains("USB AUDIO CODEC") || n.contains("USB CODEC") {
+        Some(0)
+    } else if n.contains("USB PNP SOUND DEVICE") {
         // Digirig Mobile / Digirig Lite / CM108-class dongles.
-        || n.contains("USB PNP SOUND DEVICE")
+        Some(1)
+    } else if n.contains("USB AUDIO DEVICE") {
         // Generic enumeration used by several interface cables and by ALSA for the same devices.
-        || n.contains("USB AUDIO DEVICE")
+        Some(2)
+    } else if n.contains("USB AUDIO") {
         // Kept last and broadest: the historical pattern, which also covers names like
         // "USB Audio CODEC #2" that the duplicate-name disambiguator produces.
-        || n.contains("USB AUDIO")
+        Some(3)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -567,6 +601,21 @@ mod tests {
         );
     }
 
+    /// A Windows/macOS device, where cpal's name IS the friendly string (label == name).
+    fn wdev(name: &str) -> AudioDevice {
+        AudioDevice {
+            name: name.to_string(),
+            label: name.to_string(),
+        }
+    }
+    /// A Linux device: the ALSA PCM name addresses it, the card description names it.
+    fn ldev(name: &str, label: &str) -> AudioDevice {
+        AudioDevice {
+            name: name.to_string(),
+            label: label.to_string(),
+        }
+    }
+
     /// Digirig's codec matched NEITHER prior pattern, so Detect paired no audio at all and the
     /// operator had to guess which device was the radio.
     #[test]
@@ -578,7 +627,7 @@ mod tests {
             "USB Audio CODEC #2",   // the duplicate-name disambiguator
         ] {
             assert!(
-                is_generic_rig_codec(name),
+                generic_codec_tier(name).is_some(),
                 "{name} should be recognised as rig audio"
             );
         }
@@ -590,8 +639,74 @@ mod tests {
             "Speakers (Realtek)",
             "HDMI Output",
         ] {
-            assert!(!is_generic_rig_codec(name), "{name} is not rig audio");
+            assert!(
+                generic_codec_tier(name).is_none(),
+                "{name} is not rig audio"
+            );
         }
+    }
+
+    /// THE FIELD REPORT'S THIRD CASUALTY: zero-config rig-audio pairing on Linux, which has
+    /// never once worked — every pattern is written for a description ("USB AUDIO CODEC")
+    /// and cpal only ever offered the PCM name ("plughw:CARD=CODEC,DEV=0"), so Detect Rigs
+    /// paired the CAT port and left audio blank on every Linux box.
+    ///
+    /// The FTDX10 hides behind a generic CP2102 bridge, so its product string names no rig
+    /// and this must resolve through the generic fallback — and it must reach the CODEC and
+    /// not the plain "USB Audio Device" that sorts ahead of it on this operator's machine.
+    #[test]
+    fn linux_pairs_the_rig_codec_by_its_description_not_its_pcm_name() {
+        let ports = vec![port(
+            "/dev/ttyUSB0",
+            0x10C4,
+            "CP2102 USB to UART Bridge Controller",
+            "Silicon Labs",
+        )];
+        // His real pruned list order: card 3 first, the FTDX10 (card 7) last.
+        let audio = vec![
+            ldev("plughw:CARD=Generic,DEV=0", "HD-Audio Generic"),
+            ldev("plughw:CARD=Device,DEV=0", "USB Audio Device"),
+            ldev("plughw:CARD=CODEC,DEV=0", "USB AUDIO CODEC"),
+            ldev("pipewire", "PipeWire Sound Server"),
+        ];
+        let got = detect_rigs(&ports, &audio, &audio, HostOs::Linux);
+        // The STORABLE ALSA name comes back, never the label — a label cannot address a device.
+        assert_eq!(
+            got[0].suggested_audio.as_deref(),
+            Some("plughw:CARD=CODEC,DEV=0")
+        );
+        assert_eq!(
+            got[0].suggested_audio_out.as_deref(),
+            Some("plughw:CARD=CODEC,DEV=0")
+        );
+    }
+
+    /// The tiering, on its own: with two generic USB audio devices present, the more
+    /// specific "CODEC" wins wherever it sits in the list. A flat first-match OR would take
+    /// list order and pair the wrong radio.
+    #[test]
+    fn the_more_specific_generic_codec_wins_regardless_of_list_order() {
+        let ports = vec![port(
+            "COM9",
+            0x10C4,
+            "CP2102 USB to UART Bridge",
+            "Silicon Labs",
+        )];
+        let audio = vec![wdev("USB Audio Device"), wdev("USB Audio CODEC")];
+        assert_eq!(
+            detect_rigs(&ports, &audio, &audio, HostOs::Windows)[0]
+                .suggested_audio
+                .as_deref(),
+            Some("USB Audio CODEC")
+        );
+        // ...and the Digirig dongle still wins over a bare "USB Audio Device".
+        let audio = vec![wdev("USB Audio Device"), wdev("USB PnP Sound Device")];
+        assert_eq!(
+            detect_rigs(&ports, &audio, &audio, HostOs::Windows)[0]
+                .suggested_audio
+                .as_deref(),
+            Some("USB PnP Sound Device")
+        );
     }
 
     #[test]
@@ -599,14 +714,8 @@ mod tests {
         // An IC-705 (native USB, Silicon Labs bridge) + its USB-Audio CODEC.
         let ports = vec![port("COM5", 0x10C4, "IC-705", "Icom Inc.")];
         // Windows enumerates the rig's CODEC under DIFFERENT input vs output names.
-        let audio_in = vec![
-            "Microphone (USB Audio CODEC)".to_string(),
-            "Realtek HD".to_string(),
-        ];
-        let audio_out = vec![
-            "Speakers (USB Audio CODEC)".to_string(),
-            "Realtek HD".to_string(),
-        ];
+        let audio_in = vec![wdev("Microphone (USB Audio CODEC)"), wdev("Realtek HD")];
+        let audio_out = vec![wdev("Speakers (USB Audio CODEC)"), wdev("Realtek HD")];
         let got = detect_rigs(&ports, &audio_in, &audio_out, HostOs::Windows);
         assert_eq!(got.len(), 1);
         let r = &got[0];
@@ -632,12 +741,8 @@ mod tests {
         // A CH340-cabled rig that reports only the chip → no model, but a driver hint
         // and (on Linux) bundled. No audio match → None.
         let ports = vec![port("/dev/ttyUSB0", 0x1A86, "USB Serial", "wch.cn")];
-        let got = detect_rigs(
-            &ports,
-            &["Built-in Audio".into()],
-            &["Built-in Audio".into()],
-            HostOs::Linux,
-        );
+        let audio = vec![wdev("Built-in Audio")];
+        let got = detect_rigs(&ports, &audio, &audio, HostOs::Linux);
         assert_eq!(got[0].suggested_model, None);
         assert_eq!(got[0].chip, UsbSerialChip::Ch340);
         assert!(got[0].driver.as_ref().is_some_and(|d| d.bundled)); // Linux ships CH340
@@ -686,14 +791,14 @@ mod tests {
 
     #[test]
     fn pair_audio_prefers_model_named_device_over_generic() {
-        let audio = vec!["Generic USB Audio".to_string(), "IC-705 Audio".to_string()];
+        let audio = vec![wdev("Generic USB Audio"), wdev("IC-705 Audio")];
         assert_eq!(
             pair_audio("IC-705", &audio).as_deref(),
             Some("IC-705 Audio")
         );
         // No model-named device → falls back to the generic USB-audio device.
         assert_eq!(
-            pair_audio("FT-991A", &["Generic USB Audio".into()]).as_deref(),
+            pair_audio("FT-991A", &[wdev("Generic USB Audio")]).as_deref(),
             Some("Generic USB Audio"),
         );
     }

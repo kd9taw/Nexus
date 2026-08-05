@@ -821,10 +821,24 @@ export interface BandChannel {
   note: string
 }
 
-/** Audio input + output device names discovered on the host. */
+/**
+ * One selectable audio device: the value to STORE plus the text to SHOW.
+ *
+ * Identical strings on Windows/macOS (cpal reports the OS's friendly name). On Linux
+ * `name` is the ALSA PCM name (`plughw:CARD=CODEC,DEV=0`) and `label` its card description
+ * (`USB AUDIO CODEC`) — the string the operator's system, `aplay -l`, KDE, pavucontrol and
+ * WSJT-X all show. ⚠️ Only `name` is ever written to settings: two identical rig codecs
+ * share a label, so a label cannot address a device.
+ */
+export interface AudioDeviceInfo {
+  name: string
+  label: string
+}
+
+/** Audio input + output devices discovered on the host. */
 export interface AudioDevices {
-  input: string[]
-  output: string[]
+  input: AudioDeviceInfo[]
+  output: AudioDeviceInfo[]
 }
 
 /** A Parks/Summits On The Air activator currently on the air (hunter feed). */

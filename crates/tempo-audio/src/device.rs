@@ -13,13 +13,14 @@
 //! Device/rate selection here is the conservative default; on a real station you
 //! may want to pick a specific CODEC device and a 48 kHz config explicitly.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 
+use crate::audiodev::{split_device_ordinal, AudioDevice};
 use crate::backend::AudioBackend;
 use crate::capture_resample::CaptureResampler;
 use crate::monitor::{Monitor, SpscRing};
@@ -50,10 +51,14 @@ const RX_METER_DECAY: f32 = 0.85;
 /// the full duration of that work, so enumeration can never overlap a stream open.
 pub(crate) static AUDIO_HOST_LOCK: Mutex<()> = Mutex::new(());
 
-/// Enumerate the host's input and output device names. Errors (and devices whose
-/// name can't be read) are ignored, yielding empty/partial lists rather than
-/// failing — this feeds a UI dropdown.
-pub fn available_devices() -> (Vec<String>, Vec<String>) {
+/// Enumerate the host's input and output devices for the Settings pickers. Errors (and
+/// devices whose name can't be read) are ignored, yielding empty/partial lists rather
+/// than failing — this feeds a UI dropdown.
+///
+/// Each entry carries the string that ADDRESSES the device and the string the operator
+/// READS; see [`AudioDevice`] for why those differ on Linux and why only the former is
+/// ever persisted.
+pub fn available_devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
     // cpal's host/device enumeration can PANIC deep in the platform backend (Windows WASAPI has
     // been seen to panic on a broken/virtual device — some Flex DAX, RDP-remote-audio, or bad-driver
     // setups). This runs when the Settings tab opens, so an un-isolated panic there crashes the whole
@@ -64,17 +69,13 @@ pub fn available_devices() -> (Vec<String>, Vec<String>) {
     std::panic::catch_unwind(|| {
         // Serialize against CpalBackend::open() (see AUDIO_HOST_LOCK) — concurrent cpal
         // host/device access during stream construction crashes natively.
+        //
+        // ⚠️ Still required on the Linux path even though it no longer calls cpal at all:
+        // `snd_device_name_hint` walks alsa-lib's refcounted GLOBAL config tree, which
+        // `CpalBackend::open` may concurrently be inside `snd_pcm_open` on. Do not delete
+        // this as dead weight when reading the Linux branch alone.
         let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let host = cpal::default_host();
-        let inputs = host
-            .input_devices()
-            .map(|it| it.filter_map(|d| d.name().ok()).collect())
-            .unwrap_or_default();
-        let outputs = host
-            .output_devices()
-            .map(|it| it.filter_map(|d| d.name().ok()).collect())
-            .unwrap_or_default();
-        (disambiguate_names(inputs), disambiguate_names(outputs))
+        enumerate_devices()
     })
     .unwrap_or_else(|_| {
         // Surface caught enumeration panics (rate-limited) — silent catches hid a
@@ -93,55 +94,128 @@ pub fn available_devices() -> (Vec<String>, Vec<String>) {
     })
 }
 
-/// Disambiguate duplicate device names for a UI picker: the FIRST occurrence of a name is kept
-/// bare (so existing single-device configs still resolve), and each later duplicate gets a
-/// trailing " #N" (`#2`, `#3`, …). Two radios that both enumerate as the generic "USB Audio CODEC"
-/// (a Yaesu + Icom pair is the common case) thus become distinct, selectable entries instead of two
-/// identical strings that both resolve to the first codec. Matched back by [`split_device_ordinal`].
-fn disambiguate_names(names: Vec<String>) -> Vec<String> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    names
-        .into_iter()
-        .map(|n| {
-            let c = counts.entry(n.clone()).or_insert(0);
-            *c += 1;
-            if *c == 1 {
-                n
-            } else {
-                format!("{n} #{c}")
-            }
-        })
-        .collect()
-}
-
-/// Inverse of [`disambiguate_names`] for one name: split off a trailing " #N" (N ≥ 2) into a base
-/// name + 1-based ordinal. A name with no such suffix is the 1st (bare) device.
-fn split_device_ordinal(name: &str) -> (&str, usize) {
-    if let Some(pos) = name.rfind(" #") {
-        if let Ok(n) = name[pos + 2..].parse::<usize>() {
-            if n >= 2 {
-                return (&name[..pos], n);
-            }
+/// **Linux**: name devices from ALSA's PCM hints directly, never from cpal.
+///
+/// cpal's ALSA host walks the same `HintIter` but keeps only `hint.name`, discarding the
+/// human `desc` and the `direction`, and it probe-OPENS every hint in both directions,
+/// silently dropping whatever will not open. On a PipeWire desktop that reduced a
+/// reported 8-card machine to ONE card under raw `hw:`/`dmix:` names while flooding the
+/// log with ALSA open errors. Reading the hints ourselves opens NO PCM, so nothing is
+/// dropped for being busy and the error flood disappears by construction. See
+/// [`crate::audiodev`] for the full account and the pruning policy.
+#[cfg(target_os = "linux")]
+fn enumerate_devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
+    match alsa_hints() {
+        Ok(hints) => crate::audiodev::prune_alsa_hints(&hints),
+        Err(e) => {
+            // No cpal fallback on purpose: cpal's ALSA host reads the SAME hint list, so
+            // if this failed cpal's enumeration has nothing left to offer either.
+            eprintln!("nexus: ALSA device enumeration failed ({e}); device lists are empty");
+            (Vec::new(), Vec::new())
         }
     }
-    (name, 1)
+}
+
+/// Read every PCM hint alsa-lib knows about.
+///
+/// Opens no PCM stream — only each card's non-exclusive CONTROL device, which is exactly
+/// why `aplay -L` still lists a card PipeWire is holding. So a busy rig codec is LISTED
+/// (it is the operator's device and may well be free by the time he transmits) instead of
+/// vanishing, and an unopenable one fails loudly at open time via [`resolve_configured`].
+#[cfg(target_os = "linux")]
+fn alsa_hints() -> Result<Vec<crate::audiodev::PcmHint>, String> {
+    use crate::audiodev::{HintDir, PcmHint};
+    let iter = alsa::device_name::HintIter::new_str(None, "pcm").map_err(|e| e.to_string())?;
+    Ok(iter
+        .filter_map(|h| {
+            Some(PcmHint {
+                name: h.name?,
+                desc: h.desc,
+                // ALSA's IOID has no "both" value — a bidirectional PCM omits it, which
+                // the alsa crate reports as None. Pass that through unchanged.
+                direction: match h.direction {
+                    Some(alsa::Direction::Capture) => Some(HintDir::Capture),
+                    Some(alsa::Direction::Playback) => Some(HintDir::Playback),
+                    None => None,
+                },
+            })
+        })
+        .collect())
+}
+
+/// **Windows / macOS**: cpal's own device names, exactly as before the Linux naming fix.
+///
+/// WASAPI reports `DEVPKEY_Device_FriendlyName` and CoreAudio
+/// `kAudioDevicePropertyDeviceNameCFString` — both already the friendly string the OS
+/// shows the operator — so `label == name` and every rendered `<option>` is byte-identical
+/// to what shipped. That is asserted, not assumed: see
+/// `audiodev::tests::cpal_names_are_their_own_labels` (the pure string path, run on every
+/// platform) and `tests::non_linux_devices_are_their_own_labels` below (the real path, run
+/// on the Windows/macOS runners).
+#[cfg(not(target_os = "linux"))]
+fn enumerate_devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
+    use crate::audiodev::devices_from_cpal_names;
+    let host = cpal::default_host();
+    let inputs: Vec<String> = host
+        .input_devices()
+        .map(|it| it.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default();
+    let outputs: Vec<String> = host
+        .output_devices()
+        .map(|it| it.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default();
+    (
+        devices_from_cpal_names(inputs),
+        devices_from_cpal_names(outputs),
+    )
+}
+
+/// Anything that can report its device name.
+///
+/// Implemented for `cpal::Device` in the app and for a plain `String` in the tests — cpal
+/// has no public `Device` constructor, so without this seam the selection POLICY
+/// ([`pick_device`]'s ordinal handling, [`resolve_configured`]'s strict/fallback split)
+/// could not be tested at all on a machine without a sound card.
+pub(crate) trait NamedDevice {
+    fn device_name(&self) -> Option<String>;
+}
+
+impl NamedDevice for cpal::Device {
+    fn device_name(&self) -> Option<String> {
+        self.name().ok()
+    }
+}
+
+/// A test stand-in: the device's name plus an id, so a test can tell WHICH of two
+/// identically-named codecs the picker returned (the ordinal suffix exists for exactly
+/// that case, and a stand-in that could not distinguish them could not prove it).
+#[cfg(test)]
+impl NamedDevice for (String, u32) {
+    fn device_name(&self) -> Option<String> {
+        Some(self.0.clone())
+    }
 }
 
 /// Pick a device by name from an iterator of devices, falling back to `default`
 /// when `name` is empty/None or no device matches. Understands the " #N" ordinal suffix
-/// [`disambiguate_names`] appends to identically-named devices, so two rigs sharing the generic
-/// "USB Audio CODEC" name resolve to DIFFERENT codecs (else `find()` always returns the first).
-pub(crate) fn pick_device(
-    devices: Option<impl Iterator<Item = cpal::Device>>,
+/// `audiodev::disambiguate_names` appends to identically-named devices, so two rigs sharing
+/// the generic "USB Audio CODEC" name resolve to DIFFERENT codecs (else `find()` always
+/// returns the first).
+///
+/// ⚠️ The silent `default` fallback is right for exactly one caller — the voice mic, which
+/// passes `default = None` and so gets no fallback at all. Anything resolving a device the
+/// operator explicitly CHOSE must use [`resolve_configured`] instead.
+pub(crate) fn pick_device<D: NamedDevice>(
+    devices: Option<impl Iterator<Item = D>>,
     name: Option<&str>,
-    default: Option<cpal::Device>,
-) -> Option<cpal::Device> {
+    default: Option<D>,
+) -> Option<D> {
     let wanted = name.map(str::trim).filter(|n| !n.is_empty());
     if let (Some(wanted), Some(devs)) = (wanted, devices) {
         let (base, ordinal) = split_device_ordinal(wanted);
         let mut seen = 0usize;
         for d in devs {
-            if d.name().ok().as_deref() == Some(base) {
+            if d.device_name().as_deref() == Some(base) {
                 seen += 1;
                 if seen == ordinal {
                     return Some(d);
@@ -150,6 +224,39 @@ pub(crate) fn pick_device(
         }
     }
     default
+}
+
+/// Resolve a CONFIGURED device name, strictly.
+///
+/// The difference from [`pick_device`] is the whole of fix C: an EMPTY selection still
+/// means "system default" (a real choice the picker offers, listed as "System default"),
+/// but a NON-EMPTY one that resolves to nothing is an `Err` the operator SEES.
+///
+/// It used to fall back to the system default silently. So an operator who had explicitly
+/// chosen his rig's codec, on a day it would not open, was captured from the LAPTOP
+/// MICROPHONE with TX audio going to the PC speakers — while PTT still keyed the rig over
+/// CAT. That is a dead, unmodulated carrier on the air, and it looked like everything was
+/// working. `Engine::set_audio_error` renders as a persistent banner, so now it says so.
+///
+/// On Linux the usual cause is BUSY, not absent: resolution runs through cpal's
+/// `input_devices()`, which probe-opens (see [`enumerate_devices`]), so a card PipeWire or
+/// another application is holding is listed by us and unresolvable here. The message names
+/// both possibilities rather than guessing.
+pub(crate) fn resolve_configured<D: NamedDevice>(
+    devices: Option<impl Iterator<Item = D>>,
+    name: Option<&str>,
+    default: Option<D>,
+    what: &str,
+) -> Result<D, String> {
+    match name.map(str::trim).filter(|n| !n.is_empty()) {
+        None => default.ok_or_else(|| format!("this system has no default {what} device")),
+        Some(wanted) => pick_device(devices, Some(wanted), None).ok_or_else(|| {
+            format!(
+                "audio {what} device {wanted:?} is not available \
+                 (missing, or in use by another application)"
+            )
+        }),
+    }
 }
 
 /// Real sound-card backend. Keep it alive for the duration of operation — the
@@ -321,9 +428,11 @@ impl CpalBackend {
         Self::open(None, None)
     }
 
-    /// Open the named input + output devices (empty/`None` → system default;
-    /// a name that matches no device also falls back to the default) and start
-    /// streaming.
+    /// Open the named input + output devices and start streaming.
+    ///
+    /// Empty/`None` → the system default. A NON-EMPTY name that matches no device is an
+    /// `Err` naming the device (it used to fall back to the system default silently — see
+    /// [`resolve_configured`] for why that had to stop).
     pub fn open(in_name: Option<&str>, out_name: Option<&str>) -> Result<Self, String> {
         // Hold the host lock across the ENTIRE host/device/stream-construction
         // sequence (through both `.play()` calls below) so a concurrent
@@ -331,18 +440,18 @@ impl CpalBackend {
         // can never drive cpal's native init at the same time. See AUDIO_HOST_LOCK.
         let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let host = cpal::default_host();
-        let in_dev = pick_device(
+        let in_dev = resolve_configured(
             host.input_devices().ok(),
             in_name,
             host.default_input_device(),
-        )
-        .ok_or("no input device")?;
-        let out_dev = pick_device(
+            "input",
+        )?;
+        let out_dev = resolve_configured(
             host.output_devices().ok(),
             out_name,
             host.default_output_device(),
-        )
-        .ok_or("no output device")?;
+            "output",
+        )?;
 
         let in_cfg = in_dev.default_input_config().map_err(|e| e.to_string())?;
         let out_cfg = out_dev.default_output_config().map_err(|e| e.to_string())?;
@@ -741,46 +850,116 @@ impl AudioBackend for CpalBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{disambiguate_names, split_device_ordinal};
+    use super::{pick_device, resolve_configured};
 
+    /// A stand-in host — cpal exposes no `Device` constructor, so this is the only way to
+    /// exercise the policy on a machine with no sound card.
+    ///
+    /// It reports RAW names, the way a real host does: the " #N" ordinal is a thing OUR
+    /// picker adds, so a two-rig station really does present two devices with the SAME
+    /// name. (Writing the fixture the other way was the first thing these tests caught.)
+    fn host() -> Vec<(String, u32)> {
+        vec![
+            ("Microphone (USB Audio CODEC)".to_string(), 1),
+            ("Line In (Realtek)".to_string(), 2),
+            ("Microphone (USB Audio CODEC)".to_string(), 3),
+        ]
+    }
+    fn default_dev() -> (String, u32) {
+        ("Line In (Realtek)".to_string(), 2)
+    }
+
+    /// FIX C, the behaviour change. An EMPTY selection is "System default" and still
+    /// falls back; a name the operator explicitly chose that resolves to nothing is an
+    /// error he can see, NOT a silent switch to whatever the OS calls default (which on a
+    /// laptop is the built-in microphone, with TX audio going to the speakers while PTT
+    /// still keys the rig — a dead carrier on the air that looked like it was working).
     #[test]
-    fn disambiguates_duplicate_device_names() {
-        // Two rigs both enumerating as "USB Audio CODEC" must become distinct, selectable entries;
-        // the first stays bare (existing single-device configs keep resolving), later ones get #N.
-        let got = disambiguate_names(vec![
-            "USB Audio CODEC".into(),
-            "Speakers".into(),
-            "USB Audio CODEC".into(),
-            "USB Audio CODEC".into(),
-        ]);
-        assert_eq!(
-            got,
-            vec![
-                "USB Audio CODEC",
-                "Speakers",
-                "USB Audio CODEC #2",
-                "USB Audio CODEC #3",
-            ]
-        );
+    fn an_unresolvable_explicit_choice_is_an_error_not_the_default() {
+        let err = resolve_configured(
+            Some(host().into_iter()),
+            Some("plughw:CARD=CODEC,DEV=0"),
+            Some(default_dev()),
+            "input",
+        )
+        .unwrap_err();
+        assert!(err.contains("plughw:CARD=CODEC,DEV=0"), "{err}");
+        assert!(err.contains("in use by another application"), "{err}");
     }
 
     #[test]
-    fn split_device_ordinal_is_the_inverse_of_disambiguate() {
+    fn an_empty_selection_still_means_the_system_default() {
+        for name in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                resolve_configured(Some(host().into_iter()), name, Some(default_dev()), "input"),
+                Ok(default_dev()),
+                "empty selection {name:?} must keep falling back"
+            );
+        }
+    }
+
+    #[test]
+    fn a_resolvable_choice_resolves_including_the_ordinal_suffix() {
+        // The " #N" suffix is the ADDRESS of the SECOND identically-named codec; losing it
+        // would send a two-rig station to the wrong radio. Ids 1 and 3 share a name, so the
+        // id is the only proof the right one came back.
         assert_eq!(
-            split_device_ordinal("USB Audio CODEC"),
-            ("USB Audio CODEC", 1)
+            resolve_configured(
+                Some(host().into_iter()),
+                Some("Microphone (USB Audio CODEC) #2"),
+                Some(default_dev()),
+                "input",
+            ),
+            Ok(("Microphone (USB Audio CODEC)".to_string(), 3))
         );
+        // ...and the bare name is still the FIRST, so existing single-rig configs resolve
+        // exactly as they always did.
         assert_eq!(
-            split_device_ordinal("USB Audio CODEC #2"),
-            ("USB Audio CODEC", 2)
+            pick_device(
+                Some(host().into_iter()),
+                Some("Microphone (USB Audio CODEC)"),
+                None
+            ),
+            Some(("Microphone (USB Audio CODEC)".to_string(), 1))
         );
+    }
+
+    /// The voice mic's precedent, unchanged: no default means no fallback, ever.
+    #[test]
+    fn pick_device_without_a_default_still_returns_none() {
         assert_eq!(
-            split_device_ordinal("USB Audio CODEC #3"),
-            ("USB Audio CODEC", 3)
+            pick_device(Some(host().into_iter()), Some("no such device"), None),
+            None
         );
-        // Only a synthetic " #N" with N >= 2 is an ordinal; a real name that happens to contain
-        // "#1" or a non-numeric "#" is left intact as the 1st device.
-        assert_eq!(split_device_ordinal("Rig #1"), ("Rig #1", 1));
-        assert_eq!(split_device_ordinal("Mic #A"), ("Mic #A", 1));
+    }
+
+    /// The label is NOT an address. A Linux operator's stored value is the ALSA PCM name,
+    /// and resolving what he READS ("USB AUDIO CODEC") must not accidentally work — if it
+    /// ever did, something would be persisting labels.
+    #[test]
+    fn a_label_never_resolves_as_a_device_name() {
+        let alsa = vec![("plughw:CARD=CODEC,DEV=0".to_string(), 7)];
+        assert!(resolve_configured(
+            Some(alsa.into_iter()),
+            Some("USB AUDIO CODEC"),
+            Some(default_dev()),
+            "input"
+        )
+        .is_err());
+    }
+
+    /// WINDOWS / macOS REGRESSION GUARD, on the REAL path (this test does not exist on
+    /// Linux). Whatever the runner's sound hardware is, every entry the picker offers must
+    /// render its own cpal name — i.e. the DTO widening changed no visible string there.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn non_linux_devices_are_their_own_labels() {
+        let (input, output) = super::available_devices();
+        for d in input.iter().chain(output.iter()) {
+            assert_eq!(
+                d.name, d.label,
+                "cpal's name must be what the operator reads"
+            );
+        }
     }
 }

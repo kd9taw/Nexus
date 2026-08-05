@@ -6964,12 +6964,26 @@ async fn get_serial_ports_detailed() -> Vec<SerialPortInfo> {
     }
 }
 
-/// Available sound-card input/output device names (for the Settings dropdowns).
+/// One sound device for the Settings dropdowns: the value to STORE plus the text to SHOW.
+///
+/// Same shape and same reason as [`SerialPortInfo`] above. They are identical strings on
+/// Windows/macOS (cpal reports the OS's friendly name); on Linux `name` is the ALSA PCM
+/// name (`plughw:CARD=CODEC,DEV=0`) and `label` its card description (`USB AUDIO CODEC`) —
+/// the string the operator's system, `aplay -l`, KDE, pavucontrol and WSJT-X all show.
+/// ⚠️ Only `name` may ever be persisted; see `tempo_audio::audiodev::AudioDevice`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioDeviceDto {
+    name: String,
+    label: String,
+}
+
+/// Available sound-card input/output devices (for the Settings dropdowns).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AudioDevices {
-    input: Vec<String>,
-    output: Vec<String>,
+    input: Vec<AudioDeviceDto>,
+    output: Vec<AudioDeviceDto>,
 }
 
 /// Enumerate sound-card devices for the Settings audio-device pickers. Empty
@@ -6978,8 +6992,19 @@ struct AudioDevices {
 async fn get_audio_devices() -> AudioDevices {
     #[cfg(feature = "radio")]
     {
+        fn dto(v: Vec<tempo_audio::audiodev::AudioDevice>) -> Vec<AudioDeviceDto> {
+            v.into_iter()
+                .map(|d| AudioDeviceDto {
+                    name: d.name,
+                    label: d.label,
+                })
+                .collect()
+        }
         let (input, output) = tempo_audio::device::available_devices();
-        AudioDevices { input, output }
+        AudioDevices {
+            input: dto(input),
+            output: dto(output),
+        }
     }
     #[cfg(not(feature = "radio"))]
     {

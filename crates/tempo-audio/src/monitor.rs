@@ -197,7 +197,7 @@ pub use device_monitor::Monitor;
 #[cfg(feature = "device")]
 mod device_monitor {
     use super::{MonoResampler, SpscRing};
-    use crate::device::{pick_device, AUDIO_HOST_LOCK};
+    use crate::device::AUDIO_HOST_LOCK;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{SampleFormat, Stream};
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -297,6 +297,13 @@ mod device_monitor {
     /// The caller MUST already hold [`AUDIO_HOST_LOCK`]. Opens at `in_rate` when the
     /// device supports it (pure pass-through); otherwise falls back to the device
     /// default rate and nearest-neighbour resamples in the callback.
+    ///
+    /// A NAMED device that will not resolve is an `Err` (already non-fatal — it gets its
+    /// own error lane in `service.rs`), never the system default. This one is a TX-safety
+    /// edge, not just honesty: `monitor_would_transmit` guards by comparing NAMES, so a
+    /// silent fallback to the system default could land on the device that IS the rig's TX
+    /// output and monitor the received band straight back onto the air, with the guard
+    /// none the wiser because the name it checked was never the device that opened.
     fn build_output(
         device_name: &str,
         in_rate: u32,
@@ -305,12 +312,12 @@ mod device_monitor {
     ) -> Result<Stream, String> {
         let host = cpal::default_host();
         let name = (!device_name.trim().is_empty()).then_some(device_name);
-        let dev = pick_device(
+        let dev = crate::device::resolve_configured(
             host.output_devices().ok(),
             name,
             host.default_output_device(),
-        )
-        .ok_or("no monitor output device")?;
+            "monitor output",
+        )?;
         let supported = output_config_at_rate(&dev, in_rate)
             .or_else(|| dev.default_output_config().ok())
             .ok_or("no monitor output config")?;

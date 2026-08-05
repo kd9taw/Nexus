@@ -24,6 +24,11 @@
 /// APRS (AFSK-1200 / AX.25) RX decode thread — same armed-decoder pattern, RX ONLY.
 #[cfg(feature = "device")]
 pub mod aprsrx;
+/// The audio-device LIST the operator picks from, and the rules that build it
+/// (ALSA hint → `{name, label}` naming + pruning). Pure string policy — no cpal, no
+/// alsa-lib — so it unit-tests in the headless workspace build and on every CI
+/// platform; `device::available_devices` supplies the live enumeration.
+pub mod audiodev;
 pub mod backend;
 /// Test-CAT baud-ladder diagnosis for Icom CI-V rigs — probes the SAME serial port at
 /// the other common CI-V rates when the configured probe got zero bytes, and composes

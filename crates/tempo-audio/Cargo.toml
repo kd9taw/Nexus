@@ -15,7 +15,7 @@ workspace = true
 # system deps. The `device` feature pulls in cpal for real sound-card I/O — gate
 # it on so the workspace test build needs no audio libraries.
 default = []
-device = ["dep:cpal", "dep:tempo-net", "dep:tempo-sstv"]
+device = ["dep:cpal", "dep:tempo-net", "dep:tempo-sstv", "dep:alsa"]
 # Serial PTT + COM-port enumeration via `serialport`. OFF by default: the
 # headless workspace build has no libudev. The station PC enables it.
 serial = ["dep:serialport"]
@@ -43,6 +43,16 @@ tempo-net = { path = "../tempo-net", optional = true }
 tempo-sstv = { path = "../tempo-sstv", optional = true }
 # SSTV gallery persistence (gallery.json load/save in `sstv_store`). Pure.
 serde_json = "1"
+
+# Linux-only: read ALSA's PCM hints ourselves, so the device picker can show the card
+# DESCRIPTION ("USB AUDIO CODEC") the operator's system, `aplay -l`, KDE, pavucontrol and
+# WSJT-X all show — cpal keeps only the raw PCM name ("plughw:CARD=CODEC,DEV=0") and, worse,
+# probe-opens every hint and silently drops what it cannot open. `alsa` is cpal's OWN
+# dependency at the same "0.9" requirement, so this is already in Cargo.lock and adds no new
+# code to the tree; it is a direct dependency only so we can call `HintIter` (which opens no
+# PCM stream). Apache-2.0 OR MIT — GPL-3.0-only compatible; NOTICE entry filed.
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa = { version = "0.9", optional = true }
 
 # Windows-only: assign the launched rigctld to a Job Object so the OS kills it
 # (freeing the serial/COM port) whenever Tempo exits — even on a crash.

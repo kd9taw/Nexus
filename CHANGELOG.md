@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux: the audio device list finally reads like your own machine, and shows all of it.**
+  An operator with eight sound cards — an FTDX10 among them — was offered one card, named
+  `hw:CARD=Device,DEV=0`, while his system, `aplay -l`, KDE, pavucontrol and WSJT-X all called his
+  radio `USB AUDIO CODEC`. Nothing in the list matched anything he could see anywhere else, and his
+  log filled with ALSA errors. Two causes, both in the audio library Nexus used to enumerate
+  devices: it named each device by its raw ALSA PCM string and threw the human description away,
+  and it tried to *open* every device to see whether it existed — so anything held by PipeWire, or
+  by another application, silently disappeared. Nexus now reads ALSA's own device list directly. It
+  opens nothing, so a card that is momentarily busy is still offered; it uses ALSA's own
+  input/output flags instead of guessing; and it shows one entry per card, under the name the rest
+  of your desktop uses. The error flood is gone because nothing is being probed. **After updating,
+  re-pick your audio devices once** — the list now prefers the format-converting entry for each
+  card, which is the forgiving one for a radio codec, and your saved entry may be the older strict
+  one. Your existing choice keeps working and stays selected until you change it.
+- **Linux: Detect Rigs now fills in your radio's audio, which it never could before.** Automatic
+  rig-audio pairing matches on names like "USB AUDIO CODEC" — and on Linux it was only ever shown
+  `plughw:CARD=CODEC,DEV=0`, so it matched nothing and left audio blank on every Linux station
+  since the feature shipped. It now sees the real card name. Where a machine has more than one
+  generic USB audio device, the more specific match wins rather than whichever came first in the
+  list, so a radio codec is preferred over a plain USB sound adapter (this part applies on Windows
+  and macOS too).
+- **A radio audio device that will not open now says so instead of quietly using the wrong one.**
+  If you had explicitly chosen your rig's codec and it was unavailable — powered off, unplugged,
+  or held by another program — Nexus fell back to the system default without a word. On a laptop
+  that means receiving from the built-in microphone and sending transmit audio to the speakers,
+  while PTT still keys the radio over CAT: a dead unmodulated carrier on the air that looks like
+  everything is working. You now get a banner naming the device that failed. Nexus keeps running on
+  the system default so the radio is not dead in the water, and retries your device once as the
+  radio loop starts — so a codec that was busy for only a moment recovers on its own. If it is
+  still unavailable, the banner stays up and saving your audio settings tries again. "System
+  default" is still a real choice and still behaves exactly as before. The device picker also
+  marks a saved device that is not currently present as **not detected**.
+
 - **FT8 decodes the station answering your CQ when you transmit off your receive frequency.**
   WSJT-X gives its deepest decoding two frequency windows, not one: around where you listen, and
   around where you transmit. The second exists because a caller normally answers on *your*
