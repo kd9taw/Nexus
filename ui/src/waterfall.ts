@@ -125,8 +125,20 @@ export function applyGainZero(
  * Two regimes fall out of that, and both are needed:
  *
  * - **A pixel covers more than one bin (decimating).** MAX over the bins it covers,
- *   so a single-bin carrier can never fall between pixels. WSJT-X aggregates per
- *   pixel column for the same reason (`widegraph.cpp` dataSink2, `binsPerPixel`).
+ *   so a single-bin carrier can never fall between pixels.
+ *   ⚠️ THIS IS A DELIBERATE DIVERGENCE FROM UPSTREAM, NOT A MATCH — an earlier version
+ *   of this comment claimed WSJT-X does the same and that was FALSE. `widegraph.cpp`
+ *   dataSink2 computes both and ships the SUM: `m_swide[j]=nbpp*ss` (:187), with the
+ *   max-hold line sitting COMMENTED OUT directly above it (`// m_swide[j]=nbpp*smax;`
+ *   :186). Upstream tried max-hold and abandoned it.
+ *   We diverge because our row is not theirs: ours is already a dB display value, so
+ *   summing or averaging it is arithmetic on a log axis — the geometric-mean trap that
+ *   `RowAverage` converts through `display_to_power` specifically to avoid. Max is the
+ *   one aggregate that is meaningful on a log axis without converting.
+ *   The cost is real and is the price of that: max-pooling noise biases the floor UP and
+ *   ADDS variance where a mean would reduce it. Only reached when a waterfall is narrower
+ *   than ~377 device px (pxHz > binHz), which is not the FT case. If this ever moves to
+ *   the hot path, convert to power and mean instead.
  * - **A bin covers more than one pixel (upsampling — the normal FT case: 512 bins,
  *   ~360 in view, across 1200–1900 device px).** LINEAR INTERPOLATION between the
  *   neighbouring bin centers. Point-sampling here paints each bin as a hard 3–5 px

@@ -21,9 +21,13 @@ export function PalettePicker({
   scope?: string
 }) {
   const [palette, setPalette] = useWaterfallPalette(scope)
+  // ⚠️ "every mode" STOPPED BEING TRUE when FT took its own scoped key (4c4fe3da), and this
+  // branch was left saying it — the exact failure the doc block above forbids. An operator
+  // changing the palette in Phone, CW, RTTY or SSTV was told it reached every mode while it
+  // silently did not reach the FT waterfall. Name the modes it actually drives.
   const label = scope
     ? 'Waterfall color palette (this mode)'
-    : 'Waterfall color palette (applies to all modes)'
+    : 'Waterfall color palette (Phone, CW, RTTY and SSTV — FT has its own)'
   return (
     <select
       className={className}
@@ -32,7 +36,7 @@ export function PalettePicker({
       title={
         scope
           ? 'Waterfall color palette — applies to this mode'
-          : 'Waterfall color palette — applies to every mode'
+          : 'Waterfall color palette — shared by Phone, CW, RTTY and SSTV. The FT waterfall keeps its own.'
       }
       onChange={(e) => setPalette(e.target.value)}
     >

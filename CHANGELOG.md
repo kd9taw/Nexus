@@ -5,6 +5,48 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The FT waterfall.** It looked, in the operator's words, "so 8 bit" — and that turned out to be
+  four separate causes stacked on one surface, all now fixed. The intensity axis was linear in
+  *amplitude* against a reference that moved every 20 ms, which left the noise floor about 15 of
+  256 shades to work with and reserved the whole colourful middle of the palette for signals that
+  are rarely there; it is now dB against a fixed reference, and an ordinary run of FT8 signals is
+  spread across the palette instead of crowded into one dark blue. Five of every six spectra were
+  being thrown away rather than averaged, so the floor boiled frame to frame; each drawn row is
+  now the mean of every frame since the last one. Bins were point-sampled onto pixels, painting
+  each one as a hard rectangle, and the accumulated history repainted that way every time you
+  touched the palette picker or resized a pane — both now interpolate. The FT waterfall also keeps
+  its own palette, defaulting to Turbo, so a choice made in another mode no longer follows it.
+  **What this does not do:** it does not reach WSJT-X's smoothness. Ours integrates ~171 ms per
+  row against their ~2.5 s, which is the price of a display that updates 12× faster.
+- The waterfall palette picker in Phone, CW, RTTY and SSTV said it applied to every mode. It no
+  longer reaches the FT waterfall, and now says so.
+- A capture underrun could blend one waterfall row across the gap, mixing audio from before the
+  stall with audio from after it. One row in roughly 450, but it is now a clean restart.
+- **MSK144 decodes about 90× faster** — 2.55 s down to 0.028 s for a 15-second period. The
+  frequency tolerance was being derived from the receive passband, which made it 1350 Hz where
+  WSJT-X uses 50; MSK144 sits at one fixed centre, so that width never meant anything. The same
+  mistake let the decoder accept a signal a kilohertz off frequency, which is not an MSK144
+  contact at all. This is the decode that could make the whole app appear to hang.
+- **An FT1 over could run past the end of its own slot** and transmit into the period it should be
+  receiving in. The transmit deadline had no slot bound, so any delay in keying the radio — a slow
+  CAT link can spend a full second — pushed the end of the over out with it. WSJT-X clamps the
+  window to the period and can never cross it; Nexus now does the same, for every mode. FT8 and
+  FT4 were never affected in practice: they carry over two seconds of slack where FT1 carries 214
+  milliseconds. FT1's 4-second timing is unchanged.
+- **The QRZ link on the callsign card** only appeared once a callbook lookup had already
+  succeeded, which withheld it in exactly the cases you want it — no QRZ subscription, no
+  credentials, a lookup that failed, or a callsign QRZ has never heard of. Opening the page only
+  ever needed the callsign. Separately, if the browser refused to open, nothing said so anywhere;
+  every QRZ and DXpedition link now reports the failure instead of doing nothing.
+- **SSTV gained the radio controls the other cockpits already had** — power, tune and stop from
+  the header. Drive matters more here than anywhere else, because the picture rides in the audio
+  and pushing past ALC visibly wrecks the image at the far end. The drop-image box no longer
+  reserves 160 pixels before you have loaded anything.
+
 ## [1.0.0] — 2026-08-04
 
 Nexus has been a beta since its first public build, and this release closes the beta period.

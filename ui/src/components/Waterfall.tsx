@@ -88,10 +88,16 @@ interface Props {
    * than us, not equal.
    *
    * Why 120 stays 120 on the FT surfaces, now that it has a real reason: it buys ~6 frames
-   * per row against WSJT-X's default of 5, and a viewport of ~450 device rows holds ~54 s
-   * of history — 3½ FT8 cycles, which is what the operator actually reads the waterfall
-   * for. Halving it would halve BOTH (noisier floor, ~1½ cycles on screen) and triple the
-   * IPC, which several mounted waterfalls each pay a 512-float row for.
+   * per row, and a viewport of ~450 device rows holds ~54 s of history — 3½ FT8 cycles,
+   * which is what the operator actually reads the waterfall for. Halving it would halve
+   * BOTH (noisier floor, ~1½ cycles on screen) and cost 2.4× the IPC, which several mounted
+   * waterfalls each pay a 512-float row for.
+   *
+   * ⚠️ DO NOT READ "~6 frames" AS PARITY WITH WSJT-X's 5. The counts are not comparable and
+   * an earlier revision of this comment let them look it. Our six frames are 171 ms windows
+   * overlapping 88%, worth roughly ENL 1.7; theirs are five 1.365 s windows overlapping 79%,
+   * integrating ~2.5 s at about ENL 3. We are still the noisier picture by ~1 dB rms — the
+   * honest figure is in the `spectrum.rs` module header and this is the number to carry away.
    *
    * The live-instrument surfaces (RTTY cockpit, SSTV band) pass 50 to match the rig scope's
    * 20 Hz (PhoneScope) — at 120 they discarded 5 of every 6 rows, the operator's "smoothed

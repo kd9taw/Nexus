@@ -15,7 +15,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tempo_core::fieldday::{Exchange, FieldDayStation};
 use tempo_core::logbook::{Logbook, QsoRecord};
@@ -77,6 +77,11 @@ struct RowAverage {
 }
 
 impl RowAverage {
+    /// A publish gap at least this long opens a fresh window instead of folding into the old
+    /// one. Comfortably longer than the 20 ms producer tick and than any ordinary scheduling
+    /// hiccup, so it fires on a real capture stall and not on jitter.
+    const GAP_RESTART: Duration = Duration::from_millis(500);
+
     /// Open a window on `row` — its own values verbatim as the mean, so a one-frame window is
     /// bit-identical to the frame (the dB↔power round trip is not exact in f32, and the
     /// byte-stable row digest in `tempo_audio::rxdsp` reads a one-frame window).
@@ -99,8 +104,18 @@ impl RowAverage {
         // bin-count change (zoom, device swap, a capture closing to an empty row) would smear
         // frequencies that were never together, and a source change is a different instrument
         // entirely. The frame cap is the no-reader guard — see [`SpectrumFeed::MAX_AVG_FRAMES`].
+        //
+        // ⚠️ A TIME GAP RESTARTS TOO, and its absence was a real hole. `rxdsp::tick` returns
+        // early without publishing when the device hands back nothing, so a capture underrun
+        // stops the frames without changing geometry or source. With no active reader — no
+        // scope on screen, or a native RF row winning the precedence rule — `n` survives the
+        // stall (the stale branch in [`SpectrumFeed::row`] returns the empty row WITHOUT
+        // calling `take`), so the first frame after it folded into up to 31 PRE-stall frames
+        // and one drawn row was a power blend across the gap. One row in ~450, cosmetic, but
+        // the list above read as exhaustive and was not.
         if self.n == 0
             || self.n >= SpectrumFeed::MAX_AVG_FRAMES
+            || self.at.elapsed() >= Self::GAP_RESTART
             || row.row.len() != self.sum.len()
             || row.lo_hz != self.mean.lo_hz
             || row.hi_hz != self.mean.hi_hz
@@ -19824,6 +19839,41 @@ mod tests {
     /// (`s[i] = 1000·gain·|X|²`) and takes dB only at the draw. `the_average_is_not_taken_on_the
     /// _dB_values_themselves` below pins the difference so a "simplification" back to a plain
     /// mean fails instead of quietly dimming the display.
+    #[test]
+    fn a_capture_stall_starts_a_fresh_window_instead_of_blending_across_it() {
+        // `rxdsp::tick` returns early WITHOUT publishing when the device hands back nothing, so
+        // an underrun stops the frames while geometry and source stay identical — none of the
+        // other restart conditions fire. With no active reader `n` also survives the stall,
+        // because the stale branch in `row()` returns the empty row without calling `take()`.
+        // Without a time-gap restart the first frame after the stall folds into the pre-stall
+        // ones and one drawn row is a power blend across the gap.
+        let feed = SpectrumFeed::default();
+        let pre = 0.9f32;
+        for _ in 0..4 {
+            feed.publish_audio(Spectrum {
+                row: vec![pre],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
+        }
+        std::thread::sleep(RowAverage::GAP_RESTART + Duration::from_millis(50));
+        let post = 0.1f32;
+        feed.publish_audio(Spectrum {
+            row: vec![post],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+        let got = feed.row().expect("published").row[0];
+        assert!(
+            (got - post).abs() < 1e-6,
+            "the row after a stall must be the post-stall frame alone, not blended with the \
+             four loud frames from before it: got {got}, want {post} (a blend reads {})",
+            power_mean(&[pre, pre, pre, pre, post]),
+        );
+    }
+
     #[test]
     fn a_read_returns_the_mean_of_the_frames_published_since_the_last_read() {
         let feed = SpectrumFeed::default();
