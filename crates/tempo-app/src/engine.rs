@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tempo_core::fieldday::{Exchange, FieldDayStation};
-use tempo_core::logbook::{Logbook, QsoRecord};
+use tempo_core::logbook::QsoRecord;
 use tempo_core::qso::{State as QsoState, Station as QsoStation};
 use tempo_core::qsy::{Directive, Roamer};
 use tempo_core::{channel, spectrum, tempo_fast, tx};
@@ -6006,11 +6006,11 @@ impl Engine {
                 self.station.pending_hunt = None;
             }
         }
-        if let Some(path) = &self.station.log_path {
-            if let Err(e) = Logbook::append(path, &rec) {
-                eprintln!("tempo: failed to append to logbook: {e}");
-            }
-        }
+        // Through the station's append (not a bare `Logbook::append`) so the shared
+        // log's freshness fingerprint moves with the file. Skip it and the recovery
+        // gate misses on the next upload stamp / Needed-board poll and re-parses the
+        // whole log — once per contact, on every contact.
+        self.station.append_to_log(std::slice::from_ref(&rec));
         self.push_to_hrd(&rec);
         self.push_to_n1mm(&rec);
         // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
@@ -13388,6 +13388,10 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 mod tests {
     use super::*;
     use modes::Decode;
+    // The station owns every write to the shared log now (`StationCore::append_to_log`),
+    // so the only code left reaching `Logbook` directly is the concurrency guards,
+    // where it stands in for the OTHER instance.
+    use tempo_core::logbook::Logbook;
 
     /// What `sat_tune_nominal` is told the bird needs the radio to be in. Named
     /// rather than spelled `DownlinkClass::Usb` at ~40 call sites because the

@@ -18,13 +18,23 @@
 //! [`Engine`](crate::engine::Engine) untouched.
 
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tempo_core::logbook::{Logbook, QsoRecord};
 
 use crate::engine::{
     now_unix_secs, LotwResolver, PendingUpload, HUNT_TTL_SECS, MAX_UPLOAD_RETRIES, SSTV_GALLERY_CAP,
 };
+
+/// The shared `log.adi`'s freshness fingerprint — `(mtime, byte length)`, or `None`
+/// if it cannot be statted. See [`StationCore::last_log_mtime`] for why the length
+/// rides along; `None` never gates anything, because the recovery must never skip on
+/// uncertainty.
+fn log_file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok().map(|t| (t, m.len())))
+}
 
 /// Canonical band key for the per-band worked indices.
 ///
@@ -589,9 +599,7 @@ impl StationCore {
         // or WROTE (save_log records our own writes), the disk holds exactly
         // what we hold — skip the parse. A stat error falls through to the
         // full read: never skip on uncertainty.
-        let stamp = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
+        let stamp = log_file_stamp(&path);
         if stamp.is_some() && stamp == self.last_log_mtime {
             return false;
         }
@@ -609,6 +617,58 @@ impl StationCore {
         }
         self.last_log_mtime = stamp;
         true
+    }
+
+    /// THE way to APPEND to the logbook file: write the records on the end, then
+    /// carry the freshness fingerprint forward so the recovery gate above does not
+    /// re-parse a multi-MB log we extended ourselves.
+    ///
+    /// An append needs no recovery first — it cannot truncate anything — but it does
+    /// move the file's `(mtime, len)`, and leaving the fingerprint behind made the
+    /// gate MISS on every later call. That is a permanent per-call cost, not a
+    /// one-time one: companion mode imports one ADIF per logged QSO, so a 26,000-QSO
+    /// log was re-parsed from disk on every contact WSJT-X logged.
+    ///
+    /// Stamping is only sound while we can account for every byte on disk, so two
+    /// checks fence it and BOTH are load-bearing:
+    ///
+    /// - the file must look exactly as we last read or WROTE it before we append —
+    ///   otherwise our copy is already stale by another instance's records, and
+    ///   nothing here would ever pull them back;
+    /// - it must be exactly `written` bytes longer afterwards — otherwise another
+    ///   instance appended in the window between our write and our stat, and the
+    ///   post-write length is partly ITS bytes, which we do not hold.
+    ///
+    /// Fail either (or fail the write itself) and we drop the fingerprint rather than
+    /// record it, so the next recovery re-reads. A stamp we cannot justify is exactly
+    /// how a stale copy silently deletes a second instance's QSOs on the next full
+    /// rewrite — the fault `recover_external_appends` exists to prevent. `written` is
+    /// re-derived through the same [`adif_record`] the append writes; if the two ever
+    /// drift the length check simply misses and we fall back to re-reading.
+    ///
+    /// [`adif_record`]: tempo_core::logbook::adif_record
+    pub(crate) fn append_to_log(&mut self, recs: &[QsoRecord]) {
+        let Some(path) = self.log_path.clone() else {
+            return;
+        };
+        let before = log_file_stamp(&path);
+        let mut accountable = before.is_some() && before == self.last_log_mtime;
+        let mut written = 0u64;
+        for r in recs {
+            match Logbook::append(&path, r) {
+                Ok(()) => written += tempo_core::logbook::adif_record(r).len() as u64,
+                Err(e) => {
+                    eprintln!("tempo: logbook append failed: {e}");
+                    accountable = false;
+                }
+            }
+        }
+        self.last_log_mtime = match (accountable, before, log_file_stamp(&path)) {
+            (true, Some((_, was)), Some((mtime, now))) if now == was + written => {
+                Some((mtime, now))
+            }
+            _ => None,
+        };
     }
 
     /// THE way to persist the logbook: save, then record the file's fresh mtime
@@ -752,12 +812,8 @@ impl StationCore {
         let (added, skipped, merged) = self.logbook.import_adif(text);
         if merged > 0 {
             self.save_log("import_adif"); // rewrites the whole log, `added` included
-        } else if let Some(path) = &self.log_path {
-            for r in &added {
-                if let Err(e) = Logbook::append(path, r) {
-                    eprintln!("tempo: import_adif append failed: {e}");
-                }
-            }
+        } else {
+            self.append_to_log(&added);
         }
         self.backfill_country();
         self.refresh_worked_index();
@@ -1126,6 +1182,114 @@ mod grid_tests {
             !sc.grid_worked_on("FN", "20m"),
             "a 2-char fragment is not a square"
         );
+    }
+
+    /// 57bd9dba put a `recover_external_appends` in front of `import_adif` — right,
+    /// and it stays — but the APPEND branch below it left the freshness fingerprint
+    /// pointing at the file as it was BEFORE our own append. So the gate missed on
+    /// every later call, and companion mode (one `import_adif` per QSO WSJT-X logs)
+    /// re-parsed the whole log from disk on every contact: measured 132.7 ms per QSO
+    /// against a 26,007-record / 3.67 MB log, forever, not once.
+    #[test]
+    fn our_own_import_append_leaves_the_recovery_gate_shut() {
+        use tempo_core::logbook::{adif_header, adif_record};
+        let path =
+            std::env::temp_dir().join(format!("nexus_append_stamp_{}.adi", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                adif_header(),
+                adif_record(&rec("W1AW", "20m", "FN31"))
+            ),
+        )
+        .unwrap();
+
+        let mut sc = StationCore::new();
+        sc.set_log_path(path.clone());
+        assert!(
+            sc.recover_external_appends(),
+            "the first look reads the file"
+        );
+        assert!(
+            !sc.recover_external_appends(),
+            "...and shuts the gate behind it"
+        );
+
+        // A companion-logged QSO: one contact we lack, nothing already held to
+        // upgrade, so the append branch runs and not the full rewrite.
+        let (added, _, merged, _) = sc.import_adif(
+            "<EOH>\n<CALL:5>K5XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260804<TIME_ON:6>120000<EOR>\n",
+        );
+        assert_eq!((added, merged), (1, 0), "the append path, not the rewrite");
+
+        assert!(
+            !sc.recover_external_appends(),
+            "our own append must not reopen the gate — every later call re-parses the whole log"
+        );
+        assert_eq!(
+            sc.logbook.len(),
+            2,
+            "and nothing was re-read or double-counted"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The other half, and it is the half that must never be traded for the first:
+    /// an append may carry the fingerprint forward ONLY while we can account for
+    /// every byte on disk. Here a second instance wrote after our last look and we
+    /// append without looking again — exactly the `Engine::log_qso` shape, which has
+    /// no recovery in front of it. Stamping there would record a file we do not hold,
+    /// the gate would skip, and the next full rewrite would delete the other
+    /// instance's QSO: the fault 57bd9dba exists to prevent. The stamp must be
+    /// DROPPED instead, so the next look re-reads.
+    #[test]
+    fn an_append_onto_a_file_that_moved_under_us_drops_the_fingerprint() {
+        use tempo_core::logbook::{adif_header, adif_record};
+        let path =
+            std::env::temp_dir().join(format!("nexus_append_stale_{}.adi", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                adif_header(),
+                adif_record(&rec("W1AW", "20m", "FN31"))
+            ),
+        )
+        .unwrap();
+
+        let mut sc = StationCore::new();
+        sc.set_log_path(path.clone());
+        assert!(sc.recover_external_appends(), "we hold W1AW, gate shut");
+
+        // Instance A appends a contact we never see in memory.
+        Logbook::append(&path, &rec("W3CCC", "40m", "IO91")).unwrap();
+
+        // We log our own contact — append first, then memory, as log_qso does.
+        let k = rec("K5XYZ", "20m", "FN31");
+        sc.append_to_log(std::slice::from_ref(&k));
+        sc.logbook.add(k);
+        assert!(
+            sc.last_log_mtime.is_none(),
+            "a file we cannot account for must not be stamped as ours"
+        );
+        assert!(
+            sc.recover_external_appends(),
+            "so the next look re-reads and folds A's QSO in"
+        );
+
+        // ...and the full rewrite that follows keeps it.
+        sc.save_log("test");
+        let on_disk = Logbook::load(&path);
+        let calls: Vec<&str> = on_disk.records().iter().map(|r| r.call.as_str()).collect();
+        assert!(
+            calls.contains(&"W3CCC"),
+            "another instance's append survives our rewrite (on disk: {calls:?})"
+        );
+        assert_eq!(on_disk.len(), 3, "...and nothing is double-logged");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

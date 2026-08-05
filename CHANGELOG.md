@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your confirmations are behind, download your report from LoTW (or Club Log, or eQSL) and
   import it, and it lands on the contacts you already hold instead of being thrown away.
 
+- **Logging a contact re-read your whole logbook off the disk.** Two copies of Nexus can share
+  one `log.adi`, so before rewriting that file Nexus checks whether the other copy has written to
+  it since — a cheap comparison of the file's timestamp and size against what Nexus last saw.
+  Writing a contact onto the end moved both, and Nexus never updated its own note of them, so the
+  check missed every time and re-parsed the entire file instead: measured at 60 ms on a
+  26,007-QSO, 3.7 MB log, on every contact you log and on every contact WSJT-X hands over in
+  companion mode. Nexus now notes what it wrote — but only when it can account for every byte in
+  the file, so a contact written by the other copy still forces the re-read that keeps it from
+  being overwritten.
+
 - **A confirmation marked `V` read as unconfirmed.** ADIF spells a confirmation you hold two
   ways — `Y`, and `V` for one an award credit has been granted against — and Club Log and
   DXKeeper both write `V`. Nexus read only `Y`, so importing a master log from either of them
