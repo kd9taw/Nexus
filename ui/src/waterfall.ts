@@ -127,6 +127,18 @@ export function normalize(mag: number, floor: number, ceil: number): number {
  * +30 dB stations were in view — weak signals went dark exactly when the band got good, which
  * reads as propagation, not as a display setting. The trim below is flat at +2.9/+3.0 dB
  * across that whole sweep.
+ *
+ * Re-measured on the honest 8-FSK scene (2026-08-05) as MDS — the weakest station the waterfall
+ * actually draws, which is the operator-meaningful form of the same harm. 20 stations, 5 dB tilt:
+ *
+ *   zero          0        +0.25      +0.5       +1.0
+ *   old (±½ win)  -19.05   -15.08     -11.72     **-5.40**  dB SNR
+ *   new (±5 dB)   -19.05   -17.38     -15.95     -13.09
+ *
+ * At the right-hand stop the old composition put the minimum displayable signal at -5.4 dB SNR:
+ * the ENTIRE FT8 decode range from -21 to -6 was rendered as background, on every waterfall at
+ * once. The trim costs 5.96 dB across the slider's full travel, which is the intended amount of
+ * authority for a brightness control.
  */
 export const WF_ZERO_TRIM_DB = 5
 
@@ -192,49 +204,100 @@ export const WF_FLOOR_PCT = 0.5
  * ~0.6 dB — net **SNR + 22.3**. So -21 dB SNR is **+1.3 dB/bin**, and a 3 dB park sits ABOVE the
  * signal it was chosen to protect. The old comment's own rule selected the wrong number.
  *
- * Measured on the guard's scene, decode-floor station vs THE SAME SCENE WITHOUT IT:
- *   park 3 dB → 78.4% of the field black, but the station leads its own absence by 9 LUT — i.e.
- *               most of what was being called "the signal" is the bright tail of the grain.
- *   park 2 dB → 68.0% black, station LUT 44 against grain p95 36, leads its absence by >12.
- * Two points of blackness bought back a signal that FT8 exists to dig out. That is the right
- * side of the trade: the operator can SEE a background that is not dark enough and ask for more,
- * and can never see a station that stopped being drawn.
+ * The trade this constant makes: the operator can SEE a background that is not dark enough and
+ * ask for more, and can NEVER see a station that stopped being drawn. So when the two collide,
+ * the background yields.
  *
- * ⚠️ AND 2 dB IS STILL OPTIMISTIC, on two counts that are known and not yet fixed.
- * (1) Real FT8 is 8-FSK and the 270 ms averaging window spans ~1.7 symbols, so its power is
- *     divided across the bins its tones visited — measured 4.5-6.6 dB dimmer than the constant
- *     carrier every number above assumes. Real excess ≈ SNR + 16.5.
- * (2) `WF_FLOOR_PCT`'s median is the whole visible row's, not the noise's, so band occupancy and
- *     passband tilt push the EFFECTIVE park well past this constant: measured 3.3 dB on a dead
- *     band, 4.4 with 20 stations, 6.4 with 5 dB of tilt, 11.2 with 15 dB.
- * The real fix for (2) is spectral flattening (kills the tilt term — WSJT-X runs `flat4` on
- * every row), which is `flattenRow` below.
+ * ⚠️ THE "LEADS ITS OWN ABSENCE BY 9 LUT" FIGURE THAT USED TO SIT HERE WAS AN ARTEFACT AND IS
+ * WITHDRAWN (2026-08-05, second pass). It came from a scene that put a station's whole power in
+ * ONE BIN PER ROW and a metric that took a MAX over 8 tone bins — an extremum whose null
+ * expectation grows with the bin count, measured against a null control that was not actually
+ * paired. On the honest 8-FSK scene with an exactly-paired null control the same chain measures
+ * **3.15 ± 0.39 LUT** (8 base seeds) for a -21 dB SNR station. The chain did not change; the
+ * measurement did. See `waterfall.test.ts` for the full account and the seed sweep.
  *
- * ⚠️ THE SECOND "REAL FIX" NAMED HERE — a SOFT KNEE below the park instead of the hard clamp,
- * so a sub-park column accumulates contrast over the ~105 rows an over lasts — WAS MODELLED AND
- * REFUTED (2026-08-05). It is written down because it is the obvious idea and it will be had
- * again. The premise is true: the clamp does destroy sub-park structure, and an unclamped map
- * scores 6.2 LUT of column separation against the clamp's 4.3. What is false is that a knee can
- * recover it at a price worth paying. Measured on this scene, the marginal value of one palette
- * index of slope at level `d` above the parked floor — separation bought per unit of background
- * brightness paid, `[P(sig>d) − P(no-sig>d)] / P(background>d)`:
+ * ⚠️ HOW OPTIMISTIC 2 dB STILL IS, corrected against the honest model.
+ * (1) Real FT8 is 8-FSK and the row's 270 ms support spans ~1.7 symbols, so its power divides
+ *     across the bins its tones visited. The penalty depends on WHICH VIEW you measure, and an
+ *     earlier "4.5-6.6 dB dimmer, real excess ≈ SNR + 16.5" conflated them: measured against a
+ *     same-power constant carrier, a station is only **-1.27 dB** in the PER-ROW peak (one
+ *     170 ms FFT is 1.07 symbols, so the dominant symbol keeps most of the coherent gain) but
+ *     **-3.73 dB** COLUMN-INTEGRATED, because the tone hops and no single column stays lit.
+ *     Against the displayed noise median a constant carrier is SNR + 22.84 dB, so real FT8 is
+ *     ≈ SNR + 21.6 per row and ≈ SNR + 19.1 integrated — not SNR + 16.5.
+ * (2) `WF_FLOOR_PCT`'s median is the whole visible row's, not the noise's, so BAND OCCUPANCY and
+ *     PASSBAND TILT both push the EFFECTIVE park past this constant. `flattenRow` below now
+ *     removes the TILT term completely — measured per-segment spread across the visible passband
+ *     falls 10.61 → 0.45 dB on a 15 dB-tilt rig, 3.51 → 0.45 with 5 dB, 3.12 → 0.44 with the SSB
+ *     skirt in view. THE OCCUPANCY TERM SURVIVES AND IS NOT FIXED: flattening removes shape, not
+ *     population, so a heavily occupied row still drags `WF_FLOOR_PCT`'s median up. Mean
+ *     effective park after flattening, against station count (and the visible-band occupancy it
+ *     produces): 0 → **1.91 dB**, 10 → 2.44, 20 → 3.00, 30 → 3.59, 45 → **4.97**. Monotone, so it
+ *     is the occupancy and not sampling noise — though past ~30 stations the band is 98% full and
+ *     those last figures rest on 4-8 noise-only bins, where the first three rest on 339, 210 and
+ *     78. On a contest band the black point therefore still sits ~3 dB above what this constant
+ *     says. The honest fix is to park against the flattener's own occupancy-robust p10 anchors
+ *     instead of re-measuring a median — a change to the AGC's contract rather than to a
+ *     constant, and deliberately NOT made here.
  *
- *   d = −5 dB  0.035    d = −1 dB  0.132    d = +2 dB  0.885    d = +5 dB  1.602
- *   d = −2 dB  0.074    d =  0 dB  0.221    d = +4 dB  1.457    d = +6 dB  2.318
+ * ⚠️ THE SECOND "REAL FIX" ONCE NAMED HERE — a SOFT KNEE below the park instead of the hard
+ * clamp, so a sub-park column accumulates contrast over the ~105 rows an over lasts — WAS BUILT
+ * AND MEASURED TWICE AND IS REFUTED (2026-08-05). It is written down at length because it is the
+ * obvious idea, the operator asked for it by name, and it will be had again.
  *
- * It rises monotonically. Below the park is the WORST place on the axis to spend a palette
- * index — 55% of every background pixel lives below −2 dB and almost none of the signal's
- * distinguishing mass does — so every knee shape (linear segment, γ=2/3/4 compressive, softplus
- * soft-clip, and a slope-preserving variant that costs the above-park contrast nothing) came out
- * DOMINATED by simply moving `WF_PARK_DB`: at matched background brightness the plain clamp gave
- * equal or better separation on all four of column separation, the guard's max-over-tones metric,
- * %-black and luminance-integrated ΔL*. The best of them (16 indices over a 2 dB knee, slope
- * preserving) landed ON the park frontier, moved the guard metric 8.6 → 8.6, and cost 68% → 50%
- * black and +68% inter-row twinkle — i.e. it bought nothing and re-created the bright, restless
- * field the operator complained about. A knee is a reparametrisation of the park, not a new
- * degree of freedom. The lever that DOES move weak-signal separation is palette indices per dB
- * (`WF_MIN_WINDOW_DB`), and it is nearly free in blackness: 24 → 20 dB took the guard metric
- * 8.6 → 10.2 and %-black 68.1 → 68.0.
+ * The PREMISE IS TRUE: the clamp does destroy sub-park structure. Everything below the black
+ * point renders bit-identical to the background, and an unclamped map scores 6.2 LUT of column
+ * separation against the clamp's 4.3. What is false is that a knee buys that back at a price
+ * worth paying — and the second measurement, on the honest 8-FSK scene with an exactly paired
+ * null control (see `waterfall.test.ts`), refuted it more widely than the first.
+ *
+ * A knee reserving `K` palette indices below the park, decaying with `tau` dB, was swept over
+ * K ∈ {4,6,8,12} × tau ∈ {2,3,4} against plain clamps at park ∈ {2.0,1.7,1.4,1.0,0.5}, on a dead
+ * band, a 20-station band and a 15 dB-tilt band. EVERY KNEE IS DOMINATED BY A PLAIN CLAMP AT A
+ * LOWER PARK, on BOTH background axes at once — the grain p95 the eye reads as boil, and the
+ * mean L* of the field — and the gap WIDENS the more the knee spends. On the dead band, matched
+ * on mean background L* (MDS = the SNR at which a station crosses 8 LUT of paired column
+ * separation; more negative is better):
+ *
+ *   L* 1.96   clamp park 1.4  MDS -20.81   |  knee K=4 tau=3   MDS -20.43
+ *   L* 2.65   clamp park 1.0  MDS -21.37   |  knee K=8 tau=3   MDS -20.68
+ *   L* 3.76   clamp park 0.5  MDS -22.04   |  knee K=12 tau=4  MDS -20.78
+ *
+ * WHY, and this is the mechanism, not a fitted result. The marginal value of one palette index
+ * of slope at level `d` relative to the parked floor — separation bought per unit of background
+ * brightness paid, `[P(sig>d) - P(no-sig>d)] / P(background>d)` — rises monotonically:
+ *
+ *   d = -5 dB  0.035    d = -1 dB  0.132    d = +2 dB  0.885    d = +5 dB  1.602
+ *   d = -2 dB  0.074    d =  0 dB  0.221    d = +4 dB  1.457    d = +6 dB  2.318
+ *
+ * Below the park is the WORST place on the axis to spend an index: 55% of every background pixel
+ * lives below -2 dB and almost none of the signal's distinguishing mass does.
+ *
+ * ⚠️ AND THERE IS A SECOND, INDEPENDENT REASON, WHICH IS A CONFLICT INSIDE THIS CODEBASE. The
+ * waterfall palette was DELIBERATELY given a long dark bottom (`colormaps.ts`: turbo's canonical
+ * low stop replaced by black plus two dark stops `#0a0c22`/`#1d2060`) for the express purpose of
+ * making the parked grain read black. Measured on that palette, L* per index averages 0.231 over
+ * indices 0-6 and 0.899 over indices 20-40 — the bottom of the ramp is 3.9x flatter than the
+ * body BY DESIGN. A knee writes its whole output into indices 0-6, i.e. into exactly the region
+ * the palette exists to erase. THE KNEE AND THE PALETTE ARE THE SAME LEVER POINTED IN OPPOSITE
+ * DIRECTIONS, and the palette wins: the entire 6-index knee spans ΔL* 1.38, about one JND for a
+ * large uniform patch and less than that on a moving grainy field. The information it preserves
+ * is real in the Shannon sense and below the threshold of the eye that has to read it.
+ *
+ * So a knee is a REPARAMETRISATION OF THE PARK, not a new degree of freedom, and a worse-valued
+ * one. If weak-signal margin is wanted, MOVE THIS CONSTANT — that is the efficient lever and its
+ * frontier is measured (honest scene, 20-station band, paired column separation of a -21 dB
+ * station / % of the field black): park 2.0 -> 2.9 LUT / 89.6%, park 1.4 -> 4.0 / 84.4%,
+ * park 1.0 -> 5.0 / 80.4%, park 0.5 -> 6.4 / 74.6%. It is a straight trade against the operator's
+ * own "the back is dark and not over noisy", which is why it is left at 2 rather than chosen here.
+ *
+ * ⚠️ ONE EARLIER CLAIM IN THIS COMMENT WAS ALSO WRONG AND IS CORRECTED: that `WF_MIN_WINDOW_DB`
+ * (palette indices per dB) is "the lever that DOES move weak-signal separation, nearly free in
+ * blackness". It only moves anything ON A BAND WHERE IT BINDS, and it binds only on a quiet one.
+ * Measured raw parked window: dead band 3.8 dB (clamp BINDS), 20 stations 24.6 dB, 15 dB tilt
+ * 24.5 dB (does NOT bind — the p99.5 ceiling is already wider than the minimum). Sweeping it
+ * 24 -> 20 -> 16 dB on the 20-station band changes the separations by nothing at all, to three
+ * significant figures. The earlier number was measured on a quiet scene and generalised.
  */
 export const WF_PARK_DB = 2
 

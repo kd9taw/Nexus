@@ -544,186 +544,461 @@ describe('the parked black point (WF_FLOOR_PCT / WF_PARK_DB / parkFloor)', () =>
   it('MEASURES the operator report: an empty band renders dark, and a weak signal survives', () => {
     // 2026-08-05: "too much noise in the areas without a frequency ... the back is dark and not
     // over noisy, while the signal itself looks good". Two requirements pulling opposite ways, so
-    // this test asserts BOTH against real palette indices — the perceptual claim is modelled but
-    // every number below is computed by the shipping helpers, not asserted by eye.
+    // this asserts BOTH against real palette indices — every number is computed by the shipping
+    // helpers over a replica of the real producer, none is asserted by eye.
     //
-    // Scene: the row the FT waterfall actually gets. 512 bins over 0-4000 Hz, a -76 dBFS noise
-    // floor with 5 dB of passband tilt (measured on the WSJT-X reference captures), the ~40 dB
-    // dead cliff every SSB filter leaves above 3.3 kHz, twelve stations, and probe tones at a
-    // known per-bin excess over the noise median.
+    // ⚠️ THE SCENE AND THE METRIC WERE BOTH REPLACED (2026-08-05, second pass) AND THE REPORTED
+    // WEAK-SIGNAL MARGIN FELL FROM 9 LUT TO 3.2. Neither the chain nor `WF_PARK_DB` changed —
+    // the old margin was an artefact of the measurement, on three counts that compounded:
     //
-    // ⚠️ CALIBRATION, AND IT WAS 2.3 dB OPTIMISTIC UNTIL 2026-08-05. Measured against the REAL
-    // producer, not derived: analytic peak-raw-bin-signal over mean-raw-bin-noise is
-    // SNR + 24.54 dB (= 10log10(2048/7.2)), but `power_spectrum`'s peak-hold over ~3 raw bins
-    // lifts the DISPLAYED NOISE MEDIAN by 1.67 dB, and Hann scalloping costs a tone 0-1.24 dB
-    // (mean ~0.6). Net per-bin excess over the displayed noise median = **SNR + 22.3**.
+    //  (1) THE NULL CONTROL WAS NOT PAIRED, though its comment claimed it was. The `drop` list
+    //      skipped an emitter with `continue` BEFORE its tone draw `Math.floor(rnd2()*8)`, so
+    //      omitting a station consumed one fewer RNG value and EVERY LATER DRAW SHIFTED. The
+    //      control measured a different noise realisation, not the station's absence (measured
+    //      on the old generator: row 1 differed in 505 of 512 bins).
+    //  (2) THE METRIC WAS A MAX OVER THE 8 TONE BINS. The max of N samples has a null
+    //      expectation that GROWS WITH N — about median + sd·√(2 ln N) — whatever the signal is,
+    //      so a fixed bar on it is satisfiable by grain alone. That is exactly how this guard
+    //      shipped vacuous the first time (it passed with the station deleted from its scene).
+    //  (3) THE SCENE PUT A STATION'S WHOLE POWER IN ONE BIN PER ROW. Real FT8 is 8-FSK and the
+    //      row's 270 ms support spans ~1.7 symbols, so the power is divided across the bins the
+    //      tones visited; the grain was modelled as the mean of two exponentials (ENL 2, no
+    //      spatial correlation) where the real display bin is ENL ~3.1 with lag-1 correlation
+    //      0.61, because adjacent display bins SHARE a raw bin under `power_spectrum`'s
+    //      peak-hold.
     //
-    // So -21 dB SNR — the FT8 decode floor — is +1.3 dB/bin, NOT the +3.6 the old comment
-    // claimed. The old number is what justified WF_PARK_DB = 3 as "safe"; with the real one the
-    // park sits ABOVE the signal it was chosen to protect, and the reasoning inverts.
+    // All three are fixed below, and the fixes are STRUCTURAL rather than careful:
+    //  - the tone is a PURE HASH of (emitter, symbol) and THE RNG IS CONSUMED ONLY BY THE NOISE,
+    //    in a fixed order, so deleting an emitter leaves every noise draw bit-identical and the
+    //    null separation is EXACTLY 0 — not small, zero, at every seed (verified, see below);
+    //  - the metric is a per-bin time MEAN (null expectation is a constant), with the argmax
+    //    taken on the SIGNAL side and read at that SAME bin index on the null side, so the
+    //    selection cannot bias the difference;
+    //  - the scene is a replica of `tempo_core::spectrum::power_spectrum` + `RowAverage`.
     //
-    // ⚠️ AND THIS SCENE IS STILL OPTIMISTIC, deliberately, because fixing it is a bigger change:
-    // it deposits a probe's whole power into ONE bin per row. Real FT8 is 8-FSK and the 270 ms
-    // averaging window spans ~1.7 symbols, so the power is divided across the bins the tones
-    // visited — measured 4.5-6.6 dB dimmer than a constant carrier. Real FT8 excess is roughly
-    // SNR + 16.5. Anything this test calls "visible at -21 dB" is therefore an UPPER BOUND on
-    // what the operator actually sees. Do not read a pass here as coverage of the real signal.
+    // MODEL VALIDATION against the real chain (this replica / measured / error):
+    //   constant-carrier per-bin excess over the displayed noise median  SNR+22.84 / SNR+22.8
+    //   FT8 per-row peak vs the same-power carrier                       −1.27 / −1.20 dB
+    //   FT8 column-integrated peak vs that carrier                       −3.73 / −4.19 dB
+    //   display-bin grain                       2.54 dB rms / 2.51,  lag-1 0.613 / 0.611
+    // The 8-FSK penalty is what makes this scene 4–6 dB harsher than the old one: a station is
+    // barely dimmer than a carrier IN ONE ROW (−1.3 dB) but much dimmer INTEGRATED (−3.7 dB),
+    // because the tone hops and no single column stays lit. Only the integrated view is honest,
+    // so that is what is measured.
     const BINS = 512
+    const NRAW = 684 // raw bins covering 0–4004 Hz at 12 kHz / FFT_N 2048
+    const HZ_RAW = 12000 / 2048 // 5.859375 Hz — `power_spectrum`'s hz_per_bin
+    const ROWS = 105 // one FT8 over: 79 symbols × 0.16 s = 12.64 s at rowMs 120
+    const BURN = 40 // discarded before any statistic: the AGC EMA (α 0.1) has τ ≈ 10 rows
     const HZ = (i: number) => ((i + 0.5) * 4000) / BINS
-    // Mean of two exponentials ≈ ENL 2 (3.4 dB rms per bin); the shipping chain measures ~3.85.
-    // The RNG is re-seeded INSIDE buildRows so the null control draws the identical noise —
-    // otherwise the comparison would measure a different noise realisation, not the signal.
-    const disp = (dbfs: number) => Math.min(1, Math.max(0, (dbfs + WF_DB_SPAN) / WF_DB_SPAN))
-    const noiseMeanDb = (hz: number) =>
-      hz >= 3300 || hz <= 200 ? -116.3 : -76.3 + 5 * (0.5 - Math.min(1, Math.max(0, (hz - 300) / 2500)))
-    const EXCESS = (snr: number) => snr + 22.3
-    const probes = [-21, -18, -11, -1].map((snr, k) => ({ hz: 700 + k * 300, snr }))
-    const stations = Array.from({ length: 12 }, (_, k) => ({ hz: 1900 + k * 60, snr: -14 + k }))
-    const near = (hz: number, f: number) => Math.abs(hz - f) < 45
 
-    /** Build the scene. `drop` omits those probe frequencies entirely — the null control. */
-    const buildRows = (drop: number[] = []) => {
-    const rows: number[][] = []
-    let s2 = 0x9e3779b9
-    const rnd2 = () => ((s2 = (s2 * 1664525 + 1013904223) >>> 0), s2 / 4294967296)
-    const speckle2 = () => -0.5 * (Math.log(rnd2() || 1e-9) + Math.log(rnd2() || 1e-9))
-    for (let r = 0; r < 60; r++) {
-      const p = new Float64Array(BINS)
-      for (let i = 0; i < BINS; i++) p[i] = 10 ** (noiseMeanDb(HZ(i)) / 10) * speckle2()
-      for (const t of [...probes, ...stations]) {
-        if (drop.includes(t.hz)) continue
-        // FT8 is 8-FSK: one 6.25 Hz tone of the 50 Hz group is on at a time.
-        const i = Math.round((t.hz - 25 + 6.25 * (Math.floor(rnd2() * 8) + 0.5)) / (4000 / BINS) - 0.5)
-        p[i] += 10 ** ((noiseMeanDb(HZ(i)) - 0.9 + EXCESS(t.snr)) / 10)
+    // Hann leakage, analytic. A Hann window is three frequency taps, so a tone at fractional
+    // raw-bin offset d lands with power |0.5·D(d) + 0.25·D(d−1) + 0.25·D(d+1)|²/0.25 —
+    // 1 at the bin, 0.25 at ±1, and EXACTLY 0 at ±2.
+    const D = (x: number) =>
+      Math.abs(x) < 1e-9 ? 1 : Math.sin(Math.PI * x) / (2048 * Math.sin((Math.PI * x) / 2048))
+    const leak = (d: number) => ((0.5 * D(d) + 0.25 * D(d - 1) + 0.25 * D(d + 1)) / 0.5) ** 2
+
+    // Noise mean per raw bin: −76.3 dBFS, 5 dB of passband tilt, ±1 dB of filter ripple, and
+    // the ~40 dB dead cliff every SSB/DATA filter leaves outside ~300–3300 Hz. The RIPPLE IS
+    // LOAD-BEARING: a pure linear tilt is removable by a first-order detrend, so without
+    // curvature a flattener that cannot follow a passband would score as well as one that can.
+    const noiseDb = (hz: number) => {
+      const u = Math.min(1, Math.max(0, (hz - 300) / 3000))
+      const roll =
+        40 *
+        Math.max(
+          Math.min(1, Math.max(0, (300 - hz) / 300)),
+          Math.min(1, Math.max(0, (hz - 3300) / 300)),
+        )
+      return -76.3 + 5 * (0.5 - u) + Math.cos(2 * Math.PI * u) - roll
+    }
+
+    /** Tone index for (emitter, symbol) — A PURE HASH, never the RNG. This is the whole of the
+     *  anti-vacuity property: dropping an emitter consumes no draws, so the noise is identical. */
+    const toneOf = (id: number, sym: number) => {
+      let h = Math.imul(id + 1, 0x9e3779b1) ^ Math.imul(sym + 1, 0x85ebca6b)
+      h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+      return ((h ^ (h >>> 16)) >>> 0) % 8
+    }
+
+    const probes = [-21, -18, -11, -1].map((snr, k) => ({ id: k, hz: 700 + k * 300, snr }))
+    const stations = Array.from({ length: 12 }, (_, k) => ({
+      id: 100 + k,
+      hz: 1900 + k * 60,
+      snr: -14 + k,
+    }))
+
+    /** Build the scene. `drop` omits those emitter ids — and, by construction, changes NOTHING
+     *  else: the RNG below is touched only by the noise loop, in a fixed order. */
+    const buildRows = (drop: number[] = [], seed = 1) => {
+      let s = seed >>> 0
+      const rnd = () => {
+        s = (s + 0x6d2b79f5) >>> 0
+        let t = s
+        t = Math.imul(t ^ (t >>> 15), t | 1)
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
       }
-      rows.push(Array.from(p, (v) => disp(10 * Math.log10(Math.max(v, 1e-30)))))
+      let spare: number | null = null
+      const gauss = () => {
+        if (spare !== null) {
+          const v = spare
+          spare = null
+          return v
+        }
+        let u = 0
+        while (u <= 1e-12) u = rnd()
+        const r = Math.sqrt(-2 * Math.log(u))
+        const th = 2 * Math.PI * rnd()
+        spare = r * Math.sin(th)
+        return r * Math.cos(th)
+      }
+      const prof = new Float64Array(NRAW)
+      for (let k = 0; k < NRAW; k++) prof[k] = 10 ** (noiseDb(k * HZ_RAW) / 10)
+      const out: Float32Array[] = []
+      const p = new Float64Array(NRAW)
+      const ur = new Float64Array(NRAW + 2)
+      const ui = new Float64Array(NRAW + 2)
+      for (let r = 0; r < ROWS + BURN; r++) {
+        p.fill(0)
+        // NOISE — the exact one-frame Hann frequency structure (X[k] = 0.5u[k] − 0.25u[k−1] −
+        // 0.25u[k+1], E|X|² = 0.375), two weighted looks standing in for the 6 overlapped frames
+        // `RowAverage` means. THE ONLY CONSUMER OF THE RNG.
+        for (const w of [0.7, 0.3]) {
+          for (let k = 0; k < NRAW + 2; k++) {
+            ur[k] = gauss() * Math.SQRT1_2
+            ui[k] = gauss() * Math.SQRT1_2
+          }
+          for (let k = 0; k < NRAW; k++) {
+            const j = k + 1
+            const xr = 0.5 * ur[j] - 0.25 * ur[j - 1] - 0.25 * ur[j + 1]
+            const xi = 0.5 * ui[j] - 0.25 * ui[j - 1] - 0.25 * ui[j + 1]
+            p[k] += (w * (xr * xr + xi * xi)) / 0.375
+          }
+        }
+        for (let k = 0; k < NRAW; k++) p[k] *= prof[k]
+        // SIGNALS — 8-FSK. The row's Hann-weighted centre is 135 ms into its 270 ms support, so
+        // it straddles two 160 ms symbols; 0.80/0.20 is the measured split (range 0.54–0.96).
+        const sym = Math.floor((r * 120 + 135) / 160)
+        for (const t of [...probes, ...stations]) {
+          if (drop.includes(t.id)) continue
+          // SNR + 24.54 dB is the analytic peak-raw-bin-signal over mean-raw-bin-noise ratio,
+          // = 10log10(FFT_N/7.2). The chain then subtracts the peak-hold and scalloping terms
+          // by itself, landing at the measured SNR + 22.8 over the DISPLAYED median — so no
+          // constant in this test states the excess; it is produced.
+          const A = 10 ** ((t.snr + 24.54) / 10) * 10 ** (noiseDb(t.hz + 22) / 10)
+          for (const [sy, w] of [
+            [sym, 0.8],
+            [sym - 1, 0.2],
+          ] as [number, number][]) {
+            const kf = (t.hz + 6.25 * toneOf(t.id, sy)) / HZ_RAW
+            const k0 = Math.round(kf)
+            for (let d = -3; d <= 3; d++) {
+              const k = k0 + d
+              if (k >= 0 && k < NRAW) p[k] += A * w * leak(k - kf)
+            }
+          }
+        }
+        // DISPLAY BINS — peak-hold over the raw bins each covers, then the absolute dB axis.
+        // 511 of 512 display bins cover exactly 3 raw bins and adjacent ones SHARE one, which
+        // is why the grain is spatially correlated (lag-1 0.61) rather than iid.
+        const row = new Float32Array(BINS)
+        for (let i = 0; i < BINS; i++) {
+          const klo = Math.min(NRAW - 1, Math.max(1, Math.floor(((4000 * i) / BINS) / HZ_RAW)))
+          const khi = Math.min(NRAW - 1, Math.max(klo, Math.ceil(((4000 * (i + 1)) / BINS) / HZ_RAW)))
+          let m = 0
+          for (let k = klo; k <= khi; k++) if (p[k] > m) m = p[k]
+          row[i] = Math.min(1, Math.max(0, (10 * Math.log10(Math.max(m, 1e-300)) + WF_DB_SPAN) / WF_DB_SPAN))
+        }
+        out.push(row)
+      }
+      return out
     }
-    return rows
-    }
-    const rows = buildRows()
-    // Background = visible passband bins clear of every emitter.
+
+    // Background = visible passband bins clear of every emitter's 50 Hz tone group.
     const bgBins: number[] = []
     for (let i = 0; i < BINS; i++) {
       const hz = HZ(i)
-      if (hz < 340 || hz > 2780) continue
-      if ([...probes, ...stations].some((t) => near(hz, t.hz))) continue
+      if (hz < 350 || hz > 3250) continue
+      if ([...probes, ...stations].some((t) => hz > t.hz - 30 && hz < t.hz + 6.25 * 7 + 30)) continue
       bgBins.push(i)
     }
-    const lutOf = (v: number, floor: number, ceil: number) => {
-      const t = normalize(v, floor, ceil)
-      return t >= 1 ? 255 : Math.round(t * 255)
+    const groupBins = (hz0: number) => {
+      const g: number[] = []
+      for (let i = 0; i < BINS; i++) if (HZ(i) >= hz0 - 8 && HZ(i) <= hz0 + 6.25 * 7 + 8) g.push(i)
+      return g
     }
     const pctl = (a: number[], q: number) => {
       const b = [...a].sort((x, y) => x - y)
       return b[Math.min(b.length - 1, Math.round(q * (b.length - 1)))]
     }
-    /** Run one display chain over the scene → background stats + each probe's column. */
-    const run = (
-      chain: (row: number[]) => { floor: number; ceil: number },
-      scene: number[][] = rows,
-    ) => {
-      const bg: number[] = []
-      const sig = new Map(probes.map((p) => [p.snr, [] as number[]]))
-      for (const row of scene) {
-        const { floor, ceil } = chain(row)
-        for (const i of bgBins) bg.push(lutOf(row[i], floor, ceil))
-        for (const p of probes) {
-          let best = 0
-          for (let t = 0; t < 8; t++) {
-            const i = Math.round((p.hz - 25 + 6.25 * (t + 0.5)) / (4000 / BINS) - 0.5)
-            best = Math.max(best, lutOf(row[i], floor, ceil))
-          }
-          sig.get(p.snr)!.push(best)
-        }
-      }
-      const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
-      return {
-        med: pctl(bg, 0.5),
-        p95: pctl(bg, 0.95),
-        blackPct: (100 * bg.filter((v) => v === 0).length) / bg.length,
-        sig: Object.fromEntries(probes.map((p) => [p.snr, Math.round(mean(sig.get(p.snr)!))])) as
-          Record<number, number>,
-      }
+    const lutOf = (v: number, floor: number, ceil: number) => {
+      const t = normalize(v, floor, ceil)
+      return t >= 1 ? 255 : Math.round(t * 255)
     }
-    // View window = the default "Std" 200–3000 Hz.
     const vLo = Math.floor(200 / (4000 / BINS))
     const vHi = Math.ceil(3000 / (4000 / BINS))
 
-    // BEFORE — the shipping chain until 2026-08-05: whole-row AGC at the 5th percentile, no park.
-    const before = run((row) => agcRange(row))
-    // AFTER — visible-window AGC at the median, floor parked, minimum window (Waterfall.tsx).
-    const after = run((row) => {
-      const { floor, ceil } = agcRange(row.slice(vLo, vHi), WF_FLOOR_PCT)
-      return parkFloor(floor, ceil)
-    })
+    /** Run the shipping display chain (Waterfall.tsx:466-499) → per-bin LUT columns + bg stats. */
+    const run = (scene: Float32Array[], parked = true) => {
+      const buf = new Float32Array(BINS)
+      const col = new Float64Array(BINS) // per-bin time mean of the LUT index
+      const bg: number[] = []
+      let af = 0
+      let ac = 1
+      let init = false
+      for (let r = 0; r < scene.length; r++) {
+        flattenRow(scene[r], buf)
+        const { floor, ceil } = parked
+          ? agcRange(buf.slice(vLo, vHi), WF_FLOOR_PCT)
+          : agcRange(buf)
+        if (!init) {
+          af = floor
+          ac = ceil
+          init = true
+        } else {
+          af += (floor - af) * 0.1
+          ac += (ceil - ac) * 0.1
+        }
+        const w = parked ? parkFloor(af, ac) : { floor: af, ceil: ac }
+        if (r < BURN) continue
+        for (let i = 0; i < BINS; i++) col[i] += lutOf(buf[i], w.floor, w.ceil) / ROWS
+        for (const i of bgBins) bg.push(lutOf(buf[i], w.floor, w.ceil))
+      }
+      return {
+        col,
+        med: pctl(bg, 0.5),
+        p95: pctl(bg, 0.95),
+        blackPct: (100 * bg.filter((v) => v === 0).length) / bg.length,
+      }
+    }
 
-    // (a) THE BACKGROUND. Before: the noise sat in the bright half of the palette and NOTHING
-    //     was black — the operator's "over noisy". After: the noise median is the palette floor.
+    /** Paired column separation: the bin is chosen by the SIGNAL side's argmax and read at that
+     *  SAME index on the null side. Choosing per-side (or by the difference) would re-introduce
+     *  the selection bias this replaces. */
+    const sep = (sig: { col: Float64Array }, nul: { col: Float64Array }, hz0: number) => {
+      let best = -Infinity
+      let atNull = 0
+      for (const i of groupBins(hz0)) {
+        if (sig.col[i] > best) {
+          best = sig.col[i]
+          atNull = nul.col[i]
+        }
+      }
+      return best - atNull
+    }
+
+    const scene = buildRows()
+    const after = run(scene)
+    // BEFORE — the shipping chain until 2026-08-05: whole-row AGC at the 5th percentile, no park.
+    const before = run(scene, false)
+
+    // (a) THE BACKGROUND. Before: the noise sat in the bright half of the palette and NOTHING was
+    //     black — the operator's "over noisy". After: the noise median IS the palette floor.
     expect(before.med).toBeGreaterThan(140)
     expect(before.blackPct).toBeLessThan(1)
     expect(after.med).toBe(0)
-    // ⚠️ THESE TWO BARS WERE LOWERED (70→55, 32→40) WHEN THE PARK DROPPED 3→2 dB, and that is a
-    // deliberate trade, not a test bent to fit. They were never operator-derived — they were
-    // written to match whatever a 3 dB park produced, alongside the signal assertion that turned
-    // out to be vacuous. The operator's requirement is "the back is dark and not over noisy";
-    // 68% of the field pure black with the grain's p95 in the bottom seventh meets it. What he
-    // did NOT ask for, and could never detect, is a station that stopped being drawn — so when
-    // the two requirements collide the background yields. Measured: 78.4% black at 3 dB with the
-    // decode-floor station indistinguishable from grain, 57.3% at 1 dB with it clearly drawn.
-    //
-    // MEASURED CROSSOVER, and the two requirements DO NOT OVERLAP under a hard clamp:
-    //   park 0 dB → noise median LUT 4: the field never reaches black at all.
-    //   park 1 dB → median 0, 57.3% black, grain p95 47.
-    //   park 2 dB → median 0, 68.0% black, grain p95 36. ← here
-    //   park 3 dB → median 0, 78.4% black, grain p95 26.
-    // Signal separation is 9 LUT at ALL of them, so the park buys background darkness without
-    // costing this signal — the 3 dB default was wrong for a different reason (its calibration),
-    // not because 3 dB itself deleted it. 2 dB keeps a margin against the occupancy/tilt drift
-    // that pushes the EFFECTIVE park to 4.4 dB on a busy band and 6.4 with 5 dB of tilt.
-    // Getting a genuinely dark field AND comfortable weak-signal margin needs the two things
-    // still missing: spectral flattening (WSJT-X runs flat4 on every row; we run nothing) and a
-    // soft knee below the park so a sub-park column still accumulates over those ~105 rows.
-    expect(after.blackPct).toBeGreaterThan(55)
-    // The residual grain at 1 dB reaches LUT 47 — a dark trace, not the bright field it was
-    // (before: median 164-203, NOTHING black), but not as dark as 2-3 dB would give. That is the
-    // cost of keeping the decode floor drawn, and it is recorded here rather than hidden.
-    expect(after.p95).toBeLessThan(50)
+    // Measured over 8 base seeds (mean ± sd): median LUT 0 ± 0, p95 13.6 ± 0.47 (13–14),
+    // %black 86.7 ± 0.27 (86.4–87.2). Bars sit ≥6 outside the observed range at every seed.
+    // p95 is the gated darkness statistic rather than %black because it is what sets perceived
+    // boil: turbo's bottom is deliberately long and dark (`colormaps.ts` — L*≥1 only at LUT 5,
+    // L*≥5 at 19), so the difference between a field at LUT 0 and one at LUT 3 is ΔL* 0.69,
+    // well under one JND, while p95 is the grain the eye actually reads as noise.
+    expect(after.blackPct).toBeGreaterThan(80)
+    expect(after.p95).toBeLessThan(20)
 
-    // (b) THE SIGNALS. The whole risk of (a) is buying it by deleting weak signals.
-    //
-    // ⚠️ THIS HALF USED TO BE VACUOUS AND IT IS THE ONLY GUARD STANDING HERE. The probe metric
-    // is a MAX over the 8 tone bins, and under a parked chain the max of 8 pure-noise samples
-    // sits around LUT 26-28 — so `after.sig[-21] > 20` PASSED WITH THE -21 dB STATION DELETED
-    // FROM THE SCENE (measured: 42 present, 28 absent; the differential assertion passed too,
-    // 2 > 1). A guard that cannot fail for the reason it exists is worse than no guard, because
-    // it is read as coverage. Adversarial pass, 2026-08-05.
-    //
-    // The fix is a NULL CONTROL: the identical scene with that station omitted, same noise
-    // draws, same chain. The signal must beat ITS OWN ABSENCE. Nothing else distinguishes a
-    // drawn signal from the brightest tail of the grain that happens to sit in its bins.
-    const nullCtl = run((row) => {
-      const { floor, ceil } = agcRange(row.slice(vLo, vHi), WF_FLOOR_PCT)
-      return parkFloor(floor, ceil)
-    }, buildRows([probes[0].hz]))
+    // (b) THE SIGNALS, against the NULL CONTROL — the same scene with that station omitted, the
+    //     same noise draws (bit-identical, see buildRows), the same chain.
+    const nulls = probes.map((p) => run(buildRows([p.id])))
+    const seps = probes.map((p, k) => sep(after, nulls[k], p.hz))
+
+    // ⚠️ THE HONEST DECODE-FLOOR NUMBER IS 3.2 LUT, NOT THE 9 THIS FILE USED TO CLAIM, and the
+    // difference is entirely (1)+(2)+(3) above — the chain is unchanged. It is recorded rather
+    // than tuned away: a −21 dB SNR FT8 station is genuinely ~1 dB over the noise in a 7.8 Hz
+    // bin, and once its power is spread across the tones it visits, its column-integrated
+    // brightness is a few palette indices. There is no display map that turns that into 8 LUT
+    // (see WF_PARK_DB — a soft knee below the park was built and measured for exactly this and
+    // came out DOMINATED by simply moving the park). What makes it visible is the operator's own
+    // temporal integration over the ~105 rows an over lasts, which is what this metric models.
+    // Measured over 8 base seeds: 3.15 ± 0.39 (2.67–3.89).
     expect(
-      after.sig[-21] - nullCtl.sig[-21],
-      'the -21 dB station must be brighter than the same scene WITHOUT it — otherwise the ' +
-        'assertion below is satisfied by the max of 8 noise bins and proves nothing',
-      // ≥8 LUT is the ADVERSARIAL VERIFIER'S justified bar, not an invented one: 8 indices in
-      // Turbo's low ramp is ΔE76 ≈ 51, a plainly different colour. My first pass used 12 and
-      // that was arbitrary — and unachievable at ANY park, which is the physics, not a tuning
-      // failure. Per-bin grain fluctuates 3.85 dB rms while a -21 dB SNR station sits +1.3 dB
-      // over the noise median, so a SINGLE ROW cannot show it at all; it is visible only by
-      // column integration over the ~105 rows an over lasts. Measured separation is 9 LUT at
-      // every park from 1 to 3 dB — the park moves the background, not this margin.
-      // ⚠️ 9 against a bar of 8 is ONE INDEX of headroom. Treat a failure here as real.
-    ).toBeGreaterThan(8)
-    expect(after.sig[-21]).toBeGreaterThan(20)
-    expect(after.sig[-21] - after.p95).toBeGreaterThan(before.sig[-21] - before.p95)
-    // Strength ordering survives: louder is brighter, at every step.
-    expect(after.sig[-18]).toBeGreaterThan(after.sig[-21])
-    expect(after.sig[-11]).toBeGreaterThan(after.sig[-18])
-    expect(after.sig[-1]).toBeGreaterThan(after.sig[-11])
+      seps[0],
+      'the -21 dB station must lead its own absence — the null control is the identical scene ' +
+        'with it removed and IDENTICAL noise, so anything above 0 here is the station itself',
+    ).toBeGreaterThan(2)
+    // Strength ordering survives: louder is brighter, at every step. Measured (8 seeds):
+    // -18 → 13.0 ± 0.75, -11 → 49.6 ± 0.52, -1 → 137.3 ± 0.72.
+    expect(seps[1]).toBeGreaterThan(seps[0])
+    expect(seps[2]).toBeGreaterThan(seps[1])
+    expect(seps[3]).toBeGreaterThan(seps[2])
+  })
+
+  it('NULL CONTROL: with the station deleted the weak-signal statistic is EXACTLY zero', () => {
+    // The anti-vacuity proof, as a TEST rather than a comment — a comment rots and cannot fail.
+    // This runs the identical measurement over the identical scene with the probe dropped from
+    // BOTH arms. Because the scene's RNG is consumed only by the noise and tones come from a
+    // pure hash, the two arms are bit-identical arrays and the statistic is exactly 0.0 — not
+    // small, ZERO, at every seed. So the guard above cannot be satisfied by grain AT ALL.
+    //
+    // This is the property the previous null control was written to have and did not: it skipped
+    // an RNG draw when it dropped an emitter, so its two arms carried different noise (row 1
+    // differed in 505 of 512 bins) and its 9-vs-8 margin was one draw wide — re-running the old
+    // statistic over 8 base seeds gave 9.0 8.6 5.3 9.2 10.8 5.3 10.2 10.5, i.e. it FAILED ITS
+    // OWN BAR on 2 of 8 seeds.
+    //
+    // VERIFIED RED by deleting what it measures: with the probe restored to one arm only this
+    // reads 4.85 at seed 1 instead of 0 and `toBe(0)` fails. The guard above was proved red the
+    // same way — dropping the -21 dB station from the SIGNAL arm too makes its separation
+    // EXACTLY 0 against a bar of 2 (`expected 0 to be greater than 2`), which is the strongest
+    // form of the property: the statistic cannot be satisfied by grain at any seed, because with
+    // no station the two arrays are identical.
+    const BINS = 512
+    const NRAW = 684
+    const HZ_RAW = 12000 / 2048
+    const ROWS = 105
+    const BURN = 40
+    const D = (x: number) =>
+      Math.abs(x) < 1e-9 ? 1 : Math.sin(Math.PI * x) / (2048 * Math.sin((Math.PI * x) / 2048))
+    const leak = (d: number) => ((0.5 * D(d) + 0.25 * D(d - 1) + 0.25 * D(d + 1)) / 0.5) ** 2
+    const noiseDb = (hz: number) => {
+      const u = Math.min(1, Math.max(0, (hz - 300) / 3000))
+      const roll =
+        40 *
+        Math.max(
+          Math.min(1, Math.max(0, (300 - hz) / 300)),
+          Math.min(1, Math.max(0, (hz - 3300) / 300)),
+        )
+      return -76.3 + 5 * (0.5 - u) + Math.cos(2 * Math.PI * u) - roll
+    }
+    const toneOf = (id: number, sym: number) => {
+      let h = Math.imul(id + 1, 0x9e3779b1) ^ Math.imul(sym + 1, 0x85ebca6b)
+      h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+      return ((h ^ (h >>> 16)) >>> 0) % 8
+    }
+    const emitters = [{ id: 0, hz: 700, snr: -21 }]
+    const build = (drop: number[], seed: number) => {
+      let s = seed >>> 0
+      const rnd = () => {
+        s = (s + 0x6d2b79f5) >>> 0
+        let t = s
+        t = Math.imul(t ^ (t >>> 15), t | 1)
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+      let spare: number | null = null
+      const gauss = () => {
+        if (spare !== null) {
+          const v = spare
+          spare = null
+          return v
+        }
+        let u = 0
+        while (u <= 1e-12) u = rnd()
+        const r = Math.sqrt(-2 * Math.log(u))
+        const th = 2 * Math.PI * rnd()
+        spare = r * Math.sin(th)
+        return r * Math.cos(th)
+      }
+      const prof = new Float64Array(NRAW)
+      for (let k = 0; k < NRAW; k++) prof[k] = 10 ** (noiseDb(k * HZ_RAW) / 10)
+      const out: Float32Array[] = []
+      const p = new Float64Array(NRAW)
+      const ur = new Float64Array(NRAW + 2)
+      const ui = new Float64Array(NRAW + 2)
+      for (let r = 0; r < ROWS + BURN; r++) {
+        p.fill(0)
+        for (const w of [0.7, 0.3]) {
+          for (let k = 0; k < NRAW + 2; k++) {
+            ur[k] = gauss() * Math.SQRT1_2
+            ui[k] = gauss() * Math.SQRT1_2
+          }
+          for (let k = 0; k < NRAW; k++) {
+            const j = k + 1
+            const xr = 0.5 * ur[j] - 0.25 * ur[j - 1] - 0.25 * ur[j + 1]
+            const xi = 0.5 * ui[j] - 0.25 * ui[j - 1] - 0.25 * ui[j + 1]
+            p[k] += (w * (xr * xr + xi * xi)) / 0.375
+          }
+        }
+        for (let k = 0; k < NRAW; k++) p[k] *= prof[k]
+        const sym = Math.floor((r * 120 + 135) / 160)
+        for (const t of emitters) {
+          if (drop.includes(t.id)) continue
+          const A = 10 ** ((t.snr + 24.54) / 10) * 10 ** (noiseDb(t.hz + 22) / 10)
+          for (const [sy, w] of [
+            [sym, 0.8],
+            [sym - 1, 0.2],
+          ] as [number, number][]) {
+            const kf = (t.hz + 6.25 * toneOf(t.id, sy)) / HZ_RAW
+            const k0 = Math.round(kf)
+            for (let d = -3; d <= 3; d++) {
+              const k = k0 + d
+              if (k >= 0 && k < NRAW) p[k] += A * w * leak(k - kf)
+            }
+          }
+        }
+        const row = new Float32Array(BINS)
+        for (let i = 0; i < BINS; i++) {
+          const klo = Math.min(NRAW - 1, Math.max(1, Math.floor(((4000 * i) / BINS) / HZ_RAW)))
+          const khi = Math.min(NRAW - 1, Math.max(klo, Math.ceil(((4000 * (i + 1)) / BINS) / HZ_RAW)))
+          let m = 0
+          for (let k = klo; k <= khi; k++) if (p[k] > m) m = p[k]
+          row[i] = Math.min(1, Math.max(0, (10 * Math.log10(Math.max(m, 1e-300)) + WF_DB_SPAN) / WF_DB_SPAN))
+        }
+        out.push(row)
+      }
+      return out
+    }
+    const vLo = Math.floor(200 / (4000 / BINS))
+    const vHi = Math.ceil(3000 / (4000 / BINS))
+    const col = (scene: Float32Array[]) => {
+      const buf = new Float32Array(BINS)
+      const c = new Float64Array(BINS)
+      let af = 0
+      let ac = 1
+      let init = false
+      for (let r = 0; r < scene.length; r++) {
+        flattenRow(scene[r], buf)
+        const { floor, ceil } = agcRange(buf.slice(vLo, vHi), WF_FLOOR_PCT)
+        if (!init) {
+          af = floor
+          ac = ceil
+          init = true
+        } else {
+          af += (floor - af) * 0.1
+          ac += (ceil - ac) * 0.1
+        }
+        const w = parkFloor(af, ac)
+        if (r < BURN) continue
+        for (let i = 0; i < BINS; i++) {
+          const t = normalize(buf[i], w.floor, w.ceil)
+          c[i] += (t >= 1 ? 255 : Math.round(t * 255)) / ROWS
+        }
+      }
+      return c
+    }
+    const gb: number[] = []
+    for (let i = 0; i < BINS; i++) {
+      const hz = ((i + 0.5) * 4000) / BINS
+      if (hz >= 700 - 8 && hz <= 700 + 6.25 * 7 + 8) gb.push(i)
+    }
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const a = col(build([0], seed))
+      const b = col(build([0], seed))
+      let best = -Infinity
+      let atNull = 0
+      for (const i of gb)
+        if (a[i] > best) {
+          best = a[i]
+          atNull = b[i]
+        }
+      expect(
+        best - atNull,
+        `seed ${seed}: with the station deleted from BOTH arms the statistic must be exactly 0 — ` +
+          'anything else means the null control is not paired and the guard above can be ' +
+          'satisfied by grain',
+      ).toBe(0)
+    }
   })
 })
 
