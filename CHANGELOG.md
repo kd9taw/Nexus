@@ -9,38 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Importing a LoTW download threw away every confirmation it carried.** An operator with a
-  26,000-QSO log downloaded from LoTW saw his awards card read "3% — 816 of 26,007 QSOs
-  confirmed", with DXCC 131 against LoTW's 249, the Challenge 277 against 1,202, WAZ 31 of 40
-  and 23 DXCC credits against the 248 ARRL had granted him. Every worked total was right and
-  every confirmed total was wrong, which is one fault, not five. **Importing an ADIF treated a
-  contact already in the log as nothing but a duplicate and dropped the whole row** — and on a
-  LoTW download the confirmation, the granted award credit, and the STATE and COUNTRY that only
-  a confirmed row carries are all *on* those rows, because a confirmation report is by
-  definition about contacts you have already logged. "Already in the log" means do not log it
-  twice; it never meant ignore what the row says about the one you have. An import now merges
-  those rows into the contacts they describe, using the same one-way merge the **Sync
-  confirmations** button uses — it only ever adds, so no import can un-confirm or un-credit a
-  contact, and a QSL you have merely *requested* still counts for nothing. The import toast now
-  reports updates separately from additions ("0 imported · 24,163 existing QSOs updated with
-  confirmations/credits"), because an import that adds no contacts at all can be the one that
-  repairs every award total you have.
+- **Purging the logbook left the LoTW and eQSL sync positions behind, so the next sync brought
+  back a sliver of your confirmations.** An operator purged a 26,000-QSO log, re-synced, and his
+  awards card read "3% — 816 of 26,007 QSOs confirmed": DXCC 131 against LoTW's 249, the
+  Challenge 277 against 1,202, WAZ 31 of 40, and 23 DXCC credits against the 248 ARRL had
+  granted him. Every worked total was right and every confirmed total was wrong. Each service is
+  synced incrementally — Nexus remembers the date of your last confirmation and asks the service
+  only for what has been matched since — and purging the log did not clear that date. So the
+  next "Sync LoTW now" asked for the last few days of matches against a log that had just been
+  emptied, and brought back a few hundred confirmations instead of a whole history. That date
+  gates the confirmation pull and nothing else, which is why the contact totals looked right
+  while every award did not. Nothing but changing your LoTW username ever reset it, so the rest
+  stayed out of reach permanently. A purge now clears both positions. **The purge dialog says so
+  before you confirm**, because the sync that follows is a full confirmation-history download and
+  takes considerably longer than a routine one — it is the pull that brings your confirmations
+  back, not a hang.
 
-- **Purging the logbook left the LoTW and eQSL sync positions behind, so the next sync came back
-  nearly empty.** Each service is synced incrementally: Nexus remembers the date of your last
-  confirmation and asks only for what has been matched since. Purging the log did not clear
-  that, so a fresh start followed by "Sync LoTW now" asked for the last few days of matches
-  against an empty logbook and returned a few hundred confirmations instead of your whole
-  history — and nothing but changing your LoTW username ever reset it, so the rest stayed out of
-  reach permanently. A purge now resets both positions, and the next sync is a full pull.
+- **Importing a confirmation report over the contacts it describes changed nothing.** A LoTW,
+  Club Log or eQSL download restates contacts you have already logged — that is what a
+  confirmation report *is* — and the confirmation, the granted award credit and the STATE and
+  COUNTRY ride *on* those restated rows. **Import treated a row matching a logged contact as
+  nothing but a duplicate and dropped the whole row**, so importing a download over the log it
+  describes skipped every row as a dupe and repaired nothing. "Already in the log" means do not
+  log it twice; it never meant ignore what the row says about the one you have. An import now
+  merges those rows into the contacts they describe, using the same one-way merge the **Sync
+  confirmations** button uses — it only ever adds, so no import can un-confirm or un-credit a
+  contact, and a QSL you have merely *requested* still counts for nothing. The import toast
+  reports updates separately from the dupe count, because an import that adds no contacts at all
+  can be the one that repairs every award total you have. **This is the hand-repair path**: if
+  your confirmations are behind, download your report from LoTW (or Club Log, or eQSL) and
+  import it, and it lands on the contacts you already hold instead of being thrown away.
 
 - **A confirmation marked `V` read as unconfirmed.** ADIF spells a confirmation you hold two
   ways — `Y`, and `V` for one an award credit has been granted against — and Club Log and
   DXKeeper both write `V`. Nexus read only `Y`, so importing a master log from either of them
   silently dropped the confirmations on exactly your *best* contacts, the credited ones. Both
   are now read; `N`, `R` (requested, not received) and `I` still confirm nothing. A value padded
-  with spaces by a sloppy export is no longer read as a refusal. This is separate from the LoTW
-  fault above — LoTW's own report only ever writes `Y` or `N`.
+  with spaces by a sloppy export is no longer read as a refusal. This is separate from the two
+  LoTW faults above and never touched a LoTW download: LoTW's own report only ever writes `Y` or
+  `N`.
 
 - **Light theme: the "NEW ONE — Work it" pounce banner had no readable text.** When a needed
   station appeared, the banner slid down from the top of the screen with its NEW chip and its
