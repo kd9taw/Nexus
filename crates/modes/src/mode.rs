@@ -733,7 +733,45 @@ impl Mode for Ft4Mode {
 /// `Ft1Mode::gen_wave`), so a signal at t=0 has no early-side margin at all. 0.4 s buys that
 /// margin while still fitting inside `gen_wave`'s fixed 48000-sample buffer, whose 0.464 s of
 /// trailing zeros is the entire budget available to shift into.
-const FT1_LEAD_IN_SECS: f32 = 0.4;
+/// FT1's slot lead-in — the ONLY early-timing margin the mode has, and half of a fixed budget.
+///
+/// The buffer is 4.6432 s of room holding 3.5357 s of tones, so lead and post-tone tail come out
+/// of one 464 ms allowance and trade one-for-one:
+///
+/// ```text
+///   early tolerance = the lead          (the decoder's istart clamps at 0)
+///   late tolerance  = ~900 ms - lead    (the coarse sweep's top)
+///   post-tone tail  = 464 ms - lead     (what survives soundcard output latency)
+/// ```
+///
+/// **0.300 s, chosen on measurement (`crates/tempo-fast/tests/ft1_lead_sweep.rs`, operator
+/// decision 2026-08-05).** It was 0.400 s, which left a 64 ms tail — and because the PTT hold is
+/// clamped to the slot boundary and the device output ring lags the buffer by the soundcard's
+/// latency, ANY output latency above ~64 ms cut FT1's RF mid-tone. 20-100 ms cpal buffers are
+/// ordinary, so the shipped value was inside the failure region on real hardware.
+///
+/// The sweep (12 trials/cell, AWGN, -4/-8/-12 dB) shows early tolerance tracks the lead to the
+/// millisecond and is a CLIFF, not a slope — flat at 10-12/12 up to -lead, then 0 at the next step
+/// out, because `tempofast_decode.f90` cannot search before sample 0. The shape is identical at
+/// all three SNRs, so it is timing and not sensitivity:
+///
+/// ```text
+///   lead  tail |  -450 -400 -350 -300 -250 -200 -150  -100    0  +100  +250  +400
+///    150   314 |     0    0    0    0    0    0   12    11   10    12    11    12
+///    250   214 |     0    0    0    0   12   11   11    10   12    12    11    11
+///    300   164 |     0    0    0   12   11   11   10    12   12    11    12    12   <- here
+///    400    64 |     0   12   11   11   10   12   12    12   11    11    11    11
+/// ```
+///
+/// So this costs 100 ms of early tolerance (a peer more than 300 ms fast is now lost, where 400 ms
+/// was tolerated) and buys 100 ms of tail — 164 ms, comfortably clear of any normal audio buffer.
+/// It also IMPROVES the late side, which is `900 ms - lead`: at -12 dB the old 400 ms lead already
+/// fell to 5/12 at +400 ms where 300 ms holds 6/12 and shorter leads do better still.
+///
+/// ⚠️ DO NOT RAISE THIS WITHOUT RE-READING THE TAIL. Every millisecond added here is taken from
+/// the margin protecting the end of the signal, and that failure is invisible in a loopback test —
+/// it only appears on hardware with real output latency.
+pub(crate) const FT1_LEAD_IN_SECS: f32 = 0.3;
 
 /// **FT1** (KD9TAW) — 4 s T/R, 4-CPM turbo, with IR-HARQ. Tempo's native mode.
 #[derive(Debug, Clone, Copy, Default)]
@@ -783,12 +821,12 @@ impl Mode for Ft1Mode {
         // reassembled. FT8 was unaffected on the same radios, because its symmetric search
         // absorbs the same error.
         //
-        // 0.4 s, NOT the 0.5 s FT8/FT4 use: `tempo_fast::gen_wave` returns a FIXED
-        // NMAX = 48000-sample (4.000 s) buffer holding 3.536 s of tones plus 0.464 s of tail
-        // zeros. 0.4 s (4800 samples) shifts into that tail with 771 samples to spare; 0.5 s
-        // would overrun it. Shifting WITHIN the buffer — rather than prepending, as FT8/FT4 do —
-        // keeps the length at exactly 4.000 s, which matters because the PTT hold is sized from
-        // `w.len()` (`tempo-audio/src/slot.rs`) and FT1's over already fills its whole T/R period.
+        // NOT the 0.5 s FT8/FT4 use: `tempo_fast::gen_wave` returns a FIXED NMAX = 48000-sample
+        // (4.000 s) buffer holding 3.536 s of tones plus 0.464 s of tail zeros, and the lead is
+        // shifted WITHIN that buffer rather than prepended — which keeps the length at exactly
+        // 4.000 s. That matters because the PTT hold is sized from `w.len()`
+        // (`tempo-audio/src/slot.rs`), so a longer buffer would not buy time, it would only push
+        // the clamp. See `FT1_LEAD_IN_SECS` for why the value is 0.300 and what it trades.
         let tones = tempo_fast::gen_wave(itone, fsample, f0);
         let lead = (FT1_LEAD_IN_SECS * fsample).round().max(0.0) as usize;
         if lead == 0 || lead >= tones.len() {
@@ -1018,6 +1056,54 @@ mod tx_capability_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_ft1_lead_and_tail_are_what_the_slot_clamp_assumes() {
+        // ⭐ THE GEOMETRY GUARD, measured off the REAL waveform rather than restated from a
+        // constant. `tempo-audio/src/slot.rs` sizes FT1's PTT hold from `w.len()` and asserts a
+        // ~164 ms post-tone tail using its own mirrored copy of the lead — so a change to
+        // `FT1_LEAD_IN_SECS` here, without a matching change there, would leave both files
+        // internally consistent and both wrong. This test is what makes that impossible: it
+        // reads where the tones actually start and stop in the buffer that goes on the air.
+        //
+        // The tail is not cosmetic. The PTT hold is clamped to the slot boundary and the device
+        // output ring lags the buffer by the soundcard's latency, so the tail IS the margin
+        // protecting the end of the signal. At the former 400 ms lead it was 64 ms, inside the
+        // failure region for ordinary 20-100 ms audio buffers (operator decision 2026-08-05;
+        // the trade is measured in crates/tempo-fast/tests/ft1_lead_sweep.rs).
+        let m = Ft1Mode;
+        let w = m.gen_wave(&tempo_fast::encode("CQ W9XYZ EN37"), 12_000.0, 1500.0);
+        assert_eq!(w.len(), 48_000, "FT1's buffer must stay exactly 4.000 s");
+
+        let first = w
+            .iter()
+            .position(|&v| v != 0.0)
+            .expect("the wave has tones");
+        let last = w
+            .iter()
+            .rposition(|&v| v != 0.0)
+            .expect("the wave has tones");
+        let lead_ms = first as f64 / 12.0;
+        let tail_ms = (w.len() - 1 - last) as f64 / 12.0;
+
+        assert!(
+            (lead_ms - 300.0).abs() < 1.0,
+            "FT1's tones must start ~300 ms into the buffer (the early-timing margin), got \
+             {lead_ms:.1} ms"
+        );
+        assert!(
+            (tail_ms - 164.0).abs() < 2.0,
+            "FT1 must keep ~164 ms of tail after the tones — this is the soundcard-latency \
+             margin `slot.rs` asserts and the reason the lead was shortened; got {tail_ms:.1} ms"
+        );
+        // And the pair must still fit the fixed frame, which is the constraint that makes this
+        // a trade at all: lead + tones + tail == 4.000 s, always.
+        assert!(
+            lead_ms + tail_ms < 470.0,
+            "lead + tail must fit the 464 ms the tones leave; got {:.1} ms",
+            lead_ms + tail_ms
+        );
     }
 
     #[test]

@@ -186,7 +186,11 @@ mod tests {
         let tones = m.encode("CQ KD9TAW EN52");
         let wave = m.gen_wave(&tones, FS, 1500.0);
         let bare = tempo_fast::gen_wave(&tones, FS, 1500.0);
-        let lead = (0.4 * FS).round() as usize;
+        // ⚠️ READ THE CONSTANT, DO NOT RESTATE IT. This was a hardcoded `0.4 * FS`, and when
+        // `FT1_LEAD_IN_SECS` moved to 0.300 (2026-08-05) the test kept asserting silence over a
+        // window that now contains tones — it failed loudly here, but a change in the other
+        // direction would have passed while testing nothing.
+        let lead = (crate::mode::FT1_LEAD_IN_SECS * FS).round() as usize;
 
         // The buffer LENGTH must not change. FT1's over already fills its whole 4 s T/R period,
         // and the PTT hold is sized from the wave length — a longer buffer would push the tail

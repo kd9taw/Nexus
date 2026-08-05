@@ -57,9 +57,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window to the period and can never cross it; Nexus now does the same, for every mode. FT8 and
   FT4 were never affected in practice: they carry over two seconds of slack. FT1 carries none at
   all — its transmit buffer fills its whole 4-second period, so every FT1 over now ends exactly at
-  the slot boundary and about 64 milliseconds of quiet tail is what protects the end of the signal.
-  FT1's 4-second timing is unchanged. (An earlier draft of this entry said FT1 had 214 milliseconds
-  of slack; that was measured from the tones rather than the buffer actually sent, and was wrong.)
+  the slot boundary. FT1's 4-second timing is unchanged. (An earlier draft of this entry said FT1
+  had 214 milliseconds of slack; that was measured from the tones rather than the buffer actually
+  sent, and was wrong.)
+- **TempoFast (FT1) starts its transmission 100 milliseconds earlier in the slot**, which leaves
+  164 milliseconds of quiet at the end of the over instead of 64. That trailing quiet is what
+  protects the end of your signal: transmit stops at the slot boundary, and your sound card is
+  always running a little behind, so if its buffer is longer than the quiet you have left, the
+  last of your tones never reaches the air. Buffers of 20 to 100 milliseconds are completely
+  ordinary, so the old margin was inside the range where that happens.
+  **What it costs:** the lead-in is also TempoFast's tolerance for a station whose clock is FAST,
+  and the two come out of the same fixed budget. A station more than 0.3 seconds ahead of UTC will
+  now be missed where up to 0.4 seconds was tolerated before. Measured across signal levels, that
+  tolerance is a cliff rather than a slope — inside it, decoding is unaffected — and the tolerance
+  for a station running LATE improves by the same 100 milliseconds. If you work someone whose PC
+  clock is badly fast, this is the trade you are on the wrong side of; the measurement that chose
+  it is kept in the source so it can be revisited.
 - **The QRZ link on the callsign card** only appeared once a callbook lookup had already
   succeeded, which withheld it in exactly the cases you want it — no QRZ subscription, no
   credentials, a lookup that failed, or a callsign QRZ has never heard of. Opening the page only

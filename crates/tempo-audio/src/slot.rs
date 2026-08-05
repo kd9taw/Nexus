@@ -49,13 +49,17 @@ pub const TX_TAIL_MS: f64 = 250.0;
 /// FT1's effective post-tone tail is a fixed **64.2 ms** (tones end at 0.400 + 3.5357 = 3.9357 s;
 /// the clamp drops PTT at 4.000 s).
 ///
-/// ⚠️ **THAT 64 ms IS AN ON-AIR HAZARD AND IS NOT YET RESOLVED.** The device output ring carries
-/// soundcard latency L; at the clamped deadline the last L ms is still unrendered. **Any output
-/// latency above ~64 ms cuts FT1's RF mid-tone**, and cpal buffers of 20-100 ms are ordinary.
-/// The underlying arithmetic is lead(0.400) + tones(3.5357) + tail(0.250) = 4.186 > 4.000; the
-/// 0.400 s lead is protocol-critical and on-air-verified (KD9TAW/N9UM, 6 m, 2026-07-26), so FT1
-/// cannot have both a full lead and a full tail. Which to shorten is the operator's call about
-/// his own protocol, not a WSJT-X parity question — flagged, not silently changed. The 4 s period is by design (operator,
+/// **RESOLVED 2026-08-05 by shortening the LEAD, on the operator's decision.** At the former
+/// 0.400 s lead the tail was 64 ms, and because the device output ring lags the buffer by the
+/// soundcard's latency, any output latency above that cut FT1's RF mid-tone — inside the failure
+/// region for ordinary 20-100 ms cpal buffers. The lead is now 0.300 s
+/// (`FT1_LEAD_IN_SECS`, crates/modes/src/mode.rs) and the tail is **164 ms**.
+///
+/// Lead and tail come out of one 464 ms budget and trade one-for-one, so this cost 100 ms of
+/// early-timing tolerance — measured as a hard cliff, not a slope, in
+/// `crates/tempo-fast/tests/ft1_lead_sweep.rs`. FT1 still cannot have both a full lead and a full
+/// 250 ms tail; 0.300/0.164 is the balance chosen, and the sweep is the instrument for revisiting
+/// it. The clamp itself is unchanged and still fires on every FT1 over. The 4 s period is by design (operator,
 /// 2026-08-04: "ft1 has a designed 4 sec timing… but it should still follow strict
 /// wsjtx based aspects of the transmission"); the missing bound was the defect.
 ///
@@ -386,9 +390,11 @@ mod tests {
     /// The tone length, for the tests that are about where the SIGNAL ends rather than the buffer.
     const FT1_TONES_MS: f64 = 99.0 * (3000.0 / 7.0) / 12_000.0 * 1000.0;
     const FT1_PERIOD_MS: f64 = 4_000.0;
-    /// FT1's lead-in, shifted WITHIN the fixed buffer (crates/modes/src/mode.rs) — on-air-verified
-    /// as protocol-critical, which is why the tail cannot simply be taken from it.
-    const FT1_LEAD_MS: f64 = 400.0;
+    /// FT1's lead-in, shifted WITHIN the fixed buffer — mirrors `FT1_LEAD_IN_SECS`
+    /// (crates/modes/src/mode.rs). ⚠️ MOVES WITH IT: the tail this file asserts is
+    /// `464 ms - lead`, so a change there without a change here silently stops testing the real
+    /// geometry. 300 ms since 2026-08-05; the trade is measured in the ft1_lead_sweep test.
+    const FT1_LEAD_MS: f64 = 300.0;
 
     #[test]
     fn an_ft1_over_keyed_late_still_ends_at_the_boundary() {
@@ -431,9 +437,10 @@ mod tests {
         let tone_end = slot_start + FT1_LEAD_MS + FT1_TONES_MS;
         let tail_ms = got - tone_end;
         assert!(
-            (tail_ms - 64.2).abs() < 0.5,
-            "FT1's real post-tone tail is ~64.2 ms, got {tail_ms:.1} — if this moved, the \
-             soundcard-latency hazard moved with it"
+            (tail_ms - 164.2).abs() < 0.5,
+            "FT1's real post-tone tail is ~164.2 ms at the 300 ms lead, got {tail_ms:.1} — if \
+             this moved, so did the margin protecting the end of the signal from soundcard \
+             output latency, which is the whole reason the lead was shortened"
         );
     }
 
