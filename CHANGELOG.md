@@ -5,6 +5,44 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Light theme: the "NEW ONE — Work it" pounce banner had no readable text.** When a needed
+  station appeared, the banner slid down from the top of the screen with its NEW chip and its
+  Work it button — and nothing between them. The callsign, the country, the frequency, the mode
+  and the band were all being drawn in the light theme's near-black ink on a near-black
+  background, so the one thing the banner exists to tell you was the one thing you could not
+  read. The chip and the button paint their own colours, which is why they still showed and the
+  data did not. Dark mode was never affected. The self-update prompt at the bottom right had the
+  same fault from the same cause and is fixed with it.
+
+- **Light theme: the "needed" colours were the dark theme's colours everywhere they appeared.**
+  The eleven colours that say what is worth working — magenta for an all-time new one, violet for
+  a new zone, orange for a new band-slot, and the rest — had light-theme versions written for
+  them, and none of them were ever used. The light theme rendered the dark theme's pastels
+  instead: colours picked to glow against a near-black panel, shown on white. That affected the
+  need chips on roster/station cards and in the Satellites pass list, the tags and row tints in
+  the decode feed, the POTA/SOTA/DXpedition badges on the band strip and band map, and the mode
+  cells on the Needed board — where the FT8, FT4 and RTTY cells were pale fills carrying
+  near-white text, effectively blank. All of it now uses the light inks. **You will see these
+  colours change** in light mode; they are the same eleven hues, taken dark enough to read on a
+  white panel. Three of them (new US state, wanted, new mode) were re-tuned a shade darker than
+  originally written, because this is the first time they have ever been rendered and measured,
+  and they fell short of the 4.5:1 readability floor. The world map is not part of this: it
+  carries its own copy of the palette and still draws the dark colours in light mode.
+
+- **Light and dark: the ATNO, new-band and SOTA badges had unreadable labels.** The white letters
+  on the magenta "NEW ONE" decode tag (3.4:1), on the orange band-slot tag (2.2:1) and on the
+  violet SOTA badge (2.5:1) all sat below the 4.5:1 readability floor in dark mode. Every badge
+  that fills itself with a needed-colour now takes its letter colour from the theme, so it stays
+  legible in both. **You will see those three labels flip from white to near-black in dark mode.**
+
+- The pounce banner's bottom corners are rounded again — the rule that rounded them named a
+  design token that does not exist, so it had been doing nothing and the banner was shipping
+  square-cornered.
+
 ## [1.0.1] — 2026-08-05
 
 ### Added

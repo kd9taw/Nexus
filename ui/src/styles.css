@@ -3103,20 +3103,7 @@ button.nb-chip:hover {
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
   --shadow: 0 4px 14px rgba(30, 50, 80, 0.12);
-  /* Shared needed-palette, light inks (same hues as the dark pastels — the
-     chips/badges keep one color language, readable on white). The map is
-     unaffected: it carries its own hardcoded copies tuned to its basemap. */
-  --need-entity: #c2187f;
-  --need-zone: #7e22ce;
-  --need-band: #a16207;
-  --need-mode: #0e7490;
-  --need-grid: #047857;
-  --need-state: #0d9488; /* teal — new US state (WAS) */
-  --need-dxped: #0369a1;
-  --need-pota: #15803d;
-  --need-sota: #6d28d9;
-  --need-wanted: #d97706; /* amber — on your wanted watch list */
-  --need-confirm: #64748b;
+  /* The light --need-* inks do NOT live here — see the palette further down. */
 }
 
 /* ---- LIGHT-MODE INK OVERRIDES ------------------------------------------
@@ -4607,8 +4594,19 @@ select optgroup {
 /* Shared "needed" palette — one bold color language across the roster, decode
    feed, and map so a needed station is unmistakable at a glance:
      ATNO/new DXCC = magenta · new zone = violet · new band = orange ·
-     new mode = cyan · new grid = green · needs-confirm = grey. */
-:root {
+     new mode = cyan · new grid = green · needs-confirm = grey.
+
+   ⚠ KEEP THE LIGHT BLOCK BELOW RIGHT HERE, and do not "tidy" it up into the
+   [data-theme='light'] token block near the top of this sheet. That is exactly
+   where it used to live, and `:root` and `[data-theme='light']` have EQUAL
+   specificity (0,1,0) — so source order decided it and this palette, being
+   later in the file, won every one of the eleven light overrides. The light
+   inks were dead from the day they landed: light mode rendered these
+   dark-theme pastels (chosen to glow on near-black) on a white panel, across
+   the roster, the decode feed and every needed badge. Default-then-light,
+   declared adjacent, is the sheet's idiom — see the decode swatches above. */
+:root,
+[data-theme='dark'] {
   --need-entity: #f23ec0; /* magenta — all-time-new one (ATNO) */
   --need-zone: #c084fc; /* violet — new CQ zone */
   --need-band: #f59e0b; /* orange — new band-slot */
@@ -4620,6 +4618,38 @@ select optgroup {
   --need-pota: #4ade80; /* green — live POTA activator */
   --need-sota: #a78bfa; /* purple — live SOTA activator */
   --need-wanted: #fbbf24; /* amber — on your wanted watch list */
+  /* Needed-board submode hues (RTTY/FT4 get their own so an RTTY opportunity
+     reads apart from an FT8 one). Declared rather than left to a var() fallback:
+     a fallback is a DARK value that fires in both themes, which is the whole of
+     the bug above. */
+  --need-mode-rtty: #f5a524; /* amber — RTTY (an RBN skimmer row) */
+  --need-mode-ft4: #4ade80; /* green — FT4, apart from FT8's cyan */
+  /* Ink for a chip that FILLS itself with a --need-* colour. The palette flips
+     value between themes (light pastels on near-black here, dark inks on white
+     there), so the ink on top has to flip with it — a hardcoded one is legible
+     in exactly one theme. */
+  --need-ink: #10131a;
+}
+/* Light inks: the same eleven hues taken dark enough to read on the off-white
+   panel, so the chips/badges keep one colour language across both themes. The
+   map is unaffected — it carries its own hardcoded copies tuned to its basemap. */
+[data-theme='light'] {
+  --need-entity: #c2187f;
+  --need-zone: #7e22ce;
+  --need-band: #a16207;
+  /* One shade darker than the #0e7490 this was written as: the Needed board's mode
+     cell fills itself with this and inks it --bg, and that pair measured 4.43:1. */
+  --need-mode: #0d6f8a;
+  --need-grid: #047857;
+  --need-state: #0f766e; /* teal — new US state (WAS) */
+  --need-confirm: #64748b;
+  --need-dxped: #0369a1;
+  --need-pota: #15803d;
+  --need-sota: #6d28d9;
+  --need-wanted: #9a5b00; /* amber — on your wanted watch list */
+  --need-mode-rtty: #8a5200;
+  --need-mode-ft4: #0f7038;
+  --need-ink: #ffffff;
 }
 .need-chip {
   font-size: 10.5px;
@@ -9779,14 +9809,13 @@ select.settings-input {
   font-size: 9px;
   font-weight: 800;
   line-height: 1;
-  color: #06121f;
+  color: var(--need-ink);
 }
 .spot-type-badge.type-pota {
   background: var(--need-pota);
 }
 .spot-type-badge.type-sota {
   background: var(--need-sota);
-  color: #f4f1ff;
 }
 .spot-type-badge.type-dxped {
   background: var(--need-dxped);
@@ -10696,19 +10725,20 @@ select.settings-input {
   color: var(--accent-ink);
   background: var(--state-good);
 }
-/* New ones POP with the shared palette: ATNO/DXCC = magenta, new grid = green. */
+/* New ones POP with the shared palette: ATNO/DXCC = magenta, new grid = green.
+   --need-ink, not a hardcoded one: the palette flips value between themes. */
 .decode-tag.newdxcc {
-  color: #fff;
+  color: var(--need-ink);
   background: var(--need-entity);
 }
 .decode-tag.newgrid {
-  color: #06281c;
+  color: var(--need-ink);
   background: var(--need-grid);
 }
 /* Band-slot — worked this entity before, but not on this band. Uses the same
    orange as the Needed board's BAND chip; dimmer than the ATNO magenta above. */
 .decode-tag.newband {
-  color: #fff;
+  color: var(--need-ink);
   background: var(--need-band);
 }
 /* DXCC entity (country) on a decode row — DX chasers scan by country. Pushed to
@@ -19531,10 +19561,18 @@ tr.sel .aprs-sym {
      the smallest windows wrapped the loudest banner soonest. */
   max-width: min(calc(0.92 * var(--vw-eff, 100vw)), 60rem);
   padding: var(--space-2) var(--space-3);
-  border: 2px solid var(--need-entity, #ff5c7a);
+  border: 2px solid var(--need-entity);
   border-top: none;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
-  background: color-mix(in srgb, var(--need-entity, #ff5c7a) 22%, var(--bg-panel, #12161d));
+  /* --radius-sm, not --radius-md: no sheet defines --radius-md, and with no
+     fallback the whole shorthand was invalid at computed-value time — the
+     banner has been shipping square-cornered. 8px is what the sheet's other
+     --radius-md uses fall back to. */
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  /* --panel, and no fallback. This read `var(--bg-panel, #12161d)` — a token no
+     sheet defines — so BOTH themes painted the dark fallback, and light mode put
+     #14202e ink on it at 1.18:1. The banner's own chip and button paint their own
+     colours, which is why only the call/entity/frequency went missing. */
+  background: color-mix(in srgb, var(--need-entity) 22%, var(--panel));
   box-shadow: 0 6px 28px rgba(0, 0, 0, 0.55);
   animation: pounce-in 180ms ease-out;
 }
@@ -19551,8 +19589,8 @@ tr.sel .aprs-sym {
   letter-spacing: 0.06em;
   padding: 2px var(--space-2);
   border-radius: var(--radius-sm);
-  background: var(--need-entity, #ff5c7a);
-  color: #10131a;
+  background: var(--need-entity);
+  color: var(--need-ink);
   white-space: nowrap;
 }
 .pounce-what { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
@@ -19563,9 +19601,9 @@ tr.sel .aprs-sym {
   font-weight: 700;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--need-entity, #ff5c7a);
-  background: var(--need-entity, #ff5c7a);
-  color: #10131a;
+  border: 1px solid var(--need-entity);
+  background: var(--need-entity);
+  color: var(--need-ink);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -19598,7 +19636,7 @@ tr.sel .aprs-sym {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border, #2a3340);
   border-radius: var(--radius);
-  background: var(--bg-panel, #12161d);
+  background: var(--panel); /* was var(--bg-panel, …) — see .pounce-banner above */
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
   font-size: var(--fs-body);
 }

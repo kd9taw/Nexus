@@ -63,8 +63,14 @@ describe('light theme readability', () => {
   })
 
   it('overrides EVERY --need-* token with a ≥3:1 ink (no dark-pastel fall-through)', () => {
+    // NOTE: this merges the blocks by name and does NOT resolve the cascade, so it says only
+    // that an override was WRITTEN. Between 2026-07-06 and 2026-08-05 every one of these
+    // overrides was written and then lost to a later :root palette, and this test stayed green
+    // throughout — the resolution guard lives in styles-theme-cascade.test.ts. --need-ink is excluded because
+    // it is not an ink ON the panel: it is the ink that goes ON TOP of a --need-* fill, so it
+    // is deliberately white in light mode. That pair is measured in the cascade guard.
     const dark = { ...rootBlock(), ...themeBlock('dark') }
-    const needTokens = Object.keys(dark).filter((k) => k.startsWith('--need-'))
+    const needTokens = Object.keys(dark).filter((k) => k.startsWith('--need-') && k !== '--need-ink')
     expect(needTokens.length).toBeGreaterThan(0)
     for (const tok of needTokens) {
       expect(light[tok], `${tok} must be overridden for light mode`).toBeDefined()
