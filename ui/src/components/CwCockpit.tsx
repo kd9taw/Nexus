@@ -20,7 +20,6 @@ import {
   NOTHING_SENT_REASON,
 } from '../features/panelHost'
 import { CW_PANEL_IDS, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
-import { AssistanceNote } from './AssistanceNote'
 import { LogEntry } from './LogEntry'
 import { SpotDialog } from './SpotDialog'
 import {
@@ -134,9 +133,6 @@ interface Props {
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
    *  Optional: without it every pane shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<CwPanelId>
-  /** Is an UNASSISTED contest entry declared (settings.unassistedMode)? Drives the footer that
-   *  states the contest-category implication of the assistance sources that are running. */
-  unassisted?: boolean
 }
 
 /** Display labels for the CW removable panels (the ⊞ Panels menu). */
@@ -215,7 +211,6 @@ export function CwCockpit({
   onRecallMemory,
   onOpenMemories,
   panels,
-  unassisted,
 }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
@@ -1061,20 +1056,6 @@ export function CwCockpit({
     </CockpitPaneFrame>
   )
 
-  // THE CONTEST-CATEGORY FOOTER. A CW operator entering a contest needs to know that the
-  // decoder and the spot feeds change their entry category, and the whole value of this line
-  // is that nobody has to go looking for it — so it is ALWAYS PRESENT: no `shown()` gate, no
-  // id in CW_PANEL_IDS, no onRemove. That is the sanctioned way a pane stays put
-  // (CockpitPaneFrame's `onRemove` doc). It is content-fit — a one-line status strip cannot
-  // use surplus height — and it rides the LOG column, the only column that always renders, so
-  // an always-present pane cannot make `mainPresent`/`auxPresent` lie to the tier arithmetic.
-  // The rule citations stay one click away inside the note's own <details>.
-  const assistPane = (
-    <CockpitPaneFrame title="Contest category" paneId="assist" fit="content">
-      <AssistanceNote compact unassisted={!!unassisted} />
-    </CockpitPaneFrame>
-  )
-
   return (
     <main className="layout single cw-cockpit" ref={cockpitRef}>
       <CockpitHeader
@@ -1348,7 +1329,6 @@ export function CwCockpit({
             <div className="cockpit-col" key="aux">{auxPanes}</div>
             <div className="cockpit-col" key="log">
               {logPane}
-              {assistPane}
             </div>
           </>
         ) : (
@@ -1362,7 +1342,6 @@ export function CwCockpit({
             )}
             <div className="cockpit-col" key="log">
               {logPane}
-              {assistPane}
             </div>
           </>
         )}

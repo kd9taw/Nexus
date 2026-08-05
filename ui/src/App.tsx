@@ -2153,7 +2153,6 @@ export default function App() {
         <CwCockpit
           pitchHz={settings?.cwPitchHz ?? 600}
           wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
-          unassisted={settings?.unassistedMode === true}
           snap={snap}
           theme={theme}
           pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
