@@ -69,6 +69,18 @@ module msk144_cabi
   ! NUM_MSK144_SYMBOLS. The MSK40 shorthand form is 40 of these.
   integer, parameter :: MSK144_NN = 144
 
+  ! The fixed centre and the frequency-ERROR budget around it. Upstream pins both
+  ! spin boxes to 1500, clamps RX to 1400..1600 (mainwindow.cpp:8097-8099), and
+  ! defaults Ftol_MSK144 to 50 from the set {20,50,100,200} (mainwindow.cpp:1444,
+  ! :8113). Matches our own TX: msk144::TX_CENTRE_HZ is 1500 and gen_wave ignores
+  ! the operator's offset, because a 1000 Hz-wide signal has nowhere to move.
+  ! ⚠️ NTOL is NOT a passband — see the long note in msk144_decode_frame. If a
+  ! Settings control ever exposes it, it takes the upstream set and clamps here.
+  integer, parameter :: MSK144_NFQSO_HZ  = 1500
+  integer, parameter :: MSK144_NFQSO_MIN = 1400
+  integer, parameter :: MSK144_NFQSO_MAX = 1600
+  integer, parameter :: MSK144_NTOL_HZ   = 50
+
   ! mskrtd.f90:220 format 1021 — the contract this wrapper reads back.
   character(len=*), parameter :: FMT_1021 = '(i6,i4,f5.1,i5,a4,a37)'
 
@@ -99,12 +111,15 @@ contains
   !   iwave      : ntrperiod*12000 int16 audio samples @ 12 kHz
   !   ntrperiod  : 5, 10, 15 or 30 (seconds). Anything else => -1.
   !   nutc       : per-period label. MUST DIFFER between periods — see the banner.
-  !   nfa, nfb   : frequency search band edges (Hz). MSK144 searches nfqso +/- ntol
-  !                rather than a range, so ntol is derived from the width asked for.
+  !   nfa, nfb   : ACCEPTED FOR ABI UNIFORMITY AND OTHERWISE UNUSED. Every other
+  !                mode searches a band; MSK144 sits at one fixed centre, so the
+  !                width the caller asks for says nothing about how far off
+  !                frequency the far station can be. See the note in the body.
   !   ndepth     : 1..3 (3 = deepest; <=0 defaults to 3)
   !   mycall     : NUL/space-terminated callsign for AP + hashed shorthand
   !   hiscall    : NUL/space-terminated callsign (may be empty)
-  !   nfqso_in   : QSO/RX audio freq (Hz). 0 / out of band => band centre.
+  !   nfqso_in   : QSO/RX audio freq (Hz). Honoured only inside 1400..1600;
+  !                anything else (including 0) => the mode's own 1500 Hz centre.
   !   out        : caller array of msk144_decode_t (capacity max_out)
   !   max_out    : capacity of out
   !
@@ -154,17 +169,40 @@ contains
     ndepth_l = ndepth
     if (ndepth_l <= 0) ndepth_l = 3
 
-    ! MSK144 has no nfa..nfb search: mskrtd takes a centre and a tolerance. Derive
-    ! both from the band the caller asked for so nfa/nfb mean the same thing here
-    ! as in every other mode's ABI. (FST4W needed the identical treatment; there,
-    ! a pinned ntol=20 made the mode look dead because the beacon sat outside a
-    ! 40 Hz window.)
-    if (nfqso_in >= nfa .and. nfqso_in <= nfb) then
+    ! ⭐ nfa/nfb DO NOT SIZE THE SEARCH HERE, AND THAT IS DELIBERATE. mskrtd takes
+    ! a centre and a tolerance, but for MSK144 neither is a passband: the mode
+    ! lives at ONE fixed centre. The signal is 1000 Hz wide (tones at centre ±500)
+    ! and fills a normal SSB passband, so there is nowhere to move it — which is
+    ! why our own gen_wave ignores the operator's TX offset, and why upstream pins
+    ! BOTH spin boxes to 1500 and clamps the RX one to 1400..1600
+    ! (mainwindow.cpp:8097-8099). ntol is therefore a frequency-ERROR budget — rig
+    ! offset and Doppler — and upstream defaults it to 50, operator-settable from
+    ! {20,50,100,200} (mainwindow.cpp:1444, :8113). Its widest possible search is
+    ! 1200..1800.
+    !
+    ! Deriving both from the caller's band instead was a category error twice
+    ! over. At the default 200..2900 it gave ntol=1350, and:
+    !   * msk144sync searches `2*nint(ntol/delf)+1` bins (msk144sync.f90:56) — a
+    !     search 27x wider than upstream's, measured at 2.55 s per 15 s period
+    !     against 0.10 s after this change. That is the decode that looked hung.
+    !   * msk144spd gates detections on `abs(detfer(il)) <= ntol`
+    !     (msk144spd.f90:131,145), so it would accept one a kilohertz off
+    !     frequency — not an MSK144 contact, and never reported by WSJT-X.
+    !
+    ! The FST4W precedent does NOT transfer, though it is why this looks risky: a
+    ! pinned ntol=20 made FST4W look dead because a BEACON sits wherever the
+    ! operator put it, so the centre was genuinely unknown. Here the centre is
+    ! knowable exactly, so pinning the tolerance costs nothing.
+    !
+    ! nfqso_in is honoured only within upstream's clamp. An operator whose RX
+    ! offset still carries an FT8 habit (1200 is typical) must not lose the mode
+    ! by dragging a ±50 Hz window off the only frequency the signal is ever on.
+    if (nfqso_in >= MSK144_NFQSO_MIN .and. nfqso_in <= MSK144_NFQSO_MAX) then
        nfqso = nfqso_in
     else
-       nfqso = (nfa + nfb) / 2
+       nfqso = MSK144_NFQSO_HZ
     end if
-    ntol = max(20, (nfb - nfa) / 2)
+    ntol = MSK144_NTOL_HZ
 
     ! Fixed arguments:
     !   bshmsg  .false. — MSK144 SHORTHAND (MSK40) messages off, matching WSJT-X's

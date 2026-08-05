@@ -205,9 +205,18 @@ const MAX_DECODES: usize = 100;
 /// be one of [`PERIODS`] (5/10/15/30; 15 is the 6 m workhorse).
 ///
 /// `nutc` labels the period and **must differ between periods** — see the module
-/// docs. `nfa..=nfb` is the audio search range (Hz); MSK144 searches a centre plus
-/// tolerance internally, both derived from that range. `nfqso` is the QSO/RX audio
-/// frequency; pass 0 (or out of range) for band-center.
+/// docs.
+///
+/// `nfa..=nfb` is **accepted for ABI uniformity and otherwise ignored.** MSK144
+/// does not search a band: the signal is 1000 Hz wide and always centred on
+/// [`TX_CENTRE_HZ`] — [`gen_wave`] ignores `f0` for the same reason — so the
+/// decoder pins that centre and searches only WSJT-X's ±50 Hz frequency-error
+/// budget (`Ftol_MSK144`, mainwindow.cpp:1444). Sizing the tolerance from the
+/// passband instead cost 2.55 s per 15 s period and would accept a signal a
+/// kilohertz off frequency; see the note in `msk144_cabi.f90`.
+///
+/// `nfqso` is the QSO/RX audio frequency, honoured only inside upstream's
+/// 1400..1600 clamp; anything else (including 0) falls back to the fixed centre.
 ///
 /// # Panics
 /// Panics if `iwave.len() < nmax(period_s)` or `period_s` is unsupported. These are
@@ -359,6 +368,65 @@ mod tests {
             assert!(
                 d.iter().any(|r| r.message.trim() == MSG),
                 "MSK144-{p} did not decode its own transmission: {:?}",
+                d.iter().map(|r| r.message.trim()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// Build one period of MSK144 centred on `f0` at a healthy level.
+    fn one_period_at(msg: &str, period_s: u16, f0: f32) -> Vec<i16> {
+        let t = encode(msg).unwrap();
+        let w = gen_wave(&t, period_s, SAMPLE_RATE, f0).unwrap();
+        let mut iwave = vec![0i16; nmax(period_s)];
+        for (i, &v) in w.iter().enumerate() {
+            if i < iwave.len() {
+                iwave[i] = (v * 8000.0) as i16;
+            }
+        }
+        iwave
+    }
+
+    #[test]
+    fn a_signal_off_the_msk144_centre_is_not_reported() {
+        // ⭐ THE TOLERANCE IS A FREQUENCY-ERROR BUDGET, NOT A BAND SEARCH. MSK144
+        // lives at a FIXED centre — gen_wave ignores f0 for exactly this reason
+        // (the signal is 1000 Hz wide and fills the passband, so there is nowhere
+        // to move it), and upstream pins both spin boxes to 1500 with the RX one
+        // clamped to 1400..1600 (mainwindow.cpp:8097-8099) and Ftol_MSK144
+        // defaulting to 50 (mainwindow.cpp:1444). So ntol covers rig offset and
+        // Doppler, nothing more.
+        //
+        // Deriving ntol from the caller's passband instead — max(20,(nfb-nfa)/2),
+        // which is 1350 Hz at the default 200..2900 — was a category error twice
+        // over: it made msk144sync's search `2*nint(ntol/delf)+1` bins wide, i.e.
+        // 27x the work upstream does (the ~10 s decode), and it opened
+        // msk144spd's plausibility gate `abs(detfer(il)) <= ntol` wide enough to
+        // accept a detection a kilohertz off frequency. This is that second half:
+        // a station 1000 Hz from the centre is not an MSK144 contact, and WSJT-X
+        // would never report it.
+        let iwave = one_period_at("K1ABC W9XYZ EN37", 15, 2500.0);
+        let d = decode_frame(&iwave, 15, 0, 200, 2900, 3, "", "", 1500);
+        assert!(
+            !d.iter().any(|r| r.message.trim() == "K1ABC W9XYZ EN37"),
+            "a signal 1000 Hz off the MSK144 centre was reported as a decode: {:?}",
+            d.iter().map(|r| r.message.trim()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_centre_is_the_modes_own_not_the_operators_rx_offset() {
+        // The other half, and the one that makes narrowing ntol safe: because our
+        // TX ignores f0, the far end is always at TX_CENTRE_HZ. An operator whose
+        // RX offset still carries an FT8 habit (1200 is typical) must not lose the
+        // mode — so nfqso_in cannot be allowed to drag a +/-50 Hz window off the
+        // only frequency the signal is ever on.
+        const MSG: &str = "K1ABC W9XYZ EN37";
+        let iwave = one_period_at(MSG, 15, TX_CENTRE_HZ);
+        for nfqso in [0, 700, 1200, 1500, 2500] {
+            let d = decode_frame(&iwave, 15, 0, 200, 2900, 3, "", "", nfqso);
+            assert!(
+                d.iter().any(|r| r.message.trim() == MSG),
+                "an RX offset of {nfqso} Hz lost a signal on the MSK144 centre: {:?}",
                 d.iter().map(|r| r.message.trim()).collect::<Vec<_>>()
             );
         }
