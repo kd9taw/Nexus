@@ -36,11 +36,18 @@ function fnBody(src: string, name: string): string {
   return src.slice(at, end)
 }
 
-/** Every `ch("band", "group", dial, ...)` row in a Rust band-plan function, in order. */
+/** Every `ch("band", "group", dial, ...)` row in a Rust band-plan function, in order.
+ *
+ * ⚠️ `\s*` AFTER THE OPEN PAREN IS LOAD-BEARING. rustfmt splits a `ch(...)` call across lines
+ * as soon as its note argument makes the line long, and without this the row silently stops
+ * being seen — the Rust side then looks like it has no such band and the guard fails claiming
+ * the TS table has an EXTRA row. That is a confusing way to learn you reformatted a file: it
+ * happened to 60 m the moment its note grew (2026-08-05). The guard exists to compare DATA, so
+ * it must not be sensitive to formatting. */
 function rustPlan(name: string): { band: string; mhz: number }[] {
-  return [...fnBody(BANDPLAN_RS, name).matchAll(/\bch\("([^"]+)",\s*"[^"]+",\s*([\d.]+)/g)].map(
-    (m) => ({ band: m[1], mhz: Number(m[2]) }),
-  )
+  return [
+    ...fnBody(BANDPLAN_RS, name).matchAll(/\bch\(\s*"([^"]+)",\s*"[^"]+",\s*([\d.]+)/g),
+  ].map((m) => ({ band: m[1], mhz: Number(m[2]) }))
 }
 
 /** A `const NAME = [ ... ]` / `const NAME: T = [ ... ]` array literal's text. The open

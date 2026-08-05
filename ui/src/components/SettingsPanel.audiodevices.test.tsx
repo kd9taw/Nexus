@@ -215,21 +215,36 @@ describe('Windows / macOS render exactly what they always did', () => {
   })
 })
 
-describe('a saved device that is no longer on the machine', () => {
-  it('stays selectable and says so', async () => {
-    // It always stayed selectable (losing the saved routing silently is worse). What is new
-    // is that it SAYS it is missing — because an unresolvable configured device is now an
-    // error at open time instead of a silent fall back to the laptop microphone.
+describe('a saved device that is not in the offered list', () => {
+  it('stays selectable and says only what we actually know', async () => {
+    // ⚠️ THIS USED TO SAY "— not detected", AND THAT ASSERTED KNOWLEDGE WE DO NOT HAVE.
+    // The flag is computed against the list the picker OFFERS, which on Linux is the PRUNED
+    // ALSA hint set (one entry per card, `plughw` preferred, `dmix`/`dsnoop`/`front`/`iec958`
+    // dropped). But a device is OPENED through cpal, whose own enumeration is a probe-open
+    // sweep — a different set, and neither is a subset of the other. So a perfectly working
+    // device that our pruning simply does not offer was being labelled missing: proven live
+    // against a synthetic ALSA config, `saved dsnoop` → offered_in_picker=false,
+    // opens_at_runtime=true.
+    //
+    // We cannot tell from here whether a stored name will open. What we CAN say is that it is
+    // not one of the entries we are offering — which is the useful hint (a renumbered card, a
+    // moved USB port) without the false claim. The authoritative answer already exists and is
+    // accurate: an unresolvable device is a visible error at open time, naming the device.
     settings = { ...settings, audioIn: 'plughw:CARD=GONE,DEV=0' }
     api.get('getAudioDevices').mockImplementation(() => Promise.resolve(LINUX))
     renderPanel()
     await openRadioTab()
     const rx = await picker('Input Device (RX)')
     expect(rx.value).toBe('plughw:CARD=GONE,DEV=0')
+    const texts = [...rx.options].map((o) => o.textContent?.trim())
+    expect(texts).toContain('plughw:CARD=GONE,DEV=0 — saved, not in the list')
     expect(
-      [...rx.options].map((o) => o.textContent?.trim()),
-    ).toContain('plughw:CARD=GONE,DEV=0 — not detected')
+      texts.some((t) => t?.includes('not detected')),
+      'must not assert a device is absent — we only know it is not one we offer',
+    ).toBe(false)
     // The enumerated entries are NOT flagged — a warning on everything says nothing.
-    expect([...rx.options].filter((o) => o.textContent?.includes('not detected'))).toHaveLength(1)
+    expect(
+      [...rx.options].filter((o) => o.textContent?.includes('not in the list')),
+    ).toHaveLength(1)
   })
 })

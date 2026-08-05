@@ -39,8 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the system default so the radio is not dead in the water, and **keeps retrying your chosen device
   every couple of seconds** — so a rig you switch on after Nexus, or a codec another program was
   holding for a moment, is picked up on its own within a few seconds and the banner clears itself.
-  "System default" is still a real choice and still behaves exactly as before. The device picker also
-  marks a saved device that is not currently present as **not detected**.
+  "System default" is still a real choice and still behaves exactly as before. If you have a device
+  saved that is not one of the ones offered, the picker now says **saved, not in the list** rather
+  than claiming it is absent — on Linux the list is pruned to one entry per sound card, so a device
+  can be perfectly usable and still not be one we offer. Whether it actually opens is answered
+  where it can be answered honestly: at open time, by name, in the banner.
 
 - **FT8 decodes the station answering your CQ when you transmit off your receive frequency.**
   WSJT-X gives its deepest decoding two frequency windows, not one: around where you listen, and

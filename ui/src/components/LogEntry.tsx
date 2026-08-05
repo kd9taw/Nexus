@@ -24,7 +24,7 @@ const FD_SECTION_CODES = new Set(
 const LOG_BANDS: { band: string; rep: number; lo: number; hi: number }[] = [
   { band: '160m', rep: 1.84, lo: 1.8, hi: 2.0 },
   { band: '80m', rep: 3.573, lo: 3.5, hi: 4.0 },
-  { band: '60m', rep: 5.357, lo: 5.3, hi: 5.45 },
+  { band: '60m', rep: 5.3715, lo: 5.3, hi: 5.45 },
   { band: '40m', rep: 7.074, lo: 7.0, hi: 7.3 },
   { band: '30m', rep: 10.136, lo: 10.1, hi: 10.15 },
   { band: '20m', rep: 14.074, lo: 14.0, hi: 14.35 },

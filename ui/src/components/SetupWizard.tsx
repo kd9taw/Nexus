@@ -223,10 +223,13 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
 
   const gridState = mygrid.trim() === '' ? 'empty' : gridOk(mygrid) ? 'ok' : 'bad'
   const dax = findDaxDevices(audio.input, audio.output)
-  // Same rule as Settings: show the human label, and say plainly when a saved device is
-  // not on this machine (that is now a visible error at open time, not a silent fallback).
+  // Same rule as Settings, including WHY the wording is careful: this compares against the
+  // list we OFFER, which is not the set cpal will try to OPEN, so "not detected" would assert
+  // something we cannot know. See the long note in SettingsPanel.
   const audioLabel = (name: string, kind: 'input' | 'output') =>
-    audio[kind].includes(name) ? (audioLabels[kind][name] ?? name) : `${name} — not detected`
+    audio[kind].includes(name)
+      ? (audioLabels[kind][name] ?? name)
+      : `${name} — saved, not in the list`
 
   const runDetect = () => {
     setDetecting(true)

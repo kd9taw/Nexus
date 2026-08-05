@@ -213,7 +213,7 @@ type WorkingFrequency = NonNullable<Settings['workingFrequencies']>[number]
 const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
   { band: '160m', mode: 'FT8', mhz: 1.84 },
   { band: '80m', mode: 'FT8', mhz: 3.573 },
-  { band: '60m', mode: 'FT8', mhz: 5.357 },
+  { band: '60m', mode: 'FT8', mhz: 5.3715 },
   { band: '40m', mode: 'FT8', mhz: 7.074 },
   { band: '30m', mode: 'FT8', mhz: 10.136 },
   { band: '20m', mode: 'FT8', mhz: 14.074 },
@@ -1832,14 +1832,23 @@ export function SettingsPanel({
     ? [form.voiceMicDevice, ...audio.input]
     : audio.input
 
-  // What one option READS. An enumerated device shows its human label; the stored-but-
-  // unenumerated value the builders above keep selectable now SAYS it is missing — a
-  // saved device that has gone (rig off, USB port moved, ALSA card renumbered, another
-  // app holding it) used to look exactly like a working choice right up until the radio
-  // refused to start. Since that case is now a visible error at open time rather than a
-  // silent fall back to the laptop mic, it is worth catching here, before he goes on air.
+  // What one option READS. An enumerated device shows its human label; a stored value that is
+  // not one of the entries we offer says so — a saved routing can go stale (rig off, USB port
+  // moved, ALSA card renumbered) and it used to look exactly like a working choice.
+  //
+  // ⚠️ IT SAYS "not in the list", NOT "not detected", AND THE DIFFERENCE IS HONESTY. This flag
+  // is computed against the list we OFFER — on Linux the PRUNED ALSA hint set (one entry per
+  // card, `plughw` preferred, `dmix`/`dsnoop`/`front`/`iec958` dropped). A device is OPENED
+  // through cpal, whose enumeration is its own probe-open sweep: a DIFFERENT set, and neither
+  // is a subset of the other. So a device that works perfectly but that our pruning does not
+  // offer was being told it was missing (proven live: a saved `dsnoop` PCM,
+  // offered_in_picker=false, opens_at_runtime=true). We cannot know from here whether a name
+  // will open — so we state the thing we do know and leave the verdict to the open, which is
+  // already a visible error naming the device.
   const audioLabel = (name: string, kind: 'input' | 'output') =>
-    audio[kind].includes(name) ? (audioLabels[kind][name] ?? name) : `${name} — not detected`
+    audio[kind].includes(name)
+      ? (audioLabels[kind][name] ?? name)
+      : `${name} — saved, not in the list`
 
   // Frequencies tab: last-wins override lookup for the stock table, plus
   // duplicate band+mode keys (flagged in the editor — the last row wins).

@@ -60,7 +60,7 @@ const DIGITAL: Pack = {
   region: 'Worldwide',
   memories: [
     { name: 'FT8 80 m', rxMhz: 3.573, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default USB dial.' },
-    { name: 'FT8 60 m', rxMhz: 5.357, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default; 60 m is channelized/100 W ERP in the US.' },
+    { name: 'FT8 60 m', rxMhz: 5.3715, mode: 'FT8', kind: 'digital', notes: '60 m is channelized in the US (100 W ERP) and the channels differ by country — check your own band plan. WSJT-X ships no 60 m default, so this is our choice: the dial for the 5373.0 kHz channel.' },
     { name: 'FT8 40 m', rxMhz: 7.074, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default. Busiest evening/NVIS FT8 band.' },
     { name: 'FT8 30 m', rxMhz: 10.136, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default; reliable low-noise WARC band.' },
     { name: 'FT8 20 m', rxMhz: 14.074, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default. The #1 HF/POTA digital hunting freq.' },
