@@ -265,6 +265,30 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// How long ago a roster entry was actually decoded, in seconds — or `None` when
+/// it is too stale to feed the propagation engine at all.
+///
+/// The roster stores a monotonic slot index rather than wall clock (so it stays
+/// testable), and the active tier's T/R period converts it: 15 s on FT8, 30 s on
+/// FT1. `max_age_secs` is the caller's window; past it the entry is dropped
+/// rather than aged, because [`tempo_core::roster::Roster`] never evicts on its
+/// own — a band QSY's `clear()` is its only removal path — so this is the only
+/// thing standing between an all-day roster and the opening detector.
+///
+/// A slot counter that ran BACKWARDS (a rig/clock re-sync restarting it) reads as
+/// age 0, not as a negative age: `saturating_sub` keeps a re-synced entry merely
+/// fresh instead of letting it out-rank genuine current decodes.
+fn roster_spot_age_secs(
+    slot_now: u64,
+    last_heard_slot: u64,
+    period_secs: f64,
+    max_age_secs: i64,
+) -> Option<i64> {
+    let period = period_secs.max(1.0);
+    let age = (slot_now.saturating_sub(last_heard_slot) as f64 * period).round() as i64;
+    (age <= max_age_secs).then_some(age)
+}
+
 /// A plausibly-real operator callsign — checked by SHAPE, not a denylist. Network
 /// features that log in to public services (DX cluster / RBN, PSK Reporter MQTT)
 /// gate on this so they never key an unset/garbage call on a public service.
@@ -2010,9 +2034,24 @@ async fn get_propagation(
             if let Some(band) = propagation::model::Band::from_label(&snap.radio.band) {
                 let t = now_unix();
                 let me_grid = (!mygrid.trim().is_empty()).then(|| mygrid.clone());
+                // REAL decode times, never poll time — see `roster_spot_age_secs`.
+                // The roster does not evict, so stamping `now` re-injected the whole
+                // accumulated roster into the detector's most-recent bin on every
+                // poll, which is what let a dead 6 m band alert and stay latched
+                // (operator 2026-08-05). Anything older than the detector's own
+                // baseline window is dropped: past that it cannot inform an opening
+                // and can only mislead the advisor and the map as well.
+                let slot_now = snap.radio.slot;
+                let period = snap.radio.tr_period_secs;
+                let max_age = propagation::OpeningConfig::default().base_w;
                 for st in &snap.stations {
+                    let Some(age) =
+                        roster_spot_age_secs(slot_now, st.last_heard_slot, period, max_age)
+                    else {
+                        continue;
+                    };
                     local_spots.push(propagation::PathSpot {
-                        time: t,
+                        time: t - age,
                         tx_call: st.call.to_uppercase(),
                         tx_grid: st.grid.clone(),
                         rx_call: mycall.to_uppercase(),
@@ -2171,13 +2210,22 @@ async fn get_propagation(
             if let Some(band) = propagation::model::Band::from_mhz(cs.freq_mhz()) {
                 let rx_grid = propagation::skimmer_grid(&cs.spotter).map(str::to_string);
                 // VHF locality gate (weak-signal-sleuth principle): on 6m/4m/2m a
-                // continent-wide RBN spot says NOTHING about the operator's band —
-                // Es is patchy; a Florida skimmer hearing 6 m must not light the
-                // band ladder / opening detector for Wisconsin. Admit a VHF cluster
+                // far-off RBN spot says NOTHING about the operator's band — Es is
+                // patchy; a Florida skimmer hearing 6 m must not light the band
+                // ladder / opening detector for Wisconsin. Admit a VHF cluster
                 // spot only when the SKIMMER itself is within the region radius of
                 // the operator (skimmers without a known grid can't prove locality
-                // → dropped on VHF). HF keeps the continent-wide census: F2
-                // footprints genuinely span it.
+                // → dropped on VHF).
+                //
+                // HF keeps the WORLDWIDE census here, and that is correct for
+                // THIS window: `wide` drives the map (which should show worldwide
+                // activity) and the opening detector, whose operator-anchored
+                // gates decide for themselves what counts — a cluster spot is
+                // `Side::Neither` and can never satisfy `op_gate`. The word used
+                // to be "continent-wide", which is what the Needed board's copy of
+                // this comment also claimed while filtering nothing; that board now
+                // gates on the spotter's continent for real (`hf_admit_spotters`)
+                // and this window deliberately does not.
                 if band.is_vhf() {
                     let near = match (&rx_grid, me_ll_for_gate) {
                         (Some(g), Some(me)) => propagation::geo::maidenhead_to_latlon(g)
@@ -2191,7 +2239,18 @@ async fn get_propagation(
                     }
                 }
                 wide.push(propagation::PathSpot {
-                    time: now,
+                    // The spot's REAL receive time, not poll time — the same lie the
+                    // roster path above told, bounded here by the buffer's own 20 min
+                    // retention. Stamping `now` put a 19-minute-old spot in the anomaly's
+                    // most-recent 10-minute bin, so the baseline could never fill and z
+                    // read ~2 × (spots in the buffer) on a band doing nothing new.
+                    // `received_unix` is stamped at buffer insertion (`SpotBuffer::push`);
+                    // 0 means never stamped (a hand-built spot) → fall back to now.
+                    time: if cs.received_unix > 0 {
+                        cs.received_unix as i64
+                    } else {
+                        now
+                    },
                     tx_call: cs.dx_call.to_uppercase(),
                     tx_grid: None,
                     rx_call: cs.spotter.to_uppercase(),
@@ -14906,7 +14965,7 @@ mod tests {
        assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
         engine_lock, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
         load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, qso_is_sat,
-        rect_lands_on_work_area,
+        rect_lands_on_work_area, roster_spot_age_secs,
         resolve_bird, resolve_birds, run_sat_track, sanitize_profile, sat_excluded,
         tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
         tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path,
@@ -14920,6 +14979,39 @@ mod tests {
     /// dependency), cleaned up by the caller.
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("nexus-test-{}-{name}", std::process::id()))
+    }
+
+    /// REGRESSION (operator 2026-08-05, the 6 m false-alert): `get_propagation`
+    /// stamped EVERY roster entry it fed the propagation engine with the POLL
+    /// time. [`Roster`](tempo_core::roster::Roster) never evicts — `clear()` on a
+    /// band QSY is its only removal path — so on each 30 s poll the whole day's
+    /// accumulated roster was re-injected as if decoded this instant. A station
+    /// heard once at 09:00 was, at 16:00, indistinguishable from a decode two
+    /// seconds ago: it landed in the opening detector's most-recent 10-minute bin
+    /// forever, which both fabricated the rate anomaly (nothing ever aged into the
+    /// baseline, so the robust scale stayed pinned at `sigma_floor`) and supplied
+    /// hours-old DX as live evidence. That is why a dead 6 m band could alert and
+    /// then stay latched for the tracker's whole 6 h `max_dwell`.
+    ///
+    /// `last_heard_slot` against the current slot is the REAL age, at the active
+    /// tier's T/R period — the same conversion `get_need_alerts` already uses for
+    /// its own-decode freshness gate.
+    #[test]
+    fn roster_spots_carry_real_decode_age_not_poll_time() {
+        // FT8: 15 s T/R. 240 slots back = 60 minutes ago, and it must say so.
+        assert_eq!(roster_spot_age_secs(1000, 760, 15.0, 7200), Some(3600));
+        // A decode in the current slot is the only one that is genuinely "now" —
+        // the age every entry used to claim.
+        assert_eq!(roster_spot_age_secs(1000, 1000, 15.0, 7200), Some(0));
+        // FT1 (30 s slots): the same slot delta is twice the wall clock.
+        assert_eq!(roster_spot_age_secs(1000, 900, 30.0, 7200), Some(3000));
+        // Past the detector's baseline window → DROPPED, not merely aged. Since the
+        // roster itself never evicts, this is the only thing keeping an all-day
+        // roster out of the propagation engine.
+        assert_eq!(roster_spot_age_secs(1000, 400, 15.0, 7200), None);
+        // A slot counter that ran backwards (rig re-sync) must read as fresh, never
+        // as a huge negative age that would out-rank real decodes.
+        assert_eq!(roster_spot_age_secs(100, 500, 15.0, 7200), Some(0));
     }
 
     /// THE HANG GUARD: no command that can block on the engine mutex may run on

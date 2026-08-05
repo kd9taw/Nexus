@@ -214,6 +214,34 @@ pub struct BandFeatures {
     pub snr_var: Option<f32>,
 }
 
+/// How many DISTINCT stations beyond `vhf_dx_km` (700 km) one rung of the VHF
+/// open gate needs — see [`BandFeatures::raw_open`].
+///
+/// **2 m / 4 m: 1.** The 700 km figure was researched for 2 m, where everyday
+/// troposcatter tops out around 500–700 km. Past it there is no *common*
+/// single-station mechanism, so one path is unambiguous enhancement and holding
+/// out for a second would lose the short tropo/Es/aurora openings that are
+/// frequently one distant station.
+///
+/// **6 m: 2.** The same number is wrong here, and this is the operator's
+/// "too liberal" report (2026-08-05: "misfiring on openings where I tune and
+/// hear nothing. True openings only."). On 6 m, 700–1400 km is squarely the
+/// METEOR-scatter and aircraft-scatter regime — one station pinging three times
+/// in two minutes is a rock, not an opening, and [`classify`] already declines
+/// to surface meteor scatter as a mode while the gate opened the band under it
+/// anyway. Real 6 m Es does not arrive as one station; it arrives as a wall.
+/// (Measured on the modelled true positive in
+/// `a_real_six_metre_es_opening_still_opens`: 14 distinct stations, 13 of them
+/// ≥ 700 km, z = 56 against a threshold of 4 — a 6× margin over this rung. So
+/// asking for a second distinct station costs a genuine opening nothing and
+/// removes the entire single-ping class.)
+fn vhf_dx_stations(band: Band) -> usize {
+    match band {
+        Band::B6 => 2,
+        _ => 1,
+    }
+}
+
 impl BandFeatures {
     /// A zeroed feature set for a band with no activity (used as a test base and
     /// for the closed-band path).
@@ -252,7 +280,8 @@ impl BandFeatures {
     }
 
     /// Does this band clear the generic opening gate at the enter threshold?
-    /// Anomaly ≥ z_open AND (enough far-rx OR enough far-tx). Onset slope is NOT
+    /// Anomaly ≥ z_open AND the band's evidence rung (HF: a station census;
+    /// VHF: DX distance — see the body). Onset slope is NOT
     /// a hard gate here: a sustained (plateauing) opening has slope≈0 after its
     /// rising edge, so gating on slope would make `raw_open` true for only one
     /// window and defeat the ≥`enter_windows` enter requirement. Slope is kept as
@@ -262,29 +291,42 @@ impl BandFeatures {
         if self.anomaly_z < cfg.z_open {
             return false;
         }
-        // VHF/Es bands (6/4/2 m) open SUDDENLY with FEW stations and no cross-band
-        // breadth — a real Es burst shows 2–3 far stations, not the 5/3 + reciprocity
-        // + cross-band-share an HF F2 opening needs. The HF-tuned thresholds were
-        // effectively disabling 6 m detection, so loosen them on VHF (never tighten).
         let vhf = self.band.is_vhf();
-        let (far_rx, far_tx) = if vhf {
-            (cfg.min_far_rx.min(3), cfg.min_far_tx.min(2))
-        } else {
-            (cfg.min_far_rx, cfg.min_far_tx)
-        };
-        // Operator-anchored gate (v1): enough far stations on either direction, OR —
-        // on VHF — graduated DX-distance evidence. 2m tropo/Es/aurora openings are
-        // frequently ONE distant station, which the 6m-tuned multi-station bar could
-        // never surface. Rungs (research-set, see vhf_dx_km/vhf_short_km docs):
-        //   • 1 station ≥ 700 km — unambiguous DX (past any routine-scatter reach);
+        // Operator-anchored gate (v1). The two sides are different questions:
+        //
+        // HF — a station CENSUS. An F2 opening's signature is VOLUME (5 receivers
+        // or 3 transmitters), and its paths are continent-scale by construction,
+        // so a distance term would add nothing.
+        //
+        // VHF/Es (6/4/2 m) — a DISTANCE test. These bands open suddenly with few
+        // stations and no cross-band breadth, so the HF census bar could never
+        // surface them; but "few stations" must not degrade into "any stations".
+        // Rungs (research-set, see vhf_dx_km/vhf_short_km docs):
+        //   • `vhf_dx_stations` distinct stations ≥ 700 km — unambiguous DX, past
+        //     any routine-scatter reach (1 on 2 m/4 m, 2 on 6 m — see the fn);
         //   • 2 distinct stations ≥ 500 km — a corroborated SHORT tropo lift (one
         //     alone is within a strong station's everyday scatter; two at once with
         //     a rate anomaly is enhancement — catches the quick 500–700 km openings).
+        //
+        // The DISTANCE-BLIND rungs were removed here 2026-08-05 (operator: "the 6m
+        // opening detection is too liberal… misfiring on openings where I tune and
+        // hear nothing"). `unique_far_rx`/`unique_far_tx` are a plain census — the
+        // "far" in their names is a lie, they collect every station on either end
+        // regardless of distance — and loosening them to 3/2 for VHF made "I heard
+        // two stations on 6 m" the entire test. Two decodes at 111 km and 199 km
+        // (groundwave) opened the band, and the anomaly gate could not stop it:
+        // with `sigma_floor` 0.05 spots/min a dead band scores z = 2 × (spots in
+        // the last 10 min), so those same two spots put z at exactly z_open. Every
+        // rung that survives is one the ≥500/700 km geometry independently earns.
+        // The census fields are untouched — `project_opening` still displays them.
+        //
         // The anomaly-z gate above still applies to every rung, so routine scatter
         // (baseline, no spike) can't fabricate an open even at DX distance.
-        let op_gate = self.unique_far_rx >= far_rx
-            || self.unique_far_tx >= far_tx
-            || (vhf && (self.unique_far_dx >= 1 || self.unique_far_short_dx >= 2));
+        let op_gate = if vhf {
+            self.unique_far_dx >= vhf_dx_stations(self.band) || self.unique_far_short_dx >= 2
+        } else {
+            self.unique_far_rx >= cfg.min_far_rx || self.unique_far_tx >= cfg.min_far_tx
+        };
         // Regional gate (Phase 2, opt-in): a band-wide surge near the operator.
         // Multi-condition so neither a single loud station (needs two-way pairs)
         // nor a uniform contest/Es lifting every band (needs band-specificity)
@@ -534,8 +576,32 @@ pub fn band_features(
     // inflating the cross-band denominator (see `detect`).
     let short_cutoff = now - cfg.short_w;
     let mut share_short_count = 0usize;
+    // On VHF the OPEN-GATE evidence must be NOW.
+    //
+    // `raw_open`'s VHF rungs describe a live Es/tropo lift, which lives for
+    // MINUTES — but this function's window is `base_w` (2 h), so a station heard
+    // ninety minutes ago and gone since was still satisfying the DX rung while
+    // `anomaly_z` (which only ever looks at the last `short_w`) was being spiked
+    // by something else entirely. The gate's two halves were reading different
+    // clocks. Measured (operator 2026-08-05): three 90-minute-old ≥700 km decodes
+    // plus two fresh local ones opened a dead 6 m band and latched it for the
+    // tracker's full 6 h `max_dwell`.
+    //
+    // HF deliberately keeps the whole window: an F2 opening is an hours-long
+    // phenomenon whose evidence is a census, not an instant, and narrowing the
+    // 5-receiver / 3-transmitter bar to 10 minutes would drop real HF openings.
+    //
+    // Scope is the five sets the gate reads (`far_rx`/`far_tx`/`far_dx`/
+    // `far_short_dx` for `op_gate`, `near_dx_rx` for the VHF-only
+    // `regional_dx_gate`). `near_rx`, `all_stations` and the geometry pools are
+    // untouched: they feed the band-agnostic `regional_gate` census and the
+    // classifier, which are about the shape of the last two hours, not about
+    // whether the band is open this minute.
+    let vhf = band.is_vhf();
 
     for s in band_spots {
+        // Is this spot fresh enough to be VHF gate evidence? (Always true on HF.)
+        let gate_fresh = !vhf || (s.time > short_cutoff && s.time <= now);
         // Regional density census: every distinct station on either end.
         all_stations.insert(s.tx_call.to_ascii_uppercase());
         all_stations.insert(s.rx_call.to_ascii_uppercase());
@@ -553,7 +619,7 @@ pub fn band_features(
         // suppress the very skip-hole it should drive).
         let geo_grid: Option<&str> = match side {
             Side::HeardMe => {
-                if let Some(c) = s.far_call(me_call) {
+                if let Some(c) = s.far_call(me_call).filter(|_| gate_fresh) {
                     let cu = c.to_ascii_uppercase();
                     // The far station here is the RECEIVER that heard me → its own grid.
                     let d = s
@@ -571,7 +637,7 @@ pub fn band_features(
                 s.rx_grid.as_deref()
             }
             Side::IHeard => {
-                if let Some(c) = s.far_call(me_call) {
+                if let Some(c) = s.far_call(me_call).filter(|_| gate_fresh) {
                     let cu = c.to_ascii_uppercase();
                     // The far station here is the TRANSMITTER I heard → its own grid.
                     let d = s
@@ -598,10 +664,11 @@ pub fn band_features(
                             // Receive-only sentinel: this local ear is copying a
                             // DX-length path (tx↔rx ≥ vhf_dx_km) — the band is open
                             // in the operator's region whether or not they're on it.
-                            if s.tx_grid
-                                .as_deref()
-                                .and_then(|txg| grid_distance_km(txg, rxg))
-                                .is_some_and(|p| p >= cfg.vhf_dx_km)
+                            if gate_fresh
+                                && s.tx_grid
+                                    .as_deref()
+                                    .and_then(|txg| grid_distance_km(txg, rxg))
+                                    .is_some_and(|p| p >= cfg.vhf_dx_km)
                             {
                                 near_dx_rx.insert(s.rx_call.to_ascii_uppercase());
                             }
@@ -1192,10 +1259,18 @@ mod tests {
         // just 2 far stations (typical of a fresh opening). On 6m this must OPEN
         // (loosened VHF gate); the identical evidence on 20m must NOT (HF needs 3
         // tx / 5 rx). This is the fix for "I see 6m open but get no alert."
+        //
+        // The fixture sets `unique_far_short_dx` alongside the census count, i.e.
+        // both stations are genuinely ≥500 km — which is what "2 far stations" in
+        // the assertion below always meant. It used to set `unique_far_tx` alone;
+        // that field carries no distance, and relying on it here was the same
+        // blindness that let two groundwave decodes at 111/199 km open 6m (see
+        // `two_local_stations_do_not_open_six_metres` and `raw_open`).
         let cfg = OpeningConfig::default();
         let mut six = BandFeatures::empty(Band::B6);
         six.anomaly_z = cfg.z_open + 1.0;
-        six.unique_far_tx = 2; // I heard 2 far stations on 6m
+        six.unique_far_tx = 2; // I heard 2 far stations on 6m…
+        six.unique_far_short_dx = 2; // …and "far" means ≥ vhf_short_km (500 km)
         assert!(
             six.raw_open(&cfg),
             "6m should open on 2 far stations during an anomaly"
@@ -1204,6 +1279,7 @@ mod tests {
         let mut twenty = BandFeatures::empty(Band::B20);
         twenty.anomaly_z = cfg.z_open + 1.0;
         twenty.unique_far_tx = 2; // same evidence on HF
+        twenty.unique_far_short_dx = 2;
         assert!(
             !twenty.raw_open(&cfg),
             "20m must NOT open on only 2 far stations (HF needs the full gate)"
@@ -2024,6 +2100,148 @@ mod tests {
             two.raw_open(&cfg),
             "two corroborating short-lift stations open"
         );
+    }
+
+    // ---- 6 m false-alert regressions ---------------------------------------
+    //
+    // REGRESSION (operator 2026-08-05): "the 6m opening detection is too liberal…
+    // In a large opening it's working great, but it's misfiring on openings where
+    // I tune and hear nothing. True openings only."
+    //
+    // Each of the three below reproduces one admitted-on-nothing case end-to-end
+    // through the REAL feature path (`band_features` → `raw_open`), not by poking
+    // fields — the fields were exactly what hid these. Every distance is the true
+    // great-circle from EN52 (`grid_distance_km`), quoted inline. The fourth test
+    // is the true positive all three fixes must leave untouched.
+
+    /// The simplest misfire: two stations decoded on 6 m at 111 km and 199 km.
+    /// That is groundwave/local tropo, on a band that is doing nothing.
+    ///
+    /// It got in through `unique_far_tx >= 2` — a rung with **no distance term at
+    /// all** (`far_tx` collects every station the operator heard, near or far), so
+    /// on 6 m "I heard two stations" was the whole test. The anomaly gate stopped
+    /// nothing: with `sigma_floor` 0.05 spots/min a dead band's baseline is
+    /// median 0 / MAD 0, so z = 2 × (spots in the last 10 min) and those same two
+    /// spots put z at exactly 4.0 = `z_open`.
+    #[test]
+    fn two_local_stations_do_not_open_six_metres() {
+        let cfg = OpeningConfig::default();
+        let spots = [
+            i_heard("W9AAA", "EN53", Band::B6, 60), // 111 km
+            i_heard("W9BBB", "EN61", Band::B6, 30), // 199 km
+        ];
+        let bs: Vec<&PathSpot> = spots.iter().collect();
+        let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
+        assert!(
+            bf.anomaly_z >= cfg.z_open,
+            "two spots on a dead band already clear z_open (z={}) — the anomaly \
+             gate is not what holds this line",
+            bf.anomaly_z
+        );
+        assert!(
+            !bf.raw_open(&cfg),
+            "111 km + 199 km is groundwave, not a 6 m opening"
+        );
+    }
+
+    /// Stale but REAL DX: three distinct stations at 820–1316 km, decoded 90
+    /// minutes ago and gone since, plus two fresh local decodes to supply the
+    /// rate anomaly. The band is dead NOW — this is the operator tuning across
+    /// silence while the alert is up.
+    ///
+    /// It got in because `band_features` counts the operator-anchored station
+    /// sets over the whole `base_w` (2 h) window while `anomaly_z` looks only at
+    /// the last `short_w` (10 min): the gate's two halves were reading different
+    /// clocks, so an hour-and-a-half-old roster satisfied the DX rung forever.
+    #[test]
+    fn stale_dx_evidence_does_not_open_six_metres() {
+        let cfg = OpeningConfig::default();
+        let spots = [
+            i_heard("W5DDD", "EM12", Band::B6, 5400), // 1316 km, 90 min ago
+            i_heard("N4EEE", "EM74", Band::B6, 5460), //  955 km, 91 min ago
+            i_heard("VE3FFF", "FN03", Band::B6, 5520), //  820 km, 92 min ago
+            i_heard("W9AAA", "EN53", Band::B6, 60),   //  111 km, now
+            i_heard("W9BBB", "EN61", Band::B6, 30),   //  199 km, now
+        ];
+        let bs: Vec<&PathSpot> = spots.iter().collect();
+        let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
+        assert!(bf.anomaly_z >= cfg.z_open, "the two fresh locals still spike z");
+        assert!(
+            !bf.raw_open(&cfg),
+            "DX heard 90 minutes ago is not evidence the band is open now"
+        );
+    }
+
+    /// One station, three pings inside two minutes at 1316 km — a meteor burst.
+    /// The operator ruled that out of scope by name ("true openings only"), and
+    /// the classifier already refuses to surface meteor scatter as a *mode*; the
+    /// gate was opening the band under it anyway via `unique_far_dx >= 1`.
+    ///
+    /// That rung was researched for **2 m**, where routine troposcatter tops out
+    /// ~500–700 km so a single ≥700 km path is unambiguous. On **6 m** the same
+    /// distance is the middle of the meteor- and aircraft-scatter regime. The 2 m
+    /// behaviour is asserted here too, so tightening 6 m cannot silently take it.
+    #[test]
+    fn one_meteor_scatter_station_does_not_open_six_metres() {
+        let cfg = OpeningConfig::default();
+        let spots = [
+            i_heard("W5DDD", "EM12", Band::B6, 20), // 1316 km
+            i_heard("W5DDD", "EM12", Band::B6, 70),
+            i_heard("W5DDD", "EM12", Band::B6, 130),
+        ];
+        let bs: Vec<&PathSpot> = spots.iter().collect();
+        let six = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
+        assert_eq!(six.unique_far_dx, 1, "one distinct station, three pings");
+        assert!(
+            !six.raw_open(&cfg),
+            "a single 6 m station at meteor-scatter distance is not an opening"
+        );
+
+        // …and the SAME evidence on 2 m still opens: one ≥700 km path there is
+        // genuine tropo/Es enhancement with no common single-station mechanism
+        // above it (`a_single_distant_vhf_station_opens_the_band`).
+        let two_m: Vec<PathSpot> = spots
+            .iter()
+            .map(|s| PathSpot {
+                band: Band::B2,
+                ..s.clone()
+            })
+            .collect();
+        let bs2: Vec<&PathSpot> = two_m.iter().collect();
+        let two = band_features(Band::B2, &bs2, ME, ME_GRID, NOW, &cfg);
+        assert!(
+            two.raw_open(&cfg),
+            "2 m keeps its single-DX-station rung — the 6 m tightening is 6 m only"
+        );
+    }
+
+    /// THE TRUE POSITIVE. A real 6 m Es opening: fourteen distinct stations both
+    /// directions, 674–2163 km, all inside ten minutes. This is what "in a large
+    /// opening it's working great" means, and no tightening above may cost it.
+    ///
+    /// The margins are the whole point of choosing the numbers that were chosen —
+    /// real Es on 6 m does not arrive as one station, it arrives as a wall.
+    #[test]
+    fn a_real_six_metre_es_opening_still_opens() {
+        let cfg = OpeningConfig::default();
+        // 674–2163 km from EN52, every one past `vhf_short_km` (500).
+        let grids = [
+            "EM28", "EN90", "FN03", "EM85", "EM74", "EM63", "FM18", "FN20", "FM29", "EM12",
+            "FN31", "DN70", "FN42", "DM43",
+        ];
+        let mut spots = Vec::new();
+        for (i, g) in grids.iter().enumerate() {
+            let dt = (i as i64) * 20; // all inside the 10-minute short window
+            spots.push(i_heard(&format!("W{i}ES"), g, Band::B6, dt));
+            spots.push(heard_me(&format!("W{i}ES"), g, Band::B6, dt + 5));
+        }
+        let bs: Vec<&PathSpot> = spots.iter().collect();
+        let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
+        assert!(bf.raw_open(&cfg), "a real 6 m Es opening must still open");
+        // The margins, so a future tightening can see what it would be spending.
+        assert!(bf.anomaly_z >= 8.0 * cfg.z_open, "z={}", bf.anomaly_z);
+        assert!(bf.unique_far_dx >= 12, "far_dx={}", bf.unique_far_dx);
+        assert!(bf.unique_far_short_dx >= 13, "{}", bf.unique_far_short_dx);
     }
 
     #[test]

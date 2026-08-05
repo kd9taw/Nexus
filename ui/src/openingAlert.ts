@@ -5,9 +5,18 @@
 //     so they go LOUD (prominent + beep + long TTL) with concrete guidance.
 //   - Tropo lifts are real openings but last hours — an informative quiet toast.
 //   - Anything unclassified keeps the old generic one-liner, quiet.
-// Local/scatter activity never reaches here at all: the detector's anomaly gate
-// plus the ≥700 km VHF DX-distance gate drop it before an opening exists.
+// Local/scatter activity never reaches here at all: on VHF every rung of the
+// detector's open gate carries a DX distance (≥500/700 km), so groundwave and
+// routine scatter are dropped before an opening exists — see `raw_open` in
+// crates/propagation/src/opening.rs. (Until 2026-08-05 that claim was false:
+// two 6 m decodes at 111 km and 199 km satisfied a distance-blind station-count
+// rung and this file cheerfully told the operator to point SE right now.)
 import type { OpeningView } from './types'
+
+/// The backend's `Confidence::Strong` cut (propagation/src/engine.rs
+/// `confidence_word`). Mirrored rather than re-derived so the toast's tone and
+/// the confidence WORD the rest of the UI shows can never disagree.
+const STRONG_CONFIDENCE = 0.66
 
 export interface OpeningToastSpec {
   message: string
@@ -20,6 +29,41 @@ export interface OpeningToastSpec {
 
 /** Build the toast spec for a newly-opened band (o.isNew edge). Pure. */
 export function openingToastSpec(o: OpeningView): OpeningToastSpec {
+  const spec = tierSpec(o)
+  // HONESTY GATE (operator 2026-08-05: "misfiring on openings where I tune and
+  // hear nothing"). Suppressing the openings that were not real is the gate's
+  // job and the gate now does it. This is the remaining, separate problem: an
+  // opening that IS real in the data can still be inaudible tuning by ear,
+  // because every input to the detector is a report from a DECODER — PSK
+  // Reporter, the operator's own FT8 roster, CW/RTTY RBN — and a −22 dB FT8
+  // decode is not a signal you can hear on SSB.
+  //
+  // The backend already scores exactly that, and this file was throwing the
+  // score away: the identical "rare & brief, point SE NOW" fired at confidence
+  // 0.97 (14 stations, z 56) and at 0.67 (2 stations, z 4). Only Strong
+  // confidence earns the drop-everything wording; below it the SAME opening is
+  // announced quietly and says what the evidence actually was, so the operator
+  // can decide whether it is worth leaving the chair.
+  //
+  // This is a LABEL, not a filter — the row still appears, still names the mode
+  // and the bearing. Only the already-loud tiers are affected; Tropo is capped
+  // at Marginal by the backend (geometry-only v1), so hedging on confidence
+  // would silence every tropo opening there has ever been.
+  if (spec.prominent && o.confidenceScore < STRONG_CONFIDENCE) {
+    const km = Math.round(o.maxKm)
+    return {
+      message: `📻 ${o.band} possible ${o.mode} — thin evidence: ${o.stations} stns to ~${km} km ${o.octant}; may not be audible by ear`,
+      kind: 'info',
+      ttlMs: 12000,
+      prominent: false,
+      beepHz: null,
+    }
+  }
+  return spec
+}
+
+/** The per-mode tier, before the confidence hedge above. */
+function tierSpec(o: OpeningView): OpeningToastSpec {
   const km = Math.round(o.maxKm)
   switch (o.mode) {
     case 'Sporadic-E':
