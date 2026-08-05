@@ -573,8 +573,8 @@ impl StationCore {
     /// in-memory copy is otherwise stale, and `save` would `rename()` a truncated
     /// log over the file, silently discarding those QSOs.
     ///
-    /// `import_adif` dedups by call+band+mode+UTC-day, so it only ever ADDS records
-    /// we lack (appended to the end, leaving existing indices valid) — it never
+    /// The reconcile ADDS the records we lack (appended to the end, leaving existing
+    /// indices valid) and upgrades the shared ones monotonically — it never
     /// resurrects a record we just edited or deleted, PROVIDED callers run this
     /// BEFORE their mutation, while our copy still holds the record being changed.
     /// No-op without a log path or on a read error.
@@ -732,7 +732,23 @@ impl StationCore {
     /// is already in the file. Those need the full rewrite, or the confirmations
     /// live in memory until the next save and are lost outright if the app exits
     /// first.
+    ///
+    /// That second path is why this now recovers first, like every other full-log
+    /// rewrite in this file. An append-only import was concurrency-safe by
+    /// construction and was the one exemption from the contract above; the moment it
+    /// could `rename()` a whole log over the file, the exemption stopped holding and
+    /// a stale copy silently deleted a second instance's QSOs.
+    ///
+    /// ORDER — before the MERGE, not merely before the WRITE, matching every sibling
+    /// site and the "BEFORE their mutation" requirement on
+    /// [`Self::recover_external_appends`]. A confirmation report is about contacts
+    /// already logged, and some of them may be logged only by the OTHER instance. Run
+    /// first, and such a row matches the recovered record and confirms it. Run after,
+    /// and the merge — looking at a log that does not contain it yet — reads the same
+    /// row as a brand-new contact and logs it a second time. So the late order costs
+    /// a duplicate and a lost confirmation even though it saves the file.
     pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
+        self.recover_external_appends();
         let (added, skipped, merged) = self.logbook.import_adif(text);
         if merged > 0 {
             self.save_log("import_adif"); // rewrites the whole log, `added` included

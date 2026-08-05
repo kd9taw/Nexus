@@ -18589,6 +18589,79 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// M18 for the IMPORT path. `import_adif` was append-only — the one full-log
+    /// writer legitimately exempt from the recovery — until the merge fix made it
+    /// rewrite the whole file whenever a row upgraded a record already held. That
+    /// rewrite from a stale copy dropped another instance's appends, and a LoTW
+    /// download (which restates contacts already logged, so it merges on nearly
+    /// every row) is exactly the import the operator is told to run.
+    ///
+    /// The ORDER is pinned too, by the two QSOs instance A appends. `W3CCC` is
+    /// absent from the download (LoTW has not matched it yet) — it can only survive
+    /// if the recovery ran at all. `W4DDD` IS in the download, carrying a
+    /// confirmation — it can only be *matched* if the recovery ran BEFORE the merge;
+    /// recovering merely before the write would have seen that row as a new contact
+    /// and logged it a second time.
+    #[test]
+    fn importing_a_confirmation_report_preserves_another_instances_appends() {
+        let path = std::env::temp_dir().join(format!(
+            "nexus_concurrent_import_{}.adi",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        // Instance B loads the log and records two contacts (append-only).
+        let mut b = Engine::new("K2DEF", "FN31", 0);
+        b.set_log_path(path.clone());
+        b.log_qso(qrec("W1AW", "20m"));
+        b.log_qso(qrec("K5XYZ", "20m"));
+        assert_eq!(b.get_log().len(), 2);
+
+        // Instance A (a second process on the same file) appends two QSOs that B
+        // never sees in memory.
+        Logbook::append(&path, &qrec("W3CCC", "40m")).unwrap();
+        Logbook::append(&path, &qrec("W4DDD", "15m")).unwrap();
+        assert_eq!(Logbook::load(&path).len(), 4, "the file holds A's appends");
+
+        // B imports a LoTW download. It restates B's two contacts and A's W4DDD —
+        // every row a dupe, so nothing is added and the merge is what forces the
+        // full rewrite. It says nothing about A's W3CCC.
+        let adif = "<EOH>\n\
+            <CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>19700101<TIME_ON:6>000000<QSL_RCVD:1>Y<EOR>\n\
+            <CALL:5>K5XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>19700101<TIME_ON:6>000000<QSL_RCVD:1>Y<EOR>\n\
+            <CALL:5>W4DDD<BAND:3>15m<MODE:3>FT8<QSO_DATE:8>19700101<TIME_ON:6>000000<QSL_RCVD:1>Y<EOR>\n";
+        let (added, _skipped, updated, _total) = b.import_adif(adif);
+
+        let on_disk = Logbook::load(&path);
+        let calls: Vec<&str> = on_disk.records().iter().map(|r| r.call.as_str()).collect();
+        assert!(
+            calls.contains(&"W3CCC"),
+            "the import's full rewrite must not drop another instance's append (on disk: {calls:?})"
+        );
+        assert_eq!(on_disk.len(), 4, "...and must not double-log one either");
+        assert_eq!(
+            added, 0,
+            "every row restates a contact already in the shared log"
+        );
+        assert_eq!(
+            updated, 3,
+            "including A's W4DDD — matchable only if the recovery ran BEFORE the merge"
+        );
+        let confirmed: Vec<&str> = on_disk
+            .records()
+            .iter()
+            .filter(|r| r.confirmed)
+            .map(|r| r.call.as_str())
+            .collect();
+        assert!(
+            confirmed.contains(&"W4DDD"),
+            "the confirmation landed on the record only the other instance held ({confirmed:?})"
+        );
+        assert_eq!(confirmed.len(), 3, "and on B's two, and on nothing else");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn prompt_to_log_holds_then_confirms() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
