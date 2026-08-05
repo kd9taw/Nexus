@@ -6,6 +6,7 @@
 
 use tempo_app::engine::Engine;
 use tempo_core::tempo_fast;
+use tempo_core::timing::now_unix_ms;
 
 use crate::backend::AudioBackend;
 use crate::frames::RxRing;
@@ -173,6 +174,30 @@ pub fn slot_tx_phase(
         // BEFORE the carrier keys.
         let split = apply_tx_dial_shift(eng, rig);
         let _ = rig.ptt(true);
+        // ⏱ THE PTT-HOLD DEADLINE IS MEASURED FROM HERE — after the carrier is up —
+        // not from the caller's `now_ms`. That was bound at the TOP of the radio-loop
+        // tick, and the same tick then runs BLOCKING CAT before reaching this key: the
+        // retune block (its `can_retune` gate is true at a boundary, `tx_until_ms`
+        // being None), `ensure_commanded`, the split shift above, and the keying
+        // round-trip itself — each able to spend a full CAT deadline (700 ms, 2500 ms
+        // on a slow transport). A deadline built on `now_ms` is therefore measured from
+        // an instant already past, and unkeys EARLY by exactly the CAT time, cutting
+        // the tail off our own over. MSK144 is where it shows: 14.688 s of audio in a
+        // 15 s slot (period − 0.25 s truncated to whole 72 ms frames) leaves ~0.31 s of
+        // slack — less than one slow CAT exchange. FT8's 13.14 s leaves ~1.86 s, so
+        // every other tier absorbs the same stall as a merely shortened tail.
+        //
+        // ⚠️ STEER THE RE-READ. `now_ms` is on the UTC-STEERED clock (`service.rs`
+        // SUBTRACTS the measured PC-clock-vs-UTC offset so TX keys on the true UTC
+        // grid). A bare `now_unix_ms()` here would be on a different timebase and shift
+        // the deadline by the whole offset — worst on exactly the badly-synced machines
+        // the steering exists to rescue. Same expression as the busy-worker branch's
+        // post-build re-read in `service.rs`.
+        //
+        // Floored at `now_ms`: a backwards clock step (an NTP correction landing mid-
+        // tick) must never make this hold SHORTER than the caller's basis — that is the
+        // failure this whole re-read exists to prevent.
+        let keyed_ms = (now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64).max(now_ms);
         let mut secs = 0.0f32;
         for w in &waves {
             secs += w.len() as f32 / tempo_fast::SAMPLE_RATE;
@@ -180,7 +205,7 @@ pub fn slot_tx_phase(
         }
         rx.clear(); // our just-started carrier must not be decoded next boundary
         SlotAction {
-            tx_until_ms: Some(now_ms + secs as f64 * 1000.0 + TX_TAIL_MS),
+            tx_until_ms: Some(keyed_ms + secs as f64 * 1000.0 + TX_TAIL_MS),
             did_rx,
             rx_frame,
             tx_this_slot: true,
@@ -206,6 +231,181 @@ mod tests {
     use super::*;
     use crate::backend::MockBackend;
     use tempo_app::engine::{run_decode_job, DecodeApplied, DecodePass};
+
+    /// The clock instant a keyed [`SlotAction`]'s PTT-hold deadline was built from:
+    /// strip the played audio's duration and the fixed tail back off. That basis is
+    /// the whole subject of the three tests below.
+    fn deadline_basis_ms(act: &SlotAction, backend: &MockBackend) -> f64 {
+        let audio_ms = backend.played.len() as f64 / tempo_fast::SAMPLE_RATE as f64 * 1000.0;
+        act.tx_until_ms.expect("the over keyed") - audio_ms - TX_TAIL_MS
+    }
+
+    /// "Now" on the same UTC-steered timebase the radio loop hands in as `now_ms`
+    /// (`service.rs` subtracts the measured PC-clock-vs-UTC offset from the system
+    /// clock so TX keys on the true UTC grid).
+    fn steered_now_ms(eng: &Engine) -> f64 {
+        now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64
+    }
+
+    /// An engine armed with one over to send, on the default (FT8) tier.
+    fn armed_engine() -> Engine {
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx)
+        eng.broadcast("CQ TEST W9XYZ EN37");
+        eng
+    }
+
+    /// A throwaway rigctld that answers every command with `RPRT 0` — but only
+    /// after `delay_ms`. Models the real hazard: a CAT link whose keying round-trip
+    /// eats hundreds of ms (the `Rig` PTT deadline allows up to 700).
+    fn slow_rigctld(delay_ms: u64) -> String {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let mut sock = match listener.accept() {
+                Ok((s, _)) => s,
+                Err(_) => return,
+            };
+            let mut buf = [0u8; 256];
+            loop {
+                match sock.read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                if sock.write_all(b"RPRT 0\n").is_err() {
+                    return;
+                }
+            }
+        });
+        addr
+    }
+
+    #[test]
+    fn ptt_hold_is_measured_from_the_key_not_the_ticks_stale_clock() {
+        // THE BUG. `now_ms` is bound at the TOP of the radio-loop tick
+        // (`service.rs`), and that same tick then runs BLOCKING CAT before the
+        // carrier is ever up: the retune block (its `can_retune` gate is true at a
+        // boundary, `tx_until_ms` being None) and `ensure_commanded`, each able to
+        // spend a full CAT deadline (700 ms, 2500 ms on a slow transport). By the
+        // time we key, `now_ms` is that far in the past — so a deadline built on it
+        // unkeys EARLY by exactly the CAT time and truncates the tail of the over.
+        //
+        // MSK144-15 is where it shows: 14.688 s of audio in a 15 s slot leaves
+        // ~0.31 s of slack, less than one slow CAT exchange. Every other tier has
+        // enough slack to absorb it as a merely shortened tail.
+        const CAT_STALL_MS: f64 = 400.0;
+        let mut eng = armed_engine();
+        let mut rig = Rig::vox();
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+
+        // The tick bound `now` CAT_STALL_MS ago; the blocking CAT that followed is
+        // what ate the gap between then and this call.
+        let steered = steered_now_ms(&eng);
+        let act = slot_tx_phase(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            steered - CAT_STALL_MS,
+            false,
+            None,
+            None,
+        );
+
+        assert!(act.tx_this_slot, "the CQ keyed");
+        let basis = deadline_basis_ms(&act, &backend);
+        assert!(
+            (basis - steered).abs() < 100.0,
+            "PTT-hold deadline must be measured from the key ({steered:.0}), not from \
+             the tick's stale clock ({:.0}) — off by {:.0} ms",
+            steered - CAT_STALL_MS,
+            basis - steered,
+        );
+    }
+
+    #[test]
+    fn a_slow_key_pushes_the_hold_out_by_the_time_the_key_itself_took() {
+        // The same defect measured on the OTHER side of the call: the CAT round-trip
+        // of `rig.ptt(true)` is itself inside the window. A fix that re-read the
+        // clock on entry (rather than after the key) would still unkey early by the
+        // keying round-trip. Here the rig answers `T 1` only after KEY_MS.
+        const KEY_MS: u64 = 300;
+        let mut eng = armed_engine();
+        let mut rig = Rig::rigctld(&slow_rigctld(KEY_MS));
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+
+        let now_ms = steered_now_ms(&eng);
+        let act = slot_tx_phase(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            now_ms,
+            false,
+            None,
+            None,
+        );
+        let after = steered_now_ms(&eng);
+
+        assert!(act.tx_this_slot, "the CQ keyed");
+        assert!(rig.keyed, "PTT asserted");
+        let basis = deadline_basis_ms(&act, &backend);
+        assert!(
+            basis - now_ms >= 200.0,
+            "a {KEY_MS} ms key must push the hold out with it — moved only {:.0} ms",
+            basis - now_ms,
+        );
+        assert!(
+            (after - basis).abs() < 100.0,
+            "and the basis is the moment the carrier came up, not the call's entry \
+             ({:.0} ms before this call returned)",
+            after - basis,
+        );
+    }
+
+    #[test]
+    fn the_hold_clock_is_utc_steered_like_the_ticks_clock_is() {
+        // THE TRAP. `now_ms` is UTC-STEERED: `service.rs` SUBTRACTS the measured
+        // PC-clock-vs-UTC offset so TX keys on the true UTC grid even when the OS
+        // clock is skewed. Re-reading the raw system clock instead puts the deadline
+        // on a DIFFERENT timebase and shifts it by the whole offset — silently, and
+        // worst on exactly the badly-synced machines the steering exists to rescue.
+        // A 90 s skew is ordinary on a PC that has never talked to an NTP server.
+        const OFFSET_MS: i64 = 90_000; // PC clock 90 s AHEAD of true UTC
+        const CAT_STALL_MS: f64 = 400.0;
+        let mut eng = armed_engine();
+        eng.set_clock_offset_ms(Some(OFFSET_MS));
+        let mut rig = Rig::vox();
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+
+        let steered = steered_now_ms(&eng);
+        let act = slot_tx_phase(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            steered - CAT_STALL_MS,
+            false,
+            None,
+            None,
+        );
+
+        let basis = deadline_basis_ms(&act, &backend);
+        assert!(
+            (basis - steered).abs() < 150.0,
+            "the hold must be measured on the STEERED clock: {:.0} ms off (a raw \
+             now_unix_ms() re-read would be out by the whole {OFFSET_MS} ms offset)",
+            basis - steered,
+        );
+    }
 
     /// Drive the async two-phase boundary synchronously (as the live loop does, but
     /// in-line instead of across the worker thread): decide, dispatch, run the
