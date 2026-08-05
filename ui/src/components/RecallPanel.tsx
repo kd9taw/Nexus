@@ -1,6 +1,7 @@
 import type { LoggedQso } from '../types'
 import type { CallHistory } from '../features/callHistory'
 import { openQrzPage } from '../api'
+import { withErrorToast } from '../toast'
 import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '../grid'
 
 interface Props {
@@ -98,11 +99,16 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
   const needed = newEntity ? 'New DXCC!' : newBandSlot ? 'New band-slot' : newModeSlot ? 'New mode-slot' : null
   const prior = [...hist.qsos].sort((a, b) => b.whenUnix - a.whenUnix)
   const lastNote = prior.find((q) => (q.notes ?? '').trim())?.notes?.trim()
-  // The link rides on CS resolution (operator, 2026-07-31: open the call's QRZ page from the
-  // recall photo "to look at the page while you're working them"): once ANY identity content is
-  // in — name, place line, or photo — the avatar is a live QRZ button, photo or initials alike.
-  // Before that the card is still the "Tab or press Lookup" prompt, so the circle stays inert.
-  const resolved = Boolean(nm || where || image)
+  // The link needs only the CALLSIGN (operator, 2026-07-31: open the call's QRZ page from the
+  // recall photo "to look at the page while you're working them"). It used to ride on CS
+  // RESOLUTION — `nm || where || image` — and that was backwards, reported 2026-08-05 as "the
+  // lookup button for qrz is not popping open a webpage": it withheld the link in exactly the
+  // cases an operator reaches for the browser. No QRZ subscription (grid and state are
+  // subscriber-only), no credentials configured, a lookup that failed, a call the callbook does
+  // not know — an empty in-app lookup is a REASON to open the web page, not grounds to hide it.
+  // Nothing here ever needed the lookup: qrz_url() builds and sanitizes the URL from the call
+  // alone. The card still says "Tab or press Lookup for name / QTH" below, so an active link is
+  // not mistaken for a resolution.
 
   const avatarInner = (
     <>
@@ -130,31 +136,28 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
   return (
     <div className="recall-card">
       <div className="recall-head">
-        {resolved ? (
-          // Same open_qrz_page path as the roster/logbook ↗ buttons: the Rust command derives
-          // and sanitizes https://www.qrz.com/db/<base call>, so nothing URL-shaped is built
-          // here. Errors are swallowed (fire-and-forget browser launch, AprsStationCard-style).
-          <button
-            type="button"
-            className="recall-avatar"
-            title={`Open ${cu} on QRZ (browser)`}
-            aria-label={`Open ${cu} on QRZ (browser)`}
-            // preventDefault on mousedown (the park-picker guard, above in LogEntry): the
-            // browser-default focus-on-mousedown must not yank the caret out of the log form
-            // mid-entry — the opened browser window takes over; nothing in-app moves or scrolls.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => void openQrzPage(cu).catch(() => {})}
-          >
-            {avatarInner}
-            <span className="recall-avatar-qrz" aria-hidden>
-              ↗
-            </span>
-          </button>
-        ) : (
-          <div className="recall-avatar" aria-hidden>
-            {avatarInner}
-          </div>
-        )}
+        {/* Same open_qrz_page path as the roster/logbook ↗ buttons: the Rust command derives
+            and sanitizes https://www.qrz.com/db/<base call>, so nothing URL-shaped is built
+            here. Failures are TOASTED, not swallowed — there is no global unhandledrejection
+            handler in this app, so a `.catch(() => {})` here (the old AprsStationCard-style
+            fire-and-forget) turned a browser that refused to launch into "nothing happened",
+            which is indistinguishable from a dead button. */}
+        <button
+          type="button"
+          className="recall-avatar"
+          title={`Open ${cu} on QRZ (browser)`}
+          aria-label={`Open ${cu} on QRZ (browser)`}
+          // preventDefault on mousedown (the park-picker guard, above in LogEntry): the
+          // browser-default focus-on-mousedown must not yank the caret out of the log form
+          // mid-entry — the opened browser window takes over; nothing in-app moves or scrolls.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => void withErrorToast(() => openQrzPage(cu), `Could not open ${cu} on QRZ`)}
+        >
+          {avatarInner}
+          <span className="recall-avatar-qrz" aria-hidden>
+            ↗
+          </span>
+        </button>
         <div className="recall-id">
           <div className="recall-name-row">
             <span className="recall-name">{nm || cu}</span>

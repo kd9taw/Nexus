@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { BandChannel, SpotRow } from '../types'
 import { openQrzPage } from '../api'
+import { withErrorToast } from '../toast'
 
 type SortKey = 'age' | 'call' | 'entity' | 'band' | 'freq' | 'mode'
 
@@ -335,7 +336,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                   <button
                     type="button"
                     className="qrz-link-call"
-                    onClick={(e) => { e.stopPropagation(); void openQrzPage(s.call) }}
+                    onClick={(e) => { e.stopPropagation(); void withErrorToast(() => openQrzPage(s.call), `Could not open ${s.call} on QRZ`) }}
                     title={`${s.call} on QRZ.com (opens your browser)`}
                   >
                     {s.call}

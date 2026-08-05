@@ -1,5 +1,6 @@
 import type { NeedTag, Station, Tier } from '../types'
 import { openQrzPage } from '../api'
+import { withErrorToast } from '../toast'
 import { bearingLabel, distanceLabel } from '../grid'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP } from '../features/needVisuals'
@@ -103,7 +104,7 @@ export function StationCard({
         className="station-qrz"
         onClick={(e) => {
           e.stopPropagation()
-          void openQrzPage(station.call)
+          void withErrorToast(() => openQrzPage(station.call), `Could not open ${station.call} on QRZ`)
         }}
         title={`${station.call} on QRZ.com (opens your browser)`}
       >

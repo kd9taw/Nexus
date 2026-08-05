@@ -5,6 +5,7 @@
 // "Classic" layout, not just a reshaped pane.
 import { useEffect, useMemo, useState } from 'react'
 import { openQrzPage } from '../api'
+import { withErrorToast } from '../toast'
 import { useRovingList } from '../useRovingList'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
@@ -367,7 +368,7 @@ export function OperateRoster({
                     className="qrz-link"
                     onClick={(e) => {
                       e.stopPropagation()
-                      void openQrzPage(s.call)
+                      void withErrorToast(() => openQrzPage(s.call), `Could not open ${s.call} on QRZ`)
                     }}
                     onDoubleClick={(e) => e.stopPropagation()}
                     title={`${s.call} on QRZ.com (opens your browser)`}

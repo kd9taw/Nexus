@@ -965,7 +965,7 @@ export function Logbook({
                   <button
                     type="button"
                     className="qrz-link-call"
-                    onClick={() => void openQrzPage(q.call)}
+                    onClick={() => void withErrorToast(() => openQrzPage(q.call), `Could not open ${q.call} on QRZ`)}
                     title={`${q.call} on QRZ.com (opens your browser)`}
                   >
                     {q.call}

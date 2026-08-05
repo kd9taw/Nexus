@@ -19,7 +19,7 @@ import {
   NEED_TYPE_VALUES,
 } from '../neededFilters'
 import { pointRotator, readRotator, openQrzPage } from '../api'
-import { pushToast } from '../toast'
+import { pushToast, withErrorToast } from '../toast'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
@@ -596,7 +596,7 @@ export function NeededPanel({
                   <button
                     type="button"
                     className="qrz-link-call"
-                    onClick={(e) => { e.stopPropagation(); void openQrzPage(a.call) }}
+                    onClick={(e) => { e.stopPropagation(); void withErrorToast(() => openQrzPage(a.call), `Could not open ${a.call} on QRZ`) }}
                     title={`${a.call} on QRZ.com (opens your browser)`}
                   >
                     {a.call}

@@ -11,6 +11,7 @@ import { DxpedDigest } from './DxpedDigest'
 import { dxpedColorIndex } from './dxpedLanes'
 import { dxpedLink, dxpedLinkTitle } from './dxpedLink'
 import { openDxpedPage } from '../../api'
+import { withErrorToast } from '../../toast'
 
 function daysUntil(startUnix: number): string {
   const d = Math.round((startUnix - Date.now() / 1000) / 86400)
@@ -58,7 +59,7 @@ export function DxpedCalendar({
   alarms,
   onToggleAlarm,
   onAlarmLead,
-  openPage = (e) => void openDxpedPage(e.call, e.website),
+  openPage = (e) => void withErrorToast(() => openDxpedPage(e.call, e.website), `Could not open the page for ${e.call}`),
 }: {
   entries: CalendarEntry[]
   /** Modelled windows by call (get_dxped_windows) — preferred over the entry's

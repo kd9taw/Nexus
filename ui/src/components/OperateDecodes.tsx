@@ -21,6 +21,7 @@ import { gridFromMessage, isIgnored } from '../txMessages'
 import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
 import { openQrzPage } from '../api'
+import { withErrorToast } from '../toast'
 
 /** JTAlert UDP highlight entry — bg/fg may be null/missing. */
 export interface HighlightEntry {
@@ -507,7 +508,7 @@ export function OperateDecodes({
                   <button
                     type="button"
                     className="qrz-link-call decode-qrz"
-                    onClick={(e) => { e.stopPropagation(); void openQrzPage(d.from as string) }}
+                    onClick={(e) => { e.stopPropagation(); const c = d.from as string; void withErrorToast(() => openQrzPage(c), `Could not open ${c} on QRZ`) }}
                     title={`${d.from} on QRZ.com (opens your browser)`}
                   >
                     QRZ

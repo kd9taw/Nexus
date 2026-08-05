@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { RecallPanel } from './RecallPanel'
 import { openQrzPage } from '../api'
+import { subscribeToasts } from '../toast'
 import { distanceLabel, bearingLabel, distanceLabelAt, bearingLabelAt, gridToLatLon } from '../grid'
 import type { CallHistory } from '../features/callHistory'
 import type { LoggedQso } from '../types'
@@ -246,15 +247,42 @@ describe('RecallPanel — the avatar opens the QRZ page', () => {
     expect(openQrzPage).toHaveBeenCalledWith('W1ABC')
   })
 
-  it('renders no link at all while the call is unresolved', () => {
-    // No name / QTH / photo has arrived: the card is still the "Tab or press Lookup" prompt, so
-    // there is nothing resolved to look at — the avatar stays the plain inert circle.
+  it('opens QRZ for an UNRESOLVED call — that is when the browser is most needed', () => {
+    // ⭐ THIS INVERTS THE ORIGINAL GATE, ON AN OPERATOR REPORT ("the lookup button for qrz is
+    // not popping open a webpage"). Gating the link on `nm || where || image` meant the card
+    // offered no way to reach QRZ in exactly the cases an operator reaches for it: no QRZ
+    // subscription (grid/state are subscriber-only), no credentials configured, a lookup that
+    // failed, or a call the callbook does not know. The in-app lookup coming back empty is a
+    // REASON to open the web page, not a reason to withhold it — and the URL never needed the
+    // lookup anyway: qrz_url() builds and sanitizes it from the callsign alone.
+    render(<RecallPanel call="W1ABC" band="20m" hist={hist()} />)
+    const btn = screen.getByRole('button', { name: 'Open W1ABC on QRZ (browser)' })
+    fireEvent.click(btn)
+    expect(openQrzPage).toHaveBeenCalledWith('W1ABC')
+  })
+
+  it('still shows the "press Lookup" prompt when unresolved — the link is not a resolution', () => {
+    // The link ungating must not read as "we know this station". The name/QTH line keeps
+    // saying there is nothing yet.
     const { container } = render(<RecallPanel call="W1ABC" band="20m" hist={hist()} />)
-    expect(screen.queryByRole('button')).toBeNull()
-    const avatar = container.querySelector('.recall-avatar')
-    expect(avatar, 'the initials avatar itself must survive').not.toBeNull()
-    expect(avatar!.tagName).toBe('DIV')
-    expect(openQrzPage).not.toHaveBeenCalled()
+    expect(container.querySelector('.recall-where-empty')).not.toBeNull()
+  })
+
+  it('surfaces a failed browser launch instead of swallowing it', async () => {
+    // The failure the operator actually sees is "nothing happened". There is no global
+    // unhandledrejection handler in this app, and this call site used to end in
+    // `.catch(() => {})`, so a browser that refused to open said nothing at all.
+    // Asserted against the REAL toast bus, not a mocked pushToast: withErrorToast calls
+    // pushToast module-internally, so mocking the export would not intercept it and the
+    // test would pass on a helper that never fired.
+    const seen: string[] = []
+    const stop = subscribeToasts((ts) => seen.push(...ts.map((t) => t.message)))
+    vi.mocked(openQrzPage).mockRejectedValueOnce(new Error('no opener'))
+    render(<RecallPanel call="W1ABC" band="20m" name="Alice" hist={hist()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open W1ABC on QRZ (browser)' }))
+    await waitFor(() => expect(seen.some((m) => /QRZ/i.test(m))).toBe(true))
+    expect(seen.some((m) => m.includes('no opener'))).toBe(true)
+    stop()
   })
 
   it('keyboard: a REAL focusable <button>, activatable without a mouse', () => {

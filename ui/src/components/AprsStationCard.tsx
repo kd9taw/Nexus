@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { openQrzPage, type AprsStation } from '../api'
+import { withErrorToast } from '../toast'
 import { latLonToGrid, bearingDeg, haversineKm, type LatLon } from '../grid'
 import {
   CATEGORY_VAR,
@@ -285,7 +286,7 @@ export function AprsStationCard({
       )}
 
       <div className="aprs-card-actions">
-        <button type="button" onClick={() => void openQrzPage(st.call).catch(() => {})}>
+        <button type="button" onClick={() => void withErrorToast(() => openQrzPage(st.call), `Could not open ${st.call} on QRZ`)}>
           QRZ
         </button>
         {/* aprs.fi is a third-party site (Heikki Hannikainen, OH7LZB); this only opens its page for
