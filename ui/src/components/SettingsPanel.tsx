@@ -2799,12 +2799,15 @@ export function SettingsPanel({
                   value={form.rigConn || 'serial'}
                   onChange={(e) => update('rigConn', e.target.value)}
                 >
-                  <option value="serial">Serial (USB / COM)</option>
-                  <option value="network">Network (FlexRadio / remote)</option>
+                  <option value="serial">Serial (USB / COM port)</option>
+                  <option value="network">Network (host:port — SDR software, or a remote rig)</option>
                 </select>
                 <span className="settings-hint">
-                  Serial for a USB/COM rig (most, incl. Xiegu); Network for a FlexRadio via
-                  SmartSDR or a remote rigctld over TCP.
+                  Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for
+                  anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR,
+                  SmartSDR CAT, piHPSDR), or a remote rigctld. The <strong>Rig Model</strong>
+                  {' '}still picks which CAT dialect is spoken — for an SDR, choose the program
+                  you launched, not the board inside the radio.
                 </span>
               </label>
 
@@ -2851,6 +2854,18 @@ export function SettingsPanel({
                     slice you run digital on. (Direct-to-radio :4992 needs Hamlib's
                     experimental native model and failed on real hardware.) Other rigs:
                     a remote rigctld's host:port with their normal model.
+                  </span>
+                  {/* Where an SDR operator finds the real number. Nothing here is a default —
+                      every one of these programs lets the operator move the port, and the
+                      Thetis field report was a rig served on a port that is Thetis's TCI
+                      default, not its CAT default. Read the port out of the program. */}
+                  <span className="settings-hint">
+                    Running an SDR program? Read the port out of the program, don't guess it:{' '}
+                    <strong>Thetis</strong> → Setup ▸ Serial/Network/Midi CAT ▸{' '}
+                    <em>TCP/IP CAT Server</em> (its own box, factory 13013 — <em>not</em> the
+                    TCI Server box next to it, factory 50001, which is a WebSocket protocol
+                    Nexus can't drive); <strong>SmartSDR CAT</strong> → 5002;{' '}
+                    <strong>piHPSDR</strong> → 19090. Whatever it shows, type that.
                   </span>
                 </label>
               )}
@@ -3182,8 +3197,12 @@ export function SettingsPanel({
                   </label>
                 )}
 
+              {/* SmartSDR-only streams, gated on the MODEL NUMBER — never on the model's name.
+                  A name-sniff for "flex" also matched the PowerSDR entry, offering an ANAN/HL2
+                  operator a SmartSDR VITA-49 stream that radio cannot serve. `native_spectrum_kind`
+                  in Rust has always gated on 2036|23005; this is the UI catching up. */}
               {form.rigConn === 'network' &&
-                (/flex/i.test(form.rigModelName ?? '') || (form.flexRadioIp ?? '').trim() !== '') && (
+                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
                   <label className="settings-field">
                     <span className="settings-label">Flex native panadapter (early access)</span>
                     <button
@@ -3205,8 +3224,9 @@ export function SettingsPanel({
                   </label>
                 )}
 
+              {/* Same model-number gate as the panadapter above — see the note there. */}
               {form.rigConn === 'network' &&
-                (/flex/i.test(form.rigModelName ?? '') || (form.flexRadioIp ?? '').trim() !== '') && (
+                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
                   <label className="settings-field">
                     <span className="settings-label">Flex native DAX audio (early access)</span>
                     <button

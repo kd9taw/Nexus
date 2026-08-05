@@ -95,7 +95,26 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         // selectable, but nothing auto-picks it anymore.
         (2036, "FlexRadio FLEX-6xxx (SmartSDR CAT)"),
         (23005, "FlexRadio SmartSDR native (experimental)"),
-        (2048, "FlexRadio PowerSDR (TS-2000 emul.)"),
+        // SDR console SOFTWARE — here the PROGRAM is the rig. A Hermes Lite 2, an ANAN, a
+        // legacy Flex has no CAT port of its own: CAT is served by the program running on
+        // the PC, over TCP or a virtual COM pair. So these are named for what the operator
+        // LAUNCHED, not for the board on the desk. Field report 2026-08: an HL2 owner on
+        // Thetis searched this list for his hardware, found nothing, and settled on the
+        // FLEX-6xxx profile — which connects, then drives Thetis with the FLEX-6000 command
+        // set (2036 has no RIG_LEVEL_STRENGTH at all, so the S-meter goes dead).
+        // Numbers verified in the bundled Hamlib 4.7.1 riglist.h:
+        //   RIG_MODEL_THETIS     = RIG_MAKE_MODEL(RIG_KENWOOD, 54) → 2054
+        //   RIG_MODEL_POWERSDR   = RIG_MAKE_MODEL(RIG_KENWOOD, 48) → 2048
+        //   RIG_MODEL_HPSDR      = RIG_MAKE_MODEL(RIG_KENWOOD, 40) → 2040 (OpenHPSDR, PiHPSDR)
+        //   RIG_MODEL_SDRCONSOLE = RIG_MAKE_MODEL(RIG_KENWOOD, 56) → 2056
+        // 2054/2048 share `rigs/kenwood/flex6xxx.c`'s powersdr caps: STRENGTH, SWR and
+        // RFPOWER_METER present, and `flex6k_set_ptt` keys with `ZZTX1;ZZTX` (key AND read
+        // back). NOT a TS-2000 emulation — the old 2048 label said so and was wrong; the
+        // dialect is PowerSDR's own ZZ-prefixed set (`ZZMD%02d` for mode).
+        (2054, "Thetis (Hermes Lite 2 / ANAN / HPSDR)"),
+        (2048, "PowerSDR / mRX PS (Apache ANAN / legacy FLEX)"),
+        (2040, "piHPSDR / OpenHPSDR (Hermes Lite 2 / ANAN)"),
+        (2056, "SDR Console (SDR-Radio.com)"),
         // Ten-Tec
         (16013, "Ten-Tec Eagle (599)"),
         (16008, "Ten-Tec Orion (565)"),
@@ -163,7 +182,9 @@ fn extended_rig_models() -> Vec<(u32, &'static str)> {
         (2035, "Kenwood TM-V71"),
         // Kenwood-family backend: Elecraft K2 + SDRs that speak Kenwood CAT
         (2021, "Elecraft K2"),
-        (2040, "OpenHPSDR / PiHPSDR"),
+        // 2040 (OpenHPSDR / PiHPSDR) was here; it moved UP into the verified tier with the
+        // other SDR-program profiles — behind the Show-all toggle it was unfindable by the
+        // Hermes Lite 2 owner who needs it. The tiers must stay disjoint.
         (2049, "Malachite DSP SDR"),
         (2050, "Lab599 Discovery TX-500"),
         (2051, "SDRuno (SDRplay)"),
@@ -199,6 +220,33 @@ pub fn rig_model_name(model: u32) -> Option<&'static str> {
         .into_iter()
         .find(|(m, _)| *m == model)
         .map(|(_, name)| name)
+}
+
+/// Recognise a CAT server that **names itself** in the greeting it sends on connect, and
+/// return `(program name, the catalog model written for it)`.
+///
+/// Thetis's TCP/IP CAT server greets every client with
+/// `#Thetis TCP/IP Cat - <window title>#;` — that greeting is what
+/// [`crate::rigctld_server::probe_cat_port`] hands us, and it is the only evidence here.
+///
+/// **What this may and may not conclude.** The program naming itself is a fact we can quote;
+/// everything after it is not. The tail of a Thetis banner is a compile-time build label
+/// (`TitleBar.BUILD_NAME`) — the field report's `HL2 Beta 2 (MI0BOT)` is a *fork's* label,
+/// true for that operator and a lie on any other build of the same fork. So the match is on
+/// the program token alone, and **no hardware is ever inferred from a banner**. The greeting
+/// is also operator-switchable in Thetis ("Send version on client connect"), so `None` here
+/// means "did not name itself", never "not Thetis".
+pub fn program_from_banner(banner: &str) -> Option<(&'static str, u32)> {
+    let b = banner.to_ascii_lowercase();
+    // Thetis first: a Thetis fork's banner can carry PowerSDR lineage words, and Thetis is
+    // the more specific claim. Both map to `flex6xxx.c` caps with a real S-meter.
+    if b.contains("thetis") {
+        Some(("Thetis", 2054))
+    } else if b.contains("powersdr") {
+        Some(("PowerSDR", 2048))
+    } else {
+        None
+    }
 }
 
 /// The kind of NATIVE spectrum stream a radio can provide — the shared capability gate for
@@ -253,6 +301,13 @@ pub(crate) fn is_slow_serial_rig(model: u32) -> bool {
         | 2001 | 2002 | 2003 | 2005 | 2007 | 2009 | 2011 | 2013 | 2025
         // 1990s Kenwood — 9600 factory default
         | 2004 | 2010 | 2016
+        // PowerSDR (2048) / Thetis (2054) over a VIRTUAL COM pair. Not a slow wire — a slow
+        // BACKEND: Hamlib's caps for both declare `.timeout = 800, .retry = 10`
+        // (`rigs/kenwood/flex6xxx.c`), so one transaction can legitimately run ~8 s inside
+        // Hamlib while the 700 ms deadline out here fires at 0.7 s and reports "reply
+        // incomplete" for a program that was going to answer. Over TCP `is_network()` already
+        // grants the long window; the com0com route is the one that needed this.
+        | 2048 | 2054
     )
 }
 
@@ -361,10 +416,18 @@ mod tests {
                 "vintage Kenwood model {m} should be slow"
             );
         }
+        // The slow-BACKEND SDR programs on a virtual COM pair (Hamlib caps: timeout 800 ×
+        // retry 10) — the com0com half of the Thetis field report.
+        for m in [2048u32, 2054] {
+            assert!(
+                is_slow_serial_rig(m),
+                "SDR-program model {m} should be slow"
+            );
+        }
         // Everything else keeps the fast 700 ms deadline — the working rigs are UNAFFECTED:
         // Icom 7300/9700, a Yaesu serial model (1042), MODERN Kenwood TS-590S (2031),
-        // Flex SmartSDR (23005), Elecraft K4 (2048), and "none" (0).
-        for m in [3073u32, 3081, 1042, 2031, 23005, 2048, 0] {
+        // Flex SmartSDR CAT (2036) and native (23005), Elecraft K4 (2047), and "none" (0).
+        for m in [3073u32, 3081, 1042, 2031, 2036, 23005, 2047, 0] {
             assert!(
                 !is_slow_serial_rig(m),
                 "fast/modern model {m} must stay fast"
@@ -501,6 +564,90 @@ mod tests {
         assert_eq!(rig_model_name(3011), Some("Icom IC-706MKIIG"));
         // A representative extended entry from another backend.
         assert_eq!(rig_model_name(2050), Some("Lab599 Discovery TX-500"));
+    }
+
+    /// THE FIELD REPORT (2026-08). A Hermes Lite 2 owner running Thetis could not make CAT
+    /// work in Nexus while it worked in WSJT-X. The catalog named no program an SDR operator
+    /// launches — only hardware — so the hunt for "Hermes Lite 2" found nothing and ended on
+    /// the FLEX-6xxx profile, which does connect and then drives Thetis with the FLEX-6000
+    /// command set (see `only_a_real_flexradio_gets_the_vita_panadapter` and the message in
+    /// `service.rs`). These entries are the route that was missing.
+    ///
+    /// They are in the **verified** tier deliberately: "Show all models" defaults OFF, so an
+    /// entry that lives only in `extended_rig_models` is invisible to exactly the operator
+    /// who has this problem.
+    #[test]
+    fn the_sdr_program_profiles_are_in_the_default_list() {
+        let verified: HashSet<u32> = rig_models().into_iter().map(|(m, _)| m).collect();
+        for (m, who) in [
+            (2054u32, "Thetis"),
+            (2048, "PowerSDR"),
+            (2040, "piHPSDR / OpenHPSDR"),
+            (2056, "SDR Console"),
+        ] {
+            assert!(
+                verified.contains(&m),
+                "{who} ({m}) must be in the DEFAULT dropdown, not behind Show-all"
+            );
+        }
+        let name = |m| rig_model_name(m).unwrap_or("");
+        // Named for the PROGRAM the operator launched, and carrying the hardware words an
+        // HL2 owner actually types into the box.
+        assert!(name(2054).starts_with("Thetis"), "got {:?}", name(2054));
+        assert!(name(2054).contains("Hermes Lite 2"), "got {:?}", name(2054));
+        assert!(name(2040).contains("Hermes Lite 2"), "got {:?}", name(2040));
+        // 2048 is PowerSDR — a program, not a FlexRadio product line. The old
+        // "FlexRadio PowerSDR" label is what sent an ANAN/HL2 operator to the Flex profiles.
+        assert!(name(2048).starts_with("PowerSDR"), "got {:?}", name(2048));
+        // And it does not emulate a TS-2000: Hamlib's powersdr/thetis backends send the
+        // ZZ-prefixed extended set (`ZZMD%02d`, `ZZTX1;ZZTX`), not TS-2000 CAT.
+        assert!(!name(2048).contains("TS-2000"), "got {:?}", name(2048));
+    }
+
+    /// None of the SDR-program profiles may light the SmartSDR VITA-49 panadapter: that
+    /// stream exists on a FlexRadio 6000 and nowhere else. Starting the worker against a
+    /// Hermes Lite 2 is a UDP listener waiting on a radio that cannot answer.
+    #[test]
+    fn only_a_real_flexradio_gets_the_vita_panadapter() {
+        for m in [2054u32, 2048, 2040, 2056] {
+            assert_eq!(
+                native_spectrum_kind(m, "network"),
+                None,
+                "model {m} is an SDR program, not a FlexRadio"
+            );
+        }
+        // Unchanged — the ONE verified-good configuration keeps its stream.
+        assert_eq!(
+            native_spectrum_kind(2036, "network"),
+            Some(SpectrumKind::FlexVita)
+        );
+        assert_eq!(
+            native_spectrum_kind(23005, "network"),
+            Some(SpectrumKind::FlexVita)
+        );
+    }
+
+    /// A CAT server that greets us by name gets named back, and mapped to the profile
+    /// written for it — never to a Flex profile.
+    #[test]
+    fn a_cat_server_greeting_names_the_profile_written_for_it() {
+        // The exact bytes from the field report (Thetis 2.10.3.13 driving a Hermes Lite 2).
+        let thetis = "#Thetis TCP/IP Cat - Thetis v2.10.3.13 x64 (04/01/26) HL2 Beta 2 (MI0BOT)#;";
+        assert_eq!(program_from_banner(thetis), Some(("Thetis", 2054)));
+        // Upstream's own build label, so the match cannot be keyed on the fork's tail.
+        assert_eq!(
+            program_from_banner("#Thetis TCP/IP Cat - Thetis v2.10.3.13 x64 (04/01/26) MW0LGE#;"),
+            Some(("Thetis", 2054))
+        );
+        assert_eq!(
+            program_from_banner("#PowerSDR TCP/IP Cat - PowerSDR v3.4.9#;"),
+            Some(("PowerSDR", 2048))
+        );
+        // Everything else is unrecognised — we assert a program only when it names itself.
+        assert_eq!(program_from_banner(""), None);
+        assert_eq!(program_from_banner("CHKVFO 0"), None);
+        assert_eq!(program_from_banner("FA00014074000;"), None);
+        assert_eq!(program_from_banner("HTTP/1.1 400 Bad Request"), None);
     }
 
     #[test]

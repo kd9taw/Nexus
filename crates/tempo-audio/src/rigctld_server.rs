@@ -448,29 +448,122 @@ pub fn serve_until(
     // `listener` drops here → the port is released for a rebind.
 }
 
-/// Probe whether a rigctld (or compatible broker — maybe another Nexus) is already
-/// listening on `addr`, so we can connect THROUGH it instead of fighting for the
-/// serial port. Sends `\chk_vfo` and checks for any reply. Short timeout; never
-/// blocks startup long.
-pub fn probe_rigctld(addr: &str, timeout: std::time::Duration) -> bool {
+/// What answered when we asked a TCP port whether it is a rigctld.
+///
+/// The distinction this type exists to make cost an operator a working station: "something is
+/// listening" is NOT "a rigctld is listening". An SDR console's raw CAT server is also
+/// something listening, and connecting to it as if it spoke rigctld produces a rig that never
+/// answers and a message that blames the radio.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortReply {
+    /// Nothing there, or nothing said: connect refused, or connected and the port stayed
+    /// quiet for the whole budget. A rigctld that is merely slow lands here too — which is
+    /// the safe side, because it only costs a spawn attempt.
+    Silent,
+    /// A rigctld-protocol server (Hamlib's, or another Nexus's broker). Safe to share.
+    Rigctld,
+    /// Something answered, in some other protocol. Carries the first line it sent, trimmed
+    /// and capped — evidence to quote back to the operator, never to act on silently.
+    NotRigctld(String),
+}
+
+/// How much of a foreign greeting we keep. Thetis's is ~75 bytes; this is room for a long
+/// fork banner without letting a chatty server write our error message for us.
+const REPLY_SNIPPET_MAX: usize = 200;
+
+/// Judge the bytes a probed port sent back. Pure, so it can be tested against real captures
+/// instead of against a socket.
+///
+/// **Accept only what a rigctld actually says.** Hamlib 4.7.1 answers `\chk_vfo` with the bare
+/// `vfo_opt` flag — `"0\n"` (or `"1\n"` under `-o`), printed by `rigctl_parse.c` with the
+/// `RPRT` trailer suppressed. Nexus's own broker (and older Hamlib, per its man page) answers
+/// `"CHKVFO 0\n"`. `RPRT <n>` is accepted as well: nothing but a rigctld-protocol server emits
+/// it, and it means the port understood the command even if it refused it.
+///
+/// **The bias is deliberate.** A false negative costs one spawn attempt. A false positive is
+/// the bug this replaces: a silent connection to the wrong kind of server. So anything we do
+/// not recognise is [`PortReply::NotRigctld`], not a guess.
+pub fn classify_probe_reply(bytes: &[u8]) -> PortReply {
+    let text = String::from_utf8_lossy(bytes);
+    // One line is the whole of a rigctld reply. A `;`-framed CAT greeting has no newline at
+    // all, so this takes the lot — which is what we want to quote.
+    let first = text
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\r')
+        .trim();
+    if first.is_empty() {
+        return PortReply::Silent;
+    }
+    if matches!(first, "0" | "1" | "CHKVFO 0" | "CHKVFO 1") || first.starts_with("RPRT ") {
+        return PortReply::Rigctld;
+    }
+    let mut snippet: String = first.chars().take(REPLY_SNIPPET_MAX).collect();
+    if snippet.chars().count() < first.chars().count() {
+        snippet.push('…');
+    }
+    PortReply::NotRigctld(snippet)
+}
+
+/// Ask `addr` whether it is a rigctld we can share, and REPORT WHAT ANSWERED.
+///
+/// Sends `\chk_vfo` and reads one line back inside `timeout`. Two servers are being told
+/// apart here, and both talk on connect-or-command: a rigctld says nothing until asked and
+/// then answers one line; an SDR console's CAT server (Thetis, and PowerSDR forks) greets
+/// immediately and then ignores anything without a `;`. Writing the question first and
+/// reading once serves both — the greeting is already in the socket by then.
+///
+/// The read budget is `timeout` in total, not per read, so the worst case is unchanged from
+/// the single-read version this replaces (connect + one timeout).
+pub fn probe_cat_port(addr: &str, timeout: std::time::Duration) -> PortReply {
+    use std::io::Read;
     use std::net::ToSocketAddrs;
     let Ok(mut addrs) = addr.to_socket_addrs() else {
-        return false;
+        return PortReply::Silent;
     };
     let Some(sa) = addrs.next() else {
-        return false;
+        return PortReply::Silent;
     };
     let Ok(mut stream) = TcpStream::connect_timeout(&sa, timeout) else {
-        return false;
+        return PortReply::Silent;
     };
-    let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
     if stream.write_all(b"\\chk_vfo\n").is_err() {
-        return false;
+        return PortReply::Silent;
     }
-    let mut buf = [0u8; 16];
-    use std::io::Read;
-    matches!(stream.read(&mut buf), Ok(n) if n > 0)
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 256];
+    while buf.len() < REPLY_SNIPPET_MAX * 2 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        // Below a millisecond the timeval rounds to zero, which the OS reads as "block
+        // forever" — never hand that to the socket.
+        if left < std::time::Duration::from_millis(1)
+            || stream.set_read_timeout(Some(left)).is_err()
+        {
+            break;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => break,  // peer closed
+            Err(_) => break, // timed out / reset
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+        if buf.contains(&b'\n') {
+            break; // a rigctld's answer is one line, and it has arrived
+        }
+    }
+    classify_probe_reply(&buf)
+}
+
+/// Probe whether a rigctld (or compatible broker — maybe another Nexus) is already
+/// listening on `addr`, so we can connect THROUGH it instead of fighting for the
+/// serial port. Short timeout; never blocks startup long.
+///
+/// The boolean form, for callers that only branch. Callers that must EXPLAIN a failure want
+/// [`probe_cat_port`] — the bytes are the evidence.
+pub fn probe_rigctld(addr: &str, timeout: std::time::Duration) -> bool {
+    matches!(probe_cat_port(addr, timeout), PortReply::Rigctld)
 }
 
 #[cfg(test)]
@@ -868,6 +961,94 @@ mod tests {
         assert!(
             !probe_rigctld("127.0.0.1:1", to),
             "no broker on a dead port"
+        );
+    }
+
+    /// The exact bytes a Hermes Lite 2 operator's Thetis sent Nexus (field report 2026-08).
+    /// Thetis's TCP/IP CAT server greets every client on connect with
+    /// `#Thetis TCP/IP Cat - <window title>#;`.
+    const THETIS_BANNER: &str =
+        "#Thetis TCP/IP Cat - Thetis v2.10.3.13 x64 (04/01/26) HL2 Beta 2 (MI0BOT)#;";
+
+    /// Stand up a listener that behaves like Thetis's TCP/IP CAT server: greet on connect,
+    /// then answer nothing that isn't `;`-framed (`\chk_vfo\n` carries no `;`, so
+    /// `ParseReceiveBuffer` discards it and never replies). Returns its address.
+    fn fake_thetis() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(4) {
+                let Ok(mut s) = stream else { continue };
+                let _ = s.write_all(THETIS_BANNER.as_bytes());
+                let _ = s.flush();
+                // Hold the socket open, silent, the way the real server does.
+                std::thread::sleep(std::time::Duration::from_millis(800));
+            }
+        });
+        addr
+    }
+
+    /// THE ROOT CAUSE of the Thetis field report. The probe used to end in
+    /// `matches!(stream.read(&mut buf), Ok(n) if n > 0)` — true on ANY bytes, never once
+    /// looking at them. Thetis's greeting IS those bytes, so a raw Kenwood-dialect CAT port
+    /// read as "a rigctld is already here", `open_cat` took the coexist branch, and Nexus
+    /// spoke rigctld protocol at a rig-CAT server until the deadline expired.
+    #[test]
+    fn a_raw_cat_greeting_is_not_a_rigctld() {
+        let addr = fake_thetis();
+        let to = std::time::Duration::from_millis(600);
+        assert!(
+            !probe_rigctld(&addr, to),
+            "a CAT server's greeting is not a rigctld handshake"
+        );
+        // And the greeting comes BACK, verbatim — it is the evidence the operator-facing
+        // message quotes, and the only thing that lets us name the program.
+        assert_eq!(
+            probe_cat_port(&addr, to),
+            PortReply::NotRigctld(THETIS_BANNER.to_string())
+        );
+    }
+
+    /// What each kind of answer means, from real captures. The accept side is the one that
+    /// must stay wide: a rigctld we fail to recognise gets a needless spawn attempt.
+    #[test]
+    fn probe_reply_classification() {
+        use PortReply::*;
+        // Hamlib 4.7.1: `chk_vfo` prints the bare vfo_opt flag, RPRT suppressed. `1` is the
+        // same daemon started with `-o`.
+        assert_eq!(classify_probe_reply(b"0\n"), Rigctld);
+        assert_eq!(classify_probe_reply(b"1\n"), Rigctld);
+        // Nexus's own broker, and older Hamlib per its man page.
+        assert_eq!(classify_probe_reply(b"CHKVFO 0\n"), Rigctld);
+        assert_eq!(classify_probe_reply(b"CHKVFO 0\r\n"), Rigctld);
+        // Understood the command and refused it — still a rigctld.
+        assert_eq!(classify_probe_reply(b"RPRT -11\n"), Rigctld);
+        // Nothing said.
+        assert_eq!(classify_probe_reply(b""), Silent);
+        assert_eq!(classify_probe_reply(b"\r\n"), Silent);
+        // Raw rig CAT: `;`-framed, no newline. THE FIELD REPORT.
+        assert_eq!(
+            classify_probe_reply(THETIS_BANNER.as_bytes()),
+            NotRigctld(THETIS_BANNER.to_string())
+        );
+        // A bare Kenwood-dialect answer, and a web server on the port — neither is a rigctld.
+        assert_eq!(
+            classify_probe_reply(b"FA00014074000;"),
+            NotRigctld("FA00014074000;".into())
+        );
+        assert_eq!(
+            classify_probe_reply(b"HTTP/1.1 400 Bad Request\r\nServer: nginx\r\n"),
+            NotRigctld("HTTP/1.1 400 Bad Request".into())
+        );
+        // A chatty server does not get to write our error message.
+        let flood = "x".repeat(500);
+        let Some(NotRigctld(s)) = Some(classify_probe_reply(flood.as_bytes())) else {
+            panic!("a flood of bytes is not a rigctld")
+        };
+        assert_eq!(
+            s.chars().count(),
+            REPLY_SNIPPET_MAX + 1,
+            "capped, with an ellipsis"
         );
     }
 }

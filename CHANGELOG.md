@@ -76,6 +76,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   design token that does not exist, so it had been doing nothing and the banner was shipping
   square-cornered.
 
+- **A Hermes Lite 2 running Thetis could not get CAT working — and Nexus told its operator to
+  check the radio was powered on while quoting that radio's own greeting back at them.** CAT
+  worked in WSJT-X. It worked in Nexus too, but only after the operator discovered that
+  picking a *FlexRadio* profile got it going, which is not a thing anyone should have to find
+  out. Three faults, one report.
+
+  **The rig list named no program.** For a Hermes Lite 2, an ANAN, a legacy Flex, the SDR
+  console on your PC *is* the CAT port — the board on the desk has none of its own. The list
+  named only hardware, so searching it for your radio turns up nothing, and the FlexRadio
+  entries are the closest-looking thing there. They do connect. They also cost you the
+  S-meter (Hamlib's FLEX-6000 profile carries no signal-strength reading at all) and send
+  keying without the read-back the PowerSDR-family profiles use. The default rig list — the
+  one you see without ticking "Show all models" — now carries **Thetis (Hermes Lite 2 / ANAN
+  / HPSDR)**, **PowerSDR / mRX PS (Apache ANAN / legacy FLEX)**, **piHPSDR / OpenHPSDR (Hermes
+  Lite 2 / ANAN)** and **SDR Console**, each named for the program you launched. PowerSDR is
+  no longer filed under FlexRadio, and no longer described as a TS-2000 emulation, which it
+  never was.
+
+  **Nexus mistook a rig's CAT port for a rigctld.** Before starting its own copy of Hamlib's
+  rigctld, Nexus checks whether one is already running so it can share it rather than fight
+  for the radio. That check accepted *any* reply as proof — and Thetis greets every program
+  that connects to it. So the greeting alone convinced Nexus a raw CAT port was a rigctld, and
+  it spoke the wrong protocol at a perfectly healthy CAT server until the timeout ran out. The
+  check now reads what came back. When the program announces itself, Nexus names it: *"…is
+  Thetis's CAT server, not a rigctld"*, quotes the greeting it was sent, and names the profile
+  written for that program. If you are on a FlexRadio profile it also spells out what that
+  profile is costing you. **Nothing is changed for you** — the message says what to set.
+
+  **Both ends of the chain on one port.** Nexus connects to rigctld, and rigctld connects to
+  your rig, so a single port cannot be both — and nothing checked. Setting the rig's address
+  and the rigctld port to the same number is now caught before anything is launched, with both
+  numbers read back so you can see the collision instead of being told about it.
+
+  What this does *not* do: recognition is by greeting, and only Thetis and PowerSDR announce
+  themselves. piHPSDR, SmartSDR CAT and rigctld itself all stay silent until spoken to, and
+  Thetis's greeting can be switched off in its own settings — in every one of those cases
+  Nexus reports what answered and quotes it, rather than guessing a program. No hardware is
+  ever inferred from a greeting: the interesting-looking tail of a Thetis banner is a
+  build label, not your radio.
+
+  Two smaller things from the same report. The Connection row read "Network (FlexRadio /
+  remote)", which tells an SDR operator the row is not for them; it now reads **"Network
+  (host:port — SDR software, or a remote rig)"**, and the address field says where to read the
+  real port out of your program instead of leaving you to guess (Thetis's TCP/IP CAT server is
+  a different box from its TCI server, and only one of them is CAT). And the two FlexRadio
+  native-stream toggles — SmartSDR panadapter and DAX audio — were offered to any rig whose
+  model *name* contained "flex", which the PowerSDR entry's did; they now appear only for an
+  actual FLEX-6000.
+
 ## [1.0.1] — 2026-08-05
 
 ### Added

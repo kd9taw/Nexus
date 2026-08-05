@@ -181,9 +181,14 @@ fn with_backend(detail: String, label: &str) -> String {
 /// only one of which carries CI-V — picking the wrong one looks exactly like this).
 fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
     if t.is_network() {
+        // A network CAT address is very often an SDR console on the same PC, not a radio with
+        // a power switch — telling that operator to check the rig is powered on is advice for
+        // a machine that has no such control. (It was worse than useless in the Thetis field
+        // report: the quoted "no reply" was the program's own greeting.)
         return format!(
-            "CAT can't reach the rig — no reply from {} ({err}). Check the radio is powered on \
-             and the network CAT address/port is correct.",
+            "CAT can't reach the rig — nothing answered at {} ({err}). Check that whatever \
+             serves CAT there is running — the radio itself, or the SDR program on that PC — \
+             and that the address and port are right.",
             t.rig_addr
         );
     }
@@ -200,6 +205,100 @@ fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
         "CAT can't reach the rig — {name} on {} @ {} baud isn't answering ({err}). Check the COM \
          port, that the CAT baud matches the rig, and that the radio is on.{hint}",
         t.serial_port, t.baud
+    )
+}
+
+/// The port a `host:port` rig address names, plus its host. `None` when the address names no
+/// port. The last colon wins, so the bracketed IPv6 form (`[::1]:5002`) splits correctly.
+fn split_host_port(addr: &str) -> Option<(&str, u16)> {
+    let (host, port) = addr.trim().rsplit_once(':')?;
+    Some((host.trim(), port.trim().parse().ok()?))
+}
+
+/// Is this rig address on THIS machine — i.e. does its port live in the same space rigctld
+/// binds into? A remote rig reusing our rigctld's port number is no clash at all.
+fn host_is_this_machine(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    h.is_empty()
+        || h.eq_ignore_ascii_case("localhost")
+        || h == "::1"
+        || h == "0.0.0.0"
+        || h.starts_with("127.")
+}
+
+/// **Case (c).** Nexus connects to rigctld, and rigctld connects to the rig: one local port
+/// cannot be both ends of that chain. Pure config, so it is answerable before any socket.
+///
+/// Nothing checked this. `tempo_app::settings::validate_radio_ports` de-duplicates
+/// `rigctld_port`/`rotctld_port` BETWEEN radios and against the broker, and never looks
+/// inside a radio's own `rig_addr` — so a single radio could be configured with both ends on
+/// one port, which is what the Thetis field report actually was. rigctld then cannot bind
+/// (the rig's own server holds the port), and whatever Nexus reaches is not rigctld.
+fn cat_port_conflict(t: &Transport) -> Option<String> {
+    if !t.is_network() {
+        return None;
+    }
+    let (host, port) = split_host_port(&t.rig_addr)?;
+    if port != t.rigctld_port || !host_is_this_machine(host) {
+        return None;
+    }
+    Some(format!(
+        "rigctld and the rig are both on port {port} — Network Address is {}, and rigctld TCP \
+         Port is {port}. Nexus connects to rigctld and rigctld connects to the rig, so they \
+         cannot share one port: change rigctld TCP Port (Settings ▸ Radio ▸ Advanced) to 4532 \
+         or any other free port.",
+        t.rig_addr
+    ))
+}
+
+/// **Cases (a) and (b).** Something is listening where we look for a rigctld, and it is not
+/// one. Say so, quote what it said, and — only when the greeting NAMES a program — name the
+/// profile written for that program.
+///
+/// The rule this message obeys: state what the socket proved, and nothing past it. (a) never
+/// names a program. (b) names one and quotes the greeting as its evidence, because the
+/// program is the only thing a banner establishes — the rest of a Thetis banner is a
+/// compile-time build label, so no hardware is read out of it.
+///
+/// Detection INFORMS. Nothing here switches an operator's rig model.
+fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
+    if let Some((program, model)) = crate::rigmodels::program_from_banner(reply) {
+        let profile = crate::rigmodels::rig_model_name(model).unwrap_or("");
+        // The workaround this operator found on real hardware: a FlexRadio profile DOES
+        // connect to Thetis (Hamlib flips a Kenwood serial model to TCP for a host:port
+        // pathname), so they are not wrong that it works — they are paying for it.
+        // Both costs verified in Hamlib's `rigs/kenwood/flex6xxx.c`: 2036's F6K_LEVEL_ALL
+        // carries no RIG_LEVEL_STRENGTH, and 2036 keys via `kenwood_set_ptt` (`TX;`/`RX;`)
+        // where 2048/2054 use `flex6k_set_ptt` (`ZZTX1;ZZTX` — key AND read back).
+        let flex_caveat = if matches!(rig_model, 2036 | 23005) {
+            format!(
+                " You have a FlexRadio profile selected. It does connect to {program}, but \
+                 Hamlib then drives it with the FLEX-6000 command set: no S-meter (that model \
+                 carries no signal-strength level at all), and keying sent without the \
+                 read-back. Model {model} is the profile written for {program}."
+            )
+        } else {
+            String::new()
+        };
+        return format!(
+            "{addr} is {program}'s CAT server, not a rigctld — it greeted us with \"{reply}\". \
+             Set Rig Model to \"{profile}\" ({model}), Connection to Network, Network Address \
+             to {addr}, and give rigctld TCP Port a different, free number.{flex_caveat}"
+        );
+    }
+    // Unrecognised. We may say what it is NOT, and quote it. We may not say what it is —
+    // except that a ';'-framed reply is the shape raw rig CAT takes on the wire.
+    let framing = if reply.ends_with(';') {
+        " — the reply is ';'-framed, the shape raw rig CAT takes"
+    } else {
+        ""
+    };
+    format!(
+        "{addr} answered, but not as a rigctld{framing} (got \"{reply}\"). Nexus will not \
+         connect through it. If an SDR program is serving rig CAT on that port, Hamlib has to \
+         be pointed AT it rather than connected to it: set Connection to Network, Network \
+         Address to {addr}, Rig Model to the program you launched, and give rigctld TCP Port \
+         a different, free number."
     )
 }
 
@@ -792,8 +891,9 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
         return (Rig::vox(), None, None);
     }
     // A monitor ALWAYS spawns its OWN rigctld — it must NEVER coexist onto a daemon already on the
-    // port, because `probe_rigctld` can only tell that SOMETHING is listening, not WHICH radio it
-    // serves; coexisting onto another radio's daemon is the dual-radio crossed-CAT bug (a monitor
+    // port, because `probe_rigctld` can only tell that a RIGCTLD is listening (it reads the reply
+    // now — see `classify_probe_reply`), never WHICH radio that daemon serves; coexisting onto
+    // another radio's daemon is the dual-radio crossed-CAT bug (a monitor
     // reading + commanding the wrong rig). If the port is already taken, our spawned rigctld can't
     // bind and exits immediately → `is_alive()` is false → we report DISCONNECTED (fail safe) instead
     // of connecting to the foreign daemon. Distinct ports (validated on every save) make this the
@@ -6336,24 +6436,52 @@ fn open_cat(
             ),
         );
     }
-    if allow_coexist && crate::rigctld_server::probe_rigctld(&addr, Duration::from_millis(400)) {
-        // Auto-coexist: a rigctld is ALREADY here (e.g. WSJT-X launched one). Connect
-        // THROUGH it instead of fighting for the serial port. Skipped on a dual-radio SWITCH that
-        // reuses the port of the daemon we just killed (`allow_coexist == false`), so we never
-        // reconnect through our own dying daemon and keep commanding the OLD radio.
-        let mut rig = Rig::with_control(Some(addr.clone()), ptt_mode);
-        rig.set_slow_transport(
-            t.is_network() || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
-        ); // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long command deadline
-        let mut probe = finish_cat_open(&mut rig, t);
-        probe.detail = format!(
-            "Sharing the rigctld already on :{} — {}",
-            t.rigctld_port, probe.detail
-        );
-        return (
-            rig, None, // we didn't spawn it — leave the existing daemon alone
-            probe,
-        );
+    // Misconfig, caught before any socket: one local port cannot be both the rigctld we
+    // connect to and the rig rigctld connects to. See `cat_port_conflict`.
+    if let Some(msg) = cat_port_conflict(t) {
+        return (Rig::vox(), None, CatProbe::status(Some(false), msg));
+    }
+    // Is a rigctld already here (e.g. WSJT-X launched one)? Ask, and READ THE ANSWER — the
+    // old probe accepted any bytes at all, so an SDR console's CAT greeting passed for a
+    // rigctld handshake. Skipped entirely on a dual-radio SWITCH that reuses the port of the
+    // daemon we just killed (`allow_coexist == false`), so we never reconnect through our own
+    // dying daemon and keep commanding the OLD radio.
+    let listening = if allow_coexist {
+        crate::rigctld_server::probe_cat_port(&addr, Duration::from_millis(400))
+    } else {
+        crate::rigctld_server::PortReply::Silent
+    };
+    match listening {
+        crate::rigctld_server::PortReply::Rigctld => {
+            // Auto-coexist: connect THROUGH it instead of fighting for the serial port.
+            let mut rig = Rig::with_control(Some(addr.clone()), ptt_mode);
+            rig.set_slow_transport(
+                t.is_network() || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud),
+            ); // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long command deadline
+            let mut probe = finish_cat_open(&mut rig, t);
+            probe.detail = format!(
+                "Sharing the rigctld already on :{} — {}",
+                t.rigctld_port, probe.detail
+            );
+            return (
+                rig, None, // we didn't spawn it — leave the existing daemon alone
+                probe,
+            );
+        }
+        crate::rigctld_server::PortReply::NotRigctld(reply) => {
+            // Something else holds this port. Don't connect through it (it doesn't speak our
+            // protocol) and don't spawn onto it (rigctld can't bind). Say what answered.
+            return (
+                Rig::vox(),
+                None,
+                CatProbe::status(
+                    Some(false),
+                    foreign_cat_port_message(&addr, &reply, t.rig_model),
+                ),
+            );
+        }
+        // Nothing there — the normal path. Launch our own below.
+        crate::rigctld_server::PortReply::Silent => {}
     }
     // A network rig (Flex/SmartSDR or a remote rig) → point rigctld at host:port over TCP
     // (no serial device, no baud); else the serial port + baud as before.
@@ -10459,6 +10587,157 @@ mod tests {
         );
         assert_eq!(ok, Some(true), "connected through it: {detail}");
         assert!(detail.contains("Sharing"), "got: {detail}");
+    }
+
+    /// The exact greeting the field-report operator's Thetis sent (2.10.3.13 on a Hermes
+    /// Lite 2). Kept verbatim: it is what the shipped message quotes back.
+    const THETIS_BANNER: &str =
+        "#Thetis TCP/IP Cat - Thetis v2.10.3.13 x64 (04/01/26) HL2 Beta 2 (MI0BOT)#;";
+
+    /// A listener that behaves like Thetis's TCP/IP CAT server: greet on connect, then
+    /// answer nothing that isn't `;`-framed. Returns its port.
+    fn fake_thetis_cat_server() -> u16 {
+        use std::io::Write as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let _ = s.write_all(THETIS_BANNER.as_bytes());
+                let _ = s.flush();
+                std::thread::sleep(Duration::from_millis(3000));
+            }
+        });
+        port
+    }
+
+    /// THE FIELD REPORT, end to end. An SDR console's raw CAT server sat on the port Nexus
+    /// probes for a rigctld. The old probe accepted its greeting as proof of a rigctld, so
+    /// `open_cat` took the COEXIST branch and spoke rigctld protocol at a Kenwood-dialect
+    /// port — and then reported "no reply from …, check the radio is powered on" while
+    /// holding that radio's own greeting in its hand.
+    #[test]
+    fn a_cat_server_on_the_rigctld_port_is_named_not_shared() {
+        let port = fake_thetis_cat_server();
+        let t = cat_transport(port, None);
+        let (_rig, proc, probe) = open_rig(&t, true);
+        let detail = probe.detail;
+        assert_eq!(probe.ok, Some(false), "not a working CAT link: {detail}");
+        assert!(
+            !detail.contains("Sharing"),
+            "must NOT claim to share a rigctld: {detail}"
+        );
+        // Names the program, quotes the evidence, and points at the profile written for it.
+        assert!(detail.contains("Thetis"), "got: {detail}");
+        assert!(
+            detail.contains(THETIS_BANNER),
+            "quotes the greeting: {detail}"
+        );
+        assert!(detail.contains("2054"), "names the profile: {detail}");
+        // Never spawns a daemon onto a port something else already holds.
+        assert!(proc.is_none(), "did not spawn onto an occupied port");
+    }
+
+    /// Case (b): the greeting names the program, so we may name it back — and when the
+    /// operator is on the FlexRadio profile (the workaround they found on real hardware),
+    /// say what that profile costs them. Informing and offering only: nothing switches.
+    #[test]
+    fn a_recognised_greeting_names_the_program_and_the_profile() {
+        let m = foreign_cat_port_message("127.0.0.1:50001", THETIS_BANNER, 0);
+        assert!(m.contains("Thetis"), "{m}");
+        assert!(m.contains("2054"), "{m}");
+        assert!(m.contains("Thetis (Hermes Lite 2 / ANAN / HPSDR)"), "{m}");
+        assert!(m.contains(THETIS_BANNER), "quotes its evidence: {m}");
+        // No FlexRadio profile selected → no lecture about one.
+        assert!(!m.contains("FLEX-6000"), "{m}");
+        // The workaround the operator actually found: 2036 connects, and costs them these.
+        let flex = foreign_cat_port_message("127.0.0.1:50001", THETIS_BANNER, 2036);
+        assert!(flex.contains("FLEX-6000"), "{flex}");
+        assert!(flex.contains("S-meter"), "{flex}");
+        // 23005 is the other Flex profile and carries the same caveat.
+        assert!(
+            foreign_cat_port_message("127.0.0.1:50001", THETIS_BANNER, 23005).contains("FLEX-6000")
+        );
+        // A rig model that is NOT a Flex profile gets no caveat.
+        assert!(
+            !foreign_cat_port_message("127.0.0.1:50001", THETIS_BANNER, 3073).contains("FLEX-6000")
+        );
+    }
+
+    /// Case (a): something answered and did not name itself. We may say it is not a rigctld
+    /// and quote it. We may NOT name a program — that is the inference that would make this
+    /// message a new lie.
+    #[test]
+    fn an_unrecognised_reply_is_quoted_but_never_named() {
+        let m = foreign_cat_port_message("127.0.0.1:4532", "FA00014074000;", 0);
+        assert!(m.contains("not as a rigctld"), "{m}");
+        assert!(m.contains("FA00014074000;"), "quotes it: {m}");
+        assert!(!m.contains("Thetis") && !m.contains("PowerSDR"), "{m}");
+        // A ';'-framed reply may be called raw CAT; a reply that is not, may not.
+        assert!(m.contains("';'"), "{m}");
+        assert!(!foreign_cat_port_message("127.0.0.1:4532", "hello", 0).contains("';'"));
+    }
+
+    /// Case (c): pure config, checkable before any socket. Nexus connects to rigctld and
+    /// rigctld connects to the rig — one port cannot be both ends. `validate_radio_ports`
+    /// de-duplicates ports BETWEEN radios and never looked inside a radio's own `rig_addr`.
+    #[test]
+    fn a_local_rig_address_may_not_reuse_the_rigctld_port() {
+        let mut t = cat_transport(50001, None);
+        t.rig_conn = "network".into();
+        t.rig_addr = "127.0.0.1:50001".into();
+        let msg = cat_port_conflict(&t).expect("the collision must be caught");
+        assert!(msg.contains("50001"), "{msg}");
+        assert!(
+            msg.contains("127.0.0.1:50001"),
+            "reads both numbers back: {msg}"
+        );
+        assert!(
+            msg.contains("rigctld TCP Port"),
+            "names the field to change: {msg}"
+        );
+
+        // Distinct ports: fine.
+        t.rigctld_port = 4532;
+        assert_eq!(cat_port_conflict(&t), None);
+
+        // A REMOTE rig on the same port number is NOT a collision — rigctld binds locally.
+        t.rigctld_port = 4532;
+        t.rig_addr = "192.168.1.50:4532".into();
+        assert_eq!(cat_port_conflict(&t), None, "different host, no clash");
+        // …but localhost by name is.
+        t.rig_addr = "localhost:4532".into();
+        assert!(cat_port_conflict(&t).is_some(), "localhost is us");
+
+        // A serial rig has no rig_addr in play at all.
+        let mut serial = cat_transport(4532, None);
+        serial.rig_addr = "127.0.0.1:4532".into(); // stale value from a previous config
+        assert_eq!(
+            cat_port_conflict(&serial),
+            None,
+            "serial: rig_addr is unused"
+        );
+    }
+
+    /// Case (d): the network branch of the down message used to tell an operator to check
+    /// their radio was powered on — while quoting that radio's own greeting back at them.
+    /// For a network rig the thing that serves CAT may be a program, not a power switch.
+    #[test]
+    fn the_network_down_message_does_not_send_you_to_the_power_switch() {
+        let mut t = cat_transport(4532, None);
+        t.rig_conn = "network".into();
+        t.rig_addr = "127.0.0.1:13013".into();
+        let e = std::io::Error::new(std::io::ErrorKind::TimedOut, "rig reply incomplete");
+        let m = cat_down_message(&t, &e);
+        assert!(m.contains("127.0.0.1:13013"), "{m}");
+        assert!(!m.contains("powered on"), "{m}");
+        assert!(
+            m.contains("SDR program"),
+            "names what else serves CAT there: {m}"
+        );
+        // The serial branch is UNTOUCHED — a radio on a COM port really does have a switch.
+        let serial = cat_transport(4532, None);
+        assert!(cat_down_message(&serial, &e).contains("radio is on"));
     }
 
     /// Shared recording backend for the read-only-launch tests: a stand-in rig that
