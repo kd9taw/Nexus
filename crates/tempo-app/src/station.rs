@@ -720,12 +720,23 @@ impl StationCore {
     }
 
     /// Import an external ADIF logbook: merge (deduped) into the persistent log,
-    /// append the newly-added records to the ADIF file, and return
-    /// `(added, skipped, total)`. The next propagation snapshot derives real
-    /// "needs" from the enlarged log (and roster B4 highlighting updates).
-    pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize) {
-        let (added, skipped) = self.logbook.import_adif(text);
-        if let Some(path) = &self.log_path {
+    /// persist it, and return `(added, skipped, updated, total)` — where `updated`
+    /// counts records ALREADY logged that the import upgraded. The next propagation
+    /// snapshot derives real "needs" from the enlarged log (and roster B4
+    /// highlighting updates).
+    ///
+    /// Two write paths, because the import has two effects. New contacts are
+    /// APPENDED (cheap, and all an import used to do). But an import also upgrades
+    /// records already in the log — the confirmations and credits a LoTW/eQSL/QRZ
+    /// download restates — and an append cannot express a change to a record that
+    /// is already in the file. Those need the full rewrite, or the confirmations
+    /// live in memory until the next save and are lost outright if the app exits
+    /// first.
+    pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
+        let (added, skipped, merged) = self.logbook.import_adif(text);
+        if merged > 0 {
+            self.save_log("import_adif"); // rewrites the whole log, `added` included
+        } else if let Some(path) = &self.log_path {
             for r in &added {
                 if let Err(e) = Logbook::append(path, r) {
                     eprintln!("tempo: import_adif append failed: {e}");
@@ -734,7 +745,7 @@ impl StationCore {
         }
         self.backfill_country();
         self.refresh_worked_index();
-        (added.len(), skipped, self.logbook.len())
+        (added.len(), skipped, merged, self.logbook.len())
     }
 
     /// Reconcile a confirmation/credit report (ADIF — e.g. a LoTW export) INTO the

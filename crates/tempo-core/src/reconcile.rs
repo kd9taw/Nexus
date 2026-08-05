@@ -127,7 +127,10 @@ fn take_match(buckets: &mut HashMap<Key, Vec<usize>>, inc: &QsoRecord) -> Option
 
 /// Monotonically upgrade a matched local record from an incoming report row (only
 /// ever adds confirmation/credit) and tally the change in `sum`.
-fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut ReconcileSummary) {
+/// (`pub(crate)`: [`crate::logbook::Logbook::import_adif`] upgrades a deduped row
+/// through this same merge, so "import" and "sync" can't disagree about what a
+/// confirmation row means.)
+pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut ReconcileSummary) {
     sum.matched += 1;
     // `newly_confirmed_any` counts a plain confirmed flip from any channel (incl.
     // eQSL/QRZ); `newly_confirmed` counts only award-grade (LoTW/paper) upgrades.

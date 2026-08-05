@@ -521,16 +521,38 @@ impl Logbook {
         n
     }
 
-    /// Merge external ADIF `text` into the log, skipping records already present
-    /// (deduped by call+band+mode+UTC-day). Returns the newly-added records (so
-    /// the caller can persist exactly those) and the count skipped as dupes.
-    /// Used to import an existing logbook so the "needs" model reflects real
-    /// worked entities/bands/modes (and confirmations).
-    pub fn import_adif(&mut self, text: &str) -> (Vec<QsoRecord>, usize) {
-        let mut seen: std::collections::HashSet<DedupKey> =
-            self.records.iter().map(dedup_key).collect();
+    /// Merge external ADIF `text` into the log: ADD the contacts it has that we
+    /// lack (deduped by call+band+mode+exact time) and monotonically UPGRADE the
+    /// ones we already hold from the row that restates them. Returns the
+    /// newly-added records (so the caller can persist exactly those), the count
+    /// deduped, and the count of held records the import actually changed.
+    ///
+    /// # Why a dupe is not a discard
+    ///
+    /// "Already present" answers *don't log this contact twice* — it never meant
+    /// *throw away what this row knows about the one we have*. It did: a dupe was
+    /// dropped whole, taking its `QSL_RCVD`, its `CREDIT_GRANTED` and the
+    /// STATE/COUNTRY detail with it. That is exactly the shape a LoTW download
+    /// has (it restates contacts you already logged, and the confirmation rides
+    /// on those rows), so importing one over a master log left an operator's
+    /// award-eligible confirmations at 3% of his QSOs — worked counts perfect,
+    /// confirmed counts empty, every award wrong at once. The upgrade uses the
+    /// same [`crate::reconcile`] merge the sync path uses, which only ever ADDS:
+    /// a re-import can never un-confirm or un-credit anything.
+    pub fn import_adif(&mut self, text: &str) -> (Vec<QsoRecord>, usize, usize) {
+        // Held records by dedup identity → index, so a dupe can be upgraded in
+        // place and not merely counted. First index wins (log order), matching
+        // the oldest-first consume order `reconcile` uses for repeated keys.
+        let mut held: std::collections::HashMap<DedupKey, usize> =
+            std::collections::HashMap::with_capacity(self.records.len());
+        for (i, r) in self.records.iter().enumerate() {
+            held.entry(dedup_key(r)).or_insert(i);
+        }
         let mut added = Vec::new();
         let mut skipped = 0usize;
+        let mut merged = 0usize;
+        // Counters the import doesn't report; `apply_match` tallies into it.
+        let mut tally = crate::reconcile::ReconcileSummary::default();
         for rec in parse_adif(text) {
             // LEGACY-MODE BRIDGE: rows this file imported under an earlier build
             // read MODE only, so a WSJT-X "MODE=MFSK + SUBMODE=FT4" row is stored
@@ -543,16 +565,31 @@ impl Logbook {
                 k.2 = "MFSK".to_string();
                 k
             });
-            if legacy_twin.is_some_and(|k| seen.contains(&k)) {
-                skipped += 1;
-            } else if seen.insert(dedup_key(&rec)) {
-                added.push(rec.clone());
-                self.records.push(rec);
-            } else {
-                skipped += 1;
+            let key = dedup_key(&rec);
+            let hit = legacy_twin
+                .and_then(|t| held.get(&t).copied())
+                .or_else(|| held.get(&key).copied());
+            match hit {
+                Some(i) => {
+                    skipped += 1;
+                    // Compare the whole record, not the summary counters: the
+                    // enrichment a confirmation row carries (STATE, COUNTRY) is a
+                    // real change the tallies don't name, and the caller has to
+                    // persist it.
+                    let before = self.records[i].clone();
+                    crate::reconcile::apply_match(&mut self.records[i], &rec, &mut tally);
+                    if self.records[i] != before {
+                        merged += 1;
+                    }
+                }
+                None => {
+                    held.insert(key, self.records.len());
+                    added.push(rec.clone());
+                    self.records.push(rec);
+                }
             }
         }
-        (added, skipped)
+        (added, skipped, merged)
     }
 
     /// Reconcile the on-disk copy of this log back into memory — the two-instance-safe recovery.
@@ -1320,6 +1357,24 @@ fn take_yes(f: &mut std::collections::HashMap<String, String>, k: &str) -> bool 
     f.remove(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
 }
 
+/// Consume a `*_QSL_RCVD` flag. ADIF's `QSL_Rcvd` enumeration spells a confirmation
+/// the importer HOLDS two ways, not one: `Y` (received) and `V` (verified — an award
+/// credit has been granted against it), the value Club Log and DXKeeper write for a
+/// credited QSO in the logs they export. Reading only `Y` silently demoted exactly
+/// the operator's best QSOs to unconfirmed. Everything else is NOT a confirmation
+/// and must never promote one — `N`, `R` (requested: asked for, not received) and
+/// `I` (ignore/invalid) all stay false. Trimmed, so a padded value from a sloppy
+/// export still states what it states.
+///
+/// LoTW's own report emits only `Y`/`N` (ARRL's published field table), so `V` is
+/// about third-party logs, not about a LoTW download.
+fn take_confirmed(f: &mut std::collections::HashMap<String, String>, k: &str) -> bool {
+    f.remove(k).is_some_and(|v| {
+        let v = v.trim();
+        v.eq_ignore_ascii_case("Y") || v.eq_ignore_ascii_case("V")
+    })
+}
+
 /// Consume an `APP_TEMPO_UL_*` upload stamp: "{outcome}|{when}|{detail}" —
 /// splitn(3) so a detail containing '|' survives intact.
 fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Option<UploadStatus> {
@@ -1402,9 +1457,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         .remove("APP_QRZLOG_STATUS")
         .is_some_and(|v| v.eq_ignore_ascii_case("C") || v.eq_ignore_ascii_case("Y"));
     let qsl_rcvd = QslRcvd {
-        card: take_yes(f, "QSL_RCVD"),
-        lotw: take_yes(f, "LOTW_QSL_RCVD"),
-        eqsl: take_yes(f, "EQSL_QSL_RCVD"),
+        card: take_confirmed(f, "QSL_RCVD"),
+        lotw: take_confirmed(f, "LOTW_QSL_RCVD"),
+        eqsl: take_confirmed(f, "EQSL_QSL_RCVD"),
         qrz: qrz_status,
     };
     let confirmed = qsl_rcvd.any();
@@ -1673,7 +1728,7 @@ mod tests {
         // Same station/band/mode/day, but 14:00:00 and 15:00:00 — two distinct contacts.
         let adif = format!("Nexus\n<EOH>\n{}{}", mk(14 * 3600), mk(15 * 3600));
         let mut lb = Logbook::new();
-        let (added, skipped) = lb.import_adif(&adif);
+        let (added, skipped, _) = lb.import_adif(&adif);
         assert_eq!(
             added.len(),
             2,
@@ -1683,7 +1738,7 @@ mod tests {
         // An identical second (a true re-import of the very same QSO) still collapses to one.
         let same = format!("Nexus\n<EOH>\n{}{}", mk(14 * 3600), mk(14 * 3600));
         let mut lb2 = Logbook::new();
-        let (added2, skipped2) = lb2.import_adif(&same);
+        let (added2, skipped2, _) = lb2.import_adif(&same);
         assert_eq!(
             added2.len(),
             1,
@@ -2294,7 +2349,7 @@ mod tests {
                         <MODE:4>MFSK<SUBMODE:3>FT4<EOR>";
         let mut lb = Logbook::new();
         lb.import_adif(&(adif_header() + legacy));
-        let (added, skipped) = lb.import_adif(&(adif_header() + promoted));
+        let (added, skipped, _) = lb.import_adif(&(adif_header() + promoted));
         assert!(added.is_empty(), "the promoted twin is the same QSO");
         assert_eq!(skipped, 1);
         assert_eq!(lb.records().len(), 1);
@@ -3021,7 +3076,7 @@ mod tests {
         let adif = "<EOH>\n\
             <CALL:5>C91RU<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20250101<EOR>\n\
             <CALL:5>JA1XX<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20250101<LOTW_QSL_RCVD:1>Y<EOR>\n";
-        let (added, skipped) = lb.import_adif(adif);
+        let (added, skipped, _) = lb.import_adif(adif);
         assert_eq!(added.len(), 2);
         assert_eq!(skipped, 0);
         assert_eq!(lb.len(), 2);
@@ -3033,14 +3088,14 @@ mod tests {
             .any(|r| r.call == "JA1XX" && r.confirmed && r.award_confirmed));
 
         // Re-importing the same text adds nothing (all dupes).
-        let (added2, skipped2) = lb.import_adif(adif);
+        let (added2, skipped2, _) = lb.import_adif(adif);
         assert_eq!(added2.len(), 0);
         assert_eq!(skipped2, 2);
         assert_eq!(lb.len(), 2);
 
         // A NEW band for an existing call is a distinct slot → imported.
         let more = "<EOH>\n<CALL:5>C91RU<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20250102<EOR>\n";
-        let (added3, _) = lb.import_adif(more);
+        let (added3, ..) = lb.import_adif(more);
         assert_eq!(added3.len(), 1);
         assert!(lb.worked_before_band("C91RU", "40m"));
     }
@@ -3098,5 +3153,243 @@ mod tests {
             out.contains("<LOTW_QSL_RCVD:1>Y"),
             "legacy best-guess kept: {out}"
         );
+    }
+
+    // ---- LoTW download → confirmations (operator report, 2026-08-05) --------
+    //
+    // The fixtures below are shaped like LoTW's ACTUAL output, not like this
+    // parser's expectations — that inversion is how the bug shipped. Layout and
+    // field set follow ARRL's published response table
+    // (lotw.arrl.org/lotw-help/developer-query-qsos-qsls): one field per line,
+    // the `APP_LoTW_*` fields interleaved, UPPERCASE band labels, lowercase
+    // `<eor>`, an `<APP_LoTW_EOF>` trailer — and, per that table, `QSL_RCVD` is
+    // "Y" when LoTW matched the QSO and "N" when it did not, with the QSL-detail
+    // block (DXCC / COUNTRY / STATE / GRIDSQUARE) present ONLY on a matched row.
+
+    /// One ADIF field as LoTW writes it. The declared length is COMPUTED: a
+    /// fixture that miscounts it desyncs the scan and would "prove" whatever the
+    /// parser happened to do with the wreckage.
+    fn fld(name: &str, value: &str) -> String {
+        format!("<{name}:{}>{value}\n", value.len())
+    }
+
+    /// One `lotwreport.adi` QSO record.
+    fn lotw_row(call: &str, band: &str, mode: &str, date: &str, st: &str, matched: bool) -> String {
+        let mut s = String::new();
+        s.push_str(&fld("STATION_CALLSIGN", "NT9E"));
+        s.push_str(&fld("CALL", call));
+        s.push_str(&fld("BAND", band));
+        s.push_str(&fld("MODE", mode));
+        s.push_str(&fld("APP_LoTW_MODEGROUP", "DATA"));
+        s.push_str(&fld("QSO_DATE", date));
+        s.push_str(&fld("TIME_ON", "010203"));
+        s.push_str(&fld("APP_LoTW_RXQSO", "2024-02-01 00:00:00"));
+        if matched {
+            s.push_str(&fld("QSL_RCVD", "Y"));
+            s.push_str(&fld("QSLRDATE", "20240210"));
+            s.push_str(&fld("APP_LoTW_RXQSL", "2024-02-10 11:22:33"));
+            // ADIF CreditList: each credit may carry a `:QSLMedium` qualifier.
+            s.push_str(&fld("CREDIT_GRANTED", "DXCC:LOTW,DXCC_BAND:LOTW"));
+            s.push_str(&fld("COUNTRY", "UNITED STATES OF AMERICA"));
+            s.push_str(&fld("GRIDSQUARE", "FN31PR"));
+            if !st.is_empty() {
+                s.push_str(&fld("STATE", st));
+            }
+        } else {
+            s.push_str(&fld("QSL_RCVD", "N"));
+        }
+        s.push_str("<eor>\n");
+        s
+    }
+
+    /// (call, LoTW band label, mode, date, state, LoTW matched it)
+    const LOTW_FIXTURE: [(&str, &str, &str, &str, &str, bool); 4] = [
+        ("W1AW", "20M", "FT8", "20240101", "CT", true),
+        ("K5XYZ", "40M", "SSB", "20240102", "TX", true),
+        ("DL1ABC", "160M", "CW", "20240103", "", true),
+        ("VK3AAA", "30M", "FT8", "20240104", "", false),
+    ];
+
+    fn lotw_download() -> String {
+        let mut s = String::from("ARRL Logbook of the World Status Report\nfor nt9e\n");
+        s.push_str(&fld("PROGRAMID", "LoTW"));
+        s.push_str(&fld("APP_LoTW_LASTQSL", "2026-08-04 21:12:44"));
+        s.push_str("<eoh>\n\n");
+        for (c, b, m, d, st, ok) in LOTW_FIXTURE {
+            s.push_str(&lotw_row(c, b, m, d, st, ok));
+        }
+        s.push_str("<APP_LoTW_EOF>\n");
+        s
+    }
+
+    /// The same contacts as a third-party master log holds them: no QSL fields at
+    /// all, lowercase band, same call/mode/second (this log is what was uploaded).
+    fn master_log() -> String {
+        let mut s = String::from("Some Other Logger\n<EOH>\n");
+        for (c, b, m, d, _, _) in LOTW_FIXTURE {
+            s.push_str(&fld("CALL", c));
+            s.push_str(&fld("BAND", &b.to_ascii_lowercase()));
+            s.push_str(&fld("MODE", m));
+            s.push_str(&fld("QSO_DATE", d));
+            s.push_str(&fld("TIME_ON", "010203"));
+            s.push_str("<eor>\n");
+        }
+        s
+    }
+
+    /// ⭐ THE OPERATOR'S REPORT (2026-08-05): after a purge and a re-download from
+    /// LoTW his QSO count is right and his confirmations are not — "816 of 26007".
+    /// This is that shape at four records: the master log first, then the LoTW
+    /// download through the SAME "Import ADIF" path. Every LoTW row deduped
+    /// against the QSO already logged and was discarded WHOLE — confirmation,
+    /// `CREDIT_GRANTED`, and the STATE/COUNTRY that only a matched row carries.
+    /// A dupe means "don't add a second contact", never "throw away what this row
+    /// knows about the one we have".
+    #[test]
+    fn a_lotw_download_confirms_the_qsos_already_logged() {
+        let mut lb = Logbook::new();
+        let (added, skipped, _) = lb.import_adif(&master_log());
+        assert_eq!((added.len(), skipped), (4, 0), "the master log imports");
+
+        let (added2, skipped2, merged) = lb.import_adif(&lotw_download());
+        assert_eq!(added2.len(), 0, "LoTW re-states contacts we already hold");
+        assert_eq!(skipped2, 4, "…so none is added");
+        assert_eq!(merged, 3, "the three MATCHED rows upgrade what we hold");
+        assert_eq!(lb.len(), 4, "and the QSO count is untouched");
+
+        let by = |call: &str| {
+            lb.records()
+                .iter()
+                .find(|r| r.call == call)
+                .unwrap_or_else(|| panic!("{call} missing"))
+        };
+        // The three LoTW matched it: award-eligible, credited, and enriched with
+        // the detail fields the confirmation row carries.
+        for call in ["W1AW", "K5XYZ", "DL1ABC"] {
+            let r = by(call);
+            assert!(r.confirmed && r.award_confirmed, "{call} confirmed");
+            assert_eq!(r.credit_granted, vec!["DXCC", "DXCC_BAND"], "{call} credit");
+            assert_eq!(r.country.as_deref(), Some("UNITED STATES OF AMERICA"));
+        }
+        assert_eq!(by("W1AW").state.as_deref(), Some("CT"), "STATE drives WAS");
+        assert_eq!(by("K5XYZ").state.as_deref(), Some("TX"));
+        // …and the one LoTW has NOT matched stays unconfirmed. `QSL_RCVD:N` is a
+        // statement, not an absence, and it must never read as a confirmation.
+        let vk = by("VK3AAA");
+        assert!(
+            !vk.confirmed && !vk.award_confirmed,
+            "QSL_RCVD=N is not a QSL"
+        );
+        assert!(vk.credit_granted.is_empty());
+    }
+
+    /// The over-correction guard. Everything here is a row that looks confirmation-
+    /// adjacent and is NOT one; a merge that promotes any of them would hand the
+    /// operator a DXCC application ARRL rejects, which is worse than under-counting.
+    #[test]
+    fn an_import_never_invents_a_confirmation() {
+        let mut lb = Logbook::new();
+        lb.import_adif(&master_log());
+        // 1. An outbound QSL REQUEST (`QSL_SENT`) — a card we mailed, not one we hold.
+        // 2. `QSL_RCVD:R` — requested. Not received.
+        // 3. eQSL — a real confirmation, but never award-eligible.
+        let sneaky = format!(
+            "<EOH>\n{}{}{}",
+            format_args!(
+                "{}{}{}{}{}{}<eor>\n",
+                fld("CALL", "W1AW"),
+                fld("BAND", "20M"),
+                fld("MODE", "FT8"),
+                fld("QSO_DATE", "20240101"),
+                fld("TIME_ON", "010203"),
+                fld("QSL_SENT", "Y")
+            ),
+            format_args!(
+                "{}{}{}{}{}{}<eor>\n",
+                fld("CALL", "K5XYZ"),
+                fld("BAND", "40M"),
+                fld("MODE", "SSB"),
+                fld("QSO_DATE", "20240102"),
+                fld("TIME_ON", "010203"),
+                fld("QSL_RCVD", "R")
+            ),
+            format_args!(
+                "{}{}{}{}{}{}<eor>\n",
+                fld("CALL", "DL1ABC"),
+                fld("BAND", "160M"),
+                fld("MODE", "CW"),
+                fld("QSO_DATE", "20240103"),
+                fld("TIME_ON", "010203"),
+                fld("EQSL_QSL_RCVD", "Y")
+            ),
+        );
+        let (added, _, merged) = lb.import_adif(&sneaky);
+        assert_eq!(added.len(), 0);
+        // Two rows change the record — the eQSL confirmation and the outbound
+        // request, which is recorded AS a request. The `R` row changes nothing:
+        // "I asked for a card" is not news about a card.
+        assert_eq!(merged, 2);
+        let by = |c: &str| lb.records().iter().find(|r| r.call == c).unwrap();
+        assert!(!by("W1AW").confirmed, "a QSL we SENT is not a QSL we hold");
+        assert!(
+            by("W1AW").qsl_sent.sent,
+            "…it is recorded as the request it is"
+        );
+        assert!(
+            !by("K5XYZ").confirmed,
+            "QSL_RCVD=R is requested, not received"
+        );
+        let dl = by("DL1ABC");
+        assert!(dl.confirmed, "eQSL confirms the contact");
+        assert!(!dl.award_confirmed, "…but never earns DXCC/WAZ/WAS credit");
+    }
+
+    /// A later import can only ever ADD. A LoTW pull taken before the partner
+    /// uploaded says `QSL_RCVD:N` about a QSO a previous pull confirmed — and must
+    /// leave it confirmed. (`reconcile` already guaranteed this for the sync path;
+    /// the import path now shares it.)
+    #[test]
+    fn an_unconfirmed_row_never_clears_a_confirmation() {
+        let mut lb = Logbook::new();
+        lb.import_adif(&master_log());
+        lb.import_adif(&lotw_download());
+        assert!(lb.records().iter().filter(|r| r.award_confirmed).count() == 3);
+
+        // The same download, but with LoTW having matched nothing.
+        let mut stale = String::from("ARRL Logbook of the World Status Report\n<eoh>\n");
+        for (c, b, m, d, st, _) in LOTW_FIXTURE {
+            stale.push_str(&lotw_row(c, b, m, d, st, false));
+        }
+        let (_, _, merged) = lb.import_adif(&stale);
+        assert_eq!(merged, 0, "nothing to add — and nothing to take away");
+        assert_eq!(
+            lb.records().iter().filter(|r| r.award_confirmed).count(),
+            3,
+            "confirmations are monotonic"
+        );
+        assert_eq!(lb.records()[0].credit_granted, vec!["DXCC", "DXCC_BAND"]);
+    }
+
+    /// ADIF's `QSL_Rcvd` enumeration has THREE confirmation-bearing spellings, not
+    /// one: "Y", and "V" — verified, i.e. an award credit was granted against it —
+    /// which Club Log and DXKeeper both write into the logs they export. LoTW's own
+    /// report emits only Y/N (ARRL's field table), so this is not what the operator
+    /// hit; it is the same class of miss, in the same predicate, for anyone whose
+    /// master log came from one of those. A padded value must not read as "no"
+    /// either.
+    #[test]
+    fn a_verified_qsl_is_a_confirmation_and_a_padded_one_still_parses() {
+        let mut lb = Logbook::new();
+        let adif = "<EOH>\n\
+            <CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<QSL_RCVD:1>V<EOR>\n\
+            <CALL:5>K5XYZ<BAND:3>40m<MODE:3>SSB<QSO_DATE:8>20240102<LOTW_QSL_RCVD:1>V<EOR>\n\
+            <CALL:6>DL1ABC<BAND:4>160m<MODE:2>CW<QSO_DATE:8>20240103<QSL_RCVD:2>Y <EOR>\n\
+            <CALL:6>JA1XYZ<BAND:3>15m<MODE:3>FT8<QSO_DATE:8>20240104<QSL_RCVD:1>I<EOR>\n";
+        lb.import_adif(adif);
+        let by = |c: &str| lb.records().iter().find(|r| r.call == c).unwrap();
+        assert!(by("W1AW").award_confirmed, "QSL_RCVD=V is a confirmation");
+        assert!(by("K5XYZ").qsl_rcvd.lotw, "LOTW_QSL_RCVD=V likewise");
+        assert!(by("DL1ABC").award_confirmed, "a padded Y is still a Y");
+        assert!(!by("JA1XYZ").confirmed, "I = ignore/invalid is not a QSL");
     }
 }

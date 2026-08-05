@@ -9857,7 +9857,18 @@ fn delete_qso(state: State<'_, SharedEngine>, index: usize) -> Result<AppSnapsho
 #[tauri::command(async)]
 fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
     let mut eng = engine_lock(&state);
-    Ok(eng.clear_logbook())
+    let removed = eng.clear_logbook();
+    // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
+    // an incremental cursor is a lie about an empty log). Persist that here — the
+    // engine holds settings, the command layer owns the file.
+    if let Err(e) = eng.settings().clone().save(&settings_path()) {
+        conn_log(
+            "LoTW",
+            "error",
+            format!("failed to reset the sync cursor after a purge: {e}"),
+        );
+    }
+    Ok(removed)
 }
 
 /// Whether a logged QSO was made through a satellite (`PROP_MODE=SAT`) — the
@@ -10613,10 +10624,11 @@ async fn get_need_alerts(
 #[tauri::command(async)]
 fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
     let mut eng = engine_lock(&state);
-    let (added, skipped, total) = eng.import_adif(&text);
+    let (added, skipped, updated, total) = eng.import_adif(&text);
     Ok(ImportStats {
         added,
         skipped,
+        updated,
         total,
     })
 }
@@ -17158,5 +17170,142 @@ mod tests {
     fn dxped_page_gives_up_when_there_is_nothing_to_open() {
         assert_eq!(dxped_page_url("", None), None);
         assert_eq!(dxped_page_url("///", Some("nonsense")), None);
+    }
+
+    // ---- LoTW download → award credit, end to end -------------------------
+    //
+    // `tempo_core` proves the flag survives the parse and the merge; this proves
+    // the whole path the operator actually walks, through the SAME fold
+    // `get_awards` runs. The fixture is shaped like a real `lotwreport.adi` per
+    // ARRL's published response table, NOT like our parser's habits.
+
+    fn fld(name: &str, value: &str) -> String {
+        format!("<{name}:{}>{value}\n", value.len())
+    }
+
+    /// (call, LoTW band label, mode, date, state) — five entities, five bands.
+    const LOTW_QSOS: [(&str, &str, &str, &str, &str); 5] = [
+        ("W1AW", "20M", "FT8", "20240101", "CT"),
+        ("K5XYZ", "40M", "SSB", "20240102", "TX"),
+        ("DL1ABC", "160M", "CW", "20240103", ""),
+        ("JA1XYZ", "15M", "FT8", "20240104", ""),
+        ("VK3AAA", "30M", "FT8", "20240105", ""),
+    ];
+
+    /// The LoTW confirmation download: every row matched, so every row carries
+    /// `QSL_RCVD=Y`, `CREDIT_GRANTED` and the QSL-detail block.
+    fn lotw_download() -> String {
+        let mut s = String::from("ARRL Logbook of the World Status Report\nfor nt9e\n");
+        s.push_str(&fld("PROGRAMID", "LoTW"));
+        s.push_str(&fld("APP_LoTW_LASTQSL", "2026-08-04 21:12:44"));
+        s.push_str("<eoh>\n\n");
+        for (c, b, m, d, st) in LOTW_QSOS {
+            s.push_str(&fld("STATION_CALLSIGN", "NT9E"));
+            s.push_str(&fld("CALL", c));
+            s.push_str(&fld("BAND", b));
+            s.push_str(&fld("MODE", m));
+            s.push_str(&fld("QSO_DATE", d));
+            s.push_str(&fld("TIME_ON", "010203"));
+            s.push_str(&fld("QSL_RCVD", "Y"));
+            s.push_str(&fld("QSLRDATE", "20240210"));
+            s.push_str(&fld("CREDIT_GRANTED", "DXCC:LOTW,DXCC_BAND:LOTW"));
+            if !st.is_empty() {
+                s.push_str(&fld("STATE", st));
+            }
+            s.push_str("<eor>\n");
+        }
+        s.push_str("<APP_LoTW_EOF>\n");
+        s
+    }
+
+    /// The same contacts as his master log holds them — no QSL fields at all.
+    fn master_log() -> String {
+        let mut s = String::from("Some Other Logger\n<EOH>\n");
+        for (c, b, m, d, _) in LOTW_QSOS {
+            s.push_str(&fld("CALL", c));
+            s.push_str(&fld("BAND", &b.to_ascii_lowercase()));
+            s.push_str(&fld("MODE", m));
+            s.push_str(&fld("QSO_DATE", d));
+            s.push_str(&fld("TIME_ON", "010203"));
+            s.push_str("<eor>\n");
+        }
+        s
+    }
+
+    /// EXACTLY the fold `get_awards` runs over the logbook.
+    fn awards_of(e: &tempo_app::engine::Engine) -> propagation::AwardSummary {
+        let mut awards = propagation::Awards::new();
+        awards.set_home_call(&e.settings().mycall);
+        for q in e.get_log() {
+            let credited = q.credit_granted.iter().any(|c| c.starts_with("DXCC"));
+            awards.add_qso(
+                &q.call,
+                &q.band,
+                &q.mode,
+                q.award_confirmed,
+                credited,
+                q.state.as_deref(),
+                q.grid.as_deref(),
+                q.ota.iota.as_deref(),
+                qso_is_sat(q.prop_mode.as_deref()),
+            );
+        }
+        awards.summary()
+    }
+
+    /// ⭐ THE OPERATOR'S REPORT (2026-08-05): a log whose QSO count is right and
+    /// whose confirmations are not — "816 of 26007 QSOs confirmed" from a
+    /// LoTW-sourced log. Master log first, then the LoTW download through the same
+    /// "Import ADIF" path. Every LoTW row deduped against a QSO already logged,
+    /// and used to be discarded whole. Worked counts were perfect; confirmed
+    /// counts were empty; every award was wrong at once, for one reason.
+    #[test]
+    fn a_lotw_download_over_an_existing_log_confirms_and_credits_it() {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.import_adif(&master_log());
+        let before = awards_of(&e);
+        assert_eq!(before.confirmed_qsos, 0, "the master log carries no QSLs");
+        // 5 QSOs, 4 entities (W1AW and K5XYZ are both the United States).
+        assert_eq!(before.qsos, 5, "but it does carry the contacts");
+        assert_eq!(before.dxcc_worked, 4);
+        assert_eq!(before.dxcc_confirmed, 0);
+
+        let (added, skipped, updated, total) = e.import_adif(&lotw_download());
+        assert_eq!((added, skipped, updated), (0, 5, 5), "0 added, 5 upgraded");
+        assert_eq!(total, 5, "the QSO count is untouched — no phantom dupes");
+
+        let s = awards_of(&e);
+        assert_eq!(s.qsos, before.qsos, "same contacts");
+        assert_eq!(s.confirmed_qsos, 5, "…now confirmed (was 0)");
+        assert_eq!(
+            s.dxcc_confirmed, s.dxcc_worked,
+            "every worked entity is a confirmed entity"
+        );
+        assert_eq!(
+            s.dxcc_credited, s.dxcc_confirmed,
+            "CREDIT_GRANTED rode in on the same rows (the 23-of-248 gap)"
+        );
+        assert_eq!(s.slots_confirmed, s.slots_worked, "Challenge entity×band slots");
+        assert_eq!(s.ready_to_submit, 0, "confirmed − credited");
+        assert_eq!(s.waz_confirmed, s.waz_worked, "WAZ zones");
+        assert_eq!(s.was.confirmed, 2, "WAS — STATE only rides on a matched row");
+        assert_eq!(s.was.worked, 2);
+    }
+
+    /// The other half of the same failure: a purge leaves the incremental cursor
+    /// standing, so the very next "Fetch LoTW" asks only for confirmations matched
+    /// SINCE a date the now-empty log knows nothing about. Nothing but a username
+    /// change ever reset it, which is why the history became unreachable.
+    #[test]
+    fn purging_the_log_makes_the_next_lotw_pull_a_full_one() {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.import_adif(&lotw_download());
+        e.set_lotw_cursor("2026-08-04 21:12:44".to_string());
+        assert_eq!(e.clear_logbook(), 5);
+        // What `download_lotw_report_impl` reads to build `qso_qslsince`.
+        assert!(
+            e.settings().lotw_last_qsl.trim().is_empty(),
+            "an incremental cursor is a lie about an empty log"
+        );
     }
 }

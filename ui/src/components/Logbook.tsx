@@ -229,8 +229,17 @@ export function Logbook({
     const text = await f.text()
     const stats = await withErrorToast(() => importAdif(text), 'ADIF import failed')
     if (stats) {
+      // An import of a LoTW/eQSL download adds nothing and updates everything —
+      // say so, or the one toast that means "your awards were just repaired"
+      // reads as "nothing happened, all dupes".
       const dupes = stats.skipped ? ` (${stats.skipped} dupes skipped)` : ''
-      pushToast(`Imported ${stats.added} QSO${stats.added === 1 ? '' : 's'}${dupes}`, 'success')
+      const upgraded = stats.updated
+        ? ` · ${stats.updated} existing QSO${stats.updated === 1 ? '' : 's'} updated with confirmations/credits`
+        : ''
+      pushToast(
+        `Imported ${stats.added} QSO${stats.added === 1 ? '' : 's'}${dupes}${upgraded}`,
+        'success',
+      )
       load()
     }
   }

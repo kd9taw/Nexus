@@ -13005,13 +13005,28 @@ impl Engine {
         self.station.delete_qso(index)
     }
 
-    /// See [`StationCore::clear_logbook`].
+    /// See [`StationCore::clear_logbook`] — plus the reset of the LoTW/eQSL
+    /// incremental-sync cursors, which is part of purging the log rather than a
+    /// separate step.
+    ///
+    /// Each cursor means "you already hold every confirmation matched up to this
+    /// date", and the next sync asks the service only for what has been matched
+    /// SINCE. After a purge that claim is false about an empty log: the pull comes
+    /// back with the last few days' confirmations and the operator's whole
+    /// confirmation history is unreachable through the app — permanently, because
+    /// nothing else resets these but a change of username. Clearing them makes the
+    /// next sync the full pull the empty log actually needs. Returns the number of
+    /// contacts removed; the caller persists [`Engine::settings`] to keep the reset
+    /// across a restart.
     pub fn clear_logbook(&mut self) -> usize {
-        self.station.clear_logbook()
+        let removed = self.station.clear_logbook();
+        self.settings.lotw_last_qsl.clear();
+        self.settings.eqsl_last_sync.clear();
+        removed
     }
 
     /// See [`StationCore::import_adif`].
-    pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize) {
+    pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
         self.station.import_adif(text)
     }
 
@@ -18853,6 +18868,29 @@ mod tests {
         );
     }
 
+    /// A purge that leaves the incremental cursors standing makes the operator's
+    /// confirmation history unreachable: the next sync asks LoTW/eQSL only for
+    /// what has been matched SINCE a date the empty log knows nothing about, and
+    /// nothing but a change of username ever resets them. Purging the log is
+    /// exactly the event that invalidates them.
+    #[test]
+    fn purging_the_log_resets_the_incremental_sync_cursors() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_lotw_cursor("2026-08-04 21:12:44".to_string());
+        e.set_eqsl_cursor("2026-08-04 21:12:44".to_string());
+        e.import_adif(
+            "<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8\
+             <QSO_DATE:8>20240101<TIME_ON:6>120000<QSL_RCVD:1>Y<EOR>\n",
+        );
+        assert_eq!(e.clear_logbook(), 1);
+        assert!(e.get_log().is_empty());
+        assert!(
+            e.settings().lotw_last_qsl.is_empty(),
+            "the next LoTW sync must be a FULL pull, not an incremental one"
+        );
+        assert!(e.settings().eqsl_last_sync.is_empty(), "eQSL likewise");
+    }
+
     #[test]
     fn import_backfills_missing_country_via_resolver() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
@@ -18869,7 +18907,7 @@ mod tests {
         let adif = "<EOH>\n\
             <CALL:6>DL1XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>120000<EOR>\n\
             <CALL:5>F5RXL<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>120100<EOR>\n";
-        let (added, _skipped, _total) = e.import_adif(adif);
+        let (added, ..) = e.import_adif(adif);
         assert_eq!(added, 2);
         let log = e.get_log();
         let country = |call: &str| {

@@ -1239,6 +1239,12 @@ pub struct UploadReportDto {
 pub struct ImportStats {
     pub added: usize,
     pub skipped: usize,
+    /// Records ALREADY in the log that this import upgraded — the confirmations,
+    /// credits and STATE/COUNTRY detail a LoTW/eQSL/QRZ download restates about
+    /// contacts you logged long ago. Counted separately from `added` because it is
+    /// invisible in the QSO count: an import that adds nothing can still be the one
+    /// that fixes every award.
+    pub updated: usize,
     pub total: usize,
 }
 

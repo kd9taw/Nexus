@@ -2025,6 +2025,9 @@ export interface GeoLogStats {
 export interface ImportStats {
   added: number
   skipped: number
+  /** Records already in the log that this import upgraded (confirmations, credits,
+   *  STATE/COUNTRY) — invisible in the QSO count, but it is what fixes the awards. */
+  updated: number
   total: number
 }
 

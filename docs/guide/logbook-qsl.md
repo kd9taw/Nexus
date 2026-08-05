@@ -60,6 +60,17 @@ nothing moves at any window size where the form already fits.
    marks which of *your* uploads LoTW holds on file, so a pending contact reads
    "waiting on the other op," not "never uploaded."
 
+   Purging the logbook resets that incremental position, so the next sync after a
+   purge pulls your whole history again rather than only what LoTW has matched
+   since you last synced.
+
+   You can also feed Nexus a report you downloaded from the LoTW website by hand —
+   either **Sync confirmations** (which only ever updates contacts you already
+   have) or **Import ADIF** works. Import adds any contacts the file has that you
+   lack *and* applies the confirmations and award credits to the ones you already
+   hold; its toast reports the two separately, so "0 imported, 24,163 existing QSOs
+   updated" is the normal and correct result for a confirmation download.
+
 ### Push a single QSO to QRZ / ClubLog / HRDLog
 
 Auto-upload (configured per service in

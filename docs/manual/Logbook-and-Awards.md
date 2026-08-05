@@ -31,6 +31,23 @@ the exact QSO timestamp — the same station worked twice on one day (a rover fr
 a second contact after an opening) stays two records, while a true re-import of the same
 file adds zero records; every entry is returned as skipped, not duplicated.
 
+A deduplicated row is **merged, not discarded**. "Already in the log" answers *do not log
+this contact twice*; it never meant *ignore what this row knows about the contact you have*.
+So an import also upgrades the records it matched: confirmations (`QSL_RCVD`,
+`LOTW_QSL_RCVD`, `EQSL_QSL_RCVD`), `CREDIT_GRANTED`/`CREDIT_SUBMITTED`, and the
+STATE/COUNTRY detail that a confirmation row carries and an ordinary log row does not. The
+merge is the same monotonic one the confirmation-sync path uses — it only ever adds, so no
+import can un-confirm or un-credit a contact, and re-importing the same file twice changes
+nothing the second time. The import result reports these separately as `updated`, because
+they are invisible in the QSO count: an import that adds zero contacts can be the one that
+repairs every award total.
+
+ADIF spells a held confirmation two ways, and both are read: `Y` (received) and `V`
+(verified — an award credit has been granted against it), the value Club Log and DXKeeper
+write for a credited QSO. `N`, `R` (requested — asked for, not received) and `I`
+(ignore/invalid) are not confirmations and never promote one. LoTW's own report emits only
+`Y`/`N`.
+
 POTA and SOTA references round-trip through standard ADIF field names (`MY_SIG`/`MY_SIG_INFO`/`SIG`/`SIG_INFO` for POTA/WWFF; `MY_SOTA_REF`/`SOTA_REF` for SOTA), so exports upload cleanly to pota.app and the SOTA database without custom extensions.
 
 ---
