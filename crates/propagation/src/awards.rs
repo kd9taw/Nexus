@@ -17,10 +17,14 @@ use crate::achievements::{self, Achievement, AchievementStats};
 use crate::dxcc;
 use crate::model::{Band, ModeClass};
 
-/// The ARRL DXCC Challenge bands — exactly 160/80/40/30/20/17/15/12/10/6 m. Challenge
-/// EXCLUDES 60 m, and 4 m / 2 m are above 6 m and not Challenge bands at all. A DXCC
-/// contact on those bands still counts toward basic/Mixed DXCC and the per-band breakdown,
-/// but NOT toward the 1000-slot Challenge total — so the Challenge count filters to these.
+/// The ARRL DXCC Challenge bands — exactly 160/80/40/30/20/17/15/12/10/6 m.
+///
+/// ⚠️ THE THREE BANDS OUTSIDE THIS LIST ARE OUTSIDE IT FOR DIFFERENT REASONS, and an earlier
+/// version of this comment gave one rule for all of them, which was wrong for two:
+///   * **2 m** — has its OWN DXCC award and counts toward Mixed. Only the CHALLENGE excludes it.
+///   * **60 m** — earns NO ARRL DXCC credit whatsoever. Not Mixed, not per-band, not per-mode.
+///     See [`earns_dxcc_credit`].
+///   * **4 m** — not an ARRL award band at all (no US allocation), so likewise none.
 const CHALLENGE_BANDS: &[Band] = &[
     Band::B160,
     Band::B80,
@@ -33,6 +37,29 @@ const CHALLENGE_BANDS: &[Band] = &[
     Band::B10,
     Band::B6,
 ];
+
+/// Whether a contact on `b` can earn ARRL DXCC credit of ANY kind.
+///
+/// ⭐ **60 m EARNS NONE — not Mixed, not per-band, not per-mode.** It is a secondary,
+/// channelised allocation implemented differently country to country, and ARRL excludes it from
+/// DXCC outright. This is not the same as "no 60 m band award": a 60 m contact does not count
+/// toward the entity's basic/Mixed total either, so an entity worked ONLY on 60 m is not a DXCC
+/// entity at all.
+///
+/// **4 m** is excluded for a different reason — there is no ARRL 4 m award and no US allocation,
+/// so it cannot be credited either. (It IS a real band elsewhere; see the 4 m support added
+/// 2026-08-05. This gate is about award credit, not about whether the band exists.)
+///
+/// ⚠️ SCOPE: this is DXCC only, deliberately. CQ's WAZ, RSGB's IOTA, ARRL's WAS and the VUCC
+/// grid awards are separate programmes with their own band rules, and the fold applies this gate
+/// AFTER them so none is affected. Do not widen it without checking each programme's own rules.
+///
+/// Reported by a field user via the DXpedition board (2026-08-05): the code asserted the
+/// opposite, so anyone with 60 m contacts saw an inflated DXCC total and could believe an entity
+/// was confirmed that ARRL will never credit.
+fn earns_dxcc_credit(b: Band) -> bool {
+    !matches!(b, Band::B60 | Band::B4)
+}
 
 /// DXCC mode classes, in display order (separate CW/Phone/Digital DXCC awards).
 const MODE_CLASSES: [ModeClass; 3] = [ModeClass::Cw, ModeClass::Phone, ModeClass::Digital];
@@ -437,6 +464,13 @@ impl Awards {
         if !info.is_dxcc {
             return;
         }
+        // …and neither does a contact on a band ARRL does not credit. Placed HERE, after the QSO
+        // total, WAZ, IOTA, the VUCC grids and WAS, so only DXCC is affected — see
+        // [`earns_dxcc_credit`]. An unparseable band label still earns entity/mode credit as
+        // before; only a band we recognise AND exclude is refused.
+        if Band::from_label(band).is_some_and(|b| !earns_dxcc_credit(b)) {
+            return;
+        }
         let entity = info.entity; // &'static str (cty.dat is leaked once)
         self.worked_entity.insert(entity);
         if confirmed {
@@ -817,20 +851,55 @@ mod tests {
     }
 
     #[test]
-    fn challenge_slots_exclude_60m_2m_4m_but_dxcc_still_counts_them() {
+    fn sixty_metres_earns_no_dxcc_credit_at_all() {
+        // ⭐ 60 m IS NOT A DXCC BAND, AND THIS USED TO ASSERT THE OPPOSITE. The old test was
+        // named `challenge_slots_exclude_60m_2m_4m_but_dxcc_still_counts_them` and it grouped
+        // three bands that are excluded for three DIFFERENT reasons, then asserted one rule for
+        // all of them:
+        //   2 m  — has its OWN DXCC award and counts toward Mixed. Not a CHALLENGE band. ✓ was right.
+        //   60 m — earns NO ARRL DXCC credit whatsoever: not Mixed, not per-band, not per-mode.
+        //   4 m  — not an ARRL award band at all (no US allocation), so likewise none.
+        // Only the 2 m half of that grouping was correct.
+        //
+        // The consequence of getting it wrong is not cosmetic: an operator with 60 m contacts saw
+        // an INFLATED DXCC total and could believe an entity was confirmed when ARRL will never
+        // credit it. Reported by a field user via the DXpedition board, 2026-08-05.
         let mut a = Awards::new();
-        a.add("W1AW", "20m", "CW", true); // USA / 20m — a Challenge band
-        a.add("JA1XYZ", "60m", "FT8", true); // Japan / 60m — DXCC yes, Challenge NO
-        a.add("DL1ABC", "2m", "SSB", true); // Germany / 2m — DXCC yes, Challenge NO
+        a.add("W1AW", "20m", "CW", true); // USA / 20m — real DXCC credit
+        a.add("JA1XYZ", "60m", "FT8", true); // Japan / 60m — NO credit of any kind
+        a.add("DL1ABC", "2m", "SSB", true); // Germany / 2m — DXCC yes, Challenge no
         let s = a.summary();
-        // Every entity counts toward basic/Mixed DXCC and the per-band breakdown…
-        assert_eq!(s.dxcc_worked, 3);
-        assert_eq!(s.dxcc_confirmed, 3);
-        assert!(s.bands.iter().any(|b| b.band == "60m" && b.worked == 1));
+
+        // Japan was worked ONLY on 60 m, so it must not appear as a DXCC entity anywhere.
+        assert_eq!(
+            s.dxcc_worked, 2,
+            "60 m must not add a DXCC entity (USA + Germany only)"
+        );
+        assert_eq!(s.dxcc_confirmed, 2);
+        assert!(
+            !s.bands.iter().any(|b| b.band == "60m"),
+            "60 m must not appear in the per-band DXCC breakdown at all"
+        );
+        // 2 m is unaffected — it has its own DXCC award; it is only the CHALLENGE it is outside.
         assert!(s.bands.iter().any(|b| b.band == "2m" && b.worked == 1));
-        // …but ONLY the 20m slot counts toward the 1000-slot Challenge total.
         assert_eq!(s.slots_worked, 1, "only (USA,20m) is a Challenge slot");
         assert_eq!(s.slots_confirmed, 1);
+    }
+
+    #[test]
+    fn a_sixty_metre_contact_still_counts_as_a_qso_and_for_non_arrl_awards() {
+        // The exclusion is DXCC-specific and must not silently delete the contact. The QSO
+        // happened; CQ's WAZ and RSGB's IOTA are different award programmes with their own
+        // rules, and this fix deliberately does not touch them.
+        let mut a = Awards::new();
+        a.add("JA1XYZ", "60m", "FT8", true);
+        let s = a.summary();
+        assert_eq!(s.qsos, 1, "the contact is still a logged QSO");
+        assert_eq!(s.dxcc_worked, 0, "…but earns no DXCC entity");
+        assert!(
+            s.waz_worked > 0,
+            "CQ WAZ is a different programme — untouched"
+        );
     }
 
     #[test]
