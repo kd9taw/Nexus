@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Known
+
+- **The band recommender still favours one band too strongly.** After the 60 m fix above it usually
+  says 40 m. The reason is in the model rather than in any band's settings: at night the prediction
+  for every band below about 9.6 MHz collapses onto a fixed per-band ceiling, so the 24-hour "best"
+  figure the recommendation uses is a constant rather than something that varies with the path. Two
+  paths 5,000 km apart can get the same answer. Fixing it properly means reworking how the night-time
+  prediction is calculated — a bigger change with its own testing, deliberately not folded into this
+  release. **What this does and does not affect:** the per-band cards, their colours and their sort
+  order are computed from the CURRENT hour and are unaffected — they were always sound. It is the
+  single "best shot" summary line that is worth less than it looks.
+
 ### Fixed
 
 - **The DXpedition board recommended 60 m for everything, on every card.** An operator with 60 m
@@ -18,9 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   perfect score. That matters at night, when the model's other discriminators go quiet and the cap
   becomes the whole of the ranking — 60 m scored an identical 0.939 on paths from 2,214 km to
   11,589 km and won them all. It now sits at 0.80, between 80 m and 40 m where it belongs, and a
-  test refuses any future band added without a cap. **This also repairs the general band ladder** in
-  Connect, the globe and the map, where 60 m had been reading as the single best band for every
-  operator on Earth at every hour of the day.
+  test refuses any future band added without a cap. The same fault was showing in the general band
+  ladder in Connect, the globe and the map, where 60 m had been reading as the single best band for
+  every operator on Earth at every hour of the day; 60 m no longer wins there either.
+  **What is honestly not fixed:** that ladder still names one band far too often — 40 m now, where
+  it used to be 60 m. The cause runs deeper than any one band and is described under *Known* below.
+  40 m at least earns DXCC credit and is a band expeditions actually run, so the recommendation is
+  no longer actively misleading, but it is not yet carrying much information.
   **A card now reports its own band.** Each card covers one band, but the "best shot" line was
   ranking every band on the path — so a 20 m card would headline 60 m, a band that expedition may
   never have announced. Each card now shows the window for the band it is actually about, and says

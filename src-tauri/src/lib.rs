@@ -2630,9 +2630,27 @@ async fn get_dxped_windows(
                 // `band_outlook_ring`, which answer "which bands are open right now" — a
                 // different question, where 60 m is a legitimate answer and demoting it
                 // would be a lie. Only a caller that knows it is ranking chases may do it.
-                // Must precede `truncate`, or the demoted band falls off the card entirely.
                 p.demote_award_ineligible();
-                p.bands.truncate(4);
+                // NO TRUNCATION HERE, AND THAT IS THE FIX. A `p.bands.truncate(4)` used to
+                // follow this line with no recorded reason. Once each WORK NOW card began
+                // headlining its OWN band instead of a shared cross-band line, that truncation
+                // started deleting exactly the cards worth reading.
+                //
+                // The two rankings disagree by construction: `truncate` kept the top four by
+                // 24-HOUR PEAK, while a card's status is INSTANTANEOUS. And the ceiling ramp
+                // pins the saturated low bands (40m 0.880 / 60m 0.800 / 80m 0.720) into the
+                // first slots on every long night path, so the kept set was near-fixed and
+                // systematically the CLOSED bands. Measured, EN52 -> KH0 Marianas, SFI 150 /
+                // Kp 2, 00:00 Z: KEPT 40m/60m/80m/17m (three closed right now), CUT
+                // 20m/15m/30m/12m -- every one of which was workable at that moment. Those
+                // cards then fell to the no-outlook branch: no window line, no engine badge,
+                // and no `details` button at all, which is the only route from a card to the
+                // band-by-hour heat map.
+                //
+                // Cost of keeping all of them: `BandOutlook` is a few scalars plus a 24-float
+                // `hourly` grid, so this is ~10 of those per expedition instead of ~4 -- a few
+                // KB across the whole board, and `predict` had already scored every band.
+                // Throwing the answers away was never the saving it looked like.
                 let best_line = |p: &propagation::PathPrediction| {
                     p.bands
                         .first()
