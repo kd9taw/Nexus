@@ -5,19 +5,23 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.1] — 2026-08-05
 
-### Known
+### Added
 
-- **The band recommender still favours one band too strongly.** After the 60 m fix above it usually
-  says 40 m. The reason is in the model rather than in any band's settings: at night the prediction
-  for every band below about 9.6 MHz collapses onto a fixed per-band ceiling, so the 24-hour "best"
-  figure the recommendation uses is a constant rather than something that varies with the path. Two
-  paths 5,000 km apart can get the same answer. Fixing it properly means reworking how the night-time
-  prediction is calculated — a bigger change with its own testing, deliberately not folded into this
-  release. **What this does and does not affect:** the per-band cards, their colours and their sort
-  order are computed from the CURRENT hour and are unaffected — they were always sound. It is the
-  single "best shot" summary line that is worth less than it looks.
+- **Scroll any digit of the frequency dial to tune by that amount.** Hover the 100 Hz digit and one
+  notch moves 100 Hz; hover the MHz digit and one notch moves a megahertz. It carries like a real
+  VFO — 14.199 rolls up to 14.200 — and every digit is live, including MHz. The dial stops at the
+  edge of the band rather than refusing to move, and it will not tune while the radio is
+  transmitting. The tuning-step selector and the scope wheel are unchanged; this is in addition to
+  them, not instead. On the main dial in Operate, Phone, CW, RTTY and SSTV.
+
+- **4 m (70 MHz) is now a band you can pick in Settings ▸ Frequencies**, with FT8 at 70.154 MHz and
+  the SSB/CW and AM/FM calling channels, alongside the MSK144, JT65 and WSPR channels already
+  there. Frequencies are the IARU Region 1 plan. ⚠️ **4 m allocations vary a great deal by
+  country** — several are narrower than 70.0–70.5 MHz, and there is no US allocation at all, so a
+  US station will see the band but cannot transmit on it. Check your own licence. No FT4 channel is
+  offered because no 4 m FT4 frequency exists in any band plan we could find.
 
 ### Fixed
 
@@ -159,6 +163,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the header. Drive matters more here than anywhere else, because the picture rides in the audio
   and pushing past ALC visibly wrecks the image at the far end. The drop-image box no longer
   reserves 160 pixels before you have loaded anything.
+
+### Known
+
+- **The band recommender still favours one band too strongly.** After the 60 m fix above it usually
+  says 40 m. The reason is in the model rather than in any band's settings: at night the prediction
+  for every band below about 9.6 MHz collapses onto a fixed per-band ceiling, so the 24-hour "best"
+  figure the recommendation uses is a constant rather than something that varies with the path. Two
+  paths 5,000 km apart can get the same answer. Fixing it properly means reworking how the night-time
+  prediction is calculated — a bigger change with its own testing, deliberately not folded into this
+  release. **What this does and does not affect:** the per-band cards, their colours and their sort
+  order are computed from the CURRENT hour and are unaffected — they were always sound. It is the
+  single "best shot" summary line that is worth less than it looks.
 
 ## [1.0.0] — 2026-08-04
 
