@@ -100,7 +100,21 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
     vec![
         ch("160m", "HF", 1.840, "USB", "160 m · FT8", n),
         ch("80m", "HF", 3.573, "USB", "80 m · FT8", n),
-        ch("60m", "HF", 5.357, "USB", "60 m · FT8", n),
+        // ⚠️ NOT `n` — 60 m has no WSJT-X default to be "the" standard. Upstream's
+        // `models/FrequencyList.cpp` ships NO 5 MHz row at all, so this value is ours.
+        // 5.3715 is the USB dial for the US 60 m channel centred on 5373.0 kHz
+        // (suppressed-carrier dial = centre − 1.5 kHz), operator's choice 2026-08-05.
+        // 60 m is CHANNELISED in the US and several other administrations and the channels
+        // differ country to country — an operator outside the US must check their own plan.
+        ch(
+            "60m",
+            "HF",
+            5.3715,
+            "USB",
+            "60 m · FT8",
+            "US 60 m channel at 5373.0 kHz centre (dial = centre - 1.5 kHz); 60 m is channelised \
+             and the channels differ by country - check your own band plan",
+        ),
         ch("40m", "HF", 7.074, "USB", "40 m · FT8", n),
         ch("30m", "HF", 10.136, "USB", "30 m · FT8", n),
         ch("20m", "HF", 14.074, "USB", "20 m · FT8", n),

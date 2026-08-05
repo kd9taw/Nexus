@@ -188,8 +188,8 @@ impl ModeClass {
 /// matches a small window from 1 kHz below to 4 kHz above.
 const DIGITAL_HOLES: &[f64] = &[
     1.840, // 160m FT8
-    3.573, 3.575, // 80m FT8 / FT4
-    5.357, // 60m FT8
+    3.573, 3.575,  // 80m FT8 / FT4
+    5.3715, // 60m FT8 (US channel, 5373.0 kHz centre)
     7.074, 7.0475, // 40m FT8 / FT4
     10.136, 10.140, // 30m FT8 / FT4
     14.074, 14.080, // 20m FT8 / FT4
@@ -208,7 +208,7 @@ pub fn band_digital_mhz(band: Band) -> f64 {
     match band {
         Band::B160 => 1.840,
         Band::B80 => 3.573,
-        Band::B60 => 5.357,
+        Band::B60 => 5.3715,
         Band::B40 => 7.074,
         Band::B30 => 10.136,
         Band::B20 => 14.074,
