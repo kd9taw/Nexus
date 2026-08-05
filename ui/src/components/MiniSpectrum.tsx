@@ -5,6 +5,7 @@
 // FFT fallback) and draws a filled trace; honest idle state when the row is flat.
 import { useEffect, useRef, useState } from 'react'
 import { getSpectrumRow } from '../api'
+import { agcRange, dbToSpan, normalize } from '../waterfall'
 import type { Spectrum } from '../types'
 
 interface Props {
@@ -35,6 +36,9 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
           if (!mounted) return
           setSpec(s)
           // "Alive" = visible dynamic range in the row (a silent/wrong device is flat).
+          // On the dB axis the 0.05 threshold reads as ~6 dB of spread across the band,
+          // which still separates a dead input (a digitally silent capture floors the whole
+          // row at 0, so the spread is exactly 0) from any real one.
           const row = s.row ?? []
           let min = 1
           let max = 0
@@ -88,14 +92,28 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
     ctx.lineTo(w, h / 2)
     ctx.stroke()
     ctx.globalAlpha = 1
-    // The trace: filled area under a polyline (row values are the UI's 0..1 contract).
+    // The trace: filled area under a polyline.
+    //
+    // Row values are the UI's 0..1 contract, but that axis is LINEAR IN dB against an
+    // ABSOLUTE full-scale reference (2026-08-04) — it is no longer self-scaling. The old
+    // draw plotted them raw, which only ever filled the box because the producer divided
+    // every row by its own loudest bin, pinning the peak to the top for free. With an
+    // absolute reference a real capture sits in a narrow band partway up (a -90 dBFS floor
+    // is 0.25, a -50 dBFS signal 0.58) and the trace would have flattened into an
+    // uninformative smear near the bottom — a silent regression in the one strip whose
+    // whole job is "is my audio alive". So scale it the same way every other scope does:
+    // the shared visual-AGC window, with the same 10 dB minimum span the Phone/CW scope
+    // uses so a noise-only band stays a low flat line instead of being stretched to
+    // full height.
     const row = spec.row
+    const { floor, ceil } = agcRange(row)
+    const top = Math.max(ceil, floor + dbToSpan(10))
+    const yFor = (v: number) => h - normalize(v, floor, top) * (h - 4)
     ctx.beginPath()
     ctx.moveTo(0, h)
     for (let i = 0; i < row.length; i++) {
       const x = (i / (row.length - 1)) * w
-      const y = h - Math.min(1, Math.max(0, row[i])) * (h - 4)
-      ctx.lineTo(x, y)
+      ctx.lineTo(x, yFor(row[i]))
     }
     ctx.lineTo(w, h)
     ctx.closePath()
@@ -108,7 +126,7 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
     ctx.beginPath()
     for (let i = 0; i < row.length; i++) {
       const x = (i / (row.length - 1)) * w
-      const y = h - Math.min(1, Math.max(0, row[i])) * (h - 4)
+      const y = yFor(row[i])
       if (i === 0) ctx.moveTo(x, y)
       else ctx.lineTo(x, y)
     }

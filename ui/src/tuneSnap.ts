@@ -4,13 +4,46 @@
 // cockpit hook (useScopeTune) commands the resulting dial over CAT.
 //
 // Row-value contract: every feed is only guaranteed MONOTONIC in power, not a known
-// scale — audio rows are sqrt(power/peak) (spectrum.rs), Flex is u16/65535 (SmartSDR
-// VITA), Icom CI-V is byte/160. So every detection threshold here is a RATIO to a
-// percentile noise floor (scale-invariant), never an absolute magnitude. If on-air
-// testing shows a feed is actually dB-scaled (log), switch that feed's opts to an
-// additive threshold — a one-line opts change, the algorithm is unaffected.
+// scale — Flex is u16/65535 (SmartSDR VITA), Icom CI-V is byte/160, and the AUDIO feed
+// is now LINEAR IN dB (`tempo_core::spectrum`, 2026-08-04 — it used to be
+// sqrt(power/peak)). So a detection threshold is stated ONCE, in dB above the percentile
+// noise floor, and each feed combines it its own way: additive on a dB-scaled feed,
+// multiplicative (10^(dB/20)) on a ratio-scaled one. See `thresholdAbove`.
+//
+// ⚠️ THIS IS THE FEED SCALE'S ONLY LOAD-BEARING CONSUMER OUTSIDE THE RENDERERS, and it
+// moves the radio. When the audio axis went from amplitude to dB, the old `floor × 2.0`
+// rule silently became "twice the dB NUMBER" — on the 120 dB axis that demands a peak
+// 30 dB over the floor instead of 6, so click-to-tune would quietly stop snapping to
+// ordinary signals and mis-measure the width of the ones it still caught. Nothing threw.
+// The header above predicted exactly this ("if a feed is actually dB-scaled, switch that
+// feed's opts to an additive threshold"); this is that switch, scoped to the feed that
+// actually changed. The RF feeds keep the ratio rule — their scaling is unverified on
+// air and nobody asked for it to move.
 
-import { isRfScopeSource, sidebandSign, isSymmetricMode } from './waterfall'
+import { dbToSpan, isRfScopeSource, sidebandSign, isSymmetricMode } from './waterfall'
+
+/** True when a feed's row values are LINEAR IN dB (the soundcard FFT), false when they are
+ *  a bare ratio (`'flex'` / `'civ'` native panadapters). `''` = the audio feed. */
+export function isDbScaledFeed(source: string): boolean {
+  return !isRfScopeSource(source)
+}
+
+/**
+ * The row value `db` dB above `level`, on the scale THIS FEED uses — the one place the two
+ * row scalings differ.
+ *
+ * The soundcard FFT is linear in dB, so the offset is ADDITIVE. The native panadapter feeds
+ * are only guaranteed monotonic, so they keep the historical multiplicative rule —
+ * `10^(db/20)` reproduces the old constants exactly (6.0206 dB → ×2.0, 3.5218 dB → ×1.5),
+ * which is why restating the thresholds in dB is a no-op for Flex/CI-V rather than a change.
+ *
+ * Lives here because detection is its only consumer. If a second one appears (a scope that
+ * thresholds against its own noise floor), promote it to `waterfall.ts` next to `dbToSpan` —
+ * the rule is a property of the axis, not of click-to-tune.
+ */
+function thresholdAbove(level: number, db: number, dbScaled: boolean): number {
+  return dbScaled ? level + dbToSpan(db) : level * Math.pow(10, db / 20)
+}
 
 export interface DetectOpts {
   /** ± window (Hz) around the click the edge-walk may roam. */
@@ -22,11 +55,15 @@ export interface DetectOpts {
    * click window) because on an audio SSB row one voice can fill most of the span —
    * a window-local floor would sit ON the signal. */
   floorPct: number
-  /** Accept a peak iff peak >= floor×this. 2.0 amplitude = the ×4 power rule the CW
-   * skimmer uses (cw_decode.rs), translated through the sqrt compression. */
-  peakMult: number
-  /** Edge threshold: the skirt ends where bins drop below floor×this. */
-  edgeMult: number
+  /** Accept a peak iff it is at least this many dB over the floor. 6.02 dB = the ×4 power
+   * rule the CW skimmer uses (cw_decode.rs) — the old `floor × 2.0` amplitude form. */
+  peakDb: number
+  /** Edge threshold: the skirt ends where bins drop below this many dB over the floor
+   * (3.52 dB = the old `floor × 1.5`). */
+  edgeDb: number
+  /** How this feed's values combine with a dB offset — see `isDbScaledFeed`. Set from the
+   * feed source by `detectOptsFor`, never by hand. */
+  dbScaled: boolean
   /** Hz of consecutive sub-threshold bins required to DECLARE an edge — bridges the
    * formant gaps inside a voice signal so the walk doesn't stop mid-word. */
   edgeBridgeHz: number
@@ -50,18 +87,30 @@ export interface Detection {
  * carrier, so the detected energy edge sits ~300 Hz off the true carrier. */
 export const SSB_LOWCUT_HZ = 300
 
+/** Threshold a peak must clear over the noise floor to count as a signal (dB) — the ×4
+ *  power / ×2 amplitude rule, stated on the axis it actually lives on. */
+const PEAK_DB = 6.0206 // 20·log10(2.0)
+/** Where the skirt ends, over the noise floor (dB) — the old ×1.5 amplitude rule. */
+const EDGE_DB = 3.5218 // 20·log10(1.5)
+
 /** Per-mode detection tunings. CW: tight seed, raw row, sub-bin interp. SSB: narrow
  * seed but a wide edge-walk with smoothing + a formant-gap bridge. FM/AM: wide and
- * symmetric around the carrier. */
-export function detectOptsFor(sideband: string): DetectOpts {
+ * symmetric around the carrier.
+ *
+ * `source` is the FEED (`''`/`'audio'` | `'flex'` | `'civ'`), and it decides only how the dB
+ * thresholds above combine with the row's values — not what they are. Defaults to the audio
+ * feed, which is the dB-scaled one. */
+export function detectOptsFor(sideband: string, source = ''): DetectOpts {
   const m = sideband.trim().toUpperCase()
+  const dbScaled = isDbScaledFeed(source)
   if (m.startsWith('CW')) {
     return {
       searchRadiusHz: 300,
       peakSeedRadiusHz: 300,
       floorPct: 0.2,
-      peakMult: 2.0,
-      edgeMult: 1.5,
+      peakDb: PEAK_DB,
+      edgeDb: EDGE_DB,
+      dbScaled,
       edgeBridgeHz: 40,
       smoothHz: 0,
       interpolatePeak: true,
@@ -72,8 +121,9 @@ export function detectOptsFor(sideband: string): DetectOpts {
       searchRadiusHz: 6000,
       peakSeedRadiusHz: 1500,
       floorPct: 0.2,
-      peakMult: 2.0,
-      edgeMult: 1.5,
+      peakDb: PEAK_DB,
+      edgeDb: EDGE_DB,
+      dbScaled,
       edgeBridgeHz: 300,
       smoothHz: 300,
       interpolatePeak: true,
@@ -84,8 +134,9 @@ export function detectOptsFor(sideband: string): DetectOpts {
     searchRadiusHz: 3000,
     peakSeedRadiusHz: 700,
     floorPct: 0.2,
-    peakMult: 2.0,
-    edgeMult: 1.5,
+    peakDb: PEAK_DB,
+    edgeDb: EDGE_DB,
+    dbScaled,
     edgeBridgeHz: 250,
     smoothHz: 150,
     interpolatePeak: false,
@@ -151,13 +202,16 @@ export function detectSignal(
   }
   const peakVal = row[peakBin]
   if (!(peakVal > 0)) return null
-  // A zero/degenerate floor (silent band edge-case) falls back to a fraction of the peak.
-  const floor = floorRaw > 0 ? floorRaw : peakVal * 0.1
-  if (peakVal < floor * opts.peakMult) return null // flat noise — nothing to snap to
+  // A zero/degenerate floor (silent band edge-case) falls back to 20 dB below the peak
+  // (the old `peakVal * 0.1`, which is exactly what a ratio feed still computes).
+  const floor = floorRaw > 0 ? floorRaw : thresholdAbove(peakVal, -20, opts.dbScaled)
+  // Flat noise — nothing to snap to. ADDITIVE in dB on a dB-scaled feed: `floor * peakDb`
+  // would be a threshold tens of dB too high (see the module header).
+  if (peakVal < thresholdAbove(floor, opts.peakDb, opts.dbScaled)) return null
 
   // Edge-walk on the (optionally smoothed) row, allowed to roam the full search radius.
   const s = opts.smoothHz > 0 ? movingAvg(row, Math.max(1, Math.round(opts.smoothHz / w))) : row
-  const edgeThresh = floor * opts.edgeMult
+  const edgeThresh = thresholdAbove(floor, opts.edgeDb, opts.dbScaled)
   const bridge = Math.max(1, Math.round(opts.edgeBridgeHz / w))
   const walkLo = binOf(nearHz - opts.searchRadiusHz)
   const walkHi = binOf(nearHz + opts.searchRadiusHz)
@@ -257,7 +311,13 @@ export function clickTuneTarget(ctx: TuneCtx): TuneResult {
   const sym = isSymmetricMode(m)
   const sign = sidebandSign(ctx.sideband)
   const rf = isRfScopeSource(ctx.source)
-  const det = detectSignal(ctx.row, ctx.rowLoHz, ctx.rowHiHz, ctx.clickHz, detectOptsFor(ctx.sideband))
+  const det = detectSignal(
+    ctx.row,
+    ctx.rowLoHz,
+    ctx.rowHiHz,
+    ctx.clickHz,
+    detectOptsFor(ctx.sideband, ctx.source),
+  )
 
   // True-CW rigs zero-beat with the dial ON the signal; SSB-carried CW (soundcard
   // keyer) needs the dial sign×pitch off it so the tone lands at the pitch.

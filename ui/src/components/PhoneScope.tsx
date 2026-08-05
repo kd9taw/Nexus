@@ -5,12 +5,17 @@ import {
   agcRange,
   applyGainZero,
   bakeLut,
+  dbToSpan,
   isRfScopeSource,
   isSymmetricMode,
   normalize,
   resolveColormap,
   scopeView,
   sidebandSign,
+  // Aliased: this component already has a `spanDb` STATE variable (the Δ readout it renders),
+  // which shadows a bare import everywhere inside the component — including the one call site
+  // below, where it resolved to a number and failed to compile.
+  spanDb as rowSpanDb,
 } from '../waterfall'
 import { boxEdges, boxWidthFor, clampBoxCenterHz, clickTuneTarget, dialFromBoxCenter } from '../tuneSnap'
 import type { ScopeTuneRequest } from '../useScopeTune'
@@ -428,17 +433,23 @@ export function PhoneScope({
       // visual span so noise-only rows sit dark at the palette bottom; rows with real
       // signals span far more than 10 dB and render exactly as before. Gain/Zero then
       // apply on top (same semantics as the FT8 waterfall's controls).
-      const MIN_DYN_RATIO = 3.16 // 10 dB in linear magnitude
+      //
+      // The clamp is ADDITIVE because the row's intensity axis is linear in dB
+      // (2026-08-04). It used to be `agcFloor * 3.16` — 10 dB as an amplitude RATIO, which
+      // on a dB axis is not 10 dB at all: it scales with where the floor happens to sit, so
+      // a quiet band (floor near 0) got almost no clamp at all and the rainbow came back,
+      // while a hot one got a wildly excessive one. This is the exact failure the sentinel
+      // rule warns about — arithmetic that still runs, and still looks plausible, on a wire
+      // whose meaning changed underneath it.
+      const MIN_DYN_DB = 10
       const { floor: dispFloor, ceil: dispCeil } = applyGainZero(
         agcFloor,
-        Math.max(agcCeil, agcFloor * MIN_DYN_RATIO),
+        Math.max(agcCeil, agcFloor + dbToSpan(MIN_DYN_DB)),
         gainRef.current,
         zeroRef.current,
       )
       // Live Δ-span honesty readout: how much real dynamic range this view holds.
-      const db = Math.round(
-        20 * Math.log10(Math.max(agcCeil, 1e-12) / Math.max(agcFloor, 1e-12)),
-      )
+      const db = Math.round(rowSpanDb(agcFloor, agcCeil))
       if (Number.isFinite(db) && db !== spanDbRef.current) {
         spanDbRef.current = db
         setSpanDb(db)

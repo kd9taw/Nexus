@@ -65,6 +65,7 @@ import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
 import { FieldDayScoreboard } from './components/FieldDayView'
 import { Waterfall } from './components/Waterfall'
+import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
 import { visibleNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall } from './features/needs'
 import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
@@ -293,6 +294,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
             if (target === 'tx' || target === 'both') void setTxOffset(hz)
           }}
           active
+          paletteScope={FT_PALETTE_SCOPE}
         />
         <Toasts />
       </div>

@@ -13,6 +13,7 @@ import {
   coerceZoomSpan,
   zoomRange,
   MIN_SPAN,
+  spanDb,
   tuneTarget,
 } from '../waterfall'
 import { useWaterfallPalette } from '../waterfallPalette'
@@ -96,6 +97,11 @@ interface Props {
    * 20 Hz (PhoneScope) — at 120 they discarded 5 of every 6 rows, the operator's "smoothed
    * out" report (2026-07-30). Reduced-motion still overrides to the gentler 480 either way. */
   rowMs?: number
+  /** Palette scope (see `waterfallPalette.ts`). The FT8/FT4 surfaces pass
+   * `FT_PALETTE_SCOPE` so they keep their own palette, defaulting to Turbo, instead of
+   * inheriting a pick made in another mode. Unset = the shared master palette, which is
+   * what the RTTY and SSTV waterfalls want (they move with the CW/Phone scopes). */
+  paletteScope?: string
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -126,6 +132,7 @@ export function Waterfall({
   cursors,
   hint,
   rowMs = 120,
+  paletteScope,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -135,7 +142,7 @@ export function Waterfall({
   const rafRef = useRef<number | null>(null)
   // Master palette ('auto' = theme-driven), shared across every scope; changing it in any
   // mode recolors them all. Manual contrast (gain/zero, 0 = pure auto-AGC) stays local.
-  const [palette] = useWaterfallPalette()
+  const [palette] = useWaterfallPalette(paletteScope)
   const [gain, setGain] = useState<number>(() => loadKnob(GAIN_KEY))
   const [zero, setZero] = useState<number>(() => loadKnob(ZERO_KEY))
   // Span/zoom: the displayed audio-band window. 0 = the default Std 0–3 kHz view, -1 = Full
@@ -444,14 +451,18 @@ export function Waterfall({
         gainRef.current,
         zeroRef.current,
       ))
-      // live legend readout: dynamic range bottom→top, in dB relative to the
-      // current strongest signal (top = 0 dBr). A degenerate span (silent/all-
-      // zero band) reads ~0 dBr, not a fabricated full-scale range. Honest
-      // relative scale — the spectrum row is uncalibrated 0..1 magnitude.
+      // live legend readout: dynamic range bottom→top, in dB relative to the current
+      // strongest signal (top = 0 dBr). A degenerate span (silent/all-zero band) reads
+      // ~0 dBr, not a fabricated full-scale range.
+      //
+      // The row's intensity axis is LINEAR IN dB (2026-08-04), so the displayed range is
+      // just the AGC window's height scaled by WF_DB_SPAN — one multiply, and it is now
+      // actually true. The old `20·log10(dispFloor/dispCeil)` read the axis as an amplitude
+      // ratio, which it no longer is; left alone it would have gone on printing a confident
+      // number that no longer meant anything.
       if (dbLabelRef.current) {
-        const span = dispCeil - dispFloor
-        const ratio = span > MIN_SPAN && dispCeil > 0 ? Math.max(dispFloor / dispCeil, 1e-3) : 1
-        dbLabelRef.current.textContent = String(Math.round(20 * Math.log10(ratio))).replace('-', '−')
+        const range = dispCeil - dispFloor > MIN_SPAN ? -Math.round(spanDb(dispFloor, dispCeil)) : 0
+        dbLabelRef.current.textContent = String(range).replace('-', '−')
       }
 
       // Append the row to the RETAINED HISTORY as normalized intensities over the ROW's
@@ -700,7 +711,7 @@ export function Waterfall({
       <div className="panel-header">
         <h2>Waterfall</h2>
         <span className="wf-hint">{hint ?? 'left = RX · right / Shift = TX · Ctrl = both'}</span>
-        <PalettePicker />
+        <PalettePicker scope={paletteScope} />
         <select
           className="wf-palette wf-zoom"
           value={zoomSpan}

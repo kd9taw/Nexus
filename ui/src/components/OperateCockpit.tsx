@@ -26,6 +26,7 @@ import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { Waterfall } from './Waterfall'
+import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { Splitter } from './Splitter'
 import { SplitterSeam } from './SplitterSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
@@ -916,6 +917,7 @@ export function OperateCockpit({
                 theme={theme}
                 onTune={onTune}
                 active={active}
+                paletteScope={FT_PALETTE_SCOPE}
               />
             </section>
             <Splitter

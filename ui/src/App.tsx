@@ -67,6 +67,7 @@ import { StationList } from './components/StationList'
 import { Conversation } from './components/Conversation'
 import { TempoHeader } from './components/TempoHeader'
 import { Waterfall } from './components/Waterfall'
+import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { LinkPill } from './components/LinkPill'
 import { ModeNav, type View, type DigitalMode } from './components/ModeNav'
 import { OperateCockpit } from './components/OperateCockpit'
@@ -2018,6 +2019,7 @@ export default function App() {
         txOffsetHz={snap.radio.txOffsetHz}
         theme={theme}
         onTune={handleTune}
+        paletteScope={FT_PALETTE_SCOPE}
       />
       <OperateDecodes
         decodes={snap.recentDecodes}

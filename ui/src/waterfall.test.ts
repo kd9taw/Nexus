@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI } from './waterfall'
+import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -371,5 +371,52 @@ describe('resampleRow (bin → pixel)', () => {
     // aligned (an edge-aligned map puts the peak half a bin, ~500 Hz here, off).
     expect(out[0]).toBeCloseTo(0.75, 6)
     expect(out[1]).toBeCloseTo(0.75, 6)
+  })
+})
+
+describe('the dB intensity axis (WF_DB_SPAN / spanDb / dbToSpan)', () => {
+  it('MIRRORS the producer constant — drift here silently misreports dB at the operator', () => {
+    // tempo_core::spectrum::DB_SPAN. The producer puts values on this axis; these helpers are
+    // the only way anything reads one back off it. There is no wire field carrying the span,
+    // so this test and the ⚠️ notes on both constants are the whole coupling.
+    expect(WF_DB_SPAN).toBe(120)
+  })
+
+  it('converts an AGC window to the dB range it covers', () => {
+    // The legend's job: floor→ceil of the display window, in dB.
+    expect(spanDb(0, 1)).toBe(120) // the whole axis
+    expect(spanDb(0.5, 1)).toBe(60)
+    expect(spanDb(0.25, 0.5)).toBe(30)
+    // Position-independent — a 30 dB window is 30 dB wherever it sits. This is what the old
+    // 20*log10(floor/ceil) got wrong: it read the axis as an amplitude ratio, so the SAME
+    // 30 dB window reported a different number depending on how bright the band was.
+    expect(spanDb(0.6, 0.85)).toBeCloseTo(spanDb(0.1, 0.35), 10)
+  })
+
+  it('round-trips with dbToSpan', () => {
+    expect(dbToSpan(10)).toBeCloseTo(1 / 12, 10)
+    expect(spanDb(0, dbToSpan(37))).toBeCloseTo(37, 10)
+    // The additive form PhoneScope/MiniSpectrum clamp with: a floor plus 10 dB is 10 dB up
+    // wherever the floor is (the old multiplicative `floor * 3.16` was not).
+    for (const floor of [0.05, 0.4, 0.9]) {
+      expect(spanDb(floor, floor + dbToSpan(10))).toBeCloseTo(10, 10)
+    }
+  })
+
+  it('normalize spends the palette evenly in dB across the AGC window', () => {
+    // The payoff, and the thing the operator sees. With a 40 dB window, each 10 dB step is a
+    // quarter of the palette — everywhere, including down at the noise floor. On the old
+    // amplitude axis the floor got ~15 of 256 levels and the top 15 dB got the rest.
+    const floor = 0.2
+    const ceil = floor + dbToSpan(40)
+    const at = (db: number) => normalize(floor + dbToSpan(db), floor, ceil)
+    expect(at(0)).toBeCloseTo(0, 10)
+    expect(at(10)).toBeCloseTo(0.25, 10)
+    expect(at(20)).toBeCloseTo(0.5, 10)
+    expect(at(30)).toBeCloseTo(0.75, 10)
+    expect(at(40)).toBeCloseTo(1, 10)
+    // Equal dB steps are equal LUT steps — 25.5 of 256 levels per dB-tenth of the window.
+    const step = (a: number, b: number) => Math.round(at(b) * 255) - Math.round(at(a) * 255)
+    expect(step(0, 10)).toBe(step(30, 40))
   })
 })

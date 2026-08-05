@@ -46,7 +46,7 @@ describe('detectSignal', () => {
   it('#1 Flex CW spike: peak within a bin of the true frequency, tight edges', () => {
     const f = 14_030_025
     const row = spike(flat(FLEX_BINS, 0.05), f, FLEX_LO, FLEX_HI, 1)
-    const det = detectSignal(row, FLEX_LO, FLEX_HI, f + 35, detectOptsFor('CW'))
+    const det = detectSignal(row, FLEX_LO, FLEX_HI, f + 35, detectOptsFor('CW', 'flex'))
     expect(det).not.toBeNull()
     expect(Math.abs(det!.peakHz - f)).toBeLessThan(FLEX_W)
     expect(Math.abs(det!.loEdgeHz - f)).toBeLessThan(2 * FLEX_W)
@@ -55,13 +55,15 @@ describe('detectSignal', () => {
 
   it('#13 flat-noise reject: a bump under 2× the floor is not a signal', () => {
     const row = flat(FLEX_BINS, 0.1)
-    row[1000] = 0.18 // 1.8× floor < peakMult 2.0
-    expect(detectSignal(row, FLEX_LO, FLEX_HI, FLEX_LO + 1000 * FLEX_W, detectOptsFor('CW'))).toBeNull()
+    row[1000] = 0.18 // 1.8× floor < the 6.02 dB (×2.0) peak threshold
+    expect(
+      detectSignal(row, FLEX_LO, FLEX_HI, FLEX_LO + 1000 * FLEX_W, detectOptsFor('CW', 'flex')),
+    ).toBeNull()
   })
 
   it('#14 edge-of-row click: clamps, no out-of-range', () => {
     const row = spike(flat(FLEX_BINS, 0.05), FLEX_LO + FLEX_W / 2, FLEX_LO, FLEX_HI, 1)
-    const det = detectSignal(row, FLEX_LO, FLEX_HI, FLEX_LO, detectOptsFor('CW'))
+    const det = detectSignal(row, FLEX_LO, FLEX_HI, FLEX_LO, detectOptsFor('CW', 'flex'))
     expect(det).not.toBeNull()
     expect(det!.loEdgeHz).toBeGreaterThanOrEqual(FLEX_LO)
     expect(det!.peakBin).toBe(0)
@@ -72,11 +74,45 @@ describe('detectSignal', () => {
     row[1024 - 1] = 0.4
     row[1024] = 1.0
     row[1024 + 1] = 0.6 // heavier right neighbor → true peak slightly right of bin center
-    const det = detectSignal(row, FLEX_LO, FLEX_HI, FLEX_LO + 1024.5 * FLEX_W, detectOptsFor('CW'))
+    const det = detectSignal(row, FLEX_LO, FLEX_HI, FLEX_LO + 1024.5 * FLEX_W, detectOptsFor('CW', 'flex'))
     expect(det).not.toBeNull()
     const binCenter = FLEX_LO + 1024.5 * FLEX_W
     expect(det!.peakHz).toBeGreaterThan(binCenter)
     expect(det!.peakHz - binCenter).toBeLessThanOrEqual(FLEX_W / 2)
+  })
+
+  // ⭐ THE AXIS REGRESSION GUARD. The audio feed became LINEAR IN dB on 2026-08-04
+  // (tempo_core::spectrum). A multiplicative `floor × 2.0` threshold, which is what this
+  // function used, silently becomes "twice the dB NUMBER" on that axis: with a −90 dBFS
+  // floor (display 0.25) it demands the peak reach 0.5 = −60 dBFS, i.e. 30 dB over the
+  // floor instead of 6. Click-to-tune would stop snapping to ordinary signals — no throw,
+  // no visual tell, and it moves the radio. These pin the additive form.
+  //
+  // Audio row values here are display units on the 120 dB axis: v = (dBFS + 120)/120.
+  const dbfs = (v: number) => (v + 120) / 120
+
+  it('#17 dB-scaled audio feed: a signal 10 dB over the floor IS detected', () => {
+    // Floor −90 dBFS, carrier −80 dBFS: 10 dB up, comfortably over the 6.02 dB threshold.
+    const row = spike(flat(AUD_BINS, dbfs(-90)), 1500, AUD_LO, AUD_HI, dbfs(-80))
+    const det = detectSignal(row, AUD_LO, AUD_HI, 1500, detectOptsFor('CW', 'audio'))
+    expect(det).not.toBeNull()
+    expect(Math.abs(det!.peakHz - 1500)).toBeLessThan(2 * ((AUD_HI - AUD_LO) / AUD_BINS))
+    // The old multiplicative rule needed floor×2 = display 0.5 = −60 dBFS to accept this,
+    // so it would have returned null. Prove the threshold really is ~6 dB, not ~30.
+    expect(det!.floor).toBeCloseTo(dbfs(-90), 6)
+  })
+
+  it('#18 dB-scaled audio feed: 3 dB over the floor is still rejected as noise', () => {
+    const row = spike(flat(AUD_BINS, dbfs(-90)), 1500, AUD_LO, AUD_HI, dbfs(-87))
+    expect(detectSignal(row, AUD_LO, AUD_HI, 1500, detectOptsFor('CW', 'audio'))).toBeNull()
+  })
+
+  it('#19 the SAME row is read differently by the two feed scales', () => {
+    // One row, two contracts: as dB display units the carrier is 10 dB over the floor and
+    // detects; read as a bare ratio it is only 1.125× the floor and does not.
+    const row = spike(flat(AUD_BINS, dbfs(-90)), 1500, AUD_LO, AUD_HI, dbfs(-80))
+    expect(detectSignal(row, AUD_LO, AUD_HI, 1500, detectOptsFor('CW', 'audio'))).not.toBeNull()
+    expect(detectSignal(row, AUD_LO, AUD_HI, 1500, detectOptsFor('CW', 'flex'))).toBeNull()
   })
 })
 

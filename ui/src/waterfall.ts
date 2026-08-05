@@ -11,6 +11,38 @@ import { sampleLut, type ColormapName } from './colormaps'
  * ~0 dBr rather than a fabricated full-scale range). */
 export const MIN_SPAN = 1e-6
 
+/**
+ * Span of the spectrum row's intensity axis, in dB. A row value is LINEAR IN dB: `0` is
+ * `-WF_DB_SPAN` dBFS and `1` is full scale.
+ *
+ * ⚠️ MIRRORS `tempo_core::spectrum::DB_SPAN` (crates/tempo-core/src/spectrum.rs) — the producer
+ * is what puts values on this axis, and this is the only way a consumer turns one back into dB.
+ * The two must move together.
+ *
+ * Before 2026-08-04 the axis was amplitude-linear against each row's own loudest bin, and dB
+ * was recovered with `20·log10(a/b)`. Every such call site is now `spanDb`; a stray `log10` on
+ * a row value is a bug that will not throw, it will just print a wrong number at the operator.
+ *
+ * ⚠️ And a row value is now a LEVEL, not a magnitude, so a threshold stated relative to the
+ * noise floor is ADDITIVE (`floor + dbToSpan(6)`), never multiplicative. `floor * 2` meant
+ * "6 dB up" on the old axis and means "twice the dB number" on this one — on a 120 dB span
+ * that is a 30 dB threshold. It throws nothing and draws nothing; it just changes a decision.
+ * `tuneSnap.ts::detectSignal` is where that bit, and it moves the radio.
+ */
+export const WF_DB_SPAN = 120
+
+/** dB between two values on the row's intensity axis — the display-value → dB conversion.
+ *  `spanDb(floor, ceil)` is the dynamic range a `{floor, ceil}` AGC window covers. */
+export function spanDb(floor: number, ceil: number): number {
+  return (ceil - floor) * WF_DB_SPAN
+}
+
+/** A display-value delta for `db` dB on the row's intensity axis — the inverse of `spanDb`,
+ *  for clamps that are naturally stated in dB (PhoneScope's minimum visual span). */
+export function dbToSpan(db: number): number {
+  return db / WF_DB_SPAN
+}
+
 function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x
 }
