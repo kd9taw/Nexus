@@ -197,10 +197,46 @@ fn model_tokens(name: &str) -> Vec<String> {
         .collect()
 }
 
+/// The USB identity split the SAME way a catalog name is — on whitespace and "/", each piece
+/// normalized. Empty pieces dropped.
+///
+/// ⚠️ **THE SPLIT IS THE POINT.** This used to be one `normalize`d blob of
+/// `manufacturer + product`, and a blob has no word boundaries left in it: `"Lab599"` and
+/// `"TX-500"` fused into `LAB599TX500`, where the Ten-Tec Eagle's token `599` is a substring.
+/// A Lab599 Discovery TX-500 therefore prefilled `(16013, "Ten-Tec Eagle (599)")`.
+fn descriptor_tokens(manufacturer: &str, product: &str) -> Vec<String> {
+    format!("{manufacturer} {product}")
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .map(normalize)
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// Does the catalog token `model_tok` claim the USB descriptor token `hay_tok`?
+///
+/// **Prefix, and never extended by a digit.** Two rules, one per false positive measured
+/// against this catalog:
+/// - *Prefix, not substring anywhere*: `599` does not claim `LAB599`. A model number is the
+///   start of the word that names the radio, never buried inside someone else's.
+/// - *Not extended by a digit*: `IC910` does not claim `IC9100`. Those are two different
+///   Icoms, and the corpus contains only the first — so an IC-9100 that names itself
+///   correctly used to be prefilled as an IC-910, and `port_prober` then dropped the
+///   operator's own model for it.
+///
+/// A LETTER may still extend it, because that is how rig families are spelled and the catalog
+/// name is often the shorter one: `TS590S` claims `TS-590SG`, `FT991` claims `FT-991A` (where
+/// the same entry's longer token `FT991A` then wins on length).
+fn token_claims(hay_tok: &str, model_tok: &str) -> bool {
+    hay_tok
+        .strip_prefix(model_tok)
+        .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_digit()))
+}
+
 /// Best Hamlib model guess from a USB **product** (and manufacturer) string. Native-
 /// USB rigs report their model there (e.g. `"IC-705"`); generic bridges report only
 /// the chip (e.g. `"CP2102 USB to UART Bridge"`) → `None`. Picks the LONGEST model
-/// token that appears in the haystack so "K3S" beats "K3" and "IC-7610" beats noise.
+/// token that CLAIMS one of the descriptor's own tokens ([`token_claims`]) so "K3S"
+/// beats "K3" and "IC-7610" beats noise.
 ///
 /// **The corpus is narrower than the catalog, and deliberately.** Two kinds of entry are
 /// skipped because neither can ever BE the USB device in front of us, so any token of theirs
@@ -208,17 +244,31 @@ fn model_tokens(name: &str) -> Vec<String> {
 /// model ≤ 4), and the software-served profiles ([`crate::rigmodels::is_software_cat_profile`]
 /// — where the program is the rig, reached over TCP or a virtual COM pair).
 pub fn match_rig_model(product: &str, manufacturer: &str) -> Option<(u32, &'static str)> {
-    let hay = normalize(&format!("{manufacturer} {product}"));
+    match_rig_model_in(product, manufacturer, &rig_models())
+}
+
+/// [`match_rig_model`] against an arbitrary catalog, so the corpus property can be checked
+/// against a DELIBERATELY OFFENDING one. The list is hand-maintained and the exclusion list
+/// beside it is too; nothing in the types couples them, so the only thing that can catch the
+/// next tier move is a guard that runs the real matcher over a poisoned catalog and watches
+/// it re-open the false positive. See `no_verified_tier_name_claims_a_device_that_is_not_that_radio`.
+fn match_rig_model_in(
+    product: &str,
+    manufacturer: &str,
+    catalog: &[(u32, &'static str)],
+) -> Option<(u32, &'static str)> {
+    let hay = descriptor_tokens(manufacturer, product);
     if hay.is_empty() {
         return None;
     }
     let mut best: Option<(usize, u32, &'static str)> = None;
-    for (model, name) in rig_models() {
+    for &(model, name) in catalog {
         if model <= 4 || crate::rigmodels::is_software_cat_profile(model) {
             continue;
         }
         for tok in model_tokens(name) {
-            if hay.contains(&tok) && best.is_none_or(|(len, ..)| tok.len() > len) {
+            let claims = hay.iter().any(|h| token_claims(h, &tok));
+            if claims && best.is_none_or(|(len, ..)| tok.len() > len) {
                 best = Some((tok.len(), model, name));
             }
         }
@@ -513,6 +563,17 @@ mod tests {
             match_rig_model("TS-590SG", "Kenwood").map(|(m, _)| m),
             Some(2037)
         );
+        // A LETTER may extend a model token. Catalog names are often the shorter spelling of
+        // a family, so a descriptor that adds a trailing letter must still resolve — here on
+        // an entry that has no longer sibling in the catalog to absorb it.
+        assert_eq!(
+            match_rig_model("IC-910H", "Icom Inc.").map(|(m, _)| m),
+            Some(3044)
+        );
+        // A DIGIT may not. The IC-9100 is a different radio and is not in the corpus at all,
+        // so the honest answer is "I don't know" — see
+        // `no_verified_tier_name_claims_a_device_that_is_not_that_radio`.
+        assert_eq!(match_rig_model("IC-9100", "Icom Inc."), None);
     }
 
     #[test]
@@ -536,7 +597,7 @@ mod tests {
     }
 
     /// ⚠️ A CATALOG ENTRY IS ALSO AUTO-DETECT CORPUS. Adding the SDR-console profiles put
-    /// their names into `model_tokens`, which is a SUBSTRING match against
+    /// their names into `model_tokens`, which is matched against the tokens of
     /// `manufacturer + product` — so `LITE`, `SDR`, `HPSDR`, `ANAN`, `APACHE`, `HERMES` and
     /// `FLEX` became live claims about USB hardware. Measured on the shipped build: a
     /// **Digirig Lite** (a cable this crate already recognises by name, `match_interface`)
@@ -585,6 +646,161 @@ mod tests {
         );
     }
 
+    /// USB identities that are **not** any radio in the verified corpus, so no catalog name
+    /// may ever claim one. Three kinds, and all three have bitten:
+    ///
+    /// 1. **Cables and interfaces** this crate itself recognises as not-a-radio
+    ///    ([`match_interface`]) — a Digirig Lite came back as a Thetis.
+    /// 2. **SDR hardware and bare bridge chips** — an SDRplay RSPdx came back as SDR Console.
+    /// 3. **Real transceivers that live OUTSIDE the corpus** (extended tier). Here a wrong
+    ///    model is worse than none: `detect_rigs` writes `suggested_model` into the Rig Model
+    ///    field, and `port_prober::candidates_from` takes a name match as its "exact, trusted"
+    ///    candidate and DROPS the operator's configured model. An IC-9100 that names itself
+    ///    correctly on USB resolved to `(3044, "Icom IC-910")` — a different radio — because
+    ///    the token `IC910` was a substring of `IC9100`.
+    const NOT_A_CORPUS_RADIO: &[(&str, &str)] = &[
+        // (1) cables
+        ("Digirig Lite", "Digirig"),
+        ("Digirig Mobile", "Digirig"),
+        ("RIGblaster Advantage", "West Mountain Radio"),
+        // (2) SDR hardware, SDR programs' own names, bare bridge chips
+        ("SDRplay RSPdx", "SDRplay Ltd"),
+        ("RS-HFIQ SDR", ""),
+        ("ANAN-7000DLE", "Apache Labs"),
+        ("Hermes Lite 2", "Hermes"),
+        ("HPSDR interface", ""),
+        ("FLEX control cable", ""),
+        ("SDR Console", ""),
+        ("CP2102 USB to UART Bridge Controller", "Silicon Labs"),
+        ("USB-Serial Controller", "Prolific"),
+        // (3) real rigs, extended tier — the corpus must say "I don't know", never a neighbour
+        ("IC-9100", "Icom Inc."),
+        ("TX-500", "Lab599"),
+        ("Discovery TX-500", "Lab599"),
+    ];
+
+    /// Every catalog name in `catalog` that claims one of [`NOT_A_CORPUS_RADIO`], as
+    /// `"<maker> <product> → (model, name)"`. Empty is the property holding.
+    fn corpus_false_positives(catalog: &[(u32, &'static str)]) -> Vec<String> {
+        NOT_A_CORPUS_RADIO
+            .iter()
+            .filter_map(|(product, maker)| {
+                match_rig_model_in(product, maker, catalog)
+                    .map(|(m, n)| format!("{maker:?} {product:?} → ({m}, {n:?})"))
+            })
+            .collect()
+    }
+
+    /// ⭐ THE PROPERTY, not a list of product strings. D1 and D2 each asserted the specific
+    /// names that had already gone wrong; neither could see the NEXT one. Nothing in the types
+    /// couples [`crate::rigmodels::is_software_cat_profile`] to the catalog it filters, and the
+    /// commit that introduced D2 says how the bug arrives: **a tier move**. Promote one entry
+    /// out of `extended_rig_models`, or add a fifth SDR-program profile and forget the
+    /// exclusion, and `LITE`/`SDR`/`CONSOLE` re-enter the corpus with the suite still green.
+    ///
+    /// So this runs the real matcher over the real catalog AND over a poisoned one, and
+    /// requires the poisoned run to FAIL. What it pins is: no verified-tier name may claim a
+    /// USB identity that is not that radio.
+    #[test]
+    fn no_verified_tier_name_claims_a_device_that_is_not_that_radio() {
+        assert_eq!(
+            corpus_false_positives(&rig_models()),
+            Vec::<String>::new(),
+            "the shipped catalog"
+        );
+
+        // TEETH — both shapes the D2 commit names, each as a synthetic catalog entry that
+        // `is_software_cat_profile` has never heard of. Verified by hand too: pasting either
+        // line into `rig_models()` reds the assertion above.
+        for (offender, victim, expect) in [
+            // (a) A TIER MOVE. 2040 was promoted out of `extended_rig_models` in the very
+            //     commit that broke this; here 2049 makes the same move.
+            (
+                (2049, "Malachite DSP SDR"),
+                ("SDRplay RSPdx", "SDRplay Ltd"),
+                "the bare token SDR walks straight back into the corpus",
+            ),
+            // (b) A FIFTH SDR-PROGRAM PROFILE added without the exclusion.
+            (
+                (2058, "SparkSDR (Hermes Lite 2 / ANAN)"),
+                ("Hermes Lite 2", "Hermes"),
+                "a program's hardware list is not a claim about USB devices",
+            ),
+        ] {
+            let mut poisoned = rig_models();
+            poisoned.push(offender);
+            assert!(
+                !corpus_false_positives(&poisoned).is_empty(),
+                "a guard that cannot red on {offender:?} is not a guard"
+            );
+            assert_eq!(
+                match_rig_model_in(victim.0, victim.1, &poisoned).map(|(m, _)| m),
+                Some(offender.0),
+                "{expect}"
+            );
+        }
+    }
+
+    /// The other half of the same property, and the reason the fix could not simply be
+    /// "match less": every corpus entry that contributes a token must still resolve its OWN
+    /// catalog name. Read this beside the guard above — one says "claim nothing you are not",
+    /// the other says "and still claim yourself".
+    ///
+    /// (Entries whose every token is shorter than 3 characters — Elecraft K3, K4 — contribute
+    /// nothing to the corpus by design, so they are skipped rather than asserted.)
+    #[test]
+    fn every_corpus_entry_still_matches_its_own_name() {
+        for (model, name) in rig_models() {
+            if model <= 4 || crate::rigmodels::is_software_cat_profile(model) {
+                continue;
+            }
+            if model_tokens(name).is_empty() {
+                continue;
+            }
+            assert_eq!(
+                match_rig_model(name, "").map(|(m, _)| m),
+                Some(model),
+                "{name} ({model}) must still match its own name"
+            );
+        }
+    }
+
+    /// ⭐ THE GUARD THAT NEEDS NO HAND-MAINTAINED LIST, and the one that would have caught the
+    /// IC-9100 on the day the entry was added: **run every EXTENDED-tier name through the
+    /// corpus.** Those radios are real and are not in the corpus, so the only honest answers
+    /// are "that model" or "I don't know" — never a NEIGHBOUR. `port_prober::candidates_from`
+    /// treats a name match as exact and trusted, so a neighbour here is a rig swept at another
+    /// rig's bauds with the operator's own model discarded.
+    ///
+    /// It is derived entirely from the catalog, so it grows with the catalog: add an extended
+    /// entry whose name a corpus token claims, and this reds without anyone remembering to
+    /// list a product string.
+    ///
+    /// **One exception, and it is not a matching bug.** `Yaesu FT-1000MP Mark-V` (1004)
+    /// CONTAINS the whole name of `Yaesu FT-1000MP` (1024) as its own leading words — no
+    /// boundary rule can separate them, only whole-string coverage scoring, which is a
+    /// redesign this does not need: the Mark-V's CAT is an RS-232 port, so that string does
+    /// not arrive here from a USB descriptor. Listed, not hidden — a future coverage-scoring
+    /// matcher retires the entry rather than inheriting a silent exception.
+    #[test]
+    fn no_extended_tier_rig_resolves_to_a_different_rig() {
+        const CONTAINED_BY_NAME: &[u32] = &[1004]; // FT-1000MP Mark-V ⊃ FT-1000MP
+        let verified: std::collections::HashSet<u32> =
+            rig_models().iter().map(|(m, _)| *m).collect();
+        let mut wrong: Vec<String> = Vec::new();
+        for (model, name) in crate::rigmodels::all_rig_models() {
+            if verified.contains(&model) || CONTAINED_BY_NAME.contains(&model) {
+                continue;
+            }
+            if let Some((m, n)) = match_rig_model(name, "") {
+                if m != model {
+                    wrong.push(format!("{name:?} ({model}) → ({m}, {n:?})"));
+                }
+            }
+        }
+        assert_eq!(wrong, Vec::<String>::new());
+    }
+
     /// The second consumer, and the more damaging one: a name match here REPLACES the
     /// operator's configured `fallback_model` with a "trusted" one. An IC-7300 wired through
     /// a Digirig Lite must still be probed as an IC-7300.
@@ -594,7 +810,10 @@ mod tests {
         let cands = crate::port_prober::candidates_from(&ports, 3073);
         assert_eq!(cands.len(), 1, "one port, one candidate: {cands:?}");
         assert_eq!(cands[0].model, 3073, "the operator's own model: {cands:?}");
-        assert!(!cands[0].seeded, "still the trusted-model branch: {cands:?}");
+        assert!(
+            !cands[0].seeded,
+            "still the trusted-model branch: {cands:?}"
+        );
     }
 
     fn port(name: &str, vid: u16, product: &str, maker: &str) -> UsbPort {

@@ -239,6 +239,15 @@ fn host_is_this_machine(host: &str) -> bool {
 /// Address `127.0.0.1:4532`, rigctld TCP Port the shipped-default 4532), and a guard placed
 /// before the probe took its CAT away and silently degraded keying to VOX.
 ///
+/// **The message leans on that same precondition, and that is what makes it useful.** Because
+/// the probe has already come back Silent, "nothing answered on :port" is a fact (the message
+/// says exactly that and no more — a listener that greets nothing is also Silent) — so the
+/// likeliest reading of this exact config is not a port clash at all: it is the manual's own
+/// NET-rigctl station with the external rigctld **not started yet**, and the message names that
+/// first. It used to name only the port, and hard-coded 4532 as the number to change to — which
+/// in the shipped-default case (`rigctld_port` 4532, address `127.0.0.1:4532`, i.e. the manual
+/// followed exactly) read as "change 4532 to 4532" while the cure went unmentioned.
+///
 /// Nothing checked this. `tempo_app::settings::validate_radio_ports` de-duplicates
 /// `rigctld_port`/`rotctld_port` BETWEEN radios and against the broker, and never looks
 /// inside a radio's own `rig_addr` — so a single radio could be configured with both ends on
@@ -254,9 +263,12 @@ fn cat_port_conflict(t: &Transport) -> Option<String> {
     }
     Some(format!(
         "rigctld and the rig are both on port {port} — Network Address is {}, and rigctld TCP \
-         Port is {port}. Nexus connects to rigctld and rigctld connects to the rig, so they \
-         cannot share one port: change rigctld TCP Port (Settings ▸ Radio ▸ Advanced) to 4532 \
-         or any other free port.",
+         Port is {port} — and nothing answered there. Nexus connects to rigctld \
+         and rigctld connects to the rig, so one port cannot be both ends of that chain. If you \
+         run your OWN rigctld on :{port} (the NET rigctl station in the manual), it just isn't \
+         running yet — start it and try again; Nexus shares a rigctld that is already there. If \
+         you meant Nexus to launch one, give rigctld TCP Port (Settings ▸ Radio ▸ Advanced) a \
+         different, free number.",
         t.rig_addr
     ))
 }
@@ -930,9 +942,7 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
             // ~1.3 s (engine queue) — the client deadline must outlast it or every busy
             // moment reads as CAT-dead (the flapping pill).
             rig.set_slow_transport(
-                network
-                    || native_civ_addr(t).is_some()
-                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud, &t.rig_conn),
+                network || native_civ_addr(t).is_some() || t.is_slow_serial_link(),
             );
             let ok = probe_cat(&mut rig, t.rigctld_port).ok;
             (rig, Some(proc), ok)
@@ -3547,9 +3557,9 @@ impl RadioLoop {
             //  - never on a slow SERIAL link (a read there can block to 2500 ms; the heavy
             //    cadence is the honest ceiling on such links). This is the ONE caller of
             //    `is_slow_serial_link` with no `is_network()` in front of it — a network CAT
-            //    link is not a slow serial link however its (unused) baud field reads, and the
-            //    connection is passed in so the classifier says so rather than this call site
-            //    having to remember;
+            //    link is not a slow serial link however its (unused) baud field reads, and
+            //    `Transport::is_slow_serial_link` asks `is_network()` (the app's single
+            //    source of truth) itself, so this call site has nothing to remember;
             //  - never on a tick that already issued the dial read (`last_freq_poll == now`),
             //    so at most ONE blocking CAT read lands per 20 ms loop tick — the two fast
             //    reads interleave on adjacent ticks instead of stacking on one.
@@ -3560,11 +3570,7 @@ impl RadioLoop {
                 && self.cat_ok != Some(false)
                 && self.freq_misses == 0
                 && self.smeter_supported == Some(true)
-                && !crate::rigmodels::is_slow_serial_link(
-                    self.applied.rig_model,
-                    self.applied.baud,
-                    &self.applied.rig_conn,
-                )
+                && !self.applied.is_slow_serial_link()
                 && self.last_freq_poll != now
                 && now - self.last_smeter_poll >= SMETER_FAST_POLL_MS
             {
@@ -6096,6 +6102,21 @@ impl Transport {
         tempo_app::settings::rig_conn_is_network(&self.rig_conn, &self.rig_addr)
     }
 
+    /// Does this transport need the LONG (2.5 s) CAT command deadline because the SERIAL
+    /// link is slow — a known slow-backend rig, or any rig on ≤ 19200 baud?
+    ///
+    /// The classification itself is [`crate::rigmodels::is_slow_serial_link`]; what lives
+    /// here is the one thing it must not guess. It is asked as a BOOLEAN off
+    /// [`Self::is_network`] — the app's single source of truth — so no caller has to hold,
+    /// or re-parse, `rig_conn`. It briefly took the string and re-derived the answer
+    /// itself, and disagreed with the SoT on a "network" pick with no address typed yet: a
+    /// slow Xiegu on a serial port at 19200 lost its long deadline (and un-gated the fast
+    /// S-meter poll) the moment the Connection dropdown moved, before the address existed.
+    #[cfg_attr(not(feature = "device"), allow(dead_code))]
+    fn is_slow_serial_link(&self) -> bool {
+        crate::rigmodels::is_slow_serial_link(self.rig_model, self.baud, self.is_network())
+    }
+
     /// True if the selected sound-card input/output device changed.
     fn audio_differs(&self, o: &Transport) -> bool {
         self.audio_in != o.audio_in || self.audio_out != o.audio_out
@@ -6468,10 +6489,9 @@ fn open_cat(
         crate::rigctld_server::PortReply::Rigctld => {
             // Auto-coexist: connect THROUGH it instead of fighting for the serial port.
             let mut rig = Rig::with_control(Some(addr.clone()), ptt_mode);
-            rig.set_slow_transport(
-                t.is_network()
-                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud, &t.rig_conn),
-            ); // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long command deadline
+            rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+            // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200
+            // baud) get the long command deadline
             let mut probe = finish_cat_open(&mut rig, t);
             probe.detail = format!(
                 "Sharing the rigctld already on :{} — {}",
@@ -6518,9 +6538,7 @@ fn open_cat(
             std::thread::sleep(Duration::from_millis(700));
             let mut rig = Rig::with_control(Some(addr), ptt_mode);
             rig.set_slow_transport(
-                network
-                    || native_civ_addr(t).is_some()
-                    || crate::rigmodels::is_slow_serial_link(t.rig_model, t.baud, &t.rig_conn),
+                network || native_civ_addr(t).is_some() || t.is_slow_serial_link(),
             ); // network chains + the native daemon + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
@@ -10468,6 +10486,55 @@ mod tests {
         );
     }
 
+    /// ⭐ THE CAT DEADLINE ASKS THE SINGLE SOURCE OF TRUTH, OR IT ASKS NOTHING.
+    ///
+    /// "Is this a network link?" has exactly one answer in this app —
+    /// [`tempo_app::settings::rig_conn_is_network`], which [`Transport::is_network`] calls
+    /// and whose own doc names the three ways a previous copy parted company from it: the
+    /// empty string, mixed case, and a "network" pick with no address yet. The slow-deadline
+    /// classifier re-implemented it from `rig_conn` alone and re-created two of the three.
+    ///
+    /// MEASURED, and this is the case the guard exists for: a Xiegu G90 (3088, in
+    /// `is_slow_serial_rig`) on a real serial port at 19200, with Connection flipped to
+    /// **Network** and no address typed yet. `is_network()` is false, so `open_cat` correctly
+    /// dials the SERIAL port at 19200 — while the string test said "network" and handed that
+    /// rig the 700 ms deadline it times out on ("rig reply incomplete after 700 ms"), and
+    /// un-gated the fast S-meter poll on a link the heavy cadence is the honest ceiling for.
+    #[test]
+    fn the_slow_cat_deadline_reads_the_network_answer_off_the_single_source_of_truth() {
+        let slow = |conn: &str, addr: &str| {
+            let mut t = cat_transport(4532, None);
+            t.rig_model = 3088; // Xiegu G90 — slow per model
+            t.baud = 19_200; // …and slow per baud, so the serial answer is unambiguous
+            t.rig_conn = conn.to_string();
+            t.rig_addr = addr.to_string();
+            (t.is_network(), t.is_slow_serial_link())
+        };
+
+        // The measured regression.
+        assert_eq!(
+            slow("network", ""),
+            (false, true),
+            "a 'network' pick with no address dials SERIAL, so it is still a slow serial link"
+        );
+        // The second divergence the SoT's doc lists: case. `rig_conn_is_network` is
+        // exact-case, so "Network" is a serial transport and must be classified as one.
+        assert_eq!(
+            slow("Network", "127.0.0.1:5002"),
+            (false, true),
+            "mixed case is not the network kind to the SoT, so it is not one here either"
+        );
+        // The third: a settings.json written before the field existed loads `rig_conn` as "".
+        assert_eq!(slow("", ""), (false, true), "empty rig_conn is serial");
+        // The ordinary pair, both ways.
+        assert_eq!(slow("serial", ""), (false, true));
+        assert_eq!(
+            slow("network", "127.0.0.1:5002"),
+            (true, false),
+            "a real network link is never a slow SERIAL link — D3's win, kept"
+        );
+    }
+
     /// Native Flex DAX RX cannot be verified on this bench — there is no Flex here. That is
     /// exactly why its FAILURE path must be testable: when the tester reports "no audio", the
     /// build has to have already told them which of the four causes it was.
@@ -10756,6 +10823,32 @@ mod tests {
         t.rig_addr = "localhost:4532".into();
         assert!(cat_port_conflict(&t).is_some(), "localhost is us");
 
+        // ⭐ THE SHIPPED-DEFAULT CASE, and it is the likeliest one. The manual's own
+        // NET-rigctl station (Getting-Started: an external `rigctld`, model 2, Network
+        // Address 127.0.0.1:4532) leaves rigctld TCP Port at the shipped default 4532 —
+        // so both numbers are 4532 by following our instructions, and the check fires the
+        // moment Nexus starts BEFORE the external rigctld does. Observed live, the advice
+        // was "change rigctld TCP Port … to 4532": a hard-coded 4532 that, in exactly this
+        // configuration, tells the operator to change a number to itself. The cure he needs
+        // is not a port at all — his rigctld isn't up yet — and the message never said so.
+        let mut manual = cat_transport(4532, None);
+        manual.rig_model = 2; // NET rigctl
+        manual.rig_conn = "network".into();
+        manual.rig_addr = "127.0.0.1:4532".into();
+        let m = cat_port_conflict(&manual).expect("both ends on 4532 is still a conflict");
+        assert!(
+            !m.contains("to 4532"),
+            "never advise changing a port to the number it already is: {m}"
+        );
+        assert!(
+            m.contains("running") || m.contains("started"),
+            "names the real cure — the external rigctld is not up yet: {m}"
+        );
+        assert!(
+            m.contains("rigctld TCP Port"),
+            "…and still names the field for the operator who meant Nexus to launch one: {m}"
+        );
+
         // A serial rig has no rig_addr in play at all.
         let mut serial = cat_transport(4532, None);
         serial.rig_addr = "127.0.0.1:4532".into(); // stale value from a previous config
@@ -10765,18 +10858,26 @@ mod tests {
             "serial: rig_addr is unused"
         );
 
-        // …and it still REACHES the operator on the path where it is true: nothing listening,
-        // so `open_cat` is about to spawn a daemon that would dial itself. (The companion
-        // guard is `open_rig_coexists_with_an_existing_rigctld`, where the identical config
-        // with an external rigctld ON that port must come out CONNECTED, not conflicted.)
-        let free = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port() // released on drop
-        };
+        // …and it still REACHES the operator on the path where it is true: the probe found no
+        // rigctld, so `open_cat` is about to spawn a daemon that would dial itself. (The
+        // companion guard is `open_rig_coexists_with_an_existing_rigctld`, where the identical
+        // config with an external rigctld ON that port must come out CONNECTED, not conflicted
+        // — which is also what pins this guard as being AFTER the probe, not before it.)
+        //
+        // ⚠️ THE PORT IS HELD, NOT SAMPLED-AND-RELEASED. Reading a `:0` port and dropping the
+        // listener leaves the number free for the rest of the run, and other tests in this
+        // binary bind `:0` concurrently — one of them taking it and ANSWERING sends `open_cat`
+        // down the coexist branch and reds this guard for a reason that has nothing to do with
+        // it (measured: "Sharing the rigctld already on :36779"). A listener that accepts
+        // nothing and says nothing is precisely `PortReply::Silent`, and holding it makes the
+        // port un-stealable for the length of the check.
+        let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let free = squatter.local_addr().unwrap().port();
         let mut spawning = cat_transport(free, None);
         spawning.rig_conn = "network".into();
         spawning.rig_addr = format!("127.0.0.1:{free}");
         let (_rig, proc, probe) = open_rig(&spawning, true);
+        drop(squatter);
         assert!(proc.is_none(), "never spawns into its own port");
         assert_eq!(probe.ok, Some(false));
         assert!(

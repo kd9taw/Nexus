@@ -197,4 +197,35 @@ describe('the port hint tells the truth about TCI', () => {
     expect(text).toMatch(/13013/)
     expect(text).toMatch(/50001/)
   })
+
+  // ⭐ THE HINT IS RENDERED ON `rigConn === 'network'` ALONE — no model condition — so a
+  // sentence about which port belongs in this field is a claim about EVERY model. "50001 is
+  // not a CAT port" is true of the Thetis/PowerSDR CAT profiles and false of the one model
+  // the same sentence tells the operator to go and find: take its advice, tick Show all
+  // models, select "TCI (SunSDR / ExpertSDR)" (7), and the correct Network Address IS
+  // 127.0.0.1:50001 — Hamlib tci1x's own default, and what `service.rs` spawns
+  // `rigctld -m 7 -r 127.0.0.1:50001` against.
+  it('does not call 50001 the wrong box while the TCI model is the one selected', async () => {
+    await openRadioTab(networkRadio(7, 'TCI (SunSDR / ExpertSDR)'))
+    const text = screen.getByText(/Running an SDR program/).textContent ?? ''
+    // 50001 is this operator's address. Nothing may tell him it is not a CAT port, or that
+    // some other box is the route "we recommend".
+    expect(text).not.toMatch(/not a CAT port/i)
+    expect(text).not.toMatch(/\bnot\b[^.]{0,40}TCI Server/i)
+    // It must name his number as the one that belongs here.
+    expect(text).toMatch(/50001/)
+    expect(text).toMatch(/TCI Server/)
+  })
+
+  // The claim "beta in Hamlib" is not readable from the artifact we ship: `rig_caps.status`
+  // in the bundled libhamlib-4.dll is an enum, not a string, so nothing in this build can
+  // check it. It matched upstream source at the time of writing and nothing keeps it true.
+  it('makes no claim about Hamlib maturity that this build cannot check', async () => {
+    for (const model of [2054, 7] as const) {
+      cleanup()
+      await openRadioTab(networkRadio(model, 'x'))
+      const text = screen.getByText(/Running an SDR program/).textContent ?? ''
+      expect(text).not.toMatch(/beta|alpha|experimental/i)
+    }
+  })
 })

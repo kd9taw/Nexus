@@ -2860,21 +2860,44 @@ export function SettingsPanel({
                       Thetis field report was a rig served on a port that is Thetis's TCI
                       default, not its CAT default. Read the port out of the program.
 
-                      ⚠️ The TCI sentence says only that 50001 is the wrong box for THIS field.
-                      It may not say Nexus can't drive TCI — it can: `rigmodels` ships
-                      (7, "TCI (SunSDR / ExpertSDR)") and the bundled libhamlib-4.dll carries
-                      tci1x.c (its own default is 127.0.0.1:50001). The reporting operator's
-                      port was 50001, and "Show all models" puts that entry in front of him. */}
-                  <span className="settings-hint">
-                    Running an SDR program? Read the port out of the program, don't guess it:{' '}
-                    <strong>Thetis</strong> → Setup ▸ Serial/Network/Midi CAT ▸{' '}
-                    <em>TCP/IP CAT Server</em> (its own box, factory 13013 — <em>not</em> the
-                    TCI Server box next to it, factory 50001: TCI is a separate protocol with
-                    its own Hamlib model, "TCI (SunSDR / ExpertSDR)" (model 7, under Show all
-                    models, beta in Hamlib), so 50001 is not a CAT port and the CAT server
-                    above is the route we recommend); <strong>SmartSDR CAT</strong> → 5002;{' '}
-                    <strong>piHPSDR</strong> → 19090. Whatever it shows, type that.
-                  </span>
+                      ⚠️ WHICH BOX IS THE RIGHT BOX DEPENDS ON THE MODEL, so this sentence is
+                      gated on it. This row renders on `rigConn === 'network'` alone, so an
+                      unconditional claim about port 50001 is a claim about EVERY model — and
+                      "50001 is not a CAT port" is false for the one model the same sentence
+                      sends the operator to find. `rigmodels` ships (7, "TCI (SunSDR /
+                      ExpertSDR)"), the bundled libhamlib-4.dll carries tci1x.c whose own
+                      default is 127.0.0.1:50001, and `service.rs` spawns
+                      `rigctld -m 7 -r <that address>`. Tick Show all models, pick 7, and
+                      50001 is exactly what belongs in this field.
+
+                      Nothing here claims a Hamlib maturity level: `rig_caps.status` in the
+                      shipped DLL is an enum, not a string, so no part of this build can check
+                      such a claim, and an unbacked one in shipped UI text is how the previous
+                      wording went stale. */}
+                  {form.rigModel === 7 ? (
+                    <span className="settings-hint">
+                      Running an SDR program? Read the port out of the program, don't guess it:{' '}
+                      You have the <strong>TCI</strong> model (7) selected, so this field wants
+                      the <em>TCI Server</em> port — <strong>Thetis</strong> → Setup ▸
+                      Serial/Network/Midi CAT ▸ <em>TCI Server</em>, factory 50001, i.e.
+                      127.0.0.1:50001, which is also what Hamlib's TCI backend defaults to.
+                      (The <em>TCP/IP CAT Server</em> box beside it, factory 13013, is the other
+                      route — it needs a CAT profile such as "Thetis", not model 7.) Whatever
+                      the program shows, type that.
+                    </span>
+                  ) : (
+                    <span className="settings-hint">
+                      Running an SDR program? Read the port out of the program, don't guess it:{' '}
+                      <strong>Thetis</strong> → Setup ▸ Serial/Network/Midi CAT ▸{' '}
+                      <em>TCP/IP CAT Server</em> (its own box, factory 13013 — with a CAT
+                      profile selected it is <em>not</em> the TCI Server box next to it,
+                      factory 50001: TCI is a separate protocol with its own Hamlib model,
+                      "TCI (SunSDR / ExpertSDR)" (model 7, under Show all models). Pick that
+                      model and 50001 becomes the right number; with this one, the CAT server
+                      above is the route we recommend); <strong>SmartSDR CAT</strong> → 5002;{' '}
+                      <strong>piHPSDR</strong> → 19090. Whatever it shows, type that.
+                    </span>
+                  )}
                 </label>
               )}
 
