@@ -109,6 +109,17 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
         ch("12m", "HF", 24.915, "USB", "12 m · FT8", n),
         ch("10m", "HF", 28.074, "USB", "10 m · FT8", n),
         ch("6m", "VHF", 50.313, "USB", "6 m · FT8", n),
+        // ⚠️ 4 m IS NOT A WORLDWIDE BAND, and it is the only one in this table that
+        // is not. It exists on a CEPT secondary basis (footnote ECA9, 69.9–70.5 MHz)
+        // in IARU Region 1 only, with national edges that differ by tens of kHz —
+        // 70.154 is inside DL's 70.150–70.210 by 4 kHz and OUTSIDE CT, I and LY
+        // altogether — and the US has NO 4 m allocation at any class. The dial is
+        // WSJT-X's own R1 default (`models/FrequencyList.cpp`, flagged `preferred`;
+        // it is row 52 of `paritylab/wsjtx_freqs.txt`, the table this plan is
+        // generated from, and was simply dropped in transcription — the other three
+        // 4 m rows from that file ship in the MSK144/JT65/WSPR plans below). The note
+        // is the tooltip an operator reads before keying, so it says so.
+        ch("4m", "VHF", 70.154, "USB", "4 m · FT8", "standard FT8 calling frequency (WSJT-X default) — IARU Region 1 only, no US allocation; 4 m band edges vary widely by country, confirm yours before transmitting"),
         ch("2m", "VHF", 144.174, "USB", "2 m · FT8", n),
         ch("70cm", "UHF", 432.065, "USB", "70 cm · FT8", n),
         ch("23cm", "UHF", 1296.174, "USB", "23 cm · FT8", n),
@@ -393,6 +404,82 @@ pub fn band_for_dial(dial_mhz: f64) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    /// 4 m is the one band Nexus ships that exists ALMOST EVERYWHERE EXCEPT THE US
+    /// (IARU Region 1 only; CEPT footnote ECA9), so it is the band where a
+    /// US-table-shaped assumption shows up. Drive the resolution the operator
+    /// actually performs — pick 4 m on a tier, get a dial — rather than restating
+    /// the constants.
+    #[test]
+    fn the_4m_band_exists_end_to_end() {
+        use crate::dto::Tier;
+        // (band, mode) → dial, through the same dispatch the cockpit uses.
+        let dial = |t: Tier| -> Option<f64> {
+            band_plan_for(t)
+                .into_iter()
+                .find(|c| canonical_band(&c.band) == "4m")
+                .map(|c| c.dial_mhz)
+        };
+        // The four WSJT-X modes with a 70 MHz row in their default table, and only
+        // those four (WSJT-X `models/FrequencyList.cpp`; `paritylab/wsjtx_freqs.txt`).
+        assert_eq!(dial(Tier::Ft8), Some(70.154));
+        assert_eq!(dial(Tier::Jt65), Some(70.102));
+        assert_eq!(dial(Tier::Msk144), Some(70.230));
+        assert_eq!(dial(Tier::Wspr), Some(70.091));
+        // FT4 and Q65 have NO 4 m frequency upstream — an invented one would point
+        // an operator at a dial nobody watches, in a band whose national edges vary.
+        assert_eq!(dial(Tier::Ft4), None);
+        assert_eq!(dial(Tier::Q65), None);
+        // Every one of those dials must name itself back as 4 m, or the label the
+        // ADIF/interop wire carries disagrees with the dial the rig is on.
+        for f in [70.091, 70.102, 70.154, 70.230] {
+            assert_eq!(super::band_for_dial(f), Some("4m"), "{f} MHz is 4 m");
+        }
+    }
+
+    /// ⚠️ THE US OPERATOR HAS NO 4 m ALLOCATION AT ALL — no class, no segment, no
+    /// exception. The 4 m channels are shipped for the app's Region-1 users, so the
+    /// guarantee is that they stay *pickable* while remaining *unkeyable* for a US
+    /// class: the existing TX lockout answers, the same way it does for a Technician
+    /// on 20 m phone. Nothing here may become `true` without an FCC allocation.
+    #[test]
+    fn no_us_license_class_may_key_a_4m_channel() {
+        use crate::privileges::{phone_home, segment_start, tx_allowed};
+        use crate::settings::{LicenseClass, OperatingMode};
+        let us = [
+            LicenseClass::Technician,
+            LicenseClass::General,
+            LicenseClass::Extra,
+        ];
+        // Judge the EMISSION, not the dial: USB data sits ~1.5 kHz above the dial.
+        let off = 0.0015;
+        for class in us {
+            for f in [70.091, 70.102, 70.154, 70.230] {
+                assert!(
+                    !tx_allowed(class, f + off, OperatingMode::Digital),
+                    "{class:?} must not key 4 m data at {f}"
+                );
+            }
+            assert!(!tx_allowed(class, 70.200, OperatingMode::Phone));
+            assert!(!tx_allowed(class, 70.200, OperatingMode::Cw));
+            // No home dial either — the band drops out of every picker rather than
+            // publishing a start the transmit gate would then refuse.
+            for m in [
+                OperatingMode::Digital,
+                OperatingMode::Cw,
+                OperatingMode::Phone,
+            ] {
+                assert_eq!(segment_start(class, "4m", m), None, "{class:?} 4 m {m:?}");
+            }
+            assert_eq!(phone_home(class, "4m"), None);
+        }
+        // The non-US class keys it — that is who the band is for.
+        assert!(tx_allowed(
+            LicenseClass::Open,
+            70.154 + off,
+            OperatingMode::Digital
+        ));
+    }
+
     #[test]
     fn the_23cm_band_exists_end_to_end() {
         // IC-9700 support: dial→band, the FT8 channel at the verified 1296.174,
@@ -668,8 +755,8 @@ mod tests {
             (ft1_20.dial_mhz - 14.0905).abs() < 1e-9,
             "FT1 20m stays native .0905"
         );
-        // The full standard set is present (13 + 23 cm for the IC-9700 class).
-        assert_eq!(ft8_band_plan().len(), 14);
+        // The full standard set is present (13 + 4 m + 23 cm for the IC-9700 class).
+        assert_eq!(ft8_band_plan().len(), 15);
         assert!(ft8_band_plan().iter().all(|c| c.mode == "USB"));
     }
 

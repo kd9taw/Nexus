@@ -23,7 +23,12 @@ const BAND_RANGES: BandRange[] = [
   { lo: 24.89, hi: 24.99, label: '12m' },
   { lo: 28.0, hi: 29.7, label: '10m' },
   { lo: 50.0, hi: 54.0, label: '6m' },
-  { lo: 70.0, hi: 70.5, label: '4m' }, // EU allocation — the backend band plan has it
+  // IARU Region 1 only (CEPT secondary, footnote ECA9) — the backend band plan has it.
+  // 70.0–71.0 is the ADIF Band Enumeration, WSJT-X's models/Bands.cpp and `band_for_dial`'s
+  // own arm; this used to stop at 70.5, so a UK NoV holder above it read as no band at all
+  // while the backend still called it 4 m. National edges vary widely INSIDE this range —
+  // the range is the ADIF identity, never a licence claim.
+  { lo: 70.0, hi: 71.0, label: '4m' },
   { lo: 144.0, hi: 148.0, label: '2m' },
   { lo: 222.0, hi: 225.0, label: '1.25m' },
   { lo: 420.0, hi: 450.0, label: '70cm' },

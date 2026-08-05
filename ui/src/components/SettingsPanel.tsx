@@ -222,6 +222,7 @@ const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
   { band: '12m', mode: 'FT8', mhz: 24.915 },
   { band: '10m', mode: 'FT8', mhz: 28.074 },
   { band: '6m', mode: 'FT8', mhz: 50.313 },
+  { band: '4m', mode: 'FT8', mhz: 70.154 },
   { band: '2m', mode: 'FT8', mhz: 144.174 },
   { band: '70cm', mode: 'FT8', mhz: 432.065 },
   { band: '23cm', mode: 'FT8', mhz: 1296.174 },
@@ -237,8 +238,17 @@ const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
   { band: '2m', mode: 'FT4', mhz: 144.17 },
 ]
 
-/** Bands/modes offered in the override editor (the stock table's coverage). */
-const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '2m', '70cm', '23cm']
+/** Bands offered in the override editor AND in the two band-routing surfaces (per-radio
+ * coverage chips, routing-rule bands, the routing test) — the four lists share this one.
+ * So it is not "the stock table's coverage": it must cover every stock row (or a row is
+ * unreachable to override — 4 m was) plus every band a station might route a rig to.
+ * 1.25 m is here for the routing half — no FT8/FT4 row exists upstream, but the band is
+ * fully supported (`privileges::VHF` 222–225 all-mode from Technician up, `band_for_dial`,
+ * `cw_activity_mhz`, native + Q65/JT65 channels) and a 1.25 m rig could not be declared.
+ * 33 cm is deliberately absent: `band_for_dial` cannot name a 902 MHz dial and the
+ * privilege table has no 902–928 segment, so offering it would produce an unlabellable
+ * frequency. Modes stay FT8/FT4 — the override table's own scope. */
+const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '23cm']
 const FREQ_MODES = ['FT8', 'FT4']
 
 /** The mode classes radio ROUTING decides on, with the operator-facing labels (must match the Rust
