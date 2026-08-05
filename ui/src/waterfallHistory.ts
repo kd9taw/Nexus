@@ -16,6 +16,14 @@
 // pause + scrollback with honest per-row frequency mapping across retunes.
 //
 // Pure TS + typed arrays, no DOM: unit-tested independently of the canvas.
+//
+// Both the store (`push`) and the re-render (`renderInto`) go through `resampleRow`, the
+// SAME bin→pixel mapping the live bottom-row path uses. They used to disagree: the live
+// path interpolated, these two point-sampled, so a palette switch / zoom / resize / pause
+// repainted the whole accumulated waterfall as hard-edged rectangles — the operator's
+// "looks so 8 bit" (2026-08-03).
+
+import { resampleRow } from './waterfall'
 
 /** One stored row's metadata. */
 export interface RowFrame {
@@ -37,12 +45,15 @@ export class WaterfallHistory {
   private frames: Float64Array // [loHz, hiHz, tsMs] × depth
   private head = 0 // next write index (ring)
   private count = 0 // rows stored (≤ depth)
+  /** Reused resample scratch (cols wide) so `push` allocates nothing per row. */
+  private scratch: Float32Array
 
   constructor(cols: number, depth = DEFAULT_DEPTH) {
     this.cols = Math.max(1, cols | 0)
     this.depth = Math.max(2, depth | 0)
     this.data = new Uint8Array(this.depth * this.cols)
     this.frames = new Float64Array(this.depth * 3)
+    this.scratch = new Float32Array(this.cols)
   }
 
   get columns(): number {
@@ -55,8 +66,12 @@ export class WaterfallHistory {
   }
 
   /** Append one row of NORMALIZED intensities (0..1 → stored as 0..255). `row` may be any
-   * length — it is resampled to the history's column count with peak-preserving max-pooling
-   * (a decimated carrier must not vanish; AetherSDR's downsample rule). */
+   * length — it is resampled to the history's column count by `resampleRow`: max-pooled
+   * when the row is WIDER than cols (a decimated carrier must not vanish; AetherSDR's
+   * downsample rule) and interpolated when it is NARROWER. The narrow case is the FT
+   * waterfall's (512 bins into 1024 columns): the old max-pool degenerated there to plain
+   * duplication — each bin written to ⌈cols/n⌉ identical columns — baking a staircase into
+   * history that no amount of render-side smoothing could undo. */
   push(row: ArrayLike<number>, loHz: number, hiHz: number, tsMs: number): void {
     const base = this.head * this.cols
     const n = row.length
@@ -67,16 +82,13 @@ export class WaterfallHistory {
         this.data[base + i] = v <= 0 ? 0 : v >= 1 ? 255 : (v * 255) | 0
       }
     } else {
-      // Resample to cols: for each destination cell take the MAX over its source span.
+      // Resample onto the column grid over the row's own span (view === row, so the only
+      // regime that applies is the n↔cols ratio).
+      const s = this.scratch
+      resampleRow(row, loHz, hiHz, loHz, hiHz, s)
       for (let i = 0; i < this.cols; i++) {
-        const s0 = Math.floor((i * n) / this.cols)
-        const s1 = Math.max(s0 + 1, Math.floor(((i + 1) * n) / this.cols))
-        let m = 0
-        for (let s = s0; s < s1 && s < n; s++) {
-          const v = row[s]
-          if (v > m) m = v
-        }
-        this.data[base + i] = m <= 0 ? 0 : m >= 1 ? 255 : (m * 255) | 0
+        const v = s[i]
+        this.data[base + i] = !(v > 0) ? 0 : v >= 1 ? 255 : (v * 255) | 0
       }
     }
     const f = this.head * 3
@@ -116,7 +128,9 @@ export class WaterfallHistory {
    * tail). Columns outside a row's stored span render the palette floor (lut[0..2]).
    *
    * Cold-path only (palette/zoom/resize/scrollback): O(outW × outH). The hot path
-   * appends via `push` + the caller's retained-buffer copyWithin scroll.
+   * appends via `push` + the caller's retained-buffer copyWithin scroll — and goes
+   * through the same `resampleRow`, so a rebuild reproduces the live picture instead
+   * of replacing it with a blockier one.
    */
   renderInto(
     out: Uint8ClampedArray,
@@ -131,6 +145,7 @@ export class WaterfallHistory {
     const floorR = lut[0]
     const floorG = lut[1]
     const floorB = lut[2]
+    const px = new Float32Array(outW)
     for (let y = 0; y < outH; y++) {
       // Bottom row = newest (age offsetRows), top row = oldest visible.
       const age = offsetRows + (outH - 1 - y)
@@ -146,19 +161,22 @@ export class WaterfallHistory {
         }
         continue
       }
-      const rowSpan = fr.hiHz - fr.loHz
+      // Stored columns for this row, resampled onto the viewport. NaN = this pixel's
+      // frequency is outside the row's own span (a retune) → palette floor.
+      const idx = (this.head - 1 - age + this.depth * 2) % this.depth
+      const stored = this.data.subarray(idx * this.cols, (idx + 1) * this.cols)
+      resampleRow(stored, fr.loHz, fr.hiHz, viewLoHz, viewHiHz, px)
       for (let x = 0; x < outW; x++) {
-        const hz = viewLoHz + (span * (x + 0.5)) / outW
+        const v = px[x]
         const p = o + x * 4
-        if (hz < fr.loHz || hz > fr.hiHz) {
+        if (Number.isNaN(v)) {
           out[p] = floorR
           out[p + 1] = floorG
           out[p + 2] = floorB
           out[p + 3] = 255
           continue
         }
-        const col = Math.min(this.cols - 1, Math.floor(((hz - fr.loHz) / rowSpan) * this.cols))
-        const li = this.at(age, col) * 4
+        const li = (v <= 0 ? 0 : v >= 255 ? 255 : Math.round(v)) * 4
         out[p] = lut[li]
         out[p + 1] = lut[li + 1]
         out[p + 2] = lut[li + 2]

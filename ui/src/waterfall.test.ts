@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI } from './waterfall'
+import { agcRange, applyGainZero, normalize, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -299,5 +299,77 @@ describe('themeColormap', () => {
 
   it('falls back to inferno for an unknown theme', () => {
     expect(themeColormap('whatever')).toBe('inferno')
+  })
+})
+
+describe('resampleRow (bin → pixel)', () => {
+  const fill = (n: number) => new Float32Array(n)
+
+  it('INTERPOLATES when a bin is wider than a pixel — the "8 bit" blocks are gone', () => {
+    // 2 bins over 200 Hz drawn across 8 px: 4 px per bin. Nearest-neighbour (what the
+    // history's cold path used to do) paints two hard 4-px blocks — the operator's
+    // "blocky" report. The ramp below is the fix, and the values are exact.
+    const out = fill(8)
+    resampleRow([0, 1], 0, 200, 0, 200, out)
+    // Bin centers are 50 Hz and 150 Hz; pixel centers 12.5, 37.5, … 187.5.
+    expect(Array.from(out)).toEqual([0, 0, 0.125, 0.375, 0.625, 0.875, 1, 1])
+    // …and the block signature (only the two source values ever appearing) is gone.
+    expect(new Set(out).size).toBeGreaterThan(2)
+  })
+
+  it('holds the edge value outside the outermost bin centers, never wrapping', () => {
+    const out = fill(4)
+    resampleRow([0.25, 0.75], 0, 100, 0, 100, out)
+    expect(out[0]).toBeCloseTo(0.25, 6) // below the first bin center → held
+    expect(out[3]).toBeCloseTo(0.75, 6) // above the last → held
+    expect(out[1]).toBeGreaterThan(out[0])
+    expect(out[2]).toBeGreaterThan(out[1])
+  })
+
+  it('MAX-POOLS when a pixel covers several bins, so a lone carrier cannot vanish', () => {
+    // 64 bins into 8 px = 8 bins per pixel. Point-sampling would miss bin 37 entirely.
+    const row = new Array(64).fill(0)
+    row[37] = 1
+    const out = fill(8)
+    resampleRow(row, 0, 6400, 0, 6400, out)
+    expect(Array.from(out)).toEqual([0, 0, 0, 0, 1, 0, 0, 0]) // px 4 covers bins 32–39
+  })
+
+  it('is an exact copy when the pixel grid matches the bin grid', () => {
+    const row = [0.1, 0.9, 0.4, 0.6]
+    const out = fill(4)
+    resampleRow(row, 200, 3000, 200, 3000, out)
+    row.forEach((v, i) => expect(out[i]).toBeCloseTo(v, 6))
+  })
+
+  it('marks pixels outside the row span NaN so the caller paints the palette floor', () => {
+    // Row spans 500–1500 Hz; the view starts at 0, so the low half has no data. Clamping
+    // to bin 0 there (what the live path used to do) smears the row's edge bin across it.
+    const out = fill(8)
+    resampleRow([1, 0, 0, 0], 500, 1500, 0, 1000, out)
+    expect(Number.isNaN(out[0])).toBe(true)
+    expect(Number.isNaN(out[3])).toBe(true) // pixel center 437.5 Hz — still below the row
+    expect(Number.isNaN(out[4])).toBe(false) // 562.5 Hz — inside
+    expect(out[4]).toBeCloseTo(1, 6)
+  })
+
+  it('yields all-NaN on degenerate input rather than a fabricated row', () => {
+    const empty = fill(4)
+    resampleRow([], 0, 4000, 0, 4000, empty)
+    expect(Array.from(empty).every(Number.isNaN)).toBe(true)
+    const zeroSpan = fill(4)
+    resampleRow([1, 2, 3], 0, 4000, 1000, 1000, zeroSpan)
+    expect(Array.from(zeroSpan).every(Number.isNaN)).toBe(true)
+  })
+
+  it('maps a zoomed sub-window onto the right bins', () => {
+    // Row 0–4000 Hz in 4 bins (1 kHz each, centers 500/1500/2500/3500); view 2000–3000.
+    const out = fill(2)
+    resampleRow([0, 0, 1, 0], 0, 4000, 2000, 3000, out)
+    // Pixel centers 2250 and 2750 Hz sit symmetrically either side of bin 2's 2500 Hz
+    // center, so both read 0.75 — proof the mapping is bin-CENTER aligned, not edge
+    // aligned (an edge-aligned map puts the peak half a bin, ~500 Hz here, off).
+    expect(out[0]).toBeCloseTo(0.75, 6)
+    expect(out[1]).toBeCloseTo(0.75, 6)
   })
 })

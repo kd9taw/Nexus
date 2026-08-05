@@ -11,6 +11,32 @@ import { sampleLut, type ColormapName } from './colormaps'
  * ~0 dBr rather than a fabricated full-scale range). */
 export const MIN_SPAN = 1e-6
 
+/**
+ * Span of the spectrum row's intensity axis, in dB. A row value is LINEAR IN dB: `0` is
+ * `-WF_DB_SPAN` dBFS and `1` is full scale.
+ *
+ * ⚠️ MIRRORS `tempo_core::spectrum::DB_SPAN` (crates/tempo-core/src/spectrum.rs) — the producer
+ * is what puts values on this axis, and this is the only way a consumer turns one back into dB.
+ * The two must move together.
+ *
+ * Before 2026-08-04 the axis was amplitude-linear against each row's own loudest bin, and dB
+ * was recovered with `20·log10(a/b)`. Every such call site is now `spanDb`; a stray `log10` on
+ * a row value is a bug that will not throw, it will just print a wrong number at the operator.
+ */
+export const WF_DB_SPAN = 120
+
+/** dB between two values on the row's intensity axis — the display-value → dB conversion.
+ *  `spanDb(floor, ceil)` is the dynamic range a `{floor, ceil}` AGC window covers. */
+export function spanDb(floor: number, ceil: number): number {
+  return (ceil - floor) * WF_DB_SPAN
+}
+
+/** A display-value delta for `db` dB on the row's intensity axis — the inverse of `spanDb`,
+ *  for clamps that are naturally stated in dB (PhoneScope's minimum visual span). */
+export function dbToSpan(db: number): number {
+  return db / WF_DB_SPAN
+}
+
 function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x
 }
@@ -80,6 +106,83 @@ export function applyGainZero(
   let c = f + span * widthFactor
   if (!(c > f)) c = f + MIN_SPAN
   return { floor: f, ceil: c }
+}
+
+/**
+ * Resample one spectrum row onto `out.length` output pixels spanning [`viewLoHz`,
+ * `viewHiHz`] — the ONE bin→pixel mapping every waterfall surface uses, live and
+ * re-rendered alike.
+ *
+ * A row's bin `i` covers [lo + i·w, lo + (i+1)·w) and holds the PEAK power in that
+ * span (`tempo_core::spectrum::power_spectrum`), so its representative frequency is
+ * the bin CENTER, lo + (i+0.5)·w. Output pixel `x` covers its own band the same way.
+ * Two regimes fall out of that, and both are needed:
+ *
+ * - **A pixel covers more than one bin (decimating).** MAX over the bins it covers,
+ *   so a single-bin carrier can never fall between pixels. WSJT-X aggregates per
+ *   pixel column for the same reason (`widegraph.cpp` dataSink2, `binsPerPixel`).
+ * - **A bin covers more than one pixel (upsampling — the normal FT case: 512 bins,
+ *   ~360 in view, across 1200–1900 device px).** LINEAR INTERPOLATION between the
+ *   neighbouring bin centers. Point-sampling here paints each bin as a hard 3–5 px
+ *   rectangle: the operator's "looks so 8 bit" (2026-08-03). Below the first bin
+ *   center / above the last the edge value is held rather than extrapolated.
+ *
+ * Pixels whose center falls outside [`rowLoHz`, `rowHiHz`] — and every pixel of a
+ * degenerate row/view — are written **NaN**, so the caller paints the palette floor
+ * instead of smearing the row's edge bin across a band that has no data.
+ *
+ * Writes exactly `out.length` values and allocates nothing; `out` is a caller-owned
+ * scratch buffer reused across rows.
+ */
+export function resampleRow(
+  row: ArrayLike<number>,
+  rowLoHz: number,
+  rowHiHz: number,
+  viewLoHz: number,
+  viewHiHz: number,
+  out: Float32Array,
+): void {
+  const outW = out.length
+  if (outW === 0) return
+  const nBins = row.length
+  const rowSpan = rowHiHz - rowLoHz
+  const viewSpan = viewHiHz - viewLoHz
+  if (nBins === 0 || !(rowSpan > 0) || !(viewSpan > 0)) {
+    out.fill(NaN)
+    return
+  }
+  const binHz = rowSpan / nBins
+  const pxHz = viewSpan / outW
+  const decimating = pxHz > binHz
+  for (let x = 0; x < outW; x++) {
+    const fLo = viewLoHz + x * pxHz
+    const fMid = fLo + pxHz * 0.5
+    if (fMid < rowLoHz || fMid > rowHiHz) {
+      out[x] = NaN
+      continue
+    }
+    if (decimating) {
+      let i0 = Math.floor((fLo - rowLoHz) / binHz)
+      let i1 = Math.ceil((fLo + pxHz - rowLoHz) / binHz) - 1
+      if (i0 < 0) i0 = 0
+      if (i1 > nBins - 1) i1 = nBins - 1
+      if (i1 < i0) i1 = i0
+      let m = row[i0]
+      for (let i = i0 + 1; i <= i1; i++) {
+        const v = row[i]
+        if (v > m) m = v
+      }
+      out[x] = m
+    } else {
+      let t = (fMid - rowLoHz) / binHz - 0.5
+      if (t < 0) t = 0
+      else if (t > nBins - 1) t = nBins - 1
+      const b0 = Math.floor(t)
+      const b1 = b0 + 1 < nBins ? b0 + 1 : nBins - 1
+      const frac = t - b0
+      out[x] = row[b0] * (1 - frac) + row[b1] * frac
+    }
+  }
 }
 
 /**
@@ -313,4 +416,31 @@ export function tuneTarget(
   if (ctrlKey) return 'both'
   if (shiftKey) return 'tx'
   return 'rx'
+}
+
+/**
+ * Span of a spectrum row's intensity axis, in dB.
+ *
+ * A row value is LINEAR IN dB: `0.0` is `WF_DB_SPAN` dB below full scale, `1.0` is full scale.
+ * That is what makes equal dB steps equal palette steps — WSJT-X does the same, converting to
+ * dB (`flat4.f90:18-20`) and indexing its palette linearly in dB (`plotter.cpp:194-197`).
+ *
+ * ⚠️ MIRRORS `tempo_core::spectrum::DB_SPAN`. The producer bakes the axis; this number is the
+ * only way back from a display value to dB. The two must move together.
+ *
+ * ⚠️ A display value is a LEVEL, not a magnitude — so thresholds relative to the noise floor are
+ * ADDITIVE here, never multiplicative. `floor * 2` was "6 dB up" on the old amplitude axis and is
+ * meaningless on this one (see `dbAbove`, and `tuneSnap.ts` for what it silently broke).
+ */
+export const WF_DB_SPAN = 120
+
+/** dB between two display values (`ceil - floor` expressed in dB). */
+export function displaySpanDb(floor: number, ceil: number): number {
+  return (ceil - floor) * WF_DB_SPAN
+}
+
+/** The display value `db` dB above `level` — the axis-correct form of an old `level * mult`
+ *  threshold (`mult` → `20·log10(mult)` dB). Not clamped: callers compare, they don't render. */
+export function dbAbove(level: number, db: number): number {
+  return level + db / WF_DB_SPAN
 }

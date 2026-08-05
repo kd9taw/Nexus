@@ -7,6 +7,7 @@ import {
   bakeLut,
   isRfScopeSource,
   normalize,
+  resampleRow,
   resolveColormap,
   WATERFALL_ZOOMS,
   coerceZoomSpan,
@@ -75,12 +76,25 @@ interface Props {
   cursors?: { hz: number; color: string; label: string }[]
   /** Header hint text override (default: the left/right/Shift/Ctrl legend). */
   hint?: string
-  /** New-row poll cadence (ms). The producer makes a fresh row every 20 ms, so this only
-   * decides how many are SHOWN. Default 120 = the FT surfaces (slot-synchronous mode; ~8
-   * rows/s is plenty and matches WSJT-X). The live-instrument surfaces (RTTY cockpit, SSTV
-   * band) pass 50 to match the rig scope's 20 Hz (PhoneScope) — at 120 they discarded 5 of
-   * every 6 rows, the operator's "smoothed out" report (2026-07-30). Reduced-motion still
-   * overrides to the gentler 480 either way. */
+  /** New-row poll cadence (ms) — and, because the producer publishes every 20 ms
+   * (`tempo_audio::rxdsp::TICK_MS`), also how many published frames each drawn row stands
+   * for: ~6 at the default 120 (the FT surfaces), ~2.5 at 50.
+   *
+   * ⚠️ This doc used to claim 120 was "slot-synchronous mode" and "matches WSJT-X". BOTH
+   * WERE FALSE and went unexamined for it: nothing in this component synchronises to an FT
+   * slot (`acc`/`rowMs` is a free-running accumulator), and WSJT-X draws 0.69 rows/s
+   * (`m_waterfallAvg` 5 × a 288 ms symspec hop, widegraph.cpp:66,160-172) — 12× SLOWER
+   * than us, not equal.
+   *
+   * Why 120 stays 120 on the FT surfaces, now that it has a real reason: it buys ~6 frames
+   * per row against WSJT-X's default of 5, and a viewport of ~450 device rows holds ~54 s
+   * of history — 3½ FT8 cycles, which is what the operator actually reads the waterfall
+   * for. Halving it would halve BOTH (noisier floor, ~1½ cycles on screen) and triple the
+   * IPC, which several mounted waterfalls each pay a 512-float row for.
+   *
+   * The live-instrument surfaces (RTTY cockpit, SSTV band) pass 50 to match the rig scope's
+   * 20 Hz (PhoneScope) — at 120 they discarded 5 of every 6 rows, the operator's "smoothed
+   * out" report (2026-07-30). Reduced-motion still overrides to the gentler 480 either way. */
   rowMs?: number
 }
 
@@ -151,7 +165,12 @@ export function Waterfall({
   // so the cold paths re-render FROM DATA — instant palette recolor of history, smear-free
   // zoom/resize, pause + scrollback. The hot path appends + scrolls a retained RGBA buffer
   // (no canvas readback; the spectrum canvas is now write-only).
-  const historyRef = useRef(new WaterfallHistory(1024))
+  // Columns = the audio feed's own bin count (`rxdsp::compute_row` BINS), so a row is stored
+  // EXACTLY — no resample on the way in. Storing 1024 forced an upsampling push that
+  // interpolated a one-bin FT8 tone down to 0.8× peak before the renderer ever saw it, and
+  // invented nothing to show for it (the resample to device pixels happens on the way out).
+  // PhoneScope keeps 1024 because it pushes device-width rows, i.e. it decimates.
+  const historyRef = useRef(new WaterfallHistory(512))
   const [paused, setPaused] = useState(false)
   const pausedRef = useRef(paused)
   pausedRef.current = paused
@@ -250,6 +269,9 @@ export function Waterfall({
     let retImg: ImageData | null = null
     let retW = 0
     let retH = 0
+    // Reused per-column resample scratch (device width) — no per-row garbage.
+    let magBuf: Float32Array | null = null
+    let magBufW = 0
     const retained = (Wd: number, wfHd: number): ImageData => {
       if (!retBuf || !retImg || retW !== Wd || retH !== wfHd) {
         retBuf = new Uint8ClampedArray(Wd * wfHd * 4)
@@ -466,22 +488,36 @@ export function Waterfall({
       const out = retBuf!
       out.copyWithin(0, Wd * 4)
       const lut = lutRef.current
-      // device-x → view frequency → bin using the row's actual span, interpolated.
+      // device-x → view frequency → bin, through the SAME mapping the history rebuild
+      // uses (resampleRow: max-pool where a pixel covers several bins, interpolate where
+      // a bin covers several pixels). Before this they disagreed twice over — the live
+      // row interpolated off bin EDGES while the rebuild point-sampled bin cells — so a
+      // palette switch / zoom / resize / pause turned the accumulated waterfall blocky
+      // and nudged it sideways half a bin.
       const vlo = viewLoRef.current
       const vhi = viewHiRef.current
+      if (!magBuf || magBufW !== Wd) {
+        magBuf = new Float32Array(Wd)
+        magBufW = Wd
+      }
+      const mag = magBuf
+      resampleRow(row, rowLo, rowHi, vlo, vhi, mag)
       const base = (wfHd - 1) * Wd * 4
       for (let x = 0; x < Wd; x++) {
-        const f = vlo + (x / Wd) * (vhi - vlo)
-        let bin = ((f - rowLo) / (rowHi - rowLo)) * (nBins - 1)
-        if (bin < 0) bin = 0
-        else if (bin > nBins - 1) bin = nBins - 1
-        const b0 = Math.floor(bin)
-        const b1 = Math.min(nBins - 1, b0 + 1)
-        const frac = bin - b0
-        const v = row[b0] * (1 - frac) + row[b1] * frac
+        const v = mag[x]
+        const o = base + x * 4
+        // NaN = this column's frequency is outside the row's span (a view wider than the
+        // feed) — palette floor, exactly as the rebuild paints it. The old clamp smeared
+        // the row's edge bin across that band instead.
+        if (Number.isNaN(v)) {
+          out[o] = lut[0]
+          out[o + 1] = lut[1]
+          out[o + 2] = lut[2]
+          out[o + 3] = 255
+          continue
+        }
         const t = normalize(v, dispFloor, dispCeil)
         const li = (t >= 1 ? 255 : Math.round(t * 255)) * 4
-        const o = base + x * 4
         out[o] = lut[li]
         out[o + 1] = lut[li + 1]
         out[o + 2] = lut[li + 2]
