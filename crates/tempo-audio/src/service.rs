@@ -241,6 +241,14 @@ const MAX_QSO_REC_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
+
+/// How often to re-attempt an audio device that failed to open (ms).
+///
+/// 2 s is a compromise the operator never sees: fast enough that switching the rig on recovers
+/// before he has finished reaching for the mouse, slow enough that a genuinely absent device is
+/// not hammered — a failed `snd_pcm_open` is cheap but not free, and the loop ticks every 20 ms,
+/// so retrying every tick would be 50 probes a second forever on a machine with no sound card.
+const AUDIO_RETRY_MS: f64 = 2_000.0;
 /// How often to read the NEXT transmit meter while keyed — the mirror image of the RX health
 /// poll. One meter is read per interval (round-robin over SWR/ALC/Po/COMP), so at 150 ms each
 /// meter refreshes ~1.7×/s: live enough to set mic gain against the moving ALC bar, while never
@@ -1577,6 +1585,19 @@ struct RadioLoop {
     /// and skip the rebuild, leaving the OLD radio's sound-card stream running (the "audio never
     /// leaves the FTDX10" bug). Consumed (taken) in the step() audio-rebuild guard.
     force_audio_rebuild: bool,
+    /// When to re-attempt an audio device that FAILED to open (loop-clock ms), or `None` when
+    /// there is nothing to retry.
+    ///
+    /// ⚠️ WITHOUT THIS THERE IS NO RECOVERY AT ALL. `self.applied = want` runs regardless of
+    /// whether the reopen succeeded, so after one failed attempt `audio_differs` is false forever
+    /// and the only other trigger (`force_audio_rebuild`) fires solely on a dual-radio switch.
+    /// The commit that made device resolution strict advertised "the rig switched on AFTER the
+    /// app" as the case it protects — and that case was NOT recovered: the single attempt lands
+    /// ~20 ms after launch, and re-saving the SAME device in Settings is a no-op because
+    /// `want == applied`. The operator was stuck on the fallback device until he restarted, with
+    /// a banner telling him to do the one thing that would not help. Found by the change's own
+    /// adversarial review, 2026-08-05.
+    audio_retry_at: Option<f64>,
     /// The NATIVE RF panadapter worker (Flex SmartSDR VITA / Icom CI-V) for the ACTIVE radio, if
     /// it has one. Reconciled each step from `native_spectrum_kind(want)`: started when the active
     /// radio gains a native scope, dropped (threads stopped + pan removed) when it loses it or the
@@ -1815,6 +1836,7 @@ impl RadioLoop {
             voice_mic_failed: false,
             monitor_reapply: false,
             force_audio_rebuild: false,
+            audio_retry_at: None,
             spectrum_src: None,
             spectrum_src_key: None,
             dax_src: None,
@@ -2523,6 +2545,12 @@ impl RadioLoop {
             let mut audio_rebuilt = false;
             // A dual-radio switch forces the rebuild (a new radio's device must be opened even if the
             // name compares equal — e.g. two "system default"s); else rebuild only on a real change.
+            // A due retry re-arms the rebuild without touching `applied` — the device name has
+            // not changed, only its availability, so `audio_differs` can never see this.
+            if self.audio_retry_at.is_some_and(|t| now >= t) {
+                self.audio_retry_at = None;
+                self.force_audio_rebuild = true;
+            }
             if !self.handoff_deferred
                 && (std::mem::take(&mut self.force_audio_rebuild)
                     || want.audio_differs(&self.applied))
@@ -2566,10 +2594,11 @@ impl RadioLoop {
                             eng.set_audio_error(None);
                         }
                         self.err_owner = ErrOwner::None;
-                        // The fresh backend has NO mic stream — a stale-true flag
-                        // here fed the recorder empty audio for the rest of a
-                        // live recording, silently (review MAJOR). The rising
-                        // edge reopens the mic on the new backend next loop.
+                        self.audio_retry_at = None; // it opened — stop retrying
+                                                    // The fresh backend has NO mic stream — a stale-true flag
+                                                    // here fed the recorder empty audio for the rest of a
+                                                    // live recording, silently (review MAJOR). The rising
+                                                    // edge reopens the mic on the new backend next loop.
                         self.voice_mic_open = false;
                     }
                     Err(e) => {
@@ -2580,6 +2609,10 @@ impl RadioLoop {
                         // A REAL device error owns the line — monitor/voice-mic
                         // notices may neither overwrite nor clear it.
                         self.err_owner = ErrOwner::Device;
+                        // Arm the retry. A rig powered on after Nexus, or a codec held for a
+                        // moment by another app, now recovers on its own instead of stranding
+                        // the operator on the fallback device — see `audio_retry_at`.
+                        self.audio_retry_at = Some(now + AUDIO_RETRY_MS);
                     }
                 }
             } else {
@@ -9617,6 +9650,67 @@ mod tests {
         assert!(!rig.keyed, "PTT dropped immediately on Stop TX");
         assert!(state.tx_until_ms.is_none(), "TX hold cleared");
         assert!(backend.flush_calls > 0, "queued TX audio was flushed");
+    }
+
+    #[test]
+    fn a_device_that_failed_to_open_is_retried_until_it_comes_back() {
+        // ⭐ THE RIG SWITCHED ON AFTER NEXUS. Strict device resolution (cb43c1a8) correctly
+        // refuses to substitute the laptop microphone for the operator's chosen codec — but with
+        // no retry the refusal was permanent: `self.applied = want` runs whether or not the
+        // reopen succeeded, so `audio_differs` is false from the next tick and the only other
+        // trigger fires solely on a dual-radio switch. One ~20 ms attempt at launch, then
+        // nothing. And re-saving the SAME device in Settings is a no-op, because `want ==
+        // applied` — so the banner told the operator to do the one thing that could not help.
+        //
+        // Found by that change's own adversarial review. The fix is a timed re-arm that does not
+        // touch `applied`: the device NAME never changed, only whether it would open.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut rr) = (no_sinks(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut backend = MockBackend::new();
+
+        // The device is missing for the first two attempts, then the operator powers the rig on.
+        let attempts = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let a = attempts.clone();
+        let mut reopen = move |_: &Transport| -> Result<MockBackend, String> {
+            a.set(a.get() + 1);
+            if a.get() <= 2 {
+                Err("no such device".into())
+            } else {
+                Ok(MockBackend::new())
+            }
+        };
+        state.force_audio_rebuild = true; // launch: open the configured device
+
+        let mut t = 0.0;
+        for _ in 0..8 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut reopen,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            t += AUDIO_RETRY_MS; // let each retry fall due
+        }
+
+        assert!(
+            attempts.get() >= 3,
+            "a failed open must be RETRIED — the rig may be switched on after the app. Saw only \
+             {} attempt(s), which is the pre-fix behaviour: one try at launch and never again",
+            attempts.get()
+        );
+        assert!(
+            state.audio_retry_at.is_none(),
+            "once the device opens the retry must disarm, not keep rebuilding the backend"
+        );
     }
 
     #[test]

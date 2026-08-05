@@ -36,10 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that means receiving from the built-in microphone and sending transmit audio to the speakers,
   while PTT still keys the radio over CAT: a dead unmodulated carrier on the air that looks like
   everything is working. You now get a banner naming the device that failed. Nexus keeps running on
-  the system default so the radio is not dead in the water, and retries your device once as the
-  radio loop starts — so a codec that was busy for only a moment recovers on its own. If it is
-  still unavailable, the banner stays up and saving your audio settings tries again. "System
-  default" is still a real choice and still behaves exactly as before. The device picker also
+  the system default so the radio is not dead in the water, and **keeps retrying your chosen device
+  every couple of seconds** — so a rig you switch on after Nexus, or a codec another program was
+  holding for a moment, is picked up on its own within a few seconds and the banner clears itself.
+  "System default" is still a real choice and still behaves exactly as before. The device picker also
   marks a saved device that is not currently present as **not detected**.
 
 - **FT8 decodes the station answering your CQ when you transmit off your receive frequency.**
