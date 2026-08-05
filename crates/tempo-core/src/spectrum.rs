@@ -1,11 +1,43 @@
 //! Power-spectrum estimator for the waterfall display.
 //!
 //! [`power_spectrum`] runs a Hann-windowed real FFT over the captured audio window and resamples
-//! the magnitude spectrum onto the requested display bins (peak-hold), normalized to 0..1 with a
-//! mild square-root compression for a pleasant waterfall. This is a real FFT (via `microfft`), so
-//! the resolution is set by the FFT size, not a handful of Goertzel taps — finer bins over a wider
-//! band than the old 120-tap bank. The single-tone Goertzel ([`tone_power`]) is retained for the CW
-//! decoder's envelope detector, which needs power at exactly one pitch, not a whole spectrum.
+//! the magnitude spectrum onto the requested display bins (peak-hold). This is a real FFT (via
+//! `microfft`), so the resolution is set by the FFT size, not a handful of Goertzel taps — finer
+//! bins over a wider band than the old 120-tap bank. The single-tone Goertzel ([`tone_power`]) is
+//! retained for the CW decoder's envelope detector, which needs power at exactly one pitch, not a
+//! whole spectrum.
+//!
+//! # The intensity axis is dB, and its reference is absolute (2026-08-04)
+//!
+//! The row is still 0..1 — that contract is unchanged and every consumer still reads it — but a
+//! row value is now LINEAR IN dB across [`DB_SPAN`] dB below full scale, not linear in amplitude,
+//! and the reference is a full-scale sine rather than the row's own loudest bin.
+//!
+//! Both halves of that were visible, and together they are the operator's "the waterfall looks so
+//! 8 bit" (2026-08-03):
+//!
+//! - **Amplitude-linear spends the palette where there is nothing to show.** Palette index was
+//!   proportional to the amplitude ratio, so on a measured synthetic FT8 row the noise floor —
+//!   95% of the picture — occupied LUT indices 0-15, about 4 bits of tone at ~1 step per dB,
+//!   while the loudest 15 dB got the whole colourful middle. Every ordinary FT8 signal rendered
+//!   as the same dark blue smudge and strong ones leapt blue→green→red with nothing between.
+//!   WSJT-X converts to dB (`flat4.f90:18-20`) and indexes its palette linearly in dB at a fixed
+//!   8.16 steps/dB (`plotter.cpp:136,194-197`).
+//! - **A per-frame reference makes the whole display breathe.** Dividing each row by its own
+//!   maximum moved the reference 50 times a second. FT8 stations key up and drop together, so at
+//!   every 15 s slot edge the row max stepped 20-30 dB and the entire background stepped with it;
+//!   the UI's ~1.4 s AGC ema lagged that step rather than absorbing it, painting a band across
+//!   the full width every cycle. WSJT-X has no per-frame normalization anywhere — it fits and
+//!   subtracts a baseline and leaves the scale absolute.
+//!
+//! Deliberately NOT changed here: there is still no temporal averaging (WSJT-X sums
+//! `m_waterfallAvg` = 5 spectra per drawn row, `widegraph.cpp:160-172`). Its frames span 1.365 s
+//! stepped 288 ms, so one of its rows integrates ~2.5 s; ours is a single 171 ms snapshot, which
+//! is why our noise floor is grainier than theirs. That grain is the price of the liveliness the
+//! operator asked for on 2026-08-01 ("smoothed out to remove response"), when the window was
+//! HALVED for exactly this reason — averaging it back would undo that. On the dB axis the same
+//! grain reads as film grain rather than the hard-quantized dither it was before, because there
+//! are now ~90 palette levels at the noise floor instead of ~15 to render it in.
 
 /// Goertzel power estimate at frequency `f` (Hz) over `samples` at `sr` (Hz).
 fn goertzel(samples: &[f32], sr: f32, f: f32) -> f32 {
@@ -38,6 +70,31 @@ pub fn tone_power(samples: &[f32], sr: f32, f: f32) -> f32 {
 /// edge fade in instead of appear. Raw bins are 5.86 Hz — still finer than the 512-bin display
 /// (7.81 Hz over 0–4000 Hz), so nothing visible is lost; the FFT is ~half the work.
 const FFT_N: usize = 2048;
+
+/// Display span of the intensity axis, in dB. A row value is LINEAR IN dB across
+/// `[-DB_SPAN, 0]` dBFS: `0.0` = the axis floor, `1.0` = full scale.
+///
+/// ⚠️ The UI mirrors this as `WF_DB_SPAN` in `ui/src/waterfall.ts` — it is the only way a
+/// consumer can turn a display value back into dB (the legend readouts, PhoneScope's
+/// minimum-dynamic-range clamp). Change one and you must change the other.
+///
+/// 120 dB is chosen to clear any real capture without clipping: a full-scale sine sits at
+/// the top and a quiet rig's per-bin noise floor lands around -95 dBFS, so nothing real is
+/// ever crushed against either end. The span is not a contrast control — the UI's visual-AGC
+/// re-fits the occupied part of it to the palette every row.
+pub const DB_SPAN: f32 = 120.0;
+
+/// Raw-FFT power that a full-scale (amplitude 1.0) sine deposits in its own bin under the Hann
+/// window: the bin magnitude is `A·N·CG/2` with Hann's coherent gain `CG = 0.5`, so `p = (N/4)²`.
+/// This is the axis's ABSOLUTE reference — it does not move with the signal.
+const FULL_SCALE_POWER: f32 = ((FFT_N / 4) * (FFT_N / 4)) as f32;
+
+/// One raw bin's power → its 0..1 display value on the dB axis (see [`DB_SPAN`]).
+/// Silence (p = 0) floors at 0.0 rather than producing -inf.
+fn db_display(power: f32) -> f32 {
+    let db = 10.0 * (power / FULL_SCALE_POWER).max(1e-30).log10();
+    ((db + DB_SPAN) / DB_SPAN).clamp(0.0, 1.0)
+}
 
 /// Hann window coefficient for sample `i` of an `FFT_N`-length frame (reduces spectral leakage so a
 /// carrier reads as a clean peak, not a smear across neighbouring bins).
@@ -100,10 +157,10 @@ pub fn power_spectrum(samples: &[f32], sr: f32, f_lo: f32, f_hi: f32, bins: usiz
             })
             .collect::<Vec<f32>>()
     });
-    // Peak-normalize to 0..1 + sqrt compression (unchanged UI/AGC contract).
-    let max = out.iter().copied().fold(0.0f32, f32::max).max(1e-12);
+    // Raw power → the dB display axis. ABSOLUTE (against full scale), so the reference never
+    // moves with the signal — see `db_display` and the two axis tests below.
     for v in out.iter_mut() {
-        *v = (*v / max).sqrt();
+        *v = db_display(*v);
     }
     out
 }
@@ -139,7 +196,16 @@ mod tests {
             (peak_f - 1500.0).abs() < (f_hi - f_lo) / bins as f32 * 2.0,
             "peak at {peak_f} Hz"
         );
-        assert!((row[peak] - 1.0).abs() < 1e-6, "peak normalized to 1.0");
+        // A full-scale sine sits at the TOP of the dB axis. This used to read exactly 1.0 by
+        // construction — every row was divided by its own loudest bin, so the peak was 1.0
+        // whatever the signal level was. Now it is 1.0 because the tone really is 0 dBFS, and
+        // the tolerance is the Hann coherent gain's departure from exactly 0.5 (the window uses
+        // an N-1 denominator), not slack.
+        assert!(
+            (row[peak] - 1.0).abs() < 0.002,
+            "a full-scale tone reads the top of the axis (got {})",
+            row[peak]
+        );
     }
 
     #[test]
@@ -171,11 +237,134 @@ mod tests {
         let peak1 = near(bin_of(1500.0));
         let peak2 = near(bin_of(1540.0));
         let dip = row[bin_of(1520.0)];
+        // Both full-scale tones reach the top of the axis...
         assert!(
-            peak1 > 0.6 && peak2 > 0.6,
+            peak1 > 0.99 && peak2 > 0.99,
             "both tones present (p1={peak1}, p2={peak2})"
         );
-        assert!(dip < 0.5, "resolved with a dip between them (dip={dip})");
+        // ...and the valley between them is a real null. Stated in dB, because the axis is dB:
+        // the old `dip < 0.5` was an amplitude-ratio threshold, and a log axis necessarily reads
+        // a deep null as a HIGH number (a 40 dB null is 0.67 of a 120 dB span, not 0.01). That
+        // made the old constant look violated by a result that is in fact ~40 dB of separation —
+        // far better than the ~6 dB the amplitude threshold actually demanded.
+        let null_db = (peak1.min(peak2) - dip) * DB_SPAN;
+        assert!(
+            null_db > 20.0,
+            "resolved with a deep null between them (only {null_db} dB down)"
+        );
+    }
+
+    /// A sum of `(freq, amplitude)` tones, for level-accuracy tests.
+    fn tones(spec: &[(f32, f32)], sr: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / sr;
+                spec.iter()
+                    .map(|(f, a)| a * (2.0 * std::f32::consts::PI * f * t).sin())
+                    .sum()
+            })
+            .collect()
+    }
+
+    /// Peak display value in the neighbourhood of `f` Hz of a 512-bin 0–4000 Hz row.
+    fn peak_near(row: &[f32], f: f32) -> f32 {
+        let b = (f / 4000.0 * 512.0) as usize;
+        row[b.saturating_sub(2)..(b + 3).min(row.len())]
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+    }
+
+    // 750 / 1500 / 2250 Hz are exact raw-bin centers at 12 kHz / 2048 (5.859375 Hz per bin),
+    // so these tests measure levels, not scalloping loss.
+    const F_A: f32 = 750.0;
+    const F_B: f32 = 1500.0;
+    const F_C: f32 = 2250.0;
+
+    // ⭐ THE AXIS CONTRACT. The display value must be LINEAR IN dB, so equal dB steps are equal
+    // palette steps everywhere — WSJT-X indexes its palette at a fixed 8.16 steps/dB
+    // (plotter.cpp:136,194-197) after converting to dB in flat4.f90:18-20.
+    //
+    // The old axis was amplitude-linear (`(p/max).sqrt()`), which spends the palette where
+    // there is no texture to show: measured on a synthetic FT8 row, the noise floor occupied
+    // LUT indices 0-15 — 15 of 256 levels, ~1 step per dB — while the top 15 dB got the entire
+    // colourful middle. That is the operator's "looks so 8 bit" (2026-08-03), literally: about
+    // 4 bits of tone across 95% of the picture.
+    #[test]
+    fn equal_db_steps_are_equal_display_steps() {
+        let sr = 12_000.0;
+        // Three tones 20 dB apart: 0, -20, -40 dBFS.
+        let s = tones(&[(F_A, 1.0), (F_B, 0.1), (F_C, 0.01)], sr, 4096);
+        let row = power_spectrum(&s, sr, 0.0, 4000.0, 512);
+        let (a, b, c) = (
+            peak_near(&row, F_A),
+            peak_near(&row, F_B),
+            peak_near(&row, F_C),
+        );
+        assert!(a > b && b > c, "monotonic in level (a={a}, b={b}, c={c})");
+        // 20 dB is 20/DB_SPAN of the axis, wherever it sits.
+        let step = 20.0 / DB_SPAN;
+        assert!(
+            (a - b - step).abs() < 0.005,
+            "0→-20 dB is one 20 dB step (got {})",
+            a - b
+        );
+        assert!(
+            (b - c - step).abs() < 0.005,
+            "-20→-40 dB is the SAME step (got {}) — the axis is dB-linear, not amplitude-linear",
+            b - c
+        );
+    }
+
+    // ⭐ THE REFERENCE CONTRACT. The axis is ABSOLUTE (dB relative to a full-scale sine), never
+    // per-frame. The old code divided every row by its own loudest bin, so the reference moved
+    // 50 times a second: FT8 stations all key up and drop together, so the row max stepped
+    // 20-30 dB at every 15 s slot edge and the whole background brightness stepped with it —
+    // a band across the full width every cycle, which the UI's 1.4 s AGC ema lagged rather
+    // than absorbed. WSJT-X has no per-frame normalization anywhere.
+    #[test]
+    fn a_loud_signal_does_not_move_the_rest_of_the_row() {
+        let sr = 12_000.0;
+        let quiet = power_spectrum(&tones(&[(F_C, 0.01)], sr, 4096), sr, 0.0, 4000.0, 512);
+        // The SAME weak tone, now with a full-scale station keyed up elsewhere in the band.
+        let loud = power_spectrum(
+            &tones(&[(F_C, 0.01), (F_A, 1.0)], sr, 4096),
+            sr,
+            0.0,
+            4000.0,
+            512,
+        );
+        let (before, after) = (peak_near(&quiet, F_C), peak_near(&loud, F_C));
+        assert!(
+            (before - after).abs() < 0.002,
+            "the weak tone reads the same with and without a loud neighbour \
+             ({before} → {after}); a moving reference IS the slot-edge pumping"
+        );
+    }
+
+    // The reference itself: full scale is the top of the axis, and halving the amplitude costs
+    // exactly 6.02 dB of it. Pins `FULL_SCALE_POWER` against the Hann coherent gain, so a change
+    // to the window can't silently slide the whole display up or down.
+    #[test]
+    fn full_scale_sits_at_the_top_of_the_axis() {
+        let sr = 12_000.0;
+        let full = peak_near(
+            &power_spectrum(&tones(&[(F_B, 1.0)], sr, 4096), sr, 0.0, 4000.0, 512),
+            F_B,
+        );
+        let half = peak_near(
+            &power_spectrum(&tones(&[(F_B, 0.5)], sr, 4096), sr, 0.0, 4000.0, 512),
+            F_B,
+        );
+        assert!(
+            (full - 1.0).abs() < 0.002,
+            "a full-scale sine reads ~1.0 (got {full})"
+        );
+        assert!(
+            (full - half - 6.0206 / DB_SPAN).abs() < 0.002,
+            "half amplitude is 6.02 dB down (got {} dB)",
+            (full - half) * DB_SPAN
+        );
     }
 
     // A large DC bias in the capture must not dominate the low bins (mean-removed + bin-0 skipped).

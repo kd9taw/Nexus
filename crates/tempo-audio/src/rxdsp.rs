@@ -470,6 +470,14 @@ mod tests {
     /// - 2026-08-01: WINDOW/FFT_N 4096 → 2048 for display liveliness (see `WINDOW`). The row
     ///   is now an FFT over half the history — deliberately different bytes. Resolution proof
     ///   unchanged: `resolves_two_close_tones` (tempo-core) still splits tones 40 Hz apart.
+    /// - 2026-08-04: the intensity axis became dB with an absolute full-scale reference
+    ///   (`tempo_core::spectrum` module header). Every value in the row changes, by design: it
+    ///   was `sqrt(p / row_max)` — amplitude-linear against a reference that moved every frame —
+    ///   and is now linear in dB across `DB_SPAN` below full scale. This is the operator's
+    ///   "the waterfall looks so 8 bit" fix, and it matches WSJT-X, which converts to dB
+    ///   unconditionally (`flat4.f90:18-20`, "If nflatten=0, convert to dB but do not flatten")
+    ///   and indexes its palette linearly in dB (`plotter.cpp:194`). Axis behaviour is proved by
+    ///   the three tests in `tempo_core::spectrum`; this digest only pins that it does not drift.
     #[test]
     fn the_row_for_a_known_input_is_byte_stable() {
         // The exact generator the golden used: a sawtooth over the analysis window.
@@ -494,7 +502,7 @@ mod tests {
             }
         }
         assert_eq!(
-            h, 6_920_642_816_737_317_696,
+            h, 2_880_453_805_003_294_649,
             "waterfall row digest drifted for a fixed input"
         );
     }
