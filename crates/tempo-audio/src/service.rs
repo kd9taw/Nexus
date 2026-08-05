@@ -4575,7 +4575,35 @@ impl RadioLoop {
         }
         let slot_over_in_flight = now < self.slot_tx_until_ms;
         let tx_off_cut = !eng.tx_enabled() && !slot_over_in_flight;
-        if self.tx_until_ms.is_some() && (slot_tx_abort || tx_off_cut) {
+        // ⚠️ THE HOLD GUARD IS ASYMMETRIC, DELIBERATELY — do not "tidy" this back into
+        // one condition.
+        //
+        //  • `tx_off_cut` STAYS under `tx_until_ms.is_some()` alone. That is the
+        //    operator's 2026-07-31 ruling quoted above: with no hold there is no over
+        //    to end, and a plain TX Off must never reach for the flush on its own.
+        //
+        //  • `slot_tx_abort` does NOT need a hold — it needs something ON THE AIR.
+        //    On a VOX / audio-keyed rig the radio is keyed BY THE AUDIO
+        //    (`rig.ptt(false)` is a no-op for `PttMode::Vox`, rig.rs), so dropping the
+        //    queued samples is the ONLY thing that can take it off the air — and this
+        //    arm is the one reachable `flush_output()` on the slot path. Gated on a
+        //    hold, Stop TX did NOTHING in exactly the state the idle self-heal below
+        //    exists for (rig keyed, no deadline — a previous unkey that never took):
+        //    that self-heal re-issues an unkey VOX ignores and never flushes, so the
+        //    queued audio kept radiating with nothing in the app able to drop it.
+        //
+        // `rig.keyed` — not an unconditional cut — is what widens it. An abort with
+        // NOTHING keyed and no hold has nothing to stop, and firing PTT-off anyway put
+        // a second unkey on the wire for every radio switch (a switch arms the abort),
+        // which `contended_switch_never_commands_the_old_rig_with_the_new_radios_settings`
+        // pins at exactly one. `manual_ptt_applied` is excluded for the same reason the
+        // self-heal excludes it: a physically held mic owns its own unkey path. A tune
+        // can never reach here — the tune branch above returns first.
+        let abort_has_something_to_cut =
+            self.tx_until_ms.is_some() || (rig.keyed && !self.manual_ptt_applied);
+        if (slot_tx_abort && abort_has_something_to_cut)
+            || (self.tx_until_ms.is_some() && tx_off_cut)
+        {
             crate::civ::diag::note(if slot_tx_abort {
                 "hard-stop TX: slot-TX abort (Stop TX / halt / watchdog) → unkey"
             } else {
@@ -9427,6 +9455,54 @@ mod tests {
         assert!(!rig.keyed, "PTT dropped immediately on Stop TX");
         assert!(state.tx_until_ms.is_none(), "TX hold cleared");
         assert!(backend.flush_calls > 0, "queued TX audio was flushed");
+    }
+
+    #[test]
+    fn stop_tx_flushes_queued_audio_on_a_vox_rig_with_no_deadline() {
+        // ⭐ VOX / audio-keyed rigs: the FLUSH is the only thing that stops the carrier.
+        //
+        // `PttMode::Vox` makes `rig.ptt(false)` a no-op (rig.rs) — the radio is keyed
+        // BY THE AUDIO, so the ONLY way the app can take a VOX rig off the air is to
+        // drop the queued TX samples. The hard-stop arm is the one reachable
+        // `flush_output()` for a slot over, and it was gated on `tx_until_ms.is_some()`
+        // — so in the exact state the idle self-heal exists for (rig keyed, no
+        // deadline: a previous unkey that never took) Stop TX did nothing at all. The
+        // self-heal re-issues `ptt(false)`, which VOX ignores, and never flushes, so
+        // the queued audio kept the transmitter up with nothing in the app able to
+        // drop it — the operator's stop button against a still-radiating radio.
+        //
+        // The UDP HaltTx arm already unkeys + flushes + clears the deadline
+        // unconditionally. The BUTTON must agree with the DATAGRAM.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let _ = rig.ptt(true); // the audio is what is keying this radio
+        let mut state = loop_state();
+        state.tx_until_ms = None; // no deadline — nothing will ever expire to flush it
+        engine.lock().unwrap().halt_tx(); // operator hits Stop TX
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        assert!(
+            backend.flush_calls > 0,
+            "Stop TX did NOT flush the queued TX audio — on a VOX rig the carrier \
+             stays up and nothing in the app can drop it"
+        );
+        assert!(!rig.keyed, "the loop's keyed flag is cleared");
+        assert!(state.tx_until_ms.is_none(), "no hold is left behind");
     }
 
     #[test]
