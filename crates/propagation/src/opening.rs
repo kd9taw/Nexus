@@ -2165,7 +2165,10 @@ mod tests {
         ];
         let bs: Vec<&PathSpot> = spots.iter().collect();
         let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
-        assert!(bf.anomaly_z >= cfg.z_open, "the two fresh locals still spike z");
+        assert!(
+            bf.anomaly_z >= cfg.z_open,
+            "the two fresh locals still spike z"
+        );
         assert!(
             !bf.raw_open(&cfg),
             "DX heard 90 minutes ago is not evidence the band is open now"
@@ -2226,8 +2229,8 @@ mod tests {
         let cfg = OpeningConfig::default();
         // 674–2163 km from EN52, every one past `vhf_short_km` (500).
         let grids = [
-            "EM28", "EN90", "FN03", "EM85", "EM74", "EM63", "FM18", "FN20", "FM29", "EM12",
-            "FN31", "DN70", "FN42", "DM43",
+            "EM28", "EN90", "FN03", "EM85", "EM74", "EM63", "FM18", "FN20", "FM29", "EM12", "FN31",
+            "DN70", "FN42", "DM43",
         ];
         let mut spots = Vec::new();
         for (i, g) in grids.iter().enumerate() {

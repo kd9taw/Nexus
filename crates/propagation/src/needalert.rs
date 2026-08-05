@@ -1283,7 +1283,10 @@ mod tests {
              skimmer and then printing \"spotted by DL8LAS\" is the same bug the \
              operator reported, just one line further down"
         );
-        assert!(kept.contains(&"DL8LAS"), "corroborators are kept, just demoted");
+        assert!(
+            kept.contains(&"DL8LAS"),
+            "corroborators are kept, just demoted"
+        );
 
         // Sanity on the operator's own side of the rule.
         assert!(hf_admit_spotters(&["W3LPL", "VE6WZ"], "KD9TAW").is_some());
