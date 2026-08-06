@@ -1409,34 +1409,252 @@ fn rect_lands_on_work_area(px: f64, py: f64, wx: f64, wy: f64, ww: f64, wh: f64,
 /// a different physical point per monitor, so validate in PHYSICAL px per candidate —
 /// mirroring tao's own resolution — rather than trusting any single window's scale factor.
 fn sanitize_free_bandmap_rect(app: &tauri::AppHandle, g: &BandmapWindow) -> (f64, f64, bool) {
+    sanitize_saved_rect(app, Some((g.x, g.y)), g.w, g.h)
+}
+
+/// One attached monitor reduced to what a rect decision needs: work area in PHYSICAL px plus
+/// that monitor's scale factor. Extracted from `tauri::Monitor` so [`resolve_saved_rect`] can
+/// be a pure function the tests drive with synthetic multi-monitor layouts — a real `Monitor`
+/// cannot be constructed outside a running app, which is why the stranding guard below could
+/// only ever test `rect_lands_on_work_area` in isolation.
+#[derive(Clone, Copy)]
+struct MonitorBox {
+    wx: f64,
+    wy: f64,
+    ww: f64,
+    wh: f64,
+    scale: f64,
+}
+
+fn monitor_box(m: &tauri::Monitor) -> MonitorBox {
+    let wa = m.work_area();
+    MonitorBox {
+        wx: wa.position.x as f64,
+        wy: wa.position.y as f64,
+        ww: wa.size.width as f64,
+        wh: wa.size.height as f64,
+        scale: m.scale_factor(),
+    }
+}
+
+/// THE DECISION CORE for replaying a saved window rect — shared by the torn-off band map and
+/// the main window so both get the same stranding and oversize protection. Pure + testable;
+/// [`sanitize_saved_rect`] is the live-monitor adapter.
+///
+/// `pos` is the saved top-left in LOGICAL px, or `None` for a record that carries a size but no
+/// position (the main window, first persisted while maximized). `None` takes the same branch as
+/// a position that no longer lands anywhere: size capped against the primary, caller centers.
+fn resolve_saved_rect(
+    pos: Option<(f64, f64)>,
+    w: f64,
+    h: f64,
+    monitors: &[MonitorBox],
+    primary: Option<MonitorBox>,
+) -> (f64, f64, bool) {
     // Reachability margin in LOGICAL px (scaled per candidate before use).
     const MARGIN: f64 = 32.0;
-    let monitors = app.available_monitors().unwrap_or_default();
-    let hit = monitors.iter().find(|m| {
-        let sf = m.scale_factor();
-        let wa = m.work_area();
-        rect_lands_on_work_area(
-            g.x * sf,
-            g.y * sf,
-            wa.position.x as f64,
-            wa.position.y as f64,
-            wa.size.width as f64,
-            wa.size.height as f64,
-            MARGIN * sf,
-        )
+    let hit = pos.and_then(|(x, y)| {
+        monitors.iter().find(|m| {
+            rect_lands_on_work_area(
+                x * m.scale,
+                y * m.scale,
+                m.wx,
+                m.wy,
+                m.ww,
+                m.wh,
+                MARGIN * m.scale,
+            )
+        })
     });
     // Cap w/h (logical) at the landing monitor's work area — or the primary's, where a
     // dropped-position window opens. If no monitor resolves at all (headless/API error),
     // leave w/h as saved; `min_inner_size` still floors them at build.
-    let cap = hit.cloned().or_else(|| app.primary_monitor().ok().flatten());
-    let (mut w, mut h) = (g.w, g.h);
+    let cap = hit.copied().or(primary);
+    let (mut w, mut h) = (w, h);
     if let Some(m) = &cap {
-        let sf = m.scale_factor();
-        let wa = m.work_area();
-        w = w.min(wa.size.width as f64 / sf);
-        h = h.min(wa.size.height as f64 / sf);
+        w = w.min(m.ww / m.scale);
+        h = h.min(m.wh / m.scale);
     }
     (w, h, hit.is_some())
+}
+
+/// [`resolve_saved_rect`] against the monitors attached RIGHT NOW.
+fn sanitize_saved_rect(
+    app: &tauri::AppHandle,
+    pos: Option<(f64, f64)>,
+    w: f64,
+    h: f64,
+) -> (f64, f64, bool) {
+    let monitors: Vec<MonitorBox> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(monitor_box)
+        .collect();
+    let primary = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| monitor_box(&m));
+    resolve_saved_rect(pos, w, h, &monitors, primary)
+}
+
+/// The main window's opening size from `tauri.conf.json` (`app.windows[label="main"]`). Needed
+/// here only for the maximized-on-a-first-run fallback in [`capture_main_window`]; keep the two
+/// in step.
+const MAIN_DEFAULT_INNER: (f64, f64) = (1200.0, 720.0);
+
+/// The main window's minimum inner size — `tauri.conf.json`'s `minWidth`/`minHeight`, re-applied
+/// in `setup` via `set_min_size`. [`restore_main_window`] must floor a saved rect at this
+/// EXPLICITLY: `set_min_size` constrains what the OS lets the OPERATOR drag to, but it does not
+/// retroactively clamp a programmatic `set_size`. Restoring a 400x300 record opened a 400x300
+/// window (measured on Windows 11, 4K at 125%), well under the supported floor.
+const MAIN_MIN_INNER: (f64, f64) = (900.0, 600.0);
+
+/// Persisted geometry (logical px) of the MAIN window, so Nexus reopens at the size and place
+/// the operator left it instead of the fixed rect in `tauri.conf.json`. A tiny sibling of
+/// settings.json exactly like `bandmap-window-*.json` — pure window state, written from the
+/// window-event handler and read in `setup`.
+///
+/// UI SCALE IS NOT IN HERE and must not be: the scale is a per-surface choice owned by the web
+/// layer (`nexus-ui-scale-mode` in localStorage, see `ui/src/useScale.ts`). Scale already
+/// survived a restart when the window size did not — which is exactly what the operator on
+/// issue #10 was describing.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default, PartialEq, Debug)]
+struct MainWindow {
+    w: f64,
+    h: f64,
+    /// Saved top-left. `None` means the size is known but the position is not — the record was
+    /// first written while maximized — and the window restores centered.
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
+    /// Reopen maximized. When set, `w`/`h`/`x`/`y` are the last UN-maximized rect, not the
+    /// maximized one — see [`capture_main_window`].
+    #[serde(default)]
+    maximized: bool,
+}
+
+fn main_window_path() -> PathBuf {
+    settings_path().with_file_name("main-window.json")
+}
+
+/// LOWER bound only, mirroring [`load_bandmap_window`]: the upper w/h cap and the position
+/// check need the live monitor list, so they run at restore time in [`resolve_saved_rect`].
+/// Rejects a blank or truncated record so a half-written file falls back to the tauri.conf
+/// default rather than opening a degenerate window.
+fn main_window_sane(g: MainWindow) -> Option<MainWindow> {
+    (g.w >= 200.0 && g.h >= 200.0).then_some(g)
+}
+
+fn load_main_window() -> Option<MainWindow> {
+    let g: MainWindow =
+        serde_json::from_str(&std::fs::read_to_string(main_window_path()).ok()?).ok()?;
+    main_window_sane(g)
+}
+
+fn save_main_window(g: &MainWindow) {
+    let p = main_window_path();
+    if let Ok(txt) = serde_json::to_string(g) {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(p, txt);
+    }
+}
+
+/// The maximized-close record: keep the last un-maximized rect, flip the flag. Pure half of
+/// [`capture_main_window`] so the reasoning is testable without a window.
+///
+/// A maximized window's `inner_size` IS the work area. Persisting that as the restored rect
+/// would reopen a NON-maximized frame at full-screen dimensions, and un-maximizing would then
+/// appear to do nothing. This is the same "read prior state, change one field" shape
+/// `capture_bandmap_window` uses to preserve `dock`.
+fn main_window_maximized_record(prior: Option<MainWindow>) -> MainWindow {
+    let mut g = prior.unwrap_or(MainWindow {
+        w: MAIN_DEFAULT_INNER.0,
+        h: MAIN_DEFAULT_INNER.1,
+        x: None,
+        y: None,
+        maximized: false,
+    });
+    g.maximized = true;
+    g
+}
+
+/// Snapshot the MAIN window's size+position on close so the next launch reopens where the
+/// operator left it. No-op for every other window — pop-outs have their own per-surface files.
+/// Captured on close (not per move/resize) for the same reason the band map is: one write, not
+/// one per drag frame.
+fn capture_main_window(window: &tauri::WebviewWindow) {
+    if window.label() != "main" {
+        return;
+    }
+    // A minimized window reports a bogus rect (Windows parks it near -32000,-32000) — the trap
+    // `capture_bandmap_window` documents. Skip it; the last good rect on disk stays.
+    if window.is_minimized().unwrap_or(false) {
+        return;
+    }
+    if window.is_maximized().unwrap_or(false) {
+        save_main_window(&main_window_maximized_record(load_main_window()));
+        return;
+    }
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let (Ok(size), Ok(pos)) = (window.inner_size(), window.outer_position()) else {
+        return;
+    };
+    save_main_window(&MainWindow {
+        w: size.width as f64 / scale,
+        h: size.height as f64 / scale,
+        x: Some(pos.x as f64 / scale),
+        y: Some(pos.y as f64 / scale),
+        maximized: false,
+    });
+}
+
+/// Floor a restored size at the main window's minimum. Pure, because the ORDER matters and the
+/// absence of this step shipped a 400x300 window in testing: the monitor cap runs first, this
+/// floor second, so on a display smaller than the minimum the minimum still wins.
+fn floor_main_size(w: f64, h: f64) -> (f64, f64) {
+    (w.max(MAIN_MIN_INNER.0), h.max(MAIN_MIN_INNER.1))
+}
+
+/// Replay the saved main-window geometry. Called from `setup` while the window is still HIDDEN
+/// (`tauri.conf.json` declares `visible: false` and the splash thread reveals it ~2s later), so
+/// the restore is never visible as a jump.
+///
+/// Size is capped DOWN to the monitor ([`resolve_saved_rect`]) and floored UP at
+/// [`MAIN_MIN_INNER`] — the floor is explicit because `set_min_size` does not clamp a
+/// programmatic `set_size` (verified on Windows: a saved 400x300 opened 400x300 without it).
+/// The cap runs first and the floor second, so on a display smaller than the minimum the
+/// minimum wins — the same precedence `min_inner_size` has over any other sizing.
+fn restore_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let Some(g) = load_main_window() else {
+        return;
+    };
+    let pos = match (g.x, g.y) {
+        (Some(x), Some(y)) => Some((x, y)),
+        _ => None,
+    };
+    let (w, h, keep_position) = sanitize_saved_rect(app, pos, g.w, g.h);
+    let (w, h) = floor_main_size(w, h);
+    let _ = window.set_size(tauri::LogicalSize::new(w, h));
+    match (keep_position, pos) {
+        // The saved top-left still lands on a monitor: exact restore.
+        (true, Some((x, y))) => {
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+        }
+        // Stale (that monitor was unplugged or rearranged) or never recorded: center instead of
+        // replaying a rect nothing displays. The main window is the whole app — stranding it
+        // off-screen leaves no in-app way back at all.
+        _ => {
+            let _ = window.center();
+        }
+    }
+    if g.maximized {
+        let _ = window.maximize();
+    }
 }
 
 /// Snap a band-map window to the left/right edge of its monitor's WORK AREA (excludes the
@@ -14715,6 +14933,10 @@ pub fn run() {
             // smallest window at which auto fit-scaling stays usable.
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.set_min_size(Some(tauri::LogicalSize::new(900.0, 600.0)));
+                // Reopen at the size and place the operator left. AFTER the min-size call above
+                // so a saved rect below the floor is clamped up rather than honoured, and while
+                // the window is still hidden so the restore never shows as a jump.
+                restore_main_window(app.handle(), &main);
             }
             // Pounce detector. Emits `pounce` to every window when a rare one appears — the
             // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
@@ -14810,6 +15032,9 @@ pub fn run() {
                 // Window); no-op for any non-band-map window.
                 if let Some(w) = app.get_webview_window(window.label()) {
                     capture_bandmap_window(&w);
+                    // ...and the main window's own rect. No-op for every other label, so the
+                    // cascade below still only writes band-map files.
+                    capture_main_window(&w);
                 }
                 // Closing the MAIN window tears down the whole app: close any torn-off panel
                 // windows too, so they don't linger — persisting each band map's geometry first.
@@ -14867,16 +15092,18 @@ pub fn run() {
 mod tests {
     use super::{
        assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
-        engine_lock, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
-        load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, qso_is_sat,
-        rect_lands_on_work_area,
-        resolve_bird, resolve_birds, run_sat_track, sanitize_profile, sat_excluded,
-        tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
-        tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path,
-        tle_set_currency, view_passes, write_json_atomic, AssistanceEvent,
-        AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SharedEngine,
-        SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
-        TleFlightGuard, TleSnapshot
+        engine_lock, floor_main_size, install_block_reason, is_complete_lotw_body,
+        iss_pass_from_tles,
+        load_tle_snapshot_from, main_window_maximized_record, main_window_sane, parse_sstv_mode,
+        profile_dir_name, qso_is_sat, rect_lands_on_work_area, resolve_bird, resolve_birds,
+        resolve_saved_rect, run_sat_track, sanitize_profile, sat_excluded, tle_absorb_foreign,
+        tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
+        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, tle_set_currency, view_passes,
+        write_json_atomic, AssistanceEvent, AssistanceSourceState, MainWindow, MonitorBox, SatBird,
+        SatTrackDto, SatTrackLoss, SatTrackRun, SharedEngine, TleFlightGuard, TleSnapshot,
+        MAIN_DEFAULT_INNER, MAIN_MIN_INNER, SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS,
+        TLE_FETCHING,
+        TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -16026,6 +16253,188 @@ mod tests {
         let on = |px, py| rect_lands_on_work_area(px, py, -1920.0, 0.0, 1920.0, 1040.0, 32.0);
         assert!(on(-1800.0, 100.0));
         assert!(!on(100.0, 100.0)); // primary's territory — not THIS monitor's hit
+    }
+
+    /// A synthetic monitor for the rect-restore core: work area in PHYSICAL px plus its scale,
+    /// which is all `resolve_saved_rect` reads. A real `tauri::Monitor` cannot be constructed
+    /// outside a running app — which is why the whole decision now lives in a pure function.
+    fn mon(wx: f64, wy: f64, ww: f64, wh: f64, scale: f64) -> MonitorBox {
+        MonitorBox {
+            wx,
+            wy,
+            ww,
+            wh,
+            scale,
+        }
+    }
+
+    /// ISSUE #10. The MAIN window reopened at the fixed 1200x720 from tauri.conf.json on every
+    /// launch — nothing captured its rect and nothing replayed one. The operator noticed at a
+    /// 150% manual UI scale (that DID persist, in localStorage, so the mismatch was visible),
+    /// but the size was lost at every scale. These guard the restore path against the same two
+    /// failure classes the band map already learned the hard way.
+    #[test]
+    fn a_saved_main_rect_on_an_unplugged_monitor_is_dropped_not_replayed() {
+        let laptop = mon(0.0, 0.0, 1920.0, 1040.0, 1.0);
+        // Saved on a second monitor to the right that is gone now. Replaying it verbatim would
+        // open the whole app off-screen — and unlike a band map there is no other window to
+        // recover from.
+        let (_, _, keep) = resolve_saved_rect(
+            Some((2600.0, 200.0)),
+            1600.0,
+            900.0,
+            &[laptop],
+            Some(laptop),
+        );
+        assert!(
+            !keep,
+            "a rect on a since-unplugged monitor must not be replayed"
+        );
+        // A rect that is still on this monitor restores exactly.
+        let (_, _, keep) =
+            resolve_saved_rect(Some((100.0, 100.0)), 1600.0, 900.0, &[laptop], Some(laptop));
+        assert!(keep);
+    }
+
+    #[test]
+    fn a_saved_main_rect_larger_than_the_current_screen_is_capped() {
+        // Saved on a 2560x1440 desktop, reopened on a 1366x768 laptop.
+        let laptop = mon(0.0, 0.0, 1366.0, 728.0, 1.0);
+        let (w, h, keep) = resolve_saved_rect(
+            Some((100.0, 100.0)),
+            2560.0,
+            1400.0,
+            &[laptop],
+            Some(laptop),
+        );
+        assert!(keep);
+        assert_eq!(
+            (w, h),
+            (1366.0, 728.0),
+            "must not reopen overhanging the screen"
+        );
+    }
+
+    /// The cap is in LOGICAL px, so it divides the monitor's PHYSICAL work area by that
+    /// monitor's own scale — a 4K panel at 200% holds a 1920x1040 logical window, not 3840x2080.
+    #[test]
+    fn the_restored_size_cap_is_logical_not_physical() {
+        let hidpi = mon(0.0, 0.0, 3840.0, 2080.0, 2.0);
+        let (w, h, keep) =
+            resolve_saved_rect(Some((100.0, 100.0)), 2400.0, 1300.0, &[hidpi], Some(hidpi));
+        assert!(keep);
+        assert_eq!((w, h), (1920.0, 1040.0));
+    }
+
+    /// A record written while maximized carries no position: restore centered rather than at an
+    /// invented origin, and still cap the size to the screen it opens on.
+    #[test]
+    fn a_main_record_with_no_saved_position_restores_centered() {
+        let m = mon(0.0, 0.0, 1920.0, 1040.0, 1.0);
+        let (w, h, keep) = resolve_saved_rect(None, 1200.0, 720.0, &[m], Some(m));
+        assert!(!keep, "no saved position -> the caller centers");
+        assert_eq!((w, h), (1200.0, 720.0));
+    }
+
+    /// Closing while MAXIMIZED must not overwrite the restored rect with the full-screen one:
+    /// the app would reopen a non-maximized frame at screen size, and un-maximizing would then
+    /// appear to do nothing.
+    #[test]
+    fn a_maximized_close_keeps_the_last_unmaximized_rect() {
+        let prior = MainWindow {
+            w: 1280.0,
+            h: 800.0,
+            x: Some(60.0),
+            y: Some(40.0),
+            maximized: false,
+        };
+        let g = main_window_maximized_record(Some(prior));
+        assert!(g.maximized);
+        assert_eq!((g.w, g.h), (1280.0, 800.0));
+        assert_eq!((g.x, g.y), (Some(60.0), Some(40.0)));
+    }
+
+    /// Maximized on a FIRST run, nothing on disk: fall back to the tauri.conf opening size with
+    /// NO position, so a later un-maximize lands centered instead of at some invented corner.
+    #[test]
+    fn a_first_run_maximized_close_records_no_position() {
+        let g = main_window_maximized_record(None);
+        assert!(g.maximized);
+        assert_eq!((g.x, g.y), (None, None));
+        assert_eq!((g.w, g.h), MAIN_DEFAULT_INNER);
+    }
+
+    /// THE 400x300 WINDOW. `set_min_size` constrains what the OS lets the operator DRAG to; it
+    /// does not clamp a programmatic `set_size`. Without an explicit floor, a saved record of
+    /// 400x300 — which passes the `main_window_sane` lower bound of 200 — reopened the app at
+    /// 400x300, under its own minimum and far under the 1024x768 supported floor. Measured on
+    /// Windows 11, 4K at 125%, before this floor existed.
+    #[test]
+    fn a_restored_size_under_the_minimum_is_floored() {
+        assert_eq!(floor_main_size(400.0, 300.0), MAIN_MIN_INNER);
+        // At or above the minimum, nothing is touched.
+        assert_eq!(floor_main_size(1425.6, 842.4), (1425.6, 842.4));
+        // Per axis, not all-or-nothing: a wide but short rect only gains height.
+        assert_eq!(floor_main_size(1600.0, 400.0), (1600.0, 600.0));
+    }
+
+    /// The floor beats the monitor cap. On a display smaller than the minimum, capping to the
+    /// work area would otherwise hand back a window below the app's own contract.
+    #[test]
+    fn the_minimum_outranks_the_monitor_cap() {
+        let tiny = mon(0.0, 0.0, 800.0, 480.0, 1.0);
+        let (w, h, _) = resolve_saved_rect(Some((0.0, 0.0)), 1200.0, 720.0, &[tiny], Some(tiny));
+        assert_eq!((w, h), (800.0, 480.0), "cap runs first");
+        assert_eq!(
+            floor_main_size(w, h),
+            MAIN_MIN_INNER,
+            "floor runs second and wins"
+        );
+    }
+
+    /// A blank or truncated file falls back to the tauri.conf default instead of opening a
+    /// degenerate window. LOWER bound only — the screen-size cap needs the live monitor list.
+    #[test]
+    fn a_degenerate_saved_main_rect_is_rejected() {
+        assert!(main_window_sane(MainWindow::default()).is_none());
+        assert!(main_window_sane(MainWindow {
+            w: 1200.0,
+            h: 12.0,
+            ..Default::default()
+        })
+        .is_none());
+        assert!(main_window_sane(MainWindow {
+            w: 1200.0,
+            h: 720.0,
+            ..Default::default()
+        })
+        .is_some());
+    }
+
+    /// The record round-trips, and a file missing the optional fields still loads — an operator
+    /// who saved a size under an older build must not have it thrown away.
+    #[test]
+    fn a_saved_main_record_round_trips_and_tolerates_missing_fields() {
+        let g = MainWindow {
+            w: 1440.0,
+            h: 900.0,
+            x: Some(120.0),
+            y: Some(80.0),
+            maximized: true,
+        };
+        let back: MainWindow = serde_json::from_str(&serde_json::to_string(&g).unwrap()).unwrap();
+        assert_eq!(back, g);
+        let size_only: MainWindow = serde_json::from_str(r#"{"w":1200,"h":720}"#).unwrap();
+        assert_eq!(
+            size_only,
+            MainWindow {
+                w: 1200.0,
+                h: 720.0,
+                x: None,
+                y: None,
+                maximized: false,
+            }
+        );
     }
 
     // Well-known 2008 ISS element set (NORAD 25544) — the same vectors the

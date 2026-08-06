@@ -5,6 +5,25 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Nexus reopens at the size and the place you left it.** The main window went back to its
+  stock 1200×720, centred, on every single launch — resize it to suit your screen, quit, and the
+  next start threw that away. It was most visible to operators running a manual UI scale on a
+  4K display, because the scale itself *was* being remembered: the app came back at 150% in a
+  window sized for 100%, the wrong shape for the setting it had just restored. The size was in
+  fact being lost at every scale; the scale mismatch only made it obvious. Nexus now records the
+  window's size and position when you close it and restores both next time. Maximized stays
+  maximized, and un-maximizing afterwards gives you back the size you had before rather than the
+  whole screen. Nothing is replayed blindly: a window saved on a monitor you have since
+  unplugged, or saved bigger than the display you are sitting at today, opens centred and
+  clamped to the screen you actually have instead of off-screen or overhanging — the main window
+  is the whole app, so stranding it where you cannot reach it would leave no way back. The
+  torn-off band map has restored itself this way for some time; this is the same treatment for
+  the main window, sharing the same monitor-validation code.
+
 ## [1.0.1] — 2026-08-05
 
 ### Added
