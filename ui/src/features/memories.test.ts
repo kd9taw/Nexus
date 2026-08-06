@@ -14,15 +14,18 @@ import {
   hotkeyRecallTarget,
   memoryKey,
   migrateV1Channel,
+  moveFavorite,
   moveMemory,
   parseChirpCsv,
   planRecall,
   saveFavoriteFromDial,
   setMemoryGroups,
   siteOffset,
+  STRIP_FAVORITE_LIMIT,
   toChirpCsv,
   toggleFavorite,
   updateMemory,
+  type MemoriesBank,
   type Memory,
 } from './memories'
 
@@ -132,6 +135,40 @@ describe('operations', () => {
     const r3 = addMemoryDeduped(r2.bank, { rxMhz: 146.94, mode: 'FM', ctcssEncHz: 91.5 })
     expect(r3.added).toBe(true)
     expect(memoryKey(r3.bank.memories[0])).not.toBe(memoryKey(r3.bank.memories[1]))
+  })
+
+  it('moveFavorite swaps RANKS — the previous/next ★, however far apart in the bank', () => {
+    // The cockpit strip's order is the master array FILTERED to favorites, so two
+    // visually adjacent ★ rows can sit many master slots apart. moveMemory swaps master
+    // NEIGHBOURS: pressing ▲ on rank 2 below would swap it with a non-favorite and change
+    // nothing the operator can see — the reported "▲ appears to do nothing".
+    const bank = (): MemoriesBank => ({
+      version: 2,
+      groups: [],
+      memories: [
+        mem({ id: 'a', favorite: true }),
+        mem({ id: 'x' }),
+        mem({ id: 'y' }),
+        mem({ id: 'b', favorite: true }),
+        mem({ id: 'z' }),
+        mem({ id: 'c', favorite: true }),
+      ],
+    })
+    const ranks = (b: MemoriesBank) => b.memories.filter((m) => m.favorite).map((m) => m.id)
+    const order = (b: MemoriesBank) => b.memories.map((m) => m.id)
+
+    // ONE press moves a whole rank, whatever sits between the two stars.
+    expect(ranks(moveFavorite(bank(), 'b', -1))).toEqual(['b', 'a', 'c'])
+    expect(ranks(moveFavorite(bank(), 'b', 1))).toEqual(['a', 'c', 'b'])
+    // moveMemory is what "adjacent" used to mean here — one press changes no rank at all.
+    expect(ranks(moveMemory(bank(), 'b', -1))).toEqual(['a', 'b', 'c'])
+    // Only the two favorites move; the non-favorites keep their master slots.
+    expect(order(moveFavorite(bank(), 'b', -1))).toEqual(['b', 'x', 'y', 'a', 'z', 'c'])
+    // Ends and non-targets are no-ops.
+    expect(order(moveFavorite(bank(), 'a', -1))).toEqual(order(bank()))
+    expect(order(moveFavorite(bank(), 'c', 1))).toEqual(order(bank()))
+    expect(order(moveFavorite(bank(), 'x', -1))).toEqual(order(bank())) // not a favorite
+    expect(order(moveFavorite(bank(), 'nope', 1))).toEqual(order(bank()))
   })
 
   it('groups: add/rename-safe/delete removes membership but keeps memories', () => {
@@ -337,6 +374,36 @@ describe('saveFavoriteFromDial (cockpit ＋)', () => {
     const { bank, result } = saveFavoriteFromDial(base, { rxMhz: 146.52, mode: 'FM' })
     expect(result).toBe('exists')
     expect(bank.memories).toHaveLength(1)
+  })
+
+  // The strip shows the first STRIP_FAVORITE_LIMIT favorites, so an APPENDED star past
+  // that count is saved and invisible — the exact "＋ did nothing" the star-the-existing
+  // branch was written to prevent. A new favorite therefore lands at RANK 1.
+  it('lands the new favorite at rank 1, so the chip appears with a full strip', () => {
+    let base = emptyBank()
+    for (let i = 0; i < STRIP_FAVORITE_LIMIT; i++) {
+      base = addMemory(base, { rxMhz: 145 + i * 0.01, mode: 'FM', favorite: true })
+    }
+    const { bank, result } = saveFavoriteFromDial(base, { rxMhz: 146.52, mode: 'FM' })
+    expect(result).toBe('added')
+    const favs = bank.memories.filter((m) => m.favorite)
+    expect(favs).toHaveLength(STRIP_FAVORITE_LIMIT + 1)
+    expect(favs[0].rxMhz).toBe(146.52)
+  })
+
+  it('stars an existing row at rank 1 too — it is equally new to the strip', () => {
+    let base = addMemory(emptyBank(), { rxMhz: 7.2, mode: 'LSB', favorite: true })
+    base = addMemory(base, { rxMhz: 146.52, mode: 'FM', favorite: false })
+    const { bank, result } = saveFavoriteFromDial(base, { rxMhz: 146.52, mode: 'FM' })
+    expect(result).toBe('starred')
+    expect(bank.memories.filter((m) => m.favorite).map((m) => m.rxMhz)).toEqual([146.52, 7.2])
+  })
+
+  it('inserts ahead of rank 1 only — non-favorites above it keep their slots', () => {
+    let base = addMemory(emptyBank(), { rxMhz: 3.965, mode: 'LSB', favorite: false })
+    base = addMemory(base, { rxMhz: 7.2, mode: 'LSB', favorite: true })
+    const { bank } = saveFavoriteFromDial(base, { rxMhz: 146.52, mode: 'FM' })
+    expect(bank.memories.map((m) => m.rxMhz)).toEqual([3.965, 146.52, 7.2])
   })
 })
 

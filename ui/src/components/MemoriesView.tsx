@@ -13,12 +13,14 @@ import {
   deleteGroup,
   deleteMemory,
   memoriesStore,
+  moveFavorite,
   moveMemory,
   newMemoryId,
   parseChirpCsv,
   renameGroup,
   setMemoryGroups,
   siteOffset,
+  STRIP_FAVORITE_LIMIT,
   toChirpCsv,
   toggleFavorite,
   updateMemory,
@@ -168,25 +170,38 @@ export function MemoriesView({
       m.rxMhz.toFixed(4).includes(query)
     )
   })
-  const shown = sort
-    ? [...filtered].sort((a, b) => {
-        const av = a[sort.col]
-        const bv = b[sort.col]
-        const c = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv))
-        return c * sort.dir
-      })
-    : filtered
+  // ★ Favorites (in the LIST) is the cockpit MEM strip written down: row n is chip n. Its
+  // order therefore has to be the MASTER order the strip and Ctrl+1..9 read — no column
+  // sort, no band sections, both of which would show a truthful set in a misleading order.
+  // Ranking is what makes the strip's cap legible and its ▲▼ meaningful. The Grid stays
+  // the CHIRP spreadsheet under every selection, sortable and sectioned as before.
+  const rankView = sel === 'fav' && !grid
+  const shown =
+    sort && !rankView
+      ? [...filtered].sort((a, b) => {
+          const av = a[sort.col]
+          const bv = b[sort.col]
+          const c = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv))
+          return c * sort.dir
+        })
+      : filtered
+
+  // Rank = position among ALL favorites in master order — not among the rows on screen, so
+  // it still names the right chip while a search narrows the list.
+  const favRank = new Map(bank.memories.filter((m) => m.favorite).map((m, i) => [m.id, i + 1]))
 
   // Organize the list cleanly by band range: HF (< 30 MHz — 10 m at 28-29.7 stays HF) then
   // VHF/UHF (>= 30 MHz — 6 m at 50 up). Applies everywhere this list shows: All memories AND a
   // pack/group's channels. The active sort is preserved within each section; a section header
   // only shows when the view actually spans both ranges (an all-HF group needs no label).
   const HF_MAX_MHZ = 30
-  const bandSections = [
-    { key: 'hf', label: 'HF', rows: shown.filter((m) => m.rxMhz < HF_MAX_MHZ) },
-    { key: 'vu', label: 'VHF / UHF', rows: shown.filter((m) => m.rxMhz >= HF_MAX_MHZ) },
-  ].filter((s) => s.rows.length > 0)
-  const showSectionHeaders = bandSections.length > 1
+  const bandSections = rankView
+    ? [{ key: 'rank', label: '', rows: shown }]
+    : [
+        { key: 'hf', label: 'HF', rows: shown.filter((m) => m.rxMhz < HF_MAX_MHZ) },
+        { key: 'vu', label: 'VHF / UHF', rows: shown.filter((m) => m.rxMhz >= HF_MAX_MHZ) },
+      ].filter((s) => s.rows.length > 0)
+  const showSectionHeaders = !rankView && bandSections.length > 1
 
   const commit = (fn: (b: typeof bank) => typeof bank) => memoriesStore.update(fn)
 
@@ -930,9 +945,24 @@ export function MemoriesView({
                     {sec.label} <span className="mv-section-count">{sec.rows.length}</span>
                   </li>
                 )}
-                {sec.rows.map((m) => (
+                {sec.rows.map((m) => {
+              const rank = favRank.get(m.id) ?? 0
+              const offStrip = rank > STRIP_FAVORITE_LIMIT
+              return (
               <li key={m.id} className={`mv-row${invalidRow(m) ? ' invalid' : ''}`}>
                 <div className="mv-row-line">
+                  {rankView && (
+                    <span
+                      className={`mv-rank${offStrip ? ' off' : ''}`}
+                      title={
+                        offStrip
+                          ? `Rank ${rank} — past the ${STRIP_FAVORITE_LIMIT} chips the cockpit MEM strip shows. Move it up with ▲.`
+                          : `Chip ${rank} on the cockpit MEM strip${rank <= 9 ? ` · Ctrl+${rank}` : ''}`
+                      }
+                    >
+                      {rank}
+                    </span>
+                  )}
                   <button
                     type="button"
                     className={`mv-star${m.favorite ? ' on' : ''}`}
@@ -961,21 +991,25 @@ export function MemoriesView({
                       ) : null
                     })}
                   </button>
-                  {sel === 'all' && !sort && !query && (
+                  {(rankView || (sel === 'all' && !sort && !query)) && (
                     <span className="mv-row-move">
                       <button
                         type="button"
                         aria-label={`Move ${m.name} up`}
-                        onClick={() => commit((b) => moveMemory(b, m.id, -1))}
-                        title="Move up"
+                        onClick={() =>
+                          commit((b) => (rankView ? moveFavorite(b, m.id, -1) : moveMemory(b, m.id, -1)))
+                        }
+                        title={rankView ? `Move up one rank (1–${STRIP_FAVORITE_LIMIT} are the strip)` : 'Move up'}
                       >
                         ▲
                       </button>
                       <button
                         type="button"
                         aria-label={`Move ${m.name} down`}
-                        onClick={() => commit((b) => moveMemory(b, m.id, 1))}
-                        title="Move down"
+                        onClick={() =>
+                          commit((b) => (rankView ? moveFavorite(b, m.id, 1) : moveMemory(b, m.id, 1)))
+                        }
+                        title={rankView ? `Move down one rank (1–${STRIP_FAVORITE_LIMIT} are the strip)` : 'Move down'}
                       >
                         ▼
                       </button>
@@ -1008,7 +1042,8 @@ export function MemoriesView({
                 </div>
                 {editingId === m.id && editor(m)}
               </li>
-                ))}
+                  )
+                })}
               </Fragment>
             ))}
           </ul>

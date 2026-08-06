@@ -17695,6 +17695,15 @@ button.sat-chip:disabled {
   color: var(--text);
   border-color: var(--accent);
 }
+/* The favorites past the strip's cap, counted on ≡ (never a popover — a cockpit
+   header is not a place to open a menu from). Smaller than the ≡ glyph it rides
+   on, so it can never be what sets the strip's row height. */
+.mem-strip-more {
+  margin-left: 3px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-faint);
+}
 .mem-chip {
   border: 1px solid var(--border);
   background: var(--bg-elev-2);
@@ -17703,6 +17712,15 @@ button.sat-chip:disabled {
   padding: 1px var(--space-2);
   font-size: 0.72rem;
   font-weight: 600;
+  /* THE CHIP DOES NOT SHRINK. It clips itself for the ellipsis below, which makes
+     it a scroll container, which (CSS Flexbox §4.5) resolves its automatic minimum
+     size to ZERO — so under the initial `flex-shrink: 1` the chips gave up all
+     their width, every name ellipsed to a couple of characters, the row always
+     fit, and the strip's `overflow-x: auto` never had anything to scroll. `MEM`,
+     `＋` and `≡` are not scroll containers and kept their min-content floor, which
+     is exactly why only the chips looked truncated. `max-width` still bounds a
+     pathological name. Computed by mem-strip-clip.test.tsx. */
+  flex: 0 0 auto;
   max-width: 10rem;
   white-space: nowrap;
   overflow: hidden;
@@ -17962,6 +17980,23 @@ button.sat-chip:disabled {
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
+}
+/* Strip rank, shown only in the ★ view: 1..STRIP_FAVORITE_LIMIT ARE the cockpit
+   MEM strip's chips, in order. `.off` is starred but past the strip's cap — still
+   saved, just not on the strip until ▲ moves it up. */
+.mv-rank {
+  flex: 0 0 auto;
+  min-width: 1.7em;
+  text-align: right;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.mv-rank.off {
+  font-weight: 500;
+  color: var(--text-faint);
+  opacity: 0.75;
 }
 .mv-star {
   border: none;

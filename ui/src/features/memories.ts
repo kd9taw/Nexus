@@ -117,6 +117,14 @@ export interface MemoriesBank {
   groups: MemoryGroup[]
 }
 
+/** How many ★ favorites the cockpit MEM strip shows, in master-array order (the same
+ * order [`hotkeyRecallTarget`] counts). The strip is ONE non-wrapping row in a cockpit
+ * header — past ten chips the surplus lives off the right edge, where it is unreadable
+ * at header width and (past Ctrl+1..9) unreachable by keyboard. The strip counts the
+ * rest on its ≡ button; the Memories section's ★ view ranks them so the order is
+ * editable. Also read by MemoriesView to mark the ranks that are OFF the strip. */
+export const STRIP_FAVORITE_LIMIT = 10
+
 const STORAGE_KEY = 'nexus.memory.bank.v2'
 /** The superseded v1 key (features/memoryBank.ts) — read once for migration,
  * then left in place untouched (rollback safety for a downgraded build). */
@@ -417,9 +425,25 @@ export function addMemoryDeduped(
   return { bank: addMemory(bank, input), added: true }
 }
 
+/** Star `id` and move it to RANK 1 — just ahead of the current first favorite, leaving
+ * every other row where it sits. The cockpit strip shows the first
+ * [`STRIP_FAVORITE_LIMIT`] favorites, so a star appended after ten existing ones is
+ * saved and invisible: the same silent "＋ did nothing" the star-the-existing branch of
+ * [`saveFavoriteFromDial`] exists to prevent. */
+function starAtRankOne(bank: MemoriesBank, id: string): MemoriesBank {
+  const i = bank.memories.findIndex((m) => m.id === id)
+  if (i < 0) return bank
+  const memories = [...bank.memories]
+  const [m] = memories.splice(i, 1)
+  const first = memories.findIndex((x) => x.favorite)
+  memories.splice(first < 0 ? memories.length : first, 0, { ...m, favorite: true })
+  return { ...bank, memories }
+}
+
 /** Save the current dial as a FAVORITE (the cockpit strip's ＋). Adds it, or — when an
  * equivalent memory already exists — stars THAT one, so a chip always appears instead of
- * the ＋ looking like it did nothing (the silent-no-op case). */
+ * the ＋ looking like it did nothing (the silent-no-op case). Either way the result lands
+ * at rank 1, which is what keeps that chip inside the strip's cap. */
 export function saveFavoriteFromDial(
   bank: MemoriesBank,
   input: Partial<Memory> & { rxMhz: number; mode: string },
@@ -429,9 +453,10 @@ export function saveFavoriteFromDial(
   const existing = findEquivalent(bank, probe)
   if (existing) {
     if (existing.favorite) return { bank, result: 'exists' }
-    return { bank: updateMemory(bank, existing.id, { favorite: true }), result: 'starred' }
+    return { bank: starAtRankOne(bank, existing.id), result: 'starred' }
   }
-  return { bank: addMemory(bank, { ...input, favorite: true }), result: 'added' }
+  const id = input.id ?? newMemoryId()
+  return { bank: starAtRankOne(addMemory(bank, { ...input, id }), id), result: 'added' }
 }
 
 export function updateMemory(bank: MemoriesBank, id: string, patch: Partial<Memory>): MemoriesBank {
@@ -461,6 +486,27 @@ export function moveMemory(bank: MemoriesBank, id: string, dir: -1 | 1): Memorie
   const i = bank.memories.findIndex((m) => m.id === id)
   const j = i + dir
   if (i < 0 || j < 0 || j >= bank.memories.length) return bank
+  const memories = [...bank.memories]
+  ;[memories[i], memories[j]] = [memories[j], memories[i]]
+  return { ...bank, memories }
+}
+
+/** Move a FAVORITE one RANK up (-1) or down (+1) — swapping it with the previous/next
+ * favorite, wherever that one sits in the master array. [`moveMemory`] swaps master
+ * NEIGHBOURS, which is the wrong verb behind the ★ view's ▲▼: the rows there are the
+ * master array filtered, so two visually adjacent stars can be twenty slots apart and a
+ * press that swaps a star with a non-favorite changes nothing the operator can see.
+ * Rank order is what the cockpit strip and Ctrl+1..9 read, so this is what reorders it. */
+export function moveFavorite(bank: MemoriesBank, id: string, dir: -1 | 1): MemoriesBank {
+  const favIdx: number[] = []
+  bank.memories.forEach((m, i) => {
+    if (m.favorite) favIdx.push(i)
+  })
+  const rank = favIdx.findIndex((i) => bank.memories[i].id === id)
+  const target = rank + dir
+  if (rank < 0 || target < 0 || target >= favIdx.length) return bank
+  const i = favIdx[rank]
+  const j = favIdx[target]
   const memories = [...bank.memories]
   ;[memories[i], memories[j]] = [memories[j], memories[i]]
   return { ...bank, memories }

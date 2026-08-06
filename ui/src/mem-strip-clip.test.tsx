@@ -48,6 +48,15 @@
 //   5. THE BOXES ARE THE RENDERED ONES (rendered): MemoryStrip really does emit the
 //      classes angle 2 measures, and emits NO item class angle 2 does not measure — so
 //      the arithmetic cannot go stale behind a taller item nobody told it about.
+//   6. THE CHIPS ARE WHAT SCROLLS (computed): angle 4's horizontal scroll only means
+//      anything if the chips can OVERFLOW the strip. `.mem-chip` is a scroll container
+//      (`overflow: hidden`, for its ellipsis), and per CSS Flexbox §4.5 a flex item that
+//      is a scroll container has its automatic minimum size resolved to ZERO. With the
+//      initial `flex-shrink: 1` the chips therefore shrink without limit: the line always
+//      fits, `overflow-x: auto` never has anything to scroll, and the ellipsis eats the
+//      names — while `MEM`/`＋`/`≡` are not scroll containers, keep their min-content
+//      floor, and stay readable. That is the reported picture exactly (truncated chips
+//      beside intact buttons), and `flex-shrink: 0` on the chip is the whole of the fix.
 //
 // ON THE ZOOM SWEEP. UI zoom is `zoom: var(--ui-zoom)` on `.app` (styles.css ~3274).
 // Chromium has shipped two readings of how `rem` behaves under `zoom` — scaled with the
@@ -62,7 +71,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MemoryStrip } from './components/MemoryStrip'
-import { memoriesStore, saveFavoriteFromDial } from './features/memories'
+import { memoriesStore, saveFavoriteFromDial, STRIP_FAVORITE_LIMIT } from './features/memories'
 
 // jsdom's URL resolves a relative reference against the DOCUMENT base, not the module —
 // so every path here is built with node:path from the module's own directory.
@@ -255,6 +264,7 @@ interface BoxDecls {
   height?: string
   overflowX?: string
   overflowY?: string
+  flexShrink?: string
 }
 
 /** First token of a `border` / `border-top` shorthand, which is where the width sits
@@ -331,6 +341,20 @@ function applyBlock(box: BoxDecls, body: string): void {
       case 'overflow-y':
         box.overflowY = value
         break
+      case 'flex-shrink':
+        box.flexShrink = value
+        break
+      case 'flex': {
+        // The shorthand's shrink is the SECOND unitless number; with fewer than two it
+        // stays the shorthand default of 1 (`flex: 1` = `1 1 0%`). `none` is `0 0 auto`.
+        const kw = value.trim().toLowerCase()
+        if (kw === 'none') box.flexShrink = '0'
+        else {
+          const nums = parts.filter((p) => /^\d*\.?\d+$/.test(p))
+          box.flexShrink = nums.length >= 2 ? nums[1] : '1'
+        }
+        break
+      }
       default:
         break
     }
@@ -471,9 +495,22 @@ function scrollbarPx(
   return px
 }
 
-/** The classes MemoryStrip renders as items of the strip — every box angle 2 measures.
- *  Angle 5 checks this list against what the component actually emits. */
-const ITEM_CLASSES = ['mem-strip-label', 'mem-strip-save', 'mem-chip', 'mem-strip-manage'] as const
+/** The classes MemoryStrip renders inside the strip — every box angle 2 measures.
+ *  Angle 5 checks this list against what the component actually emits, DESCENDANTS
+ *  included: `.mem-strip-more` (the over-cap favorite count) rides inside the ≡ button,
+ *  so it is not a child of the strip, but it is still a box that can set the row's
+ *  height and so still has to be measured. */
+const ITEM_CLASSES = [
+  'mem-strip-label',
+  'mem-strip-save',
+  'mem-chip',
+  'mem-strip-manage',
+  'mem-strip-more',
+] as const
+
+/** State modifiers — they restyle an item's box rather than adding one, so they are not
+ *  items in their own right. Anything else the strip emits must be in ITEM_CLASSES. */
+const MODIFIERS = new Set(['active'])
 
 /** App mounts every workspace under `.app` → `.shell` (App.tsx ~2336); the cockpit shell
  *  chain is the one cockpit-header-crush.test.tsx computes against. */
@@ -680,15 +717,48 @@ describe('the horizontal scroll is still the strip’s overflow behavior', () =>
   }
 })
 
+describe('the chips are what the strip scrolls (they do not shrink to nothing)', () => {
+  // Angle 4 proves the strip still SAYS `overflow-x: auto`. This angle proves there is
+  // ever anything to scroll. `.mem-chip` clips itself for its ellipsis, which makes it a
+  // scroll container, which (Flexbox §4.5) resolves its automatic minimum size to 0 —
+  // so with the initial `flex-shrink: 1` the chips give up all their width, the row
+  // always fits, and the scroll is dead. The ceiling arithmetic above cannot see this:
+  // it is the horizontal axis and it is a FLEX behavior, not a declared size.
+  for (const host of HOSTS) {
+    it(`${host.what}: .mem-chip resolves a shrink factor of 0`, () => {
+      const chipChain = [...host.chain, new Set(['mem-chip'])]
+      for (const media of mediaContexts(chipChain)) {
+        const box = computeBox(chipChain, media)
+        const where = `${host.what}${media ? ` (within \`${media}\`)` : ''}`
+        const why =
+          `${where}: .mem-chip resolves \`flex-shrink: ${box.flexShrink ?? '1 (initial)'}\`. ` +
+          'The chip clips itself (`overflow: hidden`) for its ellipsis, so per CSS ' +
+          'Flexbox §4.5 its automatic minimum size is 0 and a non-zero shrink factor ' +
+          'lets it collapse without limit: every name ellipses down to a few characters, ' +
+          'the row always fits, and the strip’s `overflow-x: auto` never has anything to ' +
+          'scroll. `MEM`, `＋` and `≡` are not scroll containers, keep their min-content ' +
+          'floor and stay readable — which is why only the chips look truncated. Give the ' +
+          'chip `flex: 0 0 auto`; its `max-width` still bounds a pathological name.'
+        expect(box.flexShrink, why).toBeDefined()
+        expect(parseFloat(box.flexShrink!), why).toBe(0)
+      }
+    })
+  }
+})
+
 describe('the measured boxes are the rendered ones', () => {
   afterEach(cleanup)
 
   it('MemoryStrip emits every item class the arithmetic measures, and no other', () => {
-    // A favorite has to exist for a chip to render at all — saved the same way the
-    // component's own "＋" saves, so the fixture cannot drift from the real shape.
-    memoriesStore.update(
-      (b) => saveFavoriteFromDial(b, { rxMhz: 146.52, mode: 'FM', kind: 'simplex' }).bank,
-    )
+    // Favorites have to exist for a chip to render at all — saved the same way the
+    // component's own "＋" saves, so the fixture cannot drift from the real shape. One
+    // PAST the strip's cap, so the over-cap count on ≡ renders too: every item class the
+    // component can emit has to be present for this census to see it.
+    for (let i = 0; i <= STRIP_FAVORITE_LIMIT; i++) {
+      memoriesStore.update(
+        (b) => saveFavoriteFromDial(b, { rxMhz: 146 + i * 0.01, mode: 'FM', kind: 'simplex' }).bank,
+      )
+    }
     const { container } = render(
       <MemoryStrip dialMhz={146.52} mode="FM" onRecall={() => {}} onManage={() => {}} />,
     )
@@ -696,10 +766,11 @@ describe('the measured boxes are the rendered ones', () => {
     expect(strip, 'MemoryStrip rendered no .mem-strip — the box this whole guard is about.').not.toBeNull()
 
     const emitted = new Set<string>()
-    for (const el of Array.from(strip!.children)) {
+    // Descendants, not just children: a box nested inside an item still contributes to
+    // the row height the ceiling has to clear.
+    for (const el of Array.from(strip!.querySelectorAll('*'))) {
       for (const cls of Array.from(el.classList)) {
-        // `active` is a state modifier on a chip, not an item of its own.
-        if (cls !== 'active') emitted.add(cls)
+        if (!MODIFIERS.has(cls)) emitted.add(cls)
       }
     }
     expect(
