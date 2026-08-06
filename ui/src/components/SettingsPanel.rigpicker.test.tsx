@@ -118,7 +118,9 @@ function renderPanel() {
 
 // The curated list the panel loads on mount. Yaesu spread across the eras that matter:
 // three fixed-4800 backends, the FT-847 (4800..57600), and two that really do 38400.
-// Plus the FX-4, which is in the shipped verified tier and runs at one rate only.
+// Plus the FX-4, which is in the shipped verified tier and runs at one rate only, and the
+// TS-870S, whose menu spans 1,200..57,600 while the radio ships on 9,600 — the one shape in
+// which a rate the rig CAN run still has to be replaced.
 const CURATED: [number, string][] = [
   [1001, 'Yaesu FT-847'],
   [1004, 'Yaesu FT-1000MP Mark-V'],
@@ -129,6 +131,7 @@ const CURATED: [number, string][] = [
   [1024, 'Yaesu FT-1000MP'],
   [1042, 'Yaesu FTDX10'],
   [1049, 'Yaesu FT-710'],
+  [2010, 'Kenwood TS-870S'],
   [2053, 'BG2FX FX-4 (C/CR/L)'],
   [3073, 'Icom IC-7300'],
 ]
@@ -264,12 +267,38 @@ describe('the rule, not the table — a future entry cannot reintroduce the clob
     }
   })
 
-  it('no entry ever replaces a rate its own rig can run', () => {
+  it('no entry ever replaces a rate its own rig can run — once someone has CHOSEN it', () => {
     // THE clobber guard. For every entry, every rate the rig is allowed = hands off.
+    // 38,400 is excluded because it is the one rate that carries no evidence of a choice:
+    // it is what a settings file that has never been touched already says. That half is the
+    // sweep below.
     for (const [model, r] of entries) {
-      for (const rate of r.rates) {
+      for (const rate of r.rates.filter((b) => b !== 38400)) {
         expect({ model, rate, imposed: baudForRig(model, rate) }).toEqual({ model, rate, imposed: null })
       }
+    }
+  })
+
+  it('every entry moves the app default onto the rate its radio ships on', () => {
+    // ⭐ THE OTHER HALF, and the round-three regression. An entry exists because the radio is
+    // NOT on 38,400 when it comes out of its box; leaving the default in place there is dead
+    // CAT on a fresh install, which is what three Kenwoods shipped with. There is no entry in
+    // this table for which "leave 38,400 alone" is the right answer — if there ever is, it
+    // needs no entry at all.
+    for (const [model, r] of entries) {
+      expect({ model, imposed: baudForRig(model, 38400) }).toEqual({
+        model,
+        imposed: r.preferred === 38400 ? null : r.preferred,
+      })
+    }
+  })
+
+  it('…and never invents a rate the picker cannot show', () => {
+    // Whatever an entry imposes has to be restorable by hand from the Baud menu.
+    const offered = new Set([1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200])
+    for (const [model] of entries) {
+      const imposed = baudForRig(model, 38400)
+      if (imposed !== null) expect({ model, imposed, offered: offered.has(imposed) }).toEqual({ model, imposed, offered: true })
     }
   })
 
@@ -286,6 +315,17 @@ describe('the rule, not the table — a future entry cannot reintroduce the clob
     }
   })
 
+  it('the cost of reading 38,400 as "never chosen" is bounded to three radios', () => {
+    // ⭐ THE TRADE, written down rather than left implicit. Half 2 of the rule cannot tell a
+    // deliberate 38,400 from an untouched one, so on a listed rig whose menu CONTAINS 38,400 it
+    // will overwrite a choice. That is only possible where 38,400 is in `rates` at all — every
+    // other entry already replaced it under half 1 — and it is exactly the three Kenwoods,
+    // whose radios ship on 9,600. If this list grows, the trade grew with it: check the new
+    // rig's manual and decide deliberately.
+    const canOverwriteAChoice = entries.filter(([, r]) => r.rates.includes(38400) && r.preferred !== 38400)
+    expect(canOverwriteAChoice.map(([m]) => m).sort((a, b) => a - b)).toEqual([2004, 2010, 2016])
+  })
+
   it('a rig with no entry is never touched, whatever it is set to', () => {
     // Absent means "no evidence" — the branch that must stay a no-op, because it is every
     // rig in the catalog that is not listed, including every model added in future.
@@ -293,6 +333,116 @@ describe('the rule, not the table — a future entry cannot reintroduce the clob
       expect(baudForRig(1042, rate)).toBeNull() // FTDX10 — genuinely does 38400
       expect(baudForRig(3073, rate)).toBeNull() // IC-7300
       expect(baudForRig(999999, rate)).toBeNull() // a raw model number typed by hand
+    }
+  })
+})
+
+describe('a radio that SHIPS on a rate gets it — the app default is not a choice', () => {
+  // ⭐ THE ROUND-THREE REGRESSION, and the whole reason `baudForRig` has two halves.
+  //
+  // These three were given `rateRange(1200, 57600, 9600)` — Hamlib's DECLARED range — under
+  // the rule "never clobber a valid choice". 38,400 is inside 1,200..57,600, so it counted as
+  // a valid choice, `baudForRig` imposed nothing, and a fresh install that picked "Kenwood
+  // TS-870S" saved 38,400 against a radio sitting on its factory 9,600: dead CAT out of the
+  // box, on three popular radios, where the plain `model → baud` map this replaced had worked.
+  //
+  // The declared range is what the BACKEND can drive. It is not what the RADIO is set to.
+  const SHIPS_ON_9600: [number, string][] = [
+    [2010, 'Kenwood TS-870S'],
+    [2004, 'Kenwood TS-570D'],
+    [2016, 'Kenwood TS-570S'],
+  ]
+
+  it.each(SHIPS_ON_9600)('model %i comes out of its box on 9,600 — %s', (model) => {
+    expect(baudForRig(model, 38400)).toBe(9600)
+  })
+
+  it.each(SHIPS_ON_9600)('…and model %i leaves every rate the operator chose alone — %s', (model) => {
+    // The radio HAS a baud menu, so all of these are real settings someone may be running.
+    for (const chosen of [1200, 2400, 4800, 9600, 19200, 57600]) {
+      expect({ model, chosen, imposed: baudForRig(model, chosen) }).toEqual({ model, chosen, imposed: null })
+    }
+  })
+
+  it('the TS-870S picker lands on 9,600, and a 57,600 the operator set survives it', async () => {
+    await openRadioTab()
+    expect(baudSelect().value).toBe('38400')
+    fireEvent.change(rigSelect(), { target: { value: '2010' } })
+    expect(baudSelect().value).toBe('9600')
+    fireEvent.change(baudSelect(), { target: { value: '57600' } })
+    fireEvent.change(rigSelect(), { target: { value: '2010' } })
+    expect(baudSelect().value).toBe('57600')
+  })
+})
+
+describe('the verified tier: the Icom CI-V rigs whose RADIO tops out below 38,400', () => {
+  // The audit finished for the verified tier. `rigctl -m <model> --dump-caps` (bundled Hamlib
+  // 4.7.1) says nine verified-tier radios declare a range that excludes the 38,400 default —
+  // and all nine are Icom CI-V, the one family where a low declared max is NOT evidence
+  // (measured last round: `rig_open` on 3085 at 115,200 returns 0 against a declared max of
+  // 19,200, and Nexus drives Icoms past it on purpose for the native scope).
+  //
+  // So each of the nine was settled against the RADIO's own CI-V BAUD menu, not the backend's
+  // caps. Seven top out at 19,200 and earn an entry; two do 115,200 and must not have one.
+  const TOPS_AT_19200: [number, string][] = [
+    [3013, 'IC-718 — set mode CI-V baud: 300/1200/4800/9600/19200 ("3/12/48/96/HI")'],
+    [3023, 'IC-746 — set mode CI-V baud: 9600/19200/Auto'],
+    [3046, 'IC-746PRO — set mode CI-V baud: 300/1200/4800/9600/19200/Auto'],
+    [3057, 'IC-756PROIII — set mode CI-V baud: 300/1200/4800/9600/19200/Auto'],
+    [3044, 'IC-910H — set mode CI-V baud: 300/1200/4800/9600/19200/Auto'],
+    [3060, 'IC-7000 — set mode CI-V baud: 4800/9600/19200/Auto'],
+    [3070, 'IC-7100 — Connectors ▸ CI-V baud: 300/1200/4800/9600/19200/Auto'],
+  ]
+
+  it.each(TOPS_AT_19200)('model %i is set to 19,200 out of the box — %s', (model) => {
+    expect(baudForRig(model, 38400)).toBe(19200)
+  })
+
+  it.each(TOPS_AT_19200)('…and model %i leaves a slower rate the operator chose alone', (model) => {
+    expect(baudForRig(model, 9600)).toBeNull()
+  })
+
+  it('the two Icoms that really do 115,200 get NO entry, whatever their caps say', () => {
+    // THE EXCEPTION, and it survives because it was checked per rig rather than by make.
+    // 3085 IC-705: caps 4800..19200, but 115,200 is its CI-V USB default AND what Nexus's
+    //   own native scope requires — an entry here would break the feature it was added for.
+    // 3092 IC-7760: caps 300..19200, but its CI-V baud menu goes to 115,200/Auto and the USB
+    //   spectrum path runs there. The backend's range is stale, not narrow.
+    for (const model of [3085, 3092]) {
+      expect({ model, listed: RIG_CAT_RATES.has(model) }).toEqual({ model, listed: false })
+      for (const rate of [9600, 19200, 38400, 115200]) expect(baudForRig(model, rate)).toBeNull()
+    }
+  })
+
+  it('no OTHER verified-tier rig is left on a rate its backend excludes', () => {
+    // The sweep that closes the audit: every verified-tier model, its declared
+    // `Serial speed: min..max` from the bundled 4.7.1, and what Nexus sets on a fresh install.
+    // Models with no serial port at all (Dummy/NET/FLRig/Flex-native) print no such line.
+    const CAPS: [number, number, number][] = [
+      [3073, 4800, 115200], [3085, 4800, 19200], [3078, 300, 115200], [3081, 4800, 38400],
+      [3092, 300, 19200], [3094, 4800, 115200], [3070, 300, 19200], [3013, 300, 19200],
+      [3060, 300, 19200], [3023, 300, 19200], [3046, 300, 19200], [3057, 300, 19200],
+      [3044, 300, 19200], [3090, 4800, 230400], [1035, 4800, 38400], [1049, 4800, 115200],
+      [1051, 4800, 115200], [1042, 4800, 38400], [1040, 4800, 38400], [1044, 4800, 38400],
+      [1036, 4800, 38400], [1022, 4800, 38400], [1043, 4800, 38400], [1020, 4800, 38400],
+      [1041, 4800, 38400], [1046, 4800, 38400], [1028, 4800, 38400], [1029, 4800, 38400],
+      [1034, 4800, 38400], [1037, 4800, 38400], [1032, 4800, 38400], [1024, 4800, 4800],
+      [2031, 4800, 115200], [2037, 4800, 115200], [2041, 4800, 115200], [2039, 4800, 115200],
+      [2028, 4800, 115200], [2014, 1200, 115200], [2010, 1200, 57600], [2009, 4800, 4800],
+      [2029, 4800, 38400], [2043, 4800, 38400], [2047, 4800, 115200], [2044, 4800, 38400],
+      [2045, 4800, 38400], [2054, 300, 115200], [2048, 300, 115200], [2040, 4800, 38400],
+      [2056, 1200, 115200], [16013, 57600, 57600], [16008, 57600, 57600], [16011, 57600, 57600],
+      [3088, 19200, 19200], [3087, 300, 19200], [3091, 300, 19200], [3089, 300, 19200],
+      [2057, 9600, 230400], [2052, 4800, 115200], [2053, 115200, 115200], [2055, 38400, 115200],
+      [17002, 9600, 9600],
+    ]
+    // The Icom pair is the documented exception: their caps are stale, so being outside the
+    // declared range is the correct, deliberate outcome for them and only for them.
+    const EXEMPT = new Set([3085, 3092])
+    for (const [model, min, max] of CAPS) {
+      const set = baudForRig(model, 38400) ?? 38400
+      const within = min <= set && set <= max
+      expect({ model, set, within: within || EXEMPT.has(model) }).toEqual({ model, set, within: true })
     }
   })
 })
