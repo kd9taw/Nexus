@@ -7229,15 +7229,19 @@ impl Engine {
         if mycall.is_empty() {
             return Err("Set your callsign in Settings before calling CQ".to_string());
         }
-        // A COMPOUND call (W9XYZ/P, VP2E/W9XYZ) packs only as the grid-less i3=4 CQ —
-        // a grid OR a directed-CQ token would force the packer to TRUNCATED free text
-        // ("CQ W9XYZ/P EN" / "CQ DX W9XYZ/P"). Mirror `qso::compound_form`: clear BOTH.
-        // A standard call needs its 4-char grid (i3=1) and may carry a directed token.
-        let compound = tempo_core::message::is_compound(&mycall);
-        if !compound && grid.len() < 4 {
+        // A 77-bit NONSTANDARD call (PJ4/K1ABC, YW18FIFA, KD9TAW/QRP) packs only as the
+        // grid-less i3=4 CQ: that type has a slot for neither a grid nor a directed
+        // token, so mirror `qso::nonstandard_form` and clear BOTH. The packer does not
+        // truncate — it discards the affix SILENTLY and re-emits a well-formed CQ naming
+        // a different station ("CQ PJ4/K1ABC FK52" decodes as "CQ K1ABC FK52"), which is
+        // why we must not hand it one. A standard call keeps its 4-char grid (i3=1/2) and
+        // may carry a directed token — and `/P`//`R` ARE standard (`is_std_call`, WSJT-X
+        // `stdCall`), so a portable operator's CQ carries his locator like anyone else's.
+        let nonstandard = !tempo_core::message::is_std_call(&mycall);
+        if !nonstandard && grid.len() < 4 {
             return Err("Set your 4-character grid in Settings before calling CQ".to_string());
         }
-        let (grid, dir) = if compound {
+        let (grid, dir) = if nonstandard {
             (String::new(), String::new())
         } else {
             (
@@ -7259,19 +7263,19 @@ impl Engine {
     }
 
     /// The structured chat-CQ text, or None when identity is invalid (same rules as
-    /// [`Self::call_cq`] — compound calls drop grid/dir). Used by the CQ run's
-    /// per-slot re-send, which must never emit a malformed frame silently.
+    /// [`Self::call_cq`] — only a 77-bit NONSTANDARD call drops the grid). Used by the
+    /// CQ run's per-slot re-send, which must never emit a malformed frame silently.
     fn chat_cq_text(&self) -> Option<String> {
         let mycall = self.settings.mycall.trim().to_string();
         let grid = self.settings.mygrid.trim();
         if mycall.is_empty() {
             return None;
         }
-        let compound = tempo_core::message::is_compound(&mycall);
-        if !compound && grid.len() < 4 {
+        let nonstandard = !tempo_core::message::is_std_call(&mycall);
+        if !nonstandard && grid.len() < 4 {
             return None;
         }
-        let grid = if compound {
+        let grid = if nonstandard {
             String::new()
         } else {
             grid.chars().take(4).collect::<String>().to_uppercase()
@@ -16002,19 +16006,39 @@ mod tests {
     }
 
     #[test]
-    fn call_cq_compound_call_uses_grid_less_form() {
-        // A compound call packs only as the grid-less i3=4 CQ — keeping a grid or a
-        // directed token would force TRUNCATED free text (the bug). It must also be
-        // allowed to call CQ WITHOUT a grid.
-        let mut e = Engine::new("W9XYZ/P", "", 0);
+    fn call_cq_nonstandard_call_uses_grid_less_form() {
+        // A 77-bit NONSTANDARD call packs only as the grid-less i3=4 CQ — that type has
+        // a slot for neither a grid nor a directed token, and the packer discards what it
+        // cannot carry silently. It must also be allowed to call CQ WITHOUT a grid.
+        let mut e = Engine::new("PJ4/W9XYZ", "", 0);
         e.set_tier(Tier::TempoFast);
         e.call_cq(Some("DX"))
-            .expect("compound CQ succeeds without a grid");
+            .expect("nonstandard CQ succeeds without a grid");
         assert_eq!(e.broadcast_queue.len(), 1);
         assert_eq!(
-            e.broadcast_queue[0], "CQ W9XYZ/P",
-            "compound packs grid-less + drops the dir token"
+            e.broadcast_queue[0], "CQ PJ4/W9XYZ",
+            "nonstandard packs grid-less + drops the dir token"
         );
+    }
+
+    #[test]
+    fn call_cq_from_a_portable_station_carries_the_grid_and_the_dir_token() {
+        // THE REPORTED BUG. `/P` and `/R` are 77-bit STANDARD (WSJT-X `stdCall`), so a
+        // portable operator's CQ is an ordinary Type 2 frame: grid in the clear, directed
+        // token intact. It used to come out as a bare "CQ F4CYH/P".
+        let mut e = Engine::new("F4CYH/P", "JN18", 0);
+        e.set_tier(Tier::TempoFast);
+        e.call_cq(Some("DX")).expect("portable CQ");
+        assert_eq!(e.broadcast_queue[0], "CQ DX F4CYH/P JN18");
+
+        let mut e = Engine::new("KD9TAW/R", "EN52", 0);
+        e.set_tier(Tier::TempoFast);
+        e.call_cq(None).expect("portable CQ");
+        assert_eq!(e.broadcast_queue[0], "CQ KD9TAW/R EN52");
+
+        // …and it is now GATED on a grid, exactly like any other standard call.
+        let mut e = Engine::new("F4CYH/P", "", 0);
+        assert!(e.call_cq(None).is_err(), "a /P CQ needs a 4-char grid too");
     }
 
     #[test]

@@ -69,21 +69,22 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
   if (!dx) {
     return { tx1: '', tx2: '', tx3: '', tx4: '', tx5: '', tx6: j('CQ', my, grid) }
   }
-  // Compound QSO (either call slashed): mirror the engine's modem-faithful
-  // i3=4 rewrite (qso.rs::compound_form) so the PANEL SHOWS WHAT GOES ON AIR
-  // and snap.qso.txNow matches a row (the next-dot confirmation): the DX is
-  // hashed `<DX>`, grids are dropped, and a compound SENDER can't carry a
-  // numeric report (Tx2 → grid-less call, Tx3 → RRR).
-  if (isCompoundCall(dx) || isCompoundCall(my)) {
+  // A 77-bit NONSTANDARD call on either side: mirror the engine's modem-faithful
+  // hashed rewrite (qso.rs::nonstandard_form) so the PANEL SHOWS WHAT GOES ON AIR
+  // and snap.qso.txNow matches a row (the next-dot confirmation). The DX is hashed
+  // `<DX>`; the SENDER decides what the payload can be — a standard sender keeps its
+  // grid and number, a nonstandard one cannot carry either (Tx1/Tx2 → grid-less
+  // call, Tx3 → RRR). `/P` and `/R` are standard and never come down this path.
+  if (!isStdCall(dx) || !isStdCall(my)) {
     const bdx = `<${dx.replace(/^<|>$/g, '')}>`
-    const meCompound = isCompoundCall(my)
+    const meNonstandard = !isStdCall(my)
     return {
-      tx1: j(bdx, my),
-      tx2: meCompound ? j(bdx, my) : j(bdx, my, rpt),
-      tx3: meCompound ? j(bdx, my, 'RRR') : j(bdx, my, `R${rpt}`),
+      tx1: meNonstandard ? j(bdx, my) : j(bdx, my, grid),
+      tx2: meNonstandard ? j(bdx, my) : j(bdx, my, rpt),
+      tx3: meNonstandard ? j(bdx, my, 'RRR') : j(bdx, my, `R${rpt}`),
       tx4: j(bdx, my, final),
       tx5: j(bdx, my, '73'),
-      tx6: j('CQ', my), // i3=4 CQ drops the grid too
+      tx6: meNonstandard ? j('CQ', my) : j('CQ', my, grid), // never a hashed CQ
     }
   }
   return {
@@ -96,12 +97,18 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
   }
 }
 
-/** A compound/portable call (KD9TAW/P, PJ4/K1ABC) — can't ride the standard
- * 28-bit call field; i3=4 hashes it on air. Mirrors message.rs::is_compound
- * closely enough for display (any slashed call with a call-like part). */
-export function isCompoundCall(call: string): boolean {
-  const c = call.trim().replace(/^<|>$/g, '')
-  return c.includes('/') && c.split('/').some((p) => /\d/.test(p) && /[A-Za-z]/.test(p))
+/**
+ * A call that fits the 77-bit protocol's standard 28-bit callsign field — WSJT-X's
+ * `MainWindow::stdCall()` (mainwindow.cpp:6627), the same regex `message.rs::is_std_call`
+ * transcribes. **`/P` and `/R` are standard**: they ride a dedicated suffix bit in
+ * Type 1/2 and keep both a grid and a numeric report, so a portable operator's panel
+ * shows his locator and his reports like anyone else's. Any other slash form
+ * (PJ4/K1ABC, KD9TAW/QRP) and any non-conforming shape (YW18FIFA) is nonstandard and
+ * must be hashed on air. Keep this in lockstep with the Rust predicate — when the two
+ * disagree, `snap.qso.txNow` stops matching a row and the next-dot lands nowhere.
+ */
+export function isStdCall(call: string): boolean {
+  return /^([A-Z]{0,2}|[A-Z][0-9]|[0-9][A-Z])([0-9][A-Z]{0,3})(\/R|\/P)?$/i.test(call.trim())
 }
 
 /** The six messages as an ordered row list (panel rows / Alt+1…6 dispatch). */

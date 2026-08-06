@@ -225,20 +225,35 @@ impl Station {
 
         // Skip Tx1 (WSJT-X parity): when WE initiate a call and already have the DX's
         // SNR (we're answering their CQ), open with the report (Tx2) instead of our grid
-        // (Tx1), saving a cycle. Guarded to a STANDARD mycall — the report message can't
-        // pack a compound/nonstandard call, so those still open with the grid (this is
-        // exactly WSJT-X's `elide_tx1_not_allowed` restriction). No SNR context (a manual
-        // call with nothing decoded) also falls back to the grid.
+        // (Tx1), saving a cycle. No SNR context (a manual call with nothing decoded)
+        // falls back to the grid.
+        //
+        // WHAT `elide_tx1_not_allowed` ACTUALLY MEANS (`mainwindow.cpp:5834`) — read
+        // backwards here for a long time. The name parses as "eliding Tx1 is NOT
+        // allowed", and its ONLY use upstream is
+        // `ui->tx1->setEnabled(elide_tx1_not_allowed() || …)`: returning true FORCES Tx1
+        // to stay available. It is not licence to substitute a degraded message — Tx1
+        // itself is untouched, and the old claim here ("the report message can't pack a
+        // compound/nonstandard call") is measurably false: `W9XYZ F4CYH/P +03` packs and
+        // round-trips exactly. What the restriction protects is the hash table — a
+        // nonstandard station's partner must copy the full call at least once before the
+        // hashed forms mean anything, and Tx1 is where that happens.
+        //
+        // Upstream's predicate is `Radio::is_77bit_nonstandard_callsign`, which is
+        // COARSER than `stdCall` and true for `/P` as well, so a portable station still
+        // opens with the grid — even though (unlike before) its report would pack fine.
         let fresh_open = || match context {
-            Some((_, rpt)) if skip_tx1 && !crate::message::is_compound(&mycall_s) => (
-                State::AwaitRoger,
-                Some(Msg::Report {
-                    to: dxcall.into(),
-                    de: mycall_s.clone(),
-                    snr: rpt,
-                }),
-                format!("calling {dxcall} with report {rpt} (skip Tx1)"),
-            ),
+            Some((_, rpt)) if skip_tx1 && !crate::message::is_77bit_nonstandard_call(&mycall_s) => {
+                (
+                    State::AwaitRoger,
+                    Some(Msg::Report {
+                        to: dxcall.into(),
+                        de: mycall_s.clone(),
+                        snr: rpt,
+                    }),
+                    format!("calling {dxcall} with report {rpt} (skip Tx1)"),
+                )
+            }
             _ => grid_start(),
         };
 
@@ -347,9 +362,27 @@ impl Station {
         self.state == State::Done && self.pending.is_none()
     }
 
-    /// True when either party's call is nonstandard/compound, so outgoing messages must
-    /// use the i3=4 form (the compound call in full, the OTHER call wrapped in `<...>`) —
-    /// otherwise the modem silently strips the prefix off a bare compound call.
+    /// True when either party's call is 77-bit NONSTANDARD, so our outgoing messages
+    /// must use the hashed forms — the nonstandard call in full, the other wrapped in
+    /// `<...>` — because `pack77_1` would otherwise strip the affix off a bare
+    /// nonstandard call silently and name a different station.
+    ///
+    /// **`/P` and `/R` are NOT nonstandard**: they ride the plain Type 1/2 forms in
+    /// full, with grid and numeric report intact. Using the coarse "has a slash" test
+    /// here is what made a portable station's locator and reports disappear. Drives
+    /// [`Self::nonstandard_form`] — i.e. what we TRANSMIT — and nothing else.
+    fn is_nonstandard_qso(&self) -> bool {
+        !crate::message::is_std_call(&self.mycall)
+            || self
+                .dxcall
+                .as_deref()
+                .is_some_and(|dx| !crate::message::is_std_call(dx))
+    }
+
+    /// True when either call carries a slash at all. **Receive-side tolerance only**:
+    /// a partner who chose the hashed forms — a station running a Nexus from before
+    /// this fix, say — answers a `/P` QSO grid-less, and the [`Self::observe`] arms
+    /// keyed on this must still advance the exchange. Never decides what we send.
     fn is_compound_qso(&self) -> bool {
         crate::message::is_compound(&self.mycall)
             || self
@@ -358,12 +391,14 @@ impl Station {
                 .is_some_and(crate::message::is_compound)
     }
 
-    /// Rewrite a standard message into its modem-faithful i3=4 form for a compound QSO:
-    /// wrap the ADDRESSEE in `<...>` (the modem hashes it, and the hashed-first Type-1
-    /// path keeps a numeric report) while the sender stays in full; CQ / the first call
-    /// drop the grid (i3=4 carries none). A no-op for an all-standard QSO.
-    fn compound_form(&self, msg: Msg) -> Msg {
-        if !self.is_compound_qso() {
+    /// Rewrite a message into its modem-faithful hashed form when a genuinely
+    /// nonstandard call is involved: wrap the ADDRESSEE in `<...>` (the modem hashes
+    /// it, and the hashed-first Type-1 path keeps grid and numeric report) while the
+    /// sender stays in full. A no-op when both calls are 77-bit standard — which now
+    /// includes every `/P` and `/R` station, so their overs are left exactly as the
+    /// sequencer built them.
+    fn nonstandard_form(&self, msg: Msg) -> Msg {
+        if !self.is_nonstandard_qso() {
             return msg;
         }
         let brk = |to: &str| {
@@ -373,31 +408,46 @@ impl Station {
             )
         };
         match msg {
-            // i3=4 has NO directed-CQ slot: keeping the dir would make the
-            // packer fall through to TRUNCATED free text ("CQ DX PJ4/K1A").
-            // Drop it — the panel's compound preview shows the same plain form.
+            // A CQ has no addressee to hash, and a hashed CQ is unusable anyway:
+            // `CQ <F4CYH/P> JN18` packs but does NOT unpack, so it must never be
+            // generated. A standard caller therefore keeps grid and directed token; a
+            // nonstandard one sends its call in full and loses both, because i3=4 has a
+            // slot for neither (a kept `dir` would fall through to TRUNCATED free text).
+            Msg::Cq { de, grid, dir } if crate::message::is_std_call(&de) => {
+                Msg::Cq { de, grid, dir }
+            }
             Msg::Cq { de, .. } => Msg::Cq {
                 de,
                 grid: String::new(),
                 dir: String::new(),
             },
-            Msg::Grid { to, de, .. } => Msg::Grid {
-                to: brk(&to),
-                de,
-                grid: String::new(),
-            },
-            // A numeric report survives i3=4/Type-1 only when the SENDER (`de`) is a
-            // standard 28-bit call — it becomes the c28 carrying the report while the
-            // other party is hashed. If *I* am the compound sender, i3=4 has no report
-            // field (only RRR/RR73/73), so roger instead: the QSO still completes and the
-            // numeric exchange is carried by the standard partner's overs (this is the
-            // protocol's constraint, not a loss of fidelity).
-            Msg::RReport { to, de, .. } if crate::message::is_compound(&de) => {
+            // The SENDER decides what the payload can be. A standard c28 sender keeps
+            // its grid even when the DX is hashed — `<PJ4/K1ABC> KD9TAW EN52` is a
+            // hashed-first Type 1 and round-trips verbatim, which is exactly what
+            // upstream builds (`msgtype(t0a + my_grid, ui->tx1)` when only HIS call is
+            // nonstandard). A nonstandard sender must go i3=4, which has no grid field.
+            Msg::Grid { to, de, grid } => {
+                let grid = if crate::message::is_std_call(&de) {
+                    grid
+                } else {
+                    String::new()
+                };
+                Msg::Grid {
+                    to: brk(&to),
+                    de,
+                    grid,
+                }
+            }
+            // Likewise a numeric report: it survives only when the SENDER is a standard
+            // 28-bit call, becoming the c28 that carries it while the other party is the
+            // hash. If *I* am the nonstandard sender, i3=4 has no report field at all
+            // (only RRR/RR73/73), so roger instead — the QSO still completes and the
+            // numeric exchange rides the standard partner's overs. That is the
+            // protocol's constraint, and it no longer catches `/P`.
+            Msg::RReport { to, de, .. } if !crate::message::is_std_call(&de) => {
                 Msg::Rrr { to: brk(&to), de }
             }
-            // A compound SENDER can't carry a number either — fall back to a grid-less
-            // i3=4 call (the partner, who IS the standard c28, sends the reports).
-            Msg::Report { to, de, .. } if crate::message::is_compound(&de) => Msg::Grid {
+            Msg::Report { to, de, .. } if !crate::message::is_std_call(&de) => Msg::Grid {
                 to: brk(&to),
                 de,
                 grid: String::new(),
@@ -421,7 +471,7 @@ impl Station {
 
     /// The message to transmit on my next TX slot, if any (RV-agnostic).
     pub fn outgoing(&self) -> Option<Msg> {
-        self.pending.clone().map(|m| self.compound_form(m))
+        self.pending.clone().map(|m| self.nonstandard_form(m))
     }
 
     /// True when the current step's transmission budget is exhausted, so the next over
@@ -456,7 +506,7 @@ impl Station {
         }
         self.pending
             .clone()
-            .map(|m| (self.compound_form(m), self.rv_count))
+            .map(|m| (self.nonstandard_form(m), self.rv_count))
     }
 
     /// True when the current step has hit its transmission budget without the partner
@@ -473,7 +523,7 @@ impl Station {
     pub fn pending_text(&self) -> Option<String> {
         self.pending
             .as_ref()
-            .map(|m| self.compound_form(m.clone()).to_text())
+            .map(|m| self.nonstandard_form(m.clone()).to_text())
     }
 
     /// Operator "Resend": re-arm the current step. Clears the retransmission
@@ -926,17 +976,18 @@ mod start_context_tests {
     }
 
     #[test]
-    fn working_a_compound_dx_completes_with_realistic_i3_4_forms() {
-        // Click a compound DXpedition's CQ and run the QSO with the forms the REAL modem
-        // delivers: a compound party can't send a numeric report (i3=4 has no report
-        // field), so the DX answers/rogers grid-less and I — the standard station — send
-        // the report. Every over is the modem-faithful i3=4 form (compound call in full,
-        // the other call in <...>), never a prefix-strippable bare form.
+    fn working_a_nonstandard_dx_completes_with_realistic_hashed_forms() {
+        // Click a genuinely NONSTANDARD DXpedition's CQ (a prefix form, which the packer
+        // cannot carry in full alongside a payload) and run the QSO with the forms the
+        // REAL modem delivers: the DX answers/rogers grid-less and I — the standard
+        // station — carry the numbers. Every over hashes the DX rather than sending it
+        // bare, which `pack77_1` would silently rewrite to a different station.
         let cq = Msg::parse("CQ PJ4/K1ABC");
         let mut s = Station::start(ME, MY_GRID, "PJ4/K1ABC", Some((&cq, -10)), false, false);
-        // Tx1: i3=4 call — DX hashed, my call in full, no grid.
-        assert_eq!(s.pending_text().as_deref(), Some("<PJ4/K1ABC> KD9TAW"));
-        // The compound DX answers grid-less (it cannot send a numeric report).
+        // Tx1: DX hashed, my call the standard c28 — so MY grid still rides along
+        // (hashed-first Type 1, exactly upstream's `msgtype(t0a + my_grid, ui->tx1)`).
+        assert_eq!(s.pending_text().as_deref(), Some("<PJ4/K1ABC> KD9TAW EN61"));
+        // The nonstandard DX answers grid-less (it cannot send a numeric report).
         s.observe(&[dec("<KD9TAW> PJ4/K1ABC", -7)]);
         assert_eq!(s.state, State::AwaitRoger);
         // I send MY report — it survives because I'm the standard c28 sender.
@@ -948,48 +999,49 @@ mod start_context_tests {
         assert_eq!(
             s.dxcall.as_deref(),
             Some("PJ4/K1ABC"),
-            "logs the FULL compound call"
+            "logs the FULL nonstandard call"
         );
     }
 
     #[test]
-    fn compound_me_running_cq_completes_against_a_standard_caller() {
-        // I run CQ as a compound station (KD9TAW/P). A standard caller answers + reports
-        // me (a standard sender CAN carry a number); I roger (i3=4 can't carry MY number)
-        // and the QSO completes — never emitting a phantom number the modem would drop.
-        let mut s = Station::calling_cq("KD9TAW/P", MY_GRID);
+    fn nonstandard_me_running_cq_completes_against_a_standard_caller() {
+        // I run CQ as a genuinely nonstandard station (PJ4/K1ABC). A standard caller
+        // answers + reports me (a standard sender CAN carry a number); I roger (i3=4
+        // can't carry MY number) and the QSO completes — never emitting a phantom number
+        // the modem would drop. This is the protocol's constraint, and it applies HERE
+        // and not to `/P` (see `portable_*` in tests/portable_suffix_air.rs).
+        let mut s = Station::calling_cq("PJ4/K1ABC", MY_GRID);
         assert_eq!(
             s.pending_text().as_deref(),
-            Some("CQ KD9TAW/P"),
-            "compound CQ, no grid"
+            Some("CQ PJ4/K1ABC"),
+            "nonstandard CQ, no grid — and never hashed, a hashed CQ does not unpack"
         );
         // W9XYZ answers with a bare report (me hashed, them the c28 sender → survives).
-        s.observe(&[dec("<KD9TAW/P> W9XYZ -09", -8)]);
+        s.observe(&[dec("<PJ4/K1ABC> W9XYZ -09", -8)]);
         assert_eq!(s.dxcall.as_deref(), Some("W9XYZ"));
         assert_eq!(
             s.rx_report,
             Some(-9),
             "captured the standard caller's report"
         );
-        // My roger degrades to RRR (compound sender → no numeric); QSO advances.
-        assert_eq!(s.pending_text().as_deref(), Some("<W9XYZ> KD9TAW/P RRR"));
+        // My roger degrades to RRR (nonstandard sender → no numeric); QSO advances.
+        assert_eq!(s.pending_text().as_deref(), Some("<W9XYZ> PJ4/K1ABC RRR"));
         // The caller closes → I'm done.
-        s.observe(&[dec("<KD9TAW/P> W9XYZ RR73", -8)]);
+        s.observe(&[dec("<PJ4/K1ABC> W9XYZ RR73", -8)]);
         assert_eq!(s.state, State::Done);
     }
 
     #[test]
     fn portable_mycall_still_matches_a_reply_to_the_base_call() {
         // I operate as KD9TAW/P; the DX reports my base call KD9TAW. The QSO must still
-        // resume, not stall at the grid. Because MY call is compound, the over uses the
-        // i3=4 form: my call in full, the DX wrapped in <...>. i3=4 can't carry a numeric
-        // report FROM a compound sender, so the R-report degrades to a roger (RRR) — the
-        // QSO still completes; it never emits a bare "W9XYZ KD9TAW/P R-11" whose prefix
-        // the modem would silently strip.
+        // resume, not stall at the grid — and the over it resumes with is the PLAIN
+        // Type 1 R-report, both calls in the clear. `/P` rides its own suffix bit, so
+        // nothing is hashed and nothing is dropped; this used to degrade to
+        // "<W9XYZ> KD9TAW/P RRR", losing the number for no protocol reason at all.
         let m = Msg::parse("KD9TAW W9XYZ -09");
         let s = Station::start("KD9TAW/P", MY_GRID, DX, Some((&m, -11)), false, false);
         assert_eq!(s.state, State::AwaitRr73);
-        assert_eq!(s.pending_text().as_deref(), Some("<W9XYZ> KD9TAW/P RRR"));
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW/P R-11"));
     }
 
     #[test]
@@ -1015,13 +1067,27 @@ mod start_context_tests {
     }
 
     #[test]
-    fn skip_tx1_falls_back_to_grid_for_a_compound_call() {
-        // The report message can't pack a compound/nonstandard call, so Skip Tx1 must NOT
-        // apply — a compound station still opens with the grid (WSJT-X's own restriction).
+    fn skip_tx1_falls_back_to_grid_for_a_77bit_nonstandard_call() {
+        // Upstream's `elide_tx1_not_allowed()` FORCES Tx1 to stay available for a 77-bit
+        // nonstandard call — it does not authorise a degraded message (the old comment
+        // here claimed "the report message can't pack a compound/nonstandard call", which
+        // is measurably false: `W9XYZ KD9TAW/P +03` packs and round-trips exactly). The
+        // real reason is the hash table: the partner must copy the full call once first.
+        //
+        // The gate is `Radio::is_77bit_nonstandard_callsign`, which is COARSER than
+        // `stdCall` — it has no `/R`//`P` exemption, so a portable station still opens
+        // with the grid, and so does a no-slash nonstandard call that the old
+        // "has a slash" test waved straight through.
         let cq = Msg::parse("CQ W9XYZ EN37");
-        let s = Station::start("KD9TAW/P", MY_GRID, DX, Some((&cq, -12)), false, true);
-        assert_eq!(s.state, State::AwaitReport);
-        assert!(matches!(s.pending, Some(Msg::Grid { .. })));
+        for mycall in ["KD9TAW/P", "PJ4/K1ABC", "YW18FIFA"] {
+            let s = Station::start(mycall, MY_GRID, DX, Some((&cq, -12)), false, true);
+            assert_eq!(s.state, State::AwaitReport, "{mycall} must not elide Tx1");
+            assert!(
+                matches!(s.pending, Some(Msg::Grid { .. })),
+                "{mycall} opens with the grid: {:?}",
+                s.pending
+            );
+        }
     }
 
     #[test]

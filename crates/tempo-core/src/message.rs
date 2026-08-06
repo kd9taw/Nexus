@@ -112,12 +112,6 @@ pub fn same_call(a: &str, b: &str) -> bool {
     base_call(a) == base_call(b)
 }
 
-/// True if `call` is a NONSTANDARD/compound call that can't ride the standard 28-bit
-/// field — a slash prefix/suffix form (W9XYZ/P, KH8/W1AW, PJ4/K1ABC, KH1/KH7Z). Such a
-/// call must be transmitted in FULL with the OTHER call wrapped in `<...>` (i3=4), or
-/// the modem silently strips the prefix off a bare compound call. Brackets are ignored.
-/// Requires at least one '/'-segment to be callsign-shaped, so ham free-text slashes
-/// ("5/9", "S/N", "W/L", "2X/3") are NOT mistaken for compound calls.
 /// A valid WSJT-X directed-CQ token: 1–4 letters ("DX", "NA", "POTA", "TEST")
 /// or exactly 3 digits (a kHz QSY like "CQ 040 …").
 fn is_cq_dir(s: &str) -> bool {
@@ -125,9 +119,110 @@ fn is_cq_dir(s: &str) -> bool {
         || (s.len() == 3 && s.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// True if `call` carries a slash at all — a portable/compound form (W9XYZ/P,
+/// KH8/W1AW, PJ4/K1ABC, KH1/KH7Z). Brackets are ignored. Requires at least one
+/// '/'-segment to be callsign-shaped, so ham free-text slashes ("5/9", "S/N",
+/// "W/L", "2X/3") are NOT mistaken for compound calls.
+///
+/// **This says nothing about how the call packs.** `/P` and `/R` are compound AND
+/// 77-bit standard (see [`is_std_call`]); `KH8/W1AW` is compound and nonstandard.
+/// Deciding on-air message forms with this predicate is the F4CYH/P bug: it routed
+/// every portable station down i3=4, which carries neither a grid nor a report.
+/// Its jobs are receive-side (recognising a call token while parsing) and hash-table
+/// seeding — never choosing what we transmit.
 pub fn is_compound(call: &str) -> bool {
     let c = call.trim().trim_start_matches('<').trim_end_matches('>');
     c.contains('/') && c.split('/').any(is_callsign)
+}
+
+/// True when `call` fits the 77-bit protocol's **standard 28-bit callsign field** —
+/// WSJT-X's `MainWindow::stdCall()` (`widgets/mainwindow.cpp:6627`, transcribed from
+/// upstream master), whose regex is
+///
+/// ```text
+/// ^\s* ( [A-Z]{0,2} | [A-Z][0-9] | [0-9][A-Z] )   # part 1
+///      ( [0-9][A-Z]{0,3} )                        # part 2
+///      (/R | /P)?                                 # optional suffix
+/// \s*$                                            # case-insensitive
+/// ```
+///
+/// **`/P` and `/R` are standard**, and that is the whole point of this predicate.
+/// They are the only two suffixes the protocol carries NATIVELY: Type 1
+/// (`c28 r1 c28 r1 R1 g15`) and Type 2 (`c28 p1 c28 p1 R1 g15`) each spend one bit
+/// on the suffix and still carry BOTH a grid and a numeric report. `pack77_1`
+/// selects them with `if (i1psuffix.ge.4 .or. i2psuffix.ge.4) i3=2`. Upstream's
+/// `genCQMsg`/`genStdMsgs` branch on exactly this test, so F4CYH/P sends
+/// `CQ F4CYH/P JN18` and `W9XYZ F4CYH/P +03` in the clear.
+///
+/// Everything else with a `/` (`PJ4/K1ABC`, `KD9TAW/QRP`, `KD9TAW/3`) and every
+/// non-conforming shape (`YW18FIFA`) is nonstandard and must be HASHED. Widening
+/// this predicate is not a kindness: `chkcall` accepts `PJ4/K1ABC` and hands
+/// `pack77_1` the base `K1ABC`, which packs with the prefix silently discarded — the
+/// partner then copies a well-formed message naming a *different* station.
+///
+/// Brackets are not stripped: a hashed token (`<W9XYZ>`) is not a c28 call.
+pub fn is_std_call(call: &str) -> bool {
+    let c = call.trim().to_ascii_uppercase();
+    // The optional `/R` / `/P` suffix rides its own bit, so strip it before shape-testing.
+    let body = c
+        .strip_suffix("/P")
+        .or_else(|| c.strip_suffix("/R"))
+        .unwrap_or(&c)
+        .as_bytes();
+    let al = |c: u8| c.is_ascii_uppercase();
+    let di = |c: u8| c.is_ascii_digit();
+    // Part 1 is 0..=2 chars, part 2 is `[0-9][A-Z]{0,3}` — try each split (the regex
+    // engine's backtracking: "9A1A" only matches with a 2-char part 1).
+    (0..=2).any(|k| {
+        if k > body.len() {
+            return false;
+        }
+        let (p1, p2) = body.split_at(k);
+        let part1 = match p1 {
+            [] => true,
+            [a] => al(*a),
+            [a, b] => (al(*a) && al(*b)) || (al(*a) && di(*b)) || (di(*a) && al(*b)),
+            _ => false,
+        };
+        part1 && matches!(p2.len(), 1..=4) && di(p2[0]) && p2[1..].iter().all(|c| al(*c))
+    })
+}
+
+/// True when `call` is what WSJT-X calls a **77-bit nonstandard callsign** —
+/// `Radio::is_77bit_nonstandard_callsign` (`Radio.cpp:147`, transcribed from upstream
+/// master): it is in the callsign alphabet (`^[A-Z0-9/]{3,11}$`) and does NOT match
+/// the strict standard shape (`^([A-Z][0-9]?|[0-9A-Z][A-Z])[0-9][A-Z]{0,3}$`).
+///
+/// **Coarser than [`is_std_call`], deliberately.** This one has no `/R`//`P`
+/// exemption, so `F4CYH/P` is nonstandard *here* while being standard *there*.
+/// Upstream keeps the two apart and gives them different jobs: `stdCall` chooses the
+/// message forms, this one feeds only `elide_tx1_not_allowed()` (the Tx1 elision
+/// guard in [`crate::qso::Station::start`]). Conflating them is what this fix undid —
+/// do not merge them.
+pub fn is_77bit_nonstandard_call(call: &str) -> bool {
+    let c = call.trim().to_ascii_uppercase();
+    let b = c.as_bytes();
+    let al = |c: u8| c.is_ascii_uppercase();
+    let di = |c: u8| c.is_ascii_digit();
+    // callsign_alphabet_re — outside it, upstream calls the string standard (not our
+    // problem to classify), so a blank or 2-char call is never "nonstandard".
+    if !(3..=11).contains(&b.len()) || !b.iter().all(|&x| al(x) || di(x) || x == b'/') {
+        return false;
+    }
+    // strict_standard_callsign_re: part 1 is `[A-Z][0-9]?` or `[0-9A-Z][A-Z]` (1–2 chars).
+    let strict = [1usize, 2].iter().any(|&k| {
+        if b.len() < k + 1 {
+            return false;
+        }
+        let (p1, rest) = b.split_at(k);
+        let part1 = match p1 {
+            [a] => al(*a),
+            [a, x] => (al(*a) && di(*x)) || ((al(*a) || di(*a)) && al(*x)),
+            _ => false,
+        };
+        part1 && di(rest[0]) && rest.len() <= 4 && rest[1..].iter().all(|c| al(*c))
+    });
+    !strict
 }
 
 /// The inner text of an i3=4 hashed token (`<W9XYZ>` → `W9XYZ`, `<...>` → `...`).
@@ -483,6 +578,62 @@ mod fidelity_tests {
         assert!(is_compound("<W9XYZ/P>"));
         assert!(!is_compound("W9XYZ"));
         assert!(!is_compound("<W9XYZ>"));
+    }
+
+    #[test]
+    fn std_call_accepts_the_p_and_r_suffixes_wsjtx_carries_natively() {
+        // WSJT-X `MainWindow::stdCall()` — the predicate `genCQMsg`/`genStdMsgs` branch
+        // on. `/P` and `/R` are IN, and that is the whole fix: they ride a dedicated
+        // suffix bit in Type 1/2 and keep both a grid and a numeric report.
+        assert!(is_std_call("F4CYH/P"), "the reported station");
+        assert!(is_std_call("KD9TAW/R"));
+        assert!(
+            is_std_call("f4cyh/p"),
+            "case-insensitive, like the Qt regex"
+        );
+        assert!(is_std_call(" W9XYZ "), "leading/trailing space is allowed");
+        // Ordinary calls, including the shapes that need part-1 backtracking.
+        for c in ["W9XYZ", "KD9TAW", "W1AW", "9A1A", "2E0ABC", "K1A", "PA0X"] {
+            assert!(is_std_call(c), "{c} is a standard call");
+        }
+        // Everything else with a slash is NONSTANDARD — widening past /R and /P is the
+        // hazard: `pack77_1` discards the affix silently and names another station.
+        for c in [
+            "PJ4/K1ABC",
+            "KH1/KH7Z",
+            "KD9TAW/QRP",
+            "KD9TAW/3",
+            "W9XYZ/MM",
+        ] {
+            assert!(!is_std_call(c), "{c} must be hashed, not sent bare");
+        }
+        // Non-conforming shapes are nonstandard too, slash or no slash.
+        for c in ["YW18FIFA", "3DA0ABC", "", "AB", "<W9XYZ>", "<...>"] {
+            assert!(!is_std_call(c), "{c} is not a 28-bit callsign field");
+        }
+    }
+
+    #[test]
+    fn the_77bit_nonstandard_predicate_is_coarser_and_stays_separate() {
+        // `Radio::is_77bit_nonstandard_callsign` — deliberately NOT the same test.
+        // It has no `/R`//`P` exemption, so `/P` is nonstandard here while standard in
+        // `is_std_call`. Upstream keeps them apart (message forms vs the Tx1-elision
+        // guard); merging them re-creates the bug in one direction or the other.
+        assert!(is_77bit_nonstandard_call("F4CYH/P"));
+        assert!(
+            is_std_call("F4CYH/P"),
+            "…and standard THERE — both, on purpose"
+        );
+        assert!(is_77bit_nonstandard_call("KD9TAW/R"));
+        assert!(is_77bit_nonstandard_call("PJ4/K1ABC"));
+        assert!(is_77bit_nonstandard_call("YW18FIFA"));
+        assert!(is_77bit_nonstandard_call("KD9TAW/QRP"));
+        for c in ["W9XYZ", "KD9TAW", "W1AW", "2E0ABC", "9A1A"] {
+            assert!(!is_77bit_nonstandard_call(c), "{c} is strictly standard");
+        }
+        // Outside the callsign alphabet upstream returns false — not our classification.
+        assert!(!is_77bit_nonstandard_call(""));
+        assert!(!is_77bit_nonstandard_call("AB"));
     }
 
     #[test]

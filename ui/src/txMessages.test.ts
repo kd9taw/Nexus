@@ -6,6 +6,7 @@ import {
   genStdMessages,
   gridFromMessage,
   isIgnored,
+  isStdCall,
   snrForCall,
   stdMessageList,
   toggleIgnored,
@@ -152,24 +153,51 @@ describe('DF entry clamp (200–4000 Hz)', () => {
   })
 })
 
-describe('compound-call (i3=4) display parity', () => {
-  // Mirrors qso.rs::compound_form — the panel must show what goes ON AIR.
-  it('hashes the DX and drops grids for a compound DX', () => {
-    const m = genStdMessages({ dxCall: 'KD9TAW/P', myCall: 'W9XYZ', myGrid: 'EN37', snr: -8 })
-    expect(m.tx1).toBe('<KD9TAW/P> W9XYZ')
-    expect(m.tx2).toBe('<KD9TAW/P> W9XYZ -08')
-    expect(m.tx4).toBe('<KD9TAW/P> W9XYZ RR73')
-    expect(m.tx6).toBe('CQ W9XYZ')
+describe('nonstandard-call (hashed) display parity', () => {
+  // Mirrors qso.rs::nonstandard_form — the panel must show what goes ON AIR, or
+  // snap.qso.txNow stops matching a row.
+  it('a /P or /R station keeps its grid and its reports', () => {
+    // The reported bug: F4CYH/P's panel read `CQ  F4CYH/P` with no grid, and his Tx1
+    // and Tx2 rendered to the SAME string, so he could send neither locator nor report.
+    const m = genStdMessages({ dxCall: 'W9XYZ', myCall: 'F4CYH/P', myGrid: 'JN18', snr: -8 })
+    expect(m.tx1).toBe('W9XYZ F4CYH/P JN18')
+    expect(m.tx2).toBe('W9XYZ F4CYH/P -08')
+    expect(m.tx3).toBe('W9XYZ F4CYH/P R-08')
+    expect(m.tx4).toBe('W9XYZ F4CYH/P RR73')
+    expect(m.tx5).toBe('W9XYZ F4CYH/P 73')
+    expect(m.tx6).toBe('CQ F4CYH/P JN18')
+    // Working a /P DX is equally in the clear — nothing hashed in either direction.
+    const dx = genStdMessages({ dxCall: 'F4CYH/P', myCall: 'W9XYZ', myGrid: 'EN37', snr: -8 })
+    expect(dx.tx1).toBe('F4CYH/P W9XYZ EN37')
+    expect(dx.tx2).toBe('F4CYH/P W9XYZ -08')
+    const r = genStdMessages({ dxCall: 'W9XYZ', myCall: 'KD9TAW/R', myGrid: 'EN52', snr: 3 })
+    expect(r.tx1).toBe('W9XYZ KD9TAW/R EN52')
+    expect(r.tx2).toBe('W9XYZ KD9TAW/R +03')
   })
-  it('a compound SENDER cannot carry a numeric report', () => {
-    const m = genStdMessages({ dxCall: 'K1ABC', myCall: 'W9XYZ/P', myGrid: 'EN37', snr: -8 })
-    expect(m.tx2).toBe('<K1ABC> W9XYZ/P')
-    expect(m.tx3).toBe('<K1ABC> W9XYZ/P RRR')
+  it('hashes a genuinely nonstandard DX, and my grid still rides along', () => {
+    const m = genStdMessages({ dxCall: 'PJ4/K1ABC', myCall: 'W9XYZ', myGrid: 'EN37', snr: -8 })
+    expect(m.tx1).toBe('<PJ4/K1ABC> W9XYZ EN37')
+    expect(m.tx2).toBe('<PJ4/K1ABC> W9XYZ -08')
+    expect(m.tx4).toBe('<PJ4/K1ABC> W9XYZ RR73')
+    expect(m.tx6).toBe('CQ W9XYZ EN37')
+  })
+  it('a nonstandard SENDER cannot carry a grid or a numeric report', () => {
+    const m = genStdMessages({ dxCall: 'K1ABC', myCall: 'PJ4/W9XYZ', myGrid: 'EN37', snr: -8 })
+    expect(m.tx1).toBe('<K1ABC> PJ4/W9XYZ')
+    expect(m.tx2).toBe('<K1ABC> PJ4/W9XYZ')
+    expect(m.tx3).toBe('<K1ABC> PJ4/W9XYZ RRR')
+    expect(m.tx6).toBe('CQ PJ4/W9XYZ') // never hashed — a hashed CQ does not unpack
   })
   it('standard calls are untouched', () => {
     const m = genStdMessages({ dxCall: 'K1ABC', myCall: 'W9XYZ', myGrid: 'EN37', snr: 3 })
     expect(m.tx1).toBe('K1ABC W9XYZ EN37')
     expect(m.tx2).toBe('K1ABC W9XYZ +03')
+  })
+  it('isStdCall matches WSJT-X stdCall — /P and /R in, everything else out', () => {
+    for (const c of ['W9XYZ', 'KD9TAW', 'W1AW', '9A1A', '2E0ABC', 'F4CYH/P', 'KD9TAW/R', 'f4cyh/p'])
+      expect(isStdCall(c), c).toBe(true)
+    for (const c of ['PJ4/K1ABC', 'KD9TAW/QRP', 'KD9TAW/3', 'YW18FIFA', '', 'AB', '<W9XYZ>'])
+      expect(isStdCall(c), c).toBe(false)
   })
 })
 
