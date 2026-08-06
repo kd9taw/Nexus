@@ -80,7 +80,7 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libhamlib-utils"]
+        "depends": ["libhamlib-utils", "libgfortran5", "libfftw3-single3"]
       }
     }
   },
