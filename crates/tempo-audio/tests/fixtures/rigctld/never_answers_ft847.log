@@ -1,0 +1,77 @@
+read_block_generic(): Timed out 1.33496 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+rigctl_chk_vfo: **********************************
+rigctl_dump_state: chk_vfo_executed=1
+read_block_generic(): Timed out 1.41426 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.43923 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1
+read_block_generic(): Timed out 1.43781 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.41693 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1
+rigctl_chk_vfo: **********************************
+rigctl_dump_state: chk_vfo_executed=1
+read_block_generic(): Timed out 1.31737 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.40770 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1
+rigctl_chk_vfo: **********************************
+rigctl_dump_state: chk_vfo_executed=1
+read_block_generic(): Timed out 1.30318 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.37669 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1
+read_block_generic(): Timed out 1.41882 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.30899 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1
+rigctl_chk_vfo: **********************************
+rigctl_dump_state: chk_vfo_executed=1
+read_block_generic(): Timed out 1.42997 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.25760 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1
+rigctl_chk_vfo: **********************************
+rigctl_dump_state: chk_vfo_executed=1
+read_block_generic(): Timed out 1.30058 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.40807 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1
+read_block_generic(): Timed out 1.24276 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.42763 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1
+rigctl_chk_vfo: **********************************
+rigctl_dump_state: chk_vfo_executed=1
+read_block_generic(): Timed out 1.28248 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+read_block_generic(): Timed out 1.41425 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+handle_socket: rig_open retcode=0, opened=1

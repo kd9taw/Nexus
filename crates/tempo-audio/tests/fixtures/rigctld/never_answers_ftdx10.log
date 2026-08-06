@@ -1,0 +1,26 @@
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+newcat_set_cmd_validate: cmd validation failed, 'AI0;'!='', try#1
+rig_get_vfo: returning -5(rig_get_vfo: cache miss age=1000000ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block(): TX 3 bytes
+read_string_generic called, rxmax=129 direct=1, expected_len=1
+read_string_generic(1371): retrying read timeout 1/1 timeout=1000
+read_string_generic(): Timed out 2.040 seconds after 0 chars, direct=1
+***3:newcat.c(11606):newcat_get_cmd returning(-5) Communication timed out
+
+**2:newcat.c(2110):newcat_get_vfo returning(-5) Communication timed out
+
+Communication timed out
+Communication timed out
+)

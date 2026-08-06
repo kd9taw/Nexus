@@ -1,0 +1,83 @@
+serial_open(332): open failed#1 No such file or directory
+serial_open: Unable to open \\.\pipe\nexuscom - No such file or directory
+rig_open: error = Requesting 47752 bytes for rig_struct
+Requesting 688 bytes for rig_cache
+rig_init: rig has VFO_A
+rig_init: rig has VFO_B
+rig_init: rig has VFO_MEM
+rig.c(995) trace
+*1:newcat.c(702):newcat_init entered
+*1:newcat.c(748):newcat_init returning(0) 
+rig_set_conf called
+main: twiddle=0, uplink=0, twiddle_rit=0
+rig.c(1051):rig_open entered
+rig_settings_get_path: path=\Users\operator/.hamlib_settings
+rig_open: async_data_enable=0, async_data_supported=0
+serial_open: serial port \\.\pipe\nexuscom is OK
+serial_open: \\.\pipe\nexuscom
+serial_open(332): open failed#1 No such file or directory
+serial_open: Unable to open \\.\pipe\nexuscom - No such file or directory
+rig.c(1284):rig_open returning2(-6) IO error
+
+IO error
+ \\.\pipe\nexuscom No such file or directory 
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open reopened retcode=-22
+handle_socket: i/o error
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open reopened retcode=-22
+handle_socket: i/o error
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open reopened retcode=-22
+handle_socket: i/o error
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0
+handle_socket: rig_close retcode=-1
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open
+handle_socket: rig_open retcode=-22, opened=0

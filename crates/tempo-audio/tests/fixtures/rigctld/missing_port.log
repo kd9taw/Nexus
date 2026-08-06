@@ -1,0 +1,67 @@
+serial_open: serial port COM99 does not exist
+rig_open: error = rig_test_2038: MSVCRT 2038 test = 0xf0000000:Mon Aug 05 04:04:00 2097
+rig_init: 2038 time test passed
+rig_check_rig_caps: p1=00007fff12c1a960, p2=00007fff12c20ee0, rig_model=00007fff12c1a960, macro_name=00007fff12c20ee0
+yaesu: initrigs4_yaesu called
+rig_init: rig_model=Yaesu FT-847 20230512.0
+Requesting 47752 bytes for rig_struct
+Requesting 688 bytes for rig_cache
+rig_init: rig has VFO_SUB
+rig_init: rig has VFO_MAIN
+rig.c(995) trace
+ft847_init called 
+rig_set_conf called
+main: twiddle=0, uplink=0, twiddle_rit=0
+rig.c(1051):rig_open entered
+rig_settings_get_path: path=\Users\operator/.hamlib_settings
+rig_open: async_data_enable=0, async_data_supported=0
+serial_open: serial port COM99 does not exist
+rig.c(1284):rig_open returning2(-6) IO error
+
+IO error
+ COM99 No such file or directory 
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open reopened retcode=-6
+handle_socket: i/o error
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open reopened retcode=-6
+handle_socket: i/o error
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open reopened retcode=-6
+handle_socket: i/o error
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0
+handle_socket: rig_close retcode=-1
+serial_open: serial port COM99 does not exist
+handle_socket: rig_open retcode=-6, opened=0

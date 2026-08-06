@@ -296,15 +296,65 @@ pub struct RigctldProc {
 
 /// How many of the daemon's stderr lines are kept. Bounded because the loudest case is a rig
 /// that is merely MUTE: at `-vvv` Hamlib reports the read timeout AND the backend's own error
-/// on every poll, forever (measured: 2 lines per poll), so an unbounded buffer would grow for
-/// as long as the operator leaves the app open. The newest lines are the ones worth having —
-/// a later error supersedes an earlier one.
+/// on every poll, forever, so an unbounded buffer would grow for as long as the operator leaves
+/// the app open. A healthy rig contributes nothing to push anything out (it prints nothing at
+/// this level at all).
 ///
-/// **8 is enough to survive that rate**, which is the thing the level change had to not break:
-/// the two mute-rig lines alternate, so a full ring holds four of each, and
-/// `service::with_daemon_error` reads the newest two DISTINCT lines — the pair. A healthy rig
-/// contributes nothing to push them out (it prints nothing at this level at all).
+/// **Why 8 SURVIVED the round-three audit**, and it is not the reason first given here. The old
+/// justification was "the newest lines are the ones worth having — a later error supersedes an
+/// earlier one", and that premise is false: Hamlib prints the CAUSE first and its consequences
+/// after, so newest-wins systematically keeps the wrong end. What was actually re-measured is
+/// narrower and is what this constant needs to be true — **an 8-line window still CONTAINS a
+/// cause line** in every failure mode captured from the real bundled daemon, because the whole
+/// burst repeats on the next poll. Verbatim captures and the check are in
+/// `service::tests::the_operator_sees_what_hamlib_diagnosed_on_every_real_failure`. Choosing
+/// WHICH of the eight to show is `service::with_daemon_error`'s job, and it is done by content.
+///
+/// Per-failure burst sizes measured (bundled rigctld 4.7.1, `-vvv`): missing serial port 3–4
+/// lines per reconnect, busy port 4, FT-847 that never answers 5, FTDX10 that never answers ~26
+/// (its cause line lands inside the last 8), wrong baud 1.
 const SAID_KEPT: usize = 8;
+
+/// One stderr line as the ring keeps it — trimmed, `None` if there is nothing left.
+///
+/// **Bytes, not `&str`, and that signature is the fix.** The drain used
+/// `BufRead::lines().map_while(Result::ok)`, and `lines()` yields `Err(InvalidData)` for a line
+/// that is not UTF-8. `map_while` STOPS at the first `Err` — so such a line did not merely go
+/// missing, it ended the drain thread and every line after it for the life of the daemon.
+///
+/// Hamlib emits exactly that line in the one case where it diagnoses a **wrong baud**: it
+/// quotes the rig's own bytes back. Observed against the bundled rigctld 4.7.1 with mis-framed
+/// replies — `newcat_get_cmd: Command is not correctly terminated '…'` followed by ~200 bytes
+/// of the rig's garbage, which is arbitrary and very rarely valid UTF-8 (the capture is
+/// `tests/fixtures/rigctld/wrong_baud.log`, and it is not a UTF-8 file). So the fault Nexus
+/// most needed explaining was the fault that silenced the whole mechanism. `from_utf8_lossy`
+/// keeps the sentence and marks the garbage; the marks are themselves the diagnosis — bytes
+/// came back and they were rubbish, which is what a baud mismatch looks like from here.
+fn said_line(raw: &[u8]) -> Option<String> {
+    let line = String::from_utf8_lossy(raw).trim().to_string();
+    (!line.is_empty()).then_some(line)
+}
+
+/// Add one line to the bounded ring, dropping the oldest when it is full.
+fn push_said(q: &mut VecDeque<String>, line: String) {
+    if q.len() == SAID_KEPT {
+        q.pop_front();
+    }
+    q.push_back(line);
+}
+
+/// The ring the drain thread would be holding after `raw` — its own line handling and its own
+/// bound, as a pure function, so a REAL captured `rigctld` stderr log can be replayed against
+/// [`RigctldProc::said`]'s consumer without a daemon, a serial port or a rig.
+pub fn said_ring(raw: &[u8]) -> Vec<String> {
+    let mut q = VecDeque::with_capacity(SAID_KEPT);
+    for line in raw.split_inclusive(|b| *b == b'\n') {
+        if let Some(l) = said_line(line) {
+            push_said(&mut q, l);
+        }
+    }
+    q.into_iter().collect()
+}
 
 impl RigctldProc {
     /// The underlying child's process id, for logging.
@@ -692,17 +742,23 @@ pub fn spawn_rigctld(
         std::thread::Builder::new()
             .name("rigctld-stderr".into())
             .spawn(move || {
-                let reader = std::io::BufReader::new(stderr);
-                for line in reader.lines().map_while(Result::ok) {
-                    let line = line.trim();
-                    if !line.is_empty() {
-                        crate::civ::diag::note(&format!("rigctld: {line}"));
-                        if let Ok(mut q) = sink.lock() {
-                            if q.len() == SAID_KEPT {
-                                q.pop_front();
-                            }
-                            q.push_back(line.to_string());
-                        }
+                let mut reader = std::io::BufReader::new(stderr);
+                let mut raw = Vec::new();
+                loop {
+                    raw.clear();
+                    // `read_until`, not `lines()`: a line Hamlib fills with the RIG's own bytes
+                    // is not UTF-8, and `lines().map_while(Result::ok)` ended the whole drain
+                    // there. See [`said_line`] — that line is the wrong-baud diagnosis.
+                    match reader.read_until(b'\n', &mut raw) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let Some(line) = said_line(&raw) else {
+                        continue;
+                    };
+                    crate::civ::diag::note(&format!("rigctld: {line}"));
+                    if let Ok(mut q) = sink.lock() {
+                        push_said(&mut q, line);
                     }
                 }
             })
