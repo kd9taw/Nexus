@@ -1,0 +1,35 @@
+# Line endings.
+#
+# WHY THIS FILE EXISTS. Several fixtures are compared BYTE FOR BYTE against a string the
+# code builds with '\n' — `station_identity.rs` and `watch_identity.rs` read
+# `tests/fixtures/*.json` and `assert_eq!` the whole document. With no .gitattributes, a
+# clone on Windows under Git's default `core.autocrlf=true` checks those fixtures out as
+# CRLF, so the comparison cannot pass and a PRISTINE clone fails its own test suite. The
+# failure message reads "Do not rebaseline: find what changed", which sends a new
+# contributor hunting a bug that is not there. Development on Linux never sees it.
+#
+# So: normalise text to LF in the working tree on every platform.
+* text=auto eol=lf
+
+# EXCEPTIONS — these carry CRLF deliberately and must survive byte for byte.
+# `-text` disables eol translation in both directions, so the bytes on disk are the bytes
+# in the object store.
+#
+# Third-party data shipped as published. cty.dat is AD1C's country file and the .tle is a
+# captured Celestrak payload; both are line-oriented formats consumed verbatim, and the
+# TLE is a test fixture whose bytes are the point.
+crates/propagation/data/cty.dat            -text
+crates/propagation/tests/fixtures/*.tle    -text
+
+# Vendored hamlib licence texts, bundled as Tauri resources. Licence files are reproduced
+# as received — rewriting their line endings edits third-party legal text.
+src-tauri/resources/hamlib/*.txt           -text
+
+# Binary assets: never eol-translated, never diffed as text.
+*.png     binary
+*.webp    binary
+*.wav     binary
+*.bin     binary
+*.ico     binary
+*.icns    binary
+*.onnx    binary
