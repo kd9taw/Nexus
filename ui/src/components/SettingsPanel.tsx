@@ -464,6 +464,15 @@ export function SettingsPanel({
   const [allRigModels, setAllRigModels] = useState<[number, string][]>([])
   const [allRigModelsLoading, setAllRigModelsLoading] = useState(false)
   const [showAllRigModels, setShowAllRigModels] = useState(false)
+  // Rig-picker search text. The picker itself STAYS a native <select>: that is the control a
+  // screen reader can actually work: on the Chromium/WebView2 IA2 bridge JAWS reads, a
+  // <select> is a first-class combobox — name, current value, "n of m", and JAWS's own
+  // first-letter type-ahead. An <input list> + <datalist> would let a name be typed, but its
+  // suggestion popup is browser chrome rather than DOM and is not put on that bridge, so a
+  // blind operator gets an edit box that silently offers nothing (and the datalist submits a
+  // LABEL, not the model number this field stores). A11y here is always-on, never a mode
+  // (0.9.6 design rule), so searchability arrives as a filter field that narrows the options.
+  const [rigFilter, setRigFilter] = useState('')
   const [serialPorts, setSerialPorts] = useState<string[]>([])
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
@@ -1028,6 +1037,14 @@ export function SettingsPanel({
   //   the TS-50S): the serial interface is FIXED at 4800 (8N2, handled by the Hamlib
   //   backend; -s only overrides the speed).
   // - 1990s Kenwood with a baud menu (TS-870S, TS-570D/S): factory default 9600.
+  // - Yaesu (added 2026-08 off an FT-847 field report: CAT worked in WSJT-X, dead here).
+  //   Rates are read off each model's Hamlib backend caps, `serial_rate_min`/`_max` in
+  //   rigs/yaesu/*.c — six backends declare a FIXED 4800 (max < the 38400 default, so the
+  //   default is guaranteed silence), and the FT-847 declares 4800..57600 but its CAT RATE
+  //   menu (Menu 37) enumerates only 4800 / 9600 / 57600 — 38400 is not on the dial at all.
+  //   4800 is its factory setting, i.e. the rate an untouched radio answers on. Every other
+  //   Yaesu in the catalog declares max ≥ 38400 and is deliberately absent: overriding a
+  //   default that already works is the same bug pointed the other way.
   // Model numbers mirror crates/tempo-audio/src/rigmodels.rs (verified vs riglist.h).
   const BAUD_BY_MODEL = new Map<number, number>([
     // Xiegu → 19200
@@ -1037,6 +1054,10 @@ export function SettingsPanel({
     [2009, 4800], [2011, 4800], [2013, 4800], [2025, 4800],
     // Kenwood with 9600 factory default
     [2010, 9600], [2004, 9600], [2016, 9600],
+    // Yaesu → 4800. ft847.c 4800/57600 (menu 4800/9600/57600, factory 4800);
+    // ft1000mp.c, ft736.c, ft920.c, ft990.c, ft100.c all 4800/4800.
+    [1001, 4800], [1004, 4800], [1010, 4800], [1014, 4800], [1016, 4800],
+    [1021, 4800], [1024, 4800],
   ])
   const recommendedBaud = (modelNum: number): number | null => BAUD_BY_MODEL.get(modelNum) ?? null
 
@@ -1813,6 +1834,28 @@ export function SettingsPanel({
   const portOptions = form.serialPort && !serialPorts.includes(form.serialPort)
     ? [form.serialPort, ...serialPorts]
     : serialPorts
+
+  // Rig-model search. Tokens must ALL appear, and both sides are stripped to letters+digits,
+  // so "ft847", "ft 847", "yaesu 847" and "1001" all land on the FT-847 — an operator types
+  // what is printed on the radio, not our label's punctuation. The number is part of the
+  // haystack so a model number typed here finds its rig too.
+  const rigSearchKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const rigModelList = showAllRigModels ? allRigModels : rigModels
+  const rigFilterTokens = rigFilter.trim().split(/\s+/).map(rigSearchKey).filter(Boolean)
+  const rigModelMatches =
+    rigFilterTokens.length === 0
+      ? rigModelList
+      : rigModelList.filter(([num, name]) => {
+          const hay = rigSearchKey(`${name}${num}`)
+          return rigFilterTokens.every((t) => hay.includes(t))
+        })
+  // The chosen rig is never filtered out of its own picker: a <select> whose value matches no
+  // option displays the FIRST one instead, so the form would read as a different radio than
+  // it holds. Counted separately from the matches, so the announcement stays honest.
+  const rigModelOptions =
+    rigFilterTokens.length === 0 || rigModelMatches.some(([n]) => n === form.rigModel)
+      ? rigModelMatches
+      : [...rigModelList.filter(([n]) => n === form.rigModel), ...rigModelMatches]
 
   // include the current selection even if it's not in the enumerated list
   const audioInOptions = form.audioIn && !audio.input.includes(form.audioIn)
@@ -2742,14 +2785,40 @@ export function SettingsPanel({
 
               <label className="settings-field">
                 <span className="settings-label">Rig Model</span>
+                {/* Type-to-find. It sits BEFORE the select, so it is what the wrapping label
+                    now targets — hence the explicit aria-label on the select below, which
+                    also fixes the name it used to get (the whole label's text, hints and
+                    all). See the `rigFilter` note above for why this is not a datalist. */}
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={rigFilter}
+                  placeholder="Find a rig — type a name or model number"
+                  onChange={(e) => setRigFilter(e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label="Filter the rig model list"
+                />
+                {/* Mounted unconditionally and EMPTY until there is something to say: a live
+                    region added to the DOM at the same moment as its first content is a
+                    coin-flip with a screen reader — the AT registers regions it can already
+                    see. Sighted operators watch the list shrink; this is the same fact, said. */}
+                <span className="settings-hint" role="status">
+                  {rigFilterTokens.length === 0
+                    ? ''
+                    : rigModelMatches.length === 0
+                      ? 'No model matches — clear the box, or enter the model number directly.'
+                      : `${rigModelMatches.length} model${rigModelMatches.length === 1 ? '' : 's'} match.`}
+                </span>
                 <div className="settings-input-row">
                   <select
                     className="settings-input"
                     value={String(form.rigModel)}
                     onChange={(e) => selectRig(Number(e.target.value))}
+                    aria-label="Rig Model"
                   >
                     <option value="0">— None —</option>
-                    {(showAllRigModels ? allRigModels : rigModels).map(([num, name]) => (
+                    {rigModelOptions.map(([num, name]) => (
                       <option key={num} value={String(num)}>
                         {name} ({num})
                       </option>
@@ -5128,21 +5197,29 @@ export function SettingsPanel({
                   zero-beat marker.
                 </span>
               </label>
-              <label className="settings-field">
-                <span className="settings-label">WinKeyer port</span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.winkeyerPort}
-                  placeholder="COM6 — K1EL WinKeyer serial port"
-                  onChange={(e) => update('winkeyerPort', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">
-                  For the WinKeyer CW keyer (select it above). 1200 baud.
-                </span>
-              </label>
+              {/* Gated on its own backend, exactly like the keyline port/line below. Shipped
+                  unconditionally through 0.27, which made it the ONLY visible port box under
+                  Keyer: an operator on the default `cat` backend filled it in, saved, and
+                  nothing keyed — the box he could see belonged to a keyer he had not chosen. */}
+              {form.cwKeyer === 'winkeyer' && (
+                <label className="settings-field">
+                  <span className="settings-label">WinKeyer port</span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.winkeyerPort}
+                    placeholder="COM6 — K1EL WinKeyer serial port"
+                    onChange={(e) => update('winkeyerPort', e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">
+                    The serial port your WinKey presents. 1200 baud. A WinKey micro inside a
+                    multi-function interface (Timewave Navigator, microHAM) counts — use that
+                    device&apos;s CW/WinKey port, not its CAT port.
+                  </span>
+                </label>
+              )}
               {form.cwKeyer === 'serial' && (
                 <>
                   <label className="settings-field">
@@ -5156,10 +5233,17 @@ export function SettingsPanel({
                       autoComplete="off"
                       spellCheck={false}
                     />
+                    {/* "US Navigator" was listed here as an example through 0.27. The Timewave
+                        Navigator keys through a K1EL WinKey micro, which ignores DTR/RTS
+                        entirely — so this hint pointed a Navigator owner at the one backend
+                        that cannot drive his hardware, and CW just never keyed. */}
                     <span className="settings-hint">
-                      The USB-to-serial into your keying interface (Buxcomm, US Navigator, a homebrew
+                      The USB-to-serial into your keying interface (Buxcomm, a homebrew
                       DTR cable, …) that plugs into the rig&apos;s KEY jack. Must be a SEPARATE port
                       from CAT. Set the rig to CW and its key-jack to straight-key / bug.
+                      An interface with a WinKey chip in it — Timewave Navigator, microHAM, a K1EL
+                      WinKeyer — does <strong>not</strong> key on DTR: pick the WinKeyer backend above
+                      instead and give it that device&apos;s CW port.
                     </span>
                   </label>
                   <label className="settings-field">
