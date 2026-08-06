@@ -7280,7 +7280,7 @@ mod tests {
         }
     }
 
-    /// ⭐ THE OTHER HALF OF "nothing noteworthy" (FT-847 field report). `-vv` is what makes the
+    /// ⭐ THE OTHER HALF OF "nothing noteworthy" (FT-847 field report). `-vvv` is what makes the
     /// daemon SPEAK (`rigctld_proc`); this is what carries it to the operator. Before, every
     /// captured line went to the CI-V diagnostic file and nowhere else — and that toggle is
     /// rendered only for an Icom on the native CI-V path, so for a Yaesu owner the pipeline
@@ -7291,7 +7291,7 @@ mod tests {
     #[test]
     fn a_failed_cat_probe_carries_what_hamlib_itself_said() {
         let ours = "CAT error: rig reply incomplete after 700 ms (got \"\")".to_string();
-        // The exact line the bundled rigctld 4.7.0 emits at -vv for a port that isn't there.
+        // The exact line the bundled rigctld 4.7.1 emits at -vvv for a port that isn't there.
         let said = ["serial_open: serial port COM7 does not exist".to_string()];
         let out = with_daemon_error(ours.clone(), &said);
         assert!(
@@ -11068,6 +11068,87 @@ mod tests {
             assert_eq!(ok, Some(true), "{what}: connected through it: {detail}");
             assert!(detail.contains("Sharing"), "{what}: got: {detail}");
         }
+    }
+
+    /// ⭐ THE DELIVERY SITE THAT HAD NO COVER (`open_cat`, the fold at the end of the spawn arm).
+    ///
+    /// `with_daemon_error` is unit-tested as a pure function and `tests/rigctld_stderr.rs` proves
+    /// the daemon's words reach the handle. Between them sat the two places that actually PUT
+    /// those words in front of the operator, and only one of them — Test CAT — had a caller in a
+    /// test. Deleting the other one, the ORDINARY connect failure, left the whole suite and
+    /// clippy green: 422 + 7 + 1 + 5, all passing, with the field report's fix removed from the
+    /// path it matters most on. An operator meets Test CAT only after this has already told him
+    /// nothing.
+    ///
+    /// So this drives the real `open_rig` → `open_cat` against a stand-in daemon that says one
+    /// Hamlib-shaped thing and never binds its port, and asks the status the operator is shown
+    /// whether Hamlib's own diagnosis is in it. Hamlib is deliberately not involved: what is
+    /// under test is our plumbing, and a test needing Hamlib installed would self-skip on the
+    /// machines where this regressed.
+    #[test]
+    #[cfg(unix)]
+    fn an_ordinary_connect_failure_carries_what_the_daemon_said() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        const HAMLIB_SAYS: &str = "read_block_generic(): Timed out 1.109 seconds after 0 chars";
+
+        let dir = std::env::temp_dir().join(format!("nexus-opencat-said-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let bin = dir.join("rigctld");
+        {
+            let mut f = std::fs::File::create(&bin).expect("write stand-in");
+            // Speaks once and then just lives, without binding the CAT port — the shape of a
+            // daemon that came up, opened the port and got nothing back from the radio. The
+            // `--show-conf` probe inside `spawn_rigctld` runs first with other arguments and is
+            // EXPECTED to fail here (it falls back to "say nothing about the control lines").
+            f.write_all(
+                format!(
+                    "#!/bin/sh\n\
+                     [ \"$1\" = \"-vvv\" ] || exit 9\n\
+                     echo '{HAMLIB_SAYS}' >&2\n\
+                     sleep 30\n"
+                )
+                .as_bytes(),
+            )
+            .expect("write stand-in");
+        }
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        // `resolve_rigctld` prefers a binary bundled beside the executable and falls back to
+        // PATH; a test binary has no bundle, so this is the path it takes. Prepend-only, and
+        // this is the only test in this binary that resolves a rigctld.
+        std::env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+
+        // A port with nothing on it: the daemon we launch will not bind it either, so the
+        // control connection is refused and the probe fails — an ordinary connect failure.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let (_rig, proc, probe) = open_rig(&cat_transport(port, None), true);
+
+        assert_eq!(
+            probe.ok,
+            Some(false),
+            "the stand-in never binds the port, so this must be a failed open: {}",
+            probe.detail
+        );
+        assert!(
+            probe.detail.contains("Hamlib said:") && probe.detail.contains(HAMLIB_SAYS),
+            "an ordinary connect failure must carry the daemon's OWN diagnosis — this is the \
+             delivery site the operator hits first and it had no test at all. got: {}",
+            probe.detail
+        );
+        drop(proc);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The exact greeting the field-report operator's Thetis sent (2.10.3.13 on a Hermes

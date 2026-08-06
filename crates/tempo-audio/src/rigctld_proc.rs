@@ -195,14 +195,18 @@ fn resolve_lines(settable: SettableLines, want: ControlLines) -> ControlLines {
 ///   level for the whole session, so opening the port cannot key the transmitter. `lines` must
 ///   already have been narrowed by [`resolve_lines`] to what this rig's Hamlib accepts — see
 ///   [`SettableLines`] for the two refusals and why a wrong flag is silently dead CAT.
-/// - `-vv` — **why the daemon says anything at all.** rigctld hands its `-v` count straight to
-///   `rig_set_debug`, so with no flag Hamlib runs at `RIG_DEBUG_NONE` and prints NOTHING; the
-///   stderr pipe [`spawn_rigctld`] opens then drains an empty stream, which is exactly how a
-///   failing FT-847 produced a support report saying "nothing noteworthy". `-vv` is
-///   `RIG_DEBUG_ERR`: the first level that emits (measured — `-vv -r COM99` gives
-///   `serial_open: serial port COM99 does not exist`, `-v` gives nothing), and the last that is
-///   errors ONLY. `-vvv`/`-vvvv` are WARN/TRACE and would put a line per poll on the pipe for a
-///   rig that is merely mute. See `the_daemon_is_launched_at_the_verbosity_that_makes_it_report_errors`.
+/// - `-vvv` — **why the daemon says anything at all, and why it says the RIGHT thing.** rigctld
+///   hands its `-v` count straight to `rig_set_debug`, so with no flag Hamlib runs at
+///   `RIG_DEBUG_NONE` and prints NOTHING; the stderr pipe [`spawn_rigctld`] opens then drains an
+///   empty stream, which is exactly how a failing FT-847 produced a support report saying
+///   "nothing noteworthy". `-vv` is `RIG_DEBUG_ERR`, the first level that emits at all — but it
+///   covers the OPEN (`serial_open: serial port COM99 does not exist`), and the commonest fault
+///   behind that report is not an open: it is *the port opened and the rig never answered*, whose
+///   explaining line is `RIG_DEBUG_WARN`. `-vvv` is that level, it costs nothing on a healthy rig
+///   (measured: byte-identical output at `-vv` and `-vvv` over 10 serial polls and 30 network
+///   polls that all succeeded), and `-vvvv` is where the per-transaction narration starts and is
+///   the level this must never reach. Full measurements, both directions, on
+///   `the_daemon_is_launched_at_the_verbosity_that_reports_a_rig_that_never_answered`.
 pub fn rigctld_args(
     model: u32,
     addr: &str,
@@ -212,9 +216,10 @@ pub fn rigctld_args(
     ptt_line: Option<crate::rig::SerialLine>,
     lines: ControlLines,
 ) -> Vec<String> {
-    // Errors only, and errors at all — see the `-vv` bullet above. Unconditional: a fault the
-    // operator needs explaining is no more likely on a serial rig than a network one.
-    let mut args = vec!["-vv".to_string(), "-m".to_string(), model.to_string()];
+    // Errors AND the read timeouts that are the commonest fault — see the `-vvv` bullet above.
+    // Unconditional: a fault the operator needs explaining is no more likely on a serial rig
+    // than a network one.
+    let mut args = vec!["-vvv".to_string(), "-m".to_string(), model.to_string()];
     if !addr.is_empty() {
         args.push("-r".to_string());
         args.push(addr.to_string());
@@ -290,9 +295,15 @@ pub struct RigctldProc {
 }
 
 /// How many of the daemon's stderr lines are kept. Bounded because the loudest case is a rig
-/// that is merely MUTE: at `-vv` Hamlib reports the read error on every poll, forever, so an
-/// unbounded buffer would grow for as long as the operator leaves the app open. The newest
-/// lines are the ones worth having — a later error supersedes an earlier one.
+/// that is merely MUTE: at `-vvv` Hamlib reports the read timeout AND the backend's own error
+/// on every poll, forever (measured: 2 lines per poll), so an unbounded buffer would grow for
+/// as long as the operator leaves the app open. The newest lines are the ones worth having —
+/// a later error supersedes an earlier one.
+///
+/// **8 is enough to survive that rate**, which is the thing the level change had to not break:
+/// the two mute-rig lines alternate, so a full ring holds four of each, and
+/// `service::with_daemon_error` reads the newest two DISTINCT lines — the pair. A healthy rig
+/// contributes nothing to push them out (it prints nothing at this level at all).
 const SAID_KEPT: usize = 8;
 
 impl RigctldProc {
@@ -721,16 +732,37 @@ mod tests {
     /// is `RIG_DEBUG_NONE`, at which Hamlib prints nothing whatsoever. The operator's daemon was
     /// silent, not ignored.
     ///
-    /// Measured against the bundled rigctld 4.7.0, one run per level, `-r COM99`:
+    /// Measured against the bundled rigctld 4.7.1, one run per level, `-r COM99`:
     /// - no flag → nothing;
     /// - `-v` (`RIG_DEBUG_BUG`) → nothing;
-    /// - `-vv` (`RIG_DEBUG_ERR`) → `serial_open: serial port COM99 does not exist`.
+    /// - `-vv` (`RIG_DEBUG_ERR`) → `serial_open: serial port COM99 does not exist`;
+    /// - `-vvv` (`RIG_DEBUG_WARN`) → the same one line;
+    /// - `-vvvv` (`RIG_DEBUG_VERBOSE`) → 38 lines for that one failed open.
     ///
-    /// `-vv` is the FIRST level that says anything and the LAST one that is errors only —
-    /// `-vvv` is WARN and `-vvvv` is a per-transaction trace, either of which would flood a
-    /// mute rig's poll loop. So the level is load-bearing in both directions.
+    /// **Why `-vvv` and not the `-vv` this shipped at.** `-vv` covers the OPEN: the port that
+    /// is not there, the port that is busy. It does not cover the fault the field report is
+    /// most likely to be — *the port opened and the rig never answered* — in the words that
+    /// name it. Measured on a mute serial rig (a pty that accepts and never replies, FT-847,
+    /// three `get_freq` polls):
+    /// - `-vv` → 1 line per poll: `ft847: read_block returned -5`;
+    /// - `-vvv` → 2 lines per poll: that, plus
+    ///   `read_block_generic(): Timed out 1.109 seconds after 0 chars, direct=1`.
+    ///
+    /// The second line is the one an operator can act on, and `-vv` does not have it.
+    ///
+    /// **And the cost is nil, which is the part that had to be measured rather than assumed.**
+    /// A HEALTHY rig prints nothing at either level — 10 polls on a pty rig that answers, and
+    /// 30 polls through a real `rigctld -m 1` over one persistent connection, gave byte-identical
+    /// output at `-vv` and `-vvv` (0 lines and 2 connect-time lines respectively). WARN adds
+    /// warnings; it does not narrate. `-vvvv` is where the per-transaction trace starts (85
+    /// lines for those same 10 healthy polls), and that is the level this must never reach.
+    ///
+    /// The doubled fault-case rate is bounded by [`SAID_KEPT`] and cannot displace the useful
+    /// line: the ring keeps the NEWEST 8, the two mute-rig lines alternate, and
+    /// `service::with_daemon_error` reports the newest two DISTINCT lines — which is exactly
+    /// this pair.
     #[test]
-    fn the_daemon_is_launched_at_the_verbosity_that_makes_it_report_errors() {
+    fn the_daemon_is_launched_at_the_verbosity_that_reports_a_rig_that_never_answered() {
         for args in [
             rigctld_args(
                 1001,
@@ -753,13 +785,14 @@ mod tests {
             ),
         ] {
             assert!(
-                args.iter().any(|a| a == "-vv"),
-                "without it Hamlib is at RIG_DEBUG_NONE and the stderr drain has nothing to \
-                 drain: {args:?}"
+                args.iter().any(|a| a == "-vvv"),
+                "at `-vv` a mute rig says only `read_block returned -5`, and below that Hamlib \
+                 is at RIG_DEBUG_NONE and the stderr drain has nothing to drain: {args:?}"
             );
             assert!(
-                !args.iter().any(|a| a == "-vvv" || a == "-vvvv"),
-                "WARN and TRACE flood a mute rig's poll loop — errors only: {args:?}"
+                !args.iter().any(|a| a == "-vvvv"),
+                "VERBOSE narrates every transaction (85 lines per 10 HEALTHY polls) and would \
+                 push the fault out of an 8-line ring: {args:?}"
             );
         }
     }
@@ -790,7 +823,7 @@ mod tests {
         );
         assert_eq!(
             args,
-            vec!["-vv", "-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]
+            vec!["-vvv", "-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]
         );
     }
 
@@ -809,7 +842,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "-vv",
+                "-vvv",
                 "-m",
                 "23005",
                 "-r",
@@ -834,7 +867,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "-vv",
+                "-vvv",
                 "-m",
                 "1042",
                 "-r",
@@ -851,7 +884,7 @@ mod tests {
     fn args_without_serial_port_omit_port_and_baud() {
         // Dummy / NET rigs need no serial device.
         let args = rigctld_args(1, "", 38400, 4532, false, None, ControlLines::default());
-        assert_eq!(args, vec!["-vv", "-m", "1", "-t", "4532"]);
+        assert_eq!(args, vec!["-vvv", "-m", "1", "-t", "4532"]);
     }
 
     /// The single-cable interface (Digirig Mobile): ONE port carries CAT and the RTS keying
@@ -871,7 +904,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "-vv", "-m", "3073", "-r", "COM5", "-s", "38400", "-P", "RTS", "-p", "COM5", "-t",
+                "-vvv", "-m", "3073", "-r", "COM5", "-s", "38400", "-P", "RTS", "-p", "COM5", "-t",
                 "4532"
             ],
             "-P/-p must name the SAME device as -r; a mismatch opens a second port"
@@ -929,7 +962,7 @@ mod tests {
             Some(crate::rig::SerialLine::Rts),
             ControlLines::default(),
         );
-        assert_eq!(no_dev, vec!["-vv", "-m", "1", "-t", "4532"]);
+        assert_eq!(no_dev, vec!["-vvv", "-m", "1", "-t", "4532"]);
     }
 
     /// Every arg-shape test below reads the flag pairs rather than a whole vector, so adding an
@@ -1131,7 +1164,7 @@ mod tests {
         );
 
         let no_dev = rigctld_args(1, "", 38400, 4532, false, None, ControlLines::hold_low());
-        assert_eq!(no_dev, vec!["-vv", "-m", "1", "-t", "4532"]);
+        assert_eq!(no_dev, vec!["-vvv", "-m", "1", "-t", "4532"]);
     }
 
     /// ⚠️ THE P1 REGRESSION, by name. Both dumps are real `rigctld 4.7.1 -m <model> -L` output

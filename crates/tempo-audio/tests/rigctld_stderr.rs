@@ -1,6 +1,6 @@
 //! Does what the CAT daemon says actually REACH us?
 //!
-//! The unit tests around this cover the two ends — that `-vv` is on the command line
+//! The unit tests around this cover the two ends — that `-vvv` is on the command line
 //! (`rigctld_proc`) and that a captured line is folded into the CAT status
 //! (`service::with_daemon_error`). Neither can see the middle, and the middle is where this
 //! bug lived for a year: `spawn_rigctld` has piped stderr and drained it on a thread since the
@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use tempo_audio::rigctld_proc::{spawn_rigctld, ControlLines};
 
-/// The exact line the bundled rigctld 4.7.0 prints at `-vv` for a port that is not there
-/// (observed: `rigctld.exe -vv -m 1001 -r COM99 -s 57600`). At `-v` and with no flag it prints
+/// The exact line the bundled rigctld 4.7.1 prints at `-vvv` for a port that is not there
+/// (observed: `rigctld.exe -vvv -m 1001 -r COM99 -s 57600`). At `-v` and with no flag it prints
 /// nothing at all, which is the whole reason the drain had nothing to drain.
 const HAMLIB_SAYS: &str = "serial_open: serial port COM99 does not exist";
 
@@ -33,14 +33,14 @@ fn the_daemons_own_words_reach_the_handle_the_operator_is_told_from() {
     let bin = dir.join("rigctld");
     {
         let mut f = std::fs::File::create(&bin).expect("write stand-in");
-        // `exit 9` unless -vv leads: `spawn_rigctld`'s own `--show-conf` probe runs first with
+        // `exit 9` unless -vvv leads: `spawn_rigctld`'s own `--show-conf` probe runs first with
         // different arguments and is EXPECTED to fail here (it falls back to "say nothing about
-        // the control lines"), while a launch that lost `-vv` would be launching a daemon that
-        // cannot report anything — so the stand-in refuses to play one.
+        // the control lines"), while a launch that lost `-vvv` would be launching a daemon that
+        // cannot report a rig that never answered — so the stand-in refuses to play one.
         f.write_all(
             format!(
                 "#!/bin/sh\n\
-                 [ \"$1\" = \"-vv\" ] || exit 9\n\
+                 [ \"$1\" = \"-vvv\" ] || exit 9\n\
                  echo '{HAMLIB_SAYS}' >&2\n\
                  sleep 30\n"
             )
