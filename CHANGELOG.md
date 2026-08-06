@@ -101,30 +101,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot drift again — which matters more than it did, because the composer now uses that number to
   tell you how long the transmitter will be keyed.
 
-- **Connecting to a serial rig on Linux could put it straight into transmit — and hold it there.**
+## [1.0.2] — 2026-08-05
+
+### Fixed
+
+- **Connecting to a serial rig could put it straight into transmit — and hold it there.**
   If your PTT Method is anything other than RTS or DTR on the CAT port — VOX and CAT keying, which
   is the default and what most operators run — Nexus started Hamlib's `rigctld` without telling it
-  anything about the port's control lines. The Linux serial driver raises RTS and DTR when a port
+  anything about the port's control lines. A serial port's driver raises RTS and DTR when the port
   is opened, and Hamlib only puts a line back down when it is the line it has been asked to key
-  with, so on the default both stayed high for the whole session. On an interface wired to key the
+  with, so on the default both stayed up for the whole session. On an interface wired to key the
   radio from RTS (or from DTR) that is the transmitter switched on by the act of connecting, with
   nothing in Nexus that would switch it off. Nexus now asks the daemon to hold those lines low when
-  it opens the port. **Who was exposed:** a serial CAT connection on Linux (and, less certainly,
-  macOS — the same driver behaviour) through an interface that keys PTT or a CW line from RTS or
-  DTR: the classic single-cable and homebrew interfaces, commercial CAT cables wired that way, and
-  anything built to the RTS-is-PTT convention. A network/TCP rig has no control lines and was never
-  affected. **What to check:** if you have ever seen the radio key on connect, drop to receive, or
-  show TX with nothing sending, this was a candidate cause. **What has NOT changed:** if you key by
-  RTS or DTR, Nexus never touches that line — Hamlib refuses to open a rig that is asked to hold
-  the line it keys with, so keying works exactly as before. Neither is RTS touched on a radio whose
-  Hamlib backend uses it for hardware flow control (the FTDX10, FT-991, TS-2000 and TS-590 among
-  about fifty others); Nexus reads that from the Hamlib you actually have, per radio, before it
-  starts the daemon. If your interface takes its power from the DTR or RTS pin rather than from
-  USB — a design from the RS-232 era — it will now see those pins low. **What this is not:** it is
-  a real defect, found by reading the Hamlib source and confirmed against the Hamlib Nexus ships,
-  and it matches a published report of the same behaviour with the same FT-847 cable under a
-  different program. It is not established as the cause of any particular report of a silent radio,
-  and it is not claimed as one — silence and a stuck transmitter are different symptoms.
+  it opens the port, and closes the same gap in the two places it opens a serial port itself:
+  serial PTT, which drove only the line it keys and left the other one up, and the native CI-V
+  connection used by scope-capable Icoms, which keys nothing and so left both up. The CW and RTTY
+  keylines already did this; the rule now lives in one place instead of being remembered at each.
+  **Who was exposed:** a serial CAT connection through an interface that keys PTT or a CW line from
+  RTS or DTR — the classic single-cable and homebrew interfaces, commercial CAT cables wired that
+  way, and anything built to the RTS-is-PTT convention. **On every platform, not just Linux**: the
+  earlier note here said Linux and probably macOS, and that was wrong about the platform most of
+  you are on. Linux and macOS raise both pins on open. Windows raises them too, and while Hamlib
+  lowers DTR itself as it configures the port, it leaves RTS to the driver — and RTS is the line
+  the reports are about. A network/TCP rig has no control lines and was never affected.
+  **What to check:** if you have ever seen the radio key on connect, drop to receive, or show TX
+  with nothing sending, this was a candidate cause. **What has NOT changed:** if you key by RTS or
+  DTR, Nexus never touches that line, so keying works exactly as before. Neither is RTS touched on
+  a radio whose Hamlib backend uses it for hardware flow control (the FTDX10, FT-991, TS-2000 and
+  TS-590 among about fifty others), nor is either line touched on a radio whose Hamlib backend keys
+  the transmitter from that pin in its own right — the Yaesu FT-980 keys from RTS and the FT-757GXII
+  from DTR, and Hamlib refuses to open either of them if it is also asked to hold that pin. Nexus
+  asks the Hamlib you actually have, per radio, which lines it will accept before it starts the
+  daemon, so this stays right when Hamlib changes: four popular radios gained the flow-control
+  declaration between two Hamlib releases, and a list baked in here would have gone stale in the
+  direction that costs you CAT. Anything it cannot establish, it leaves alone. If your interface
+  takes its power from the DTR or RTS pin rather than from USB — a design from the RS-232 era — it
+  will now see those pins low. **What this is not:** it is a real defect, found by reading the
+  Hamlib source and confirmed against the Hamlib Nexus ships, and it matches a published report of
+  the same behaviour with the same FT-847 cable under a different program. It is not established as
+  the cause of any particular report of a silent radio, and it is not claimed as one — silence and
+  a stuck transmitter are different symptoms. Nobody here has a serial rig: every Hamlib refusal
+  above was reproduced by running the bundled `rigctld`, but no pin has been watched moving.
 
 - **The Needed board hid US-spotted rows on exactly the pileups where a US spotter matters.**
   An HF spot reaches the board when someone on your continent heard the DX — a JA station a
