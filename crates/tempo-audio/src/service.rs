@@ -7593,12 +7593,13 @@ mod tests {
     /// produces when it drops the socket on a failed command.
     ///
     /// **Counted, not described** (the first wording of this comment said "line 3 of 2000+",
-    /// which was not true of the file it shipped with): 549 lines, 26 of them naming the fault,
-    /// first on line 1, last on line 517, 32 lines of bookkeeping after that one and runs of up
-    /// to 60 lines between them. What makes the capture bite is not its length but those runs —
-    /// both are longer than the window, so an 8-line ring sampled at the end, or anywhere inside
-    /// a run, holds no diagnosis at all. The assertion below pins that precondition directly
-    /// rather than trusting a line count to imply it.
+    /// which was not true of the file it shipped with; this is `wc` and a scan of the file that
+    /// is actually here): **2236 lines**, 110 of them naming the fault, first on line 1, last on
+    /// line 2204, 32 lines of bookkeeping after that one and runs of up to 59 lines between them.
+    /// What makes the capture bite is not its length but those runs — both are longer than the
+    /// window, so an 8-line ring sampled at the end, or anywhere inside a run, holds no diagnosis
+    /// at all. The assertion below pins that precondition directly rather than trusting a line
+    /// count to imply it.
     ///
     /// Before the fix the ring held the newest 8 lines of that, and every one of them was
     /// bookkeeping: the operator was told `handle_socket: rig_open retcode=0`. Ranking at read
