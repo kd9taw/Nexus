@@ -107,10 +107,30 @@ the picture cannot.
 
 **Transmit** (a ⊞ pane) is the image chooser: a drop zone that takes a dragged
 file, a **Choose image…** button for the file dialog, and a preview canvas that
-shows the picture cover-cropped to the selected mode's exact pixels — scaled up
-until it fills the frame, centred, overflow cropped. What you see there is
-byte-for-byte what goes out. Under it, the file name and the size it was cropped
-to (`sunset.jpg → 320×256`). Change the mode and it re-crops.
+shows the picture already resized to the selected mode's exact pixels. **Drop a
+photo at any size** — a 4032×3024 phone picture is fine. Nexus reads the file's
+rotation tag first (so a portrait phone photo is not sent sideways), crops it to
+the mode's shape from the middle, and scales it down in steps so fine detail
+softens rather than breaking up into speckle. **Drag the preview** to choose which
+part of the picture survives the crop; arrow keys nudge it a pixel at a time,
+shift ten, Home re-centres, and double-click does the same. Only the over-long
+axis moves — the cursor tells you which — and when the picture already matches the
+mode it says so instead of offering a control that would do nothing.
+
+**Your callsign is burned into the top-left corner**, and that is not decoration —
+see [Your callsign goes out in the picture](#your-callsign-goes-out-in-the-picture)
+below. What you see on the preview canvas is byte-for-byte what goes out, plate
+included. Under it, the file name, its original size, the size it was resized to,
+the mode and how long the rig will be keyed (`sunset.jpg (4032×3024) → 320×256 ·
+Scottie 1 · 1:51 key-down`). Change the mode and it re-derives the crop at the new
+shape, keeping your framing.
+
+If a file cannot be sent the pane says so and keeps the picture you already had
+loaded. **iPhone HEIC photos are the common one**: Nexus has no HEVC decoder, so
+it names the format and your two fixes (Settings ▸ Camera ▸ Formats ▸ **Most
+Compatible**, or Settings ▸ Photos ▸ Transfer to Mac or PC ▸ **Automatic**). JPEG,
+PNG, WebP, BMP and GIF all work; a GIF sends its first frame. A picture smaller
+than the mode is enlarged with a warning that stays on screen, not refused.
 
 **Gallery** (a ⊞ pane) holds the received images, newest first, each a thumbnail
 with its mode, the decoded FSK callsign ID if the sender appended one, and the
@@ -126,7 +146,7 @@ callsign (FSK ID), mode, frequency, and time."
 
 **The transmit bar** is pinned across the bottom and is not a panel. It carries
 the mode picker — grouped Scottie / Martin / Robot / PD, each option labelled
-with its airtime and pixel size (`Scottie 1 · ≈110s · 320×256`) — **Send**,
+with its airtime and pixel size (`Scottie 1 · ≈111s · 320×256`) — **Send**,
 **Stop**, and, while an image is going out, a progress bar reading
 "TX — Scottie 1 · 1:12 remaining". It sticks to the bottom of the scroll area, so
 on a short window **Stop** is on screen at every scroll position.
@@ -173,16 +193,19 @@ The status line is the diagnosis, in order of what to do about it:
 ### Send an image
 
 1. Arm transmit with the header's **■ TX Off** latch (it turns into **▼ TX On**).
-2. Drag a picture onto the Transmit pane, or use **Choose image…**. Any format
-   the webview can decode (PNG, JPEG, …) works; it is cropped to the mode.
+2. Drag a picture onto the Transmit pane, or use **Choose image…**. Any size
+   works — JPEG, PNG, WebP, BMP or GIF — and it is rotated upright, cropped and
+   resized to the mode for you. Drag the preview to reframe it.
+   (**Not** HEIC: see the note in the tour above.)
 3. Pick a mode in the bottom bar. Until you choose one, Nexus follows the band:
    Scottie 1 on HF (the North American calling-frequency convention) and PD-120
    above 30 MHz (what ARISS uses).
 4. Press **Send**. Nexus switches the app to Phone so the image rides the phone
    segment — without moving your dial — then hands the encoded transmission to
-   the gated transmit path. A refusal is a toast that names the reason: TX off,
-   outside your license privileges, the transmitter already busy with the voice
-   keyer or mic PTT, or a mode whose key-down would out-run your Tx Watchdog.
+   the gated transmit path. A refusal is a toast that names the reason: **no
+   callsign set**, TX off, outside your license privileges, the transmitter
+   already busy with the voice keyer or mic PTT, or a mode whose key-down would
+   out-run your Tx Watchdog.
 5. Watch the progress bar count down. **Stop** aborts the image, drops the queued
    job and unkeys; so does turning the TX latch off.
 
@@ -204,6 +227,47 @@ sanctioned ARISS uplink event. Send anyway?"
 
 See [Satellites](satellites.md) for pass prediction and the rest of the ISS
 picture.
+
+## Your callsign goes out in the picture
+
+Your call is burned into the top-left corner of every image you transmit, white on
+a black plate. There is no switch for it, and **Send is refused if you have not set
+a callsign** in [Settings ▸ Station](settings-reference.md).
+
+**This is how the station is identified, and before this build there was no
+identification at all.** An SSTV over is one continuous key-down of up to about
+five minutes carrying nothing but picture: no callsign was drawn into the image, no
+CW ident was sent after it, and the FSK ID that some stations append is something
+Nexus *reads*, not something it has ever transmitted. §97.119(b)(4) allows the call
+to go out in the image itself when the picture is the communication, which is what
+the plate does — and because the longest over Nexus can key is PD-290 at about
+4:50, back-to-back images keep you inside the ten-minute rule with room to spare.
+
+The end-of-communication ident is still yours. If the QSO finishes on voice, or you
+hit **Stop** part-way through an image, the last thing transmitted did not
+necessarily carry your call.
+
+Some detail, because "there is a callsign in the bitmap" is not the same as "the
+other station can read it":
+
+- **It is sized as a fraction of the picture width**, so it scales with the mode:
+  5 px strokes on the 320-wide modes, 12 px on PD-290. That is at or above the
+  smear a receiving decoder's own demodulator introduces, which is what would
+  otherwise turn thin lettering into mush.
+- **It is white on solid black, not an outline.** Black-to-white is the entire
+  tone range an SSTV mode carries, so the plate is the strongest thing in the
+  frame and does not depend on the picture behind it. A thin outline would vanish
+  at these sizes.
+- **It is drawn after the crop**, in the transmitted picture's own coordinates, so
+  no amount of dragging the crop box can move your callsign off the edge.
+- **It is a fixed bitmap font, not system text**, so the letter shapes are the same
+  on every machine and every build.
+- **It is proved by decoding it back.** Nexus's own test suite encodes a picture
+  carrying the plate, runs it through the real decoder, and reads the callsign back
+  out of the resulting pixels — for all fifteen modes, on a clean signal and at
+  20 dB and 10 dB signal-to-noise. What that cannot prove is how *another*
+  program's decoder renders it; if you want certainty there, ask a station running
+  MMSSTV or QSSTV to tell you what they see.
 
 ## Honest limits
 
@@ -235,10 +299,16 @@ picture.
   same picture.
 - **The slant trim is disabled.** The decoder re-anchors the line rate itself;
   the manual trim control is on screen but inert, and its tooltip says so.
-- **Nothing here logs.** No QSO, no callsign field, no dupe check. The only
-  callsign SSTV recovers is the FSK ID some stations append after the picture,
-  which is best-effort, at most ten characters, and simply absent when the burst
-  is missing or garbled.
+- **Nothing here logs.** No QSO, no callsign field, no dupe check. On receive, the
+  only callsign SSTV recovers is the FSK ID some stations append after the picture,
+  which is best-effort, at most ten characters, and simply absent when the burst is
+  missing or garbled. Nexus does not transmit an FSK ID of its own — its own
+  identification is the burned-in plate described above, which is human-readable
+  rather than machine-readable.
+- **The resized picture is not kept.** The crop lives in the section while the app
+  runs and is gone on restart; your original file is untouched and is the only copy
+  Nexus keeps. Sent images do not go into the Gallery — that folder means "what I
+  received".
 - **Robot 24 and Robot 36 carry a colour cast on the very top row**, an artifact
   of how those modes alternate colour information between lines. It is faithful
   to the reference decoder and it is in the saved image too.

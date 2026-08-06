@@ -8367,14 +8367,44 @@ fn sstv_send(
             spec.name
         ));
     }
-    let rgb: Vec<[u8; 3]> = bytes.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-    let img = tempo_sstv::SourceImage { width, height, rgb };
+    let mut rgb: Vec<[u8; 3]> = bytes.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
     // Pre-flight the TX gate under a SHORT lock so a refused send (wrong frequency, TX
-    // off, another over in flight) fails fast BEFORE we spend CPU on the encode.
-    {
+    // off, another over in flight) fails fast BEFORE we spend CPU on the encode. The
+    // operator callsign comes out of the same lock — it is a TX gate of its own.
+    let mycall = {
         let eng = engine_lock(&state);
         eng.sstv_tx_gate()?;
+        eng.settings().mycall.clone()
+    };
+
+    // ⭐ BURN THE STATION ID IN, HERE, WHERE IT CANNOT BE BYPASSED.
+    //
+    // SSTV transmit carried NO station identification of any kind before this: no
+    // burned-in overlay, no CW ident (`cw_id_after_73` reaches `pending_cw_id` only via
+    // the FT/digital QSO state machine, and `Engine::sstv_send` never touched it), and
+    // the FSK ID is decode-only — there is no encoder. One over is a single continuous
+    // PTT hold of up to ~290 s of picture-only audio.
+    //
+    // §97.119(b)(4) lets the call ride in the picture ("by an image emission … when all
+    // or part of the communications are transmitted in the same image emission"), which
+    // is what this plate is. The webview draws the identical plate so the operator's
+    // preview is honest, and the two agree bit for bit (`sstv-id-overlay.test.ts` parses
+    // `idcard.rs` and fails if the mirror drifts), so drawing it again here is a no-op
+    // on pixels and a guarantee on policy: no webview bug, no stale packed buffer and no
+    // other caller of this command can put an unidentified picture on the air.
+    //
+    // Legibility is not assumed either — `crates/tempo-sstv/tests/id_legibility.rs`
+    // encodes the plate, decodes it with the real decoder and READS THE CALLSIGN BACK
+    // out of the pixels, for all 15 modes, clean and at 20 dB and 10 dB SNR.
+    if tempo_sstv::plate_for(width, height, &mycall).is_none() {
+        return Err(
+            "No callsign set — Settings → Station. SSTV identifies your station by burning \
+             your call into the picture, so it will not transmit without one."
+                .to_string(),
+        );
     }
+    tempo_sstv::draw_id(&mut rgb, width, height, &mycall);
+    let img = tempo_sstv::SourceImage { width, height, rgb };
     // Encode the whole 12 kHz waveform OFF the engine lock (tens of ms even for PD290).
     let samples = tempo_sstv::encode_image(sstv_mode, &img, 12_000).map_err(|e| e.to_string())?;
     // Re-take the lock and hand it to the gated engine path (re-runs the full gate + the

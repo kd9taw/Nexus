@@ -7,7 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SSTV transmit was sending no station identification of any kind. It now burns your callsign
+  into every picture.** This is the plain fact and it is worth stating plainly: an SSTV over is one
+  continuous key-down of up to about five minutes carrying nothing but picture, and until now
+  nothing in that transmission said who was sending it. There was no callsign drawn into the image,
+  no CW ident after it, and the FSK ID that some stations append is something Nexus has only ever
+  *read*, never transmitted. Your call now appears in the top-left corner of every transmitted
+  image, white on a solid black plate, with no switch to turn it off — and **Send is refused
+  outright if you have not set a callsign** in Settings ▸ Station. §97.119(b)(4) allows the call to
+  ride in the image when the picture is the communication, and since the longest over Nexus can key
+  is PD-290 at about 4:50, back-to-back images stay inside the ten-minute rule with room to spare.
+  The end-of-communication ident is still yours to send if the QSO finishes on voice or you stop an
+  image part-way. The plate is designed to survive the mode rather than merely be present in the
+  file — sized as a fraction of picture width so it scales from Scottie's 320 pixels to PD-290's
+  800, white-on-black because that is the full tone range an SSTV mode carries, and drawn from a
+  fixed bitmap font so the letters are identical on every machine. It is checked by decoding it
+  back: the test suite encodes a picture carrying the plate, runs it through the real decoder and
+  reads the callsign out of the resulting pixels, for all fifteen modes, clean and at 20 dB and
+  10 dB signal-to-noise. What that cannot prove is how another program's decoder renders it — for
+  that, ask a station running MMSSTV or QSSTV what they see.
+
+- **Send any picture to SSTV: it is resized, rotated upright and cropped for you.** Before this you
+  had to produce a file at the mode's exact pixel size yourself — 320×256 for Scottie and Martin,
+  320×240 for Robot, and four other sizes across the PD modes — or the transmit was refused. Drop a
+  4032×3024 phone photo now and it just works. **Rotation is read from the file**, so a picture
+  taken in portrait no longer transmits on its side, which is the trap that would otherwise have
+  bitten every iPhone user and nobody testing on a desktop. The picture is cropped from the middle
+  to the mode's shape and scaled down in stages rather than in one jump, so fine detail — foliage,
+  brickwork, fabric — softens instead of breaking into the crawling speckle that a single-step
+  resize produces and that an SSTV transmission then faithfully sends for four minutes. **Drag the
+  preview to choose which part of the picture is sent**; arrow keys nudge it, shift moves ten
+  pixels, Home or a double-click re-centres. Only the axis with something to give will move, and
+  when the picture already matches the mode it says so rather than offering a control that does
+  nothing. Change the mode and the crop re-derives at the new shape, keeping your framing. JPEG,
+  PNG, WebP, BMP and GIF are accepted (a GIF sends its first frame); a picture smaller than the mode
+  is enlarged with a warning that stays on screen rather than being refused. **iPhone HEIC photos
+  are refused by name**, with both of the fixes on the phone spelled out, because Nexus has no HEVC
+  decoder and "could not load that image" would have sent you looking in the wrong place. The
+  composer now also tells you the original size, the size it was resized to, and — before you key
+  anything — exactly how long the rig will be transmitting.
+
 ### Fixed
+
+- **The SSTV mode picker understated every mode's airtime by about a second.** The pixel sizes were
+  right, but the durations beside them were a hand-maintained copy that had drifted from what the
+  encoder actually emits. They are now the exact figures, and a test compares the two tables so they
+  cannot drift again — which matters more than it did, because the composer now uses that number to
+  tell you how long the transmitter will be keyed.
 
 - **Connecting to a serial rig on Linux could put it straight into transmit — and hold it there.**
   If your PTT Method is anything other than RTS or DTR on the CAT port — VOX and CAT keying, which

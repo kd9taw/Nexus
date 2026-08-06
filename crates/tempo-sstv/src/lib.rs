@@ -58,6 +58,7 @@ pub(crate) mod encode_robot;
 pub(crate) mod encode_scottie;
 pub mod error;
 pub(crate) mod fsk;
+pub mod idcard;
 pub mod image;
 pub mod mode_pd;
 pub mod mode_robot;
@@ -72,6 +73,7 @@ pub mod vis;
 pub use crate::decoder::{SstvDecoder, SstvEvent};
 pub use crate::encode::{encode_image, tx_duration_secs, SourceImage};
 pub use crate::error::{Error, Result};
+pub use crate::idcard::{draw_id, plate_for, IdPlate};
 pub use crate::image::SstvImage;
 pub use crate::modespec::{
     for_mode, lookup as lookup_vis, ChannelLayout, ModeSpec, SstvMode, SyncPosition,

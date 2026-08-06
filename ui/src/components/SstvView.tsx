@@ -7,6 +7,20 @@ import { PanelsMenu } from './PanelsMenu'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { panelHost } from '../features/panelHost'
 import { sstvImageWidth } from '../sstvScale'
+import { readExifOrientation, readIntrinsicSize, sniffImageKind, type ImageKind } from '../sstvExif'
+import { effectiveOrientation, orientTransform } from '../sstvOrient'
+import {
+  CENTRE,
+  cropWindow,
+  dragCentre,
+  freeAxis,
+  isExactFit,
+  isUpscale,
+  nudgeCentre,
+  type CropCentre,
+} from '../sstvCrop'
+import { halvingChain } from '../sstvResample'
+import { drawIdPlate, normalizeCall } from '../sstvIdOverlay'
 import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import {
   getLicensedBandPlan,
@@ -25,38 +39,105 @@ import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
 
 /** One transmittable SSTV mode: the backend `parse_sstv_mode` slug, its display
- * name, its exact pixel dimensions (the webview cover-crops to these; the backend
- * refuses any mismatch), and an approximate on-air key-down time for the picker
- * label. Dimensions mirror `crates/tempo-sstv/src/modespec.rs` (`ModeSpec`). */
+ * name, its exact pixel dimensions (the composer resizes to these; the backend
+ * refuses any mismatch), and the EXACT on-air key-down time.
+ *
+ * ⚠️ THIS TABLE IS A MIRROR, AND `crates/tempo-sstv/src/modespec.rs` IS THE ARBITER.
+ * `sstv-modes.test.ts` parses both sides and compares them — dimensions against
+ * `ModeSpec`, seconds against the encoder's own `tx_duration_secs` formula. Nothing
+ * here may be edited without that guard agreeing: the transmit path reads the Rust
+ * table and REFUSES anything that is not exactly `line_pixels × image_lines`, so a
+ * drift here is a resizer producing a picture the backend will not send. */
 interface TxMode {
   slug: string
   name: string
   group: 'Scottie' | 'Martin' | 'Robot' | 'PD'
   width: number
   height: number
+  /** Exact key-down seconds: header + scanlines, rounded. NOT approximate — the
+   *  composer tells the operator how long the rig is keyed, and every entry here
+   *  used to be about a second short of what the encoder actually emits. */
   seconds: number
 }
 
-/** The 15 modes, grouped by family. Scottie/Martin/PD are 320×256 unless noted;
- * PD-120/180/240 are 640×496, PD-160 is 512×400, PD-290 is 800×616; Robot is
- * 320×240. Seconds are approximate (the backend's `txTotalSecs` drives progress). */
+/** The 15 modes, grouped by family. Five distinct rasters and five distinct aspect
+ * ratios, which is why the crop box re-derives its shape on every mode change and
+ * not just its pixel size. */
 const SSTV_TX_MODES: TxMode[] = [
-  { slug: 'scottie1', name: 'Scottie 1', group: 'Scottie', width: 320, height: 256, seconds: 110 },
-  { slug: 'scottie2', name: 'Scottie 2', group: 'Scottie', width: 320, height: 256, seconds: 71 },
-  { slug: 'scottiedx', name: 'Scottie DX', group: 'Scottie', width: 320, height: 256, seconds: 269 },
-  { slug: 'martin1', name: 'Martin 1', group: 'Martin', width: 320, height: 256, seconds: 114 },
-  { slug: 'martin2', name: 'Martin 2', group: 'Martin', width: 320, height: 256, seconds: 58 },
-  { slug: 'robot24', name: 'Robot 24', group: 'Robot', width: 320, height: 240, seconds: 36 },
-  { slug: 'robot36', name: 'Robot 36', group: 'Robot', width: 320, height: 240, seconds: 36 },
-  { slug: 'robot72', name: 'Robot 72', group: 'Robot', width: 320, height: 240, seconds: 72 },
-  { slug: 'pd50', name: 'PD-50', group: 'PD', width: 320, height: 256, seconds: 50 },
-  { slug: 'pd90', name: 'PD-90', group: 'PD', width: 320, height: 256, seconds: 90 },
-  { slug: 'pd120', name: 'PD-120', group: 'PD', width: 640, height: 496, seconds: 126 },
-  { slug: 'pd160', name: 'PD-160', group: 'PD', width: 512, height: 400, seconds: 161 },
-  { slug: 'pd180', name: 'PD-180', group: 'PD', width: 640, height: 496, seconds: 187 },
-  { slug: 'pd240', name: 'PD-240', group: 'PD', width: 640, height: 496, seconds: 248 },
-  { slug: 'pd290', name: 'PD-290', group: 'PD', width: 800, height: 616, seconds: 289 },
+  { slug: 'scottie1', name: 'Scottie 1', group: 'Scottie', width: 320, height: 256, seconds: 111 },
+  { slug: 'scottie2', name: 'Scottie 2', group: 'Scottie', width: 320, height: 256, seconds: 72 },
+  { slug: 'scottiedx', name: 'Scottie DX', group: 'Scottie', width: 320, height: 256, seconds: 270 },
+  { slug: 'martin1', name: 'Martin 1', group: 'Martin', width: 320, height: 256, seconds: 115 },
+  { slug: 'martin2', name: 'Martin 2', group: 'Martin', width: 320, height: 256, seconds: 59 },
+  { slug: 'robot24', name: 'Robot 24', group: 'Robot', width: 320, height: 240, seconds: 37 },
+  { slug: 'robot36', name: 'Robot 36', group: 'Robot', width: 320, height: 240, seconds: 37 },
+  { slug: 'robot72', name: 'Robot 72', group: 'Robot', width: 320, height: 240, seconds: 73 },
+  { slug: 'pd50', name: 'PD-50', group: 'PD', width: 320, height: 256, seconds: 51 },
+  { slug: 'pd90', name: 'PD-90', group: 'PD', width: 320, height: 256, seconds: 91 },
+  { slug: 'pd120', name: 'PD-120', group: 'PD', width: 640, height: 496, seconds: 127 },
+  { slug: 'pd160', name: 'PD-160', group: 'PD', width: 512, height: 400, seconds: 162 },
+  { slug: 'pd180', name: 'PD-180', group: 'PD', width: 640, height: 496, seconds: 188 },
+  { slug: 'pd240', name: 'PD-240', group: 'PD', width: 640, height: 496, seconds: 249 },
+  { slug: 'pd290', name: 'PD-290', group: 'PD', width: 800, height: 616, seconds: 290 },
 ]
+
+/** What the file picker offers. The magic-number sniff is what actually decides — an
+ *  iPhone HEIC renamed `.jpg` has to be caught by its bytes — but the picker should
+ *  not show the operator files it is going to refuse. */
+const TX_ACCEPT =
+  'image/jpeg,image/png,image/webp,image/bmp,image/gif,.jpg,.jpeg,.png,.webp,.bmp,.gif'
+
+/** Refuse above this many megapixels. The limit is the DECODED buffer, not the file:
+ *  80 MP is ~320 MB of RGBA, which is what actually exhausts the webview. A 100 MB
+ *  progressive JPEG may be 8000×6000 and a 100 MB BMP 6000×5000 — same file size,
+ *  very different cost — so file size is not consulted anywhere. */
+const MAX_MEGAPIXELS = 80
+
+/** Header bytes read for the magic sniff, the EXIF walk and the SOF/IHDR dimensions.
+ *  Generous enough to clear an EXIF block carrying a full-size thumbnail, and read
+ *  through `Blob.slice` so a 100 MB file never lands in memory to be refused. */
+const HEADER_BYTES = 262_144
+
+/**
+ * A named refusal for a format we positively identified and cannot decode, or null to
+ * go ahead and try.
+ *
+ * ⚠️ `unknown` DELIBERATELY FALLS THROUGH TO THE DECODE. The sniff table cannot
+ * enumerate every image a webview can decode, and refusing on "I don't recognise the
+ * first twelve bytes" would reject working pictures. Positive identification refuses;
+ * absence of identification defers to the decoder, which then gives the honest answer.
+ */
+function refusalFor(kind: ImageKind): string | null {
+  switch (kind) {
+    case 'heic':
+      return (
+        "iPhone HEIC photos can't be read here — Nexus has no HEVC decoder. On the " +
+        'iPhone: Settings → Camera → Formats → Most Compatible (new photos are JPEG), ' +
+        'or Settings → Photos → Transfer to Mac or PC → Automatic (converts on send). ' +
+        'Then re-send this picture.'
+      )
+    case 'avif':
+      return 'That is an AVIF file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.'
+    case 'tiff':
+      return 'That is a TIFF file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.'
+    case 'raw':
+      return 'That is a camera RAW file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export a JPEG from it first.'
+    case 'psd':
+      return 'That is a Photoshop file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.'
+    case 'svg':
+      return 'That is an SVG drawing, not a photo. SSTV sends JPEG, PNG, WebP, BMP or GIF — export it as one of those.'
+    default:
+      return null
+  }
+}
+
+/** The first four bytes as hex, for the "that isn't an image" message — naming what
+ *  the file actually starts with beats "could not load that image". */
+function magicHex(b: Uint8Array): string {
+  return Array.from(b.subarray(0, 4))
+    .map((v) => v.toString(16).padStart(2, '0'))
+    .join(' ')
+}
 const TX_MODE_GROUPS: TxMode['group'][] = ['Scottie', 'Martin', 'Robot', 'PD']
 const MODE_BY_SLUG: Record<string, TxMode> = Object.fromEntries(
   SSTV_TX_MODES.map((m) => [m.slug, m]),
@@ -630,12 +711,34 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   modeSlugRef.current = modeSlug
   const txMode = MODE_BY_SLUG[modeSlug]
 
-  // The operator's chosen picture: decoded to an <img> once, then cover-cropped to
-  // the selected mode's exact pixels on demand. `packed` holds the base64 RGB
-  // actually sent — pixel-identical to the live preview canvas.
-  const srcImgRef = useRef<HTMLImageElement | null>(null)
+  // ⭐ THE OPERATOR'S CALLSIGN, AND IT IS NOT OPTIONAL.
+  //
+  // Before this, an SSTV over went out with NO STATION IDENTIFICATION OF ANY KIND —
+  // no burned-in overlay (this file was `drawImage` only, no `fillText` anywhere), no
+  // CW ident (`cw_id_after_73` reaches `pending_cw_id` only through the FT/digital QSO
+  // state machine; `Engine::sstv_send` never touched it), and the FSK ID is decode-only
+  // with no encoder in the tree. One over is a single continuous PTT hold of up to
+  // ~290 s of picture-only audio.
+  //
+  // §97.119(b)(4) lets the call ride in the picture itself, which is what the plate
+  // does. It is unconditional on purpose: an ID with an off switch is an ID that is off
+  // when it matters, and a toggle in the removable `txcompose` pane would disappear
+  // with the pane. `snap.mycall` is already on AppSnapshot, so no new prop is needed —
+  // the settings key is required at SettingsPanel's Station section.
+  const callsign = normalizeCall(snap?.mycall ?? '')
+  const callsignRef = useRef(callsign)
+  callsignRef.current = callsign
+
+  // The operator's chosen picture, ALREADY UPRIGHT (EXIF applied at load, before
+  // anything measures it — orientations 5–8 change the aspect ratio, so a crop computed
+  // before the rotation is a crop of a picture that does not exist). `packed` holds the
+  // base64 RGB actually sent, and it is read straight back off the preview canvas, so
+  // what the operator sees is what goes out — ID plate included.
+  const srcRef = useRef<{ img: CanvasImageSource; w: number; h: number } | null>(null)
   const txCanvasRef = useRef<HTMLCanvasElement>(null)
   const [imageName, setImageName] = useState<string | null>(null)
+  const [srcSize, setSrcSize] = useState<{ w: number; h: number } | null>(null)
+  const [notice, setNotice] = useState<{ kind: 'error' | 'warn'; text: string } | null>(null)
   const [packed, setPacked] = useState<{
     slug: string
     width: number
@@ -643,26 +746,70 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     b64: string
   } | null>(null)
 
-  // Cover-crop the source image onto the preview canvas at the mode's dimensions
-  // and read back the raw RGB (what you see is exactly what goes out).
-  const recrop = (slug: string) => {
-    const img = srcImgRef.current
+  // Where the crop is centred in the source, NORMALISED — so changing mode preserves
+  // the operator's framing intent across the aspect change instead of snapping back to
+  // centre. Held in a ref, not state: the drag re-renders the canvas directly and a
+  // state round-trip per pointermove would be a re-render per frame for nothing.
+  const centreRef = useRef<CropCentre>(CENTRE)
+  // Two ping-pong scratch canvases for the halving chain — allocated once, alternated so
+  // a step never resizes the canvas the previous step is being read from.
+  const scratchRef = useRef<HTMLCanvasElement[]>([])
+  const scratch = (i: number) => {
+    const s = scratchRef.current
+    if (!s[i]) s[i] = document.createElement('canvas')
+    return s[i]
+  }
+
+  /**
+   * Draw the picture the operator will transmit, and optionally pack it.
+   *
+   * THE ORDER IS THE WHOLE DESIGN: orient (done at load) → crop → resample → burn in
+   * the ID → pack. The ID goes on last, in DESTINATION-raster coordinates, which is
+   * what makes it both un-croppable (the drag moves the source behind a fixed frame,
+   * and this writes after that) and legible (a callsign drawn at 4032 px and then
+   * downscaled 12× becomes a sub-pixel grey smear — present in the bitmap, and not an
+   * identification).
+   *
+   * `pack` is false during a drag: `getImageData` + base64 is 1.4 MB of string building
+   * for PD-290 and has no business running per pointermove.
+   */
+  const renderTx = (slug: string, pack: boolean) => {
+    const src = srcRef.current
     const canvas = txCanvasRef.current
     const m = MODE_BY_SLUG[slug]
-    if (!img || !canvas || !m) return
-    const sw = img.naturalWidth || img.width
-    const sh = img.naturalHeight || img.height
-    if (sw <= 0 || sh <= 0) return
+    if (!src || !canvas || !m || src.w <= 0 || src.h <= 0) return
     canvas.width = m.width
     canvas.height = m.height
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    // Scale up until the image fills the frame, centre it, crop the overflow.
-    const scale = Math.max(m.width / sw, m.height / sh)
-    const dw = sw * scale
-    const dh = sh * scale
+
+    const win = cropWindow(src.w, src.h, m.width, m.height, centreRef.current)
+    const steps = halvingChain(win.sw, win.sh, m.width, m.height)
+    // Fold the crop into the FIRST step's source rect: scaling anything outside the
+    // crop would average in pixels that were going to be thrown away.
+    let cur: CanvasImageSource = src.img
+    let [sx, sy, sw, sh] = [win.sx, win.sy, win.sw, win.sh]
+    for (let i = 0; i < steps.length - 1; i++) {
+      const st = steps[i]
+      const cv = scratch(i % 2)
+      cv.width = st.w
+      cv.height = st.h
+      const sctx = cv.getContext('2d')
+      if (!sctx) break
+      // ⚠️ LOAD-BEARING. With smoothing off, "bilinear" is nearest-neighbour and the
+      // halving chain becomes 4:1 decimation — strictly worse than one naive step.
+      sctx.imageSmoothingEnabled = true
+      sctx.drawImage(cur, sx, sy, sw, sh, 0, 0, st.w, st.h)
+      cur = cv
+      ;[sx, sy, sw, sh] = [0, 0, st.w, st.h]
+    }
+    ctx.imageSmoothingEnabled = true
     ctx.clearRect(0, 0, m.width, m.height)
-    ctx.drawImage(img, (m.width - dw) / 2, (m.height - dh) / 2, dw, dh)
+    ctx.drawImage(cur, sx, sy, sw, sh, 0, 0, m.width, m.height)
+    // ⭐ THE STATION ID, after everything that could shrink or crop it away.
+    drawIdPlate(ctx, m.width, m.height, callsignRef.current)
+
+    if (!pack) return
     try {
       const data = ctx.getImageData(0, 0, m.width, m.height).data
       setPacked({ slug, width: m.width, height: m.height, b64: rgbToBase64(data, m.width * m.height) })
@@ -671,31 +818,219 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     }
   }
 
-  // Re-crop whenever the mode changes and a picture is loaded — the preview + the
-  // packed RGB must always match the dimensions the backend validates.
-  useEffect(() => {
-    if (srcImgRef.current) recrop(modeSlug)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modeSlug])
+  // rAF-coalesced redraw for the drag: at most one render per frame, no packing.
+  const rafRef = useRef(0)
+  const scheduleRender = () => {
+    if (rafRef.current) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0
+      renderTx(modeSlugRef.current, false)
+    })
+  }
+  useEffect(
+    () => () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    },
+    [],
+  )
 
-  const loadImage = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      pushToast('Choose an image file (PNG / JPEG / …)', 'info', 3000)
+  // Re-run whenever the mode changes and a picture is loaded — the preview and the
+  // packed RGB must always match the dimensions the backend validates. Deliberately
+  // from the ORIENTED FULL-RESOLUTION source, never from the previous crop: re-cropping
+  // a crop compounds resample loss. The centre is kept and re-clamped for the new
+  // aspect, which is why 320×256 → 800×616 (same 1.30 ratio) is a free resolution
+  // change with identical framing.
+  //
+  // The callsign is a dependency too: an operator who fills in Settings → Station after
+  // loading a picture must not be left holding a packed frame with no ident in it.
+  useEffect(() => {
+    if (srcRef.current) renderTx(modeSlug, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeSlug, callsign])
+
+  /** Decode a file to something drawable. Asks for `imageOrientation: 'none'` first so
+   *  the EXIF matrix is ours to apply; falls back through plain `createImageBitmap` and
+   *  then an `<img>`, because the app runs on both WebKitGTK and WebView2 and neither
+   *  the option's availability nor the default is something to bet the picture on.
+   *  `effectiveOrientation` then MEASURES which of them happened. */
+  const decodeImage = (file: File): Promise<{ img: CanvasImageSource; w: number; h: number } | null> => {
+    const cib = (globalThis as { createImageBitmap?: (b: Blob, o?: unknown) => Promise<ImageBitmap> })
+      .createImageBitmap
+    const viaImg = () =>
+      new Promise<{ img: CanvasImageSource; w: number; h: number } | null>((resolve) => {
+        const url = URL.createObjectURL(file)
+        const img = new Image()
+        img.onload = () => {
+          URL.revokeObjectURL(url)
+          resolve({ img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height })
+        }
+        img.onerror = () => {
+          URL.revokeObjectURL(url)
+          resolve(null)
+        }
+        img.src = url
+      })
+    if (!cib) return viaImg()
+    return cib(file, { imageOrientation: 'none' })
+      .catch(() => cib(file))
+      .then((bmp) => (bmp && bmp.width > 0 ? { img: bmp, w: bmp.width, h: bmp.height } : null))
+      .catch(() => viaImg())
+  }
+
+  /** Rotate/mirror a decoded picture upright onto its own canvas, so everything
+   *  downstream works in upright coordinates. Only reached for orientations 2–8 that
+   *  the decoder did not already apply, so the common path allocates nothing. */
+  const orientOnto = (
+    d: { img: CanvasImageSource; w: number; h: number },
+    orientation: number,
+  ): { img: CanvasImageSource; w: number; h: number } => {
+    const t = orientTransform(orientation, d.w, d.h)
+    const cv = document.createElement('canvas')
+    cv.width = t.w
+    cv.height = t.h
+    const ctx = cv.getContext('2d')
+    if (!ctx) return d
+    ctx.setTransform(t.m[0], t.m[1], t.m[2], t.m[3], t.m[4], t.m[5])
+    ctx.drawImage(d.img, 0, 0)
+    return { img: cv, w: t.w, h: t.h }
+  }
+
+  const loadImage = async (file: File) => {
+    setNotice(null)
+    // Header only, through Blob.slice — a 100 MB file must not land in memory just to
+    // be refused for being 100 MB.
+    let head = new Uint8Array(0)
+    try {
+      head = new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer())
+    } catch {
+      /* no Blob.slice/arrayBuffer here — fall through and let the decoder answer */
+    }
+    const kind = sniffImageKind(head)
+    const refusal = refusalFor(kind)
+    if (refusal) {
+      // Keep the previous picture and its crop loaded: a refusal must not also cost the
+      // operator the framing they had already set up.
+      setNotice({ kind: 'error', text: refusal })
       return
     }
-    const url = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload = () => {
-      URL.revokeObjectURL(url)
-      srcImgRef.current = img
-      setImageName(file.name)
-      recrop(modeSlugRef.current)
+    const decoded = await decodeImage(file)
+    if (!decoded || decoded.w <= 0 || decoded.h <= 0) {
+      setNotice({
+        kind: 'error',
+        text:
+          kind === 'unknown' && head.length >= 4
+            ? `That file isn't an image Nexus can read (it starts with ${magicHex(head)}).`
+            : "That image is damaged and only decoded partly — Nexus won't transmit half a picture. Try re-exporting it.",
+      })
+      return
     }
-    img.onerror = () => {
-      URL.revokeObjectURL(url)
-      pushToast('Could not load that image', 'error')
+    const mp = (decoded.w * decoded.h) / 1e6
+    if (mp > MAX_MEGAPIXELS) {
+      setNotice({
+        kind: 'error',
+        text:
+          `That's a ${decoded.w}×${decoded.h} image (${mp.toFixed(0)} megapixels) — too large to ` +
+          'work with. Export a smaller copy; anything over about 4000 px wide is already far ' +
+          'more than SSTV can send.',
+      })
+      return
     }
-    img.src = url
+
+    // ⭐ ORIENTATION FIRST, and only when the decode did not already do it.
+    const tag = readExifOrientation(head)
+    const eff = effectiveOrientation(tag, readIntrinsicSize(head), { w: decoded.w, h: decoded.h })
+    srcRef.current = eff === 1 ? decoded : orientOnto(decoded, eff)
+    centreRef.current = CENTRE
+    setSrcSize({ w: srcRef.current.w, h: srcRef.current.h })
+    setImageName(file.name)
+    if (kind === 'gif') {
+      setNotice({ kind: 'warn', text: 'Sending the first frame — SSTV transmits one still picture.' })
+    }
+    renderTx(modeSlugRef.current, true)
+  }
+
+  // ---------------------------------------------------------------------------
+  // DRAG TO ADJUST. The destination frame is fixed and the SOURCE moves behind it —
+  // the preview IS the output raster, so the frame can never move or resize. Pointer
+  // events rather than HTML5 drag: the app runs `dragDropEnabled: false` (0.15.1, so
+  // WebView2's OS handler stops eating HTML5 drag events), the drop zone's HTML5
+  // handlers are the one thing that config exists to keep alive, and a second HTML5
+  // drag inside it would fight them for the same events. Pointer events also give
+  // touch and pen for free.
+  // ---------------------------------------------------------------------------
+  const dragRef = useRef<{ id: number; x: number; y: number; scale: number } | null>(null)
+  const axis = srcSize && txMode ? freeAxis(srcSize.w, srcSize.h, txMode.width, txMode.height) : 'none'
+
+  const onPreviewPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!srcRef.current || !txMode || axis === 'none') return
+    const el = e.currentTarget
+    const rect = el.getBoundingClientRect()
+    // Measured, not assumed: the preview is CSS-scaled, so a drag in CSS pixels has to
+    // be divided by that scale or it moves the picture by the wrong amount. This is the
+    // classic "the drag feels three times too fast".
+    const scale = el.width > 0 && rect.width > 0 ? rect.width / el.width : 1
+    el.setPointerCapture?.(e.pointerId)
+    dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY, scale }
+  }
+
+  const onPreviewPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const d = dragRef.current
+    const src = srcRef.current
+    if (!d || d.id !== e.pointerId || !src || !txMode) return
+    centreRef.current = dragCentre(
+      src.w,
+      src.h,
+      txMode.width,
+      txMode.height,
+      centreRef.current,
+      e.clientX - d.x,
+      e.clientY - d.y,
+      d.scale,
+    )
+    d.x = e.clientX
+    d.y = e.clientY
+    scheduleRender()
+  }
+
+  const endDrag = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!dragRef.current || dragRef.current.id !== e.pointerId) return
+    dragRef.current = null
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
+    // Pack once, at the end — this is where the expensive read happens.
+    renderTx(modeSlugRef.current, true)
+  }
+
+  /** Arrows nudge one target-raster pixel, shift ten. Non-negotiable: this app's
+   *  accessibility stance is always-on, and a pointer-only crop is unusable with a
+   *  screen reader or without a mouse. */
+  const onPreviewKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const src = srcRef.current
+    if (!src || !txMode) return
+    const step = e.shiftKey ? 10 : 1
+    const d: Record<string, [number, number]> = {
+      ArrowLeft: [step, 0],
+      ArrowRight: [-step, 0],
+      ArrowUp: [0, step],
+      ArrowDown: [0, -step],
+    }
+    if (e.key === 'Home') {
+      e.preventDefault()
+      centreRef.current = CENTRE
+      renderTx(modeSlugRef.current, true)
+      return
+    }
+    const mv = d[e.key]
+    if (!mv) return
+    e.preventDefault()
+    centreRef.current = nudgeCentre(src.w, src.h, txMode.width, txMode.height, centreRef.current, mv[0], mv[1])
+    renderTx(modeSlugRef.current, true)
+  }
+
+  /** Double-click re-centres — the one-gesture way back to the default framing. */
+  const recentre = () => {
+    if (!srcRef.current) return
+    centreRef.current = CENTRE
+    renderTx(modeSlugRef.current, true)
   }
 
   const changeMode = (slug: string) => {
@@ -705,6 +1040,13 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
 
   const sendImage = () => {
     if (!packed || sending) return
+    // ⚠️ NO CALLSIGN, NO TRANSMISSION. The picture IS the identification here, so an
+    // empty call is not a cosmetic gap. The backend refuses the same way and is the
+    // authority — this is the half that says so before the operator clicks.
+    if (!callsign) {
+      pushToast('Set your callsign in Settings → Station — SSTV identifies by burning it into the picture', 'error', 6000)
+      return
+    }
     const m = MODE_BY_SLUG[packed.slug]
     // Soft ISS guard: 145.800 is the ISS SSTV DOWNLINK — transmit there only for a
     // sanctioned ARISS uplink event, never by accident.
@@ -946,18 +1288,40 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               onDrop={(e) => {
                 e.preventDefault()
                 const f = e.dataTransfer.files?.[0]
-                if (f) loadImage(f)
+                if (f) void loadImage(f)
               }}
             >
+              {/* THE STAGE. This canvas IS what gets transmitted — `renderTx` reads it
+                  straight back with getImageData — so the preview is WYSIWYG down to the
+                  pixel, ID plate included. It is also the drag surface: the frame never
+                  moves, the source moves behind it. */}
               <canvas
                 ref={txCanvasRef}
-                className={`sstv-tx-preview${packed ? '' : ' empty'}`}
+                className={`sstv-tx-preview${packed ? '' : ' empty'} drag-${axis}`}
                 role="img"
-                aria-label={packed ? `Transmit preview, ${packed.width}×${packed.height}` : 'No image chosen'}
+                tabIndex={packed ? 0 : -1}
+                aria-label={
+                  packed
+                    ? `Transmit preview, ${packed.width}×${packed.height}${
+                        axis === 'none'
+                          ? ' — the picture already fits, no crop needed'
+                          : `. Drag or use the arrow keys to choose which part of the picture is sent (${
+                              axis === 'x' ? 'left and right' : 'up and down'
+                            }); Home re-centres.`
+                      }`
+                    : 'No image chosen'
+                }
+                onPointerDown={onPreviewPointerDown}
+                onPointerMove={onPreviewPointerMove}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+                onDoubleClick={recentre}
+                onKeyDown={onPreviewKeyDown}
               />
               {!packed && (
                 <div className="sstv-tx-drop-hint">
-                  Drop an image here, or choose one below. Cover-cropped to the mode size.
+                  Drop an image here, or choose one below — any size, resized to the mode
+                  for you.
                 </div>
               )}
             </div>
@@ -965,17 +1329,51 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               <span>{imageName ? 'Change image…' : 'Choose image…'}</span>
               <input
                 type="file"
-                accept="image/*"
+                accept={TX_ACCEPT}
                 onChange={(e) => {
                   const f = e.target.files?.[0]
-                  if (f) loadImage(f)
+                  if (f) void loadImage(f)
                   e.target.value = ''
                 }}
               />
             </label>
+            {/* What actually goes out: the source size, the raster it was resized to,
+                the mode, and — the number that matters most before a Send — how long the
+                rig will be keyed. A 290 s PTT hold is an expensive place to discover a
+                bad crop. */}
             {imageName && txMode && (
               <span className="sstv-tx-name" title={imageName}>
-                {imageName} → {txMode.width}×{txMode.height}
+                {imageName}
+                {srcSize ? ` (${srcSize.w}×${srcSize.h})` : ''} → {txMode.width}×{txMode.height} ·{' '}
+                {txMode.name} · {fmtClock(txMode.seconds)} key-down
+              </span>
+            )}
+            {/* ⭐ THE IDENT, SAID OUT LOUD. Unconditional, so the only thing worth
+                reporting is WHERE it is — and, if the operator has no callsign set, that
+                Send is going to refuse and why. */}
+            {packed && (
+              <span className={`sstv-tx-id${callsign ? '' : ' missing'}`}>
+                {callsign
+                  ? `${callsign} burned in · top left`
+                  : 'No callsign set — Settings → Station. SSTV identifies by burning your call into the picture, so it will not transmit without one.'}
+              </span>
+            )}
+            {/* Warnings that must survive to Send time, so a badge in the composer
+                rather than a toast that has already gone. */}
+            {srcSize && txMode && isUpscale(srcSize.w, srcSize.h, txMode.width, txMode.height) && (
+              <span className="sstv-tx-notice warn">
+                That picture is {srcSize.w}×{srcSize.h}, smaller than {txMode.name}'s{' '}
+                {txMode.width}×{txMode.height} — it will be enlarged and look soft.
+              </span>
+            )}
+            {srcSize && txMode && isExactFit(srcSize.w, srcSize.h, txMode.width, txMode.height) && (
+              <span className="sstv-tx-notice">
+                Already {txMode.width}×{txMode.height} — sent pixel for pixel, no crop needed.
+              </span>
+            )}
+            {notice && (
+              <span className={`sstv-tx-notice ${notice.kind}`} role="status">
+                {notice.text}
               </span>
             )}
           </section>
@@ -1038,11 +1436,13 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             type="button"
             className="sstv-tx-send"
             onClick={sendImage}
-            disabled={!packed || sending}
+            disabled={!packed || sending || !callsign}
             title={
-              packed
-                ? 'Transmit this image — switches to Phone (USB/LSB) and keys the rig'
-                : 'Choose an image to transmit first'
+              !packed
+                ? 'Choose an image to transmit first'
+                : !callsign
+                  ? 'Set your callsign in Settings → Station — SSTV identifies by burning it into the picture, and will not transmit without one'
+                  : `Transmit this image with ${callsign} burned in — switches to Phone (USB/LSB) and keys the rig`
             }
           >
             Send

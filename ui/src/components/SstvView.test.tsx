@@ -41,6 +41,9 @@ const sstvStop = api.sstvStop as ReturnType<typeof vi.fn>
 const setOperatingMode = api.setOperatingMode as ReturnType<typeof vi.fn>
 
 const snap = {
+  // ⚠️ REQUIRED, and not decoration: SSTV identifies the station by burning this call
+  // into the transmitted picture, so Send refuses without it (see the guard below).
+  mycall: 'KD9TAW',
   radio: {
     dialMhz: 14.23,
     band: '20m',
@@ -255,6 +258,15 @@ function installCanvasStubs() {
   const ctx = {
     clearRect: vi.fn(),
     drawImage: vi.fn(),
+    // The composer burns the station-ID plate with fillRect on every render, through a
+    // save/setTransform/restore so a stale transform or alpha cannot weaken it.
+    save: vi.fn(),
+    restore: vi.fn(),
+    setTransform: vi.fn(),
+    fillRect: vi.fn(),
+    fillStyle: '#000',
+    globalAlpha: 1,
+    imageSmoothingEnabled: false,
     getImageData: (_x: number, _y: number, w: number, h: number) => ({
       data: new Uint8ClampedArray(w * h * 4),
       width: w,
@@ -320,6 +332,84 @@ describe('SstvView TX panel', () => {
     await waitFor(() =>
       expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 640, 496, 'pd120'),
     )
+  })
+
+  // ---------------------------------------------------------------------------
+  // ⭐ STATION IDENTIFICATION. SSTV transmit used to carry NONE — no burned-in
+  // overlay, no CW ident, and the FSK ID is decode-only. The remedy is a callsign
+  // burned into the picture (§97.119(b)(4): the call may go out "by an image
+  // emission … when all or part of the communications are transmitted in the same
+  // image emission"), which makes the callsign a TX GATE rather than a preference.
+  //
+  // These guards cover the VIEW's half — that the gate exists and that the ident is
+  // stated. That the burned-in call is actually LEGIBLE after the mode's demodulator
+  // has had it is a different question and is proved where the pixels are:
+  // `crates/tempo-sstv/tests/id_legibility.rs` encodes the plate, decodes it with the
+  // real decoder and reads the callsign back, for all 15 modes at three SNRs.
+  // ---------------------------------------------------------------------------
+
+  it('⭐ refuses to transmit with no callsign set — the picture IS the identification', async () => {
+    const noCall = { ...snap, mycall: '' } as unknown as AppSnapshot
+    render(<SstvView snap={noCall} />)
+    const input = document.querySelector('input[type=file]') as HTMLInputElement
+    const file = new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' })
+    fireEvent.change(input, { target: { files: [file] } })
+    const send = (await screen.findByText('Send')) as HTMLButtonElement
+    // A picture IS loaded — the composer says so — and Send is still refused.
+    await waitFor(() => expect(screen.getByText(/photo\.png/)).toBeTruthy())
+    expect(send.disabled).toBe(true)
+    expect(send.title).toMatch(/callsign/i)
+    fireEvent.click(send)
+    expect(sstvSend).not.toHaveBeenCalled()
+    // And it says why, where the operator is looking, rather than only in a tooltip.
+    expect(screen.getByText(/No callsign set/i)).toBeTruthy()
+  })
+
+  it('names the callsign it is burning in, and where', async () => {
+    render(<SstvView snap={snap} />)
+    await loadPicture()
+    expect(screen.getByText(/KD9TAW burned in/)).toBeTruthy()
+  })
+
+  it('tells the operator how long the rig will be keyed before they key it', async () => {
+    // A 290 s PTT hold is an expensive place to discover a bad crop, and the airtime
+    // is the exact encoder figure (sstv-modes.test.ts pins it against tx_duration_secs).
+    render(<SstvView snap={snap} />)
+    await loadPicture()
+    expect(screen.getByText(/1:51 key-down/)).toBeTruthy()
+    const modeSelect = screen.getByLabelText('SSTV transmit mode') as HTMLSelectElement
+    fireEvent.change(modeSelect, { target: { value: 'pd290' } })
+    await waitFor(() => expect(screen.getByText(/4:50 key-down/)).toBeTruthy())
+  })
+
+  it('⭐ refuses an iPhone HEIC BY NAME, and keeps the picture already loaded', async () => {
+    render(<SstvView snap={snap} />)
+    const send = await loadPicture()
+    const input = document.querySelector('input[type=file]') as HTMLInputElement
+    // ISO-BMFF `ftyp` box with the `heic` brand — recognised from the bytes, so a HEIC
+    // renamed .jpg is caught too.
+    const heic = new Uint8Array(16)
+    heic.set([0, 0, 0, 0x10], 0)
+    heic.set([...'ftyp'].map((c) => c.charCodeAt(0)), 4)
+    heic.set([...'heic'].map((c) => c.charCodeAt(0)), 8)
+    fireEvent.change(input, {
+      target: { files: [new File([heic], 'IMG_0001.HEIC', { type: 'image/heic' })] },
+    })
+    // The message names the format AND the operator's fix, not "could not load".
+    await waitFor(() => expect(screen.getByText(/Most Compatible/)).toBeTruthy())
+    // The previously loaded picture and its crop survive the refusal.
+    expect(send.disabled).toBe(false)
+    expect(screen.getByText(/photo\.png/)).toBeTruthy()
+  })
+
+  it('warns, but does not refuse, when the picture is smaller than the raster', async () => {
+    // The stubbed source is 120×90; Scottie 1 is 320×256. A webcam grab is a legitimate
+    // thing to send and every other SSTV program enlarges it — so this is a badge that
+    // survives to Send time, not a refusal.
+    render(<SstvView snap={snap} />)
+    const send = await loadPicture()
+    expect(screen.getByText(/enlarged and look soft/)).toBeTruthy()
+    expect(send.disabled).toBe(false)
   })
 
   it('Send is disabled and Stop enabled while sending; Stop calls sstvStop', async () => {

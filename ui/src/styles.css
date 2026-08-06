@@ -20396,3 +20396,57 @@ tr.sel .aprs-sym {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* ---------------------------------------------------------------------------
+   SSTV composer — resize/crop + the burned-in station ID (2026-08-05).
+
+   All of it lives INSIDE the existing `txcompose` CockpitPaneFrame body, in
+   `.sstv-compose`'s existing flex column. No new structural size: these are text
+   rows and a cursor on a canvas that already carries its own max-width/max-height
+   from `.sstv-tx-preview` above. Nothing here goes near `.sstv-tx-bar` — Stop and
+   the TX-enable latch keep exactly the surface `stop-line.test.tsx` sweeps.
+   --------------------------------------------------------------------------- */
+
+/* The drag surface. The frame is fixed and the SOURCE moves behind it, so the cursor
+   names the axis that actually has travel — cover-fit leaves exactly one, or none when
+   the aspects already match. */
+.sstv-tx-preview.drag-x {
+  cursor: ew-resize;
+}
+.sstv-tx-preview.drag-y {
+  cursor: ns-resize;
+}
+.sstv-tx-preview.drag-none {
+  cursor: default;
+}
+.sstv-tx-preview:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ⭐ The ident line. Not a status and not a warning in the normal case — it states a
+   fact the operator should be able to notice the absence of. `--alert-critical` and
+   `--alert-warning` are used rather than invented names: both are defined in BOTH
+   themes (dark #ff6100/#f7c243, light #9c0000/#a76d00), which is the rule. */
+.sstv-tx-id {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.sstv-tx-id.missing {
+  color: var(--alert-critical);
+  font-weight: 700;
+}
+
+/* Warnings that must survive to Send time (soft upscale, a refused file, first-frame
+   GIF) — a line in the composer rather than a toast that has already gone. */
+.sstv-tx-notice {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.sstv-tx-notice.warn {
+  color: var(--alert-warning);
+}
+.sstv-tx-notice.error {
+  color: var(--alert-critical);
+}
