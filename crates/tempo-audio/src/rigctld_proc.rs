@@ -6,8 +6,10 @@
 //! unit-tested; [`spawn_rigctld`] launches it and returns a kill-on-drop
 //! [`Child`] so the daemon dies with Tempo.
 
+use std::collections::VecDeque;
 use std::io::BufRead;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 /// What a serial control line is held at for the whole session (`-C rts_state=…` /
 /// `-C dtr_state=…`), per line, as the operator chose it.
@@ -193,6 +195,14 @@ fn resolve_lines(settable: SettableLines, want: ControlLines) -> ControlLines {
 ///   level for the whole session, so opening the port cannot key the transmitter. `lines` must
 ///   already have been narrowed by [`resolve_lines`] to what this rig's Hamlib accepts — see
 ///   [`SettableLines`] for the two refusals and why a wrong flag is silently dead CAT.
+/// - `-vv` — **why the daemon says anything at all.** rigctld hands its `-v` count straight to
+///   `rig_set_debug`, so with no flag Hamlib runs at `RIG_DEBUG_NONE` and prints NOTHING; the
+///   stderr pipe [`spawn_rigctld`] opens then drains an empty stream, which is exactly how a
+///   failing FT-847 produced a support report saying "nothing noteworthy". `-vv` is
+///   `RIG_DEBUG_ERR`: the first level that emits (measured — `-vv -r COM99` gives
+///   `serial_open: serial port COM99 does not exist`, `-v` gives nothing), and the last that is
+///   errors ONLY. `-vvv`/`-vvvv` are WARN/TRACE and would put a line per poll on the pipe for a
+///   rig that is merely mute. See `the_daemon_is_launched_at_the_verbosity_that_makes_it_report_errors`.
 pub fn rigctld_args(
     model: u32,
     addr: &str,
@@ -202,7 +212,9 @@ pub fn rigctld_args(
     ptt_line: Option<crate::rig::SerialLine>,
     lines: ControlLines,
 ) -> Vec<String> {
-    let mut args = vec!["-m".to_string(), model.to_string()];
+    // Errors only, and errors at all — see the `-vv` bullet above. Unconditional: a fault the
+    // operator needs explaining is no more likely on a serial rig than a network one.
+    let mut args = vec!["-vv".to_string(), "-m".to_string(), model.to_string()];
     if !addr.is_empty() {
         args.push("-r".to_string());
         args.push(addr.to_string());
@@ -268,16 +280,40 @@ pub fn ptt_type_token(line: crate::rig::SerialLine) -> &'static str {
 /// closing Tempo.
 pub struct RigctldProc {
     child: Child,
+    /// What the daemon has printed on stderr, newest last, filled by the drain thread in
+    /// [`spawn_rigctld`] — see [`RigctldProc::said`].
+    said: Arc<Mutex<VecDeque<String>>>,
     /// Job-object handle (Windows) as an `isize`; 0 = none. Held for the daemon's
     /// lifetime so the kill-on-close guarantee is in force until Tempo exits.
     #[cfg(windows)]
     job: isize,
 }
 
+/// How many of the daemon's stderr lines are kept. Bounded because the loudest case is a rig
+/// that is merely MUTE: at `-vv` Hamlib reports the read error on every poll, forever, so an
+/// unbounded buffer would grow for as long as the operator leaves the app open. The newest
+/// lines are the ones worth having — a later error supersedes an earlier one.
+const SAID_KEPT: usize = 8;
+
 impl RigctldProc {
     /// The underlying child's process id, for logging.
     pub fn id(&self) -> u32 {
         self.child.id()
+    }
+
+    /// What Hamlib itself has said about this rig, newest last (at most [`SAID_KEPT`] lines).
+    ///
+    /// **This exists because the operator could not see it.** The daemon's stderr has been
+    /// captured since the CI-V diagnostic was built, and it went to exactly one place: the
+    /// CI-V log file, whose toggle the UI renders only for an Icom on the native CI-V path.
+    /// Every Yaesu, Kenwood, Elecraft and Flex owner's Hamlib errors were captured and
+    /// discarded — which is why an FT-847 owner whose rig works in WSJT-X reported "nothing
+    /// noteworthy" while his daemon knew precisely what was wrong.
+    pub fn said(&self) -> Vec<String> {
+        self.said
+            .lock()
+            .map(|q| q.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// True if the daemon is still running. rigctld that fails to bind its TCP port (e.g. the port is
@@ -422,6 +458,9 @@ pub fn spawn_rotctld(
     let job = assign_kill_on_close_job(&child);
     Ok(RigctldProc {
         child,
+        // A rotator daemon's stderr is not piped, so it never says anything here. The field
+        // exists because the handle is shared with rigctld, not because rotctld is silent.
+        said: Arc::new(Mutex::new(VecDeque::new())),
         #[cfg(windows)]
         job,
     })
@@ -629,9 +668,16 @@ pub fn spawn_rigctld(
         "rigctld spawn: {} (network={network})",
         args.join(" ")
     ));
-    // Drain the daemon's stderr on a detached thread → the diagnostic. `note` is a cheap relaxed
-    // load when logging is off, so this idles for free; the thread ends when the daemon exits.
+    // Drain the daemon's stderr on a detached thread → the ring buffer AND the diagnostic.
+    // `note` is a cheap relaxed load when logging is off, so this idles for free; the thread
+    // ends when the daemon exits.
+    //
+    // The ring is the half that reaches EVERY operator: the CI-V log needs arming, and its
+    // toggle is rendered only for an Icom on the native path, so for a Yaesu owner `note` has
+    // always been a no-op ([`RigctldProc::said`]).
+    let said = Arc::new(Mutex::new(VecDeque::with_capacity(SAID_KEPT)));
     if let Some(stderr) = child.stderr.take() {
+        let sink = Arc::clone(&said);
         std::thread::Builder::new()
             .name("rigctld-stderr".into())
             .spawn(move || {
@@ -640,6 +686,12 @@ pub fn spawn_rigctld(
                     let line = line.trim();
                     if !line.is_empty() {
                         crate::civ::diag::note(&format!("rigctld: {line}"));
+                        if let Ok(mut q) = sink.lock() {
+                            if q.len() == SAID_KEPT {
+                                q.pop_front();
+                            }
+                            q.push_back(line.to_string());
+                        }
                     }
                 }
             })
@@ -651,6 +703,7 @@ pub fn spawn_rigctld(
     let job = assign_kill_on_close_job(&child);
     Ok(RigctldProc {
         child,
+        said,
         #[cfg(windows)]
         job,
     })
@@ -659,6 +712,57 @@ pub fn spawn_rigctld(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⭐ THE ROOT CAUSE OF "nothing noteworthy" (FT-847 field report, 2026-08).
+    ///
+    /// [`spawn_rigctld`] pipes the daemon's stderr and drains it on a thread, and has since the
+    /// CI-V diagnostic was built — so the shape looked right. It drains **an empty stream**:
+    /// rigctld's `-v` count is passed straight to `rig_set_debug`, and with no `-v` at all that
+    /// is `RIG_DEBUG_NONE`, at which Hamlib prints nothing whatsoever. The operator's daemon was
+    /// silent, not ignored.
+    ///
+    /// Measured against the bundled rigctld 4.7.0, one run per level, `-r COM99`:
+    /// - no flag → nothing;
+    /// - `-v` (`RIG_DEBUG_BUG`) → nothing;
+    /// - `-vv` (`RIG_DEBUG_ERR`) → `serial_open: serial port COM99 does not exist`.
+    ///
+    /// `-vv` is the FIRST level that says anything and the LAST one that is errors only —
+    /// `-vvv` is WARN and `-vvvv` is a per-transaction trace, either of which would flood a
+    /// mute rig's poll loop. So the level is load-bearing in both directions.
+    #[test]
+    fn the_daemon_is_launched_at_the_verbosity_that_makes_it_report_errors() {
+        for args in [
+            rigctld_args(
+                1001,
+                "COM5",
+                57600,
+                4532,
+                false,
+                None,
+                ControlLines::default(),
+            ),
+            rigctld_args(1, "", 38400, 4532, false, None, ControlLines::default()),
+            rigctld_args(
+                23005,
+                "192.168.1.50:4992",
+                38400,
+                4532,
+                true,
+                None,
+                ControlLines::default(),
+            ),
+        ] {
+            assert!(
+                args.iter().any(|a| a == "-vv"),
+                "without it Hamlib is at RIG_DEBUG_NONE and the stderr drain has nothing to \
+                 drain: {args:?}"
+            );
+            assert!(
+                !args.iter().any(|a| a == "-vvv" || a == "-vvvv"),
+                "WARN and TRACE flood a mute rig's poll loop — errors only: {args:?}"
+            );
+        }
+    }
 
     #[test]
     fn rotctld_args_mirror_the_rig_shape() {
@@ -686,7 +790,7 @@ mod tests {
         );
         assert_eq!(
             args,
-            vec!["-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]
+            vec!["-vv", "-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]
         );
     }
 
@@ -704,7 +808,15 @@ mod tests {
         );
         assert_eq!(
             args,
-            vec!["-m", "23005", "-r", "192.168.1.50:4992", "-t", "4532"]
+            vec![
+                "-vv",
+                "-m",
+                "23005",
+                "-r",
+                "192.168.1.50:4992",
+                "-t",
+                "4532"
+            ]
         );
     }
 
@@ -722,6 +834,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
+                "-vv",
                 "-m",
                 "1042",
                 "-r",
@@ -738,7 +851,7 @@ mod tests {
     fn args_without_serial_port_omit_port_and_baud() {
         // Dummy / NET rigs need no serial device.
         let args = rigctld_args(1, "", 38400, 4532, false, None, ControlLines::default());
-        assert_eq!(args, vec!["-m", "1", "-t", "4532"]);
+        assert_eq!(args, vec!["-vv", "-m", "1", "-t", "4532"]);
     }
 
     /// The single-cable interface (Digirig Mobile): ONE port carries CAT and the RTS keying
@@ -758,7 +871,8 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "-m", "3073", "-r", "COM5", "-s", "38400", "-P", "RTS", "-p", "COM5", "-t", "4532"
+                "-vv", "-m", "3073", "-r", "COM5", "-s", "38400", "-P", "RTS", "-p", "COM5", "-t",
+                "4532"
             ],
             "-P/-p must name the SAME device as -r; a mismatch opens a second port"
         );
@@ -815,7 +929,7 @@ mod tests {
             Some(crate::rig::SerialLine::Rts),
             ControlLines::default(),
         );
-        assert_eq!(no_dev, vec!["-m", "1", "-t", "4532"]);
+        assert_eq!(no_dev, vec!["-vv", "-m", "1", "-t", "4532"]);
     }
 
     /// Every arg-shape test below reads the flag pairs rather than a whole vector, so adding an
@@ -1017,7 +1131,7 @@ mod tests {
         );
 
         let no_dev = rigctld_args(1, "", 38400, 4532, false, None, ControlLines::hold_low());
-        assert_eq!(no_dev, vec!["-m", "1", "-t", "4532"]);
+        assert_eq!(no_dev, vec!["-vv", "-m", "1", "-t", "4532"]);
     }
 
     /// ⚠️ THE P1 REGRESSION, by name. Both dumps are real `rigctld 4.7.1 -m <model> -L` output

@@ -180,6 +180,41 @@ fn with_backend(detail: String, label: &str) -> String {
     format!("{detail} (via {label})")
 }
 
+/// Fold what the CAT daemon ITSELF said into a failed probe detail, so Hamlib's diagnosis
+/// reaches the operator no matter what make of radio they own.
+///
+/// **The gap this closes.** Our own messages are written from the outside: "CAT error: rig
+/// reply incomplete after 700 ms" is everything we can observe, and it is the same sentence
+/// for a wrong baud, a wrong COM port, a rig that is switched off, and a cable that is not
+/// plugged in. Hamlib knows which — `serial_open: serial port COM7 does not exist` is not a
+/// guess — and it has been printing it to a pipe that fed one file the UI offers to arm for
+/// Icom owners only. An FT-847 owner whose rig works in WSJT-X reported "nothing noteworthy"
+/// while his daemon was naming the fault.
+///
+/// Only ever added to a FAILURE. On a healthy link the daemon may still have muttered
+/// something at startup, and hanging that off "Connected — 14.074 MHz" would teach operators
+/// to ignore the field.
+///
+/// Newest first (a later error supersedes an earlier one), de-duplicated (a mute rig repeats
+/// the same read error every poll), and capped at two lines: this lands in a status pill, and
+/// a paragraph there is not read at all.
+fn with_daemon_error(detail: String, said: &[String]) -> String {
+    let mut picked: Vec<&str> = Vec::new();
+    for line in said.iter().rev() {
+        let line = line.trim();
+        if !line.is_empty() && !picked.contains(&line) {
+            picked.push(line);
+        }
+        if picked.len() == 2 {
+            break;
+        }
+    }
+    if picked.is_empty() {
+        return detail;
+    }
+    format!("{detail} Hamlib said: {}", picked.join(" / "))
+}
+
 /// A clear, model-aware "CAT is down" message for when the rig stops answering — the field-report
 /// fix for a tester who ran hours not knowing CAT was dead and a silent "reply incomplete" loop.
 /// It NAMES the config (model / port / baud) so the operator can see a baud/port mismatch at a
@@ -2678,6 +2713,14 @@ impl RadioLoop {
                 if ok.is_some() && probed_cat && rig.has_control() {
                     detail = with_backend(detail, self.live_backend_label(&want));
                 }
+                // Test CAT is the button an operator presses precisely BECAUSE the rig isn't
+                // answering, so this is the most valuable place of all for Hamlib's own words
+                // — and the daemon that has them is the LIVE one we launched, still running.
+                if ok == Some(false) {
+                    if let Some(CatDaemon::Spawned(p)) = &self.rigctld_proc {
+                        detail = with_daemon_error(detail, &p.said());
+                    }
+                }
                 self.cat_ok = ok;
                 {
                     let mut eng = engine_lock(engine);
@@ -2978,7 +3021,8 @@ impl RadioLoop {
                                     // Read the mode straight back FROM the rig to confirm it
                                     // actually applied — rigctld can answer RPRT 0 without the rig
                                     // changing, which is the only way to tell those apart.
-                                    retune_note = Some(mode_set_note(rig, &md));
+                                    retune_note =
+                                        Some(mode_set_note(rig, &md, self.applied.rig_model));
                                 }
                             }
                             // `last_mode` is unchanged, so the steady-state path below re-tries
@@ -3027,7 +3071,7 @@ impl RadioLoop {
                                 self.mode_giveup = None; // a success clears any prior give-up
                                 self.mode_saw_reject = false;
                                 retuned = true;
-                                retune_note = Some(mode_set_note(rig, &md));
+                                retune_note = Some(mode_set_note(rig, &md, self.applied.rig_model));
                             }
                             Err(e) => {
                                 // Retries cover a rig/rigctld still settling; past the budget the
@@ -3911,7 +3955,11 @@ impl RadioLoop {
                 let mut handled = false;
                 // WinKeyer hardware keyer: open the serial port on demand (reopen if the
                 // configured port changed) and stream the word to it. On open failure,
-                // fall through to the CAT keyer so CW still goes out.
+                // surface the OS error and OWN the word — exactly like the serial keyline
+                // below, and for its reason: falling through to the CAT keyer used to hide
+                // this entirely (the error was discarded and nothing was ever set), so a
+                // dead WinKeyer looked like a rig that would not key, and the CAT keyer's
+                // own error — if it produced one — pointed at the wrong backend.
                 #[cfg(feature = "serial")]
                 if let Some(port) = &winkeyer_port {
                     let reopen = self
@@ -3919,18 +3967,34 @@ impl RadioLoop {
                         .as_ref()
                         .map(|(p, _)| p != port)
                         .unwrap_or(true);
+                    let mut open_err = None;
                     if reopen {
-                        self.winkeyer = crate::winkeyer::WinKeyer::open(port)
-                            .ok()
-                            .map(|(wk, _rev)| (port.clone(), wk));
+                        match crate::winkeyer::WinKeyer::open(port) {
+                            Ok((wk, _rev)) => self.winkeyer = Some((port.clone(), wk)),
+                            // What the SYSTEM said, verbatim. `self.winkeyer` stays None, so
+                            // the next word retries the open — a keyer plugged in late, or a
+                            // port briefly held by another app, still recovers on its own.
+                            Err(e) => {
+                                self.winkeyer = None;
+                                open_err = Some(format!(
+                                    "WinKeyer on {port}: {e}. If the port name is right, check \
+                                     that the keyer is powered and that nothing else (CAT, \
+                                     another logger) has it open."
+                                ));
+                            }
+                        }
                     }
                     if let Some((_, wk)) = self.winkeyer.as_mut() {
                         if wpm != self.last_cw_wpm && wk.set_wpm(wpm).is_ok() {
                             self.last_cw_wpm = wpm;
                         }
                         let _ = wk.send(&text);
-                        handled = true;
                     }
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.set_cw_keyer_error(open_err);
+                    }
+                    handled = true; // the WinKeyer backend owns this word (sent or errored)
                 }
                 // Serial DTR/RTS keyline keyer: open the port on demand (reopen if the port
                 // OR the line changed) and hand it the word — its own thread times the
@@ -6244,12 +6308,18 @@ fn mode_giveup_note(md: &str, saw_reject: bool, fallback: Option<&str>) -> Strin
 /// the ONLY way to distinguish "rigctld answered RPRT 0 AND the rig actually changed" from
 /// "rigctld answered RPRT 0 but the rig is still in the old mode" (a Hamlib/rig no-op). The
 /// note is surfaced into the CAT status so the operator can see it on the rig.
-fn mode_set_note(rig: &mut Rig, md: &str) -> String {
-    // Read the rig's TRUE mode straight off the wire (raw Yaesu `MD0;` via rigctld send_cmd),
-    // bypassing Hamlib's mode cache — `read_mode` (`m`) can report the commanded mode even
-    // when the rig never moved (which fooled us once). The raw reply (e.g. "MD02;" = USB,
-    // "MD0C;" = DATA-U on Yaesu) is the ground truth of what the radio is actually in.
-    if let Some(raw) = rig.send_raw("MD0;") {
+fn mode_set_note(rig: &mut Rig, md: &str, model: u32) -> String {
+    // Read the rig's TRUE mode straight off the wire, bypassing Hamlib's mode cache —
+    // `read_mode` (`m`) can report the commanded mode even when the rig never moved (which
+    // fooled us once). The raw reply (e.g. "MD02;" = USB, "MD0C;" = DATA-U) is the ground
+    // truth of what the radio is actually in.
+    //
+    // ⚠️ ONLY for a model whose CAT is that exact ASCII set. This used to send Yaesu's `MD0;`
+    // to EVERY rig: junk on an Icom's CI-V bus (which cost a dropped rigctld connection per
+    // mode change — see `raw_mode_query`), and framing-desync on the old binary-CAT Yaesus.
+    // Every other rig falls through to `read_mode` below, which is what it always did when the
+    // raw query drew no reply — so nothing but the wasted round-trip is lost.
+    if let Some(raw) = crate::rigmodels::raw_mode_query(model).and_then(|q| rig.send_raw(q)) {
         return format!("sent {md} → rig raw mode {raw}");
     }
     match rig.read_mode() {
@@ -6587,17 +6657,48 @@ fn open_cat(
             if let Some(e) = native_fallback {
                 probe.detail = format!("{} Native CI-V start error: {e}.", probe.detail);
             }
+            // The link did not come up: hand the operator Hamlib's OWN diagnosis rather than
+            // only our outside-in one. See `with_daemon_error` — this is what was being
+            // captured and thrown away for every non-Icom.
+            if probe.ok == Some(false) {
+                if let CatDaemon::Spawned(p) = &proc {
+                    probe.detail = with_daemon_error(probe.detail, &p.said());
+                }
+            }
             (rig, Some(proc), probe)
         }
         Err(e) => (
             Rig::vox(),
             None,
-            CatProbe::status(
-                Some(false),
-                format!("Could not launch the bundled rigctld (Hamlib): {e}"),
-            ),
+            CatProbe::status(Some(false), rigctld_launch_failed(&e)),
         ),
     }
+}
+
+/// Explain a `rigctld` that would not START — as opposed to one that started and could not
+/// reach the radio.
+///
+/// **`NotFound` is its own fault and gets its own sentence.** The Windows installer ships
+/// Hamlib beside the app, and the `.deb` declares `libhamlib-utils`; the **AppImage declares
+/// nothing** and `resolve_rigctld` falls back to a bare `rigctld` on `PATH`
+/// (`scripts/build-linux.sh` says so deliberately — an AppImage cannot express a dependency).
+/// So on a Linux box without Hamlib installed, every CAT attempt died on a raw
+/// `No such file or directory (os error 2)`, which names no cause and no cure. WSJT-X does not
+/// have this problem in a way the operator can transfer: it links the Hamlib *library*
+/// (`libhamlib4`), a different package from the `rigctld` *binary* — so "but WSJT-X works" is
+/// true and is not evidence that Hamlib's tools are installed.
+///
+/// The raw error is kept in every arm; it is what support asks for.
+fn rigctld_launch_failed(e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        return format!(
+            "Hamlib's rigctld isn't installed. On Debian/Ubuntu: sudo apt install \
+             libhamlib-utils (the Nexus .deb pulls it in; the AppImage can't, so it has to be \
+             installed once by hand). WSJT-X working proves only the Hamlib LIBRARY is there — \
+             Nexus needs the rigctld program. ({e})"
+        );
+    }
+    format!("Could not launch the bundled rigctld (Hamlib): {e}")
 }
 
 /// The single shared tail of both `open_cat` branches (coexist + spawn): the open-time
@@ -7097,6 +7198,237 @@ mod tests {
         assert_eq!(fallback_sideband("CW"), None);
         assert_eq!(fallback_sideband("USB"), None);
         assert_eq!(fallback_sideband("FM"), None);
+    }
+
+    /// THE TIMEWAVE NAVIGATOR REPORT (N0UMF, IC-7410). `mode_set_note` opened with a raw
+    /// `MD0;` — **Yaesu** CAT ASCII — pushed through rigctld's `w` onto whatever bus was
+    /// there, ungated by make, on every single mode change.
+    ///
+    /// On a CI-V rig it is five junk bytes nothing can answer, so `w` blocks until the read
+    /// deadline expires; `Rig::command_with_deadline` then DROPS the rigctld connection on any
+    /// failure (that is the TX-safety invariant — a stale byte must never be read as the next
+    /// command's reply), and the drop is the daemon's disconnect fail-safe unkey. So the price
+    /// of a diagnostic string was a dropped CAT link per mode change, and the diagnostic that
+    /// answers "modes won't switch" was the thing it broke.
+    ///
+    /// **The gate is not the maker.** The old Yaesus — FT-847 (the other field report on this
+    /// batch), FT-817/857/897, FT-1000MP — speak fixed 5-byte BINARY CAT. Four stray bytes
+    /// there desynchronise the framing, so the next real command is re-read from the wrong
+    /// byte: a command nobody sent, to a transmitter. Both halves are asserted here, because
+    /// "gate it by make" would have fixed the Icom and kept the worse bug.
+    #[test]
+    fn a_raw_mode_query_goes_only_to_a_rig_that_speaks_that_exact_cat() {
+        use crate::rigmodels::raw_mode_query;
+        // The rigs it was written for and still serves — Hamlib's shared newcat ASCII backend.
+        for (m, who) in [
+            (1042u32, "FTDX10"),
+            (1035, "FT-991/991A"),
+            (1049, "FT-710"),
+            (1036, "FT-891"),
+            (1040, "FTDX101D"),
+        ] {
+            assert_eq!(
+                raw_mode_query(m),
+                Some("MD0;"),
+                "{who} ({m}) is newcat ASCII"
+            );
+        }
+        // CI-V. `MD0;` is junk on a binary bus, and the cost is a dropped rigctld connection.
+        for (m, who) in [
+            (3067u32, "IC-7410 — the reporter's rig"),
+            (3073, "IC-7300"),
+            (3078, "IC-7610"),
+            (3081, "IC-9700"),
+            (3088, "Xiegu G90 (Icom-family CI-V)"),
+        ] {
+            assert_eq!(
+                raw_mode_query(m),
+                None,
+                "{who} ({m}) must be sent nothing raw"
+            );
+        }
+        // Yaesu, and MORE dangerous than the Icoms: 5-byte binary CAT, where stray bytes
+        // desynchronise the framing rather than merely going unanswered.
+        for (m, who) in [
+            (1001u32, "FT-847"),
+            (1020, "FT-817"),
+            (1022, "FT-857"),
+            (1023, "FT-897"),
+            (1043, "FT-897D"),
+            (1024, "FT-1000MP"),
+        ] {
+            assert_eq!(
+                raw_mode_query(m),
+                None,
+                "{who} ({m}) has BINARY CAT — stray bytes reframe the next command"
+            );
+        }
+        // Everyone else, including the makes that have their own ASCII spelling we have not
+        // verified. Silence is the safe answer and costs only a diagnostic string.
+        for (m, who) in [
+            (2037u32, "Kenwood TS-590SG"),
+            (2047, "Elecraft K4"),
+            (2036, "FlexRadio SmartSDR CAT"),
+            (2054, "Thetis"),
+            (16013, "Ten-Tec Eagle"),
+            (17002, "Alinco DX-SR8"),
+            (1051, "Yaesu FTX-1 — own backend, not newcat's date"),
+            (1, "Hamlib Dummy"),
+            (0, "no rig model set"),
+        ] {
+            assert_eq!(raw_mode_query(m), None, "{who} ({m})");
+        }
+    }
+
+    /// ⭐ THE OTHER HALF OF "nothing noteworthy" (FT-847 field report). `-vv` is what makes the
+    /// daemon SPEAK (`rigctld_proc`); this is what carries it to the operator. Before, every
+    /// captured line went to the CI-V diagnostic file and nowhere else — and that toggle is
+    /// rendered only for an Icom on the native CI-V path, so for a Yaesu owner the pipeline
+    /// ended in a `note()` that was a no-op by construction.
+    ///
+    /// Our own message is everything observable from OUTSIDE the link, and it is the same
+    /// sentence for four different faults. Hamlib's is the one that names which.
+    #[test]
+    fn a_failed_cat_probe_carries_what_hamlib_itself_said() {
+        let ours = "CAT error: rig reply incomplete after 700 ms (got \"\")".to_string();
+        // The exact line the bundled rigctld 4.7.0 emits at -vv for a port that isn't there.
+        let said = ["serial_open: serial port COM7 does not exist".to_string()];
+        let out = with_daemon_error(ours.clone(), &said);
+        assert!(
+            out.starts_with(&ours),
+            "our own diagnosis stays first: {out}"
+        );
+        assert!(
+            out.contains("serial port COM7 does not exist"),
+            "the operator must SEE the daemon's diagnosis: {out}"
+        );
+
+        // A mute rig repeats one read error on every poll — the pill must not become a wall.
+        let spam: Vec<String> =
+            std::iter::repeat_n("read_string(): Timed out".to_string(), 8).collect();
+        let out = with_daemon_error(ours.clone(), &spam);
+        assert_eq!(
+            out.matches("Timed out").count(),
+            1,
+            "repeats are one line, not eight: {out}"
+        );
+
+        // Newest first: the last thing Hamlib said is the live fault, and it is what shows
+        // when only two lines fit.
+        let out = with_daemon_error(
+            ours.clone(),
+            &[
+                "rig_open: cannot set RTS with hardware handshake".to_string(),
+                "serial_open: serial port COM7 does not exist".to_string(),
+                "ft847: invalid mode".to_string(),
+            ],
+        );
+        assert!(out.contains("ft847: invalid mode"), "{out}");
+        assert!(out.contains("serial port COM7"), "{out}");
+        assert!(
+            !out.contains("hardware handshake"),
+            "capped at two lines — a status pill nobody reads helps nobody: {out}"
+        );
+
+        // A silent daemon adds nothing at all: no trailing "Hamlib said:" with an empty tail.
+        assert_eq!(with_daemon_error(ours.clone(), &[]), ours);
+        assert_eq!(with_daemon_error(ours.clone(), &["   ".to_string()]), ours);
+    }
+
+    /// A Linux AppImage cannot declare a package dependency, so `resolve_rigctld` falls back to
+    /// a bare `rigctld` on PATH — and on a box without Hamlib's tools that was a raw
+    /// `No such file or directory (os error 2)` in the CAT pill: no cause, no cure, and it
+    /// arrives to an operator whose WSJT-X works fine (WSJT-X links the LIBRARY, a different
+    /// package). Everything else keeps the generic wording; only the one diagnosable kind is
+    /// singled out.
+    #[test]
+    fn a_missing_hamlib_says_what_to_install_instead_of_os_error_2() {
+        use std::io::{Error, ErrorKind};
+        let msg = rigctld_launch_failed(&Error::new(
+            ErrorKind::NotFound,
+            "No such file or directory (os error 2)",
+        ));
+        assert!(
+            msg.contains("libhamlib-utils"),
+            "must name the package that fixes it: {msg}"
+        );
+        assert!(
+            msg.contains("os error 2"),
+            "the raw error stays — support asks for it: {msg}"
+        );
+        // Not a missing binary: no install advice, because installing would not help.
+        let msg = rigctld_launch_failed(&Error::new(
+            ErrorKind::PermissionDenied,
+            "permission denied",
+        ));
+        assert!(
+            !msg.contains("apt install"),
+            "a permissions fault is not a missing package: {msg}"
+        );
+        assert!(msg.contains("permission denied"), "{msg}");
+    }
+
+    /// THE NAVIGATOR REPORT, second half. A WinKeyer whose port will not open was
+    /// `WinKeyer::open(port).ok()` — the OS error dropped on the floor, no
+    /// `set_cw_keyer_error`, and a silent fall-through to the CAT keyer. So the operator's
+    /// hardware keyer sat dead while CW went out (or didn't) through a backend he never
+    /// chose, and the screen said nothing at all.
+    ///
+    /// Its sibling four lines below — the serial keyline — has said the OS error verbatim
+    /// since the FTX-1 report ("Report what the SYSTEM said, verbatim"), and owns the word
+    /// rather than handing it to a keyer whose own error would then mislead. This pins the
+    /// WinKeyer to the same two rules.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn a_winkeyer_that_will_not_open_says_so_instead_of_keying_through_something_else() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            // A port name no OS can hand us, so the failure is the open and nothing else.
+            s.winkeyer_port = "NO_SUCH_KEYER_PORT".to_string();
+            e.apply_settings(s);
+            e.set_cw_keyer("winkeyer", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW"); // a CW segment we hold privileges on
+            e.send_cw("TEST"); // operator hits an F-key
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        let err = engine
+            .lock()
+            .unwrap()
+            .cw_keyer_error()
+            .expect("a keyer the operator chose, that would not open, must SAY so");
+        assert!(
+            err.contains("WinKeyer"),
+            "must name the backend that failed, not the one it fell through to: {err}"
+        );
+        assert!(
+            err.contains("NO_SUCH_KEYER_PORT"),
+            "must quote the port the OS refused: {err}"
+        );
+        assert!(
+            !rig.keyed,
+            "the failed backend owns the word — it must not be re-keyed through the CAT \
+             keyer, whose own error would then misdiagnose this: {err}"
+        );
     }
 
     #[test]

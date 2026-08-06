@@ -15,7 +15,15 @@ use crate::usbrig::match_rig_model;
 
 /// Baud rates tried per port, most-common-for-CAT first. A port that answers at one baud
 /// ends the probe immediately (auto-select), so the rare high speeds rarely run.
-pub const PROBE_BAUDS: &[u32] = &[38400, 9600, 19200, 4800, 115200];
+///
+/// **57600 is here because a rate no rig can be set to is one thing, and a rate a rig can ONLY
+/// be set to is another.** The FT-847's CAT RATE (menu 37) offers exactly 4800 / 9600 / 57600;
+/// an operator on the top setting was undetectable by construction, not by bad luck, and
+/// Auto-test — the one tool that exists for "which port is my rig on?" — found nothing on any
+/// port (field report 2026-08; his rig works in WSJT-X). Hamlib's own caps agree the rate is
+/// real for that backend: `rigctl -m 1001 --dump-caps` → `Serial speed: 4800..57600`. It goes
+/// LAST but one because it is rare everywhere else, and the first answer ends the sweep.
+pub const PROBE_BAUDS: &[u32] = &[38400, 9600, 19200, 4800, 57600, 115200];
 
 /// A plausible CAT dial frequency (Hz): 100 kHz .. 500 MHz covers HF through 2 m / 70 cm.
 /// A port that isn't really the rig returns 0, an error, or garbage — all rejected.
@@ -259,6 +267,35 @@ mod tests {
             );
             assert!(bauds.iter().all(|b| *b > 0), "{name} has a zero baud seed");
         }
+    }
+
+    /// THE FIELD REPORT (2026-08, FT-847). His rig works in WSJT-X and not in Nexus, and
+    /// Auto-test found nothing on any port. The FT-847's CAT RATE is menu 37 and it offers
+    /// **4800 / 9600 / 57600** — those three and nothing else. His radio is on 57600, which
+    /// the sweep did not try, so the one tool that exists to find an unknown port could not
+    /// find him at all. A rate a catalog rig's own menu offers has to be in here or that
+    /// rig is undetectable by construction, not by bad luck.
+    #[test]
+    fn the_sweep_tries_every_rate_the_ft847s_cat_menu_offers() {
+        for baud in [4800u32, 9600, 57600] {
+            assert!(
+                PROBE_BAUDS.contains(&baud),
+                "{baud} is one of the FT-847's three CAT RATE choices (menu 37); a rig left \
+                 on it can never be found by Auto-test"
+            );
+        }
+    }
+
+    /// The trusted-model sweep runs EVERY baud on EVERY candidate port before giving up, so
+    /// its length is paid in full on a failed detect (~0.9 s per attempt). Pinned for the same
+    /// reason the seeded sweep is: growth must be a decision, not a drift.
+    #[test]
+    fn the_trusted_baud_sweep_stays_bounded() {
+        assert!(
+            PROBE_BAUDS.len() <= 6,
+            "the baud sweep grew to {} rates; each one lengthens a FAILED detect on every port",
+            PROBE_BAUDS.len()
+        );
     }
 
     /// The sweep's worst case is "nothing answers", and it is paid on every failed detect. This

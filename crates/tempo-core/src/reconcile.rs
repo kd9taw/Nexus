@@ -102,6 +102,12 @@ fn fmt_day(unix: u64) -> String {
 /// (a row stored `MFSK` by an older build reads back `FT4` today); two genuinely
 /// distinct contacts with one station on one band in one mode class cannot share a
 /// second, so class costs no discrimination here.
+///
+/// That last sentence holds ONLY while the second is a MEASURED one. A row whose
+/// source carried no `TIME_ON` parks at 00:00:00 UTC and is flagged
+/// [`time_known`](QsoRecord::time_known)`= false`; every date-only contact of that
+/// day then shares this key, and the key stops being an identity. [`take_own_disk`]
+/// is where that is handled — never by loosening the key.
 fn exact_key(r: &QsoRecord) -> Key {
     (
         r.call.to_ascii_uppercase(),
@@ -109,6 +115,88 @@ fn exact_key(r: &QsoRecord) -> Key {
         mode_class(&r.mode),
         r.when_unix,
     )
+}
+
+/// Is `b` the same CONTACT as `a` — the same record, possibly with the sync state
+/// [`apply_match`] merges moved on?
+///
+/// Compares everything that merge does NOT own, which for two copies of one of OUR
+/// OWN records is everything that cannot legitimately differ between instances.
+/// Written as "clone, blank what merge owns, compare" rather than a field list on
+/// purpose: a field added to `QsoRecord` is compared by default, so the check can
+/// never silently rot. If a future field is added to `apply_match` and not blanked
+/// here, two copies of one record read as two contacts — a visible duplicate, which
+/// is the failure this module already prefers over a silent loss.
+///
+/// Two fields are blanked on top of that because they are OURS and still differ
+/// across our own write/read cycle, so neither can discriminate anything:
+///
+/// - `mode`, whose SPELLING legitimately drifts between our own writes
+///   (`MFSK` ↔ `FT4`) — [`exact_key`] already pins the mode class;
+/// - `time_known`, which is not a property of the contact at all but of the ADIF ROW
+///   it was read from, inferred by the fabricated-midnight migration in
+///   [`crate::logbook`]. A contact logged natively at exactly 00:00:00 with no
+///   off-time is written `time_known = true` and parses back `false` — the
+///   documented false-negative of that heuristic. Compare it and a record stops
+///   being equal to its own round-trip.
+fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
+    fn strip(r: &QsoRecord) -> QsoRecord {
+        let mut r = r.clone();
+        // Everything `apply_match` writes.
+        r.confirmed = false;
+        r.award_confirmed = false;
+        r.qsl_rcvd = Default::default();
+        r.qsl_sent = Default::default();
+        r.credit_granted.clear();
+        r.credit_submitted.clear();
+        r.upload = Default::default();
+        r.state = None;
+        r.country = None;
+        // ...plus the two that do not survive our own round-trip intact.
+        r.mode.clear();
+        r.time_known = false;
+        r
+    }
+    strip(a) == strip(b)
+}
+
+/// Consume-once lookup for [`merge_own_disk`]: which local record IS this row of our
+/// own file?
+///
+/// Both sides came out of our own `save()`, so the answer is normally "the one with
+/// the same [`exact_key`]", and normally there is exactly one. When there is more
+/// than one, order alone cannot tell them apart — memory and file order diverge
+/// precisely when another instance appended something we never loaded — so prefer
+/// the candidate that IS this record by content ([`same_contact`]).
+///
+/// The fallback when nothing matches by content is the whole distinction between the
+/// two ways a bucket comes to hold twins:
+///
+/// - a MEASURED second (`time_known`) is an identity, so a content mismatch means the
+///   record changed under us (another instance edited it) rather than that we are
+///   looking at a different contact. Pair by order, as before, and let the monotonic
+///   merge do its work.
+/// - a FABRICATED second — a date-only import parked at 00:00:00 — is not an identity
+///   at all. Pairing by order there is the mis-pairing this matcher exists to end: it
+///   folds one contact's confirmation onto another and drops the row we never held.
+///   A row we cannot recognise is a row we do not have, which is exactly what the
+///   recovery appends.
+fn take_own_disk(
+    buckets: &mut HashMap<Key, Vec<usize>>,
+    local: &[QsoRecord],
+    inc: &QsoRecord,
+) -> Option<usize> {
+    let bucket = buckets.get_mut(&exact_key(inc))?;
+    // Buckets are reversed, so scanning from the BACK consumes oldest-first, the
+    // same order `pop()` does.
+    if let Some(pos) = bucket.iter().rposition(|&i| same_contact(&local[i], inc)) {
+        return Some(bucket.remove(pos));
+    }
+    if inc.time_known {
+        bucket.pop()
+    } else {
+        None
+    }
 }
 
 /// Index local QSOs by `key_of`; each bucket reversed so `pop()` consumes in log
@@ -259,7 +347,9 @@ pub fn merge_and_add(
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut buckets = build_buckets(local);
-    merge_pass(local, incoming, &mut buckets, take_match)
+    merge_pass(local, incoming, &mut buckets, |b, _local, inc| {
+        take_match(b, inc)
+    })
 }
 
 /// Two-way merge of OUR OWN on-disk log back into memory — the two-instance recovery
@@ -281,14 +371,29 @@ pub fn merge_and_add(
 /// the wrong contact and the 06:00 QSO gone. Exact identity cannot pair them; a row
 /// that fails to match is genuinely a row we do not hold, which is exactly what the
 /// recovery exists to append.
+///
+/// # What it deliberately does NOT do
+///
+/// It cannot see an EDIT. A record has no stable id in the ADIF, so a correction
+/// another instance made to a keyed field — the mis-logged time 12:00 → 12:05, a
+/// busted call — carries a different [`exact_key`] and is appended as a contact we do
+/// not hold. The operator is then holding two rows for one QSO, permanently and in
+/// both copies of the file, and both are eligible for upload. **That is the chosen
+/// trade, not an oversight**: the only key that could pair 12:00 with 12:05 is the
+/// fuzzy one this matcher replaced, and it pays for the duplicate by silently
+/// REVERTING the correction on the next full rewrite. A duplicate is on screen and one
+/// delete away; a reverted edit is invisible. See the contract on
+/// `StationCore::recover_external_appends`, which is the caller that must run first.
+///
+/// The same applies to an edit that keeps the key and changes a field the merge does
+/// not own (a `COMMENT`, a `NAME`): the rows still pair, and OUR copy — the older
+/// text — is what the rewrite writes back.
 pub fn merge_own_disk(
     local: &mut Vec<QsoRecord>,
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut buckets = build_buckets_by(local, exact_key);
-    merge_pass(local, incoming, &mut buckets, |b, inc| {
-        b.get_mut(&exact_key(inc)).and_then(|v| v.pop())
-    })
+    merge_pass(local, incoming, &mut buckets, take_own_disk)
 }
 
 /// The shared body of the two-way merges: each incoming row consumes at most one local
@@ -298,12 +403,12 @@ fn merge_pass(
     local: &mut Vec<QsoRecord>,
     incoming: Vec<QsoRecord>,
     buckets: &mut HashMap<Key, Vec<usize>>,
-    take: impl Fn(&mut HashMap<Key, Vec<usize>>, &QsoRecord) -> Option<usize>,
+    take: impl Fn(&mut HashMap<Key, Vec<usize>>, &[QsoRecord], &QsoRecord) -> Option<usize>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut sum = ReconcileSummary::default();
     let mut added = Vec::new();
     for inc in incoming {
-        match take(buckets, &inc) {
+        match take(buckets, local, &inc) {
             Some(i) => apply_match(&mut local[i], &inc, &mut sum),
             None => {
                 // New contact from the download — append it. Do NOT re-index it into the
@@ -894,16 +999,134 @@ mod tests {
     fn merge_own_disk_keeps_two_records_that_share_a_second() {
         // Date-only imports park at midnight, so two rows CAN share an exact key. They are
         // still distinct records: consume-once pairs them one-for-one and adds nothing.
-        let mut mem = vec![
-            rec("K5AA", "20m", "CW", 20_000),
-            rec("K5AA", "20m", "CW", 20_000),
-        ];
-        let disk = vec![
-            rec("K5AA", "20m", "CW", 20_000),
-            rec("K5AA", "20m", "CW", 20_000),
-        ];
+        let mut mem = vec![date_only("K5AA", "20m", "CW", 20_000, None); 2];
+        let disk = vec![date_only("K5AA", "20m", "CW", 20_000, None); 2];
         let (added, sum) = merge_own_disk(&mut mem, disk);
         assert!(added.is_empty(), "two on disk, two in memory — nothing new");
         assert_eq!((mem.len(), sum.matched), (2, 2));
+    }
+
+    /// A row from a DATE-ONLY source: no `TIME_ON`, so the parser parks it at
+    /// 00:00:00 UTC and marks it time-UNKNOWN (`logbook.rs`, `time_known`).
+    /// `rst` is what tells two such contacts apart, exactly as it does in the
+    /// paper log the ADIF came from.
+    fn date_only(call: &str, band: &str, mode: &str, day: u64, rst: Option<&str>) -> QsoRecord {
+        let mut r = rec(call, band, mode, day);
+        r.when_unix = day * 86_400; // fabricated midnight
+        r.time_known = false;
+        r.rst_sent = rst.map(str::to_string);
+        r
+    }
+
+    #[test]
+    fn merge_own_disk_keeps_two_date_only_contacts_that_share_a_fabricated_midnight() {
+        // The exact key rests on "two distinct contacts with one station on one band in one
+        // mode class cannot share a second". A date-only import breaks that assumption at the
+        // source: with no TIME_ON, every row of that day parks at 00:00:00, so two genuinely
+        // distinct contacts DO share the key — and the day-keyed mis-pairing the exact key was
+        // built to end came straight back in its own shape.
+        //
+        // Disk holds both (the 599 one is another instance's append, award-confirmed); memory
+        // holds only the 339 one. Consume-once popped OUR 339 row for the incoming 599 row —
+        // the confirmation landed on the wrong contact, the 599 contact never entered memory,
+        // and the 339 row was appended a second time. Two copies of one QSO, the other one
+        // destroyed by the next full rewrite.
+        let day = 20_000;
+        let mut a = date_only("W1AW", "20m", "CW", day, Some("599"));
+        a.award_confirmed = true;
+        a.confirmed = true;
+        let b = date_only("W1AW", "20m", "CW", day, Some("339"));
+
+        let mut mem = vec![b.clone()];
+        let (added, sum) = merge_own_disk(&mut mem, vec![a.clone(), b.clone()]);
+        assert_eq!(added.len(), 1, "only the contact we lack is new");
+        assert_eq!(added[0].rst_sent.as_deref(), Some("599"));
+        assert_eq!(sum.matched, 1, "our own 339 row matched itself");
+
+        let by_rst = |r: &str| -> Vec<&QsoRecord> {
+            mem.iter()
+                .filter(|q| q.rst_sent.as_deref() == Some(r))
+                .collect()
+        };
+        assert_eq!(by_rst("599").len(), 1, "the 599 contact survives, once");
+        assert_eq!(
+            by_rst("339").len(),
+            1,
+            "and is not a second copy of the 339 one"
+        );
+        assert!(
+            by_rst("599")[0].award_confirmed,
+            "confirmation on the contact that earned it"
+        );
+        assert!(
+            !by_rst("339")[0].award_confirmed,
+            "and not folded onto the other one"
+        );
+
+        // Idempotent: recovering the same file again adds nothing.
+        let (added2, _) = merge_own_disk(&mut mem, vec![a, b]);
+        assert!(added2.is_empty());
+        assert_eq!(mem.len(), 2);
+    }
+
+    #[test]
+    fn merge_own_disk_never_mistakes_a_real_midnight_qso_for_a_date_only_row() {
+        // The other half of the same confusion: a REAL 00:00:00 UTC contact (time known —
+        // the native writer records an off-time too) shares its second with a date-only row
+        // for the same station and band. They are two contacts, not one.
+        let day = 20_000;
+        let mut real = rec("K5AA", "40m", "CW", day);
+        real.when_unix = day * 86_400; // genuinely worked at midnight
+        real.time_off_unix = Some(day * 86_400 + 120);
+        let imported = date_only("K5AA", "40m", "CW", day, Some("559"));
+
+        let mut mem = vec![real.clone()];
+        let (added, _) = merge_own_disk(&mut mem, vec![imported.clone(), real.clone()]);
+        assert_eq!(
+            added.len(),
+            1,
+            "the imported row is a contact we do not hold"
+        );
+        assert_eq!(mem.len(), 2);
+        assert_eq!(
+            mem.iter().filter(|r| r.time_known).count(),
+            1,
+            "the real midnight QSO is still exactly one record"
+        );
+    }
+
+    #[test]
+    fn merge_own_disk_leaves_a_cross_instance_edit_as_a_visible_duplicate() {
+        // THE DOCUMENTED TRADE, pinned so it cannot change by accident. Instance A corrects a
+        // mis-logged time (12:00 → 12:05) and rewrites the file. We still hold the 12:00 copy.
+        // The correction carries a different exact key, so it matches nothing here and is
+        // appended: we end up holding BOTH, permanently, and both are eligible for upload.
+        //
+        // That is deliberate. The alternative — a key loose enough to see 12:05 as "the 12:00
+        // row, edited" — is the fuzzy pairing `exact_key` exists to end, and it pays for the
+        // duplicate with a SILENT revert of the operator's correction on the next rewrite.
+        // A duplicate is on screen and one delete away; a reverted edit is invisible.
+        // See `merge_own_disk` and `StationCore::recover_external_appends` for the contract,
+        // and the 1.0.2 CHANGELOG for what the operator is told.
+        let mut original = rec("W1AW", "20m", "SSB", 20_000);
+        original.when_unix = 20_000 * 86_400 + 12 * 3600;
+        let mut corrected = original.clone();
+        corrected.when_unix += 5 * 60;
+
+        let mut mem = vec![original];
+        let (added, sum) = merge_own_disk(&mut mem, vec![corrected]);
+        assert_eq!(added.len(), 1, "the correction reads as a contact we lack");
+        assert_eq!(sum.matched, 0);
+        assert_eq!(mem.len(), 2, "VISIBLE duplicate — never a silent revert");
+        let mut times: Vec<u64> = mem.iter().map(|r| r.when_unix).collect();
+        times.sort_unstable();
+        assert_eq!(
+            times,
+            vec![
+                20_000 * 86_400 + 12 * 3600,
+                20_000 * 86_400 + 12 * 3600 + 300
+            ],
+            "the operator's corrected time is the one that survives a rewrite"
+        );
     }
 }

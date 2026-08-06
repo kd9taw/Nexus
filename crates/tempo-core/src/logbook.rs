@@ -1907,6 +1907,61 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_disk_keeps_two_date_only_contacts_from_one_day() {
+        // The exact-second key assumes the second is a MEASURED one. A date-only source (a
+        // paper log, an old export) carries QSO_DATE and no TIME_ON, so every row of that
+        // day parks at 00:00:00 UTC — and two distinct contacts with one station on one band
+        // share the key. The two-instance divergence the exact key was built for then came
+        // straight back through it: B holds only its own row, disk holds both, and pairing by
+        // ORDER folded A's confirmation onto B's contact and appended a second copy of B —
+        // A's contact destroyed by the next full rewrite.
+        let day = 20_000u64 * 86_400;
+        let mut a = rec("W1AW", "20m", day);
+        a.mode = "CW".into();
+        a.time_known = false; // date-only: no TIME_ON in the source
+        a.rst_sent = Some("599".into());
+        a.award_confirmed = true;
+        a.confirmed = true;
+        a.qsl_rcvd.lotw = true;
+        let mut b = rec("W1AW", "20m", day);
+        b.mode = "CW".into();
+        b.time_known = false;
+        b.rst_sent = Some("339".into());
+
+        let disk = adif_header() + &adif_record(&a) + &adif_record(&b);
+        // The collision is the WRITER's and PARSER's, not the fixture's: round-tripped, both
+        // rows really do come back time-unknown at the same fabricated midnight.
+        assert!(
+            parse_adif(&disk)
+                .iter()
+                .all(|r| !r.time_known && r.when_unix == day),
+            "date-only rows round-trip as time-unknown at 00:00:00"
+        );
+
+        let mut mem = Logbook::new();
+        mem.add(b); // B's memory: only its own contact
+        mem.reconcile_disk(&disk);
+
+        assert_eq!(mem.len(), 2, "both contacts survive");
+        let with = |rst: &str| -> Vec<&QsoRecord> {
+            mem.records()
+                .iter()
+                .filter(|r| r.rst_sent.as_deref() == Some(rst))
+                .collect()
+        };
+        assert_eq!(with("599").len(), 1, "A's contact, once");
+        assert_eq!(with("339").len(), 1, "B's contact, once");
+        assert!(
+            with("599")[0].award_confirmed && with("599")[0].qsl_rcvd.lotw,
+            "the confirmation stays on the contact that earned it"
+        );
+        assert!(
+            !with("339")[0].award_confirmed,
+            "and is not folded onto the other contact"
+        );
+    }
+
+    #[test]
     fn reconcile_disk_does_not_resurrect_a_deleted_qso() {
         // The operator deleted a mis-logged contact; the recovery runs BEFORE the rewrite
         // that persists the deletion, so the row is still on disk. Exact-identity matching

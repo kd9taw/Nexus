@@ -45,6 +45,11 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         // unverified. Adding it here is what makes CAT work — before, the 7760 was absent from
         // every table, so it fell through to a wrong/zero model and CAT was dead.
         (3092, "Icom IC-7760"),
+        // IC-7300MKII — `RIG_MODEL_IC7300MK2 = RIG_MAKE_MODEL(RIG_ICOM, 94)` in the bundled
+        // 4.7.0 riglist.h → 3094 (`rigctl -l` names it `IC-7300MK2`, Beta). Driven via rigctld,
+        // NOT the native CI-V/scope path: `icom_scope_model` stays limited to the radios whose
+        // `0x27` stream we have actually seen, and this one has not been on a bench here.
+        (3094, "Icom IC-7300MKII"),
         (3070, "Icom IC-7100"),
         (3013, "Icom IC-718"),
         (3060, "Icom IC-7000"),
@@ -56,6 +61,10 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         // Yaesu
         (1035, "Yaesu FT-991 / FT-991A"),
         (1049, "Yaesu FT-710"),
+        // FTX-1 — `RIG_MODEL_FTX1 = RIG_MAKE_MODEL(RIG_YAESU, 51)` → 1051 (`rigctl -l`: `FTX-1`,
+        // Beta; its own backend, dated 20251224.0, not the shared newcat one). Yaesu's current
+        // portable: shipping now, and absent from every table here until this entry.
+        (1051, "Yaesu FTX-1"),
         (1042, "Yaesu FTDX10"),
         (1040, "Yaesu FTDX101D"),
         (1044, "Yaesu FTDX101MP"),
@@ -124,8 +133,18 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         (3087, "Xiegu X6100"),
         (3091, "Xiegu X6200"),
         (3089, "Xiegu X5105"),
-        // QRP Labs
+        // QRP / kit rigs (Kenwood-family backend — they all speak Kenwood-style CAT).
+        // Numbers off the bundled 4.7.0 riglist.h: QRPLABS=RIG_MAKE_MODEL(RIG_KENWOOD,52),
+        // FX4=…53, TRUSDX=…55, QRPLABS_QMX=…57.
         (2057, "QRP Labs QMX"),
+        (2052, "QRP Labs QCX / QDX"),
+        // BG2FX's FX-4 family — one Hamlib backend for all four variants (`rigctl -l` prints
+        // `FX4/C/CR/L`), so the variants are spelled here rather than given numbers they do
+        // not have.
+        (2053, "BG2FX FX-4 (C/CR/L)"),
+        // The DL2MAN/PE1NNZ kit. Named exactly as the project spells it, because that is what
+        // its owner types into the box.
+        (2055, "(tr)uSDX"),
         // Alinco
         (17002, "Alinco DX-SR8"),
     ]
@@ -347,6 +366,62 @@ pub(crate) fn is_slow_serial_rig(model: u32) -> bool {
         // half the S-meter rate.)
         | 2048 | 2054
     )
+}
+
+/// The raw CAT string that reads a rig's TRUE current mode straight off the wire, for the
+/// models whose CAT is ASCII text and whose query we can name. `None` = **send nothing raw**,
+/// which is the answer for every other radio on earth and the default this function exists to
+/// restore.
+///
+/// **Why it is gated at all.** `service::mode_set_note` pushed `MD0;` — a *Yaesu* CAT string —
+/// through rigctld's `w` (send_cmd) on **every mode change, to every rig, ungated by make**,
+/// and it cost two different radios two different things:
+/// - **Icom.** CI-V is a binary bus; `MD0;` is five bytes of ASCII junk on it, and nothing
+///   answers. `w` then blocks until our read deadline expires, and `rig::command_with_deadline`
+///   drops the rigctld connection on any failure — which is the daemon's disconnect fail-safe
+///   unkey, i.e. the trigger the PTT-flicker work was chasing. It also burned the one
+///   diagnostic that answers "modes won't switch" for every Icom operator.
+/// - **Old Yaesu.** The FT-847/817/857/897/1000MP family does NOT speak this ASCII set; their
+///   CAT is fixed 5-byte binary packets. Four stray bytes there do not merely fail — they
+///   desynchronise the framing, so the NEXT genuine command is re-read starting from the wrong
+///   byte. That is a made-up command sent to a transmitter, and it is why "Yaesu" is not the
+///   gate: **the make is not the protocol.**
+///
+/// **What the gate actually is**, and it is checkable rather than remembered: Hamlib's shared
+/// `newcat.c` backend is the modern Yaesu ASCII CAT set, and every rig built on it reports the
+/// same backend date. From the bundled 4.7.0 (`rigctl -m <model> --dump-caps`), the whole
+/// `20241118.x` family is listed below and everything else is out. Two Yaesus are deliberately
+/// excluded despite being modern: nothing is lost by excluding one (the note falls back to
+/// `read_mode`), and a wrong include writes bytes to a radio.
+/// - **FTX-1 (1051)** — its own backend, `20251224.0`, not newcat's date. Very likely the same
+///   command set; "very likely" is not the standard for bytes on a wire.
+/// - Anything not in the list at all, including every future model — absent means silent, which
+///   is the safe direction.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
+pub(crate) fn raw_mode_query(model: u32) -> Option<&'static str> {
+    // Yaesu `newcat.c` (backend version 20241118.x in the bundled Hamlib 4.7.0): FT-450,
+    // FT-950, FT-2000, FTDX-9000, FTDX-5000, FTDX-1200, FT-991/991A, FT-891, FTDX-3000,
+    // FTDX-101D, FTDX-10, FTDX-101MP, FT-450D, FT-710.
+    matches!(
+        model,
+        1027 | 1028
+            | 1029
+            | 1030
+            | 1032
+            | 1034
+            | 1035
+            | 1036
+            | 1037
+            | 1040
+            | 1042
+            | 1044
+            | 1046
+            | 1049
+    )
+    // `MD0;` = read the mode of VFO-A. The reply is the rig's own code (`MD02;` = USB,
+    // `MD0C;` = DATA-U), which is the ground truth `m` cannot give — Hamlib's `m` can return
+    // the mode it BELIEVES it set, from cache, on a rig that never moved.
+    .then_some("MD0;")
 }
 
 /// A **serial** CAT link that needs the LONG (2.5 s) command deadline: a known slow-backend
@@ -700,6 +775,49 @@ mod tests {
         // And it does not emulate a TS-2000: Hamlib's powersdr/thetis backends send the
         // ZZ-prefixed extended set (`ZZMD%02d`, `ZZTX1;ZZTX`), not TS-2000 CAT.
         assert!(!name(2048).contains("TS-2000"), "got {:?}", name(2048));
+    }
+
+    /// THE QA PASS (2026-08) ranked "I can't find my radio in the list" the #1 problem in the
+    /// whole rig-setup surface, and these five are the radios it named: current-production sets
+    /// whose owners are buying them NOW and finding an empty search. Every number is read off
+    /// the bundled Hamlib 4.7.0 `riglist.h` (`model = 1000 * backend + index`) — not guessed:
+    /// `RIG_MODEL_IC7300MK2 = RIG_MAKE_MODEL(RIG_ICOM, 94)` → 3094,
+    /// `RIG_MODEL_FTX1 = RIG_MAKE_MODEL(RIG_YAESU, 51)` → 1051,
+    /// `RIG_MODEL_QRPLABS = RIG_MAKE_MODEL(RIG_KENWOOD, 52)` → 2052,
+    /// `RIG_MODEL_FX4 = RIG_MAKE_MODEL(RIG_KENWOOD, 53)` → 2053,
+    /// `RIG_MODEL_TRUSDX = RIG_MAKE_MODEL(RIG_KENWOOD, 55)` → 2055.
+    /// Cross-checked against the bundled daemon itself (`rigctl -l`), which names them
+    /// `IC-7300MK2`, `FTX-1`, `QCX/QDX`, `FX4/C/CR/L` and `(tr)uSDX`.
+    ///
+    /// **Verified tier, deliberately** — the same reason the SDR-program profiles are there:
+    /// "Show all models" defaults OFF, so an entry that lives only in `extended_rig_models` is
+    /// invisible to exactly the operator who cannot find his radio. That puts their names into
+    /// the USB auto-detect corpus, which is the cost this buys; `no_verified_tier_name_claims_a_
+    /// device_that_is_not_that_radio` and `no_extended_tier_rig_resolves_to_a_different_rig` are
+    /// what say it was paid.
+    #[test]
+    fn the_current_production_rigs_the_qa_pass_named_are_in_the_default_list() {
+        let verified: HashSet<u32> = rig_models().into_iter().map(|(m, _)| m).collect();
+        for (m, who) in [
+            (3094u32, "Icom IC-7300MKII"),
+            (1051, "Yaesu FTX-1"),
+            (2052, "QRP Labs QCX / QDX"),
+            (2053, "BG2FX FX-4"),
+            (2055, "(tr)uSDX"),
+        ] {
+            assert!(
+                verified.contains(&m),
+                "{who} ({m}) must be in the DEFAULT dropdown, not behind Show-all"
+            );
+        }
+        // Named so an operator searching the box finds them by what is printed on the radio.
+        let name = |m| rig_model_name(m).unwrap_or("");
+        assert!(name(3094).contains("7300"), "got {:?}", name(3094));
+        assert!(name(1051).contains("FTX-1"), "got {:?}", name(1051));
+        assert!(name(2052).contains("QDX"), "got {:?}", name(2052));
+        assert!(name(2052).contains("QCX"), "got {:?}", name(2052));
+        assert!(name(2053).contains("FX-4"), "got {:?}", name(2053));
+        assert!(name(2055).contains("uSDX"), "got {:?}", name(2055));
     }
 
     /// None of the SDR-program profiles may light the SmartSDR VITA-49 panadapter: that
