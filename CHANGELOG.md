@@ -51,6 +51,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tune across a picture already in progress and you now get the part you caught.** Until now, if
+  you did not hear the start of an SSTV transmission, Nexus decoded nothing at all — you watched a
+  picture go by on the waterfall and got an empty screen. The reason is that the header identifying
+  the mode (the "VIS" burst) is sent once, at the very beginning; miss it and the decoder waited
+  forever for the next one. Nexus now recognises a transmission from its **sync pulses** instead —
+  the 1200 Hz tick every mode emits once per scan line — measures the line rate and the pulse
+  length, and matches that against the mode table. This is how MMSSTV and QSSTV do it too. **The
+  picture is placed at the bottom of the frame, where it belongs**, with the rows you missed left
+  black: catch the last third of a picture and you get the last third, not a full frame with
+  garbage on top.
+  **What a picture caught mid-way loses, honestly.** *The mode is inferred, not told* — a
+  transmission with no VIS carries no statement of what it is, so Nexus reads it from timing. The
+  line periods in the mode table are far enough apart for that to be reliable (the closest pair,
+  Scottie 1 and Martin 1, differ by 4 %, and their sync pulses differ further still, 9 ms against
+  4.9 ms), and a transmission whose timing matches *nothing* is refused rather than forced into the
+  nearest mode. **Robot 24 and Robot 36 are the exception and are deliberately never guessed**:
+  their timing is identical to the last decimal, and their colour depends on knowing whether a line
+  is odd or even counted from the top — which a picture you joined half-way through cannot know.
+  Guessing would swap the colour channels for the whole image and look like a fault in your radio,
+  so a mid-picture Robot 36 stays blank instead. *Where the picture sits vertically is inferred
+  too*: it is anchored to the end of the transmission, which is right when the sender ran to the
+  end of their picture — if they instead stopped part-way, the rows are still in the right order
+  but the whole block sits lower in the frame than it should. Tuning and slant are **not** worse
+  than a normal decode: the mistuning offset is measured from the sync pulses themselves, which are
+  a known 1200 Hz reference, so colours are not shifted, and slant correction never needed the
+  header in the first place. You will lose the first second or two of what you caught, which is
+  what the decoder spends confirming it is really looking at a picture.
+  **The other half of this: a transmission that stops early now gives you what it sent.** Even when
+  the header *was* heard, Nexus previously emitted nothing unless the sender ran the mode to its
+  full length — if they dropped the carrier at 99 %, you got no image and a progress bar frozen at
+  zero, and the decoder quietly went on buffering audio until the receiver was disarmed. It now
+  emits the lines it received once the carrier stops. Such an image keeps its known top edge, with
+  the missing tail black.
+  **This will not invent pictures out of an empty band.** That is the risk in relaxing a header
+  requirement, and it is the part with the most tests: white noise, silence, SSB speech, a CW
+  pileup keyed *exactly* on the sync frequency, and — the direct adversary — a perfect 1200 Hz
+  pulse train at a real mode's line rate with nothing but noise between the pulses, all produce no
+  image and no lock. Six independent checks must all agree before a decode starts, including that
+  the gaps between pulses actually contain picture and that the rate is not a harmonic of a faster
+  one. The regression test guarding the original false-positive incident was tightened at the same
+  time: it had been checking only for *complete* images, which a partial would have slipped past.
+  *Verified against synthetic transmissions only — no off-air recording of a mid-picture tune-in
+  exists in the test corpus.*
+
 - **The SSTV mode picker understated every mode's airtime by about a second.** The pixel sizes were
   right, but the durations beside them were a hand-maintained copy that had drifted from what the
   encoder actually emits. They are now the exact figures, and a test compares the two tables so they

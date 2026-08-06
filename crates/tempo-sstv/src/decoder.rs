@@ -7,11 +7,14 @@
 //! `vis.c` `GetVIS()` + `video.c` `GetVideo()`. ISC License — see
 //! `NOTICE.md`.
 
+mod blindsync;
+
 use crate::error::Result;
 use crate::image::SstvImage;
 use crate::modespec::SstvMode;
 use crate::resample::Resampler;
 use crate::sync::{find_sync, SyncTracker, SYNC_PROBE_STRIDE};
+use blindsync::BlindSync;
 
 /// One observable event emitted by [`SstvDecoder::process`].
 #[derive(Clone, Debug)]
@@ -73,16 +76,66 @@ pub enum SstvEvent {
         /// Row pixels in `[r, g, b]` order, length = mode's `line_pixels`.
         pixels: Vec<[u8; 3]>,
     },
+    /// A sync-pulse grid was locked without a VIS header — the operator
+    /// tuned in mid-picture. The peer of [`SstvEvent::VisDetected`] for
+    /// the blind path: it is what opens an in-flight image for consumers
+    /// that build one on `VisDetected`.
+    ///
+    /// Emitted only when every gate in [`crate::decoder::blindsync`]
+    /// passes. `mode` is inferred from the line period and sync length,
+    /// never guessed: a period matching no mode is refused rather than
+    /// snapped to the nearest, and Robot 24 / Robot 36 are excluded from
+    /// inference entirely (identical timing, and their Cr/Cb assignment
+    /// needs an absolute row parity a mid-picture start does not have).
+    ///
+    /// The image that follows is always [`SstvEvent::ImageComplete`]
+    /// with `partial: true`, and its rows are bottom-anchored — see that
+    /// variant's `partial` field.
+    SyncLocked {
+        /// Mode inferred from sync timing.
+        mode: SstvMode,
+        /// Least-squares-fitted line period in seconds, measured from the
+        /// locked pulses. Diagnostic: compare against the mode table
+        /// entry to judge the transmitter's clock.
+        period_seconds: f64,
+        /// Radio mistuning offset in Hz, recovered from the locked sync
+        /// pulses against their nominal 1200 Hz — the same quantity VIS
+        /// supplies as [`SstvEvent::VisDetected`]'s `hedr_shift_hz`.
+        hedr_shift_hz: f64,
+    },
     /// Image complete (`LineDecoded` for the final line was just emitted).
-    /// `partial` is reserved for future mid-image VIS handling — V1 always
-    /// emits `partial: false`. `reset()` discards in-flight images silently
-    /// without emitting any event.
+    /// `reset()` discards in-flight images silently without emitting any
+    /// event.
+    ///
+    /// `partial` distinguishes two very different pictures:
+    ///
+    /// - `false` — a VIS-anchored transmission decoded end to end. Row 0
+    ///   is row 0 because the VIS header said so.
+    /// - `true` — the transmission was not seen whole. Either the
+    ///   operator tuned in mid-picture (no VIS; see
+    ///   [`SstvEvent::SyncLocked`]) or a VIS-started transmission stopped
+    ///   before its last line. Rows that were never received keep the
+    ///   buffer's black zero-init.
+    ///
+    /// **Where a partial's rows are placed.** A VIS-started-then-cut
+    /// image knows its origin, so it is top-anchored: decoded rows land
+    /// at 0..n and the missing tail stays black. A blind mid-picture
+    /// image has no row 0 available in principle — SSTV carries no frame
+    /// marker other than VIS — so it is *bottom*-anchored: the decode is
+    /// triggered by the sync train stopping, which for a transmission
+    /// that ran to its natural end means the last line received is the
+    /// mode's last row. An operator who caught the bottom two thirds gets
+    /// the bottom two thirds, with black above. If the sender instead
+    /// aborted mid-picture, that assumption places the block too low —
+    /// the rows stay contiguous and correctly ordered, but the whole
+    /// block is offset. There is no signal in the audio that
+    /// distinguishes the two cases.
     ImageComplete {
         /// Final pixel buffer.
         image: SstvImage,
-        /// Reserved for future mid-image VIS handling. V1 always sets this
-        /// to `false`. See the deferred mid-image VIS TODO in
-        /// [`SstvDecoder::process`] for details.
+        /// `false` only for a VIS-anchored, fully received image. See the
+        /// variant docs for what `true` means and how such an image is
+        /// positioned.
         partial: bool,
     },
     /// The FSK callsign-ID burst trailing the just-completed image was
@@ -172,6 +225,145 @@ struct DecodingState {
     /// need cross-radio-line chroma state will need to extend the
     /// constructor's match in `process` to opt in.
     chroma_planes: Option<[Vec<u8>; 2]>,
+    /// Do we know where image row 0 is?
+    ///
+    /// `true` on the VIS path — the header fixed the origin, so a
+    /// truncated image is top-anchored (decoded rows at 0..n, missing
+    /// tail black). `false` on the blind path, where no row 0 exists in
+    /// the audio and the captured block is bottom-anchored instead. See
+    /// [`SstvEvent::ImageComplete`].
+    row_origin_known: bool,
+    /// Index into `has_sync` of the most recent `true` probe, or `None`
+    /// if no sync pulse has been seen yet. Drives the
+    /// end-of-transmission trigger: once a train has been seen and then
+    /// stops for [`END_OF_TX_GAP_LINES`] line periods, the transmission
+    /// is over and whatever was received is decoded and emitted as a
+    /// partial rather than held forever.
+    last_sync_probe: Option<usize>,
+}
+
+/// How many radio frames (sync-to-sync intervals) make up one image.
+///
+/// PD packs two image rows into every radio frame; Robot and the
+/// RGB-sequential family (Scottie, Martin) carry one. Mirrors slowrx
+/// `video.c:251-254` (`Length = LineTime * NumLines/2` when
+/// `NumChans == 4`, else `LineTime * NumLines`).
+fn radio_frames_per_image(spec: crate::modespec::ModeSpec) -> u32 {
+    match spec.channel_layout {
+        crate::modespec::ChannelLayout::PdYcbcr => spec.image_lines / 2,
+        crate::modespec::ChannelLayout::RobotYuv
+        | crate::modespec::ChannelLayout::RgbSequential => spec.image_lines,
+    }
+}
+
+impl DecodingState {
+    /// Enter pixel decode for `spec`, seeded with `audio` (working rate)
+    /// starting at a **radio line boundary**.
+    ///
+    /// Both entry paths land here and both owe that boundary contract:
+    /// the VIS path passes the post-stop-bit residual, the blind path
+    /// passes audio trimmed back to the inferred line start. Every
+    /// per-line decoder and `find_sync` compute line-start-relative
+    /// times, so a buffer that begins mid-line decodes skewed.
+    ///
+    /// `row_origin_known` records whether image row 0 is actually known
+    /// (VIS) or merely where our capture happened to begin (blind); it
+    /// decides how a partial image is anchored.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    fn new(
+        spec: crate::modespec::ModeSpec,
+        audio: Vec<f32>,
+        hedr_shift_hz: f64,
+        row_origin_known: bool,
+    ) -> Self {
+        let work_rate = f64::from(crate::resample::WORKING_SAMPLE_RATE_HZ);
+        let nominal_samples =
+            (f64::from(radio_frames_per_image(spec)) * spec.line_seconds * work_rate) as usize;
+        Self {
+            mode: spec.mode,
+            spec,
+            image: SstvImage::new(spec.mode, spec.line_pixels, spec.image_lines),
+            audio,
+            has_sync: Vec::new(),
+            next_probe_sample: 0,
+            sync_tracker: SyncTracker::new(hedr_shift_hz),
+            hedr_shift_hz,
+            target_audio_samples: ((nominal_samples as f64) * FINDSYNC_AUDIO_HEADROOM) as usize,
+            chroma_planes: match spec.mode {
+                SstvMode::Robot24 | SstvMode::Robot36 => {
+                    let n = (spec.image_lines as usize) * (spec.line_pixels as usize);
+                    Some([vec![0_u8; n], vec![0_u8; n]])
+                }
+                // PD modes compose RGB per-pair in place. Robot 72 and Scottie
+                // 1/2/DX also compose RGB in-place per radio line (see
+                // mode_robot::decode_r72_line, mode_scottie::decode_line); only
+                // the R36/R24 chroma-alternation + duplication path requires the
+                // side buffer. SstvMode is #[non_exhaustive], so the wildcard arm
+                // is required; future modes with cross-line chroma state would
+                // need to opt in here.
+                _ => None,
+            },
+            row_origin_known,
+            last_sync_probe: None,
+        }
+    }
+
+    /// How many whole radio frames of audio have we actually captured?
+    ///
+    /// Bounded by two things: where the last sync pulse landed (the
+    /// transmission cannot have carried more lines than it keyed sync
+    /// pulses for) and how much audio is in the buffer.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    fn captured_frames(&self) -> u32 {
+        let work_rate = f64::from(crate::resample::WORKING_SAMPLE_RATE_HZ);
+        let period_samples = self.spec.line_seconds * work_rate;
+        if period_samples <= 0.0 {
+            return 0;
+        }
+        let from_audio = (self.audio.len() as f64 / period_samples).floor();
+        let from_pulses = match self.last_sync_probe {
+            Some(p) => {
+                // Scottie keys its sync mid-line, so the pulse for frame
+                // k sits `sync_offset` into that frame; every other mode
+                // keys it at the frame boundary.
+                let sync_offset = match self.spec.sync_position {
+                    crate::modespec::SyncPosition::LineStart => 0.0,
+                    crate::modespec::SyncPosition::Scottie => {
+                        let chan_len = f64::from(self.spec.line_pixels) * self.spec.pixel_seconds;
+                        (2.0 * self.spec.septr_seconds + 2.0 * chan_len) * work_rate
+                    }
+                };
+                let t = (p * SYNC_PROBE_STRIDE) as f64;
+                (((t - sync_offset) / period_samples).round() + 1.0).max(0.0)
+            }
+            None => 0.0,
+        };
+        let frames = from_audio.min(from_pulses).max(0.0) as u32;
+        frames.min(radio_frames_per_image(self.spec))
+    }
+
+    /// Has the transmission stopped? True once a sync train has been
+    /// seen and then gone quiet for [`END_OF_TX_GAP_LINES`] line
+    /// periods. Requiring a train first is what makes this safe to run
+    /// unconditionally: it cannot fire before a transmission starts.
+    #[allow(clippy::cast_precision_loss)]
+    fn transmission_ended(&self) -> bool {
+        let Some(last) = self.last_sync_probe else {
+            return false;
+        };
+        let work_rate = f64::from(crate::resample::WORKING_SAMPLE_RATE_HZ);
+        let gap_probes = self.has_sync.len().saturating_sub(last);
+        let gap_seconds = (gap_probes * SYNC_PROBE_STRIDE) as f64 / work_rate;
+        gap_seconds > END_OF_TX_GAP_LINES * self.spec.line_seconds
+    }
 }
 
 /// Headroom factor on the buffered audio length before [`find_sync`]
@@ -201,6 +393,30 @@ const MULTI_IMAGE_CARRYBACK_LINES: u32 = 4;
 /// exceeds slowrx's ≈2.2 s leader-scan horizon.
 const FSK_CAPTURE_SECONDS: f64 = 3.0;
 
+/// Consecutive line periods without a single sync pulse that mark the
+/// end of a transmission.
+///
+/// Before this existed, `Decoding` had exactly one exit — the audio
+/// buffer reaching `target_audio_samples` — so a transmission that
+/// stopped one percent short emitted *nothing at all*: not a partial,
+/// not even the lines it had already received, while `audio` grew
+/// unbounded until `reset()`. That is the second half of the operator's
+/// 2026-08-05 report ("it should decode partial images as well") and it
+/// applies to VIS-anchored transmissions too, not just blind ones.
+///
+/// Three line periods is comfortably longer than any inter-line gap in
+/// the mode table (every mode emits a sync pulse every line) and short
+/// enough that the operator sees the picture promptly after the carrier
+/// drops. The trigger can only fire *after* a train has been seen, so it
+/// can never pre-empt a transmission that has not started.
+const END_OF_TX_GAP_LINES: f64 = 3.0;
+
+/// Fewest radio frames that may be emitted as a partial image. A
+/// three-line strip is noise to the operator however it was derived, and
+/// refusing it keeps a brief burst of interference from producing a
+/// "picture".
+const MIN_PARTIAL_FRAMES: u32 = 16;
+
 /// `|c| crate::modespec::lookup(c).is_some()` as an `fn` pointer — the
 /// "is this VIS code one we can decode?" predicate handed to every
 /// [`crate::vis::VisDetector`] (issue #89 A3). The closure captures nothing,
@@ -219,6 +435,11 @@ pub struct SstvDecoder {
     /// [`crate::mode_pd::decode_pd_line_pair`] (every
     /// [`crate::demod::SNR_REESTIMATE_STRIDE`] samples).
     snr_est: crate::snr::SnrEstimator,
+    /// Blind (no-VIS) sync search, run alongside the VIS detector while
+    /// in `AwaitingVis` so an operator who tunes in mid-picture still
+    /// gets an image. VIS always wins when both would fire in the same
+    /// call — it is the stronger evidence and it fixes row 0.
+    blind: BlindSync,
     state: State,
     samples_processed: u64,
     /// Cumulative working-rate samples emitted by the resampler.
@@ -267,6 +488,7 @@ impl SstvDecoder {
             vis: crate::vis::VisDetector::new(IS_KNOWN_VIS),
             channel_demod: crate::demod::ChannelDemod::new(),
             snr_est: crate::snr::SnrEstimator::new(),
+            blind: BlindSync::new(),
             state: State::AwaitingVis,
             samples_processed: 0,
             working_samples_emitted: 0,
@@ -298,6 +520,12 @@ impl SstvDecoder {
             match &mut self.state {
                 State::AwaitingVis => {
                     self.vis.process(remaining, self.working_samples_emitted);
+                    // The blind searcher sees the same audio the VIS
+                    // detector does. It keeps its own bounded ring: the
+                    // VIS detector drains its buffer every hop, so
+                    // `AwaitingVis` retained nothing before this and a
+                    // lock could not reach back to the lines it locked on.
+                    self.blind.push(remaining);
                     remaining = &[];
                     if let Some(detected) = self.vis.take_detected() {
                         if let Some(spec) = crate::modespec::lookup(detected.code) {
@@ -306,57 +534,17 @@ impl SstvDecoder {
                                 sample_offset: detected.end_sample,
                                 hedr_shift_hz: detected.hedr_shift_hz,
                             });
-                            let image =
-                                SstvImage::new(spec.mode, spec.line_pixels, spec.image_lines);
                             // Recover any post-stop-bit audio that the VIS
                             // detector buffered but did not consume — it is
                             // the leading edge of the image data.
                             let residual = self.vis.take_residual_buffer();
-                            let work_rate = f64::from(crate::resample::WORKING_SAMPLE_RATE_HZ);
-                            // Audio duration depends on whether the mode packs
-                            // 2 image rows per radio frame (PD) or 1 (Robot,
-                            // future Scottie/Martin). Mirrors slowrx's
-                            // video.c:251-254: `Length = LineTime * NumLines/2`
-                            // when `NumChans == 4` (PD), else
-                            // `Length = LineTime * NumLines`.
-                            let radio_frames_per_image = match spec.channel_layout {
-                                crate::modespec::ChannelLayout::PdYcbcr => spec.image_lines / 2,
-                                // Robot (RobotYuv) and Scottie (RgbSequential)
-                                // both pack one image row per radio line.
-                                crate::modespec::ChannelLayout::RobotYuv
-                                | crate::modespec::ChannelLayout::RgbSequential => spec.image_lines,
-                            };
-                            let nominal_samples =
-                                (f64::from(radio_frames_per_image) * spec.line_seconds * work_rate)
-                                    as usize;
-                            let target =
-                                ((nominal_samples as f64) * FINDSYNC_AUDIO_HEADROOM) as usize;
-                            self.state = State::Decoding(Box::new(DecodingState {
-                                mode: spec.mode,
+                            self.blind.reset();
+                            self.state = State::Decoding(Box::new(DecodingState::new(
                                 spec,
-                                image,
-                                audio: residual,
-                                has_sync: Vec::new(),
-                                next_probe_sample: 0,
-                                sync_tracker: SyncTracker::new(detected.hedr_shift_hz),
-                                hedr_shift_hz: detected.hedr_shift_hz,
-                                target_audio_samples: target,
-                                chroma_planes: match spec.mode {
-                                    SstvMode::Robot24 | SstvMode::Robot36 => {
-                                        let n = (spec.image_lines as usize)
-                                            * (spec.line_pixels as usize);
-                                        Some([vec![0_u8; n], vec![0_u8; n]])
-                                    }
-                                    // PD modes compose RGB per-pair in place. Robot 72 and Scottie
-                                    // 1/2/DX also compose RGB in-place per radio line (see
-                                    // mode_robot::decode_r72_line, mode_scottie::decode_line); only
-                                    // the R36/R24 chroma-alternation + duplication path requires the
-                                    // side buffer. SstvMode is #[non_exhaustive], so the wildcard arm
-                                    // is required; future modes with cross-line chroma state would
-                                    // need to opt in here.
-                                    _ => None,
-                                },
-                            }));
+                                residual,
+                                detected.hedr_shift_hz,
+                                true, // VIS fixed row 0
+                            )));
                             continue; // re-enter loop to process leftover audio
                         }
                         // Unknown VIS code: surface it so stream-monitoring
@@ -377,6 +565,30 @@ impl SstvDecoder {
                             self.working_samples_emitted,
                             &residual,
                         );
+                        continue;
+                    }
+                    // No VIS. Was the operator handed a picture already in
+                    // flight? Every gate in `blindsync` must pass for this
+                    // to return `Some`; noise, silence, speech and CW all
+                    // return `None` and fall through to `break` exactly as
+                    // they did before this path existed.
+                    if let Some(lock) = self.blind.try_lock() {
+                        out.push(SstvEvent::SyncLocked {
+                            mode: lock.spec.mode,
+                            period_seconds: lock.period_seconds,
+                            hedr_shift_hz: lock.hedr_shift_hz,
+                        });
+                        // Seed the decode with the audio the lock was made
+                        // of, trimmed back to the inferred line boundary,
+                        // so the lock lines land in the picture instead of
+                        // being spent on acquisition.
+                        let audio = self.blind.take_audio_from(lock.line_start_sample);
+                        self.state = State::Decoding(Box::new(DecodingState::new(
+                            lock.spec,
+                            audio,
+                            lock.hedr_shift_hz,
+                            false, // no VIS: row 0 unknown → bottom-anchor
+                        )));
                         continue;
                     }
                     break;
@@ -406,17 +618,57 @@ impl SstvDecoder {
                     while d.next_probe_sample + SYNC_PROBE_STRIDE * 2 <= d.audio.len() {
                         let center = d.next_probe_sample + SYNC_PROBE_STRIDE / 2;
                         let has = d.sync_tracker.has_sync_at(&d.audio, center);
+                        if has {
+                            d.last_sync_probe = Some(d.has_sync.len());
+                        }
                         d.has_sync.push(has);
                         d.next_probe_sample += SYNC_PROBE_STRIDE;
                     }
 
-                    if d.audio.len() < d.target_audio_samples {
+                    // Two ways out of `Decoding`. The full buffer is checked
+                    // first so a complete transmission always decodes as a
+                    // whole image; the end-of-transmission trigger is the
+                    // fallback that stops a truncated one being held forever.
+                    let full = d.audio.len() >= d.target_audio_samples;
+                    let frames = if full {
+                        radio_frames_per_image(d.spec)
+                    } else if d.transmission_ended() {
+                        d.captured_frames()
+                    } else {
+                        break;
+                    };
+
+                    if !full && frames < MIN_PARTIAL_FRAMES {
+                        // The carrier stopped, but too little arrived to be a
+                        // picture. Drop it and re-arm rather than emit a
+                        // few-line strip the operator would read as a fault.
+                        self.blind.reset();
+                        Self::restart_vis_detection(
+                            &mut self.vis,
+                            self.working_samples_emitted,
+                            &[],
+                        );
+                        self.state = State::AwaitingVis;
                         break;
                     }
 
-                    // Buffer is full → run FindSync once, then per-pair decode.
+                    // A partial image with no VIS has no row 0 in the audio.
+                    // It is bottom-anchored: the trigger above is the sync
+                    // train stopping, so for a transmission that ran to its
+                    // natural end the last frame received is the mode's last
+                    // row. A VIS-anchored partial keeps its known origin and
+                    // stays top-anchored.
+                    let frame_offset = if full || d.row_origin_known {
+                        0
+                    } else {
+                        radio_frames_per_image(d.spec).saturating_sub(frames)
+                    };
+
                     Self::run_findsync_and_decode(
                         d,
+                        frames,
+                        frame_offset,
+                        !full,
                         &mut self.channel_demod,
                         &mut self.snr_est,
                         &mut out,
@@ -438,7 +690,11 @@ impl SstvDecoder {
                     let carryback = (f64::from(MULTI_IMAGE_CARRYBACK_LINES)
                         * d.spec.line_seconds
                         * work_rate) as usize;
-                    let carry_from = d.target_audio_samples.saturating_sub(carryback);
+                    // Clamp to what was actually buffered: a partial image
+                    // stops short of `target_audio_samples`, so indexing
+                    // from it would be past the end of `audio`.
+                    let carry_end = d.audio.len().min(d.target_audio_samples);
+                    let carry_from = carry_end.saturating_sub(carryback);
                     self.state = State::AwaitingFskId(Box::new(FskCapture {
                         audio: d.audio[carry_from..].to_vec(),
                         hedr_shift_hz: d.hedr_shift_hz,
@@ -467,6 +723,12 @@ impl SstvDecoder {
                         self.working_samples_emitted,
                         &f.audio,
                     );
+                    // The blind searcher deliberately does NOT get the
+                    // carried-back tail: it is the end of an image we just
+                    // emitted, and re-locking on it would duplicate the
+                    // picture. A genuine back-to-back transmission carries
+                    // its own VIS, which the detector above will catch.
+                    self.blind.reset();
                     self.state = State::AwaitingVis;
                 }
             }
@@ -513,8 +775,20 @@ impl SstvDecoder {
         clippy::cast_sign_loss,
         clippy::cast_possible_wrap
     )]
+    ///
+    /// `frames` is how many radio frames of `d.audio` to decode and
+    /// `frame_offset` is where frame 0 lands in the image — the pair that
+    /// lets a mid-picture capture be placed at the bottom of the frame
+    /// instead of pretending it started at row 0. For a whole image they
+    /// are `radio_frames_per_image(spec)` and `0`. Audio time is always
+    /// measured from the buffer (`k · line_seconds`), independently of
+    /// the image row written, which is what makes the offset possible.
+    #[allow(clippy::too_many_arguments)]
     fn run_findsync_and_decode(
         d: &mut DecodingState,
+        frames: u32,
+        frame_offset: u32,
+        partial: bool,
         channel_demod: &mut crate::demod::ChannelDemod,
         snr_est: &mut crate::snr::SnrEstimator,
         out: &mut Vec<SstvEvent>,
@@ -527,8 +801,7 @@ impl SstvDecoder {
         let line_pixels = d.spec.line_pixels as usize;
         match d.spec.channel_layout {
             crate::modespec::ChannelLayout::PdYcbcr => {
-                let pair_count = d.spec.image_lines / 2;
-                for pair in 0..pair_count {
+                for pair in 0..frames {
                     // slowrx `video.c:140-142` computes pixel time as
                     // `Skip + round(Rate * (y/2 * LineTime + ChanStart +
                     // PixelTime * (x + 0.5)))`. Compute `pair_seconds = y/2 *
@@ -536,10 +809,14 @@ impl SstvDecoder {
                     // [`crate::mode_pd::decode_pd_line_pair`] fold it into its
                     // own `round()`, so per-pair rounding error never
                     // accumulates.
+                    // Audio time from the buffer; image row from the
+                    // placement. `decode_pd_line_pair` writes rows
+                    // `pair_index * 2` and `+ 1`.
                     let pair_seconds = f64::from(pair) * d.spec.line_seconds;
+                    let placed = frame_offset + pair;
                     crate::mode_pd::decode_pd_line_pair(
                         d.spec,
-                        pair,
+                        placed,
                         &d.audio,
                         skip,
                         pair_seconds,
@@ -549,7 +826,7 @@ impl SstvDecoder {
                         snr_est,
                         d.hedr_shift_hz,
                     );
-                    let row0 = pair * 2;
+                    let row0 = placed * 2;
                     let row1 = row0 + 1;
                     for r in [row0, row1] {
                         let start = (r as usize) * line_pixels;
@@ -570,12 +847,13 @@ impl SstvDecoder {
                 // row 0 the Cb channel is at zero-init at this point (slowrx
                 // C does the same; final ImageComplete carries the populated
                 // state).
-                for line in 0..d.spec.image_lines {
+                for line in 0..frames {
                     let line_seconds_offset = f64::from(line) * d.spec.line_seconds;
+                    let placed = frame_offset + line;
                     crate::mode_robot::decode_line(
                         d.spec,
                         d.mode,
-                        line,
+                        placed,
                         &d.audio,
                         skip,
                         line_seconds_offset,
@@ -586,11 +864,11 @@ impl SstvDecoder {
                         snr_est,
                         d.hedr_shift_hz,
                     );
-                    let start = (line as usize) * line_pixels;
+                    let start = (placed as usize) * line_pixels;
                     let end = start + line_pixels;
                     out.push(SstvEvent::LineDecoded {
                         mode: d.mode,
-                        line_index: line,
+                        line_index: placed,
                         pixels: d.image.pixels[start..end].to_vec(),
                     });
                 }
@@ -599,11 +877,12 @@ impl SstvDecoder {
                 // Scottie family. Mid-line sync handling lives inside
                 // mode_scottie::decode_line. No chroma_planes — RGB is composed
                 // in-place per line (no deferred chroma like R36/R24).
-                for line in 0..d.spec.image_lines {
+                for line in 0..frames {
                     let line_seconds_offset = f64::from(line) * d.spec.line_seconds;
+                    let placed = frame_offset + line;
                     crate::mode_scottie::decode_line(
                         d.spec,
-                        line,
+                        placed,
                         &d.audio,
                         skip,
                         line_seconds_offset,
@@ -613,11 +892,11 @@ impl SstvDecoder {
                         snr_est,
                         d.hedr_shift_hz,
                     );
-                    let start = (line as usize) * line_pixels;
+                    let start = (placed as usize) * line_pixels;
                     let end = start + line_pixels;
                     out.push(SstvEvent::LineDecoded {
                         mode: d.mode,
-                        line_index: line,
+                        line_index: placed,
                         pixels: d.image.pixels[start..end].to_vec(),
                     });
                 }
@@ -630,7 +909,7 @@ impl SstvDecoder {
         );
         out.push(SstvEvent::ImageComplete {
             image: final_image,
-            partial: false,
+            partial,
         });
     }
 
@@ -640,6 +919,7 @@ impl SstvDecoder {
         self.samples_processed = 0;
         self.working_samples_emitted = 0;
         self.vis = crate::vis::VisDetector::new(IS_KNOWN_VIS);
+        self.blind.reset();
         self.resampler.reset_state();
         self.channel_demod = crate::demod::ChannelDemod::new();
         self.snr_est = crate::snr::SnrEstimator::new();

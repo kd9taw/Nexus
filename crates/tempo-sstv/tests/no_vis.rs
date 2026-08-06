@@ -13,10 +13,25 @@
 //! synthetic non-SSTV audio buffers: white noise at the Zarya
 //! recording's measured RMS level (~0.3), and pure silence.
 //!
-//! Both must produce zero `SstvEvent::ImageComplete { partial: false }`
-//! events without panicking. This is the no-signal counterpart to the
-//! synthetic round-trip suite in `tests/roundtrip.rs` — both must hold
-//! for any release.
+//! Both must produce zero `SstvEvent::ImageComplete` events of ANY kind
+//! without panicking. This is the no-signal counterpart to the synthetic
+//! round-trip suite in `tests/roundtrip.rs` — both must hold for any
+//! release.
+//!
+//! **Re-baselined 2026-08-05 (blind mid-picture decode).** The filter
+//! used to be `ImageComplete { partial: false, .. }`, with `partial:
+//! false` as a *literal sub-pattern* — so an `ImageComplete { partial:
+//! true }` did not match, was not counted, and left both assertions
+//! green. That was a hole precisely where this file's whole purpose
+//! lies: the no-VIS decode path emits partials, and a decoder that
+//! hallucinated pictures out of the Zarya noise and stamped them
+//! `partial: true` would have passed the test that exists *because of
+//! that incident*. The guard now counts every `ImageComplete`. It passed
+//! before the blind path was written and passes after — it costs
+//! nothing and closes the hole rather than leaving the feature to fall
+//! into it. Adversarial coverage beyond noise and silence (SSB speech, a
+//! CW pileup keyed on 1200 Hz, a bare periodic sync train) lives in
+//! `tests/partial_decode.rs`.
 
 #![allow(clippy::expect_used, clippy::cast_precision_loss)]
 
@@ -46,10 +61,12 @@ impl Lcg {
     }
 }
 
+/// Count every emitted image, partial or not. Do NOT narrow this to
+/// `partial: false` — see the re-baselining note in the module header.
 fn count_complete_images(events: &[SstvEvent]) -> usize {
     events
         .iter()
-        .filter(|e| matches!(e, SstvEvent::ImageComplete { partial: false, .. }))
+        .filter(|e| matches!(e, SstvEvent::ImageComplete { .. }))
         .count()
 }
 
@@ -74,8 +91,8 @@ fn decoder_no_vis_on_white_noise() {
     let n_complete = count_complete_images(&events);
     assert_eq!(
         n_complete, 0,
-        "decoder false-positive: emitted {n_complete} non-partial \
-         ImageComplete event(s) on 10 s of white noise",
+        "decoder false-positive: emitted {n_complete} ImageComplete \
+         event(s) on 10 s of white noise",
     );
 }
 
@@ -90,7 +107,7 @@ fn decoder_no_vis_on_silence() {
     let n_complete = count_complete_images(&events);
     assert_eq!(
         n_complete, 0,
-        "decoder false-positive: emitted {n_complete} non-partial \
-         ImageComplete event(s) on 10 s of pure silence",
+        "decoder false-positive: emitted {n_complete} ImageComplete \
+         event(s) on 10 s of pure silence",
     );
 }
