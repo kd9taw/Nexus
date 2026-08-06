@@ -21,6 +21,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the question the board is asking — the ones near you first, then the ones on your continent —
   so one US skimmer is enough no matter how loud the rest of the world is.
 
+- **Changing digital mode could also make the Needed board's own-radio rows lie about their age.**
+  The same clock renumbering, one screen over. "Decoded by YOUR radio on this band" is the
+  strongest row the board can show — it is your own receiver, not somebody else's report — and it
+  is capped at two minutes old for exactly that reason. That cap was computed the unguarded way:
+  a station decoded on FT4 at 17:00 and read after a switch to FT8 at 18:00 came out as zero
+  seconds old, so an hour-old decode led the board as the freshest thing on the band. Both places
+  that turn the heard-list's slot number into an age now go through the same conversion, and it
+  refuses a number that belongs to a clock no longer running.
+
+- **A 6 m spot's local reports were being thrown away in favour of ones the 6 m gate cannot use.**
+  Nexus keeps up to eight of the other stations that reported each spot, and the entry above
+  taught that cap to keep the reports nearest you first. It measured "near" once, at the widest
+  radius any band uses — 800 km, which is the 2 m figure. On 6 m the board asks a tighter question:
+  it wants two reports from inside 250 km, because that is the size of a sporadic-E patch. From
+  EN52, sixteen skimmers publish a grid inside 800 km and only five inside 250 km, so the eight
+  slots filled with reports that ranked as "near" while being no use to 6 m — and pushed out the
+  ones that were. A genuinely corroborated 6 m opening then read as a single report and was
+  dropped. The ranking now asks each band's own question at that band's own scale.
+
+- **A short-skip sporadic-E opening on 6 m did not raise an alert.** The regional opening gate —
+  the one that fires on a band-wide surge among the receivers around you — gained a distance test
+  below, so that a busy evening of local 6 m FT8 could not pass for an opening. The test asks for
+  a path past 500 km, but the near-receiver half of it was measuring 700 km. Sporadic-E on 6 m
+  starts at about 500 km, and a burst that puts a dozen stations 540–580 km out through three
+  receivers near you is a real opening and the one a 6 m operator most wants to hear about; it
+  satisfied neither half and the gate stayed shut. The near-receiver test now measures at 500 km,
+  where the physics puts the floor. Nothing else moved: the receive-only sentinel — the alert
+  that fires when you are not even on the band — still needs two independent receivers past
+  700 km, and the anti-superstation rule it exists for is unchanged. One near receiver is enough
+  for the distance test alone because that test is not the anti-superstation check: a big station
+  on a hill can inflate a count of stations, but it cannot make a path longer than it is, and the
+  gate separately demands three distinct local receivers before it believes anything.
+
 - **Changing digital mode could make a dead 6 m band alert again.** The opening detector times
   your own decodes by the slot clock, and that clock is renumbered whenever the transmit period
   changes — 15 seconds on FT8, 7.5 on FT4, 4 on FT1. Stations already in your heard list survive

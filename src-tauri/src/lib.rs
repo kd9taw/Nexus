@@ -121,44 +121,71 @@ fn set_operator_qth(mycall: &str, mygrid: &str) {
     }
 }
 
-/// How much ADMISSION EVIDENCE one spotter callsign carries — the
-/// [`VoiceRank`](tempo_net::cluster::VoiceRank) the cluster feeds push with, read at
-/// the one moment `CORROBORATOR_CAP` forces a choice about which of a re-spotted
-/// row's voices to keep.
+/// How much ADMISSION EVIDENCE one spotter callsign carries FOR A SPOT ON THIS
+/// FREQUENCY — the [`VoiceRank`](tempo_net::cluster::VoiceRank) the cluster feeds push
+/// with, read at the one moment `CORROBORATOR_CAP` forces a choice about which of a
+/// re-spotted row's voices to keep.
 ///
-/// The ranks are exactly the two locality questions `get_need_alerts` asks of a
-/// cluster spot, so the cap can never delete the voice that would have admitted the
-/// row (operator 2026-08-05: on a busy pileup the US spotter was the one evicted):
-/// - **2** — a published skimmer grid inside the WIDEST VHF near radius
-///   (`near_me_radius_km(B2)`, 800 km). Only these count for the VHF gate, and it
-///   needs TWO. The rank is band-blind where the gate is not, so it takes the widest
-///   VHF radius: over-keeping a voice costs nothing, dropping one closes a gate.
-/// - **1** — on the operator's continent: the whole HF test, where ONE is enough
-///   (`hf_admit_spotters`).
+/// The ranks are the locality question `get_need_alerts` asks OF THIS BAND, so the cap
+/// can never delete a voice that would have admitted the row (operator 2026-08-05: on a
+/// busy pileup the US spotter was the one evicted):
+/// - **2** — a voice the band's own gate COUNTS. On VHF: a published skimmer grid
+///   inside `near_me_radius_km(band)`, and the gate needs TWO of them. On HF (and any
+///   off-plan frequency): on the operator's continent, which is the whole HF test and
+///   where ONE is enough (`hf_admit_spotters`).
+/// - **1** — on the operator's continent but NOT what this band's gate counts. Reachable
+///   on VHF only, where it is the best of the remaining voices (it still leads the
+///   evidence line) without being able to open the gate.
 /// - **0** — neither. Real evidence about the DX, but not about a path from here.
-fn spotter_evidence_rank(spotter: &str) -> u8 {
+///
+/// HF therefore uses 2 and 0 only, deliberately: any ONE continent voice admits an HF
+/// row, so a nearer continent voice is not better evidence than a farther one and the
+/// cap has no reason to prefer it.
+///
+/// **The band is the whole point, and the first version of this did not have it.** Rank
+/// 2 was `near_me_radius_km(B2)` — 800 km — for every band, on the reasoning that
+/// over-keeping a voice costs nothing. It costs the row: the cap is eight, and the
+/// 6 m/4 m gate counts only voices inside 250 km. Measured against the bundled skimmer
+/// table from EN52: 16 skimmers publish a grid inside 800 km and only **5** inside
+/// 250 km, so eleven voices the 6 m gate can never count outranked — and, being equal
+/// rank under a stable sort that keeps the oldest eight, evicted — the five it can. A
+/// 6 m row needs TWO near voices, and the cap could leave it one (its own `spotter`
+/// field) or none. The rank now asks the gate's own question at the gate's own scale.
+fn spotter_evidence_rank(spotter: &str, freq_khz: f64) -> u8 {
     let Ok(qth) = OPERATOR_QTH.lock() else {
         return 0;
     };
-    spotter_evidence_rank_at(spotter, &qth.0, qth.1)
+    spotter_evidence_rank_at(spotter, freq_khz, &qth.0, qth.1)
 }
 
 /// [`spotter_evidence_rank`] against an explicit QTH — the pure, testable core.
-fn spotter_evidence_rank_at(spotter: &str, my_call: &str, me_ll: Option<(f64, f64)>) -> u8 {
-    let near = match (propagation::skimmer_grid(spotter), me_ll) {
-        (Some(g), Some(me)) => propagation::geo::maidenhead_to_latlon(g).is_some_and(|rx| {
-            propagation::geo::haversine_km(me, rx)
-                <= propagation::near_me_radius_km(propagation::Band::B2)
-        }),
-        _ => false,
-    };
-    if near {
-        return 2;
-    }
+fn spotter_evidence_rank_at(
+    spotter: &str,
+    freq_khz: f64,
+    my_call: &str,
+    me_ll: Option<(f64, f64)>,
+) -> u8 {
     // `hf_admit_spotters` of a single voice IS "is this one on my continent" — and it
     // fails OPEN on an unknown operator continent, which flattens the ranking to
     // arrival order exactly where the gate itself stops filtering.
-    u8::from(propagation::hf_admit_spotters(&[spotter], my_call).is_some())
+    let on_continent = propagation::hf_admit_spotters(&[spotter], my_call).is_some();
+    // The band the spot is on decides which question "counts". Off the band plan there
+    // is no VHF gate to feed (`cluster_spot_heards` skips the row entirely), so the
+    // continent question stands in.
+    let vhf_band = propagation::Band::from_mhz(freq_khz / 1000.0).filter(|b| b.is_vhf());
+    let counted = match vhf_band {
+        Some(band) => match (propagation::skimmer_grid(spotter), me_ll) {
+            (Some(g), Some(me)) => propagation::geo::maidenhead_to_latlon(g).is_some_and(|rx| {
+                propagation::geo::haversine_km(me, rx) <= propagation::near_me_radius_km(band)
+            }),
+            _ => false,
+        },
+        None => on_continent,
+    };
+    if counted {
+        return 2;
+    }
+    u8::from(on_continent)
 }
 
 /// Handoff to the Pounce detector, set once at startup. The cluster feed callbacks `offer()` each
@@ -411,6 +438,56 @@ fn roster_local_spots(
                 snr: Some(st.snr as f32),
                 freq_mhz: None, // own decodes are band-level here
             })
+        })
+        .collect()
+}
+
+/// The operator's OWN decodes on the current band as [`propagation::Heard`] rows —
+/// the Needed board's strongest claim ("heard by MY radio, on this band, NOW").
+///
+/// FRESHNESS GATE (operator 2026-07-23, "decoded 11 minutes ago is too long"): the
+/// roster never evicts — a station decoded once stays in `snap.stations` until a band
+/// change clears it — so without an age cut a single decode feeds the board forever.
+///
+/// The age is [`roster_spot_age_secs`], the SAME conversion the opening detector's
+/// [`roster_local_spots`] uses, because it is the same roster read against the same
+/// slot clock. It was not, until 2026-08-05: this arm aged `last_heard_slot` with a
+/// bare `saturating_sub`, which floors to 0 for an entry numbered under a LONGER T/R
+/// period, i.e. reads an hours-old decode as this instant. Measured on the real
+/// `SlotClock`: `VE3ABC` decoded on FT4 at 17:00 is slot 233,921,760; after a switch to
+/// FT8 the 18:00 slot is 116,961,120. `Engine::set_tier` (`tempo-app/src/engine.rs`)
+/// flushes the decode context but not the roster, so the hour-old entry — carrying a
+/// number twice the size of "now" — led the board as the freshest evidence on the band.
+/// The tier-switch fix landed on `roster_local_spots` and not here, ten thousand lines
+/// away in this same file and one `last_heard_slot` grep apart.
+///
+/// Lifted out of [`get_need_alerts`] for the same reason `roster_local_spots` was:
+/// `roster_spot_age_secs` on its own cannot show whether the caller applies it, and
+/// this caller did not.
+fn own_decode_heards(
+    stations: &[tempo_app::dto::Station],
+    slot_now: u64,
+    period_secs: f64,
+    band: &str,
+    tier_mode: &str,
+    max_age_secs: i64,
+) -> Vec<propagation::Heard> {
+    stations
+        .iter()
+        .filter(|s| {
+            roster_spot_age_secs(slot_now, s.last_heard_slot, period_secs, max_age_secs).is_some()
+        })
+        .map(|s| propagation::Heard {
+            call: s.call.clone(),
+            band: band.to_string(),
+            mode: tier_mode.to_string(),
+            freq_mhz: None, // own decodes are band-level here
+            admitted_at: None,
+            evidence: Some("decoded by YOUR radio on this band".to_string()),
+            grid: s.grid.clone(), // own decode's Maidenhead grid → drives NewGrid
+            // US state hint (drives WAS NewState): FCC baseline refined by this live decode grid —
+            // a precise 6-char grid that disagrees with the license means a rover. See us_state_hint.
+            us_state: us_state_hint(&s.call, s.grid.as_deref()),
         })
         .collect()
 }
@@ -10575,31 +10652,18 @@ async fn get_need_alerts(
     // from the digital modem, so the truthful mode label is the active TIER (FT8/FT4/
     // FT1/DX1) — all of which map to the Digital class for click-to-work routing.
     let tier_mode = format!("{:?}", snap.link.tier).to_uppercase();
-    // FRESHNESS GATE (operator 2026-07-23, "decoded 11 minutes ago is too long"): the roster
-    // never evicts — a station decoded once stays in snap.stations until a band change clears
-    // it — so without an age cut a single decode feeds the Needed board indefinitely. "Heard by
-    // MY radio" is the board's strongest claim and must mean NOW: cap it at 2 minutes of wall
-    // clock, converted to slots by the active tier's T/R period (8 FT8 slots, 30 FT1 slots).
-    const OWN_DECODE_MAX_AGE_SECS: f64 = 120.0;
-    let slot_now = snap.radio.slot;
-    let period = snap.radio.tr_period_secs.max(1.0);
-    let mut heard: Vec<propagation::Heard> = snap
-        .stations
-        .iter()
-        .filter(|s| slot_now.saturating_sub(s.last_heard_slot) as f64 * period <= OWN_DECODE_MAX_AGE_SECS)
-        .map(|s| propagation::Heard {
-            call: s.call.clone(),
-            band: band.clone(),
-            mode: tier_mode.clone(),
-            freq_mhz: None, // own decodes are band-level here
-            admitted_at: None,
-            evidence: Some("decoded by YOUR radio on this band".to_string()),
-            grid: s.grid.clone(), // own decode's Maidenhead grid → drives NewGrid
-            // US state hint (drives WAS NewState): FCC baseline refined by this live decode grid —
-            // a precise 6-char grid that disagrees with the license means a rover. See us_state_hint.
-            us_state: us_state_hint(&s.call, s.grid.as_deref()),
-        })
-        .collect();
+    // "Heard by MY radio" is the board's strongest claim and must mean NOW: cap it at 2 minutes
+    // of wall clock. The conversion (and the tier-switch refusal it carries) is
+    // `own_decode_heards` → `roster_spot_age_secs`.
+    const OWN_DECODE_MAX_AGE_SECS: i64 = 120;
+    let mut heard: Vec<propagation::Heard> = own_decode_heards(
+        &snap.stations,
+        snap.radio.slot,
+        snap.radio.tr_period_secs,
+        &band,
+        &tier_mode,
+        OWN_DECODE_MAX_AGE_SECS,
+    );
     // The real value (empirical evidence, not a model): two complementary signals
     // over the PSK Reporter firehose + near-region feed —
     //   1. heard_near_me: a receiver NEAR YOU is hearing the DX (their signal
@@ -15107,7 +15171,7 @@ mod tests {
     use super::{
        assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
         engine_lock, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
-        load_tle_snapshot_from, parse_sstv_mode, profile_dir_name, qso_is_sat,
+        load_tle_snapshot_from, own_decode_heards, parse_sstv_mode, profile_dir_name, qso_is_sat,
         cluster_spot_heards, rect_lands_on_work_area, roster_local_spots, roster_spot_age_secs,
         set_operator_qth, spotter_evidence_rank, spotter_evidence_rank_at,
         resolve_bird, resolve_birds, run_sat_track, sanitize_profile, sat_excluded,
@@ -15249,6 +15313,81 @@ mod tests {
         assert_eq!(out[0].time, t - 60);
     }
 
+    /// REGRESSION (the same tier-switch defect, SECOND consumer): the fix above landed
+    /// on the opening detector's arm and not on the Needed board's — the same two
+    /// fields, off the same roster, in the same file, one `last_heard_slot` grep apart.
+    ///
+    /// `get_need_alerts`' own-decode arm is the board's STRONGEST claim — "decoded by
+    /// YOUR radio on this band" outranks every second-hand PSKR/cluster row — and it
+    /// aged `last_heard_slot` with a bare `saturating_sub`, which floors to 0 whenever
+    /// the entry was numbered under a SHORTER period than the one now running. The
+    /// operator's measured case: `VE3ABC` decoded on FT4 at 17:00, tier switched to FT8
+    /// at 18:00. `Engine::set_tier` flushes the decode context but not the roster, so
+    /// the hour-old entry survives with its FT4 number — far AHEAD of the FT8 slot
+    /// index — and the 2-minute freshness gate read it as zero seconds old.
+    ///
+    /// Both clocks are the real [`SlotClock`](tempo_core::timing::SlotClock) at the two
+    /// real wall-clock instants: the renumbering is the whole mechanism, and a
+    /// hand-computed slot delta would assume it.
+    #[test]
+    fn a_tier_switch_does_not_make_an_hour_old_decode_the_needed_boards_freshest_evidence() {
+        use tempo_core::timing::SlotClock;
+        let (ft4, ft8) = (
+            SlotClock::with_period_secs(7.5),
+            SlotClock::with_period_secs(15.0),
+        );
+        let at_1700_ms = 1_754_413_200_000.0_f64; // the decode
+        let at_1800_ms = at_1700_ms + 3_600_000.0; // one hour later, after the switch
+        let st = |slot: u64| tempo_app::dto::Station {
+            call: "VE3ABC".into(),
+            grid: Some("FN03".into()),
+            snr: -14,
+            last_heard_slot: slot,
+            heard_count: 1,
+            presence: tempo_app::dto::Presence::Active,
+            worked: false,
+            country: None,
+            tier: None,
+            grid_rarity: None,
+            lotw_user: false,
+        };
+        // The renumbering, measured rather than asserted from memory: the FT4 index of
+        // 17:00 runs ahead of the FT8 index of 18:00, which is impossible on one clock.
+        let on_ft4_at_1700 = ft4.slot_index(at_1700_ms);
+        let ft8_now = ft8.slot_index(at_1800_ms);
+        assert!(
+            on_ft4_at_1700 > ft8_now,
+            "the pre-switch number must be AHEAD of the new clock: {on_ft4_at_1700} vs {ft8_now}"
+        );
+        assert!(
+            own_decode_heards(&[st(on_ft4_at_1700)], ft8_now, 15.0, "6m", "FT8", 120).is_empty(),
+            "an hour-old FT4-numbered decode must not reach the Needed board as fresh"
+        );
+
+        // …and the gate must still admit what it is for. A decode four FT8 slots back
+        // is one minute old, inside the 2-minute window, and carries its grid + state
+        // hint through.
+        let fresh = own_decode_heards(&[st(ft8_now - 4)], ft8_now, 15.0, "6m", "FT8", 120);
+        assert_eq!(fresh.len(), 1, "a one-minute-old own decode is the board's job");
+        assert_eq!(fresh[0].call, "VE3ABC");
+        assert_eq!(fresh[0].band, "6m");
+        assert_eq!(fresh[0].mode, "FT8");
+        // …while one past the 2-minute cap is dropped on the SAME clock (the original
+        // 2026-07-23 freshness gate, still doing its job).
+        assert!(
+            own_decode_heards(&[st(ft8_now - 12)], ft8_now, 15.0, "6m", "FT8", 120).is_empty(),
+            "12 FT8 slots = 3 minutes, past the freshness cap"
+        );
+        // The other switch direction (FT8 → FT4) ages out rather than being refused —
+        // the new clock runs far ahead of the old number — and must also not survive.
+        let on_ft8_at_1700 = ft8.slot_index(at_1700_ms);
+        let ft4_now = ft4.slot_index(at_1800_ms);
+        assert!(
+            own_decode_heards(&[st(on_ft8_at_1700)], ft4_now, 7.5, "6m", "FT4", 120).is_empty(),
+            "the shrinking direction must not survive as a merely-old entry either"
+        );
+    }
+
     /// REGRESSION (operator 2026-08-05, "I would want spots to show up for almost
     /// all those spotted in the US"): the Needed board's HF locality gate, exercised
     /// through the buffer that feeds it — because the two halves only work together.
@@ -15342,24 +15481,162 @@ mod tests {
         );
     }
 
-    /// The evidence ranking is the two locality questions the board asks, and nothing
-    /// else — a rank that disagreed with the gate would evict the wrong voice.
+    /// The evidence ranking is the locality question the board asks OF THAT BAND, and
+    /// nothing else — a rank that disagreed with the gate would evict the wrong voice.
+    ///
+    /// The band is the load-bearing part: the same skimmer is rank 2 on 2 m and rank 1
+    /// on 6 m, because `near_me_radius_km` is 800 km on one and 250 km on the other and
+    /// the gate counts by that radius, not by the widest one.
     #[test]
     fn spotter_evidence_rank_matches_the_gates_it_feeds() {
         let en52 = propagation::geo::maidenhead_to_latlon("EN52");
-        // A published skimmer grid inside the widest VHF near radius — the only kind
-        // of voice the VHF gate can count.
-        assert_eq!(spotter_evidence_rank_at("K9IMM", "KD9TAW", en52), 2);
-        // On the operator's continent but far: all the HF gate needs, no use to VHF.
-        assert_eq!(spotter_evidence_rank_at("W6YX", "KD9TAW", en52), 1);
+        const HF: f64 = 14025.0; // 20 m CW
+        const SIX: f64 = 50090.0; // 6 m CW
+        const TWO: f64 = 144_050.0; // 2 m CW
+        // 78 km from EN52 — inside every VHF near radius, so it counts on both.
+        assert_eq!(spotter_evidence_rank_at("K9IMM", SIX, "KD9TAW", en52), 2);
+        assert_eq!(spotter_evidence_rank_at("K9IMM", TWO, "KD9TAW", en52), 2);
+        // 626 km from EN52 (EN91EF). Inside 2 m's 800 km radius, outside 6 m's 250 km:
+        // the 2 m gate can count it and the 6 m gate cannot, and the rank says so.
+        assert_eq!(spotter_evidence_rank_at("N8DXE", TWO, "KD9TAW", en52), 2);
+        assert_eq!(
+            spotter_evidence_rank_at("N8DXE", SIX, "KD9TAW", en52),
+            1,
+            "a 626 km skimmer must not outrank a 78 km one on 6 m"
+        );
+        // On the operator's continent but far: all the HF gate needs (so it COUNTS
+        // there), no use to a VHF gate at any radius.
+        assert_eq!(spotter_evidence_rank_at("W6YX", HF, "KD9TAW", en52), 2);
+        assert_eq!(spotter_evidence_rank_at("W6YX", SIX, "KD9TAW", en52), 1);
         // Off-continent: evidence about the DX, not about a path from here.
-        assert_eq!(spotter_evidence_rank_at("DL1AAA", "KD9TAW", en52), 0);
-        assert_eq!(spotter_evidence_rank_at("JA1XYZ", "KD9TAW", en52), 0);
+        assert_eq!(spotter_evidence_rank_at("DL1AAA", HF, "KD9TAW", en52), 0);
+        assert_eq!(spotter_evidence_rank_at("DL1AAA", SIX, "KD9TAW", en52), 0);
+        assert_eq!(spotter_evidence_rank_at("JA1XYZ", HF, "KD9TAW", en52), 0);
         // No grid set → no VHF rank is computable, but the HF question still answers.
-        assert_eq!(spotter_evidence_rank_at("K9IMM", "KD9TAW", None), 1);
+        assert_eq!(spotter_evidence_rank_at("K9IMM", SIX, "KD9TAW", None), 1);
+        assert_eq!(spotter_evidence_rank_at("K9IMM", HF, "KD9TAW", None), 2);
         // Unknown OPERATOR continent: `hf_admit_spotters` fails OPEN, so the ranking
         // goes flat exactly where the gate itself stops filtering.
-        assert_eq!(spotter_evidence_rank_at("DL1AAA", "", None), 1);
+        assert_eq!(spotter_evidence_rank_at("DL1AAA", HF, "", None), 2);
+        assert_eq!(spotter_evidence_rank_at("DL1AAA", SIX, "", None), 1);
+    }
+
+    /// REGRESSION (the rank-aware cap, applied at the wrong scale): a 6 m row's two
+    /// NEAR voices must survive a pileup of voices the 6 m gate cannot count.
+    ///
+    /// The cap keeps eight. Rank 2 was `near_me_radius_km(B2)` — 800 km — on every
+    /// band, while the 6 m gate counts only voices inside `near_me_radius_km(B6)`,
+    /// 250 km, and needs TWO of them. Measured against the bundled skimmer table from
+    /// EN52: **16** skimmers publish a grid inside 800 km, **5** inside 250 km. So the
+    /// eight cap slots filled with equal-rank voices the gate could never count, and —
+    /// the sort being stable over a list carried oldest-first — the near voices that
+    /// arrived during the pileup were the ones truncated away. A genuinely corroborated
+    /// 6 m opening then read as a single-skimmer report and was dropped.
+    ///
+    /// Every callsign here is a real skimmer from `skimmers.csv` at its published grid;
+    /// the distances are `haversine_km` from EN52, quoted inline.
+    #[test]
+    fn two_near_voices_survive_a_six_metre_pileup_of_mid_distance_skimmers() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        set_operator_qth("KD9TAW", "EN52");
+        // 250–800 km from EN52: real evidence about the DX, but outside the radius the
+        // 6 m gate counts by. There are eleven, which is more than the cap holds.
+        const MID: &[&str] = &[
+            "WT9U", "WC8GOP", "WF8Z", "N9RU", "K7EK", "K3PA", "N8DXE", "W3DAN", "W8WWV", "AC0C",
+            "W8WTS",
+        ];
+        let mk = |spotter: &str| ClusterSpot {
+            spotter: spotter.into(),
+            dx_call: "VE3WW".into(), // Canada — a different DXCC entity, so propagation-FAR
+            freq_khz: 50_090.0,      // 6 m CW (the RBN skimmer band segment)
+            comment: "CW 12 dB 24 WPM".into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: true,
+        };
+        let mut buf = SpotBuffer::new(1000);
+        // ORDER IS THE DEFECT, and it is the same order as the HF case above: the cap
+        // must already be FULL when the voice that admits the row arrives. An Es patch
+        // drifts, so the ring a few hundred km out copies the DX before the two
+        // skimmers overhead do — nine mid-distance reports bank all eight slots first.
+        for sp in &MID[..9] {
+            buf.push_ranked(mk(sp), spotter_evidence_rank);
+        }
+        // …then the two local ones — K9IMM 78 km, WE9V 79 km, the only voices inside
+        // the 250 km radius, and what makes the row workable from EN52.
+        buf.push_ranked(mk("K9IMM"), spotter_evidence_rank);
+        buf.push_ranked(mk("WE9V"), spotter_evidence_rank);
+        // …and the ring keeps re-spotting. Each of these demotes the previous spotter
+        // into a carried list that is trimmed from position 9, so under a band-blind
+        // rank — where all sixteen 800 km voices tie at 2 — the near ones went first.
+        for sp in &MID[9..] {
+            buf.push_ranked(mk(sp), spotter_evidence_rank);
+        }
+        let recent = buf.recent_within(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(900),
+        );
+        let me_ll = propagation::geo::maidenhead_to_latlon("EN52");
+        let heard = cluster_spot_heards(
+            &recent,
+            me_ll,
+            "KD9TAW",
+            tempo_app::settings::LicenseClass::Extra,
+        );
+        assert_eq!(
+            heard.len(),
+            1,
+            "two skimmers inside 250 km corroborate a 6 m opening — the row must survive"
+        );
+        assert_eq!(heard[0].call, "VE3WW");
+        assert_eq!(heard[0].band, "6m");
+
+        // The other half, unchanged: the SAME pileup with no voice inside 250 km says
+        // nothing about a 6 m path from EN52, and must still be dropped.
+        let mut buf = SpotBuffer::new(1000);
+        for sp in MID {
+            buf.push_ranked(mk(sp), spotter_evidence_rank);
+        }
+        let recent = buf.recent_within(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(900),
+        );
+        assert!(
+            cluster_spot_heards(
+                &recent,
+                me_ll,
+                "KD9TAW",
+                tempo_app::settings::LicenseClass::Extra
+            )
+            .is_empty(),
+            "no near ear = no evidence the 6 m patch reaches EN52"
+        );
+
+        // …and ONE near voice is not two: the VHF gate's anti-superstation rule is
+        // untouched by making the rank band-aware.
+        let mut buf = SpotBuffer::new(1000);
+        for sp in &MID[..9] {
+            buf.push_ranked(mk(sp), spotter_evidence_rank);
+        }
+        buf.push_ranked(mk("K9IMM"), spotter_evidence_rank);
+        for sp in &MID[9..] {
+            buf.push_ranked(mk(sp), spotter_evidence_rank);
+        }
+        let recent = buf.recent_within(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(900),
+        );
+        assert!(
+            cluster_spot_heards(
+                &recent,
+                me_ll,
+                "KD9TAW",
+                tempo_app::settings::LicenseClass::Extra
+            )
+            .is_empty(),
+            "one near skimmer is a single endpoint, not a corroborated opening"
+        );
     }
 
     /// THE HANG GUARD: no command that can block on the engine mutex may run on

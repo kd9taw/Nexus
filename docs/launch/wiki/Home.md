@@ -48,10 +48,12 @@ one says little about what your antenna reaches from your yard.
 
 Nexus scores openings on receivers near **you**, and every Needed row shows who
 nearby actually heard the station and when, so you know the path is real before
-you call. On VHF a single genuine path past 700 km opens a band, because a tropo
-or aurora opening is often one distant station rather than a crowd. Predictions
-come from a native in-app port of **ITU-R P.533**, the VOACAP-class standard, with
-no external program to install, and are labelled *modelled* wherever they appear.
+you call. On 2 m and 4 m a single genuine path past 700 km opens a band, because a
+tropo or aurora opening is often one distant station rather than a crowd; 6 m asks
+for two, because 700–1400 km there is the meteor-scatter regime and one station
+pinging a few times is a rock, not an opening. Predictions come from a native
+in-app port of **ITU-R P.533**, the VOACAP-class standard, with no external program
+to install, and are labelled *modelled* wherever they appear.
 
 *Where this stops:* it measures the paths other stations report. It does not map
 your own antenna pattern or calibrate against a beacon ladder, so it can tell you

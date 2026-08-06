@@ -299,19 +299,26 @@ fn is_login_prompt(s: &str) -> bool {
 pub const CORROBORATOR_CAP: usize = 8;
 
 /// Ranks one spotter callsign as ADMISSION EVIDENCE, higher = keep first, for the
-/// moment [`CORROBORATOR_CAP`] forces a choice.
+/// moment [`CORROBORATOR_CAP`] forces a choice. Called as `rank(spotter, freq_khz)`.
 ///
 /// The buffer owns no geography — the consumer that knows where the operator is
 /// installs this at the push site (`spotter_evidence_rank` in src-tauri). It exists
 /// because the cap is not a neutral trim: the Needed board admits a spot on whether
 /// SOMEONE NEAR THE OPERATOR heard it, so evicting the near voice deletes the very
 /// evidence the row is judged on, and the row then fails a gate it should pass.
-pub type VoiceRank = fn(&str) -> u8;
+///
+/// The spot's FREQUENCY is passed because "near enough to count" is a per-band
+/// question and the consumer's gates ask it at different scales (2026-08-05: a
+/// band-blind rank took the widest radius, so on 6 m the cap filled with voices
+/// ranked as evidence that the 6 m gate could not count, and evicted the ones it
+/// could — see `spotter_evidence_rank`). The buffer still owns no band plan; it only
+/// hands over the frequency already on the spot.
+pub type VoiceRank = fn(&str, f64) -> u8;
 
 /// The ranking for a consumer that has no locality question to ask: every voice equal,
 /// so the cap falls back to arrival order. What [`SpotBuffer::push`]/[`SpotBuffer::push_at`]
 /// use.
-pub fn flat_voice_rank(_spotter: &str) -> u8 {
+pub fn flat_voice_rank(_spotter: &str, _freq_khz: f64) -> u8 {
     0
 }
 
@@ -425,7 +432,7 @@ impl SpotBuffer {
             // their arrival order and a flat ranking is bit-identical to the old trim.
             if spot.corroborators.len() > CORROBORATOR_CAP {
                 spot.corroborators
-                    .sort_by_key(|c| std::cmp::Reverse(rank(c)));
+                    .sort_by_key(|c| std::cmp::Reverse(rank(c, fk)));
                 spot.corroborators.truncate(CORROBORATOR_CAP);
             }
         }
@@ -1025,7 +1032,7 @@ mod tests {
     fn a_local_voice_survives_a_pileup_of_foreign_ones() {
         // Stand-in for src-tauri's `spotter_evidence_rank`: US calls are the
         // evidence the gate can use, everything else is rankable but expendable.
-        fn rank(sp: &str) -> u8 {
+        fn rank(sp: &str, _freq_khz: f64) -> u8 {
             u8::from(sp.starts_with('W') || sp.starts_with('K') || sp.starts_with('N'))
         }
         let mk = |spotter: &str| ClusterSpot {

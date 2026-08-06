@@ -49,16 +49,22 @@ pub struct OpeningConfig {
     /// Min distinct far transmitters (who-I-heard) to clear the gate (OR side B).
     pub min_far_tx: usize,
     /// VHF DX distance (km): on VHF, an operator-anchored path beyond this is genuine
-    /// DX rather than routine troposcatter, so a SINGLE such station opens the band.
-    /// Research-set to 700 km — past the everyday 2m troposcatter ceiling (~500–700 km
-    /// even for a strong station) and at the floor of the enhancement modes
-    /// (sporadic-E / tropo-ducting / aurora all ≥~800 km). Only applies on VHF.
+    /// DX rather than routine troposcatter, so `vhf_dx_stations` of them open the band
+    /// (one on 2 m/4 m, two on 6 m — see that fn). Research-set to 700 km — past the
+    /// everyday 2m troposcatter ceiling (~500–700 km even for a strong station) and at
+    /// the floor of the enhancement modes (sporadic-E / tropo-ducting / aurora all
+    /// ≥~800 km). Only applies on VHF.
     pub vhf_dx_km: f64,
     /// VHF short-lift distance (km): the floor of the tropo-enhancement ambiguity zone
-    /// (500–700 km — a strong station's routine scatter can reach here, so ONE path
-    /// proves nothing). TWO distinct stations at/beyond this simultaneously — plus the
-    /// rate anomaly — is a corroborated short tropo lift and opens the band, catching
-    /// the quick 500–700 km openings the single-station 700 km sentinel would miss.
+    /// and of single-hop sporadic-E (500–700 km). Two readers, two bars, because they
+    /// are asking different questions (see [`BandFeatures::raw_open`]):
+    /// - `op_gate`'s short rung, STANDING ALONE, needs TWO distinct stations at/beyond
+    ///   this at once — a strong station's routine scatter can reach here, so one path
+    ///   proves nothing by itself. Plus the rate anomaly, that is a corroborated short
+    ///   tropo lift, catching the quick 500–700 km openings the 700 km rung would miss.
+    /// - the regional gate's distance term needs ONE, because four census conditions
+    ///   have already done the corroborating and all it has to establish is that the
+    ///   surge left the neighbourhood — a distance one station cannot fabricate.
     pub vhf_short_km: f64,
     /// Onset-slope reference (Δ rate, spots/min/window). Reserved as a rising-edge
     /// / terminator-ramp tuning knob — NOT a hard gate (see `raw_open`), since a
@@ -157,14 +163,32 @@ pub struct BandFeatures {
     /// distant station; see [`BandFeatures::raw_open`]).
     pub unique_far_dx: usize,
     /// Distinct operator-anchored far stations beyond `vhf_short_km` (the 500 km
-    /// tropo-enhancement floor). On VHF, TWO of these at once = a corroborated short
-    /// tropo lift (one alone is within a strong station's routine scatter).
+    /// single-hop-Es / tropo-enhancement floor). Read by two gates at two bars, and
+    /// they are asking different questions — see [`BandFeatures::raw_open`]:
+    /// `op_gate`'s short rung needs **2** (standing alone, one 500–700 km station is
+    /// within a strong station's routine scatter, so it needs corroboration), while
+    /// the regional gate's distance term needs **1** (behind four census conditions
+    /// that have already done the corroborating; there it only has to prove the surge
+    /// left the neighbourhood).
     pub unique_far_short_dx: usize,
     /// Distinct RECEIVERS within `region_near_km` of the operator copying a path of
-    /// `vhf_dx_km`+ length between OTHER stations — the receive-only sentinel: your
-    /// neighbors' ears prove a VHF opening even when you're not on the band at all.
-    /// Two independent ears are required to open (anti-superstation).
+    /// `vhf_dx_km`+ (700 km) length between OTHER stations — the receive-only
+    /// sentinel: your neighbors' ears prove a VHF opening even when you're not on the
+    /// band at all. `regional_dx_gate`, which is this field STANDING ALONE, requires
+    /// **2** independent ears (anti-superstation: one tall-tower receiver is a single
+    /// endpoint, not a region).
     pub unique_near_dx_rx: usize,
+    /// As [`Self::unique_near_dx_rx`] at the SHORT floor: near ears copying a far↔far
+    /// path of `vhf_short_km`+ (500 km). A superset of it, and used only by the
+    /// regional gate's distance term, which needs **1**.
+    ///
+    /// It exists because 500–700 km is a real single-hop Es opening on 6 m and the
+    /// 700 km set could not see one: the term was reading `unique_near_dx_rx` while
+    /// its own comment promised "ONE ≥500 km path is enough here", so twelve far↔far
+    /// paths of 540–583 km through three near ears — a textbook short-skip Es burst —
+    /// earned neither anchor and the gate stayed shut (2026-08-05). The sentinel keeps
+    /// the 700 km bar, because there one field IS the whole gate.
+    pub unique_near_short_dx_rx: usize,
     /// Far stations confirmed BOTH ways with the operator (me→X and X→me).
     pub reciprocal_pairs: usize,
     /// Distinct stations participating on EITHER end of ALL spots — the regional
@@ -254,6 +278,7 @@ impl BandFeatures {
             unique_far_dx: 0,
             unique_far_short_dx: 0,
             unique_near_dx_rx: 0,
+            unique_near_short_dx_rx: 0,
             reciprocal_pairs: 0,
             unique_stations: 0,
             reciprocal_pairs_regional: 0,
@@ -349,15 +374,37 @@ impl BandFeatures {
         // was. On HF that is right. On VHF it made a busy evening of local 6 m FT8
         // among a dozen neighbours indistinguishable from an Es opening, which is the
         // same "I tune and hear nothing" the operator reported and the same defect the
-        // census rungs were removed from `op_gate` for. ONE ≥500 km path is enough
-        // here — the four census conditions are doing the heavy lifting, this only has
-        // to prove the surge is not entirely local — and it is read from the
+        // census rungs were removed from `op_gate` for. It is read from the
         // 10-minute-fresh gate sets, so it cannot be satisfied by a stale sample.
-        // Either anchor counts: operator-anchored (`unique_far_short_dx`) or a near
-        // ear copying a DX-length far↔far path (`unique_near_dx_rx`), which is the
+        //
+        // **ONE path, at 500 km, and both halves of that are rulings, not defaults.**
+        //
+        // ONE, and it does not weaken the anti-superstation rule, because that rule is
+        // not this term's job and never was. A superstation fabricates COUNTS — it is
+        // one tall tower hearing everybody, so it inflates any station census — and it
+        // is refused here by `unique_near_rx >= min_regional_near_rx`: three DISTINCT
+        // local ears, plus two-way pairs and band-specificity. What one station cannot
+        // fabricate is GREAT-CIRCLE DISTANCE; that is geometry, not signal strength or
+        // antenna height. Asking for two anchors would ask the corroboration question a
+        // second time, and charge a real 500-700 km Es burst for the privilege.
+        //
+        // 500 km, because that is `vhf_short_km` — the floor this file already uses for
+        // "a path that did not stay local", set where routine scatter ends and
+        // single-hop Es begins on 6 m. Single-hop is bounded at the OTHER end by the
+        // 2400 km `vhf_max_terrestrial_km`, so 500-700 km is the short end of a real
+        // one-hop span, not outside it. The operator asked for "true openings only" AND
+        // a short-skip Es opening is a true opening he wants; those pull against each
+        // other only if this term is doing the corroborating, which it is not. Reading
+        // `unique_near_dx_rx` (700 km) here contradicted the promise for one release:
+        // twelve far↔far paths of 540-583 km through three near ears — a textbook
+        // single-hop Es burst, and the regression fixture below — earned neither anchor
+        // and the gate stayed shut.
+        //
+        // Either anchor counts: operator-anchored (`unique_far_short_dx`) or a near ear
+        // copying a 500 km+ far↔far path (`unique_near_short_dx_rx`), which is the
         // receive-only case where the operator isn't on the band at all.
         let vhf_regional_distance =
-            !vhf || self.unique_far_short_dx >= 1 || self.unique_near_dx_rx >= 1;
+            !vhf || self.unique_far_short_dx >= 1 || self.unique_near_short_dx_rx >= 1;
         let regional_gate = cfg.regional_scope
             && vhf_regional_distance
             && self.unique_stations >= cfg.min_regional_stations
@@ -367,11 +414,16 @@ impl BandFeatures {
         // Receive-only VHF sentinel (regional feed only): ≥2 DISTINCT receivers near
         // the operator each copying a ≥ vhf_dx_km path between OTHER stations. Your
         // neighbors' ears prove the opening even when you're parked on another band
-        // and transmitting nothing — the case where the alert matters most. Two
-        // independent ears keeps the anti-superstation rule (one big-antenna station
-        // can't fabricate it alone); the full 6m-scale regional_gate above stays for
-        // band-wide surges. Gated on regional_scope like the regional gate: only the
-        // PSK Reporter near-region feed carries trustworthy far↔far receive reports.
+        // and transmitting nothing — the case where the alert matters most.
+        //
+        // Here — and this is the difference from the distance term above — the field IS
+        // the whole gate: no station census, no two-way pairs, no band-specificity
+        // stands behind it. So it does the anti-superstation work itself and keeps BOTH
+        // of its bars: TWO independent ears (one big-antenna station can't fabricate a
+        // region alone) at the 700 km DX floor (not the 500 km short floor, which on
+        // 2 m is everyday troposcatter). The full 6m-scale regional_gate above stays
+        // for band-wide surges. Gated on regional_scope like the regional gate: only
+        // the PSK Reporter near-region feed carries trustworthy far↔far receive reports.
         let regional_dx_gate = cfg.regional_scope && vhf && self.unique_near_dx_rx >= 2;
         op_gate || regional_gate || regional_dx_gate
     }
@@ -577,10 +629,14 @@ pub fn band_features(
     // Operator-anchored far stations beyond the VHF DX distance (genuine DX, not
     // routine troposcatter) — the single-station VHF open signal.
     let mut far_dx: HashSet<String> = HashSet::new();
-    // …and beyond the short-lift floor (500 km): two at once = corroborated tropo.
+    // …and beyond the short-lift floor (500 km): two at once = corroborated tropo for
+    // `op_gate`; one is the regional gate's distance term (see `raw_open`).
     let mut far_short_dx: HashSet<String> = HashSet::new();
     // Near-me receivers copying DX-length far↔far paths (the receive-only sentinel).
     let mut near_dx_rx: HashSet<String> = HashSet::new();
+    // …and the same at the SHORT floor (500 km), for the regional gate's distance
+    // term: a 500-700 km far↔far path a neighbour is copying is single-hop Es.
+    let mut near_short_dx_rx: HashSet<String> = HashSet::new();
     let mut near_rx: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_stations: HashSet<String> = HashSet::new();
     let mut dists: Vec<f64> = Vec::new();
@@ -613,8 +669,9 @@ pub fn band_features(
     // phenomenon whose evidence is a census, not an instant, and narrowing the
     // 5-receiver / 3-transmitter bar to 10 minutes would drop real HF openings.
     //
-    // Scope is the THREE sets a VHF gate actually reads: `far_dx` + `far_short_dx`
-    // (`op_gate`'s VHF rungs) and `near_dx_rx` (`regional_dx_gate`).
+    // Scope is the FOUR sets a VHF gate actually reads: `far_dx` + `far_short_dx`
+    // (`op_gate`'s VHF rungs), `near_dx_rx` (`regional_dx_gate`) and
+    // `near_short_dx_rx` (the regional gate's distance term).
     //
     // `far_rx`/`far_tx` are deliberately NOT confined, and that is not an oversight:
     // on VHF `op_gate` never reads them (it takes the distance branch), so narrowing
@@ -704,13 +761,19 @@ pub fn band_features(
                             // Receive-only sentinel: this local ear is copying a
                             // DX-length path (tx↔rx ≥ vhf_dx_km) — the band is open
                             // in the operator's region whether or not they're on it.
-                            if gate_fresh
-                                && s.tx_grid
-                                    .as_deref()
-                                    .and_then(|txg| grid_distance_km(txg, rxg))
-                                    .is_some_and(|p| p >= cfg.vhf_dx_km)
-                            {
-                                near_dx_rx.insert(s.rx_call.to_ascii_uppercase());
+                            // The short set is the same question at the single-hop-Es
+                            // floor; both are gate rungs, so both are `gate_fresh`.
+                            let path = s
+                                .tx_grid
+                                .as_deref()
+                                .and_then(|txg| grid_distance_km(txg, rxg));
+                            if gate_fresh {
+                                if path.is_some_and(|p| p >= cfg.vhf_dx_km) {
+                                    near_dx_rx.insert(s.rx_call.to_ascii_uppercase());
+                                }
+                                if path.is_some_and(|p| p >= cfg.vhf_short_km) {
+                                    near_short_dx_rx.insert(s.rx_call.to_ascii_uppercase());
+                                }
                             }
                         }
                     }
@@ -743,6 +806,7 @@ pub fn band_features(
     bf.unique_far_dx = far_dx.len();
     bf.unique_far_short_dx = far_short_dx.len();
     bf.unique_near_dx_rx = near_dx_rx.len();
+    bf.unique_near_short_dx_rx = near_short_dx_rx.len();
     bf.unique_near_rx = near_rx.len();
     bf.unique_stations = all_stations.len();
     let owned: Vec<PathSpot> = band_spots.iter().map(|s| (*s).clone()).collect();
@@ -2066,10 +2130,29 @@ mod tests {
             "a regional surge with no path past 500 km is not an opening"
         );
         // Either anchor satisfies it — including the receive-only one, where the
-        // operator is parked on another band and a near ear is copying the DX.
+        // operator is parked on another band and a near ear is copying the path. The
+        // near-ear anchor is read at the SHORT floor here (500 km, single-hop Es on
+        // 6 m), not at the sentinel's 700 km: this gate has four censuses behind it,
+        // `regional_dx_gate` has nothing behind it.
         let mut near_ear = all_local.clone();
-        near_ear.unique_near_dx_rx = 1;
+        near_ear.unique_near_short_dx_rx = 1;
         assert!(near_ear.raw_open(&cfg));
+        // …and a near ear at 700 km+ is in that set too, since it is a superset.
+        let mut near_dx_ear = all_local.clone();
+        near_dx_ear.unique_near_dx_rx = 1;
+        near_dx_ear.unique_near_short_dx_rx = 1;
+        assert!(near_dx_ear.raw_open(&cfg));
+        // ONE ear at 700 km with no short-floor accounting is not representable — the
+        // sets are computed together — but a lone 700 km ear must still not open the
+        // band through `regional_dx_gate`, which needs two.
+        let mut one_dx_ear = BandFeatures::empty(Band::B6);
+        one_dx_ear.anomaly_z = 6.0;
+        one_dx_ear.unique_near_dx_rx = 1;
+        one_dx_ear.unique_near_short_dx_rx = 1;
+        assert!(
+            !one_dx_ear.raw_open(&cfg),
+            "one ear alone, with no census behind it, is a superstation risk"
+        );
         // HF is untouched: an F2 census's paths are continent-scale by construction,
         // so the same distance-free surge still opens 20 m.
         let mut hf = BandFeatures::empty(Band::B20);
@@ -2315,58 +2398,159 @@ mod tests {
         assert!(bf.unique_far_short_dx >= 13, "{}", bf.unique_far_short_dx);
     }
 
-    /// THE TRUE POSITIVE for the regional gate's new VHF distance term (2026-08-05):
-    /// real near-region Es data satisfies it comfortably, and a purely local surge —
-    /// the thing that reads identically to every one of the four census conditions —
-    /// does not.
+    /// THE TRUE POSITIVE for the regional gate's VHF distance term: a genuine
+    /// SHORT-SKIP Es opening must still open the band, and a purely local surge — the
+    /// thing that reads identically to every one of the four census conditions — must
+    /// not.
     ///
-    /// Both sides go through `band_features` over real geometry rather than setting
-    /// the field: the term is only worth adding if genuine regional evidence earns it.
+    /// **Both halves go through `detect` → `raw_open`, the real gate.** The version
+    /// this replaces asserted a feature COUNT and never called the gate at all, and
+    /// that is why it could not see the defect it was written to guard: measured on its
+    /// own fixture (`near_dx_rx=3`, `far_short_dx=0`, `stations=9`, `recip=0`),
+    /// `regional_dx_gate` opened the band regardless and `regional_gate` could not fire
+    /// under any config, so the assertion distinguished nothing.
+    ///
+    /// The fixture is chosen so the regional gate's distance term is the ONLY thing
+    /// that can decide the outcome, and the test measures that rather than assuming it:
+    /// every spot is far↔far (so `op_gate` has no operator-anchored evidence at all)
+    /// and every path is under `vhf_dx_km` (so `regional_dx_gate`'s 700 km sentinel
+    /// cannot fire either).
+    ///
+    /// Geometry is real great-circle from EN52 (`grid_distance_km`), quoted inline.
     #[test]
     fn a_real_regional_es_burst_earns_the_vhf_distance_term_a_local_one_does_not() {
-        let cfg = OpeningConfig::default();
-        // Three distinct receivers near EN52 (EN61 ≈ 200 km, EN50 ≈ 180 km, EM59
-        // ≈ 190 km), each copying transmitters 900–2000 km out. This is what the
-        // PSK Reporter near-region feed carries during 6 m Es.
-        let near = ["EN61", "EN50", "EM59"];
-        let far = ["FN42", "FM18", "DM43", "EM12", "FN31", "DN70"];
+        let cfg = OpeningConfig {
+            regional_scope: true, // the PSK Reporter near-region feed is flowing
+            ..Default::default()
+        };
+        let calm = SpaceWx {
+            sfi: 100.0,
+            kp: 1.0,
+            ..Default::default()
+        };
+        // Three distinct ears near EN52 — EN61 199 km, EN50 222 km, EM59 334 km — each
+        // copying four transmitters whose path to that ear is 540-583 km. That is
+        // single-hop sporadic-E on 6 m: below `vhf_short_km` (500) it would be
+        // ground/tropo scatter, and single-hop runs to `vhf_max_terrestrial_km` (2400)
+        // at the far end, so this sits at the SHORT end of a real Es opening. It is
+        // exactly what a 6 m operator wants an alert for, and the 700 km near-ear
+        // anchor could not see it.
+        let ears = ["EN61", "EN50", "EM59"];
+        let es_paths: [(&str, usize); 12] = [
+            ("EM39", 0), // 554 km to EN61
+            ("EN33", 0), // 540
+            ("EN45", 0), // 549
+            ("EM66", 0), // 556
+            ("EM45", 1), // 583 km to EN50
+            ("EM55", 1), // 556
+            ("EM65", 1), // 583
+            ("EM76", 1), // 565
+            ("EM54", 2), // 556 km to EM59
+            ("EM75", 2), // 568
+            ("EM87", 2), // 567
+            ("EN21", 2), // 554
+        ];
         let mut es = Vec::new();
-        for (i, fg) in far.iter().enumerate() {
+        for (i, (fg, ear)) in es_paths.iter().enumerate() {
             es.push(far_far(
                 &format!("W{i}DX"),
                 fg,
-                &format!("N{}RX", i % 3),
-                near[i % 3],
+                &format!("N{ear}RX"),
+                ears[*ear],
                 Band::B6,
                 (i as i64) * 20,
             ));
         }
-        let bs: Vec<&PathSpot> = es.iter().collect();
-        let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
+        // Two of those paths are worked BOTH ways — the regional two-way pairs the
+        // gate demands (`min_regional_reciprocal` = 2).
+        es.push(far_far("N0RX", ears[0], "W0DX", "EM39", Band::B6, 260));
+        es.push(far_far("N1RX", ears[1], "W4DX", "EM45", Band::B6, 280));
+
+        let sigs = detect(&es, ME, ME_GRID, NOW, &calm, &cfg, &[Band::B6]);
+        let six = sigs.iter().find(|s| s.band == Band::B6).unwrap();
+        let f = &six.features;
+        // WHICH gate is under test — measured, not assumed.
+        assert_eq!(f.unique_far_dx, 0, "no operator-anchored evidence at all");
+        assert_eq!(f.unique_far_short_dx, 0);
+        assert_eq!(
+            f.unique_near_dx_rx, 0,
+            "every path is under 700 km, so the receive-only sentinel cannot fire"
+        );
+        // …and the four census conditions the regional gate also demands are met, so a
+        // refusal here could only come from the distance term.
+        assert!(f.anomaly_z >= cfg.z_open, "z={}", f.anomaly_z);
+        assert!(f.unique_stations >= cfg.min_regional_stations);
+        assert!(f.unique_near_rx >= cfg.min_regional_near_rx);
+        assert!(f.reciprocal_pairs_regional >= cfg.min_regional_reciprocal);
+        assert!(f.cross_band_share >= cfg.min_regional_cross_band_share);
         assert!(
-            bf.unique_near_dx_rx >= 1,
-            "a real regional Es burst earns the distance term: near_dx_rx={}",
-            bf.unique_near_dx_rx
+            f.unique_near_short_dx_rx >= 1,
+            "the 500 km near-ear anchor is what a short-skip Es burst earns: {}",
+            f.unique_near_short_dx_rx
+        );
+        assert!(
+            six.raw_open,
+            "a 540-583 km Es opening through three near ears must OPEN the band"
+        );
+        // …and the distance term is genuinely load-bearing on this fixture: strip the
+        // one anchor it can reach and the same evidence closes. (Without this, a fixture
+        // that opened for some other reason would still pass the assertion above.)
+        let mut no_anchor = f.clone();
+        no_anchor.unique_near_short_dx_rx = 0;
+        assert!(
+            !no_anchor.raw_open(&cfg),
+            "the distance term, not another rung, is what admitted this"
         );
 
         // The same shape of traffic, entirely local: a busy 6 m FT8 evening among
         // neighbours. Every census condition the regional gate asks about looks the
-        // same; every path is short.
+        // same — same three ears, same station count, same two-way pairs, same
+        // band-specificity, same anomaly — and every path is under 500 km.
+        let local_paths: [(&str, usize); 12] = [
+            ("EN53", 0), // 276 km to EN61
+            ("EN62", 0), // 111
+            ("EN51", 0), // 167
+            ("EN60", 0), // 111
+            ("EM58", 1), // 222 km to EN50
+            ("EM69", 1), // 203
+            ("EN42", 1), // 278
+            ("EN43", 1), // 372
+            ("EN63", 2), // 475 km to EM59
+            ("EN71", 2), // 405
+            ("EM49", 2), // 172
+            ("EM48", 2), // 206
+        ];
         let mut local = Vec::new();
-        for i in 0..6 {
+        for (i, (fg, ear)) in local_paths.iter().enumerate() {
             local.push(far_far(
                 &format!("W{i}LOC"),
-                near[i % 3],
-                &format!("N{}RX", (i + 1) % 3),
-                near[(i + 1) % 3],
+                fg,
+                &format!("N{ear}RX"),
+                ears[*ear],
                 Band::B6,
                 (i as i64) * 20,
             ));
         }
-        let bs: Vec<&PathSpot> = local.iter().collect();
-        let bf = band_features(Band::B6, &bs, ME, ME_GRID, NOW, &cfg);
-        assert_eq!(bf.unique_near_dx_rx, 0, "no DX-length path anywhere");
-        assert_eq!(bf.unique_far_short_dx, 0, "…and none operator-anchored");
+        local.push(far_far("N0RX", ears[0], "W0LOC", "EN53", Band::B6, 260));
+        local.push(far_far("N1RX", ears[1], "W4LOC", "EM58", Band::B6, 280));
+
+        let sigs = detect(&local, ME, ME_GRID, NOW, &calm, &cfg, &[Band::B6]);
+        let six = sigs.iter().find(|s| s.band == Band::B6).unwrap();
+        let f = &six.features;
+        // The censuses are indistinguishable from the Es burst's…
+        assert!(f.anomaly_z >= cfg.z_open);
+        assert!(f.unique_stations >= cfg.min_regional_stations);
+        assert!(f.unique_near_rx >= cfg.min_regional_near_rx);
+        assert!(f.reciprocal_pairs_regional >= cfg.min_regional_reciprocal);
+        assert!(f.cross_band_share >= cfg.min_regional_cross_band_share);
+        // …and only the distance is not.
+        assert_eq!(f.unique_near_dx_rx, 0, "no DX-length path anywhere");
+        assert_eq!(f.unique_near_short_dx_rx, 0, "…nor any 500 km one");
+        assert_eq!(f.unique_far_short_dx, 0, "…and none operator-anchored");
+        assert!(
+            !six.raw_open,
+            "a surge that never left the neighbourhood is not an opening"
+        );
     }
 
     /// REGRESSION (2026-08-05, the same day's own fix): confining the VHF gate's
@@ -2423,17 +2607,25 @@ mod tests {
             ..Default::default()
         };
         // The operator is parked on another band: NO operator-anchored evidence at
-        // all — but two distinct local receivers each copy a ≥700 km 2m path.
+        // all — but two distinct local receivers each copy a ≥700 km 2m path. (A
+        // ≥700 km path is ≥500 km too, so the short set carries them as well; the
+        // fields are set together because `band_features` computes them together.)
         let mut ears = BandFeatures::empty(Band::B2);
         ears.anomaly_z = 6.0;
         ears.unique_near_dx_rx = 2;
+        ears.unique_near_short_dx_rx = 2;
         assert!(
             ears.raw_open(&cfg),
             "two neighbor ears open the band receive-only"
         );
-        // One ear alone = possibly a superstation — must NOT open.
+        // One ear alone = possibly a superstation — must NOT open. Note this is the
+        // ONLY place the near-ear count carries the anti-superstation rule by itself:
+        // the regional gate's distance term needs one such ear, because there three
+        // distinct local ears (`min_regional_near_rx`) plus two-way pairs and
+        // band-specificity have already established the region.
         let mut one_ear = ears.clone();
         one_ear.unique_near_dx_rx = 1;
+        one_ear.unique_near_short_dx_rx = 1;
         assert!(!one_ear.raw_open(&cfg), "a single local ear must not open");
         // Without the regional feed the sentinel stays off (no trustworthy far↔far
         // receive reports) — HF unaffected regardless.

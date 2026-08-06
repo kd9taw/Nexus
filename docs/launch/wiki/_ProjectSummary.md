@@ -36,8 +36,9 @@ rig it is listening to. Every claim carries its age.
 **Nobody can tell whether a band is open for them.** Cluster and skimmer feeds are
 global, and a superstation on a mountain hearing a rare one says little about what
 your antenna reaches. Nexus scores openings on receivers near you, and every
-Needed row shows who nearby actually heard the station and when. On VHF a single
-genuine path past 700 km opens a band. Predictions come from a native in-app port
+Needed row shows who nearby actually heard the station and when. On 2 m and 4 m a
+single genuine path past 700 km opens a band; 6 m asks for two, because one station
+at that distance is meteor scatter. Predictions come from a native in-app port
 of ITU-R P.533, the VOACAP-class standard, and are labelled modelled. What it does
 not yet do is map your own antenna pattern, so it can tell you a path is open and
 still not know your null is pointing at it.
