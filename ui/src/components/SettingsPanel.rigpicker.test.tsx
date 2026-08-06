@@ -16,7 +16,7 @@
 // tests are what stops that being quietly undone.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
-import { SettingsPanel } from './SettingsPanel'
+import { SettingsPanel, RIG_CAT_RATES, baudForRig } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -118,6 +118,7 @@ function renderPanel() {
 
 // The curated list the panel loads on mount. Yaesu spread across the eras that matter:
 // three fixed-4800 backends, the FT-847 (4800..57600), and two that really do 38400.
+// Plus the FX-4, which is in the shipped verified tier and runs at one rate only.
 const CURATED: [number, string][] = [
   [1001, 'Yaesu FT-847'],
   [1004, 'Yaesu FT-1000MP Mark-V'],
@@ -128,6 +129,7 @@ const CURATED: [number, string][] = [
   [1024, 'Yaesu FT-1000MP'],
   [1042, 'Yaesu FTDX10'],
   [1049, 'Yaesu FT-710'],
+  [2053, 'BG2FX FX-4 (C/CR/L)'],
   [3073, 'Icom IC-7300'],
 ]
 
@@ -193,6 +195,150 @@ describe('picking a Yaesu sets a baud the radio can actually run', () => {
     expect(baudSelect().value).toBe('38400')
     fireEvent.change(rigSelect(), { target: { value: '1049' } })
     expect(baudSelect().value).toBe('38400')
+  })
+})
+
+describe('picking a rig never overwrites a rate the radio can already run', () => {
+  // The regression the first cut of the fix above shipped: the baud was applied on EVERY
+  // pick, unconditionally. Six of the seven Yaesu entries were safe only by accident — their
+  // backends declare `serial_rate_min == serial_rate_max`, so there was no other rate to
+  // lose. The FT-847 is not one of them (`rigctl -m 1001 --dump-caps`: 4800..57600), and the
+  // operator whose report started all this runs his at 57600: selecting his own radio in the
+  // picker rewrote the setting that had just been made to work.
+  const setBaud = (rate: number) => fireEvent.change(baudSelect(), { target: { value: String(rate) } })
+
+  it('the FT-847 at 57,600 — the rate the reporter’s radio is on — survives the pick', async () => {
+    await openRadioTab()
+    setBaud(57600)
+    fireEvent.change(rigSelect(), { target: { value: '1001' } })
+    expect(baudSelect().value).toBe('57600')
+  })
+
+  it('…and at 9,600, the other rate on its Menu 37 dial', async () => {
+    await openRadioTab()
+    setBaud(9600)
+    fireEvent.change(rigSelect(), { target: { value: '1001' } })
+    expect(baudSelect().value).toBe('9600')
+  })
+
+  it('…while 38,400, which its dial does not offer, still becomes 4,800', async () => {
+    // The original field report, unchanged: the app default is not a rate this radio can be
+    // set to, so it is not a choice to protect.
+    await openRadioTab()
+    expect(baudSelect().value).toBe('38400')
+    fireEvent.change(rigSelect(), { target: { value: '1001' } })
+    expect(baudSelect().value).toBe('4800')
+  })
+
+  it('re-picking the same rig is idempotent — it never walks the baud back', async () => {
+    await openRadioTab()
+    setBaud(57600)
+    for (let i = 0; i < 3; i++) fireEvent.change(rigSelect(), { target: { value: '1001' } })
+    expect(baudSelect().value).toBe('57600')
+  })
+})
+
+describe('the rule, not the table — a future entry cannot reintroduce the clobber', () => {
+  // These are about `baudForRig` itself, because a table is only ever as safe as the rule it
+  // is read through. Any entry added later is swept by all four.
+  const entries = [...RIG_CAT_RATES.entries()]
+
+  it('there are entries to check at all', () => {
+    expect(entries.length).toBeGreaterThan(20)
+  })
+
+  it('every entry’s fallback rate is one of its own legal rates', () => {
+    // Otherwise the very act of imposing a rate would set an illegal one.
+    for (const [model, r] of entries) {
+      expect({ model, ok: r.rates.includes(r.preferred) }).toEqual({ model, ok: true })
+    }
+  })
+
+  it('every entry has at least one legal rate, and they are rates the picker offers', () => {
+    // An entry whose rates are all off the Baud menu would force a value the operator cannot
+    // see or restore by hand.
+    const offered = new Set([1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200])
+    for (const [model, r] of entries) {
+      expect({ model, n: r.rates.length }).not.toEqual({ model, n: 0 })
+      for (const rate of r.rates) expect({ model, rate, offered: offered.has(rate) }).toEqual({ model, rate, offered: true })
+    }
+  })
+
+  it('no entry ever replaces a rate its own rig can run', () => {
+    // THE clobber guard. For every entry, every rate the rig is allowed = hands off.
+    for (const [model, r] of entries) {
+      for (const rate of r.rates) {
+        expect({ model, rate, imposed: baudForRig(model, rate) }).toEqual({ model, rate, imposed: null })
+      }
+    }
+  })
+
+  it('…and always replaces one it cannot', () => {
+    const all = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
+    for (const [model, r] of entries) {
+      for (const rate of all.filter((b) => !r.rates.includes(b))) {
+        expect({ model, rate, imposed: baudForRig(model, rate) }).toEqual({
+          model,
+          rate,
+          imposed: r.preferred,
+        })
+      }
+    }
+  })
+
+  it('a rig with no entry is never touched, whatever it is set to', () => {
+    // Absent means "no evidence" — the branch that must stay a no-op, because it is every
+    // rig in the catalog that is not listed, including every model added in future.
+    for (const rate of [1200, 4800, 9600, 38400, 57600, 115200]) {
+      expect(baudForRig(1042, rate)).toBeNull() // FTDX10 — genuinely does 38400
+      expect(baudForRig(3073, rate)).toBeNull() // IC-7300
+      expect(baudForRig(999999, rate)).toBeNull() // a raw model number typed by hand
+    }
+  })
+})
+
+describe('a rig whose backend declares ONE rate cannot be left on the app default', () => {
+  // `rigctl -m <model> --dump-caps` against the BUNDLED Hamlib 4.7.1, field
+  // `Serial speed: <min>..<max>`, for every model in either catalog tier that declares
+  // min == max. Each is a radio the picker offers on which the 38,400 default cannot work.
+  const ONE_RATE: [number, number, string][] = [
+    [2053, 115200, 'BG2FX FX-4/C/CR/L — added to the verified tier this batch'],
+    [2021, 4800, 'Elecraft K2'],
+    [2050, 9600, 'Lab599 Discovery TX-500'],
+    [16013, 57600, 'Ten-Tec Eagle (599)'],
+    [16008, 57600, 'Ten-Tec Orion (565)'],
+    [16011, 57600, 'Ten-Tec Omni VII (588)'],
+    [16001, 57600, 'Ten-Tec TT-550 Pegasus'],
+    [16002, 57600, 'Ten-Tec TT-538 Jupiter'],
+    [16007, 1200, 'Ten-Tec TT-516 Argonaut V'],
+    [16009, 1200, 'Ten-Tec TT-585 Paragon'],
+    [17002, 9600, 'Alinco DX-SR8'],
+    [17001, 9600, 'Alinco DX-77'],
+  ]
+
+  it.each(ONE_RATE)('model %i runs at %i only — %s', (model, rate) => {
+    expect(baudForRig(model, 38400)).toBe(rate)
+    expect(baudForRig(model, rate)).toBeNull()
+  })
+
+  it('the four other radios added this batch really do 38,400, so they get no entry', () => {
+    // Measured the same way, and this half matters as much: 3094 4800..115200,
+    // 1051 4800..115200, 2052 4800..115200, 2055 38400..115200. Listing a rig that does not
+    // need listing is how the clobber gets back in.
+    for (const model of [3094, 1051, 2052, 2055]) {
+      expect({ model, listed: RIG_CAT_RATES.has(model) }).toEqual({ model, listed: false })
+      expect(baudForRig(model, 38400)).toBeNull()
+    }
+  })
+
+  it('the FX-4 lands on 115,200 — the only rate it has', async () => {
+    // `rigctl -m 2053 --dump-caps` (bundled Hamlib 4.7.1): `Serial speed: 115200..115200`.
+    // The FX-4 was added to the verified tier with no rate entry at all, so picking it left
+    // the 38400 default in place and CAT could not come up on a radio the picker offers.
+    await openRadioTab()
+    expect(baudSelect().value).toBe('38400')
+    fireEvent.change(rigSelect(), { target: { value: '2053' } })
+    expect(baudSelect().value).toBe('115200')
   })
 })
 

@@ -188,6 +188,110 @@ const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 
 // this list — the picker keeps it as an extra option so it's never silently dropped.
 const STANDARD_BAUDS = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
 
+/** The CAT rates a rig can run, and what to fall back to when the one set is not among them. */
+export type RigCatRates = { readonly rates: readonly number[]; readonly preferred: number }
+
+/** The rig has exactly one legal rate — Hamlib `serial_rate_min == serial_rate_max`. */
+const oneRate = (rate: number): RigCatRates => ({ rates: [rate], preferred: rate })
+/** The rig runs anything in `min..max`; `preferred` is the fallback (default: the top rate). */
+const rateRange = (min: number, max: number, preferred?: number): RigCatRates => {
+  const rates = STANDARD_BAUDS.filter((b) => b >= min && b <= max)
+  return { rates, preferred: preferred ?? rates[rates.length - 1] }
+}
+
+/**
+ * Rig CAT rates, for the radios where the app's 38,400 default is **not** a free choice.
+ *
+ * **THE RULE — and it is the rule, not the table, that has to survive the next entry.**
+ * An entry names the rates the radio can actually run, and picking that rig imposes one
+ * ONLY when the rate already set is not among them. A rig with a single legal rate is just
+ * the degenerate case: every other rate is invalid, so every other rate is replaced. A rig
+ * with no entry is never touched — we have no evidence about it, and a guess costs a working
+ * radio. The whole rule is [`baudForRig`], so there is one place to read it and one to test it.
+ *
+ * **Why a rule and not the plain `model → baud` map this replaces** (2026-08, the FT-847
+ * again). That map was applied on EVERY pick, unconditionally. The operator whose report
+ * started this runs his FT-847 at 57,600; selecting "Yaesu FT-847" in the picker rewrote it
+ * to 4,800 and killed the CAT that had just been made to work. Six of the seven Yaesu entries
+ * were safe only by accident — their backends declare one rate, so there was nothing to lose.
+ *
+ * **Where the numbers come from.** `rigctl -m <model> --dump-caps` against the bundled Hamlib
+ * 4.7.1 (`src-tauri/resources/hamlib`), field `Serial speed: <min>..<max>`. Where an entry is
+ * narrower than that range it is because the RADIO is narrower than the backend, and it says
+ * so at the entry.
+ *
+ * **What is deliberately NOT here: rigs whose declared max is merely low.** Hamlib does not
+ * enforce `serial_rate_min`/`_max` — `rig_open` accepts a rate outside them without a word
+ * (measured: model 3085 at 115,200 opens clean against its declared max of 19,200) — so a low
+ * max is the backend author's note, not the radio's limit. Nexus already drives Icoms past it
+ * on purpose: the native CI-V scope REQUIRES 115,200 on an IC-705 (declared max 19,200) and
+ * `civ/scope.rs` records an IC-9700 verified at 57,600 (declared max 38,400). Generating
+ * entries from a low max would have broken those radios in exactly the way this rule exists to
+ * prevent. `min == max` — the backend saying there is no choice at all — is the one thing that
+ * earns an entry on caps alone.
+ */
+export const RIG_CAT_RATES = new Map<number, RigCatRates>([
+  // Xiegu CI-V — fixed 19,200 with no baud menu on the radio, so the backend's wider
+  // 300..19,200 (X6100/X6200/X5105/X108G) describes the driver, not the rig.
+  [3088, oneRate(19200)], // G90 (caps 19200..19200)
+  [3087, oneRate(19200)], // X6100
+  [3091, oneRate(19200)], // X6200
+  [3089, oneRate(19200)], // X5105
+  [3076, oneRate(19200)], // X108G
+  // Kenwood, IC-10 / IF-232C era — the interface itself is fixed 4,800 (8N2). The backend
+  // ranges (1,200..4,800, 4,800..9,600, even 1,200..57,600 for the TS-50S) are the driver's.
+  [2001, oneRate(4800)], // TS-50S
+  [2002, oneRate(4800)], // TS-440S
+  [2003, oneRate(4800)], // TS-450S
+  [2005, oneRate(4800)], // TS-690S
+  [2007, oneRate(4800)], // TS-790
+  [2009, oneRate(4800)], // TS-850
+  [2011, oneRate(4800)], // TS-940S
+  [2013, oneRate(4800)], // TS-950SDX
+  [2025, oneRate(4800)], // TS-140S
+  // 1990s Kenwood WITH a baud menu. 9,600 is the FACTORY setting, not a limit — so it is what
+  // an out-of-range setting falls back to, and a rate the radio can be set to is left alone.
+  [2010, rateRange(1200, 57600, 9600)], // TS-870S
+  [2004, rateRange(1200, 57600, 9600)], // TS-570D
+  [2016, rateRange(1200, 57600, 9600)], // TS-570S
+  // Yaesu, one-rate backends (4800..4800).
+  [1004, oneRate(4800)], // FT-1000MP Mark-V
+  [1010, oneRate(4800)], // FT-736R
+  [1014, oneRate(4800)], // FT-920
+  [1016, oneRate(4800)], // FT-990
+  [1021, oneRate(4800)], // FT-100 / FT-100D
+  [1024, oneRate(4800)], // FT-1000MP
+  // FT-847 — caps say 4,800..57,600; the radio's CAT RATE menu (Menu 37) says 4,800 / 9,600 /
+  // 57,600 and it ships on 4,800. 38,400 is inside the backend's range and is NOT on the dial,
+  // which is the field report; 57,600 IS on the dial, which is why a pick must not touch it.
+  [1001, { rates: [4800, 9600, 57600], preferred: 4800 }],
+  // One-rate backends that had NO entry, so the 38,400 default was guaranteed silence on a
+  // radio the picker offers. All `min == max` per --dump-caps.
+  [2053, oneRate(115200)], // BG2FX FX-4/C/CR/L — added to the verified tier 2026-08
+  [2021, oneRate(4800)], // Elecraft K2
+  [2050, oneRate(9600)], // Lab599 Discovery TX-500
+  [16013, oneRate(57600)], // Ten-Tec Eagle (599)
+  [16008, oneRate(57600)], // Ten-Tec Orion (565)
+  [16011, oneRate(57600)], // Ten-Tec Omni VII (588)
+  [16001, oneRate(57600)], // Ten-Tec TT-550 Pegasus
+  [16002, oneRate(57600)], // Ten-Tec TT-538 Jupiter
+  [16007, oneRate(1200)], // Ten-Tec TT-516 Argonaut V
+  [16009, oneRate(1200)], // Ten-Tec TT-585 Paragon
+  [17002, oneRate(9600)], // Alinco DX-SR8
+  [17001, oneRate(9600)], // Alinco DX-77
+])
+
+/**
+ * The baud to apply when `modelNum` is picked, or `null` to leave the operator's setting
+ * alone. Pure, and the only expression of the rule in [`RIG_CAT_RATES`].
+ */
+export const baudForRig = (modelNum: number, currentBaud: number): number | null => {
+  const r = RIG_CAT_RATES.get(modelNum)
+  if (!r) return null // unknown rig — no evidence, no change
+  if (r.rates.includes(currentBaud)) return null // a rate this rig runs: the operator's, not ours
+  return r.preferred
+}
+
 /** WSJT-X Split Operation choices (Settings ▸ Radio parity). */
 const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; label: string }[] = [
   { value: 'none', label: 'None' },
@@ -1029,46 +1133,15 @@ export function SettingsPanel({
   const findRigModelName = (modelNum: number): string =>
     rigModels.find((m) => m[0] === modelNum)?.[1] ?? allRigModels.find((m) => m[0] === modelNum)?.[1] ?? ''
 
-  // Rigs whose CAT never runs at the app's 38400 default, so picking one auto-sets a baud
-  // that actually answers (rigctld connects regardless of baud; the radio just stays silent
-  // on a mismatch — the classic "CAT dead on defaults" trap):
-  // - Xiegu CI-V (G90/X6100/X6200/X5105/X108G): fixed 19200, no baud menu on the radio.
-  // - Vintage Kenwood (IC-10/IF-232C era — TS-140S/440S/450S/690S/790/850/940S/950SDX and
-  //   the TS-50S): the serial interface is FIXED at 4800 (8N2, handled by the Hamlib
-  //   backend; -s only overrides the speed).
-  // - 1990s Kenwood with a baud menu (TS-870S, TS-570D/S): factory default 9600.
-  // - Yaesu (added 2026-08 off an FT-847 field report: CAT worked in WSJT-X, dead here).
-  //   Rates are read off each model's Hamlib backend caps, `serial_rate_min`/`_max` in
-  //   rigs/yaesu/*.c — six backends declare a FIXED 4800 (max < the 38400 default, so the
-  //   default is guaranteed silence), and the FT-847 declares 4800..57600 but its CAT RATE
-  //   menu (Menu 37) enumerates only 4800 / 9600 / 57600 — 38400 is not on the dial at all.
-  //   4800 is its factory setting, i.e. the rate an untouched radio answers on. Every other
-  //   Yaesu in the catalog declares max ≥ 38400 and is deliberately absent: overriding a
-  //   default that already works is the same bug pointed the other way.
-  // Model numbers mirror crates/tempo-audio/src/rigmodels.rs (verified vs riglist.h).
-  const BAUD_BY_MODEL = new Map<number, number>([
-    // Xiegu → 19200
-    [3088, 19200], [3087, 19200], [3091, 19200], [3089, 19200], [3076, 19200],
-    // Vintage Kenwood → 4800 fixed
-    [2001, 4800], [2002, 4800], [2003, 4800], [2005, 4800], [2007, 4800],
-    [2009, 4800], [2011, 4800], [2013, 4800], [2025, 4800],
-    // Kenwood with 9600 factory default
-    [2010, 9600], [2004, 9600], [2016, 9600],
-    // Yaesu → 4800. ft847.c 4800/57600 (menu 4800/9600/57600, factory 4800);
-    // ft1000mp.c, ft736.c, ft920.c, ft990.c, ft100.c all 4800/4800.
-    [1001, 4800], [1004, 4800], [1010, 4800], [1014, 4800], [1016, 4800],
-    [1021, 4800], [1024, 4800],
-  ])
-  const recommendedBaud = (modelNum: number): number | null => BAUD_BY_MODEL.get(modelNum) ?? null
-
+  // Which baud a rig pick may impose — and, more to the point, when it may NOT. The rates,
+  // the rule and why it is a rule live at `RIG_CAT_RATES` / `baudForRig` (module scope).
   const selectRig = (modelNum: number) => {
     markDirty()
-    const baud = recommendedBaud(modelNum)
-    setForm((prev) =>
-      prev
-        ? { ...prev, rigModel: modelNum, rigModelName: findRigModelName(modelNum), ...(baud ? { baud } : {}) }
-        : prev,
-    )
+    setForm((prev) => {
+      if (!prev) return prev
+      const baud = baudForRig(modelNum, prev.baud)
+      return { ...prev, rigModel: modelNum, rigModelName: findRigModelName(modelNum), ...(baud ? { baud } : {}) }
+    })
   }
 
   // --- Dual-radio roster (P2). These are LIVE verbs: they persist immediately and return a fresh
@@ -1238,7 +1311,7 @@ export function SettingsPanel({
   const applyDetectedRig = (r: DetectedRig) => {
     if (!form) return
     markDirty()
-    const baud = r.suggestedModel != null ? recommendedBaud(r.suggestedModel) : null
+    const baud = r.suggestedModel != null ? baudForRig(r.suggestedModel, form.baud) : null
     const applied = {
       ...form,
       ...(r.suggestedModel != null
