@@ -144,15 +144,11 @@ mod imp {
         /// meaning — only a control line is toggled, no data bytes are sent — so
         /// [`crate::control_line`] picks a rate the port will actually accept (the
         /// keyed BAUD is the RTTY baud, passed to `send`, and is unrelated). Both lines
-        /// are explicitly driven deasserted first: the Linux kernel asserts DTR *and*
-        /// RTS on open, and the thread only manages the keyed line, so the un-keyed line
-        /// (typically PTT) would otherwise stay asserted all session — the CW keyer's
-        /// stuck-PTT bug (see the CRITICAL note in `serial_keyer.rs`). Deasserted is
-        /// also the correct FSK idle: mark.
+        /// come back deasserted from the opener — the stuck-PTT rule, see
+        /// [`crate::control_line::idle_both_lines`]. Deasserted is also the correct FSK
+        /// idle: mark.
         pub fn open(port: &str, line: KeyLine) -> std::io::Result<Self> {
-            let mut sp = crate::control_line::open_control_line_port(port)?;
-            let _ = sp.write_data_terminal_ready(false);
-            let _ = sp.write_request_to_send(false);
+            let sp = crate::control_line::open_control_line_port(port)?;
             let (tx, rx) = mpsc::channel();
             let abort = Arc::new(AtomicBool::new(false));
             let abort_thread = abort.clone();

@@ -552,6 +552,12 @@ impl Rig {
     /// With the `serial` feature this lazily opens the port and drives RTS/DTR;
     /// without it, keying is logged and treated as a no-op so the engine can
     /// still run (effectively VOX) on a build with no serial backend.
+    ///
+    /// Only the KEYED line is driven from here. The other one is deasserted once, at open, by
+    /// [`crate::control_line::idle_both_lines`] — without that this function was the third
+    /// instance of the stuck-PTT defect its own headline names: on a conventional interface
+    /// (DTR = key, RTS = PTT) opening the port raised both, and nothing here ever lowered the
+    /// one we do not key.
     #[cfg(feature = "serial")]
     fn serial_ptt(&mut self, on: bool) -> std::io::Result<()> {
         let (port, line) = match &self.ptt_mode {

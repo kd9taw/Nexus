@@ -19,13 +19,14 @@
 //! the operator to guess at, and the ladder keeps 1200 at its tail so an interface that
 //! only likes the historical rate still works.
 //!
-//! This module does the OPEN and nothing else. Each caller keeps its own control-line
-//! initial-state handling (the both-lines-deasserted Linux stuck-PTT fix in
-//! `serial_keyer::SerialKeyer::open` and `rtty_fsk::FskKeyer::open`) exactly where it is.
+//! It also owns the IDLE-STATE rule ([`idle_both_lines`]), because that rule turned out to
+//! be a property of opening a port rather than of any one caller — see its own docs.
 //!
 //! NOT for ports that carry data: the WinKeyer's 1200 baud is a PROTOCOL rate (K1EL host
 //! mode) and CAT/CI-V ports use the operator's configured rate. Both are real serial
-//! traffic where the rate has to match the far end.
+//! traffic where the rate has to match the far end. Those ports still need the idle rule —
+//! `civ::broker::CivDaemon::start` opens a CI-V port at the operator's baud and calls
+//! [`idle_both_lines`] itself.
 
 /// Baud rates tried, in order, when opening a control-line-only port: the first is the
 /// default, the rest are the fallback ladder. Most- to least- universally accepted,
@@ -35,6 +36,54 @@ pub const BAUD_LADDER: [u32; 5] = [9600, 19200, 4800, 2400, 1200];
 /// Read timeout for a control-line-only port. Nothing is ever read from it; this just
 /// keeps a pathological driver from blocking the keying thread.
 pub const OPEN_TIMEOUT_MS: u64 = 200;
+
+/// Just enough of a serial port to state the idle rule — so the rule is unit-testable with
+/// no hardware, which is the only reason it can have a test at all.
+pub trait ControlLinePins {
+    fn set_dtr(&mut self, on: bool) -> std::io::Result<()>;
+    fn set_rts(&mut self, on: bool) -> std::io::Result<()>;
+}
+
+#[cfg(feature = "serial")]
+impl ControlLinePins for Box<dyn serialport::SerialPort> {
+    fn set_dtr(&mut self, on: bool) -> std::io::Result<()> {
+        (**self)
+            .write_data_terminal_ready(on)
+            .map_err(std::io::Error::other)
+    }
+    fn set_rts(&mut self, on: bool) -> std::io::Result<()> {
+        (**self)
+            .write_request_to_send(on)
+            .map_err(std::io::Error::other)
+    }
+}
+
+/// ⚠️ CRITICAL (stuck PTT): drive DTR **and** RTS deasserted, right after opening a port.
+///
+/// The kernel asserts DTR and RTS when a serial port is opened, and `serialport`'s
+/// `dtr_on_open(false)` is documented as unreliable on Linux. Every path that opens a port
+/// then manages at most ONE line — the CW keyer keys its keyline, the FSK keyer keys its
+/// keyline, serial PTT keys the PTT line, the native CI-V daemon keys nothing at all — so
+/// the line each of them does NOT manage stays asserted for the whole session. On a
+/// conventional interface (DTR = key, RTS = PTT) that is the rig held in transmit from the
+/// moment you connect, with nothing in Nexus that would take it back down.
+///
+/// Deasserted is the correct idle for every one of those wirings: key up, PTT off, FSK mark.
+///
+/// **This lived as a comment and a copy-pasted pair of calls in two of the four openers**
+/// (`serial_keyer`, `rtty_fsk`); the other two — `rig::Rig::serial_ptt` and
+/// `civ::broker::CivDaemon::start` — simply did not have it. A rule that has to be remembered
+/// at each call site is a rule that will be missed at the next one, so it is one function now,
+/// called from the opener itself where it can be, and by name where the port carries data and
+/// therefore cannot go through [`open_control_line_port`].
+///
+/// Errors are swallowed deliberately: a port that refuses a control-line write is still a
+/// port we want to key on (some virtual/BT ports refuse), and the caller's own first real
+/// operation is where a dead port should surface.
+pub fn idle_both_lines<P: ControlLinePins + ?Sized>(port: &mut P) {
+    let _ = port.set_dtr(false);
+    let _ = port.set_rts(false);
+}
 
 /// Walk [`BAUD_LADDER`] and return the first successful open plus the rate that worked.
 ///
@@ -65,16 +114,17 @@ pub fn open_first_working_baud<T, E: std::fmt::Display>(
 }
 
 /// Open `port` for control-line-only use (DTR/RTS toggling), walking [`BAUD_LADDER`]
-/// until one rate is accepted. The returned port is untouched otherwise — the caller
-/// sets the line states it needs.
+/// until one rate is accepted. **Both control lines come back deasserted** — see
+/// [`idle_both_lines`] for why that is the opener's job and not the caller's.
 #[cfg(feature = "serial")]
 pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport::SerialPort>> {
-    let (sp, baud) = open_first_working_baud(port, |baud| {
+    let (mut sp, baud) = open_first_working_baud(port, |baud| {
         serialport::new(port, baud)
             .timeout(std::time::Duration::from_millis(OPEN_TIMEOUT_MS))
             .open()
     })
     .map_err(std::io::Error::other)?;
+    idle_both_lines(&mut sp);
     if baud != BAUD_LADDER[0] {
         // Worth a line in the log: it tells a rig-specific quirk (FTX-1) apart from a
         // cable/port problem, and the operator never has to know the rate exists.
@@ -159,6 +209,59 @@ mod tests {
             !err.contains("Check the port name"),
             "must not guess at causes in place of the real error: {err}"
         );
+    }
+
+    /// A port that records what was asked of its control lines, and can be made to refuse.
+    #[derive(Default)]
+    struct FakePort {
+        driven: Vec<(&'static str, bool)>,
+        refuse: bool,
+    }
+    impl ControlLinePins for FakePort {
+        fn set_dtr(&mut self, on: bool) -> std::io::Result<()> {
+            self.driven.push(("dtr", on));
+            if self.refuse {
+                return Err(std::io::Error::other("port refuses control lines"));
+            }
+            Ok(())
+        }
+        fn set_rts(&mut self, on: bool) -> std::io::Result<()> {
+            self.driven.push(("rts", on));
+            if self.refuse {
+                return Err(std::io::Error::other("port refuses control lines"));
+            }
+            Ok(())
+        }
+    }
+
+    /// ⚠️ THE STUCK-PTT RULE. **Both** lines, deasserted, at open. Every path that opens a
+    /// port then manages at most one of them, so the un-managed line stays asserted for the
+    /// session — on a conventional interface (DTR = key, RTS = PTT) that is the rig held in
+    /// transmit from the moment you connect. `Rig::serial_ptt` and `CivDaemon::start` both had
+    /// exactly that hole while the rule lived as a copy-pasted pair of calls inside the other
+    /// two openers; it is one function now, so the next opener cannot miss it.
+    #[test]
+    fn the_idle_rule_deasserts_both_lines_not_just_the_keyed_one() {
+        let mut p = FakePort::default();
+        idle_both_lines(&mut p);
+        assert_eq!(
+            p.driven,
+            vec![("dtr", false), ("rts", false)],
+            "the line a caller does NOT key is the one that gets left asserted"
+        );
+    }
+
+    /// A port that refuses a control-line write (some virtual/Bluetooth ports do) must not
+    /// stop the other line being deasserted, and must not fail the open: the caller's own
+    /// first real operation is where a dead port should surface.
+    #[test]
+    fn a_refused_control_line_does_not_strand_the_other_one() {
+        let mut p = FakePort {
+            refuse: true,
+            ..Default::default()
+        };
+        idle_both_lines(&mut p);
+        assert_eq!(p.driven, vec![("dtr", false), ("rts", false)]);
     }
 
     #[test]

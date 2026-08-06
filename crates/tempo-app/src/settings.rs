@@ -679,6 +679,40 @@ pub struct Settings {
     /// selected radio, so it isn't per-radio. `#[serde(default)]` so old files load.
     #[serde(default)]
     pub ptt_serial_port: String,
+    /// What the CAT port's RTS / DTR control lines are held at for the whole session:
+    /// `"low"` (default), `"high"`, or `"untouched"`. Parsed by
+    /// `tempo_audio::rigctld_proc::LineState::from_setting`, which treats anything
+    /// unrecognised — including the empty string — as `"low"`.
+    ///
+    /// **Why it exists.** A serial port's driver raises RTS and DTR on open and Hamlib does not
+    /// put them back down (it lowers only a line it is itself keying), so on Nexus's `vox`
+    /// default an interface wired to key from RTS was **keyed by the act of connecting**, all
+    /// session. 1.0.2 holds both low; that is what `"low"` means and it is right for almost
+    /// every station.
+    ///
+    /// The other two exist because holding a line low is not free for everyone:
+    /// - `"high"` powers an accessory that draws its supply from the line — an RS-232-era
+    ///   homebrew CI-V level converter, a K1EL-style serial keyer. Hamlib's own wording for
+    ///   these parameters is "for external powering".
+    /// - `"untouched"` says nothing at all: exactly 1.0.1 behaviour, and the in-app recovery
+    ///   for anything this change breaks that nobody foresaw. Without it the only way back
+    ///   would be a downgrade.
+    ///
+    /// WSJT-X ("Force Control Lines: DTR/RTS = High | Low | blank") and fldigi both expose the
+    /// same per-line three-way; they default to leave-alone, Nexus defaults to low.
+    ///
+    /// ⚠️ Global, not per-radio, and that is a compromise rather than a finding: this is a
+    /// property of the CABLE on a given radio's CAT port, so a two-radio station with a
+    /// line-powered accessory on only one of them cannot express that yet.
+    ///
+    /// Neither value can key a line Hamlib is using: `rig_open` refuses `rts_state`/`dtr_state`
+    /// on the keying line and on a hardware-handshake RTS, and Nexus asks the daemon which
+    /// lines it will accept before emitting anything.
+    #[serde(default)]
+    pub cat_rts_state: String,
+    /// See [`Settings::cat_rts_state`] — the same, for DTR.
+    #[serde(default)]
+    pub cat_dtr_state: String,
     /// Serial baud rate for CAT.
     pub baud: u32,
     /// Rig connection type: "serial" (default; rigctld talks to `serial_port`/`baud`) or
@@ -2294,6 +2328,11 @@ impl Default for Settings {
             rig_model_name: "None / VOX".to_string(),
             serial_port: String::new(),
             ptt_serial_port: String::new(),
+            // Held LOW by default — the 1.0.2 TX-safety fix. Struct-level `#[serde(default)]`
+            // means a settings file written before 1.0.2 has no such key and therefore loads
+            // THIS value, so the fix reaches existing stations without a migration.
+            cat_rts_state: "low".to_string(),
+            cat_dtr_state: "low".to_string(),
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),

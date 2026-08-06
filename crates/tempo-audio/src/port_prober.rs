@@ -169,10 +169,17 @@ pub fn candidates_from(ports: &[UsbPort], fallback_model: u32) -> Vec<Candidate>
 /// Run this when no live `rigctld` is holding the ports (the setup wizard, or a
 /// not-yet-working CAT) — a daemon already bound to the real port blocks that port's
 /// probe (the other ports still test fine).
+///
+/// Every throwaway daemon here is launched with the control lines held low
+/// ([`crate::rigctld_proc::ControlLines::hold_low`]) — the sweep spawns one per (port, baud,
+/// model) candidate and, before 1.0.2, every one of them left RTS asserted, so the comment
+/// above was only true of the CAT traffic. It does NOT read the operator's per-line override:
+/// the sweep runs before a radio is configured (the setup wizard) and probes ports that may
+/// belong to no rig at all, so the safe state is the only defensible one here.
 #[cfg(feature = "serial")]
 pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16) -> Option<ProbeHit> {
     use crate::rig::Rig;
-    use crate::rigctld_proc::spawn_rigctld;
+    use crate::rigctld_proc::{spawn_rigctld, ControlLines};
     use std::time::Duration;
 
     let ports = crate::ports::available_usb_ports();
@@ -186,7 +193,15 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16) -> Option<ProbeHit> {
             .unwrap_or(PROBE_BAUDS);
         for &baud in bauds {
             // Throwaway daemon for this (port, baud, model) — killed on drop.
-            let Ok(proc) = spawn_rigctld(c.model, &c.port_name, baud, tcp_port, false, None) else {
+            let Ok(proc) = spawn_rigctld(
+                c.model,
+                &c.port_name,
+                baud,
+                tcp_port,
+                false,
+                None,
+                ControlLines::hold_low(),
+            ) else {
                 continue;
             };
             // Let rigctld open the port + settle, then ask for the dial frequency.

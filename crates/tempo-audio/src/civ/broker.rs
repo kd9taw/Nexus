@@ -714,10 +714,16 @@ impl CivDaemon {
         civ_addr: u8,
         tcp_port: u16,
     ) -> std::io::Result<CivDaemon> {
-        let port = serialport::new(port_name, baud)
+        let mut port = serialport::new(port_name, baud)
             .timeout(super::engine::READ_TIMEOUT)
             .open()
             .map_err(std::io::Error::other)?;
+        // The native daemon keys NOTHING — it speaks CI-V and lets the rig do PTT — so both
+        // control lines would sit asserted for the whole session on an interface wired to key
+        // from either. Same rule as every other port Nexus opens; see
+        // `control_line::idle_both_lines`. (This path carries real data at the operator's
+        // baud, so it cannot go through `open_control_line_port` and its baud ladder.)
+        crate::control_line::idle_both_lines(&mut port);
         Self::start_with_io(Box::new(port), civ_addr, tcp_port)
     }
 

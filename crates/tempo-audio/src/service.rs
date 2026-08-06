@@ -114,6 +114,11 @@ fn keys_on_the_cat_port(t: &Transport) -> bool {
 ///
 /// `ptt_line` is `Some` only for the shared-port keying case ([`keys_on_the_cat_port`]); it makes
 /// the spawned rigctld key the transmitter on the same port it opened for CAT.
+///
+/// The control-line states come from the operator's settings via [`Transport::control_lines`] —
+/// see [`crate::rigctld_proc::ControlLines`]. They reach only the Hamlib path; the native CI-V
+/// daemon opens the port itself and gets the same guarantee from
+/// [`crate::control_line::idle_both_lines`] at its own open.
 fn spawn_cat_daemon(
     t: &Transport,
     target: &str,
@@ -150,6 +155,7 @@ fn spawn_cat_daemon(
         t.rigctld_port,
         network,
         ptt_line,
+        t.control_lines,
     )
     .map(|p| (CatDaemon::Spawned(p), native_fallback))
 }
@@ -887,6 +893,10 @@ impl Transport {
             // Global keying-line setting (not per-radio) — the live `from_settings` rebuild
             // of the ACTIVE radio supplies it; a monitor radio is read-only (never keys).
             ptt_serial_port: String::new(),
+            // A monitor is read-only, which makes a raised control line WORSE here, not
+            // better: nothing in this transport will ever key or unkey, so an interface wired
+            // to key from RTS would sit in transmit for as long as the monitor is open.
+            control_lines: crate::rigctld_proc::ControlLines::hold_low(),
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),
@@ -968,11 +978,23 @@ fn monitor_loop(
             let e = engine_lock(&engine);
             let s = e.settings();
             let active = s.active_radio;
+            // The control-line states are a GLOBAL setting, and a monitor's rigctld opens a
+            // real port on a real radio — so it has to honour them too. Without this, an
+            // operator who set a line HIGH to power a line-fed CI-V converter would keep that
+            // converter alive on the active radio and kill it on every monitored one.
+            let lines = crate::rigctld_proc::ControlLines {
+                rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
+                dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
+            };
             let want = s
                 .radios
                 .iter()
                 .filter(|p| p.enabled && p.id != active && p.rig_model != 0)
-                .map(|p| (p.id, Transport::from_profile(p)))
+                .map(|p| {
+                    let mut t = Transport::from_profile(p);
+                    t.control_lines = lines;
+                    (p.id, t)
+                })
                 .collect();
             (active, want)
         };
@@ -5977,6 +5999,10 @@ struct Transport {
     /// Serial port for RTS/DTR PTT when it differs from the CAT port (SO2R controller
     /// routing keying on its own COM port). Empty = key on `serial_port` (prior behavior).
     ptt_serial_port: String,
+    /// What each CAT control line is held at for the session (`Settings::cat_rts_state` /
+    /// `cat_dtr_state`). Part of the transport because changing it has to relaunch rigctld —
+    /// the states are `-C` flags on its command line, not something a running daemon re-reads.
+    control_lines: crate::rigctld_proc::ControlLines,
     baud: u32,
     /// "network" → rigctld talks to `rig_addr` over TCP (Flex/SmartSDR); else serial.
     rig_conn: String,
@@ -6014,6 +6040,9 @@ impl Transport {
             // the live per-tick `from_settings` rebuild supplies the real value, and empty
             // here just falls back to `serial_port` for the brief pre-first-tick window.
             ptt_serial_port: String::new(),
+            // The startup seed is the SAFE state, not "no opinion": this is what the very
+            // first rigctld of the session is launched with, before any settings tick.
+            control_lines: crate::rigctld_proc::ControlLines::hold_low(),
             baud: c.baud,
             rig_conn: c.rig_conn.clone(),
             rig_addr: c.rig_addr.clone(),
@@ -6041,6 +6070,10 @@ impl Transport {
             rig_model: s.rig_model,
             serial_port: s.serial_port.clone(),
             ptt_serial_port: s.ptt_serial_port.clone(),
+            control_lines: crate::rigctld_proc::ControlLines {
+                rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
+                dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
+            },
             baud: s.baud,
             icom_native_cat: s.icom_native_cat,
             rig_conn: s.rig_conn.clone(),
@@ -6080,6 +6113,7 @@ impl Transport {
             || self.rig_model != o.rig_model
             || self.serial_port != o.serial_port
             || self.ptt_serial_port != o.ptt_serial_port
+            || self.control_lines != o.control_lines
             || self.baud != o.baud
             || self.rig_conn != o.rig_conn
             || self.rig_addr != o.rig_addr
@@ -10442,6 +10476,7 @@ mod tests {
             rig_model: 1035,
             serial_port: "/dev/ttyUSB0".to_string(),
             ptt_serial_port: String::new(),
+            control_lines: crate::rigctld_proc::ControlLines::hold_low(),
             baud: 38400,
             icom_native_cat: false,
             rig_conn: "serial".to_string(),
