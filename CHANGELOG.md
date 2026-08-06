@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Connecting to a serial rig on Linux could put it straight into transmit — and hold it there.**
+  If your PTT Method is anything other than RTS or DTR on the CAT port — VOX and CAT keying, which
+  is the default and what most operators run — Nexus started Hamlib's `rigctld` without telling it
+  anything about the port's control lines. The Linux serial driver raises RTS and DTR when a port
+  is opened, and Hamlib only puts a line back down when it is the line it has been asked to key
+  with, so on the default both stayed high for the whole session. On an interface wired to key the
+  radio from RTS (or from DTR) that is the transmitter switched on by the act of connecting, with
+  nothing in Nexus that would switch it off. Nexus now asks the daemon to hold those lines low when
+  it opens the port. **Who was exposed:** a serial CAT connection on Linux (and, less certainly,
+  macOS — the same driver behaviour) through an interface that keys PTT or a CW line from RTS or
+  DTR: the classic single-cable and homebrew interfaces, commercial CAT cables wired that way, and
+  anything built to the RTS-is-PTT convention. A network/TCP rig has no control lines and was never
+  affected. **What to check:** if you have ever seen the radio key on connect, drop to receive, or
+  show TX with nothing sending, this was a candidate cause. **What has NOT changed:** if you key by
+  RTS or DTR, Nexus never touches that line — Hamlib refuses to open a rig that is asked to hold
+  the line it keys with, so keying works exactly as before. Neither is RTS touched on a radio whose
+  Hamlib backend uses it for hardware flow control (the FTDX10, FT-991, TS-2000 and TS-590 among
+  about fifty others); Nexus reads that from the Hamlib you actually have, per radio, before it
+  starts the daemon. If your interface takes its power from the DTR or RTS pin rather than from
+  USB — a design from the RS-232 era — it will now see those pins low. **What this is not:** it is
+  a real defect, found by reading the Hamlib source and confirmed against the Hamlib Nexus ships,
+  and it matches a published report of the same behaviour with the same FT-847 cable under a
+  different program. It is not established as the cause of any particular report of a silent radio,
+  and it is not claimed as one — silence and a stuck transmitter are different symptoms.
+
 - **The Needed board hid US-spotted rows on exactly the pileups where a US spotter matters.**
   An HF spot reaches the board when someone on your continent heard the DX — a JA station a
   Kansas skimmer copied says something about a path from your QTH; the same station heard only

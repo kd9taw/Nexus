@@ -9,6 +9,47 @@
 use std::io::BufRead;
 use std::process::{Child, Command, Stdio};
 
+/// Which serial control lines rigctld is told to hold LOW for the whole session
+/// (`-C rts_state=OFF` / `-C dtr_state=OFF`).
+///
+/// **Why any of this exists.** The Linux tty driver raises RTS and DTR when the port is opened,
+/// and Hamlib does not put them back down except on a line it is itself keying: `rig.c`
+/// `rig_open` lowers a line only in the `RIG_PTT_SERIAL_RTS` / `_DTR` arms ("Needed on Linux
+/// because the serial port driver sets RTS/DTR on open — only need to address the PTT line as we
+/// offer config parameters to control the other"); the `RIG_PTT_NONE` / `_RIG` / `_RIG_MICDATA`
+/// arms `break` without touching a pin. Its own force-low pair in `serial.c` is commented out
+/// ("This fails on Linux and MacOS with hardware flow control"). Nexus's PTT default is `vox`, so
+/// we pass no `-P` and land on exactly that do-nothing arm — and an interface that keys on RTS is
+/// then **keyed by the act of connecting, for the whole session**. Hamlib's own answer to this is
+/// these two config parameters (`rts_state` / `dtr_state`, values `Unset`/`ON`/`OFF`,
+/// `src/serial_cfg_params.h` + `src/conf.c` `frontend_set_conf`), applied by `iofunc.c`
+/// `port_open` AFTER `serial_setup` has finished — which is why using them is not the upstream
+/// bug re-created: that one forced the pins low BEFORE termios was configured.
+///
+/// **The two ways it bites, both re-observed against the bundled rigctld 4.7.1:**
+/// 1. Ask it to hold the line it is *keying with* and `rig_open` returns `-RIG_ECONF`
+///    (`rig.c`: "cannot set RTS with PTT by RTS" / "cannot set DTR with PTT by DTR").
+/// 2. Ask it to hold RTS on a backend whose caps declare RTS/CTS hardware flow control and
+///    `rig_open` returns `-RIG_ECONF` too ("cannot set RTS with hardware handshake"), whatever
+///    the PTT type. ~50 backends declare it, including the FTDX10, FT-991, TS-2000 and TS-590.
+///
+/// Neither refusal kills the daemon — rigctld carries on serving a rig it never opened ("continue
+/// even if opening the rig fails, because it may be powered off"), so a wrong flag here is not a
+/// crash, it is **silently dead CAT**. That is why `false` is always the safe value: it means
+/// "say nothing about this line", which is exactly what Nexus did before 1.0.2.
+///
+/// [`hold_low_for`] decides both from the caps of the very binary about to be launched, so it
+/// cannot drift against the operator's Hamlib. It has to be asked rather than tabulated: between
+/// 4.5.5 and 4.7.1 the FTDX10, TS-2000, TS-590 and FT-9000 all *gained* the hardware-handshake
+/// declaration, so a model list baked in at one release would have killed CAT on the next.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HoldLow {
+    /// Hold RTS low. Never set for a backend that uses RTS/CTS hardware flow control.
+    pub rts: bool,
+    /// Hold DTR low. DTR is not a flow-control line, so only the keying-line refusal applies.
+    pub dtr: bool,
+}
+
 /// Build the `rigctld` argument vector.
 ///
 /// Produces e.g. `["-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]`:
@@ -35,6 +76,9 @@ use std::process::{Child, Command, Stdio};
 ///   "Unrecognised PTT type, using NONE" and comes up with keying silently disabled, which
 ///   looks exactly like a dead rig. `ptt_type_token` is therefore derived from the enum, not
 ///   spelled at the call site, and is pinned by tests.
+/// - `-C rts_state=OFF` / `-C dtr_state=OFF` per [`HoldLow`]: hold a control line LOW for the
+///   whole session, so opening the port cannot key the transmitter. See [`HoldLow`] for the
+///   Hamlib contract and the two ways it bites.
 pub fn rigctld_args(
     model: u32,
     addr: &str,
@@ -42,6 +86,7 @@ pub fn rigctld_args(
     tcp_port: u16,
     network: bool,
     ptt_line: Option<crate::rig::SerialLine>,
+    hold_low: HoldLow,
 ) -> Vec<String> {
     let mut args = vec!["-m".to_string(), model.to_string()];
     if !addr.is_empty() {
@@ -60,6 +105,20 @@ pub fn rigctld_args(
             args.push(ptt_type_token(line).to_string());
             args.push("-p".to_string());
             args.push(addr.to_string());
+        }
+    }
+    // Hold the control lines LOW for the session so that merely opening the port cannot key the
+    // transmitter (see [`HoldLow`]). Gated on the same two things as keying — no control lines
+    // exist over TCP, and an empty addr has no port — and NEVER emitted for the line rigctld is
+    // itself keying with, which Hamlib refuses to open with `-RIG_ECONF`.
+    if !addr.is_empty() && !network {
+        if hold_low.rts && ptt_line != Some(crate::rig::SerialLine::Rts) {
+            args.push("-C".to_string());
+            args.push("rts_state=OFF".to_string());
+        }
+        if hold_low.dtr && ptt_line != Some(crate::rig::SerialLine::Dtr) {
+            args.push("-C".to_string());
+            args.push("dtr_state=OFF".to_string());
         }
     }
     args.push("-t".to_string());
@@ -246,6 +305,56 @@ pub fn spawn_rotctld(
     })
 }
 
+/// Which control lines it is safe to hold low for `model`, asked of the very `rigctld` we are
+/// about to launch (`rigctld -m <model> -u` dumps the backend's caps and exits without opening
+/// the port). Asking beats tabulating: the answer then matches the operator's own Hamlib, not
+/// the one this was written against (see [`HoldLow`]).
+///
+/// Any failure — no binary, a dump we cannot read, a non-serial backend — yields
+/// [`HoldLow::default`], i.e. touch nothing. It can only ever leave us where 1.0.1 already was.
+fn hold_low_for(model: u32) -> HoldLow {
+    let model = model.to_string();
+    let mut cmd = Command::new(resolve_rigctld());
+    cmd.args(["-m", &model, "-u"]);
+    cmd.stdin(Stdio::null());
+    // Same no-console-window treatment as the daemon itself (Nexus is a GUI app).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    match cmd.output() {
+        Ok(out) if out.status.success() => parse_hold_low(&String::from_utf8_lossy(&out.stdout)),
+        _ => HoldLow::default(),
+    }
+}
+
+/// Read a `rigctld --dump-caps` dump: which lines may be held low for this backend.
+///
+/// The line that decides it is `dumpcaps.c`'s
+/// `Serial speed: 4800..38400 baud, 8N2, ctrl=CTS/RTS`, printed only for `RIG_PORT_SERIAL`
+/// backends. `ctrl=` is one of exactly `NONE`, `XONXOFF`, `CTS/RTS`.
+///
+/// ⚠️ Matched as an **allow-list** — RTS is held low only for a `ctrl=` we positively recognise
+/// as leaving RTS free. Read the other way ("not CTS/RTS"), a renamed or reworded token in some
+/// future Hamlib would read as "safe" and kill CAT on every hardware-handshake rig.
+fn parse_hold_low(caps_dump: &str) -> HoldLow {
+    let Some(serial) = caps_dump
+        .lines()
+        .find(|l| l.trim_start().starts_with("Serial speed:"))
+    else {
+        // No serial line in the caps at all: a network/none backend. Hamlib does not even offer
+        // rts_state/dtr_state there (`rig_confparam_lookup` searches the serial params only for
+        // RIG_PORT_SERIAL), so the flags would be inert noise.
+        return HoldLow::default();
+    };
+    HoldLow {
+        rts: serial.contains("ctrl=NONE") || serial.contains("ctrl=XONXOFF"),
+        dtr: true,
+    }
+}
+
 /// Spawn `rigctld` for `model` on `serial_port`@`baud`, listening on
 /// `tcp_port`. Returns a kill-on-drop handle. Uses the bundled Hamlib if present
 /// (see [`resolve_rigctld`]), otherwise a `rigctld` on `PATH`.
@@ -257,7 +366,15 @@ pub fn spawn_rigctld(
     network: bool,
     ptt_line: Option<crate::rig::SerialLine>,
 ) -> std::io::Result<RigctldProc> {
-    let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line);
+    // Ask the daemon about the rig BEFORE launching it, so it cannot come up holding the
+    // transmitter keyed (see [`HoldLow`]). Skipped where there is no control line to hold:
+    // a TCP transport, or a model that needs no port at all.
+    let hold_low = if network || addr.is_empty() {
+        HoldLow::default()
+    } else {
+        hold_low_for(model)
+    };
+    let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, hold_low);
     let mut cmd = Command::new(resolve_rigctld());
     cmd.args(&args);
     // Capture the daemon's own stderr so Hamlib's connection errors (port open failed, read
@@ -324,7 +441,7 @@ mod tests {
 
     #[test]
     fn args_with_serial_port() {
-        let args = rigctld_args(3073, "COM5", 38400, 4532, false, None);
+        let args = rigctld_args(3073, "COM5", 38400, 4532, false, None, HoldLow::default());
         assert_eq!(
             args,
             vec!["-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]
@@ -334,7 +451,15 @@ mod tests {
     #[test]
     fn args_for_network_rig_omit_baud() {
         // A FlexRadio over SmartSDR (or any TCP rig): host:port on -r, no baud.
-        let args = rigctld_args(23005, "192.168.1.50:4992", 38400, 4532, true, None);
+        let args = rigctld_args(
+            23005,
+            "192.168.1.50:4992",
+            38400,
+            4532,
+            true,
+            None,
+            HoldLow::default(),
+        );
         assert_eq!(
             args,
             vec!["-m", "23005", "-r", "192.168.1.50:4992", "-t", "4532"]
@@ -343,7 +468,15 @@ mod tests {
 
     #[test]
     fn args_for_unix_serial_device() {
-        let args = rigctld_args(1042, "/dev/ttyUSB0", 19200, 4533, false, None);
+        let args = rigctld_args(
+            1042,
+            "/dev/ttyUSB0",
+            19200,
+            4533,
+            false,
+            None,
+            HoldLow::default(),
+        );
         assert_eq!(
             args,
             vec![
@@ -362,7 +495,7 @@ mod tests {
     #[test]
     fn args_without_serial_port_omit_port_and_baud() {
         // Dummy / NET rigs need no serial device.
-        let args = rigctld_args(1, "", 38400, 4532, false, None);
+        let args = rigctld_args(1, "", 38400, 4532, false, None, HoldLow::default());
         assert_eq!(args, vec!["-m", "1", "-t", "4532"]);
     }
 
@@ -378,6 +511,7 @@ mod tests {
             4532,
             false,
             Some(crate::rig::SerialLine::Rts),
+            HoldLow::default(),
         );
         assert_eq!(
             args,
@@ -394,6 +528,7 @@ mod tests {
             4533,
             false,
             Some(crate::rig::SerialLine::Dtr),
+            HoldLow::default(),
         );
         assert!(dtr.windows(2).any(|w| w == ["-P", "DTR"]));
         assert!(dtr.windows(2).any(|w| w == ["-p", "/dev/ttyUSB0"]));
@@ -422,13 +557,184 @@ mod tests {
             4532,
             true,
             Some(crate::rig::SerialLine::Rts),
+            HoldLow::default(),
         );
         assert!(
             !net.iter().any(|a| a == "-P" || a == "-p"),
             "a network rig has no serial keying line: {net:?}"
         );
 
-        let no_dev = rigctld_args(1, "", 38400, 4532, false, Some(crate::rig::SerialLine::Rts));
+        let no_dev = rigctld_args(
+            1,
+            "",
+            38400,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Rts),
+            HoldLow::default(),
+        );
         assert_eq!(no_dev, vec!["-m", "1", "-t", "4532"]);
+    }
+
+    /// Every arg-shape test below reads the flag pairs rather than a whole vector, so adding an
+    /// unrelated argument later cannot make a TX-safety test fail for the wrong reason.
+    fn holds(args: &[String], line: &str) -> bool {
+        args.windows(2)
+            .any(|w| w[0] == "-C" && w[1] == format!("{line}_state=OFF"))
+    }
+
+    /// ⚠️ THE DEFECT, 1.0.1 and earlier. Nexus's PTT Method default is `vox`, so no `-P` is
+    /// passed and Hamlib's `rig_open` takes the `RIG_PTT_NONE` arm, which `break`s without
+    /// touching a pin — while the Linux tty driver has just raised both. On an interface that
+    /// keys on RTS that is the radio put into transmit BY CONNECTING, and held there for the
+    /// session. Both lines are now held low, because both key transmitters in the field: RTS is
+    /// the reported one, DTR is the same defect on the equally common DTR-keyed interface (and
+    /// on a DTR-keyed CW interface it is a continuous key-down).
+    #[test]
+    fn a_serial_rig_on_the_vox_default_holds_both_lines_low() {
+        let args = rigctld_args(
+            3073,
+            "/dev/ttyUSB0",
+            38400,
+            4532,
+            false,
+            None,
+            HoldLow {
+                rts: true,
+                dtr: true,
+            },
+        );
+        assert!(holds(&args, "rts"), "RTS left high on connect: {args:?}");
+        assert!(holds(&args, "dtr"), "DTR left high on connect: {args:?}");
+    }
+
+    /// ⚠️ THE INVARIANT THAT OUTRANKS THE FIX: an operator who keys by RTS or DTR must still
+    /// key. Hamlib REFUSES to open a rig asked to hold the line it is keying with — `rig.c`
+    /// `rig_open` returns `-RIG_ECONF`, observed from the bundled rigctld 4.7.1 as
+    /// `rig_open: cannot set RTS with PTT by RTS "COM99"` and
+    /// `rig_open: cannot set DTR with PTT by DTR "COM99"` — and it does NOT exit on that, it
+    /// serves a rig it never opened. So this is not a preference: holding the keying line is
+    /// silently dead CAT *and* dead keying at once. The OTHER line is still held, which the same
+    /// binary confirms is accepted.
+    #[test]
+    fn the_keying_line_is_never_held_low() {
+        let both = HoldLow {
+            rts: true,
+            dtr: true,
+        };
+        let rts = rigctld_args(
+            3073,
+            "COM5",
+            38400,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Rts),
+            both,
+        );
+        assert!(
+            !holds(&rts, "rts"),
+            "would ask Hamlib to hold the RTS keying line — it refuses to open: {rts:?}"
+        );
+        assert!(holds(&rts, "dtr"), "DTR is not the keying line: {rts:?}");
+
+        let dtr = rigctld_args(
+            3073,
+            "COM5",
+            38400,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Dtr),
+            both,
+        );
+        assert!(
+            !holds(&dtr, "dtr"),
+            "would ask Hamlib to hold the DTR keying line — it refuses to open: {dtr:?}"
+        );
+        assert!(holds(&dtr, "rts"), "RTS is not the keying line: {dtr:?}");
+    }
+
+    /// A backend whose caps declare RTS/CTS hardware flow control owns RTS as a flow-control
+    /// output; asking to hold it low is refused whatever the PTT type
+    /// (`rig_open: cannot set RTS with hardware handshake "COM99"`, observed on model 1042).
+    /// DTR is not a flow-control line and is unaffected — also observed.
+    #[test]
+    fn a_hardware_handshake_backend_keeps_its_rts_and_still_drops_dtr() {
+        let args = rigctld_args(
+            1042,
+            "COM5",
+            38400,
+            4532,
+            false,
+            None,
+            HoldLow {
+                rts: false,
+                dtr: true,
+            },
+        );
+        assert!(
+            !holds(&args, "rts"),
+            "RTS is this backend's flow control — Hamlib refuses to open: {args:?}"
+        );
+        assert!(holds(&args, "dtr"), "DTR is still free: {args:?}");
+    }
+
+    /// A TCP transport has no control lines at all, and Hamlib does not even offer the config
+    /// parameters for a non-serial backend. No line flags may appear — on either gate.
+    #[test]
+    fn a_network_rig_gets_no_line_flags() {
+        let both = HoldLow {
+            rts: true,
+            dtr: true,
+        };
+        let net = rigctld_args(23005, "192.168.1.50:4992", 38400, 4532, true, None, both);
+        assert!(
+            !net.iter().any(|a| a == "-C"),
+            "a TCP rig has no control lines: {net:?}"
+        );
+
+        let no_dev = rigctld_args(1, "", 38400, 4532, false, None, both);
+        assert_eq!(no_dev, vec!["-m", "1", "-t", "4532"]);
+    }
+
+    /// The caps dumps are verbatim from the bundled `rigctld 4.7.1 -m <model> -u`. The `ctrl=`
+    /// token is read as an allow-list: anything not positively known to leave RTS free must come
+    /// back `rts: false`, because guessing wrong is dead CAT and guessing shy is only 1.0.1.
+    #[test]
+    fn parse_hold_low_reads_the_backend_caps() {
+        // IC-7300: RS-232, no hardware handshake → both lines free.
+        assert_eq!(
+            parse_hold_low("Port type:\tRS-232\nSerial speed: 4800..115200 baud, 8N1, ctrl=NONE\n"),
+            HoldLow {
+                rts: true,
+                dtr: true
+            }
+        );
+        // FTDX-10: RS-232 with RTS/CTS → RTS is spoken for, DTR is not.
+        assert_eq!(
+            parse_hold_low(
+                "Port type:\tRS-232\nSerial speed: 4800..38400 baud, 8N2, ctrl=CTS/RTS\n"
+            ),
+            HoldLow {
+                rts: false,
+                dtr: true
+            }
+        );
+        // XON/XOFF is software flow control — it does not use RTS.
+        assert!(parse_hold_low("Serial speed: 4800..9600 baud, 8N1, ctrl=XONXOFF\n").rts);
+        // NET rigctl: no serial line in the caps at all → say nothing.
+        assert_eq!(
+            parse_hold_low("Model name:\tNET rigctl\nPort type:\tNetwork link\n"),
+            HoldLow::default()
+        );
+        // An unreadable or unrecognised dump must fall back to 1.0.1 behaviour, never to
+        // "safe to hold".
+        assert_eq!(parse_hold_low(""), HoldLow::default());
+        assert_eq!(
+            parse_hold_low("Serial speed: 4800..38400 baud, 8N2, ctrl=SOMETHING_NEW\n"),
+            HoldLow {
+                rts: false,
+                dtr: true
+            }
+        );
     }
 }
