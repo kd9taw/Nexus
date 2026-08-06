@@ -5,6 +5,20 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The Linux .deb installed cleanly and then would not start.** The package named Hamlib, WebKit
+  and GTK as its dependencies but never mentioned the Fortran runtime or single-precision FFTW
+  that the modem is linked against — so `apt` reported success, the menu entry appeared, and the
+  binary then died on `libgfortran.so.5: cannot open shared object file` the moment you clicked
+  it. Nothing in the install said anything was missing, because as far as `dpkg` was concerned
+  nothing was. It only ever worked by luck: on a machine that happened to have both libraries
+  already, for some other reason. The package now declares `libgfortran5` and `libfftw3-single3`,
+  so `apt` installs them with Nexus — and on a system that genuinely cannot supply them, the
+  install refuses up front instead of handing you an application that cannot open.
+
 ## [1.0.1] — 2026-08-05
 
 ### Added
