@@ -19,6 +19,7 @@ pub mod engine;
 pub mod privileges;
 pub mod station;
 pub mod update;
+pub mod window_geometry;
 
 use std::collections::HashMap;
 
