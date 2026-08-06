@@ -189,203 +189,92 @@ const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 
 const STANDARD_BAUDS = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
 
 /**
- * The baud a settings file carries when NOBODY HAS CHOSEN ONE — `radioPatch`'s own fallback
+ * The baud a settings file carries when nobody has chosen one — `radioPatch`'s own fallback
  * below, mirroring the Rust default (`tempo-app::settings`, `baud: 38400`).
- *
- * It is not just a number: it is the only evidence this code has that the operator has never
- * been near the Baud box, and [`baudForRig`] is built on reading it that way. Anything else in
- * that field got there because a human or auto-detect put it there.
  */
 const APP_DEFAULT_BAUD = 38400
 
 /**
- * What a rig can be set to, and what it arrives on.
+ * The single CAT rate a rig can run — for the rigs whose Hamlib backend states it as a fact.
  *
- * Both fields are about the RADIO, never about the Hamlib backend — see the rule at
- * [`RIG_CAT_RATES`] for why that distinction is the whole of this file's bug history.
+ * ## THE BASIS RULE. An entry may rest on ONE fact, and this is it.
+ *
+ * A model is listed **only** when `rigctl -m <model> --dump-caps` against the bundled Hamlib
+ * reports `Serial speed: N..N` — `serial_rate_min == serial_rate_max`, the backend saying there
+ * is no choice of rate at all. The value is that N. Nothing else may put a rig in this table:
+ * not a baud menu out of the radio's manual, not a low declared max, not a make.
+ *
+ * Picking such a rig sets the baud to N, because on a one-rate rig every other value is a
+ * setting that cannot work. There is nothing to protect and so no judgement to get wrong.
+ *
+ * A rig with **no entry keeps whatever baud is set** and is never touched. Finding a working
+ * rate for those is `baud_ladder.rs`'s job — it PROBES, and a probe cannot be wrong about a
+ * radio the way a table can.
+ *
+ * ### Why the rule is this narrow — four rounds, each fixing the last one's rig and breaking a new one
+ *
+ * The predecessor of this table carried a per-radio `{rates, preferred}` transcribed out of
+ * hardware manuals across 61 models, and it clobbered a working setting every round:
+ * an FT-847 running 57,600 rewritten to 4,800; an FX-4 (fixed 115,200) shipped unable to talk;
+ * three Kenwoods dead on a fresh install; and finally an IC-746 row reading `[9600, 19200]`
+ * against a manual (Set Mode item 27) that offers 300/1200/4800/9600/19200/AUTO — so an
+ * operator running one at 4,800 was silently moved to 19,200, which is the FT-847 bug again,
+ * created by the fix for the FT-847 bug.
+ *
+ * **The root cause was the data, not the logic.** Hand transcription across 61 models has a
+ * failure rate, and each wrong row silently overwrites a radio that was working. So the table
+ * now holds only what the backend declares, and is checked against it: the caps of every rig
+ * the picker offers are dumped by `scripts/gen-hamlib-serial-speeds.mjs` into
+ * `__fixtures__/hamlibSerialSpeeds.json`, and `SettingsPanel.rigpicker.test.tsx` fails if a row
+ * appears whose model is not `min == max` there, if its rate is not that value, or if a
+ * one-rate rig in the catalog is missing a row. **A row cannot be added from a manual.**
+ *
+ * ⚠️ Deliberately NOT here, and it stays that way: rigs whose declared max is merely low.
+ * Hamlib does not enforce `serial_rate_min`/`_max` — measured, model 3085 opens clean at
+ * 115,200 against a declared max of 19,200 — and Nexus drives Icoms past it on purpose (the
+ * native CI-V scope REQUIRES 115,200 on an IC-705, and `civ/scope.rs` records an IC-9700
+ * verified at 57,600 against a declared 38,400). Only `min == max` is a fact; a range is not.
  */
-export type RigCatRates = {
-  /** Every rate the radio's own CAT/CI-V menu offers. */
-  readonly rates: readonly number[]
-  /** The rate the radio SHIPS on — its factory setting, or its only rate. */
-  readonly preferred: number
-}
-
-/** The rig has exactly one rate, so it is both the only choice and the one it ships on. */
-const oneRate = (rate: number): RigCatRates => ({ rates: [rate], preferred: rate })
-/**
- * The radio's menu covers everything from `min` to `max`, and it ships on `preferred`
- * (default: the top rate). `min`/`max` describe the RADIO — a backend's declared range is a
- * different thing and is not admissible here on its own.
- */
-const rateRange = (min: number, max: number, preferred?: number): RigCatRates => {
-  const rates = STANDARD_BAUDS.filter((b) => b >= min && b <= max)
-  return { rates, preferred: preferred ?? rates[rates.length - 1] }
-}
-
-/**
- * Rig CAT rates, for the radios where the app's 38,400 default is **not** a free choice.
- *
- * ## THE RULE. Read this before adding an entry — it has now been wrong in both directions.
- *
- * An entry states two facts about the **radio**: every rate it can be set to (`rates`), and
- * the rate it arrives on (`preferred`). Picking that rig imposes `preferred` in exactly two
- * cases, and the whole rule is [`baudForRig`] so there is one place to read it and one to test:
- *
- * 1. **The rate now set is not one this radio can run.** It cannot work, so it is replaced.
- * 2. **The rate now set is still [`APP_DEFAULT_BAUD`].** Nobody has chosen a rate here — that
- *    is Nexus's own default sitting in a box the operator has never opened — and the radio in
- *    its carton is not on it.
- *
- * Everything else is the operator's and is left exactly alone. A rig with **no entry** is never
- * touched at all: we have no evidence about it, and a guess costs a working radio.
- *
- * ### Why both halves — each one alone has shipped a bug
- *
- * **Half 1 alone is a clobber** (2026-08, the FT-847). The plain `model → baud` map this
- * replaced was applied on EVERY pick, unconditionally. The operator whose report started all
- * of this runs his FT-847 at 57,600; selecting "Yaesu FT-847" in the picker rewrote it to
- * 4,800 and killed the CAT he had just got working. Six of the seven Yaesu entries were safe
- * only by accident — their backends declare one rate, so there was nothing to lose.
- *
- * **Half 2 alone is dead CAT out of the box** (2026-08, the TS-870S — the very next round).
- * Fixing the clobber with "never replace a rate this rig can run" sounded right and quietly
- * read Hamlib's declared range as a description of the radio. ⚠️ **It is not one.**
- * `serial_rate_min`/`_max` is what the BACKEND can drive; it says nothing about what the RADIO
- * is set to. A TS-870S can be set anywhere from 1,200 to 57,600 and it **ships on 9,600** — so
- * 38,400 counted as "a rate this rig can run", nothing was imposed, and picking "Kenwood
- * TS-870S" on a fresh install saved 38,400 against a radio on its factory 9,600. Three popular
- * Kenwoods (TS-870S / TS-570D / TS-570S) went out unable to talk at all.
- *
- * The distinction that makes both halves true at once is **chosen vs. never-touched**, and
- * [`APP_DEFAULT_BAUD`] is the entire evidence we have for it. Imposing a radio's own shipping
- * rate over a value nobody picked is correct; overwriting one somebody picked is not.
- *
- * ### Where the numbers come from — TWO sources, and they answer different questions
- *
- * - `rigctl -m <model> --dump-caps` against the bundled Hamlib 4.7.1
- *   (`src-tauri/resources/hamlib`), field `Serial speed: <min>..<max>` — **what the backend
- *   drives.** `min == max` is the one caps fact strong enough to earn an entry by itself: the
- *   backend is saying there is no choice at all.
- * - **the radio's own CAT/CI-V baud menu**, from its manual — **what the radio can be set to,
- *   and what it left the factory on.** This is what `rates` and `preferred` actually mean, and
- *   the only source for `preferred`. Every entry narrower than its caps names its menu.
- *
- * ### What is deliberately NOT here: rigs whose declared max is merely low
- *
- * Hamlib does not enforce `serial_rate_min`/`_max` — `rig_open` accepts a rate outside them
- * without a word (measured: model 3085 at 115,200 opens clean against its declared max of
- * 19,200) — so a low max is the backend author's note, not the radio's limit. Nexus already
- * drives Icoms past it on purpose: the native CI-V scope REQUIRES 115,200 on an IC-705
- * (declared max 19,200) and `civ/scope.rs` records an IC-9700 verified at 57,600 (declared max
- * 38,400). Generating entries from a low max would break those radios in exactly the way this
- * rule exists to prevent — so a low max is a reason to go and read the radio's menu, never a
- * reason to write an entry. Doing that for the nine verified-tier Icoms below split them seven
- * to two.
- */
-export const RIG_CAT_RATES = new Map<number, RigCatRates>([
-  // Xiegu CI-V — fixed 19,200 with no baud menu on the radio, so the backend's wider
-  // 300..19,200 (X6100/X6200/X5105/X108G) describes the driver, not the rig.
-  [3088, oneRate(19200)], // G90 (caps 19200..19200)
-  [3087, oneRate(19200)], // X6100
-  [3091, oneRate(19200)], // X6200
-  [3089, oneRate(19200)], // X5105
-  [3076, oneRate(19200)], // X108G
-  // Icom CI-V, the pre-USB generation. All seven declare a max of 19,200 — but so do the two
-  // Icoms right below that must NOT be listed, so caps decided nothing here. Each is settled
-  // against its own SET MODE ▸ CI-V BAUD RATE menu, quoted per rig, and `preferred` is 19,200
-  // for all seven because six of them ship on **Auto** (which locks to whatever the controller
-  // drives, so the fastest rate the radio has is both legal and best) and the seventh is the
-  // IC-718, whose menu has no Auto — see the caveat on that entry.
-  //
-  // Before these entries, picking any of them left the 38,400 default on a radio whose menu
-  // does not contain 38,400: guaranteed silence, the FT-847 report's exact shape.
-  [3060, { rates: [4800, 9600, 19200], preferred: 19200 }], // IC-7000 — menu 4800/9600/19200/Auto
-  [3023, { rates: [9600, 19200], preferred: 19200 }], // IC-746 — menu 9600/19200/Auto
-  // Menu 300/1200/4800/9600/19200 (+Auto except on the IC-718). 2,400 is off every one of
-  // these dials, which is why they are spelled out rather than built with `rateRange`.
-  [3046, { rates: [1200, 4800, 9600, 19200], preferred: 19200 }], // IC-746PRO
-  [3057, { rates: [1200, 4800, 9600, 19200], preferred: 19200 }], // IC-756PROIII
-  [3044, { rates: [1200, 4800, 9600, 19200], preferred: 19200 }], // IC-910H
-  [3070, { rates: [1200, 4800, 9600, 19200], preferred: 19200 }], // IC-7100 (Connectors ▸ CI-V)
-  // IC-718 — menu "3/12/48/96/HI" (300/1200/4800/9600/19200) and NO Auto position.
-  // ⚠️ `preferred` here is the top of that menu, not a factory value read off the manual: the
-  // 718's shipping CI-V rate could not be established. 38,400 is impossible on this radio and
-  // 19,200 is at least possible, so this is strictly better than leaving the default — but if
-  // the ship rate ever gets pinned down, this is the entry to correct.
-  [3013, { rates: [1200, 4800, 9600, 19200], preferred: 19200 }], // IC-718
-  // NOT LISTED, on purpose, and this is the load-bearing half of the Icom audit:
-  //   3085 IC-705  — caps 4800..19,200, but its CI-V USB menu goes to 115,200, that is its
-  //                  DEFAULT, and Nexus's own native scope requires it. An entry would break
-  //                  the feature it was written for.
-  //   3092 IC-7760 — caps 300..19,200, but its CI-V baud menu offers 115,200/Auto and the USB
-  //                  spectrum path runs there. The backend's range is stale, not narrow.
-  // Both are pinned by `SettingsPanel.rigpicker.test.tsx`, so removing them from this comment
-  // is not enough to add them to the table.
-  // Kenwood, IC-10 / IF-232C era — the interface itself is fixed 4,800 (8N2). The backend
-  // ranges (1,200..4,800, 4,800..9,600, even 1,200..57,600 for the TS-50S) are the driver's.
-  [2001, oneRate(4800)], // TS-50S
-  [2002, oneRate(4800)], // TS-440S
-  [2003, oneRate(4800)], // TS-450S
-  [2005, oneRate(4800)], // TS-690S
-  [2007, oneRate(4800)], // TS-790
-  [2009, oneRate(4800)], // TS-850
-  [2011, oneRate(4800)], // TS-940S
-  [2013, oneRate(4800)], // TS-950SDX
-  [2025, oneRate(4800)], // TS-140S
-  // 1990s Kenwood WITH a COM SPEED menu covering 1,200..57,600 — and all three SHIP ON 9,600.
-  // That is why they are `preferred: 9600` rather than the top of the range: the menu is what
-  // the operator may choose from, the factory rate is what the radio is on until they do.
-  // These three are the round-three regression (see THE RULE above): 38,400 is inside their
-  // menu, so half 1 of the rule alone left the default in place and CAT dead on a new install.
-  [2010, rateRange(1200, 57600, 9600)], // TS-870S
-  [2004, rateRange(1200, 57600, 9600)], // TS-570D
-  [2016, rateRange(1200, 57600, 9600)], // TS-570S
-  // Yaesu, one-rate backends (4800..4800).
-  [1004, oneRate(4800)], // FT-1000MP Mark-V
-  [1010, oneRate(4800)], // FT-736R
-  [1014, oneRate(4800)], // FT-920
-  [1016, oneRate(4800)], // FT-990
-  [1021, oneRate(4800)], // FT-100 / FT-100D
-  [1024, oneRate(4800)], // FT-1000MP
-  // FT-847 — caps say 4,800..57,600; the radio's CAT RATE menu (Menu 37) says 4,800 / 9,600 /
-  // 57,600 and it ships on 4,800. 38,400 is inside the backend's range and is NOT on the dial,
-  // which is the field report; 57,600 IS on the dial, which is why a pick must not touch it.
-  [1001, { rates: [4800, 9600, 57600], preferred: 4800 }],
-  // One-rate backends that had NO entry, so the 38,400 default was guaranteed silence on a
-  // radio the picker offers. All `min == max` per --dump-caps.
-  [2053, oneRate(115200)], // BG2FX FX-4/C/CR/L — added to the verified tier 2026-08
-  [2021, oneRate(4800)], // Elecraft K2
-  [2050, oneRate(9600)], // Lab599 Discovery TX-500
-  [16013, oneRate(57600)], // Ten-Tec Eagle (599)
-  [16008, oneRate(57600)], // Ten-Tec Orion (565)
-  [16011, oneRate(57600)], // Ten-Tec Omni VII (588)
-  [16001, oneRate(57600)], // Ten-Tec TT-550 Pegasus
-  [16002, oneRate(57600)], // Ten-Tec TT-538 Jupiter
-  [16007, oneRate(1200)], // Ten-Tec TT-516 Argonaut V
-  [16009, oneRate(1200)], // Ten-Tec TT-585 Paragon
-  [17002, oneRate(9600)], // Alinco DX-SR8
-  [17001, oneRate(9600)], // Alinco DX-77
+export const RIG_FIXED_BAUD = new Map<number, number>([
+  // Yaesu
+  [1004, 4800], // FT-1000MP Mark-V
+  [1010, 4800], // FT-736R
+  [1014, 4800], // FT-920
+  [1016, 4800], // FT-990
+  [1021, 4800], // FT-100 / FT-100D
+  [1024, 4800], // FT-1000MP
+  // Kenwood
+  [2005, 4800], // TS-690S
+  [2007, 4800], // TS-790
+  [2009, 4800], // TS-850
+  // Elecraft / Lab599 / BG2FX
+  [2021, 4800], // K2
+  [2050, 9600], // Discovery TX-500
+  [2053, 115200], // FX-4/C/CR/L
+  // Xiegu
+  [3088, 19200], // G90
+  // Ten-Tec
+  [16001, 57600], // TT-550 Pegasus
+  [16002, 57600], // TT-538 Jupiter
+  [16007, 1200], // TT-516 Argonaut V
+  [16008, 57600], // TT-565/566 Orion I/II
+  [16009, 1200], // TT-585 Paragon
+  [16011, 57600], // TT-588 Omni VII
+  [16013, 57600], // TT-599 Eagle
+  // Alinco
+  [17001, 9600], // DX-77
+  [17002, 9600], // DX-SR8
 ])
 
 /**
  * The baud to apply when `modelNum` is picked, or `null` to leave the setting alone. Pure, and
- * the only expression of the rule in [`RIG_CAT_RATES`] — read that first; the four lines below
- * are it in full, and each one has a bug behind it.
+ * the whole of the rule in [`RIG_FIXED_BAUD`] — a listed rig has exactly one rate, so it gets
+ * it; an unlisted rig has no fact behind it, so it is not touched.
  */
 export const baudForRig = (modelNum: number, currentBaud: number): number | null => {
-  const r = RIG_CAT_RATES.get(modelNum)
-  if (!r) return null // unknown rig — no evidence, and a guess costs a working radio
-  if (currentBaud === r.preferred) return null // already on it; nothing to say
-  // NEVER TOUCHED. The app default is not a choice — it is where the operator has not been —
-  // and this radio did not come out of its box on it. (The TS-870S regression: this line
-  // missing meant a fresh install kept 38,400 on a radio sitting on 9,600.)
-  if (currentBaud === APP_DEFAULT_BAUD) return r.preferred
-  // CHOSEN, and this radio runs it. Hands off. (The FT-847 clobber: this line missing rewrote
-  // an operator's working 57,600 to 4,800 the moment he selected his own rig.)
-  if (r.rates.includes(currentBaud)) return null
-  // CHOSEN, but this radio cannot be set there at all, so it cannot be what they meant.
-  return r.preferred
+  const only = RIG_FIXED_BAUD.get(modelNum)
+  if (only === undefined || only === currentBaud) return null
+  return only
 }
 
 /** WSJT-X Split Operation choices (Settings ▸ Radio parity). */
@@ -1230,7 +1119,7 @@ export function SettingsPanel({
     rigModels.find((m) => m[0] === modelNum)?.[1] ?? allRigModels.find((m) => m[0] === modelNum)?.[1] ?? ''
 
   // Which baud a rig pick may impose — and, more to the point, when it may NOT. The rates,
-  // the rule and why it is a rule live at `RIG_CAT_RATES` / `baudForRig` (module scope).
+  // the rule and why it is a rule live at `RIG_FIXED_BAUD` / `baudForRig` (module scope).
   const selectRig = (modelNum: number) => {
     markDirty()
     setForm((prev) => {

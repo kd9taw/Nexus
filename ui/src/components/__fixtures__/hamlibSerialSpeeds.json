@@ -1,0 +1,641 @@
+{
+  "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
+  "rigs": [
+    {
+      "model": 1001,
+      "name": "Yaesu FT-847",
+      "min": 4800,
+      "max": 57600
+    },
+    {
+      "model": 1004,
+      "name": "Yaesu FT-1000MP MARK-V",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 1010,
+      "name": "Yaesu FT-736R",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 1014,
+      "name": "Yaesu FT-920",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 1016,
+      "name": "Yaesu FT-990",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 1020,
+      "name": "Yaesu FT-817",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1021,
+      "name": "Yaesu FT-100",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 1022,
+      "name": "Yaesu FT-857",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1023,
+      "name": "Yaesu FT-897",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1024,
+      "name": "Yaesu FT-1000MP",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 1027,
+      "name": "Yaesu FT-450",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1028,
+      "name": "Yaesu FT-950",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1029,
+      "name": "Yaesu FT-2000",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1030,
+      "name": "Yaesu FTDX-9000",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1032,
+      "name": "Yaesu FTDX-5000",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1034,
+      "name": "Yaesu FTDX-1200",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1035,
+      "name": "Yaesu FT-991",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1036,
+      "name": "Yaesu FT-891",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1037,
+      "name": "Yaesu FTDX-3000",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1040,
+      "name": "Yaesu FTDX-101D",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1041,
+      "name": "Yaesu FT-818",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1042,
+      "name": "Yaesu FTDX-10",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1043,
+      "name": "Yaesu FT-897D",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1044,
+      "name": "Yaesu FTDX-101MP",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1046,
+      "name": "Yaesu FT-450D",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 1049,
+      "name": "Yaesu FT-710",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 1051,
+      "name": "Yaesu FTX-1",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2001,
+      "name": "Kenwood TS-50S",
+      "min": 1200,
+      "max": 57600
+    },
+    {
+      "model": 2002,
+      "name": "Kenwood TS-440S",
+      "min": 1200,
+      "max": 4800
+    },
+    {
+      "model": 2003,
+      "name": "Kenwood TS-450S",
+      "min": 1200,
+      "max": 4800
+    },
+    {
+      "model": 2004,
+      "name": "Kenwood TS-570D",
+      "min": 1200,
+      "max": 57600
+    },
+    {
+      "model": 2005,
+      "name": "Kenwood TS-690S",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 2007,
+      "name": "Kenwood TS-790",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 2009,
+      "name": "Kenwood TS-850",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 2010,
+      "name": "Kenwood TS-870S",
+      "min": 1200,
+      "max": 57600
+    },
+    {
+      "model": 2011,
+      "name": "Kenwood TS-940S",
+      "min": 1200,
+      "max": 4800
+    },
+    {
+      "model": 2013,
+      "name": "Kenwood TS-950SDX",
+      "min": 1200,
+      "max": 4800
+    },
+    {
+      "model": 2014,
+      "name": "Kenwood TS-2000",
+      "min": 1200,
+      "max": 115200
+    },
+    {
+      "model": 2016,
+      "name": "Kenwood TS-570S",
+      "min": 1200,
+      "max": 57600
+    },
+    {
+      "model": 2021,
+      "name": "Elecraft K2",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 2025,
+      "name": "Kenwood TS-140S",
+      "min": 4800,
+      "max": 9600
+    },
+    {
+      "model": 2028,
+      "name": "Kenwood TS-480",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2029,
+      "name": "Elecraft K3",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 2031,
+      "name": "Kenwood TS-590S",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2034,
+      "name": "Kenwood TM-D710(G)",
+      "min": 9600,
+      "max": 57600
+    },
+    {
+      "model": 2035,
+      "name": "Kenwood TM-V71(A)",
+      "min": 9600,
+      "max": 57600
+    },
+    {
+      "model": 2037,
+      "name": "Kenwood TS-590SG",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2039,
+      "name": "Kenwood TS-990S",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2040,
+      "name": "OpenHPSDR PiHPSDR",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 2041,
+      "name": "Kenwood TS-890S",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2043,
+      "name": "Elecraft K3S",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 2044,
+      "name": "Elecraft KX2",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 2045,
+      "name": "Elecraft KX3",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 2047,
+      "name": "Elecraft K4",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2048,
+      "name": "FlexRadio/Apache PowerSDR",
+      "min": 300,
+      "max": 115200
+    },
+    {
+      "model": 2049,
+      "name": "Malachite DSP",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 2050,
+      "name": "Lab599 TX-500",
+      "min": 9600,
+      "max": 9600
+    },
+    {
+      "model": 2051,
+      "name": "SDRPlay SDRUno",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2052,
+      "name": "QRPLabs QCX/QDX",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 2053,
+      "name": "BG2FX FX4/C/CR/L",
+      "min": 115200,
+      "max": 115200
+    },
+    {
+      "model": 2054,
+      "name": "TAPR Thetis",
+      "min": 300,
+      "max": 115200
+    },
+    {
+      "model": 2055,
+      "name": "DL2MAN (tr)uSDX",
+      "min": 38400,
+      "max": 115200
+    },
+    {
+      "model": 2056,
+      "name": "SDR Radio SDRConsole",
+      "min": 1200,
+      "max": 115200
+    },
+    {
+      "model": 2057,
+      "name": "QRPLabs QMX",
+      "min": 9600,
+      "max": 230400
+    },
+    {
+      "model": 3009,
+      "name": "Icom IC-706",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3010,
+      "name": "Icom IC-706MkII",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3011,
+      "name": "Icom IC-706MkIIG",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3013,
+      "name": "Icom IC-718",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3019,
+      "name": "Icom IC-735",
+      "min": 1200,
+      "max": 9600
+    },
+    {
+      "model": 3023,
+      "name": "Icom IC-746",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3026,
+      "name": "Icom IC-756",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3027,
+      "name": "Icom IC-756PRO",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3044,
+      "name": "Icom IC-910",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3046,
+      "name": "Icom IC-746PRO",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3047,
+      "name": "Icom IC-756PROII",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3055,
+      "name": "Icom IC-703",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3056,
+      "name": "Icom IC-7800",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3057,
+      "name": "Icom IC-756PROIII",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3060,
+      "name": "Icom IC-7000",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3061,
+      "name": "Icom IC-7200",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3062,
+      "name": "Icom IC-7700",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3063,
+      "name": "Icom IC-7600",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3067,
+      "name": "Icom IC-7410",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3068,
+      "name": "Icom IC-9100",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3070,
+      "name": "Icom IC-7100",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3073,
+      "name": "Icom IC-7300",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 3076,
+      "name": "Xiegu X108G",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3078,
+      "name": "Icom IC-7610",
+      "min": 300,
+      "max": 115200
+    },
+    {
+      "model": 3081,
+      "name": "Icom IC-9700",
+      "min": 4800,
+      "max": 38400
+    },
+    {
+      "model": 3085,
+      "name": "Icom IC-705",
+      "min": 4800,
+      "max": 19200
+    },
+    {
+      "model": 3087,
+      "name": "Xiegu X6100",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3088,
+      "name": "Xiegu G90",
+      "min": 19200,
+      "max": 19200
+    },
+    {
+      "model": 3089,
+      "name": "Xiegu X5105",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3090,
+      "name": "Icom IC-905",
+      "min": 4800,
+      "max": 230400
+    },
+    {
+      "model": 3091,
+      "name": "Xiegu X6200",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3092,
+      "name": "Icom IC-7760",
+      "min": 300,
+      "max": 19200
+    },
+    {
+      "model": 3094,
+      "name": "Icom IC-7300MK2",
+      "min": 4800,
+      "max": 115200
+    },
+    {
+      "model": 16001,
+      "name": "Ten-Tec TT-550",
+      "min": 57600,
+      "max": 57600
+    },
+    {
+      "model": 16002,
+      "name": "Ten-Tec TT-538 Jupiter",
+      "min": 57600,
+      "max": 57600
+    },
+    {
+      "model": 16007,
+      "name": "Ten-Tec TT-516 Argonaut V",
+      "min": 1200,
+      "max": 1200
+    },
+    {
+      "model": 16008,
+      "name": "Ten-Tec TT-565/566 Orion I/II",
+      "min": 57600,
+      "max": 57600
+    },
+    {
+      "model": 16009,
+      "name": "Ten-Tec TT-585 Paragon",
+      "min": 1200,
+      "max": 1200
+    },
+    {
+      "model": 16011,
+      "name": "Ten-Tec TT-588 Omni VII",
+      "min": 57600,
+      "max": 57600
+    },
+    {
+      "model": 16013,
+      "name": "Ten-Tec TT-599 Eagle",
+      "min": 57600,
+      "max": 57600
+    },
+    {
+      "model": 17001,
+      "name": "Alinco DX-77",
+      "min": 9600,
+      "max": 9600
+    },
+    {
+      "model": 17002,
+      "name": "Alinco DX-SR8",
+      "min": 9600,
+      "max": 9600
+    }
+  ]
+}
