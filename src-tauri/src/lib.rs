@@ -8756,14 +8756,21 @@ struct CatTestResult {
 /// 1300 ms sleep handed back the PREVIOUS status), then reports it. The detail
 /// names the backend that was exercised (native CI-V vs Hamlib rigctld).
 ///
-/// When the probe FAILS on a serial Icom — and the failed probe exercised the CAT
-/// channel itself, not just a dedicated PTT line — runs the read-only CI-V baud
-/// ladder on the configured port (`tempo_audio::baud_ladder`): the radio loop
-/// releases the port (hold/ack handshake), the same port is probed directly at the
-/// other common CI-V rates, and the verdict says exactly which side to fix — the
-/// IC-7610-class "zero bytes at 115200" is almost always the rig's factory
-/// "CI-V USB Port = Link to [REMOTE]" capping the port at ≤ 19200, or the wrong
-/// one of the rig's two COM ports. Mirrors WSJT-X's "Test CAT" otherwise.
+/// When the probe FAILS on ANY serial rig — and the failed probe exercised the CAT
+/// channel itself, not just a dedicated PTT line — runs the read-only baud ladder on
+/// the configured port (`tempo_audio::baud_ladder`): the radio loop releases the port
+/// (hold/ack handshake), the same port is probed at the other plausible rates, and the
+/// verdict says exactly which side to fix.
+///
+/// ⏱ **This is the ONLY place a ladder runs, and that is deliberate.** Picking a rig
+/// imposes nothing and waits for nothing — the transcribed per-model rate rows that used
+/// to do that were deleted for being wrong (2026-08-06). The operator pays a sweep only
+/// after a Test CAT that has already failed. A CI-V rig's sweep is ~600 ms a rung; the
+/// Hamlib ladder's is 4.6–6.2 s a rung, worst complete sweep ~31 s (FT-847, five rungs,
+/// none answering), bounded by the rig's own declared rate range and by a 45 s guard.
+///
+/// Which ladder is asked of Hamlib rather than assumed from the model — the eleven CI-V
+/// rigs that are not native-scope radios were invisible to the old five-model gate.
 #[tauri::command]
 async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, String> {
     #[cfg(feature = "radio")]
@@ -8800,22 +8807,22 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                 &s.ptt_method,
                 &s.ptt_serial_port,
             )
-            .map(|civ_addr| {
+            .map(|gate| {
                 (
                     s.serial_port.trim().to_string(),
                     s.baud,
-                    civ_addr,
+                    s.rig_model,
+                    gate,
                     tempo_audio::rigmodels::rig_model_name(s.rig_model)
                         .unwrap_or("The rig")
                         .to_string(),
                     s.icom_native_cat,
-                    tempo_audio::baud_ladder::dual_com_ports(s.rig_model),
                 )
             });
             (r.cat_ok, r.cat_detail, ladder)
         };
         if ok == Some(false) {
-            if let Some((port, baud, civ_addr, model_name, native, dual_ports)) = ladder {
+            if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {
                 // Ask the loop to release the serial port (our own daemon holds it even
                 // when the rig is mute), wait for the ack, then probe. Always release —
                 // the loop rebuilds CAT at the configured settings either way, and the
@@ -8834,18 +8841,29 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                     // Let the OS finish tearing the just-dropped COM port down (Windows
                     // frees it asynchronously after the daemon exits).
                     std::thread::sleep(Duration::from_millis(300));
+                    // WHICH ladder is asked of Hamlib, never assumed from the model: a rig that
+                    // publishes a `civaddr` speaks CI-V and gets the fast raw probe; every
+                    // other serial rig gets the Hamlib ladder. Both run on the blocking pool —
+                    // a sweep is seconds of process work, not something to do on the UI task.
                     let report = tauri::async_runtime::spawn_blocking(move || {
-                        tempo_audio::baud_ladder::run(&port, baud, civ_addr)
+                        use tempo_audio::baud_ladder::{self as bl, LadderKind};
+                        match bl::ladder_kind(rig_model) {
+                            LadderKind::Civ { addr } => bl::compose_ladder_message(
+                                &bl::run(&port, baud, addr),
+                                &model_name,
+                                addr,
+                                native,
+                                bl::dual_com_ports(rig_model),
+                            ),
+                            LadderKind::Hamlib { caps } => bl::compose_hamlib_ladder_message(
+                                &bl::run_hamlib(&port, baud, rig_model, gate, &caps),
+                                &model_name,
+                            ),
+                        }
                     })
                     .await;
-                    if let Ok(report) = report {
-                        detail = tempo_audio::baud_ladder::compose_ladder_message(
-                            &report,
-                            &model_name,
-                            civ_addr,
-                            native,
-                            dual_ports,
-                        );
+                    if let Ok(message) = report {
+                        detail = message;
                     }
                 }
                 engine_lock(&state).release_cat_port();
