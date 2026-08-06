@@ -1,0 +1,549 @@
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=1000000ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=8517ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+rigctl_chk_vfo: **********************************
+rigctl_dump_state: chk_vfo_executed=1
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(rigctl_parse: vfo_opt=0
+rigctl_parse.c(2437):rigctl_get_vfo entered
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=20842ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=26411ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=46498ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+rigctl_parse: nothing to scan#1? retcode=-22, last_cmd=[empty]
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=75020ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+rigctl_chk_vfo: **********************************
+rigctl_dump_state: chk_vfo_executed=1
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(rigctl_parse: vfo_opt=0
+rigctl_parse.c(2437):rigctl_get_vfo entered
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=87347ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=92938ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=112965ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+newcat_get_freq: unsupported vfo=currVFO
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=134110ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=156421ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=178973ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=201520ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=222546ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rigctl_parse: RIG_EIO?
+handle_socket: i/o error
+handle_socket: rig_close retcode=0
+newcat_get_cmd: rig power is off?
+newcat_get_cmd: rig power is off?
+rig_open: Some rigs cannot get_powerstat while off
+rig_open: Known rigs: K3, K3S
+read_string_generic(): read failed, direct=1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+rig_get_vfo: returning -6(newcat_open: rig_id=0
+*1:newcat.c(921):newcat_open returning(0) 
+*1:rig.c(3532):rig_get_vfo entered
+rig_get_vfo: cache miss age=245048ms
+*rig.c(3568) trace
+rig_lock: client lock engaged
+**2:newcat.c(2091):newcat_get_vfo entered
+newcat_valid_command VS
+newcat.c(8171):newcat_valid_command returning2(1) 
+newcat_get_vfo: cmd_str = VS;
+***3:newcat.c(11373):newcat_get_cmd entered
+network_flush called
+cmd_str = VS;
+write_block():1134 failed -1 - No error
+***3:newcat.c(11475):newcat_get_cmd returning(-6) IO error
+
+**2:newcat.c(2110):newcat_get_vfo returning(-6) IO error
+
+IO error
+IO error
+)
+write_block():1131 failed -1 - No error
+write_block():1131 failed -1 - No error
+handle_socket: rig_open retcode=0, opened=1

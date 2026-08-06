@@ -1,4 +1,34 @@
-//! Test-CAT baud-ladder diagnosis for Icom CI-V rigs — the "zero bytes" root-causer.
+//! Test-CAT baud-ladder diagnosis — the "zero bytes" root-causer, for ANY serial rig.
+//!
+//! ⭐ **WHY THIS IS THE WHOLE FEATURE NOW** (operator decision, 2026-08-06). Nexus used to
+//! impose a CAT rate when the operator picked a rig, from rate rows transcribed out of 61
+//! hardware manuals. Four rounds of fixes each repaired the named rig and broke another, and the
+//! fourth review found the IC-746 row simply WRONG (`[9600, 19200]`; the manual's Set-Mode item
+//! 27 offers 300/1200/4800/9600/19200/AUTO), which silently clobbers an operator running one at
+//! 4800 — the round-one bug, re-created by the fix for the round-one bug. The root cause was
+//! never the logic: it is that hand transcription across 61 models has a failure rate, and every
+//! wrong row overwrites a working setting. So the rows are gone except where Hamlib itself
+//! states there is no choice (`serial_rate_min == serial_rate_max`), and **finding the rate
+//! EMPIRICALLY is what replaces them**. Guessing from transcribed data is what kept breaking;
+//! probing cannot.
+//!
+//! That makes this module load-bearing rather than a nicety, and it has to reach every rig whose
+//! row was deleted — twenty-one of them, of which the ladder previously reached ZERO (see
+//! [`ladder_applies`]).
+//!
+//! **Two ladders, because the rigs differ in what can PROVE a rate is right.**
+//! - [`LadderKind::Civ`] — the rig speaks CI-V: probe the port raw, and a reply is proved by the
+//!   rig's own bus address in the frame. Fast (~600 ms/rung) and cannot lock onto garbage.
+//! - [`LadderKind::Hamlib`] — everything else: let Hamlib do the talking, one one-shot `rigctl`
+//!   per rate, and prove the answer by [`classify_hamlib_probe`]. Slower, and the proof has to
+//!   be built rather than read off a frame — see that function for why "it parsed as a number"
+//!   is emphatically not enough.
+//!
+//! **Which ladder a rig gets is ASKED, never tabulated** ([`ladder_kind`]): Hamlib publishes a
+//! `civaddr` conf parameter for exactly the rigs that speak CI-V. That is the same discipline
+//! the rate rows now follow, applied to the ladder's own gate — and it is why this module no
+//! longer consults `rigmodels::icom_scope_model`, which answers the unrelated question "does
+//! this radio have a native panadapter?" and was being read as "does this radio speak CI-V?".
 //!
 //! FIELD FAILURE this exists for (IC-7610, 2026-07): the rig's USB CI-V port ships
 //! factory-set to "Link to [REMOTE]", which caps it at the REMOTE-jack rate (≤ 19200,
@@ -34,10 +64,136 @@ use crate::civ::frame::{bcd_to_freq, FrameSplitter};
 /// operator who configured something slower than the rig's USB default.
 pub const LADDER_BAUDS: &[u32] = &[19200, 9600, 4800, 38400, 57600, 115200];
 
-/// The CI-V bus address to probe `rig_model` at — `Some` only for the Icoms whose
-/// default address Nexus knows (the native-CI-V-capable set; the IC-7610 is 0x98).
-pub fn icom_civ_addr(rig_model: u32) -> Option<u8> {
-    crate::rigmodels::icom_scope_model(rig_model).map(|m| m.default_civ_addr())
+/// Which ladder a rig needs. Decided by [`ladder_kind`] from Hamlib's own caps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LadderKind {
+    /// The rig speaks CI-V at this bus address: probe the port raw, no Hamlib in the loop.
+    Civ { addr: u8 },
+    /// Every other serial rig: Hamlib does the talking, one rate at a time, and these are the
+    /// only two facts the ladder takes from its caps.
+    Hamlib { caps: RigCaps },
+}
+
+/// The rig's CI-V bus address, **as Hamlib itself declares it** — `Some` for every rig whose
+/// backend speaks CI-V, `None` for one that does not.
+///
+/// ⭐ **This replaced a five-model lookup, and the replacement is the point.** It used to be
+/// `rigmodels::icom_scope_model(model).map(|m| m.default_civ_addr())`, and that function lists
+/// the five radios with a native PANADAPTER — 3073/3078/3081/3085/3090. Reading it as "does this
+/// speak CI-V?" silently excluded eleven CI-V rigs that simply have no scope: the IC-718, IC-746,
+/// IC-746PRO, IC-756PROIII, IC-910, IC-7000 and IC-7100, and the four Xiegus. Every one of them
+/// is a rig whose transcribed rate row was just deleted, so every one of them needs this.
+///
+/// Hamlib prints the answer itself: `rigctld -m <n> -L` lists a `civaddr` parameter ("Transceiver's
+/// CI-V address") whose `Value:` is the backend's own default address, for CI-V backends and only
+/// for them. **Its very presence is the CI-V test** — no model list to keep in step with anything.
+///
+/// Verified against the bundled rigctld 4.7.1 (decimal, as printed): 3073 IC-7300 → 148 (0x94)
+/// and 3078 IC-7610 → 152 (0x98), which match the two addresses the old table had — independent
+/// corroboration that this field is the same fact. The eleven newly covered: 3013 IC-718 → 94,
+/// 3023 IC-746 → 86, 3046 IC-746PRO → 102, 3057 IC-756PROIII → 110, 3044 IC-910 → 96,
+/// 3060 IC-7000 → 112, 3070 IC-7100 → 136, 3076 X108G → 112, 3087 X6100 → 164, 3089 X5105 → 112,
+/// 3091 X6200 → 164. Absent, correctly, for 1001 FT-847, every Kenwood, 1042 FTDX-10, 2053 FX-4.
+pub fn civ_addr_from_caps(rig_model: u32) -> Option<u8> {
+    let model = rig_model.to_string();
+    parse_civ_addr(&crate::rigctld_proc::daemon_dump(&[
+        "-m",
+        model.as_str(),
+        "-L",
+    ])?)
+}
+
+/// Read `civaddr` out of a `rigctld --show-conf` dump. Decimal, as Hamlib prints it.
+///
+/// Address 0 is refused: it is the frontend's "unset" default, never a rig's bus address, so a
+/// backend that offered the parameter without seeding it would otherwise have us probing at an
+/// address no radio answers to.
+pub fn parse_civ_addr(show_conf: &str) -> Option<u8> {
+    let (value, _) = crate::rigctld_proc::conf_param(show_conf, "civaddr")?;
+    value.parse::<u8>().ok().filter(|addr| *addr != 0)
+}
+
+/// The two facts the ladder takes from Hamlib's `--dump-caps`, and nothing else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RigCaps {
+    /// `Serial speed: 4800..57600 baud` — `serial_rate_min`/`_max`, the rates the BACKEND
+    /// declares it can drive. Bounds the rungs: rates outside are ones Hamlib would not use, so
+    /// probing them only spends the operator's time. It is also what makes a fixed-rate rig a
+    /// ONE-rung ladder (2053 FX-4 prints `115200..115200`).
+    pub serial_rates: Option<(u32, u32)>,
+    /// The frequency ranges this backend declares the rig can RECEIVE, unioned over every
+    /// region block. The plausibility test in [`classify_hamlib_probe`] — a rig cannot be tuned
+    /// where it cannot receive, so a "frequency" outside every one of them did not come from
+    /// this radio.
+    pub rx_coverage: Vec<(u64, u64)>,
+}
+
+impl RigCaps {
+    /// Is `hz` a frequency this rig could actually be sitting on?
+    ///
+    /// **An EMPTY coverage list answers `true`**, and that direction is deliberate: no coverage
+    /// means we could not read caps at all, and an unreadable dump must not silently convert
+    /// every rung into a rejection (which would report "your rig never answered" to an operator
+    /// whose rig did). The mode veto still applies. In practice this cannot happen without the
+    /// probe itself being impossible — the dump comes from the very binary that does the probing.
+    pub fn covers(&self, hz: u64) -> bool {
+        self.rx_coverage.is_empty()
+            || self
+                .rx_coverage
+                .iter()
+                .any(|(lo, hi)| (*lo..=*hi).contains(&hz))
+    }
+}
+
+/// Ask Hamlib what this rig is: a CI-V bus, or something Hamlib must speak for us.
+pub fn ladder_kind(rig_model: u32) -> LadderKind {
+    if let Some(addr) = civ_addr_from_caps(rig_model) {
+        return LadderKind::Civ { addr };
+    }
+    let model = rig_model.to_string();
+    let caps = crate::rigctld_proc::daemon_dump(&["-m", model.as_str(), "-u"])
+        .map(|d| parse_caps(&d))
+        .unwrap_or_default();
+    LadderKind::Hamlib { caps }
+}
+
+/// Read [`RigCaps`] out of a `rigctld --dump-caps` dump.
+///
+/// The shape is fixed by `dumpcaps.c`: a `Serial speed: <min>..<max> baud, 8N2, ctrl=…` line, and
+/// `RX ranges #<n> for <region>:` blocks whose member lines are `\t<start> Hz - <end> Hz` (each
+/// followed by indented VFO/Mode/Antenna lists, which is why a block ends at the next
+/// UNINDENTED line and not at the next blank one). `RX ranges #n status for …` is a status line,
+/// not a block, and opening a block on it would union in nothing and mask a real parse failure.
+///
+/// Anything we cannot read comes back empty, i.e. "claim nothing" — see [`RigCaps::covers`].
+pub fn parse_caps(dump_caps: &str) -> RigCaps {
+    let mut caps = RigCaps::default();
+    let mut in_rx = false;
+    for line in dump_caps.lines() {
+        let line = line.trim_end_matches('\r');
+        let indented = line.starts_with([' ', '\t']);
+        if !indented {
+            in_rx = line.starts_with("RX ranges #") && !line.contains(" status ");
+        }
+        if let Some(rest) = line.trim().strip_prefix("Serial speed:") {
+            let mut halves = rest.trim().split("..");
+            if let (Some(lo), Some(hi)) = (halves.next(), halves.next()) {
+                let hi = hi.split_whitespace().next().unwrap_or("");
+                if let (Ok(lo), Ok(hi)) = (lo.trim().parse(), hi.trim().parse()) {
+                    caps.serial_rates = Some((lo, hi));
+                }
+            }
+        }
+        if in_rx && indented {
+            if let Some((start, end)) = line.trim().split_once(" Hz - ") {
+                let end = end.trim().trim_end_matches(" Hz");
+                if let (Ok(start), Ok(end)) = (start.trim().parse(), end.parse()) {
+                    caps.rx_coverage.push((start, end));
+                }
+            }
+        }
+    }
+    caps
 }
 
 /// Does this Icom's built-in USB enumerate TWO virtual COM ports? Only the IC-7610 and
@@ -53,38 +209,65 @@ pub fn dual_com_ports(rig_model: u32) -> bool {
     )
 }
 
-/// Should a failed Test CAT run the ladder at all? Only for a KNOWN Icom on a real
-/// serial port — the ladder speaks raw CI-V, which means nothing to a network rig,
-/// a non-Icom, or an empty port field — and only when the failed probe exercised the
-/// CAT channel itself. Mirrors the radio loop's `probed_cat` attribution predicate
-/// (service.rs `reprobe`): "cat"/"vox" probe CAT; "rts"/"dtr" probe CAT only when
-/// keying shares the CAT port (`ptt_serial_port` empty or equal to `serial_port`,
-/// case-insensitively, like `Transport::ptt_port`). A dedicated-PTT-port failure is a
-/// PTT problem — probing the (healthy) CAT port would find the rig answering at the
-/// configured rate and REPLACE the real "Could not open serial port" error with a
-/// verdict blaming a backend that never failed. Returns the CI-V address to probe at.
+/// What a ladder run needs to know about the port before it touches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LadderGate {
+    /// The control line the operator keys PTT with **on this very port**, when they do.
+    ///
+    /// ⚠️ Load-bearing for the Hamlib ladder, and it is a TX-safety matter. A serial driver
+    /// RAISES RTS and DTR when the port is opened, and Hamlib puts a line back down only in the
+    /// `RIG_PTT_SERIAL_RTS`/`_DTR` arms of `rig_open` — i.e. only when it has been TOLD that
+    /// line is the keying line (see [`crate::rigctld_proc::LineState`], which documents the
+    /// whole mechanism). An interface that keys on RTS is therefore keyed by the mere act of
+    /// opening the port. Every rung hands Hamlib the SAME `-P <line> -p <port>` the live daemon
+    /// gets, so a rung opens the port exactly the way the daemon that just failed did — parity,
+    /// not new behaviour, and a sweep of five rungs is not five transmissions.
+    pub keying: Option<crate::rig::SerialLine>,
+}
+
+/// Should a failed Test CAT run a ladder at all?
+///
+/// Only for a real serial port with a rig model set — there is no rate to find on a network rig
+/// or an empty port field — and only when the failed probe exercised the CAT channel itself.
+/// Mirrors the radio loop's `probed_cat` attribution predicate (service.rs `reprobe`):
+/// "cat"/"vox" probe CAT; "rts"/"dtr" probe CAT only when keying shares the CAT port
+/// (`ptt_serial_port` empty or equal to `serial_port`, case-insensitively, like
+/// `Transport::ptt_port`). A dedicated-PTT-port failure is a PTT problem — probing the (healthy)
+/// CAT port would find the rig answering at the configured rate and REPLACE the real "Could not
+/// open serial port" error with a verdict blaming a backend that never failed.
+///
+/// ⭐ **What changed, and it is the whole of B.** This used to end in `icom_civ_addr(rig_model)`,
+/// so it returned `None` for every rig that is not one of the five native-scope Icoms — and
+/// that is ALL TWENTY-ONE rigs whose transcribed rate rows were just deleted: the FT-847, nine
+/// Kenwoods, seven older Icoms and four Xiegus. The rigs the deletions strand were exactly the
+/// rigs the ladder could not reach. It is now a question about the PORT, not about the model;
+/// which ladder the rig then gets is [`ladder_kind`]'s job, asked of Hamlib.
 pub fn ladder_applies(
     is_network: bool,
     rig_model: u32,
     serial_port: &str,
     ptt_method: &str,
     ptt_serial_port: &str,
-) -> Option<u8> {
-    if is_network || serial_port.trim().is_empty() {
+) -> Option<LadderGate> {
+    if is_network || serial_port.trim().is_empty() || rig_model == 0 {
         return None;
     }
-    let probed_cat = match ptt_method {
-        "cat" | "vox" => true,
+    let keying = match ptt_method {
+        "cat" | "vox" => None,
         "rts" | "dtr" => {
             let ptt = ptt_serial_port.trim();
-            ptt.is_empty() || ptt.eq_ignore_ascii_case(serial_port.trim())
+            if !(ptt.is_empty() || ptt.eq_ignore_ascii_case(serial_port.trim())) {
+                return None; // a dedicated PTT port: its failure says nothing about CAT
+            }
+            Some(if ptt_method == "rts" {
+                crate::rig::SerialLine::Rts
+            } else {
+                crate::rig::SerialLine::Dtr
+            })
         }
-        _ => false,
+        _ => return None,
     };
-    if !probed_cat {
-        return None;
-    }
-    icom_civ_addr(rig_model)
+    Some(LadderGate { keying })
 }
 
 /// The rates to try, in order: the configured rate first (re-checked directly, without
@@ -138,6 +321,11 @@ pub struct LadderReport {
     pub configured_baud: u32,
     /// `(baud, outcome)` in probe order; stops early after the first [`BaudProbe::Reply`].
     pub outcomes: Vec<(u32, BaudProbe)>,
+    /// Rungs the sweep never got to because it ran out of its time budget. Normally empty —
+    /// the budget is a guard against a pathologically slow backend, not a routine truncation
+    /// (see [`run_hamlib`]) — but when it is not, the verdict must SAY so rather than report
+    /// "no rate answered", which would be advice about a port that was never tested.
+    pub not_tried: Vec<u32>,
 }
 
 /// Walk [`ladder_bauds`] with `probe`, stopping at the first rate that gets a
@@ -147,10 +335,37 @@ pub struct LadderReport {
 pub fn run_ladder(
     port: &str,
     configured_baud: u32,
+    probe: impl FnMut(u32) -> BaudProbe,
+) -> LadderReport {
+    run_ladder_over(
+        port,
+        configured_baud,
+        ladder_bauds(configured_baud),
+        || false,
+        probe,
+    )
+}
+
+/// [`run_ladder`] over an explicit rung list, with a way to run out of time.
+///
+/// `out_of_time` is consulted BEFORE each rung and never interrupts one in flight, so the budget
+/// can only ever decline to start a probe — a half-probed rate would be a rate we could say
+/// nothing honest about. Rungs it declines are recorded in [`LadderReport::not_tried`] so the
+/// verdict can say they were never tested rather than imply they were silent.
+pub fn run_ladder_over(
+    port: &str,
+    configured_baud: u32,
+    bauds: Vec<u32>,
+    mut out_of_time: impl FnMut() -> bool,
     mut probe: impl FnMut(u32) -> BaudProbe,
 ) -> LadderReport {
     let mut outcomes = Vec::new();
-    for baud in ladder_bauds(configured_baud) {
+    let mut not_tried = Vec::new();
+    for baud in bauds {
+        if !outcomes.is_empty() && out_of_time() {
+            not_tried.push(baud);
+            continue;
+        }
         let outcome = probe(baud);
         let done = matches!(outcome, BaudProbe::Reply { .. });
         outcomes.push((baud, outcome));
@@ -162,7 +377,171 @@ pub fn run_ladder(
         port: port.to_string(),
         configured_baud,
         outcomes,
+        not_tried,
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// The Hamlib ladder: for every serial rig that does not speak CI-V.
+// ---------------------------------------------------------------------------------------
+
+/// The rates the Hamlib ladder walks, most-likely-first, before [`RigCaps::serial_rates`]
+/// narrows them.
+///
+/// This order is a HEURISTIC and is allowed to be one: being wrong about it costs seconds, never
+/// a wrong verdict, because every rung is proved on its own evidence. (Contrast the deleted rate
+/// rows, where being wrong overwrote a working setting.) 9600 and 4800 lead because the ten rigs
+/// on this path are the FT-847 and nine Kenwoods — an IF-232C-era set whose factory rates are
+/// down there — then the fast rates a modern operator would have chosen, then 1200 last, which
+/// only the vintage Kenwoods' caps admit at all.
+pub const HAMLIB_LADDER_BAUDS: &[u32] = &[9600, 4800, 57600, 19200, 38400, 115200, 1200];
+
+/// The rungs to walk: the configured rate first (re-checked directly, which is what separates
+/// "the rate is wrong" from "the rate is fine and the daemon fell over"), then
+/// [`HAMLIB_LADDER_BAUDS`] narrowed to what the backend says it can drive.
+///
+/// The configured rate is probed even when it lies OUTSIDE those bounds — that is a real
+/// configuration to diagnose, not one to skip.
+pub fn hamlib_ladder_bauds(configured: u32, serial_rates: Option<(u32, u32)>) -> Vec<u32> {
+    let mut out = vec![configured];
+    out.extend(
+        HAMLIB_LADDER_BAUDS.iter().copied().filter(|b| {
+            *b != configured && serial_rates.is_none_or(|(lo, hi)| (lo..=hi).contains(b))
+        }),
+    );
+    out
+}
+
+/// What Hamlib made of the rig's MODE — the protocol-agnostic twin of the CI-V address check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModeRead {
+    /// Hamlib named it (`USB`, `CW`, `PKTUSB`…): the bytes decoded to a real rig state.
+    Named(String),
+    /// The `m` command SUCCEEDED and Hamlib printed no name at all. It decoded a reply whose
+    /// mode is not one this backend knows — `RIG_MODE_NONE`, which `rig_strrmode` prints as the
+    /// empty string, with a 0 passband under it. **This is the garbage signature**, and it is
+    /// Hamlib's own vocabulary check on the rig's own bytes, not a table of ours.
+    Unnamed,
+    /// No mode to read: the command failed, or was never asked. Says NOTHING either way.
+    Absent,
+}
+
+/// One `rigctl … f [m]` run, as it printed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RigctlRead {
+    pub freq_hz: Option<u64>,
+    pub mode: ModeRead,
+}
+
+/// Read what `rigctl` printed on stdout.
+///
+/// ⚠️ **The frequency is taken from the FIRST line and only the first line.** rigctl prints the
+/// value it was asked for and nothing before it; when a command FAILS it prints an `error = …`
+/// blob instead — and that blob is many lines of Hamlib's own trace, in which a bare number can
+/// appear (`m`'s passband prints as one). Scanning for "the first line that parses as a number"
+/// would read a passband, or a fragment of a failure, as the rig's frequency.
+pub fn parse_rigctl_read(stdout: &str) -> RigctlRead {
+    let mut lines = stdout.lines().map(|l| l.trim_end_matches('\r').trim());
+    let freq_hz = lines
+        .next()
+        .and_then(|l| l.parse::<u64>().ok())
+        .filter(|hz| *hz > 0);
+    if freq_hz.is_none() {
+        return RigctlRead {
+            freq_hz,
+            mode: ModeRead::Absent,
+        };
+    }
+    // `m` prints the mode then the passband. An EMPTY mode with a passband under it is the
+    // decoded-but-unnameable case; an error blob is neither.
+    let (second, third) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+    let mode = if second.is_empty() {
+        if !third.is_empty() && third.bytes().all(|b| b.is_ascii_digit()) {
+            ModeRead::Unnamed
+        } else {
+            ModeRead::Absent
+        }
+    } else if is_mode_token(second) {
+        ModeRead::Named(second.to_string())
+    } else {
+        ModeRead::Absent
+    };
+    RigctlRead { freq_hz, mode }
+}
+
+/// Does this look like a Hamlib mode token rather than a sentence? Shape, deliberately, not a
+/// vocabulary: the check that matters is whether Hamlib could NAME the mode at all, and pinning
+/// its mode list here would be one more transcription to go stale.
+fn is_mode_token(s: &str) -> bool {
+    s.starts_with(|c: char| c.is_ascii_alphabetic())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'/'))
+}
+
+/// ⭐ **WHAT PROVES A RATE IS RIGHT, when there is no CI-V address to check.**
+///
+/// The CI-V ladder has an easy job: a reply frame carries the rig's bus address, so garbage
+/// cannot impersonate it. Here there is no frame — only whatever Hamlib made of the bytes — and
+/// **"it parsed as a number" is not proof.** Measured, against the bundled rigctl 4.7.1 driving
+/// the real `ft847` backend with a stand-in rig answering mis-clocked bytes (30 trials, fresh
+/// random reply each time — the harness and every number below are in the commit message):
+///
+/// | test | garbage streams it ACCEPTED |
+/// |---|---|
+/// | `f` printed a number | **30 / 30** |
+/// | …and inside the rig's declared RX coverage | 8 / 30 |
+/// | …and Hamlib could name the mode | 2 / 30 |
+/// | **both** (what this function requires) | **0 / 30** |
+///
+/// One real observed value: 101054360 Hz — 101.05 MHz, which is inside no FT-847 RX range (its
+/// coverage skips 76–108 MHz), with the mode printed empty. The round-four report's
+/// `1054365010 Hz` is the same failure.
+///
+/// So a rate is proved when **both** hold, and each is a different property of the byte stream:
+/// 1. the frequency lies in a range THIS BACKEND declares the rig can receive ([`RigCaps`]) — a
+///    rig cannot be tuned where it cannot listen, so a number outside them did not come from it;
+/// 2. Hamlib did not decode a mode it could not name ([`ModeRead::Unnamed`]) — its own
+///    vocabulary check on the rig's own bytes.
+///
+/// **Why not "read it twice and require the same answer".** It was the other candidate and it is
+/// unsound: a mis-clocked stream is DETERMINISTIC — the rig sends the same reply bytes and a
+/// fixed rate error mis-samples them the same way — so two reads agree on the same rubbish. The
+/// stand-in reproduces exactly that. A second read is still taken (see
+/// [`probe_rate_via_hamlib`]), but as a second INDEPENDENT decode that must pass both tests
+/// again, never as an equality check.
+///
+/// **Why the mode is a veto and not a requirement.** [`ModeRead::Absent`] — the `m` command
+/// failing outright — cannot count against a rate: it is normal for a backend that answers `f`
+/// from one wire read and cannot answer `m` from another, and requiring a mode would report "your
+/// rig never answered" to an operator whose rig did. Only a mode Hamlib DECODED AND COULD NOT
+/// NAME is evidence, and it is evidence of garbage. That asymmetry is why this is safe in both
+/// directions on the ASCII (Kenwood) and binary (FT-847) families alike — and the nine Kenwoods
+/// never reach it anyway: measured, their `;`-terminated protocol rejects mis-framed bytes at the
+/// framing layer, printing no frequency at all.
+pub fn classify_hamlib_probe(read: &RigctlRead, caps: &RigCaps) -> BaudProbe {
+    let Some(hz) = read.freq_hz else {
+        return BaudProbe::Silence;
+    };
+    if !caps.covers(hz) || read.mode == ModeRead::Unnamed {
+        return BaudProbe::Noise;
+    }
+    BaudProbe::Reply { freq_hz: Some(hz) }
+}
+
+/// The things Hamlib says when the PORT ITSELF could not be opened, as opposed to a rig that did
+/// not answer through it. Same three fragments `service::CAUSE_FRAGMENTS` selects on, and all
+/// three are in the captures under `tests/fixtures/rigctld/`.
+const OPEN_FAILURE_FRAGMENTS: &[&str] = &["does not exist", "is already open", "Unable to open"];
+
+/// The one line of a failed `rigctl` run that says the port could not be opened, if it said so.
+/// A busy COM port is one of the commonest CAT faults and its verdict ("close WSJT-X/flrig") is
+/// completely different from a baud verdict, so it must not be reported as silence.
+pub fn open_failure_line(output: &str) -> Option<String> {
+    output
+        .lines()
+        .map(|l| l.trim_end_matches('\r').trim())
+        .find(|l| OPEN_FAILURE_FRAGMENTS.iter().any(|f| l.contains(f)))
+        .map(|l| l.trim_start_matches("error = ").to_string())
 }
 
 /// Turn a [`LadderReport`] into the operator-facing Test-CAT verdict: what answered
@@ -290,6 +669,229 @@ pub fn compose_ladder_message(
     )
 }
 
+/// The Hamlib ladder's verdict. Same job as [`compose_ladder_message`], different evidence and
+/// different cures: there is no CI-V address to check, no rig menu whose path we know, and no
+/// second COM port to send anyone hunting for.
+///
+/// ⚠️ **It never names a rig menu.** The CI-V verdict can quote `MENU » SET » Connectors » CI-V`
+/// because every Icom has it; the ten rigs here have ten different menus, and printing a guessed
+/// path is the transcription mistake this whole feature exists to stop. It says *what* to change
+/// and leaves *where* to the rig's manual.
+pub fn compose_hamlib_ladder_message(r: &LadderReport, model_name: &str) -> String {
+    let (port, configured) = (&r.port, r.configured_baud);
+    let mhz = |hz: Option<u64>| {
+        hz.filter(|&hz| hz > 0)
+            .map(|hz| format!(" (reads {:.3} MHz)", hz as f64 / 1e6))
+            .unwrap_or_default()
+    };
+    let tried = r
+        .outcomes
+        .iter()
+        .map(|(b, _)| b.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    // The rig answered at the CONFIGURED rate when asked directly → the link is fine and the
+    // CAT daemon between us and the port is what fell over.
+    if let Some((_, BaudProbe::Reply { freq_hz })) = r
+        .outcomes
+        .first()
+        .filter(|(b, o)| *b == configured && matches!(o, BaudProbe::Reply { .. }))
+    {
+        return format!(
+            "{model_name} answers on {port} @ {configured} baud{f} when asked directly — port, \
+             cable and baud are all fine, so the CAT daemon (Hamlib rigctld) is what failed. \
+             Save the settings again to relaunch it.",
+            f = mhz(*freq_hz)
+        );
+    }
+    // Another rate answered → name it, and both ways to fix it.
+    if let Some((baud, freq_hz)) = r.outcomes.iter().find_map(|(b, o)| match o {
+        BaudProbe::Reply { freq_hz } => Some((*b, *freq_hz)),
+        _ => None,
+    }) {
+        return format!(
+            "Found it: {model_name} answers on {port} at {baud} baud{f}, not the configured \
+             {configured}. Fix either side — set Baud to {baud} here in Settings, or set the \
+             radio's own CAT/serial menu to {configured}.",
+            f = mhz(freq_hz)
+        );
+    }
+    // Nothing answered. The port itself, first: it is a different fault with a different cure.
+    if let Some((_, BaudProbe::OpenFailed(e))) = r
+        .outcomes
+        .iter()
+        .find(|(_, o)| matches!(o, BaudProbe::OpenFailed(_)))
+    {
+        return format!(
+            "Test CAT could not open {port} (tried {tried}) — the system said: {e}. Usually \
+             another program is holding the port: close other CAT/logging software (WSJT-X, \
+             flrig, N1MM) and test again."
+        );
+    }
+    let noise = if r
+        .outcomes
+        .iter()
+        .any(|(_, o)| matches!(o, BaudProbe::Noise))
+    {
+        format!(
+            " Bytes DID come back at one rate, but they did not decode as anything {model_name} \
+             could be doing — so something is on {port}, but either it is not this radio or the \
+             rate is close enough to frame and still wrong."
+        )
+    } else {
+        String::new()
+    };
+    // A truncated sweep must never read as "your rig is silent" — it did not get that far.
+    if !r.not_tried.is_empty() {
+        let left = r
+            .not_tried
+            .iter()
+            .map(|b| b.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "{model_name} did not answer on {port} at {tried}.{noise} The check ran out of time \
+             before trying {left} — run Test CAT again to carry on, or set Baud to one of those \
+             and test that directly."
+        );
+    }
+    format!(
+        "{model_name} never answered on {port} at any rate its Hamlib backend supports (tried \
+         {tried}).{noise} That usually means {port} is not the radio: unplug the rig's USB or \
+         serial cable and confirm {port} is the one that disappears from the port list, then \
+         reconnect. Also check the radio is on, that its CAT/serial port is enabled in the rig \
+         menu, and that the USB driver is installed."
+    )
+}
+
+/// One `rigctl` run against the rig: `commands` executed in a single open, stdout returned.
+///
+/// **Read-only by construction.** The only commands any caller passes are `f` (get frequency)
+/// and `m` (get mode) — Hamlib GET verbs. Nothing here can key or retune a radio.
+///
+/// `--set-conf=timeout=300,retry=0` is a PROBE timeout, and the distinction matters: it governs
+/// only how fast a WRONG rate is abandoned, never how the daemon Nexus actually runs talks to the
+/// rig (that keeps the backend's own value). At a correct rate the answer is bounded by the wire
+/// — an FT-847's 5-byte reply at its slowest rate, 4800 baud, is ~10 ms — so 300 ms is some 30×
+/// headroom. Measured effect on a rung that gets nothing: 8.1 s → 6.2 s (FT-847, bundled
+/// rigctl 4.7.1).
+#[cfg(feature = "serial")]
+fn rigctl_read(
+    port: &str,
+    baud: u32,
+    rig_model: u32,
+    keying: Option<crate::rig::SerialLine>,
+    commands: &[&str],
+) -> Result<String, String> {
+    let (model, baud) = (rig_model.to_string(), baud.to_string());
+    let mut args = vec![
+        "-m",
+        model.as_str(),
+        "-r",
+        port,
+        "-s",
+        baud.as_str(),
+        "--set-conf=timeout=300,retry=0",
+    ];
+    // Hand Hamlib the same keying override the live daemon gets, so `rig_open` lowers the line
+    // it keys with instead of leaving the driver's power-on HIGH on a keyed interface. See
+    // [`LadderGate::keying`] — this is parity with the daemon that just failed, not new
+    // behaviour, and it is what keeps a five-rung sweep from being five transmissions.
+    if let Some(line) = keying {
+        args.push("-P");
+        args.push(crate::rigctld_proc::ptt_type_token(line));
+        args.push("-p");
+        args.push(port);
+    }
+    args.extend_from_slice(commands);
+    let mut cmd = std::process::Command::new(crate::rigctld_proc::resolve_rigctl());
+    cmd.args(&args);
+    cmd.stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    match cmd.output() {
+        // rigctl exits 0 even when every command failed (observed), so the exit status says
+        // nothing and stdout is the whole answer. stderr is folded in only to look for an
+        // open failure, whose wording matters more than where it was printed.
+        Ok(out) => {
+            let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
+            s.push('\n');
+            s.push_str(&String::from_utf8_lossy(&out.stderr));
+            Ok(s)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// One (port, baud) rung of the Hamlib ladder.
+///
+/// Two stages, and the split is what keeps the sweep affordable: the rung itself asks only `f`
+/// (a silent rung is the common case and costs one read), and only a rung that produces a
+/// coverage-plausible frequency pays for the confirm — a SECOND, independent open asking `f m`,
+/// which must satisfy [`classify_hamlib_probe`] all over again. The confirm is where the mode
+/// veto can bite, and it is a fresh decode rather than a re-read of the same bytes.
+#[cfg(feature = "serial")]
+fn probe_rate_via_hamlib(
+    port: &str,
+    baud: u32,
+    rig_model: u32,
+    keying: Option<crate::rig::SerialLine>,
+    caps: &RigCaps,
+) -> BaudProbe {
+    let out = match rigctl_read(port, baud, rig_model, keying, &["f"]) {
+        Ok(out) => out,
+        Err(e) => return BaudProbe::OpenFailed(e),
+    };
+    if let Some(line) = open_failure_line(&out) {
+        return BaudProbe::OpenFailed(line);
+    }
+    match classify_hamlib_probe(&parse_rigctl_read(&out), caps) {
+        BaudProbe::Reply { .. } => match rigctl_read(port, baud, rig_model, keying, &["f", "m"]) {
+            Ok(confirm) => classify_hamlib_probe(&parse_rigctl_read(&confirm), caps),
+            Err(e) => BaudProbe::OpenFailed(e),
+        },
+        other => other,
+    }
+}
+
+/// **The Hamlib ladder.** Walks `port` through the rates this rig's backend can drive until one
+/// answers provably ([`classify_hamlib_probe`]).
+///
+/// ⏱ **What it costs, and when the operator pays it.** It runs ONLY after a Test CAT that has
+/// already failed — never when a rig is picked, which is the whole point of deleting the rate
+/// rows: choosing a radio now imposes nothing and waits for nothing. Measured per rung that gets
+/// no answer, bundled rigctl 4.7.1 driving a stand-in rig that accepts and stays mute: FT-847
+/// 6.2 s, Kenwood TS-570D/570S/870S 4.6 s. With the rungs bounded by
+/// [`RigCaps::serial_rates`] the worst complete sweep in the covered set is the FT-847's five
+/// rungs — 4800..57600, so 4800/9600/19200/38400/57600 — at about **31 s**, and a rung that
+/// answers ends it early (a hit costs ~2.5 s more for the confirm). A fixed-rate rig is one rung.
+///
+/// `BUDGET` is a guard against a backend slower than any measured here, not a routine
+/// truncation: at 45 s it cannot fire on the ten rigs on this path. If it ever does, the rungs it
+/// declined are reported as untested rather than as silence.
+#[cfg(feature = "serial")]
+pub fn run_hamlib(
+    port: &str,
+    configured_baud: u32,
+    rig_model: u32,
+    gate: LadderGate,
+    caps: &RigCaps,
+) -> LadderReport {
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(45);
+    let deadline = std::time::Instant::now() + BUDGET;
+    run_ladder_over(
+        port,
+        configured_baud,
+        hamlib_ladder_bauds(configured_baud, caps.serial_rates),
+        || std::time::Instant::now() >= deadline,
+        |baud| probe_rate_via_hamlib(port, baud, rig_model, gate.keying, caps),
+    )
+}
+
 /// One real (port, baud) probe: open, send a single read-only CI-V `read_freq`, gather
 /// whatever comes back for ~600 ms, classify.
 #[cfg(feature = "serial")]
@@ -386,36 +988,380 @@ mod tests {
         }
     }
 
+    /// ⭐ FAILING-FIRST for B: the ladder has to reach the rigs whose baud entries were
+    /// deleted, and today it reaches NONE of them.
+    ///
+    /// `icom_civ_addr` is `rigmodels::icom_scope_model(..).map(..)`, and that function answers
+    /// a DIFFERENT question — "does this radio have a native panadapter?" — for exactly five
+    /// models. Every one of the twenty-one rigs whose hand-transcribed rate rows are being
+    /// deleted falls outside it, so `ladder_applies` returns `None` and the operator gets
+    /// nothing at all where the entry used to (wrongly) guess for them.
     #[test]
-    fn ladder_applies_only_to_a_known_icom_on_a_real_serial_port() {
-        assert_eq!(ladder_applies(false, 3078, "COM4", "cat", ""), Some(0x98)); // IC-7610
-        assert_eq!(ladder_applies(false, 3073, "COM4", "cat", ""), Some(0x94)); // IC-7300
+    fn the_ladder_reaches_every_delisted_rig_not_just_the_five_native_scope_icoms() {
+        // The eleven that DO speak CI-V — seven older Icoms and four Xiegus. They are absent
+        // from `icom_scope_model` only because none of them has a native scope.
+        for model in [
+            3013u32, 3023, 3046, 3057, 3044, 3060, 3070, 3076, 3087, 3089, 3091,
+        ] {
+            assert!(
+                ladder_applies(false, model, "COM4", "cat", "").is_some(),
+                "model {model} speaks CI-V and lost its baud row — it needs the ladder"
+            );
+        }
+        // The ten that do not speak CI-V at all: the FT-847 and nine Kenwoods.
+        for model in [
+            1001u32, 2001, 2002, 2003, 2004, 2005, 2010, 2011, 2016, 2025,
+        ] {
+            assert!(
+                ladder_applies(false, model, "COM4", "cat", "").is_some(),
+                "model {model} lost its baud row and has no CI-V — it needs the ladder"
+            );
+        }
+    }
+
+    /// The gate is about the PORT, not the model — the model only has to be set at all.
+    #[test]
+    fn ladder_applies_to_any_rig_on_a_real_serial_port() {
+        let cat = |m| ladder_applies(false, m, "COM4", "cat", "");
+        assert_eq!(cat(3078), Some(LadderGate { keying: None })); // IC-7610
+        assert_eq!(cat(1042), Some(LadderGate { keying: None })); // FTDX-10 — no CI-V, still laddered
         assert_eq!(ladder_applies(true, 3078, "COM4", "cat", ""), None); // network rig
-        assert_eq!(ladder_applies(false, 1042, "COM4", "cat", ""), None); // Yaesu — no CI-V
-        assert_eq!(ladder_applies(false, 0, "COM4", "cat", ""), None); // no model
+        assert_eq!(cat(0), None); // no model picked
         assert_eq!(ladder_applies(false, 3078, "  ", "cat", ""), None); // no port
     }
 
     #[test]
     fn the_ladder_only_runs_when_the_failed_probe_was_a_cat_probe() {
-        // "cat" and "vox" (with an Icom model) probe the CAT channel → ladder applies.
-        assert_eq!(ladder_applies(false, 3078, "COM4", "cat", ""), Some(0x98));
-        assert_eq!(ladder_applies(false, 3078, "COM4", "vox", ""), Some(0x98));
+        let none = Some(LadderGate { keying: None });
+        // "cat" and "vox" probe the CAT channel → ladder applies, nothing keys the port.
+        assert_eq!(ladder_applies(false, 3078, "COM4", "cat", ""), none);
+        assert_eq!(ladder_applies(false, 3078, "COM4", "vox", ""), none);
         // Dedicated-port RTS/DTR keying: reprobe tested only the PTT line — its failure
         // says nothing about the CAT port, and a ladder run would bury the real
         // "Could not open serial port COM5" error under a bogus backend verdict.
         assert_eq!(ladder_applies(false, 3078, "COM4", "rts", "COM5"), None);
         assert_eq!(ladder_applies(false, 3078, "COM4", "dtr", "COM5"), None);
         // Shared-port keying (dedicated port empty, or equal ignoring case): rigctld owns
-        // the CAT port and the reprobe DID probe it → ladder applies.
-        assert_eq!(ladder_applies(false, 3078, "COM4", "rts", ""), Some(0x98));
+        // the CAT port and the reprobe DID probe it → ladder applies — and the gate must
+        // carry WHICH line keys it, or a rung would open the port and leave the rig keyed.
+        let rts = Some(LadderGate {
+            keying: Some(crate::rig::SerialLine::Rts),
+        });
+        let dtr = Some(LadderGate {
+            keying: Some(crate::rig::SerialLine::Dtr),
+        });
+        assert_eq!(ladder_applies(false, 3078, "COM4", "rts", ""), rts);
+        assert_eq!(ladder_applies(false, 3078, "COM4", "dtr", "com4"), dtr);
+        assert_eq!(ladder_applies(false, 3078, "COM4", "rts", " COM4 "), rts);
+    }
+
+    // ---- B1: the CI-V address, asked of Hamlib instead of tabulated ----
+
+    /// The eleven CI-V rigs the five-model lookup excluded are covered by ASKING, and the
+    /// captures are real `rigctld -m <n> -L` output from the bundled 4.7.1.
+    #[test]
+    fn hamlib_hands_us_the_civ_address_and_says_nothing_for_a_rig_without_one() {
+        // IC-746 (3023) — one of the seven older Icoms whose transcribed rate row was deleted,
+        // and the row that was factually WRONG. Hamlib prints 86 = 0x56.
+        let ic746 = include_str!("../tests/fixtures/rigctld/showconf_ic746.log");
+        assert_eq!(parse_civ_addr(ic746), Some(0x56));
+        // FT-847 — no CI-V at all, so no `civaddr` parameter: it must fall to the Hamlib ladder
+        // rather than be probed at some invented address.
+        let ft847 = include_str!("../tests/fixtures/rigctld/showconf_ft847.log");
+        assert_eq!(parse_civ_addr(ft847), None);
+        // A dump we cannot read claims nothing.
+        assert_eq!(parse_civ_addr(""), None);
+        // Address 0 is the frontend's "unset", never a rig.
         assert_eq!(
-            ladder_applies(false, 3078, "COM4", "dtr", "com4"),
-            Some(0x98)
+            parse_civ_addr("civaddr: \"Transceiver's CI-V address\"\n\tDefault: 0, Value: 0\n"),
+            None
+        );
+    }
+
+    // ---- B2: what Hamlib's caps tell the ladder ----
+
+    #[test]
+    fn caps_give_the_rate_bounds_and_the_coverage_the_ladder_judges_by() {
+        let ft847 = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ft847.log"));
+        assert_eq!(ft847.serial_rates, Some((4800, 57600)));
+        // The FT-847 hears HF, 6 m/4 m, air+2 m and 70 cm — and NOT 76–108 MHz.
+        assert!(ft847.covers(14_074_000), "20 m");
+        assert!(ft847.covers(145_000_000), "2 m");
+        assert!(
+            !ft847.covers(101_054_360),
+            "the measured garbage frequency is in its RX gap"
+        );
+        assert!(
+            !ft847.covers(1_054_365_010),
+            "round four's garbage frequency, far above it"
+        );
+        let ts570 = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ts570d.log"));
+        assert_eq!(ts570.serial_rates, Some((1200, 57600)));
+        assert!(ts570.covers(7_074_000));
+        assert!(
+            !ts570.covers(145_000_000),
+            "an HF-only rig cannot be on 2 m"
+        );
+        // An unreadable dump must not turn every rung into a rejection.
+        let unknown = parse_caps("");
+        assert_eq!(unknown.serial_rates, None);
+        assert!(
+            unknown.covers(101_054_360),
+            "no coverage = no opinion, not 'no'"
+        );
+    }
+
+    #[test]
+    fn the_rungs_are_bounded_by_what_the_backend_says_it_can_drive() {
+        // FT-847: 4800..57600 — 115200 and 1200 are not rates Hamlib would use, so probing
+        // them only spends the operator's time.
+        assert_eq!(
+            hamlib_ladder_bauds(38400, Some((4800, 57600))),
+            vec![38400, 9600, 4800, 57600, 19200]
+        );
+        // A fixed-rate rig is a ONE-rung ladder (2053 FX-4 prints 115200..115200).
+        assert_eq!(
+            hamlib_ladder_bauds(115200, Some((115200, 115200))),
+            vec![115200]
+        );
+        // The configured rate is probed even when it is outside the bounds — that is a real
+        // misconfiguration to diagnose, not one to skip.
+        assert_eq!(hamlib_ladder_bauds(115200, Some((4800, 57600)))[0], 115200);
+        // No caps → the full most-likely-first order, configured first, never twice.
+        assert_eq!(
+            hamlib_ladder_bauds(19200, None),
+            vec![19200, 9600, 4800, 57600, 38400, 115200, 1200]
+        );
+    }
+
+    // ---- B2: what proves a rate, and what must not ----
+
+    /// ⭐ THE GARBAGE CASE, from the real bundled rigctl driving the real `ft847` backend.
+    ///
+    /// These three stdout shapes are what it printed, verbatim (a stand-in rig on the network
+    /// transport, which is how the existing `never_answers_*` captures were made too).
+    #[test]
+    fn a_number_is_not_proof_and_the_two_tests_together_reject_what_it_accepts() {
+        let caps = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ft847.log"));
+        // A HEALTHY rig: frequency in coverage, mode named.
+        let healthy = parse_rigctl_read("14074000\nUSB\n2200\n");
+        assert_eq!(healthy.freq_hz, Some(14_074_000));
+        assert_eq!(healthy.mode, ModeRead::Named("USB".into()));
+        assert_eq!(
+            classify_hamlib_probe(&healthy, &caps),
+            BaudProbe::Reply {
+                freq_hz: Some(14_074_000)
+            }
+        );
+        // MIS-CLOCKED BYTES, as measured: a number with no error, and an empty mode over a
+        // zero passband. `f` alone would have called this a working rate.
+        let garbage = parse_rigctl_read("101054360\n\n0\n");
+        assert_eq!(
+            garbage.freq_hz,
+            Some(101_054_360),
+            "it DID parse — that is the trap"
+        );
+        assert_eq!(garbage.mode, ModeRead::Unnamed);
+        assert_eq!(
+            classify_hamlib_probe(&garbage, &caps),
+            BaudProbe::Noise,
+            "a rig cannot be tuned where it cannot receive, and Hamlib could not name the mode"
+        );
+        // Either test alone rejects it, and each on its own grounds — measured leak rates
+        // over 30 random garbage streams were 8/30 (coverage) and 2/30 (mode), 0/30 together.
+        assert_eq!(
+            classify_hamlib_probe(
+                &RigctlRead {
+                    freq_hz: Some(101_054_360),
+                    mode: ModeRead::Named("USB".into())
+                },
+                &caps
+            ),
+            BaudProbe::Noise,
+            "coverage alone must still reject it"
         );
         assert_eq!(
-            ladder_applies(false, 3078, "COM4", "rts", " COM4 "),
-            Some(0x98)
+            classify_hamlib_probe(
+                &RigctlRead {
+                    freq_hz: Some(14_074_000),
+                    mode: ModeRead::Unnamed
+                },
+                &caps
+            ),
+            BaudProbe::Noise,
+            "the mode veto alone must still reject it"
+        );
+        // Nothing rigctl would call a frequency = the rate got no answer.
+        assert_eq!(
+            classify_hamlib_probe(&parse_rigctl_read(""), &caps),
+            BaudProbe::Silence
+        );
+    }
+
+    /// A mode that could not be READ is not evidence of anything — only a mode Hamlib decoded
+    /// and could not NAME is. Requiring one would report "your rig never answered" to an
+    /// operator whose rig answered.
+    #[test]
+    fn a_mode_that_could_not_be_read_never_counts_against_a_rate() {
+        let caps = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ts570d.log"));
+        // Measured: a Kenwood answering `f` while `m` fails prints the value, then an error
+        // blob. That is ModeRead::Absent, and the rate is still proved by coverage.
+        let read = parse_rigctl_read(
+            "14074000\nerror = rig_get_mode(3132): freqMainB=0, modeMainB=, widthMainB=0\n",
+        );
+        assert_eq!(read.mode, ModeRead::Absent);
+        assert_eq!(
+            classify_hamlib_probe(&read, &caps),
+            BaudProbe::Reply {
+                freq_hz: Some(14_074_000)
+            }
+        );
+        // The rung probe asks `f` alone, so its reads carry no mode at all.
+        assert_eq!(parse_rigctl_read("14074000\n").mode, ModeRead::Absent);
+    }
+
+    /// rigctl prints the value FIRST and an `error =` blob instead when a command fails — and
+    /// that blob contains bare numbers (a passband is one). Scanning for "the first line that
+    /// parses" would read one of them as the rig's frequency.
+    #[test]
+    fn a_failure_blob_is_never_mistaken_for_a_frequency() {
+        let mute = "error = rig_get_freq: cache miss age=10006ms, cached_vfo=Main\n\
+                    read_block_generic(): Timed out 1.27710 seconds after 0 chars, direct=1\n\
+                    ft847: read_block returned -5\n\
+                    rig_get_freq(2674): freqMainA=0, modeMainA=, widthMainA=0\n\
+                    2200\n\
+                    Communication timed out\n";
+        assert_eq!(parse_rigctl_read(mute).freq_hz, None);
+        // Nor is a zero.
+        assert_eq!(parse_rigctl_read("0\n\n0\n").freq_hz, None);
+    }
+
+    #[test]
+    fn a_port_that_will_not_open_is_reported_as_such_not_as_silence() {
+        assert_eq!(
+            open_failure_line("error = serial_open: serial port COM7 is already open\n").as_deref(),
+            Some("serial_open: serial port COM7 is already open")
+        );
+        assert!(open_failure_line("14074000\nUSB\n2200\n").is_none());
+    }
+
+    // ---- B2: the sweep ----
+
+    #[test]
+    fn the_sweep_records_what_it_never_got_to_rather_than_calling_it_silence() {
+        // A budget that expires after the first rung: the rest were never tested, and the
+        // verdict must not describe them as having been silent.
+        let mut probes = 0;
+        let r = run_ladder_over(
+            "COM4",
+            38400,
+            vec![38400, 9600, 4800, 57600],
+            || true,
+            |_| {
+                probes += 1;
+                BaudProbe::Silence
+            },
+        );
+        assert_eq!(
+            probes, 1,
+            "the budget may decline a rung, never interrupt one"
+        );
+        assert_eq!(r.outcomes.len(), 1);
+        assert_eq!(r.not_tried, vec![9600, 4800, 57600]);
+        let m = compose_hamlib_ladder_message(&r, "Yaesu FT-847");
+        assert!(m.contains("ran out of time"), "{m}");
+        assert!(m.contains("9600, 4800, 57600"), "name what is left: {m}");
+        assert!(
+            !m.contains("never answered"),
+            "an untested rate is not a silent one: {m}"
+        );
+        // A sweep that finishes leaves nothing untried.
+        let r = run_ladder_over(
+            "COM4",
+            38400,
+            vec![38400, 9600],
+            || false,
+            |_| BaudProbe::Silence,
+        );
+        assert!(r.not_tried.is_empty());
+    }
+
+    #[test]
+    fn the_hamlib_verdict_names_the_rate_and_both_cures_without_inventing_a_rig_menu() {
+        // THE R1 CASE: an FT-847 actually running at 57600, configured to 4800.
+        let r = LadderReport {
+            port: "COM4".into(),
+            configured_baud: 4800,
+            not_tried: Vec::new(),
+            outcomes: vec![
+                (4800, BaudProbe::Silence),
+                (9600, BaudProbe::Silence),
+                (
+                    57600,
+                    BaudProbe::Reply {
+                        freq_hz: Some(14_074_000),
+                    },
+                ),
+            ],
+        };
+        let m = compose_hamlib_ladder_message(&r, "Yaesu FT-847");
+        assert!(m.contains("57600"), "name the answering rate: {m}");
+        assert!(m.contains("14.074"), "show what it read: {m}");
+        assert!(m.contains("Baud"), "cure 1 — change it here: {m}");
+        assert!(m.contains("radio's own CAT/serial menu"), "cure 2: {m}");
+        assert!(
+            !m.contains("MENU »") && !m.contains("CI-V"),
+            "these ten rigs have ten different menus — quoting one is the transcription \
+             mistake this feature exists to stop: {m}"
+        );
+        // Answering at the CONFIGURED rate means the link is fine and the daemon fell over.
+        let r = LadderReport {
+            port: "COM4".into(),
+            configured_baud: 9600,
+            not_tried: Vec::new(),
+            outcomes: vec![(
+                9600,
+                BaudProbe::Reply {
+                    freq_hz: Some(7_074_000),
+                },
+            )],
+        };
+        let m = compose_hamlib_ladder_message(&r, "Kenwood TS-570D");
+        assert!(m.contains("rigctld"), "{m}");
+        assert!(m.contains("Save the settings again"), "{m}");
+        // A busy port is its own fault with its own cure, never a baud verdict.
+        let r = LadderReport {
+            port: "COM4".into(),
+            configured_baud: 9600,
+            not_tried: Vec::new(),
+            outcomes: vec![(
+                9600,
+                BaudProbe::OpenFailed("serial_open: serial port COM4 is already open".into()),
+            )],
+        };
+        let m = compose_hamlib_ladder_message(&r, "Kenwood TS-570D");
+        assert!(m.contains("already open") && m.contains("WSJT-X"), "{m}");
+        // Bytes that decode as nothing the rig could be doing.
+        let r = LadderReport {
+            port: "COM4".into(),
+            configured_baud: 9600,
+            not_tried: Vec::new(),
+            outcomes: vec![(9600, BaudProbe::Noise), (4800, BaudProbe::Silence)],
+        };
+        let m = compose_hamlib_ladder_message(&r, "Yaesu FT-847");
+        assert!(m.contains("Bytes DID come back"), "{m}");
+        // Total silence: the port identity check, and no Icom-only advice.
+        let r = LadderReport {
+            port: "COM4".into(),
+            configured_baud: 9600,
+            not_tried: Vec::new(),
+            outcomes: vec![(9600, BaudProbe::Silence), (4800, BaudProbe::Silence)],
+        };
+        let m = compose_hamlib_ladder_message(&r, "Yaesu FT-847");
+        assert!(m.contains("unplug"), "{m}");
+        assert!(
+            !m.contains("TWO COM ports"),
+            "that is Icom-only advice: {m}"
         );
     }
 
@@ -529,6 +1475,7 @@ mod tests {
             port: "COM4".into(),
             configured_baud: configured,
             outcomes,
+            not_tried: Vec::new(),
         }
     }
 
@@ -614,6 +1561,7 @@ mod tests {
         let r = LadderReport {
             port: "COM4".into(),
             configured_baud: 115200,
+            not_tried: Vec::new(),
             outcomes: vec![
                 (115200, BaudProbe::Silence),
                 (19200, BaudProbe::Silence),

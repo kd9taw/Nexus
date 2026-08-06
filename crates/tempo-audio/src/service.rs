@@ -254,67 +254,15 @@ fn with_daemon_error(detail: String, said: &[String]) -> String {
     format!("{detail} Hamlib said: {}", picked.join(" / "))
 }
 
-/// How much of the fault a daemon line actually names. **The ordering is the rule** — a line
-/// that names a cause beats anything, and rigctld's per-connection bookkeeping loses to
-/// anything.
-///
-/// The middle rank is deliberate and is what makes this degrade rather than break: a line
-/// neither list has seen still beats bookkeeping and still loses to a known cause, so a Hamlib
-/// that rewords one of its messages costs precision, never the mechanism.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum Explains {
-    /// rigctld narrating its own socket handling. True, and never the answer.
-    Bookkeeping,
-    /// Anything else — including every line neither list anticipated.
-    Plain,
-    /// Names the fault itself: the port, the host, the silence, the garbage.
-    Cause,
-}
-
-/// Fragments that make a line a [`Explains::Cause`]. **Every one was observed coming out of the
-/// bundled rigctld 4.7.1**, or is a format string in the `libhamlib-4.dll` beside it; the
-/// captures are in `tests/fixtures/rigctld/`.
-///
-/// ⚠️ `"Timed out"` is CASE-SENSITIVE on purpose and the case is load-bearing. Hamlib's
-/// diagnosis is `read_block_generic(): Timed out 1.41 seconds after 0 chars` — capital T, and
-/// it carries the char count, which is the difference between "nothing came back at all" (0
-/// chars: dead port, powered-off rig) and "something came back garbled" (N chars: wrong baud).
-/// Its consequence line is the bare lower-case `Communication timed out`, which says nothing
-/// and must not be mistaken for it.
-const CAUSE_FRAGMENTS: &[&str] = &[
-    "does not exist",           // serial_open: serial port COM99 does not exist
-    "is already open",          // serial_open: serial port COM7 is already open  (port busy)
-    "Unable to open",           // serial_open: Unable to open COM7 - Permission denied
-    "cannot get host",          // network_open: cannot get host "rig.local"
-    "Timed out",                // read_block_generic()/read_string_generic(): see above
-    "not correctly terminated", // newcat_get_cmd: Command is not correctly terminated '…'
-    "rig power is off",         // newcat_get_cmd: rig power is off?
-    "cannot set RTS",           // rig_open: cannot set RTS with PTT by RTS / hardware handshake
-    "cannot set DTR",           // rig_open: cannot set DTR with PTT by DTR
-    "Invalid parameter",        // a `-C` value Hamlib will not parse; rigctld then exits 2
-];
-
-/// Prefixes that make a line [`Explains::Bookkeeping`] — all observed, all content-free.
-const NOISE_PREFIXES: &[&str] = &[
-    "handle_socket:", // rigctld's per-connection rig_open/rig_close/i-o-error narration
-    "rigctl_",        // rigctl_chk_vfo / rigctl_dump_state — the CLIENT handshake, not the rig
-    "network_flush",  // "network data cleared" — housekeeping
-    "*",              // Hamlib's ENTERFUNC/RETURNFUNC trace dump: `**2:newcat.c(2110):… entered`
-];
-
-/// Whole lines that are content-free. These are the tail fragments of Hamlib's multi-line error
-/// prints — the subject was on the line before, which is the one worth showing.
-const NOISE_EXACT: &[&str] = &["IO error", "Communication timed out", ")"];
-
-fn explains(line: &str) -> Explains {
-    if CAUSE_FRAGMENTS.iter().any(|f| line.contains(f)) {
-        return Explains::Cause;
-    }
-    if NOISE_EXACT.contains(&line) || NOISE_PREFIXES.iter().any(|p| line.starts_with(p)) {
-        return Explains::Bookkeeping;
-    }
-    Explains::Plain
-}
+// How much of the fault a daemon line actually names — `rigctld_proc::Explains`.
+//
+// **It moved, and the move is part of the fix.** Ranking used to happen here, at read time, over
+// whatever the bounded ring still held. That cannot work at volume: a cause the ring dropped is
+// not a line this function can rank, it is a line that no longer exists. The ring now ranks at
+// WRITE time and keeps the best of the whole connection attempt (`rigctld_proc::said_ring`), so
+// by the time we get here the diagnosis is guaranteed present and this end only has to choose
+// between what survived.
+use crate::rigctld_proc::{explains, Explains};
 
 /// A line's identity for de-duplication, with every run of digits collapsed. Hamlib stamps its
 /// repeats with the elapsed time and the retcode, so the same fault reads as a new string every
@@ -7629,6 +7577,86 @@ mod tests {
         assert!(
             ring.iter().any(|l| l.contains("COM7 does not exist")),
             "one bad byte used to end the drain for good: {ring:?}"
+        );
+    }
+
+    /// ⭐ **THE ROUND-FOUR DEFECT: the diagnosis did not survive a real stream.** The four
+    /// captures above are all of a daemon whose only traffic IS the fault — a handful of lines
+    /// per reconnect and nothing else — which is why an 8-line window looked sufficient. A rig
+    /// that answers MIS-FRAMED bytes is the case that breaks it: the link stays up, so the
+    /// daemon narrates every poll forever, while the line that names the fault is printed once,
+    /// at `rig_open`, before any of it.
+    ///
+    /// This capture is that, from the real bundled rigctld 4.7.1 (`-vvv`, the flags
+    /// [`crate::rigctld_proc::rigctld_args`] builds), driven by a peer that answers mis-framed
+    /// bytes and drops the link — so every poll is a genuine reconnect, exactly as `rig.rs`
+    /// produces when it drops the socket on a failed command.
+    ///
+    /// **Counted, not described** (the first wording of this comment said "line 3 of 2000+",
+    /// which was not true of the file it shipped with): 549 lines, 26 of them naming the fault,
+    /// first on line 1, last on line 517, 32 lines of bookkeeping after that one and runs of up
+    /// to 60 lines between them. What makes the capture bite is not its length but those runs —
+    /// both are longer than the window, so an 8-line ring sampled at the end, or anywhere inside
+    /// a run, holds no diagnosis at all. The assertion below pins that precondition directly
+    /// rather than trusting a line count to imply it.
+    ///
+    /// Before the fix the ring held the newest 8 lines of that, and every one of them was
+    /// bookkeeping: the operator was told `handle_socket: rig_open retcode=0`. Ranking at read
+    /// time cannot fix it — by then the cause is not a low-ranked line, it is a line that no
+    /// longer exists.
+    #[test]
+    fn the_daemons_diagnosis_survives_a_stream_that_never_stops() {
+        let raw = include_bytes!("../tests/fixtures/rigctld/wrong_baud_flood.log");
+        let lines: Vec<&[u8]> = raw.split(|&b| b == b'\n').collect();
+        // ⚠️ THE PRECONDITION, checked rather than assumed: the capture must actually defeat a
+        // newest-8 window, or this test passes for free and would keep passing if the fix were
+        // reverted. That is true exactly when the tail carries no diagnosis — a line count does
+        // not imply it, and the count this test first asserted (`> 500`) would have been
+        // satisfied by a stream whose every eighth line named the fault.
+        let names_a_fault = |l: &[u8]| {
+            [
+                &b"rig power is off"[..],
+                &b"cmd validation failed"[..],
+                &b"not correctly terminated"[..],
+                &b"Timed out"[..],
+            ]
+            .iter()
+            .any(|f| l.windows(f.len()).any(|w| w == *f))
+        };
+        let tail_causes = lines
+            .iter()
+            .rev()
+            .take(crate::rigctld_proc::said_window_len())
+            .filter(|l| names_a_fault(l))
+            .count();
+        assert_eq!(
+            tail_causes, 0,
+            "the capture must be one a newest-8 window FAILS on, or this proves nothing"
+        );
+        assert!(
+            lines.iter().any(|l| names_a_fault(l)),
+            "…and it must contain a diagnosis somewhere for the ring to have retained"
+        );
+        let ring = crate::rigctld_proc::said_ring(raw);
+        let ours = "CAT error: rig reply incomplete after 700 ms (got \"\")".to_string();
+        let out = with_daemon_error(ours.clone(), &ring);
+        assert!(
+            out.contains("rig power is off") || out.contains("cmd validation failed"),
+            "the fault is named {} lines from the end of the stream, and the operator still \
+             has to be told it.\n  ring: {ring:?}\n  got: {out}",
+            lines.len()
+        );
+        assert!(
+            !out.contains("handle_socket"),
+            "and must not be handed the daemon's socket bookkeeping instead: {out}"
+        );
+        // The recent-context half still tracks the live end of the stream: the fix ADDS a
+        // retained line, it does not turn the ring into a log of the first 8 lines.
+        assert!(
+            ring.iter().rev().take(3).any(|l| l.contains("write_block")
+                || l.contains("handle_socket")
+                || l.contains("IO error")),
+            "the newest lines must still be there: {ring:?}"
         );
     }
 

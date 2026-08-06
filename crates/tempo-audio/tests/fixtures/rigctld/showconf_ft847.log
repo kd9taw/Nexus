@@ -1,0 +1,132 @@
+rig_pathname: "Path name to the device file of the rig"
+	Default: /dev/rig, Value: \\.\COM1
+	String.
+write_delay: "Delay in ms between each byte sent out"
+	Default: 0, Value: 50
+	Range: 0..1000, step 1.0
+post_write_delay: "Delay in ms between each command sent out"
+	Default: 0, Value: 50
+	Range: 0..1000, step 1.0
+post_ptt_delay: "Delay in ms after PTT is asserted"
+	Default: 0, Value: 0
+	Range: 0..2000, step 1.0
+timeout: "Timeout in ms"
+	Default: 0, Value: 500
+	Range: 0..10000, step 1.0
+retry: "Max number of retry"
+	Default: 0, Value: 0
+	Range: 0..10, step 1.0
+timeout_retry: "Set the # of retries for read timeouts that may occur with some serial interfaces"
+	Default: 1, Value: 1
+	Range: 0..100, step 1.0
+range_list_number: "The tx/rx range list number in use"
+	Default: 0, Value: 
+	Range: 1..5, step 1.0
+range_list_name: "The tx/rx range list name in use"
+	Default: Default, Value: 
+	String.
+device_id: "User-specified device ID for multicast state data and commands"
+	Default: , Value: 
+	String.
+vfo_comp: "VFO compensation in ppm"
+	Default: 0, Value: 0.000000
+	Range: 0..1000, step 0.0
+poll_interval: "Polling interval in ms for transceive emulation, defaults to 1000, value of 0 disables polling"
+	Default: 1000, Value: 1000
+	Range: 0..1e+06, step 1.0
+ptt_type: "Push-To-Talk interface type override"
+	Default: RIG, Value: RIG
+	Combo: RIG, RIGMICDATA, DTR, RTS, Parallel, CM108, GPIO, GPION, None
+ptt_pathname: "Path to the device of the Push-To-Talk"
+	Default: /dev/rig, Value: 
+	String.
+ptt_bitnum: "Push-To-Talk GPIO bit number"
+	Default: 2, Value: 0
+	Range: 0..7, step 1.0
+dcd_type: "Data Carrier Detect (or squelch) interface type override"
+	Default: RIG, Value: RIG
+	Combo: RIG, DSR, CTS, CD, Parallel, CM108, GPIO, GPION, None
+dcd_pathname: "Path to the device of the Data Carrier Detect (or squelch)"
+	Default: /dev/rig, Value: 
+	String.
+lo_freq: "Frequency to add to the VFO frequency for use with a transverter"
+	Default: 0, Value: 0
+	Range: 0..1e+09, step 0.1
+cache_timeout: "Cache timeout, value of 0 disables caching"
+	Default: 500, Value: 500
+	Range: 0..5000, step 1.0
+auto_power_on: "True enables compatible rigs to be powered up on open"
+	Default: 0, Value: 0
+	Check button.
+auto_power_off: "True enables compatible rigs to be powered down on close"
+	Default: 0, Value: 0
+	Check button.
+auto_disable_screensaver: "True enables compatible rigs to have their screen saver disabled on open"
+	Default: 0, Value: 0
+	Check button.
+disable_yaesu_bandselect: "True disables the automatic band select on band change for Yaesu rigs"
+	Default: 0, Value: 0
+	Check button.
+ptt_share: "True enables ptt port to be shared with other apps"
+	Default: 0, Value: 0
+	Check button.
+flushx: "True enables flushing serial port with read instead of TCFLUSH -- MicroHam"
+	Default: 0, Value: 0
+	Check button.
+twiddle_timeout: "For satellite ops when VFOB is twiddled will pause VFOB commands until timeout"
+	Default: 0, Value: 0
+	Range: 0..100, step 1.0
+twiddle_rit: "Suppress get_freq on VFOB for RIT tuning satellites"
+	Default: Unset, Value: 0
+	Combo: Unset, ON, OFF
+async: "True enables async data for rigs that support it to allow use of transceive and spectrum data"
+	Default: 0, Value: 0
+	Check button.
+tuner_control_pathname: "Path to a program to control a tuner with 1 argument of 0/1 for Tuner Off/On"
+	Default: hamlib_tuner_control, Value: hamlib_tuner_control
+	String.
+offset_vfoa: "Add Hz to VFOA/Main frequency set"
+	Default: 0, Value: 0
+	Range: 0..1e+12, step 1.0
+offset_vfob: "Add Hz to VFOB/Sub frequency set"
+	Default: 0, Value: 0
+	Range: 0..1e+12, step 1.0
+multicast_data_addr: "Multicast data UDP address for publishing rig data and state, value of 0.0.0.0 disables multicast data publishing"
+	Default: 0.0.0.0, Value: 0.0.0.0
+	String.
+multicast_data_port: "Multicast data UDP port for publishing rig data and state"
+	Default: 4532, Value: 4532
+	Range: 0..1e+06, step 1.0
+multicast_cmd_addr: "Multicast command UDP address for sending commands to rig, value of 0.0.0.0 disables multicast command server"
+	Default: 0.0.0.0, Value: 0.0.0.0
+	String.
+multicast_cmd_port: "Multicast data UDP port for sending commands to rig"
+	Default: 4532, Value: 4532
+	Range: 0..1e+06, step 1.0
+freq_skip: "True enables skipping setting the TX_VFO when RX_VFO is receiving and skips RX_VFO when TX_VFO is transmitting"
+	Default: 0, Value: 0
+	Check button.
+client: "Knows about WSJTX and GPREDICT as of 20240702"
+	Default: 0, Value: UNKNOWN
+	Check button.
+serial_speed: "Serial port baud rate"
+	Default: 0, Value: 57600
+	Range: 300..115200, step 1.0
+data_bits: "Serial port data bits"
+	Default: 8, Value: 8
+	Range: 5..8, step 1.0
+stop_bits: "Serial port stop bits"
+	Default: 1, Value: 2
+	Range: 0..3, step 1.0
+serial_parity: "Serial port parity"
+	Default: None, Value: None
+	Combo: None, Odd, Even, Mark, Space
+serial_handshake: "Serial port handshake"
+	Default: None, Value: None
+	Combo: None, XONXOFF, Hardware
+rts_state: "Serial port set state of RTS signal for external powering"
+	Default: Unset, Value: Unset
+	Combo: Unset, ON, OFF
+dtr_state: "Serial port set state of DTR signal for external powering"
+	Default: Unset, Value: Unset
+	Combo: Unset, ON, OFF

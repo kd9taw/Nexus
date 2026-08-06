@@ -160,7 +160,18 @@ fn extended_rig_models() -> Vec<(u32, &'static str)> {
     vec![
         // Hamlib built-in bridges (backend 0)
         (5, "TRX-Manager (rig control)"),
-        (7, "TCI (SunSDR / ExpertSDR)"),
+        // ⚠️ NO model 7 ("TCI (SunSDR / ExpertSDR)"). The number is real in `riglist.h`, but the
+        // Hamlib we SHIP cannot load it — measured on the delivery path, 2026-08-06:
+        //   ./rigctld.exe -m 7 -r 127.0.0.1:50001 -t 4599
+        //     → "Unknown rig num 7, or initialization error."   (model 1 starts fine)
+        //   ./rigctl.exe -l | grep -i "tci\|sunsdr\|expert"     → nothing
+        // Offering it meant an operator who ticked "Show all models" could pick a rig whose
+        // daemon then refuses to start. **A `strings libhamlib-4.dll | grep tci1x` hit (29 of
+        // them) does NOT establish the backend ships** — that check passed twice while this was
+        // broken. Source strings can be in the DLL with the backend unregistered in the build;
+        // the only check that settles it is starting rigctld on the model. TCI itself is a
+        // different protocol from Hamlib CAT — SunSDR/ExpertSDR owners use the CAT server port
+        // (13013), which is where the network-port hint now points them.
         // Icom (backend 3)
         (3011, "Icom IC-706MKIIG"),
         (3010, "Icom IC-706MKII"),
@@ -260,10 +271,14 @@ pub fn rig_model_name(model: u32) -> Option<&'static str> {
 ///
 /// - `2036` / `23005` — FlexRadio 6000: Ethernet radio, CAT served by the SmartSDR CAT app.
 /// - `2054` / `2048` / `2040` / `2056` — Thetis / PowerSDR / piHPSDR / SDR Console.
-/// - `5` / `7` / `2051` — TRX-Manager, TCI, SDRuno. These sit in `extended_rig_models`, which
+/// - `5` / `2051` — TRX-Manager, SDRuno. These sit in `extended_rig_models`, which
 ///   `match_rig_model` does not read today. They are listed anyway because a TIER MOVE is
 ///   exactly how this bug arrived: 2040 was promoted out of the extended tier in the same
 ///   commit, and `5`'s tokens include the bare words `RIG` and `CONTROL`.
+/// - `7` (TCI) is kept in the set below although it is no longer OFFERED anywhere — the
+///   bundled Hamlib cannot load it, so `extended_rig_models` dropped it (see there). Membership
+///   here only ever withholds a name match, so keeping it costs nothing and covers a settings
+///   file written before it was delisted.
 ///
 /// (Hamlib's Dummy/NET/FLRig — models ≤ 4 — are excluded by `match_rig_model` separately;
 /// they are not radios at all rather than software-served ones.)
@@ -335,8 +350,17 @@ pub(crate) fn icom_scope_model(model: u32) -> Option<crate::civ::commands::IcomM
 /// the native CI-V daemon already use — matching how WSJT-X lets Hamlib's own timeout+retry
 /// finish rather than racing an external stopwatch.
 ///
-/// The slow set is the SAME old/slow rigs that already need a non-default CAT baud (mirrors
-/// `BAUD_BY_MODEL` in SettingsPanel.tsx, verified vs Hamlib riglist.h):
+/// ⚠️ **This set stands on its own and mirrors nothing.** It used to be documented as mirroring
+/// `BAUD_BY_MODEL` in SettingsPanel.tsx — a name two renames dead (`RIG_CAT_RATES`, then
+/// `RIG_FIXED_BAUD`) — and after the 2026-08-06 deletions the two do not correspond at all: the
+/// Xiegus, the vintage Kenwoods and the TS-870S/570D/570S below every one lost their baud row,
+/// because those rows were transcribed from manuals and that is what made them wrong. **The
+/// function is unaffected: it is about the 700 ms READ DEADLINE, not about baud.** A rig belongs
+/// here because its backend answers slowly, which is why it survived a change that was entirely
+/// about rates. Do not re-couple the two — that shared premise is what made one wrong table
+/// propagate into a second place.
+///
+/// The slow set, verified against Hamlib riglist.h:
 /// - **Xiegu** CI-V family (G90/X6100/X6200/X5105/X108G) — fixed 19200, slow CI-V backend.
 /// - **Vintage Kenwood** (IF-232C era, fixed 4800 8N2: TS-50S/140S/440S/450S/690S/790/850/
 ///   940S/950SDX) and the 9600 TS-870S / TS-570D/S.
@@ -544,7 +568,9 @@ mod tests {
         for m in [3088u32, 3087, 3091, 3089, 3076] {
             assert!(is_slow_serial_rig(m), "Xiegu model {m} should be slow");
         }
-        // Vintage Kenwood (4800/9600 IF-232C-era rigs — the same set as BAUD_BY_MODEL) → slow.
+        // Vintage Kenwood (4800/9600 IF-232C-era rigs) → slow. Deliberately NOT cross-checked
+        // against any baud table: this is the read-deadline set, and the rate rows those rigs
+        // used to carry were deleted for being transcribed guesses (see `is_slow_serial_rig`).
         for m in [
             2001u32, 2002, 2003, 2005, 2007, 2009, 2011, 2013, 2025, 2004, 2010, 2016,
         ] {

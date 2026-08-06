@@ -1,0 +1,372 @@
+Caps dump for model: 2004
+Model name:	TS-570D
+Mfg name:	Kenwood
+Hamlib version:	Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit
+Backend version:	20250515.1
+Backend copyright:	LGPL
+Backend status:	Stable
+Rig type:	Other Receiver Transmitter Transceiver 
+PTT type:	None
+DCD type:	Rig capable
+Port type:	RS-232
+Serial speed: 1200..57600 baud, 8N1, ctrl=CTS/RTS
+Write delay: 0ms, timeout 500ms, 10 retry
+Post write delay: 30ms
+Has targetable VFO: Y
+Targetable features: FREQ
+Has async data support: N
+Announce: 0x0
+Max RIT: -9.990kHz/+9.990kHz
+Max XIT: -9.990kHz/+9.990kHz
+Max IF-SHIFT: -0.0kHz/+0.0kHz
+Preamp: 12dB
+Attenuator: 18dB
+AGC levels: 9=NONE
+CTCSS: 67.0 71.9 74.4 77.0 79.7 82.5 85.4 88.5 91.5 94.8 97.4 100.0 103.5 107.2 110.9 114.8 118.8 123.0 127.3 131.8 136.5 141.3 146.2 151.4 156.7 162.2 167.9 173.8 179.9 186.2 192.8 203.5 210.7 218.1 225.7 233.6 241.8 250.3 Hz, 38 tones
+DCS: None
+Get functions: FAGC NB COMP VOX TONE TSQL NR LOCK BC TUNER 
+Set functions: FAGC NB COMP VOX TONE TSQL NR LOCK BC TUNER 
+Extra functions:
+Get level: PREAMP(0..20/10) ATT(0..12/0) AF(0.000000..1.000000/0.003922) RF(0.000000..1.000000/0.003922) SQL(0.000000..1.000000/0.010000) RFPOWER(0.050000..1.000000/0.010000) MICGAIN(0.000000..1.000000/0.010000) KEYSPD(4..60/1) AGC(0..0/0) SLOPE_LOW(10..1000/50) SLOPE_HIGH(1000..5000/10) STRENGTH(0..60/0) 
+Set level: PREAMP(0..20/10) ATT(0..12/0) AF(0.000000..1.000000/0.003922) RF(0.000000..1.000000/0.003922) SQL(0.000000..1.000000/0.010000) RFPOWER(0.050000..1.000000/0.010000) MICGAIN(0.000000..1.000000/0.010000) KEYSPD(4..60/1) AGC(0..0/0) SLOPE_LOW(10..1000/50) SLOPE_HIGH(1000..5000/10) 
+Extra levels:
+Get parameters: 
+Set parameters: 
+Extra parameters:
+Mode list: AM CW USB LSB RTTY FM
+VFO list: VFOA VFOB 
+VFO Ops: UP DOWN 
+Scan Ops: VFO 
+Number of banks:	0
+Memory name desc size:	0
+Memories:
+	0..89:   	MEM
+	  Mem caps: FREQ MODE SPLIT TXFREQ TXMODE SPLIT TONE 
+	90..99:   	EDGE
+	  Mem caps: FREQ MODE SPLIT TXFREQ TXMODE SPLIT TONE 
+	1..3:   	MORSE
+	  Mem caps: 
+TX ranges #1 for TBD:
+	1810000 Hz - 1849999 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	1800000 Hz - 1999999 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	3500000 Hz - 3799999 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	3500000 Hz - 3799999 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	7000000 Hz - 7100000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	7000000 Hz - 7100000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	10100000 Hz - 10150000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	10100000 Hz - 10150000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	14000000 Hz - 14350000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	14000000 Hz - 14350000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	18068000 Hz - 18168000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	18068000 Hz - 18168000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	21000000 Hz - 21450000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	21000000 Hz - 21450000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	24890000 Hz - 24990000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	24890000 Hz - 24990000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	28000000 Hz - 29700000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	28000000 Hz - 29700000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+RX ranges #1 for TBD:
+	500000 Hz - 30000000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+TX ranges #2 for TBD:
+	1800000 Hz - 1999999 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	1800000 Hz - 1999999 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	3500000 Hz - 3999999 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	3500000 Hz - 3999999 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	7000000 Hz - 7300000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	7000000 Hz - 7300000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	10100000 Hz - 10150000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	10100000 Hz - 10150000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	14000000 Hz - 14350000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	14000000 Hz - 14350000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	18068000 Hz - 18168000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	18068000 Hz - 18168000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	21000000 Hz - 21450000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	21000000 Hz - 21450000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	24890000 Hz - 24990000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	24890000 Hz - 24990000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+	28000000 Hz - 29700000 Hz
+		VFO list: VFOA VFOB 
+		Mode list:  CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 100 W
+	28000000 Hz - 29700000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM
+		Antenna list: ANT1 ANT2 
+		Low power: 5 W, High power: 25 W
+RX ranges #2 for TBD:
+	500000 Hz - 30000000 Hz
+		VFO list: VFOA VFOB 
+		Mode list: AM CW USB LSB RTTY FM
+		Antenna list: ANT1 ANT2 
+TX ranges #3 for TBD:
+RX ranges #3 for TBD:
+TX ranges #4 for TBD:
+RX ranges #4 for TBD:
+TX ranges #5 for TBD:
+RX ranges #5 for TBD:
+TX ranges #1 status for TBD:	OK (0)
+RX ranges #1 status for TBD:	OK (0)
+TX ranges #2 status for TBD:	OK (0)
+RX ranges #2 status for TBD:	OK (0)
+TX ranges #3 status for TBD:	OK (0)
+RX ranges #3 status for TBD:	OK (0)
+TX ranges #4 status for TBD:	OK (0)
+RX ranges #4 status for TBD:	OK (0)
+TX ranges #5 status for TBD:	OK (0)
+RX ranges #5 status for TBD:	OK (0)
+Tuning steps:
+	50.0 Hz:   	AM CW USB LSB RTTY FM
+	100.0 Hz:   	AM CW USB LSB RTTY FM
+	1.0000 kHz:   	AM CW USB LSB RTTY FM
+	5.0000 kHz:   	AM CW USB LSB RTTY FM
+	9.0000 kHz:   	AM CW USB LSB RTTY FM
+	10.0000 kHz:   	AM CW USB LSB RTTY FM
+	12.5000 kHz:   	AM CW USB LSB RTTY FM
+	20.0000 kHz:   	AM CW USB LSB RTTY FM
+	25.0000 kHz:   	AM CW USB LSB RTTY FM
+	100.0000 kHz:   	AM CW USB LSB RTTY FM
+	1.0000000 MHz:   	AM CW USB LSB RTTY FM
+	ANY:   	AM CW USB LSB RTTY FM
+Tuning steps status:	OK (0)
+Filters:
+	500.0 Hz:   	 USB LSB
+	ANY:   	 USB LSB
+	1.0000 kHz:   	 USB LSB
+	400.0 Hz:   	 CW
+	100.0 Hz:   	 CW
+	1.0000 kHz:   	 CW
+	1.0000 kHz:   	 RTTY
+	500.0 Hz:   	 RTTY
+	1.5000 kHz:   	 RTTY
+	500.0 Hz:   	AM
+	ANY:   	AM
+	1.0000 kHz:   	AM
+	500.0 Hz:   	 FM
+	ANY:   	 FM
+	1.0000 kHz:   	 FM
+Bandwidths:
+	AM	Normal: 500.0 Hz,	Narrow: 0.0 Hz,	Wide: 1.0000 kHz
+	CW	Normal: 400.0 Hz,	Narrow: 100.0 Hz,	Wide: 1.0000 kHz
+	USB	Normal: 500.0 Hz,	Narrow: 0.0 Hz,	Wide: 1.0000 kHz
+	LSB	Normal: 500.0 Hz,	Narrow: 0.0 Hz,	Wide: 1.0000 kHz
+	RTTY	Normal: 1.0000 kHz,	Narrow: 500.0 Hz,	Wide: 1.5000 kHz
+	FM	Normal: 500.0 Hz,	Narrow: 0.0 Hz,	Wide: 1.0000 kHz
+	CWR	Normal: 400.0 Hz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+	RTTYR	Normal: 1.0000 kHz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+Spectrum scopes: None
+Spectrum modes: 
+Spectrum spans: 
+Spectrum averaging modes: 
+Spectrum attenuator: None
+Has priv data:	Y
+Has Init:	Y
+Has Cleanup:	Y
+Has Open:	Y
+Has Close:	N
+Can set Conf:	N
+Can get Conf:	N
+Can set Frequency:	Y
+Can get Frequency:	Y
+Can set Mode:	Y
+Can get Mode:	Y
+Can set VFO:	Y
+Can get VFO:	Y
+Can set PTT:	Y
+Can get PTT:	Y
+Can get DCD:	Y
+Can set Repeater Duplex:	N
+Can get Repeater Duplex:	N
+Can set Repeater Offset:	N
+Can get Repeater Offset:	N
+Can set Split Freq:	E
+Can get Split Freq:	E
+Can set Split Mode:	E
+Can get Split Mode:	E
+Can set Split VFO:	Y
+Can get Split VFO:	Y
+Can set Tuning Step:	N
+Can get Tuning Step:	N
+Can set RIT:	Y
+Can get RIT:	Y
+Can set XIT:	Y
+Can get XIT:	Y
+Can set CTCSS:	Y
+Can get CTCSS:	Y
+Can set DCS:	N
+Can get DCS:	N
+Can set CTCSS Squelch:	N
+Can get CTCSS Squelch:	N
+Can set DCS Squelch:	N
+Can get DCS Squelch:	N
+Can set Power Stat:	Y
+Can get Power Stat:	Y
+Can Reset:	Y
+Can get Ant:	Y
+Can set Ant:	Y
+Can set Transceive:	Y
+Can get Transceive:	Y
+Can set Func:	Y
+Can get Func:	Y
+Can set Level:	Y
+Can get Level:	Y
+Can set Param:	N
+Can get Param:	N
+Can send DTMF:	N
+Can recv DTMF:	N
+Can send Morse:	Y
+Can stop Morse:	N
+Can wait Morse:	Y
+Can send Voice:	N
+Can decode Events:	N
+Can set Bank:	N
+Can set Mem:	Y
+Can get Mem:	Y
+Can set Channel:	Y
+Can get Channel:	Y
+Can ctl Mem/VFO:	Y
+Can Scan:	Y
+Can get Info:	N
+Can get power2mW:	N
+Can get mW2power:	N
+
+Overall backend warnings: 0   

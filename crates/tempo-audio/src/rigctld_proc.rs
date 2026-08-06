@@ -285,35 +285,111 @@ pub fn ptt_type_token(line: crate::rig::SerialLine) -> &'static str {
 /// closing Tempo.
 pub struct RigctldProc {
     child: Child,
-    /// What the daemon has printed on stderr, newest last, filled by the drain thread in
-    /// [`spawn_rigctld`] — see [`RigctldProc::said`].
-    said: Arc<Mutex<VecDeque<String>>>,
+    /// What the daemon has printed on stderr, filled by the drain thread in [`spawn_rigctld`]:
+    /// the newest lines, plus the best-ranked line of this whole connection attempt — see
+    /// [`Said`] and [`RigctldProc::said`].
+    said: Arc<Mutex<Said>>,
     /// Job-object handle (Windows) as an `isize`; 0 = none. Held for the daemon's
     /// lifetime so the kill-on-close guarantee is in force until Tempo exits.
     #[cfg(windows)]
     job: isize,
 }
 
-/// How many of the daemon's stderr lines are kept. Bounded because the loudest case is a rig
-/// that is merely MUTE: at `-vvv` Hamlib reports the read timeout AND the backend's own error
-/// on every poll, forever, so an unbounded buffer would grow for as long as the operator leaves
-/// the app open. A healthy rig contributes nothing to push anything out (it prints nothing at
-/// this level at all).
+/// How many of the daemon's stderr lines are kept **as recent context**. Bounded because the
+/// loudest case is a rig that is merely MUTE: at `-vvv` Hamlib reports the read timeout AND the
+/// backend's own error on every poll, forever, so an unbounded buffer would grow for as long as
+/// the operator leaves the app open. A healthy rig contributes nothing to push anything out (it
+/// prints nothing at this level at all).
 ///
-/// **Why 8 SURVIVED the round-three audit**, and it is not the reason first given here. The old
-/// justification was "the newest lines are the ones worth having — a later error supersedes an
-/// earlier one", and that premise is false: Hamlib prints the CAUSE first and its consequences
-/// after, so newest-wins systematically keeps the wrong end. What was actually re-measured is
-/// narrower and is what this constant needs to be true — **an 8-line window still CONTAINS a
-/// cause line** in every failure mode captured from the real bundled daemon, because the whole
-/// burst repeats on the next poll. Verbatim captures and the check are in
-/// `service::tests::the_operator_sees_what_hamlib_diagnosed_on_every_real_failure`. Choosing
-/// WHICH of the eight to show is `service::with_daemon_error`'s job, and it is done by content.
+/// ⚠️ **This window is no longer what carries the diagnosis, and the round-three claim that it
+/// was is FALSIFIED.** That round re-measured the per-failure burst sizes below and concluded "an
+/// 8-line window still contains a cause line in every failure mode captured". It does not. Those
+/// captures were all of a daemon whose ONLY traffic was the fault; a daemon on a rig that answers
+/// mis-framed bytes narrates every poll on top of the fault, and the cause is printed once, at
+/// `rig_open`, before any of it. Re-measured against the bundled rigctld 4.7.1 driven by a peer
+/// that answers garbage and drops the link (`tests/fixtures/rigctld/wrong_baud_flood.log`).
+/// Counted, rather than described: **549 lines, 26 of which name the fault, the first on line 1
+/// and the last on line 517 — with 32 lines of bookkeeping after it and runs of up to 60 lines
+/// between them.** Both numbers are larger than this window, which is the whole point: an 8-line
+/// window at the end of that stream holds nothing but `handle_socket:` / `write_block()` /
+/// `IO error`, and a probe that failed anywhere inside one of those runs saw the same.
+///
+/// So the window is now only the recent-context half of [`Said`]; what makes the diagnosis
+/// survive is [`Said::best`], which is kept for the whole connection attempt and cannot be
+/// pushed out at any volume. Choosing which of the retained lines to SHOW is
+/// `service::with_daemon_error`'s job, and it is done by content.
 ///
 /// Per-failure burst sizes measured (bundled rigctld 4.7.1, `-vvv`): missing serial port 3–4
-/// lines per reconnect, busy port 4, FT-847 that never answers 5, FTDX10 that never answers ~26
-/// (its cause line lands inside the last 8), wrong baud 1.
+/// lines per reconnect, busy port 4, FT-847 that never answers 5, FTDX10 that never answers ~26,
+/// wrong baud 1 — and a wrong baud that keeps the link up, unbounded.
 const SAID_KEPT: usize = 8;
+
+/// How much of the fault a daemon line actually names. **The ordering is the rule** — a line
+/// that names a cause beats anything, and rigctld's per-connection bookkeeping loses to
+/// anything.
+///
+/// The middle rank is deliberate and is what makes this degrade rather than break: a line
+/// neither list has seen still beats bookkeeping and still loses to a known cause, so a Hamlib
+/// that rewords one of its messages costs precision, never the mechanism.
+///
+/// It lives here, beside the ring it now selects INTO, rather than beside the one consumer that
+/// used to rank at read time: the ring has to know a cause when it sees one, because by the time
+/// `service::with_daemon_error` looks, a cause it did not retain is gone.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum Explains {
+    /// rigctld narrating its own socket handling. True, and never the answer.
+    Bookkeeping,
+    /// Anything else — including every line neither list anticipated.
+    Plain,
+    /// Names the fault itself: the port, the host, the silence, the garbage.
+    Cause,
+}
+
+/// Fragments that make a line a [`Explains::Cause`]. **Every one was observed coming out of the
+/// bundled rigctld 4.7.1**, or is a format string in the `libhamlib-4.dll` beside it; the
+/// captures are in `tests/fixtures/rigctld/`.
+///
+/// ⚠️ `"Timed out"` is CASE-SENSITIVE on purpose and the case is load-bearing. Hamlib's
+/// diagnosis is `read_block_generic(): Timed out 1.41 seconds after 0 chars` — capital T, and
+/// it carries the char count, which is the difference between "nothing came back at all" (0
+/// chars: dead port, powered-off rig) and "something came back garbled" (N chars: wrong baud).
+/// Its consequence line is the bare lower-case `Communication timed out`, which says nothing
+/// and must not be mistaken for it.
+const CAUSE_FRAGMENTS: &[&str] = &[
+    "does not exist",           // serial_open: serial port COM99 does not exist
+    "is already open",          // serial_open: serial port COM7 is already open  (port busy)
+    "Unable to open",           // serial_open: Unable to open COM7 - Permission denied
+    "cannot get host",          // network_open: cannot get host "rig.local"
+    "Timed out",                // read_block_generic()/read_string_generic(): see above
+    "not correctly terminated", // newcat_get_cmd: Command is not correctly terminated '…'
+    "cmd validation failed",    // newcat_set_cmd_validate: 'AI0;'!='<the rig's garbage>'
+    "rig power is off",         // newcat_get_cmd: rig power is off?
+    "cannot set RTS",           // rig_open: cannot set RTS with PTT by RTS / hardware handshake
+    "cannot set DTR",           // rig_open: cannot set DTR with PTT by DTR
+    "Invalid parameter",        // a `-C` value Hamlib will not parse; rigctld then exits 2
+];
+
+/// Prefixes that make a line [`Explains::Bookkeeping`] — all observed, all content-free.
+const NOISE_PREFIXES: &[&str] = &[
+    "handle_socket:", // rigctld's per-connection rig_open/rig_close/i-o-error narration
+    "rigctl_",        // rigctl_chk_vfo / rigctl_dump_state — the CLIENT handshake, not the rig
+    "network_flush",  // "network data cleared" — housekeeping
+    "*",              // Hamlib's ENTERFUNC/RETURNFUNC trace dump: `**2:newcat.c(2110):… entered`
+];
+
+/// Whole lines that are content-free. These are the tail fragments of Hamlib's multi-line error
+/// prints — the subject was on the line before, which is the one worth showing.
+const NOISE_EXACT: &[&str] = &["IO error", "Communication timed out", ")"];
+
+pub(crate) fn explains(line: &str) -> Explains {
+    if CAUSE_FRAGMENTS.iter().any(|f| line.contains(f)) {
+        return Explains::Cause;
+    }
+    if NOISE_EXACT.contains(&line) || NOISE_PREFIXES.iter().any(|p| line.starts_with(p)) {
+        return Explains::Bookkeeping;
+    }
+    Explains::Plain
+}
 
 /// One stderr line as the ring keeps it — trimmed, `None` if there is nothing left.
 ///
@@ -335,25 +411,72 @@ fn said_line(raw: &[u8]) -> Option<String> {
     (!line.is_empty()).then_some(line)
 }
 
-/// Add one line to the bounded ring, dropping the oldest when it is full.
-fn push_said(q: &mut VecDeque<String>, line: String) {
-    if q.len() == SAID_KEPT {
-        q.pop_front();
+/// What the daemon has said about THIS connection attempt: a bounded window of the newest lines,
+/// and — kept out of that window's reach — the best-ranked line of the whole attempt.
+///
+/// ⭐ **The two halves answer two different questions, and one buffer could not answer both.**
+/// The window answers "what is happening now"; it has to be bounded, because a daemon on a mute
+/// or mis-framing rig narrates for as long as the app is open. `best` answers "what went wrong",
+/// and that line is printed ONCE, at `rig_open`, before the narration starts — so any bound at
+/// all eventually drops it. Ranking at read time cannot recover it: by then it is not a
+/// low-ranked line, it is a line that no longer exists.
+///
+/// One slot, not a second ring: the fault has one name, and the operator's status pill holds two
+/// lines of which the second should be the live end of the stream. **Strictly-better replaces**,
+/// so within a rank the FIRST line wins — Hamlib prints the cause first and its consequences
+/// after, and a later line of the same rank is a repeat or a knock-on. That also makes this the
+/// fallback rather than the answer: `service::with_daemon_error` scans newest-first within a
+/// rank, so while the window still holds a line as good, the LIVE one is what the operator sees
+/// and this slot only speaks when the window has nothing left to say.
+#[derive(Default)]
+pub(crate) struct Said {
+    window: VecDeque<String>,
+    best: Option<(Explains, String)>,
+}
+
+impl Said {
+    fn push(&mut self, line: String) {
+        let rank = explains(&line);
+        if self.best.as_ref().is_none_or(|(best, _)| rank > *best) {
+            self.best = Some((rank, line.clone()));
+        }
+        if self.window.len() == SAID_KEPT {
+            self.window.pop_front();
+        }
+        self.window.push_back(line);
     }
-    q.push_back(line);
+
+    /// Everything retained, oldest first — the kept diagnosis, then the window. The retained
+    /// line is omitted when the window still holds it, so a short-lived daemon reads exactly as
+    /// it did before there was a second half.
+    fn lines(&self) -> Vec<String> {
+        self.best
+            .iter()
+            .map(|(_, l)| l)
+            .filter(|l| !self.window.contains(l))
+            .chain(self.window.iter())
+            .cloned()
+            .collect()
+    }
+}
+
+/// How many lines of recent context the ring keeps ([`SAID_KEPT`]), for a test that needs to
+/// prove a capture defeats a window of exactly that size rather than assume it does.
+pub fn said_window_len() -> usize {
+    SAID_KEPT
 }
 
 /// The ring the drain thread would be holding after `raw` — its own line handling and its own
 /// bound, as a pure function, so a REAL captured `rigctld` stderr log can be replayed against
 /// [`RigctldProc::said`]'s consumer without a daemon, a serial port or a rig.
 pub fn said_ring(raw: &[u8]) -> Vec<String> {
-    let mut q = VecDeque::with_capacity(SAID_KEPT);
+    let mut said = Said::default();
     for line in raw.split_inclusive(|b| *b == b'\n') {
         if let Some(l) = said_line(line) {
-            push_said(&mut q, l);
+            said.push(l);
         }
     }
-    q.into_iter().collect()
+    said.lines()
 }
 
 impl RigctldProc {
@@ -362,7 +485,9 @@ impl RigctldProc {
         self.child.id()
     }
 
-    /// What Hamlib itself has said about this rig, newest last (at most [`SAID_KEPT`] lines).
+    /// What Hamlib itself has said about this rig: the newest [`SAID_KEPT`] lines, and ahead of
+    /// them the best-ranked line of the whole connection attempt when the window has dropped it
+    /// (see [`Said`]).
     ///
     /// **This exists because the operator could not see it.** The daemon's stderr has been
     /// captured since the CI-V diagnostic was built, and it went to exactly one place: the
@@ -371,10 +496,7 @@ impl RigctldProc {
     /// discarded — which is why an FT-847 owner whose rig works in WSJT-X reported "nothing
     /// noteworthy" while his daemon knew precisely what was wrong.
     pub fn said(&self) -> Vec<String> {
-        self.said
-            .lock()
-            .map(|q| q.iter().cloned().collect())
-            .unwrap_or_default()
+        self.said.lock().map(|s| s.lines()).unwrap_or_default()
     }
 
     /// True if the daemon is still running. rigctld that fails to bind its TCP port (e.g. the port is
@@ -521,7 +643,7 @@ pub fn spawn_rotctld(
         child,
         // A rotator daemon's stderr is not piped, so it never says anything here. The field
         // exists because the handle is shared with rigctld, not because rotctld is silent.
-        said: Arc::new(Mutex::new(VecDeque::new())),
+        said: Arc::new(Mutex::new(Said::default())),
         #[cfg(windows)]
         job,
     })
@@ -585,15 +707,28 @@ const HANDSHAKE_RTS_TAKEN: [&str; 1] = ["Hardware"];
 /// without the specific evidence that line needs.
 fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> SettableLines {
     let model = model.to_string();
-    let mut args = vec!["-m", &model, "-L"];
+    let mut args = vec!["-m", model.as_str(), "-L"];
     // Ask with the SAME keying override we are about to launch with, so the answer is the
     // effective `pttp->type.ptt` and not the backend default it may be overriding.
     if let Some(line) = ptt_line {
         args.push("-P");
         args.push(ptt_type_token(line));
     }
+    daemon_dump(&args)
+        .map(|d| parse_settable_lines(&d))
+        .unwrap_or_default()
+}
+
+/// Run the daemon binary as a ONE-SHOT dump (`-L` show-conf, `-u` dump-caps) and hand back its
+/// stdout. Opens no port and keys nothing: both flags print and exit (`rigctld.c:668-674`).
+///
+/// **This is the shape every "ask, do not tabulate" answer in Nexus takes.** A fact read out of
+/// the operator's OWN Hamlib cannot go stale the way a table transcribed from a manual does —
+/// which is the whole lesson of the baud-entry rounds. `None` on a missing binary, a non-zero
+/// exit, or output we cannot read; every caller turns that into "claim nothing".
+pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(resolve_rigctld());
-    cmd.args(&args);
+    cmd.args(args);
     cmd.stdin(Stdio::null());
     // Same no-console-window treatment as the daemon itself (Nexus is a GUI app).
     #[cfg(windows)]
@@ -603,11 +738,34 @@ fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> S
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     match cmd.output() {
-        Ok(out) if out.status.success() => {
-            parse_settable_lines(&String::from_utf8_lossy(&out.stdout))
-        }
-        _ => SettableLines::default(),
+        Ok(out) if out.status.success() => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
+        _ => None,
     }
+}
+
+/// The `rigctl` companion binary, resolved exactly like [`resolve_rigctld`]: bundled beside the
+/// app first (the Windows installer ships the whole Hamlib tool set together), then `PATH`.
+///
+/// Used by the baud ladder, which needs ONE read from a rig at ONE rate and then to be gone —
+/// a one-shot CLI, not a daemon holding a TCP port. Both binaries ship in the same Hamlib
+/// package on every platform Nexus targets, so if `rigctld` is present `rigctl` is too.
+pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for cand in [
+                "hamlib/rigctl.exe",
+                "resources/hamlib/rigctl.exe",
+                "rigctl.exe",
+                "hamlib/rigctl",
+            ] {
+                let p = dir.join(cand);
+                if p.is_file() {
+                    return p.into_os_string();
+                }
+            }
+        }
+    }
+    std::ffi::OsString::from("rigctl")
 }
 
 /// One conf parameter out of a `rigctld --show-conf` dump, as `(value, combo tokens)`.
@@ -617,7 +775,7 @@ fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> S
 /// `None` when the parameter is absent — which is itself load-bearing: Hamlib offers the serial
 /// parameters only for `RIG_PORT_SERIAL` (`rig_confparam_lookup`), so their ABSENCE is how a
 /// network or device backend is recognised, with no port-type string to parse.
-fn conf_param<'a>(dump: &'a str, name: &str) -> Option<(&'a str, Vec<&'a str>)> {
+pub(crate) fn conf_param<'a>(dump: &'a str, name: &str) -> Option<(&'a str, Vec<&'a str>)> {
     let mut lines = dump.lines();
     lines.find(|l| l.starts_with(name) && l[name.len()..].starts_with(':'))?;
     // `rfind` not `find`: a Default can itself contain ", Value: " (a pathname could), and the
@@ -736,7 +894,7 @@ pub fn spawn_rigctld(
     // The ring is the half that reaches EVERY operator: the CI-V log needs arming, and its
     // toggle is rendered only for an Icom on the native path, so for a Yaesu owner `note` has
     // always been a no-op ([`RigctldProc::said`]).
-    let said = Arc::new(Mutex::new(VecDeque::with_capacity(SAID_KEPT)));
+    let said = Arc::new(Mutex::new(Said::default()));
     if let Some(stderr) = child.stderr.take() {
         let sink = Arc::clone(&said);
         std::thread::Builder::new()
@@ -758,7 +916,7 @@ pub fn spawn_rigctld(
                     };
                     crate::civ::diag::note(&format!("rigctld: {line}"));
                     if let Ok(mut q) = sink.lock() {
-                        push_said(&mut q, line);
+                        q.push(line);
                     }
                 }
             })
@@ -779,6 +937,60 @@ pub fn spawn_rigctld(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⭐ The ring's own contract, at the volume that broke it. `said_ring` is replayed against a
+    /// REAL capture in `service::tests::the_daemons_diagnosis_survives_a_stream_that_never_stops`;
+    /// this pins the four properties that make it work, one at a time, where a failure names
+    /// which one went.
+    #[test]
+    fn the_ring_keeps_the_attempts_diagnosis_and_still_tracks_the_live_end() {
+        // 1. The cause is printed once and then buried under 500 lines of narration.
+        let mut raw = String::from("serial_open: serial port COM7 does not exist\n");
+        for i in 0..500 {
+            raw.push_str(&format!(
+                "handle_socket: rig_open reopened retcode=0 #{i}\n"
+            ));
+        }
+        let ring = said_ring(raw.as_bytes());
+        assert!(
+            ring.iter().any(|l| l.contains("COM7 does not exist")),
+            "a bounded window drops it; the whole point is that this does not: {ring:?}"
+        );
+        // 2. …without becoming a log: the window is still SAID_KEPT lines of the live end.
+        assert_eq!(ring.len(), SAID_KEPT + 1, "{ring:?}");
+        assert!(ring.last().is_some_and(|l| l.ends_with("#499")), "{ring:?}");
+
+        // 3. Within a rank the FIRST wins (Hamlib prints the cause, then its knock-ons), but a
+        //    BETTER rank arriving later still takes the slot.
+        let mut raw = String::from("handle_socket: i/o error\n");
+        raw.push_str("read_block_generic(): Timed out 1.4 seconds after 0 chars\n");
+        raw.push_str("read_block_generic(): Timed out 9.9 seconds after 0 chars\n");
+        for i in 0..20 {
+            raw.push_str(&format!("handle_socket: rig_close retcode=0 #{i}\n"));
+        }
+        let ring = said_ring(raw.as_bytes());
+        assert!(
+            ring.iter().any(|l| l.contains("Timed out 1.4")),
+            "the cause outranks the bookkeeping that preceded it, and it is the FIRST of its \
+             rank that is kept: {ring:?}"
+        );
+        assert!(
+            !ring.iter().any(|l| l.contains("Timed out 9.9")),
+            "one slot, not a second ring: {ring:?}"
+        );
+
+        // 4. A short-lived daemon reads EXACTLY as it did before there was a second half: the
+        //    retained line is in the window already, so it is not repeated.
+        let short = b"serial_open: serial port COM7 does not exist\nhandle_socket: i/o error\n";
+        assert_eq!(
+            said_ring(short),
+            vec![
+                "serial_open: serial port COM7 does not exist".to_string(),
+                "handle_socket: i/o error".to_string(),
+            ],
+            "no duplicate, no reordering, for the case that always worked"
+        );
+    }
 
     /// ⭐ THE ROOT CAUSE OF "nothing noteworthy" (FT-847 field report, 2026-08).
     ///
@@ -813,10 +1025,11 @@ mod tests {
     /// warnings; it does not narrate. `-vvvv` is where the per-transaction trace starts (85
     /// lines for those same 10 healthy polls), and that is the level this must never reach.
     ///
-    /// The doubled fault-case rate is bounded by [`SAID_KEPT`] and cannot displace the useful
-    /// line: the ring keeps the NEWEST 8, the two mute-rig lines alternate, and
-    /// `service::with_daemon_error` reports the newest two DISTINCT lines — which is exactly
-    /// this pair.
+    /// The doubled fault-case rate cannot displace the useful line, and after the round-four fix
+    /// that no longer rests on the burst being small: the two mute-rig lines alternate inside the
+    /// [`SAID_KEPT`] window, and either way [`Said::best`] holds the first `Timed out` of the
+    /// attempt for as long as the daemon lives. `service::with_daemon_error` then reports the
+    /// newest two DISTINCT lines of what survived.
     #[test]
     fn the_daemon_is_launched_at_the_verbosity_that_reports_a_rig_that_never_answered() {
         for args in [

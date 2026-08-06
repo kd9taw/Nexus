@@ -1,0 +1,442 @@
+Caps dump for model: 1001
+Model name:	FT-847
+Mfg name:	Yaesu
+Hamlib version:	Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit
+Backend version:	20230512.0
+Backend copyright:	LGPL
+Backend status:	Stable
+Rig type:	Other Receiver Transmitter Transceiver 
+PTT type:	None
+DCD type:	Rig capable
+Port type:	RS-232
+Serial speed: 4800..57600 baud, 8N2, ctrl=NONE
+Write delay: 50ms, timeout 1000ms, 0 retry
+Post write delay: 50ms
+Has targetable VFO: Y
+Targetable features: FREQ MODE TONE FUNC
+Has async data support: N
+Announce: 0x0
+Max RIT: -0.0kHz/+0.0kHz
+Max XIT: -0.0kHz/+0.0kHz
+Max IF-SHIFT: -0.0kHz/+0.0kHz
+Preamp: None
+Attenuator: None
+AGC levels: 9=NONE
+CTCSS: 67.0 69.3 71.9 74.4 77.0 79.7 82.5 85.4 88.5 91.5 94.8 97.4 100.0 103.5 107.2 110.9 114.8 118.8 123.0 127.3 131.8 136.5 141.3 146.2 151.4 156.7 162.2 167.9 173.8 179.9 186.2 192.8 203.5 210.7 218.1 225.7 233.6 241.8 250.3 Hz, 39 tones
+DCS: 23 25 26 31 32 36 43 47 51 53 54 65 71 72 73 74 114 115 116 122 125 131 132 134 143 145 152 155 156 162 165 172 174 205 212 223 225 226 243 244 245 246 251 252 255 261 263 265 266 271 274 306 311 315 325 331 332 343 346 351 356 364 365 371 411 412 413 423 431 432 445 446 452 454 455 462 464 465 466 503 506 516 523 526 532 546 565 606 612 624 627 631 632 654 662 664 703 712 723 731 732 734 743 754, 104 codes
+Get functions: 
+Set functions: TONE TSQL 
+Extra functions:
+Get level: RAWSTR(0..255/0) ALC(0.000000..1.000000/0.010000) STRENGTH(0..60/0) 
+Set level: BAND_SELECT(0..16/1) 
+Extra levels:
+Get parameters: 
+Set parameters: 
+Extra parameters:
+Mode list: AM CW USB LSB FM CWR
+VFO list: Sub Main 
+VFO Ops: 
+Scan Ops: 
+Number of banks:	0
+Memory name desc size:	0
+Memories: None
+TX ranges #1 for ITU1:
+	1810000 Hz - 2000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	3500000 Hz - 3800000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	7000000 Hz - 7200000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	10100000 Hz - 10150000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	14000000 Hz - 14350000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	18068000 Hz - 18168000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	21000000 Hz - 21450000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	24890000 Hz - 24990000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	28000000 Hz - 29700000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	1810000 Hz - 2000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	3500000 Hz - 3800000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	7000000 Hz - 7200000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	10100000 Hz - 10150000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	14000000 Hz - 14350000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	18068000 Hz - 18168000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	21000000 Hz - 21450000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	24890000 Hz - 24990000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	28000000 Hz - 29700000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	50000000 Hz - 54000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	50000000 Hz - 54000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	70000000 Hz - 70500000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 50 W
+	70000000 Hz - 70500000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 12.5 W
+	144000000 Hz - 146000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 50 W
+	144000000 Hz - 146000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 12.5 W
+	430000000 Hz - 440000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 50 W
+	430000000 Hz - 440000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 12.5 W
+RX ranges #1 for EUR:
+	100000 Hz - 30000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM CWR
+		Antenna list: ANT1 
+	36000000 Hz - 76000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM CWR
+		Antenna list: ANT1 
+	108000000 Hz - 174000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM CWR
+		Antenna list: ANT1 
+	420000000 Hz - 512000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM CWR
+		Antenna list: ANT1 
+TX ranges #2 for USA:
+	1800000 Hz - 2000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	3500000 Hz - 4000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	7000000 Hz - 7300000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	10100000 Hz - 10150000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	14000000 Hz - 14350000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	18068000 Hz - 18168000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	21000000 Hz - 21450000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	24890000 Hz - 24990000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	28000000 Hz - 29700000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	1800000 Hz - 2000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	3500000 Hz - 4000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	7000000 Hz - 7300000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	10100000 Hz - 10150000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	14000000 Hz - 14350000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	18068000 Hz - 18168000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	21000000 Hz - 21450000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	24890000 Hz - 24990000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	28000000 Hz - 29700000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	50000000 Hz - 54000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 5 W, High power: 100 W
+	50000000 Hz - 54000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 25 W
+	144000000 Hz - 148000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 50 W
+	144000000 Hz - 148000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 12.5 W
+	430000000 Hz - 450000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 50 W
+	430000000 Hz - 450000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM
+		Antenna list: ANT1 
+		Low power: 1 W, High power: 12.5 W
+RX ranges #2 for USA:
+	100000 Hz - 30000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM CWR
+		Antenna list: ANT1 
+	36000000 Hz - 76000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM CWR
+		Antenna list: ANT1 
+	108000000 Hz - 174000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM CWR
+		Antenna list: ANT1 
+	420000000 Hz - 512000000 Hz
+		VFO list: Sub Main 
+		Mode list: AM CW USB LSB FM CWR
+		Antenna list: ANT1 
+TX ranges #3 for TBD:
+RX ranges #3 for TBD:
+TX ranges #4 for TBD:
+RX ranges #4 for TBD:
+TX ranges #5 for TBD:
+RX ranges #5 for TBD:
+TX ranges #1 status for ITU1:	OK (0)
+RX ranges #1 status for EUR:	OK (0)
+TX ranges #2 status for USA:	OK (0)
+RX ranges #2 status for USA:	OK (0)
+TX ranges #3 status for TBD:	OK (0)
+RX ranges #3 status for TBD:	OK (0)
+TX ranges #4 status for TBD:	OK (0)
+RX ranges #4 status for TBD:	OK (0)
+TX ranges #5 status for TBD:	OK (0)
+RX ranges #5 status for TBD:	OK (0)
+Tuning steps:
+	1.0 Hz:   	 CW USB LSB CWR
+	10.0 Hz:   	 CW USB LSB CWR
+	100.0 Hz:   	 CW USB LSB CWR
+	10.0 Hz:   	AM FM
+	100.0 Hz:   	AM FM
+Tuning steps status:	OK (0)
+Filters:
+	2.2000 kHz:   	 CW USB LSB CWR
+	500.0 Hz:   	 CW CWR
+	9.0000 kHz:   	AM
+	2.2000 kHz:   	AM
+	15.0000 kHz:   	 FM
+	9.0000 kHz:   	 FM
+Bandwidths:
+	AM	Normal: 9.0000 kHz,	Narrow: 2.2000 kHz,	Wide: 0.0 Hz
+	CW	Normal: 2.2000 kHz,	Narrow: 500.0 Hz,	Wide: 0.0 Hz
+	USB	Normal: 2.2000 kHz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+	LSB	Normal: 2.2000 kHz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+	FM	Normal: 15.0000 kHz,	Narrow: 9.0000 kHz,	Wide: 0.0 Hz
+	CWR	Normal: 2.2000 kHz,	Narrow: 500.0 Hz,	Wide: 0.0 Hz
+Spectrum scopes: None
+Spectrum modes: 
+Spectrum spans: 
+Spectrum averaging modes: 
+Spectrum attenuator: None
+Has priv data:	N
+Has Init:	Y
+Has Cleanup:	Y
+Has Open:	Y
+Has Close:	Y
+Can set Conf:	N
+Can get Conf:	N
+Can set Frequency:	Y
+Can get Frequency:	Y
+Can set Mode:	Y
+Can get Mode:	Y
+Can set VFO:	N
+Can get VFO:	N
+Can set PTT:	Y
+Can get PTT:	Y
+Can get DCD:	Y
+Can set Repeater Duplex:	Y
+Can get Repeater Duplex:	N
+Can set Repeater Offset:	Y
+Can get Repeater Offset:	N
+Can set Split Freq:	Y
+Can get Split Freq:	Y
+Can set Split Mode:	Y
+Can get Split Mode:	Y
+Can set Split VFO:	Y
+Can get Split VFO:	Y
+Can set Tuning Step:	N
+Can get Tuning Step:	N
+Can set RIT:	N
+Can get RIT:	N
+Can set XIT:	N
+Can get XIT:	N
+Can set CTCSS:	Y
+Can get CTCSS:	N
+Can set DCS:	N
+Can get DCS:	N
+Can set CTCSS Squelch:	Y
+Can get CTCSS Squelch:	N
+Can set DCS Squelch:	Y
+Can get DCS Squelch:	N
+Can set Power Stat:	N
+Can get Power Stat:	N
+Can Reset:	N
+Can get Ant:	N
+Can set Ant:	N
+Can set Transceive:	N
+Can get Transceive:	N
+Can set Func:	Y
+Can get Func:	N
+Can set Level:	N
+Can get Level:	Y
+Can set Param:	N
+Can get Param:	N
+Can send DTMF:	N
+Can recv DTMF:	N
+Can send Morse:	N
+Can stop Morse:	N
+Can wait Morse:	N
+Can send Voice:	N
+Can decode Events:	N
+Can set Bank:	N
+Can set Mem:	N
+Can get Mem:	N
+Can set Channel:	N
+Can get Channel:	N
+Can ctl Mem/VFO:	N
+Can Scan:	N
+Can get Info:	N
+Can get power2mW:	N
+Can get mW2power:	N
+
+Overall backend warnings: 0   
