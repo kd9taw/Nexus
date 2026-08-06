@@ -14,9 +14,9 @@
 //! recording's measured RMS level (~0.3), and pure silence.
 //!
 //! Both must produce zero `SstvEvent::ImageComplete` events of ANY kind
-//! without panicking. This is the no-signal counterpart to the synthetic
-//! round-trip suite in `tests/roundtrip.rs` — both must hold for any
-//! release.
+//! **and no lock**, without panicking. This is the no-signal counterpart
+//! to the synthetic round-trip suite in `tests/roundtrip.rs` — both must
+//! hold for any release.
 //!
 //! **Re-baselined 2026-08-05 (blind mid-picture decode).** The filter
 //! used to be `ImageComplete { partial: false, .. }`, with `partial:
@@ -30,8 +30,16 @@
 //! before the blind path was written and passes after — it costs
 //! nothing and closes the hole rather than leaving the feature to fall
 //! into it. Adversarial coverage beyond noise and silence (SSB speech, a
-//! CW pileup keyed on 1200 Hz, a bare periodic sync train) lives in
+//! CW pileup keyed on 1200 Hz, a bare periodic sync train, and a sync
+//! train with a steady carrier between the pulses) lives in
 //! `tests/partial_decode.rs`.
+//!
+//! **Tightened again 2026-08-06.** Counting images still left one thing
+//! unsaid: a decoder that announced `SyncLocked` on the Zarya noise and
+//! then never emitted an image would have passed. A lock is the claim
+//! "this is a picture", and on this audio that claim is false whether or
+//! not pixels follow, so the guard now requires the event stream to be
+//! empty — the same bar `tests/nexus_acceptance.rs` holds noise to.
 
 #![allow(clippy::expect_used, clippy::cast_precision_loss)]
 
@@ -94,6 +102,12 @@ fn decoder_no_vis_on_white_noise() {
         "decoder false-positive: emitted {n_complete} ImageComplete \
          event(s) on 10 s of white noise",
     );
+    assert!(
+        events.is_empty(),
+        "decoder false-positive: 10 s of white noise produced {} event(s): {:?}",
+        events.len(),
+        &events[..events.len().min(3)]
+    );
 }
 
 #[test]
@@ -109,5 +123,11 @@ fn decoder_no_vis_on_silence() {
         n_complete, 0,
         "decoder false-positive: emitted {n_complete} ImageComplete \
          event(s) on 10 s of pure silence",
+    );
+    assert!(
+        events.is_empty(),
+        "decoder false-positive: 10 s of silence produced {} event(s): {:?}",
+        events.len(),
+        &events[..events.len().min(3)]
     );
 }

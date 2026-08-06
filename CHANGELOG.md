@@ -78,22 +78,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a known 1200 Hz reference, so colours are not shifted, and slant correction never needed the
   header in the first place. You will lose the first second or two of what you caught, which is
   what the decoder spends confirming it is really looking at a picture.
-  **The other half of this: a transmission that stops early now gives you what it sent.** Even when
-  the header *was* heard, Nexus previously emitted nothing unless the sender ran the mode to its
-  full length — if they dropped the carrier at 99 %, you got no image and a progress bar frozen at
-  zero, and the decoder quietly went on buffering audio until the receiver was disarmed. It now
-  emits the lines it received once the carrier stops. Such an image keeps its known top edge, with
-  the missing tail black.
+  **The other half of this: a transmission that stops early is now marked as what it is.** Even
+  when the header *was* heard, Nexus had no idea a sender had stopped. It went on buffering
+  whatever the receiver handed it until it had a mode's full running time of audio, and then
+  decoded all of it — so a picture abandoned at 99 % came out as a **whole image, labelled
+  complete**, with its last lines demodulated from whatever was on the band after the carrier
+  dropped. Cut off at 60 %, you got a full frame that was 40 % noise. Nexus now notices the sync
+  pulses stopping, decodes the lines that actually arrived, and marks the image partial with the
+  rest left black — so what you keep is what was sent, and it says so.
   **This will not invent pictures out of an empty band.** That is the risk in relaxing a header
   requirement, and it is the part with the most tests: white noise, silence, SSB speech, a CW
-  pileup keyed *exactly* on the sync frequency, and — the direct adversary — a perfect 1200 Hz
-  pulse train at a real mode's line rate with nothing but noise between the pulses, all produce no
-  image and no lock. Six independent checks must all agree before a decode starts, including that
-  the gaps between pulses actually contain picture and that the rate is not a harmonic of a faster
-  one. The regression test guarding the original false-positive incident was tightened at the same
-  time: it had been checking only for *complete* images, which a partial would have slipped past.
+  pileup keyed *exactly* on the sync frequency, a perfect 1200 Hz pulse train at a real mode's line
+  rate with nothing but noise between the pulses, and — the hardest one — that same perfect pulse
+  train with an unmodulated carrier sitting between the pulses, which is what a tuning signal or a
+  stuck transmitter sounds like. All produce no image and no lock, on every one of the fifteen
+  modes. Seven independent checks must agree before a decode starts, and the two that matter most
+  are about the audio between the pulses: it has to be *in* the picture band, and it has to **move**
+  — a picture varies along a scan line and a carrier does not. A signal whose brightness changes by
+  under about ten levels in 255 along a line is treated as a carrier and refused; that also means a
+  genuine picture of one flat colour will not open, which costs nothing worth having. The
+  regression test guarding the original false-positive incident was tightened twice over: it had
+  been checking only for *complete* images, which a partial would have slipped past, and then only
+  for images at all, which a bare false lock would have.
   *Verified against synthetic transmissions only — no off-air recording of a mid-picture tune-in
   exists in the test corpus.*
+  **Detecting the end of a transmission needed rebuilding to work on a radio at all.** The first
+  version asked for three scan lines with no sync pulse, and asked the wrong detector: the one it
+  used compares the sync frequency's strength against the picture band's, which is a comparison
+  band noise wins about a quarter of the time no matter how faint it is. Against a recording that
+  ends in digital silence the trigger fired; against a receiver — where the carrier drops and you
+  hear the band — it never fired at all. Nexus now checks whether the audio really is a steady tone
+  at the sync frequency, for as long as that mode's sync pulse lasts. That question has no volume
+  knob: it gives the same answer at −120 dBFS and at full scale, and the end of a transmission is
+  now found identically through silence and through band noise at −120, −60, −40 and −20 dBFS.
 
 - **The SSTV mode picker understated every mode's airtime by about a second.** The pixel sizes were
   right, but the durations beside them were a hand-maintained copy that had drifted from what the

@@ -56,8 +56,17 @@
 //!    wrong mode without this.
 //! 6. **Video-band occupancy between pulses** — an SSTV line is a
 //!    narrowband FM sweep in 1500-2300 Hz. This is what rejects "there
-//!    is a pulse train but no picture": SSB speech, a CW pileup keying
-//!    near 1200 Hz, or noise that happened to look periodic.
+//!    is a pulse train but no picture" when the "no picture" is
+//!    *broadband*: SSB speech, a CW pileup keying near 1200 Hz, or noise
+//!    that happened to look periodic.
+//! 7. **Video-band modulation between pulses** — occupancy asks whether
+//!    the band is *busy*, and an unmodulated carrier sitting in it
+//!    answers yes. That is not a hypothetical: pulses at a mode's exact
+//!    line period with a steady 1900 Hz carrier in the gaps produced a
+//!    lock and a picture on 13 of the 13 blind-eligible modes before this
+//!    gate existed. A picture *modulates* the video band and a carrier
+//!    does not, so this gate measures variation, not presence. See
+//!    [`BlindSync::gaps_are_modulated`].
 //!
 //! **Robot 24 and Robot 36 are deliberately excluded** from inference —
 //! see [`blind_eligible`]. Their `ModeSpec`s are byte-identical in every
@@ -109,6 +118,51 @@ const WIDTH_TOL_FRAC: f64 = 0.40;
 /// Minimum share of 300-3300 Hz energy that must sit in the 1450-2350 Hz
 /// video band, in every gap between locked pulses.
 const OCCUPANCY_MIN: f64 = 0.70;
+
+/// Points at which the video band is demodulated across each gap between
+/// locked pulses, to measure how much it moves.
+const LUMA_SAMPLES_PER_GAP: usize = 16;
+
+/// Working-rate samples kept clear of each sync pulse before the video
+/// band is sampled. The demodulator's own window must never straddle a
+/// 1200 Hz pulse: the peak search is confined to the video band, so a
+/// straddling window clips to the band edge and reads as a huge luminance
+/// excursion — which is variation the *pulse* produced, not the picture.
+const PULSE_CLEARANCE_SAMPLES: usize = 64;
+
+/// Hann-window index handed to [`crate::demod::ChannelDemod::pixel_freq`]
+/// — `HANN_LENS[4]` = 64 samples ≈ 5.8 ms. Short enough to follow a scan
+/// line, long enough to place a tone inside the 800 Hz video band.
+const LUMA_WINDOW_IDX: usize = 4;
+
+/// Minimum median per-gap standard deviation of the demodulated video-band
+/// frequency, in Hz, before the gaps count as carrying a picture.
+///
+/// 30 Hz is 9.6 grey levels of the 255-level luminance ramp
+/// (`(2300-1500)/255 = 3.137 Hz` per level), i.e. **a picture whose
+/// luminance varies by under about ten levels RMS along a line is refused
+/// as unmodulated.** Measured 2026-08-06 with
+/// [`crate::demod::ChannelDemod::pixel_freq`] sampling
+/// [`LUMA_SAMPLES_PER_GAP`] points per gap:
+///
+/// | input | median per-gap σ |
+/// |---|---|
+/// | steady 1900 Hz carrier between pulses, clean | 0.01 Hz |
+/// | …with AWGN at 20 / 10 / 6 / 0 dB SNR | 1.8 / 5.7 / 9.0 / 17.9 Hz |
+/// | Scottie 1 luminance ramp spanning 24 levels | 31 Hz |
+/// | the test corpus' pictures (Scottie/Martin/Robot/PD) | 147-271 Hz |
+///
+/// **What it rejects, stated plainly:** any signal whose video band does
+/// not move — a tuning carrier, a stuck carrier with periodic QRM, a data
+/// mode whose framing lands on a line period. **What it also rejects, and
+/// this is the cost:** a genuine picture that is very nearly a flat field.
+/// A dead-uniform PD frame measures 0.01 Hz, which is to say it is
+/// *identical* to a carrier in this band — there is no signal in the audio
+/// that separates them, and refusing it forfeits an image that carries no
+/// information anyway. Modes with channel separators (Scottie, Martin,
+/// Robot) clear the threshold even dead-flat, because the separators
+/// themselves move the band.
+const VIDEO_MODULATION_MIN_HZ: f64 = 30.0;
 
 /// Sub-multiples of a candidate period probed for a shorter fundamental.
 const SUBHARMONIC_DIVISORS: [usize; 2] = [2, 3];
@@ -295,12 +349,17 @@ impl BlindSync {
 
     /// Attempt a lock. Returns `None` — the overwhelmingly common
     /// answer — unless every gate in the module header passes.
+    ///
+    /// `demod` is the decoder's own per-pixel demodulator, borrowed for
+    /// gate 7 so the lock is judged by the same luminance estimator that
+    /// would draw the picture (and so this module does not build a second
+    /// 1024-point FFT plan for every armed receiver).
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
     )]
-    pub fn try_lock(&mut self) -> Option<BlindLock> {
+    pub fn try_lock(&mut self, demod: &mut crate::demod::ChannelDemod) -> Option<BlindLock> {
         if self.samples_since_attempt < ATTEMPT_STRIDE_SAMPLES {
             return None;
         }
@@ -366,13 +425,21 @@ impl BlindSync {
                     continue;
                 }
 
-                // Gate 6 — the gaps between pulses must carry a picture.
+                // Gate 6 — the gaps between pulses must carry energy in
+                // the video band.
                 if !self.gaps_carry_video(&centres, spec) {
                     continue;
                 }
 
                 let hedr =
                     self.refine_hedr_shift(&matched.iter().map(|&i| pulses[i]).collect::<Vec<_>>());
+
+                // Gate 7 — and that energy must be a picture rather than a
+                // carrier: the video band has to move.
+                if !self.gaps_are_modulated(&centres, spec, hedr, demod) {
+                    continue;
+                }
+
                 let first_pulse_sample = (centres[0] * SYNC_PROBE_STRIDE as f64) as usize;
                 let line_start_sample = line_start_for(
                     spec,
@@ -424,15 +491,76 @@ impl BlindSync {
         true
     }
 
+    /// Gate 7 — the video band between the pulses must MOVE.
+    ///
+    /// [`Self::gaps_carry_video`] asks whether the band is *occupied*, and
+    /// an unmodulated carrier occupies it perfectly — which is how a
+    /// pulse train plus a steady 1900 Hz tone produced pictures on every
+    /// blind-eligible mode. The question that actually separates a picture
+    /// from a carrier is whether the luminance the decoder would write
+    /// varies, so that is what this measures, with the decoder's own
+    /// per-pixel demodulator: sample the video-band frequency at
+    /// [`LUMA_SAMPLES_PER_GAP`] points across each gap, take the standard
+    /// deviation per gap, and require the **median** across gaps to reach
+    /// [`VIDEO_MODULATION_MIN_HZ`].
+    ///
+    /// The median rather than every gap: a real picture can hold a solid
+    /// band across a few lines and one flat line should not veto a lock.
+    /// A carrier is flat in *every* gap, so the median still catches it —
+    /// as does anything unmodulated over half its lines or more.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap
+    )]
+    fn gaps_are_modulated(
+        &self,
+        centres: &[f64],
+        spec: ModeSpec,
+        hedr_shift_hz: f64,
+        demod: &mut crate::demod::ChannelDemod,
+    ) -> bool {
+        let work_rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let mut sigmas: Vec<f64> = Vec::with_capacity(centres.len());
+        for pair in centres.windows(2) {
+            let pulse_end =
+                (pair[0] * SYNC_PROBE_STRIDE as f64 + spec.sync_seconds * work_rate) as usize;
+            let lo = pulse_end + PULSE_CLEARANCE_SAMPLES;
+            let hi = ((pair[1] * SYNC_PROBE_STRIDE as f64) as usize)
+                .saturating_sub(PULSE_CLEARANCE_SAMPLES);
+            if hi <= lo + PULSE_CLEARANCE_SAMPLES || hi > self.audio.len() {
+                return false;
+            }
+            sigmas.push(gap_luma_sigma(&self.audio, lo, hi, hedr_shift_hz, demod));
+        }
+        if sigmas.is_empty() {
+            return false;
+        }
+        sigmas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sigmas[sigmas.len() / 2] >= VIDEO_MODULATION_MIN_HZ
+    }
+
     /// Measure the radio mistuning from the locked pulses.
     ///
     /// A sync pulse is a known 1200 Hz reference lasting 4.862-20 ms, so
     /// the offset VIS would have handed us is recoverable — and to
     /// better precision, since we average over many pulses instead of
-    /// one leader. Goertzel is evaluated at arbitrary frequencies (not
-    /// FFT bin centres), so a fine scan avoids the interpolation bias a
-    /// short-window bin peak would carry; powers are summed across
-    /// pulses incoherently and the peak is taken.
+    /// one leader. Powers are summed across pulses incoherently and the
+    /// peak is taken.
+    ///
+    /// **The scan must evaluate the frequency it asks for.** This used
+    /// [`crate::dsp::goertzel_power`], which snaps its target to an
+    /// integer bin — over a 36-sample pulse interior that is a 306 Hz
+    /// grid, so the 2 Hz scan across ±250 Hz sampled *three* distinct
+    /// frequencies and returned the low edge of whichever plateau won.
+    /// The answer for a perfectly tuned Martin 1 was −128 Hz, and it
+    /// moved with the measured pulse length rather than with the radio:
+    /// a mid-picture decode was colour-shifted by 40 grey levels, and
+    /// [`crate::sync::SyncPulseGate`] — which correctly listens at
+    /// `1200 + hedr` — then heard no sync pulses at all, so the image
+    /// was never released. [`crate::dsp::tone_power`] evaluates off the
+    /// bin grid and the estimate lands within a few Hz.
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
@@ -461,7 +589,7 @@ impl BlindSync {
             // Normalise per pulse so a long pulse cannot outvote the rest.
             let p: f64 = interiors
                 .iter()
-                .map(|w| crate::dsp::goertzel_power(w, hz) / (w.len() as f64))
+                .map(|w| crate::dsp::tone_power(w, hz) / (w.len() as f64))
                 .sum();
             if p > best_power {
                 best_power = p;
@@ -470,6 +598,33 @@ impl BlindSync {
         }
         best_hz - 1200.0
     }
+}
+
+/// Standard deviation, in Hz, of the demodulated video-band frequency
+/// across [`LUMA_SAMPLES_PER_GAP`] points of `audio[lo..hi]` — the
+/// statistic gate 7 is built on.
+///
+/// The frequency is read with the decoder's own per-pixel demodulator, so
+/// this is literally "how much does the luminance this decode would write
+/// move?", in the same units the mode table uses (1500-2300 Hz spans the
+/// 255 grey levels, 3.137 Hz per level).
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
+fn gap_luma_sigma(
+    audio: &[f32],
+    lo: usize,
+    hi: usize,
+    hedr_shift_hz: f64,
+    demod: &mut crate::demod::ChannelDemod,
+) -> f64 {
+    let span = hi.saturating_sub(lo);
+    let mut freqs = [0.0_f64; LUMA_SAMPLES_PER_GAP];
+    for (j, f) in freqs.iter_mut().enumerate() {
+        let at = lo + span * j / (LUMA_SAMPLES_PER_GAP - 1);
+        *f = demod.pixel_freq(audio, at as i64, hedr_shift_hz, LUMA_WINDOW_IDX);
+    }
+    let n = LUMA_SAMPLES_PER_GAP as f64;
+    let mean = freqs.iter().sum::<f64>() / n;
+    (freqs.iter().map(|f| (f - mean) * (f - mean)).sum::<f64>() / n).sqrt()
 }
 
 /// Share of 300-3300 Hz energy sitting in the 1450-2350 Hz video band,
@@ -802,6 +957,48 @@ mod tests {
         // returning a negative origin.
         let got = line_start_for(spec, 100, period);
         assert!(got > 100, "expected a forward step, got {got}");
+    }
+
+    /// The P1 statistic, on the two inputs it exists to tell apart. Both
+    /// sit squarely in the video band, so [`video_band_share`] says "yes"
+    /// to both — occupancy cannot separate them and only variation can.
+    #[test]
+    fn gap_luma_sigma_separates_a_carrier_from_a_scan_line() {
+        let work_rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let n = 4096_usize;
+        let mut demod = crate::demod::ChannelDemod::new();
+
+        // An unmodulated 1900 Hz carrier: zero picture information.
+        let carrier: Vec<f32> = (0..n)
+            .map(|i| {
+                (0.5 * (2.0 * std::f64::consts::PI * 1900.0 * f64::from(i as i32) / work_rate)
+                    .sin()) as f32
+            })
+            .collect();
+        let flat = gap_luma_sigma(&carrier, 0, n, 0.0, &mut demod);
+        assert!(
+            flat < VIDEO_MODULATION_MIN_HZ,
+            "a steady carrier must read as unmodulated, got sigma {flat:.2} Hz"
+        );
+        assert!(
+            video_band_share(&carrier[..1024]) > OCCUPANCY_MIN,
+            "the carrier does occupy the video band — that is why gate 6 passes it"
+        );
+
+        // A scan line: the video band swept 1500 -> 2300 Hz, phase-continuous.
+        let mut phase = 0.0_f64;
+        let sweep: Vec<f32> = (0..n)
+            .map(|i| {
+                let hz = 1500.0 + 800.0 * (i as f64) / (n as f64);
+                phase += 2.0 * std::f64::consts::PI * hz / work_rate;
+                (0.5 * phase.sin()) as f32
+            })
+            .collect();
+        let moving = gap_luma_sigma(&sweep, 0, n, 0.0, &mut demod);
+        assert!(
+            moving > VIDEO_MODULATION_MIN_HZ,
+            "a swept scan line must read as modulated, got sigma {moving:.2} Hz"
+        );
     }
 
     #[test]

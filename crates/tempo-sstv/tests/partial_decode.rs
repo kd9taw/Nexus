@@ -567,3 +567,340 @@ fn mid_picture_robot36_is_refused_rather_than_guessed() {
         "no image at all is the correct answer for a mid-picture Robot 36"
     );
 }
+
+// ---------------------------------------------------------------------
+// ROUND TWO (2026-08-06 review). Two defects, both blocking, both here
+// with the true-positive direction proven in the same run:
+//
+//   P1  a steady carrier between the pulses was read as a picture, on
+//       13 of the 13 blind-eligible modes.
+//   P2  the end-of-transmission trigger could only fire against digital
+//       silence, i.e. never on a receiver.
+// ---------------------------------------------------------------------
+
+/// All fifteen modes, including the two that are not blind-eligible.
+const ALL_MODES: [SstvMode; 15] = [
+    SstvMode::Pd50,
+    SstvMode::Pd90,
+    SstvMode::Pd120,
+    SstvMode::Pd160,
+    SstvMode::Pd180,
+    SstvMode::Pd240,
+    SstvMode::Pd290,
+    SstvMode::Robot24,
+    SstvMode::Robot36,
+    SstvMode::Robot72,
+    SstvMode::Scottie1,
+    SstvMode::Scottie2,
+    SstvMode::ScottieDx,
+    SstvMode::Martin1,
+    SstvMode::Martin2,
+];
+
+/// SSB-passband-shaped noise at a stated RMS — what a receiver actually
+/// hears once the sender drops carrier. A radio never delivers the
+/// bit-exact zeroes the rest of this file pads with, and the difference
+/// was the whole of P2.
+fn band_noise(n: usize, rms: f32, seed: u32) -> Vec<f32> {
+    let mut rng = Lcg(seed);
+    let sr = work_rate();
+    let lowpass = (-2.0 * std::f64::consts::PI * 2700.0 / sr).exp() as f32;
+    let highpass = (-2.0 * std::f64::consts::PI * 300.0 / sr).exp() as f32;
+    let (mut lp, mut hp) = (0.0_f32, 0.0_f32);
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let w = rng.next_unit();
+        lp = lowpass * lp + (1.0 - lowpass) * w;
+        hp = highpass * hp + (1.0 - highpass) * lp;
+        out.push(lp - hp);
+    }
+    let cur = (out
+        .iter()
+        .map(|s| f64::from(*s) * f64::from(*s))
+        .sum::<f64>()
+        / out.len() as f64)
+        .sqrt() as f32;
+    let g = if cur > 0.0 { rms / cur } else { 0.0 };
+    out.iter().map(|s| s * g).collect()
+}
+
+/// The five trailing conditions a receiver can plausibly present: the
+/// file-only case the feature was built against, and four real noise
+/// floors spanning 100 dB.
+fn trailing_conditions(seconds: f64) -> Vec<(&'static str, Vec<f32>)> {
+    let n = (seconds * work_rate()) as usize;
+    let mut out: Vec<(&'static str, Vec<f32>)> = vec![("digital silence", vec![0.0_f32; n])];
+    for &(label, rms) in &[
+        ("band noise -120 dBFS", 1e-6_f32),
+        ("band noise -60 dBFS", 1e-3),
+        ("band noise -40 dBFS", 1e-2),
+        ("band noise -20 dBFS", 1e-1),
+    ] {
+        out.push((label, band_noise(n, rms, 0xACE1)));
+    }
+    out
+}
+
+/// Count the rows of `img` carrying any non-black pixel.
+fn painted_rows(img: &SstvImage) -> usize {
+    let w = img.width as usize;
+    (0..img.height)
+        .filter(|&y| {
+            img.pixels[(y as usize) * w..(y as usize + 1) * w]
+                .iter()
+                .any(|p| *p != [0, 0, 0])
+        })
+        .count()
+}
+
+// --- P1 ---------------------------------------------------------------
+
+/// The reviewer's exact input: 1200 Hz sync pulses at the mode's exact
+/// line period with an **unmodulated 1900 Hz carrier** filling every gap,
+/// for `periods` line periods, then the carrier drops.
+///
+/// Zero modulation, therefore zero picture information — the video band is
+/// occupied and never moves.
+fn pulses_plus_steady_carrier(mode: SstvMode, periods: usize) -> Vec<f32> {
+    let spec = tempo_sstv::for_mode(mode);
+    let sr = work_rate();
+    let period = (spec.line_seconds * sr) as usize;
+    let sync = (spec.sync_seconds * sr) as usize;
+    let mut audio: Vec<f32> = (0..period * periods)
+        .map(|i| {
+            let t = (i as f64) / sr;
+            let hz = if i % period < sync { 1200.0 } else { 1900.0 };
+            (0.5 * (2.0 * std::f64::consts::PI * hz * t).sin()) as f32
+        })
+        .collect();
+    audio.extend(std::iter::repeat_n(
+        0.0_f32,
+        (6.0 * spec.line_seconds * sr) as usize + 8192,
+    ));
+    audio
+}
+
+/// P1. A steady carrier between perfectly-timed sync pulses is not a
+/// picture, and must produce nothing at all — on **every** mode, not the
+/// handful that were spot-checked.
+///
+/// Before the video-band modulation gate this locked and emitted an
+/// `ImageComplete { partial: true }` on all thirteen blind-eligible modes
+/// (Robot 24 / Robot 36 are refused earlier, on chroma parity). The
+/// occupancy gate passed it because a carrier sits squarely in the video
+/// band: occupancy asks whether the band is busy, and only modulation
+/// asks whether it carries a picture.
+#[test]
+fn a_steady_carrier_between_sync_pulses_produces_nothing() {
+    for mode in ALL_MODES {
+        let events = stream(&pulses_plus_steady_carrier(mode, 20));
+        assert!(
+            events.is_empty(),
+            "{mode:?}: a 1900 Hz carrier between sync pulses produced {} event(s): {:?}",
+            events.len(),
+            &events[..events.len().min(3)]
+        );
+    }
+}
+
+/// The same adversary held far longer than any lock needs. A gate that
+/// merely delayed the false lock would pass the test above.
+#[test]
+fn a_steady_carrier_produces_nothing_however_long_it_runs() {
+    for mode in [SstvMode::Scottie1, SstvMode::Martin1, SstvMode::Pd120] {
+        let events = stream(&pulses_plus_steady_carrier(mode, 120));
+        assert!(
+            events.is_empty(),
+            "{mode:?}: 120 line periods of carrier produced {} event(s)",
+            events.len()
+        );
+    }
+}
+
+// --- P2 ---------------------------------------------------------------
+
+/// Scottie 1: VIS heard, sender drops the carrier at 60 %, then `tail`.
+fn cut_short_then(tail: &[f32]) -> Vec<f32> {
+    let mode = SstvMode::Scottie1;
+    let src = rgb_source(mode);
+    let mut audio = tempo_sstv::__test_support::vis::synth_vis(0x3C, 0.0);
+    let image_audio = tempo_sstv::__test_support::mode_scottie::encode_scottie(mode, &src);
+    let keep = (0.6 * image_audio.len() as f64) as usize;
+    audio.extend_from_slice(&image_audio[..keep]);
+    audio.extend_from_slice(tail);
+    audio
+}
+
+/// P2. The end-of-transmission trigger must fire on what a radio actually
+/// delivers, not only on a file that ends in zeroes.
+///
+/// Before this, the trigger asked for three line periods without a single
+/// true `has_sync` probe — and that probe is a ratio with no floor, which
+/// band noise satisfies about a quarter of the time at **every** level.
+/// Measured then: digital silence gave the 153-row partial; −120 dBFS of
+/// band noise gave nothing, ever. All five conditions must now give the
+/// same picture.
+#[test]
+fn a_truncated_transmission_ends_on_every_real_noise_floor() {
+    let mode = SstvMode::Scottie1;
+    let spec = tempo_sstv::for_mode(mode);
+    let src = rgb_source(mode);
+    for (label, tail) in trailing_conditions(30.0) {
+        let events = stream(&cut_short_then(&tail));
+        assert_eq!(
+            count_images(&events),
+            1,
+            "{label}: expected exactly one image, got {}",
+            count_images(&events)
+        );
+        let img = the_partial(&events);
+        assert_eq!(
+            first_painted_row(img),
+            Some(0),
+            "{label}: a VIS-anchored partial keeps its known origin at row 0"
+        );
+        let painted = painted_rows(img);
+        assert!(
+            (140..=160).contains(&painted),
+            "{label}: expected ~153 of 256 rows, got {painted}"
+        );
+        let to = painted * (spec.line_pixels as usize);
+        let corr = correlation(&src[..to], &img.pixels[..to]);
+        assert!(corr > 0.9, "{label}: correlation {corr:.4} <= 0.9");
+    }
+}
+
+/// P2, blind path. A mid-picture tune-in must also end on a noise floor —
+/// the trigger is shared, and this is the case the operator reported.
+/// Proves both directions in one run: the picture is found without a VIS
+/// **and** released when the carrier drops into band noise.
+#[test]
+fn a_mid_picture_tune_in_ends_on_a_noise_floor() {
+    let mode = SstvMode::Scottie1;
+    let spec = tempo_sstv::for_mode(mode);
+    let src = rgb_source(mode);
+    let image_audio = tempo_sstv::__test_support::mode_scottie::encode_scottie(mode, &src);
+    let cut = (102.37 * spec.line_seconds * work_rate()) as usize;
+
+    for (label, tail) in trailing_conditions(20.0) {
+        let mut audio = image_audio[cut..].to_vec();
+        audio.extend_from_slice(&tail);
+        let events = stream(&audio);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                SstvEvent::SyncLocked {
+                    mode: SstvMode::Scottie1,
+                    ..
+                }
+            )),
+            "{label}: no SyncLocked(Scottie1)"
+        );
+        let img = the_partial(&events);
+        let first = first_painted_row(img).expect("some rows painted");
+        assert!(
+            (100..=110).contains(&first),
+            "{label}: expected the picture to start near line 103, got {first}"
+        );
+        let from = (first as usize) * (spec.line_pixels as usize);
+        let corr = correlation(&src[from..], &img.pixels[from..]);
+        assert!(corr > 0.9, "{label}: correlation {corr:.4} <= 0.9");
+    }
+}
+
+/// The end trigger must never pre-empt a whole picture — including when
+/// the noise floor arrives right after the last line, which is what a
+/// receiver hears. A complete transmission stays `partial: false`, and the
+/// trailing noise must not then be locked as a second picture.
+#[test]
+fn a_complete_transmission_followed_by_band_noise_is_still_not_partial() {
+    let mode = SstvMode::Scottie1;
+    let src = rgb_source(mode);
+    let mut audio = tempo_sstv::__test_support::vis::synth_vis(0x3C, 0.0);
+    audio.extend(tempo_sstv::__test_support::mode_scottie::encode_scottie(
+        mode, &src,
+    ));
+    audio.extend(band_noise((30.0 * work_rate()) as usize, 1e-2, 0x5EED));
+
+    let events = stream(&audio);
+    assert_eq!(count_images(&events), 1, "expected exactly one image");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SstvEvent::ImageComplete { partial: false, .. })),
+        "a whole transmission followed by band noise must still report partial:false"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SstvEvent::SyncLocked { .. })),
+        "the trailing noise floor must not blind-lock as a second picture"
+    );
+}
+
+/// Nothing true may be rejected either. A gate tightened until the carrier
+/// stops getting through, but a real mid-picture tune-in stops too, is not
+/// a fix — so every blind-eligible mode is tuned into part-way and must
+/// still lock and produce its partial. The three tests at the top of this
+/// file check the *pixels* on the three families; this checks that the
+/// refusal gates say yes to all thirteen.
+#[test]
+fn every_blind_eligible_mode_still_decodes_a_mid_picture_tune_in() {
+    for mode in ALL_MODES {
+        // Robot 24 / Robot 36 are refused by design (chroma parity).
+        if matches!(mode, SstvMode::Robot24 | SstvMode::Robot36) {
+            continue;
+        }
+        let spec = tempo_sstv::for_mode(mode);
+        let frames = match spec.channel_layout {
+            tempo_sstv::ChannelLayout::PdYcbcr => spec.image_lines / 2,
+            _ => spec.image_lines,
+        };
+        let image_audio = match spec.channel_layout {
+            tempo_sstv::ChannelLayout::RgbSequential => {
+                tempo_sstv::__test_support::mode_scottie::encode_scottie(mode, &rgb_source(mode))
+            }
+            tempo_sstv::ChannelLayout::RobotYuv => {
+                tempo_sstv::__test_support::mode_robot::encode_robot(mode, &ycrcb_source(mode))
+            }
+            _ => tempo_sstv::__test_support::mode_pd::encode_pd(mode, &ycrcb_source(mode)),
+        };
+        let audio = tune_in_late(mode, &image_audio, f64::from(frames) * 0.55 + 0.37);
+
+        let events = stream(&audio);
+        let locked: Vec<(SstvMode, f64)> = events
+            .iter()
+            .filter_map(|e| match e {
+                SstvEvent::SyncLocked {
+                    mode,
+                    hedr_shift_hz,
+                    ..
+                } => Some((*mode, *hedr_shift_hz)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(locked.len(), 1, "{mode:?}: expected exactly one lock");
+        assert_eq!(locked[0].0, mode, "{mode:?} did not blind-lock as itself");
+        // The mistuning recovered from the pulses must be the truth: this
+        // audio is exactly on frequency. A wrong answer here shifts every
+        // colour in the picture AND deafens the end-of-transmission gate,
+        // which is what a 306 Hz-quantised scan used to deliver (-128 Hz
+        // for a perfectly tuned Martin 1).
+        assert!(
+            locked[0].1.abs() <= 20.0,
+            "{mode:?}: blind mistuning estimate {} Hz on an on-frequency signal",
+            locked[0].1
+        );
+        let img = the_partial(&events);
+        assert_eq!(img.mode, mode);
+        let first = first_painted_row(img).expect("some rows painted");
+        let lo = f64::from(spec.image_lines) * 0.50;
+        let hi = f64::from(spec.image_lines) * 0.65;
+        assert!(
+            f64::from(first) >= lo && f64::from(first) <= hi,
+            "{mode:?}: tuned in ~55 % through, expected the picture to start in \
+             rows {lo:.0}..{hi:.0} of {}, got {first}",
+            spec.image_lines
+        );
+    }
+}

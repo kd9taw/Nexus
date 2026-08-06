@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::image::SstvImage;
 use crate::modespec::SstvMode;
 use crate::resample::Resampler;
-use crate::sync::{find_sync, SyncTracker, SYNC_PROBE_STRIDE};
+use crate::sync::{find_sync, SyncPulseGate, SyncTracker, SYNC_PROBE_STRIDE};
 use blindsync::BlindSync;
 
 /// One observable event emitted by [`SstvDecoder::process`].
@@ -233,13 +233,15 @@ struct DecodingState {
     /// the audio and the captured block is bottom-anchored instead. See
     /// [`SstvEvent::ImageComplete`].
     row_origin_known: bool,
-    /// Index into `has_sync` of the most recent `true` probe, or `None`
-    /// if no sync pulse has been seen yet. Drives the
-    /// end-of-transmission trigger: once a train has been seen and then
-    /// stops for [`END_OF_TX_GAP_LINES`] line periods, the transmission
-    /// is over and whatever was received is decoded and emitted as a
-    /// partial rather than held forever.
-    last_sync_probe: Option<usize>,
+    /// Coherent-tone detector for the sync pulse, and the *only* input to
+    /// the end-of-transmission trigger.
+    ///
+    /// It deliberately does not read `has_sync`. That track is a ratio
+    /// with no floor, which band noise satisfies about a quarter of the
+    /// time at every level from −120 dBFS up — so a trigger built on it
+    /// fires only against a file that ends in bit-exact zeroes, i.e.
+    /// never on a radio. See [`SyncPulseGate`].
+    pulse_gate: SyncPulseGate,
 }
 
 /// How many radio frames (sync-to-sync intervals) make up one image.
@@ -308,8 +310,16 @@ impl DecodingState {
                 _ => None,
             },
             row_origin_known,
-            last_sync_probe: None,
+            pulse_gate: SyncPulseGate::new(spec, hedr_shift_hz),
         }
+    }
+
+    /// Feed the pulse gate everything newly appended to `audio`.
+    fn advance_pulse_gate(&mut self) {
+        let Self {
+            pulse_gate, audio, ..
+        } = self;
+        pulse_gate.advance(audio);
     }
 
     /// How many whole radio frames of audio have we actually captured?
@@ -329,7 +339,7 @@ impl DecodingState {
             return 0;
         }
         let from_audio = (self.audio.len() as f64 / period_samples).floor();
-        let from_pulses = match self.last_sync_probe {
+        let from_pulses = match self.pulse_gate.last_pulse_sample() {
             Some(p) => {
                 // Scottie keys its sync mid-line, so the pulse for frame
                 // k sits `sync_offset` into that frame; every other mode
@@ -341,7 +351,7 @@ impl DecodingState {
                         (2.0 * self.spec.septr_seconds + 2.0 * chan_len) * work_rate
                     }
                 };
-                let t = (p * SYNC_PROBE_STRIDE) as f64;
+                let t = p as f64;
                 (((t - sync_offset) / period_samples).round() + 1.0).max(0.0)
             }
             None => 0.0,
@@ -350,18 +360,23 @@ impl DecodingState {
         frames.min(radio_frames_per_image(self.spec))
     }
 
-    /// Has the transmission stopped? True once a sync train has been
-    /// seen and then gone quiet for [`END_OF_TX_GAP_LINES`] line
-    /// periods. Requiring a train first is what makes this safe to run
+    /// Has the transmission stopped? True once a real sync pulse has been
+    /// heard and then none for [`END_OF_TX_GAP_LINES`] line periods.
+    /// Requiring a pulse first is what makes this safe to run
     /// unconditionally: it cannot fire before a transmission starts.
+    ///
+    /// "Real" is load-bearing and is [`SyncPulseGate`]'s whole job — a
+    /// coherent tone at the sync frequency lasting this mode's sync
+    /// duration. Asking the `has_sync` ratio track instead is what made
+    /// this unreachable on a receiver.
     #[allow(clippy::cast_precision_loss)]
     fn transmission_ended(&self) -> bool {
-        let Some(last) = self.last_sync_probe else {
+        let Some(last) = self.pulse_gate.last_pulse_sample() else {
             return false;
         };
         let work_rate = f64::from(crate::resample::WORKING_SAMPLE_RATE_HZ);
-        let gap_probes = self.has_sync.len().saturating_sub(last);
-        let gap_seconds = (gap_probes * SYNC_PROBE_STRIDE) as f64 / work_rate;
+        let gap_samples = self.pulse_gate.analysed_samples().saturating_sub(last);
+        let gap_seconds = gap_samples as f64 / work_rate;
         gap_seconds > END_OF_TX_GAP_LINES * self.spec.line_seconds
     }
 }
@@ -409,6 +424,13 @@ const FSK_CAPTURE_SECONDS: f64 = 3.0;
 /// enough that the operator sees the picture promptly after the carrier
 /// drops. The trigger can only fire *after* a train has been seen, so it
 /// can never pre-empt a transmission that has not started.
+///
+/// **What "a sync pulse" means here decides whether this works at all.**
+/// The first version of this trigger counted `has_sync` probes, and band
+/// noise sets that ratio true a quarter of the time at every level, so
+/// the gap never reached three lines: it fired on digital silence and on
+/// nothing else, which is to say on no receiver. It now counts pulses
+/// from [`SyncPulseGate`], whose verdict a noise floor cannot buy.
 const END_OF_TX_GAP_LINES: f64 = 3.0;
 
 /// Fewest radio frames that may be emitted as a partial image. A
@@ -572,7 +594,7 @@ impl SstvDecoder {
                     // to return `Some`; noise, silence, speech and CW all
                     // return `None` and fall through to `break` exactly as
                     // they did before this path existed.
-                    if let Some(lock) = self.blind.try_lock() {
+                    if let Some(lock) = self.blind.try_lock(&mut self.channel_demod) {
                         out.push(SstvEvent::SyncLocked {
                             mode: lock.spec.mode,
                             period_seconds: lock.period_seconds,
@@ -618,12 +640,12 @@ impl SstvDecoder {
                     while d.next_probe_sample + SYNC_PROBE_STRIDE * 2 <= d.audio.len() {
                         let center = d.next_probe_sample + SYNC_PROBE_STRIDE / 2;
                         let has = d.sync_tracker.has_sync_at(&d.audio, center);
-                        if has {
-                            d.last_sync_probe = Some(d.has_sync.len());
-                        }
                         d.has_sync.push(has);
                         d.next_probe_sample += SYNC_PROBE_STRIDE;
                     }
+                    // The end-of-transmission trigger runs off its own
+                    // detector, not off `has_sync` — see `pulse_gate`.
+                    d.advance_pulse_gate();
 
                     // Two ways out of `Decoding`. The full buffer is checked
                     // first so a complete transmission always decodes as a
