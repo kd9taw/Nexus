@@ -362,21 +362,29 @@ impl Station {
         self.state == State::Done && self.pending.is_none()
     }
 
-    /// True when either party's call is 77-bit NONSTANDARD, so our outgoing messages
-    /// must use the hashed forms — the nonstandard call in full, the other wrapped in
-    /// `<...>` — because `pack77_1` would otherwise strip the affix off a bare
-    /// nonstandard call silently and name a different station.
+    /// True when this PAIR of calls cannot ride the plain Type 1/2 forms, so our
+    /// outgoing messages must use the hashed i3=4 forms instead — one call in full, the
+    /// other wrapped in `<...>`, both recovered verbatim by the receiver.
     ///
-    /// **`/P` and `/R` are NOT nonstandard**: they ride the plain Type 1/2 forms in
-    /// full, with grid and numeric report intact. Using the coarse "has a slash" test
-    /// here is what made a portable station's locator and reports disappear. Drives
-    /// [`Self::nonstandard_form`] — i.e. what we TRANSMIT — and nothing else.
-    fn is_nonstandard_qso(&self) -> bool {
+    /// Two independent packer facts, and the second is a property of the pair alone:
+    ///
+    /// 1. **Either call is 77-bit NONSTANDARD.** `pack77_1` would strip the affix off a
+    ///    bare nonstandard call silently and name a different station (`CQ PJ4/K1ABC
+    ///    FK52` goes out as `CQ K1ABC FK52`). **`/P` and `/R` are NOT nonstandard** —
+    ///    they ride Type 1/2 in full, grid and numeric report intact, and using the
+    ///    coarse "has a slash" test here is what made a portable station's locator and
+    ///    reports disappear.
+    /// 2. **The two suffixes conflict** ([`crate::message::suffix_conflict`]). One `i3`
+    ///    names what BOTH suffix bits mean, so `/P` beside `/R` is unrepresentable: the
+    ///    `/R` station's call comes back off the air as `/P`. Both calls are perfectly
+    ///    standard; the PAIR is what the packer cannot express.
+    ///
+    /// Drives [`Self::hashed_form`] — i.e. what we TRANSMIT — and nothing else.
+    fn needs_hashed_form(&self) -> bool {
+        let dx = self.dxcall.as_deref();
         !crate::message::is_std_call(&self.mycall)
-            || self
-                .dxcall
-                .as_deref()
-                .is_some_and(|dx| !crate::message::is_std_call(dx))
+            || dx.is_some_and(|dx| !crate::message::is_std_call(dx))
+            || dx.is_some_and(|dx| crate::message::suffix_conflict(&self.mycall, dx))
     }
 
     /// True when either call carries a slash at all. **Receive-side tolerance only**:
@@ -391,14 +399,24 @@ impl Station {
                 .is_some_and(crate::message::is_compound)
     }
 
-    /// Rewrite a message into its modem-faithful hashed form when a genuinely
-    /// nonstandard call is involved: wrap the ADDRESSEE in `<...>` (the modem hashes
-    /// it, and the hashed-first Type-1 path keeps grid and numeric report) while the
-    /// sender stays in full. A no-op when both calls are 77-bit standard — which now
-    /// includes every `/P` and `/R` station, so their overs are left exactly as the
-    /// sequencer built them.
-    fn nonstandard_form(&self, msg: Msg) -> Msg {
-        if !self.is_nonstandard_qso() {
+    /// Rewrite a message into its modem-faithful hashed form when the pair cannot ride
+    /// Type 1/2 ([`Self::needs_hashed_form`]): wrap the ADDRESSEE in `<...>` (the modem
+    /// hashes it) while the sender stays in full, so **both callsigns come back off the
+    /// air exactly as queued**. A no-op for a pair the plain forms can carry — which
+    /// includes every `/P` and `/R` station working a standard or same-suffixed
+    /// partner, so their overs are left exactly as the sequencer built them.
+    ///
+    /// **What the hashed form costs, stated here so it is not rediscovered:** the
+    /// sender keeps a grid or a numeric report only while it is a plain c28 call
+    /// ([`crate::message::packs_beside_hash`]). A slashed sender opposite a hash is
+    /// refused Type 1/2 by `packjt77.f90:1183-1184` and drops to i3=4, whose only
+    /// payloads are blank / `RRR` / `RR73` / `73`. So a `/P` operator working a hashed
+    /// DX — and either operator of a `/P` × `/R` pair — sends no grid and no number,
+    /// and the roger becomes `RRR`. That is deliberate: **correct-but-degraded beats
+    /// wrong-but-rich.** A missing report costs a retry; a wrong callsign costs the
+    /// other operator a confirmation they will never get and cannot diagnose.
+    fn hashed_form(&self, msg: Msg) -> Msg {
+        if !self.needs_hashed_form() {
             return msg;
         }
         let brk = |to: &str| {
@@ -421,13 +439,16 @@ impl Station {
                 grid: String::new(),
                 dir: String::new(),
             },
-            // The SENDER decides what the payload can be. A standard c28 sender keeps
-            // its grid even when the DX is hashed — `<PJ4/K1ABC> KD9TAW EN52` is a
-            // hashed-first Type 1 and round-trips verbatim, which is exactly what
-            // upstream builds (`msgtype(t0a + my_grid, ui->tx1)` when only HIS call is
-            // nonstandard). A nonstandard sender must go i3=4, which has no grid field.
+            // The SENDER decides what the payload can be, and the test is
+            // `packs_beside_hash`, NOT `is_std_call`: a plain c28 sender keeps its grid
+            // opposite the hash — `<PJ4/K1ABC> KD9TAW EN52` is a hashed-first Type 1 and
+            // round-trips verbatim, exactly what upstream builds (`msgtype(t0a +
+            // my_grid, ui->tx1)` when only HIS call is nonstandard) — while a SLASHED
+            // sender is refused Type 1/2 by `packjt77.f90:1183-1184` and drops to i3=4,
+            // which has no grid field. Keeping the grid there would not send it; it
+            // would only make Tx1 pack to the same bytes as Tx2 and Tx3.
             Msg::Grid { to, de, grid } => {
-                let grid = if crate::message::is_std_call(&de) {
+                let grid = if crate::message::packs_beside_hash(&de) {
                     grid
                 } else {
                     String::new()
@@ -438,16 +459,18 @@ impl Station {
                     grid,
                 }
             }
-            // Likewise a numeric report: it survives only when the SENDER is a standard
-            // 28-bit call, becoming the c28 that carries it while the other party is the
-            // hash. If *I* am the nonstandard sender, i3=4 has no report field at all
-            // (only RRR/RR73/73), so roger instead — the QSO still completes and the
-            // numeric exchange rides the standard partner's overs. That is the
-            // protocol's constraint, and it no longer catches `/P`.
-            Msg::RReport { to, de, .. } if !crate::message::is_std_call(&de) => {
+            // Likewise a numeric report: it survives only while the SENDER is the plain
+            // c28 call carrying it opposite the hash. When it is not — a nonstandard
+            // call, or a `/P`//`R` call, which the packer refuses beside a hash — i3=4
+            // has no report field at all (only RRR/RR73/73), so ROGER instead. That
+            // keeps Tx3 distinguishable from Tx1/Tx2, which is what lets the partner's
+            // sequencer advance; three overs with identical bytes strand it. The QSO
+            // still completes, and the numeric exchange rides the other side's overs
+            // whenever that side can carry it.
+            Msg::RReport { to, de, .. } if !crate::message::packs_beside_hash(&de) => {
                 Msg::Rrr { to: brk(&to), de }
             }
-            Msg::Report { to, de, .. } if !crate::message::is_std_call(&de) => Msg::Grid {
+            Msg::Report { to, de, .. } if !crate::message::packs_beside_hash(&de) => Msg::Grid {
                 to: brk(&to),
                 de,
                 grid: String::new(),
@@ -471,7 +494,7 @@ impl Station {
 
     /// The message to transmit on my next TX slot, if any (RV-agnostic).
     pub fn outgoing(&self) -> Option<Msg> {
-        self.pending.clone().map(|m| self.nonstandard_form(m))
+        self.pending.clone().map(|m| self.hashed_form(m))
     }
 
     /// True when the current step's transmission budget is exhausted, so the next over
@@ -506,7 +529,7 @@ impl Station {
         }
         self.pending
             .clone()
-            .map(|m| (self.nonstandard_form(m), self.rv_count))
+            .map(|m| (self.hashed_form(m), self.rv_count))
     }
 
     /// True when the current step has hit its transmission budget without the partner
@@ -523,7 +546,7 @@ impl Station {
     pub fn pending_text(&self) -> Option<String> {
         self.pending
             .as_ref()
-            .map(|m| self.nonstandard_form(m.clone()).to_text())
+            .map(|m| self.hashed_form(m.clone()).to_text())
     }
 
     /// Operator "Resend": re-arm the current step. Clears the retransmission

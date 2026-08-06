@@ -225,6 +225,83 @@ pub fn is_77bit_nonstandard_call(call: &str) -> bool {
     !strict
 }
 
+/// The suffix the PACKER will see on `call`: `Some(b'P')`, `Some(b'R')`, or `None`.
+///
+/// Transcribes `packjt77.f90:1216-1217`/`:1234-1235`, which look for the literal
+/// `"/P "` / `"/R "` in the blank-padded 13-char word and require the `/` to sit at
+/// **position 4 or later** (`index(...).ge.4`) — i.e. at least three characters of base
+/// call ahead of it. A shorter form (`W1/P`) is not a suffix to the packer, so it must
+/// not be one here either.
+fn packed_suffix(call: &str) -> Option<u8> {
+    let c = call.trim().to_ascii_uppercase();
+    let b = c.as_bytes();
+    // '/' sits at 1-based position `len-1`; `.ge.4` ⇒ len ≥ 5.
+    if b.len() < 5 {
+        return None;
+    }
+    match &b[b.len() - 2..] {
+        b"/P" => Some(b'P'),
+        b"/R" => Some(b'R'),
+        _ => None,
+    }
+}
+
+/// True when two callsigns' `/P` and `/R` suffixes **cannot share one Type 1/2 frame**.
+///
+/// The protocol spends one bit per callsign on the suffix, but the message TYPE — a
+/// single `i3` for the whole frame — is what says what that bit MEANS, and either call
+/// can force it (`packjt77.f90:1223`):
+///
+/// ```text
+/// i3=1                                        !Type 1: Standard message, possibly with "/R"
+/// if (i1psuffix.ge.4.or.i2psuffix.ge.4) i3=2  !Type 2, with "/P"
+/// ```
+///
+/// `:1234-1235` then sets *both* suffix bits from *either* suffix (`ipa=1` for `/P` or
+/// `/R` alike). So `/P`+`/P`, `/R`+`/R`, `/P`+plain and `/R`+plain all pack and
+/// round-trip — but one `/P` anywhere makes the frame Type 2, and the partner's `/R`
+/// comes out of the receiver as `/P`. **`F4CYH/P KD9TAW/R EN52` decodes as
+/// `F4CYH/P KD9TAW/P EN52`**: a well-formed message naming a station that does not
+/// exist, on every over of the QSO, and only our side logs it clean.
+///
+/// **No Type 1/2 frame can carry `/P` beside `/R`** — the pair is unrepresentable, not
+/// merely awkward. The pair must therefore fall back to the hashed i3=4 forms, which
+/// carry both calls verbatim (at the cost of the grid and the numeric report). Upstream
+/// shares the hole: `genStdMsgs` (`mainwindow.cpp:6646`) builds `t0 = hisCall + " " +
+/// my_callsign` whenever `stdCall()` accepts both, with no pair test anywhere.
+///
+/// A property of the PAIR, deliberately: neither call is wrong on its own, and
+/// [`is_std_call`] must stay an exact transcription of `stdCall()`.
+pub fn suffix_conflict(a: &str, b: &str) -> bool {
+    matches!(
+        (packed_suffix(a), packed_suffix(b)),
+        (Some(x), Some(y)) if x != y
+    )
+}
+
+/// True when `call` can be the plain 28-bit callsign standing **opposite a `<...>`
+/// hashed token** — the only shape in which a hashed frame still carries a grid or a
+/// numeric report.
+///
+/// `pack77_1` refuses Type 1/2 outright when a hashed token sits beside a call with
+/// ANY slash in it (`packjt77.f90:1183-1184`):
+///
+/// ```text
+/// if(w(1)(1:1).eq.'<' .and. index(w(2),'/').gt.0) return
+/// if(w(2)(1:1).eq.'<' .and. index(w(1),'/').gt.0) return
+/// ```
+///
+/// The frame then falls to i3=4 (`h12 c58 h1 r2 c1`), which has a slot for neither
+/// field — the packer drops them silently. So `<PJ4/K1ABC> KD9TAW EN52` keeps the grid,
+/// while `<PJ4/K1ABC> KD9TAW/P EN52` loses it, and `R-07` with it. Standard AND
+/// unslashed is the exact condition, and it is **narrower than [`is_std_call`] on
+/// purpose**: `/P` and `/R` are protocol-standard opposite another c28 call and are
+/// refused only opposite a hash.
+pub fn packs_beside_hash(call: &str) -> bool {
+    let c = call.trim();
+    !c.contains('/') && is_std_call(c)
+}
+
 /// The inner text of an i3=4 hashed token (`<W9XYZ>` → `W9XYZ`, `<...>` → `...`).
 fn hashed_inner(s: &str) -> &str {
     s.trim_start_matches('<').trim_end_matches('>')
@@ -634,6 +711,48 @@ mod fidelity_tests {
         // Outside the callsign alphabet upstream returns false — not our classification.
         assert!(!is_77bit_nonstandard_call(""));
         assert!(!is_77bit_nonstandard_call("AB"));
+    }
+
+    #[test]
+    fn suffix_conflict_is_a_property_of_the_pair_not_of_either_call() {
+        // One `i3` per frame says what BOTH suffix bits mean, so `/P` beside `/R` has no
+        // Type 1/2 encoding at all — the `/R` station's call comes back as `/P`.
+        assert!(suffix_conflict("KD9TAW/R", "F4CYH/P"));
+        assert!(suffix_conflict("F4CYH/P", "KD9TAW/R"), "order-free");
+        assert!(suffix_conflict("kd9taw/p", "f4cyh/r"), "case-insensitive");
+        // Both calls are perfectly standard on their own — which is why this could not
+        // live in `is_std_call`, and why widening that predicate would not have helped.
+        assert!(is_std_call("KD9TAW/R") && is_std_call("F4CYH/P"));
+        // Same suffix, or only one suffix, packs and round-trips.
+        for (a, b) in [
+            ("KD9TAW/P", "F4CYH/P"),
+            ("KD9TAW/R", "F4CYH/R"),
+            ("KD9TAW/P", "W9XYZ"),
+            ("KD9TAW", "F4CYH/R"),
+            ("KD9TAW", "W9XYZ"),
+            ("PJ4/K1ABC", "KD9TAW/P"),
+        ] {
+            assert!(!suffix_conflict(a, b), "{a} × {b} packs as Type 1/2");
+        }
+        // `index(w//' ','/P ').ge.4` — the '/' must sit at position 4 or later, so a
+        // 2-character base is not a suffix to the packer and must not be one here.
+        assert!(!suffix_conflict("W1/P", "F4CYH/R"));
+        assert!(suffix_conflict("AB1/P", "F4CYH/R"), "'/' at position 4 is");
+    }
+
+    #[test]
+    fn packs_beside_hash_is_narrower_than_std_call_by_exactly_the_slash() {
+        // `packjt77.f90:1183-1184` refuses Type 1/2 when a hashed token sits beside any
+        // slashed call, so only a plain c28 sender still carries a grid or a number.
+        for c in ["KD9TAW", "W9XYZ", "9A1A", " W1AW "] {
+            assert!(packs_beside_hash(c), "{c} carries payload opposite a hash");
+        }
+        for c in ["KD9TAW/P", "KD9TAW/R", "PJ4/K1ABC", "YW18FIFA", "", "AB"] {
+            assert!(!packs_beside_hash(c), "{c} cannot");
+        }
+        // The narrowing is exactly the suffix, and it is deliberate: /P and /R are
+        // standard opposite another c28 call and refused only opposite a hash.
+        assert!(is_std_call("F4CYH/P") && !packs_beside_hash("F4CYH/P"));
     }
 
     #[test]

@@ -76,6 +76,48 @@ fn over(st: &mut Station, expect: &str) {
     st.after_tx();
 }
 
+/// Prime the packer's hash table with `call` in full, exactly as a real QSO does the
+/// first time the station is heard. Until that happens a `<call>` token decodes to the
+/// unresolved `<...>`, which would make a hashed assertion meaningless.
+fn seed_hash(call: &str) {
+    let _ = on_air(ModeKind::Ft8, &format!("CQ {call}"));
+    let _ = on_air(ModeKind::Ft8, &format!("<W9XYZ> {call}"));
+}
+
+/// The over the sequencer queues at Tx stage `n` (1..=5) for this pair — built by
+/// driving the real `Station`, not by hand.
+fn queued(mycall: &str, mygrid: &str, dxcall: &str, n: usize) -> String {
+    let ctx = match n {
+        1 => None,
+        2 => Some(Msg::Grid {
+            to: mycall.into(),
+            de: dxcall.into(),
+            grid: "FK52".into(),
+        }),
+        3 => Some(Msg::Report {
+            to: mycall.into(),
+            de: dxcall.into(),
+            snr: -7,
+        }),
+        4 => Some(Msg::RReport {
+            to: mycall.into(),
+            de: dxcall.into(),
+            snr: -7,
+        }),
+        5 => Some(Msg::Rr73 {
+            to: mycall.into(),
+            de: dxcall.into(),
+        }),
+        _ => unreachable!("Tx1..Tx5"),
+    };
+    match &ctx {
+        None => Station::answering(mycall, mygrid, dxcall),
+        Some(m) => Station::start(mycall, mygrid, dxcall, Some((m, -7)), false, false),
+    }
+    .pending_text()
+    .unwrap_or_else(|| panic!("nothing queued at Tx{n} for {mycall} × {dxcall}"))
+}
+
 fn dec(text: &str, snr: i32) -> modes::Decode {
     modes::Decode {
         message: text.into(),
@@ -241,6 +283,137 @@ fn a_nonstandard_call_still_gets_its_report_through_the_hash() {
         Some("PJ4/K1ABC"),
         "logs the full call"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The two quadrants the packer cannot express — correct calls beat rich payload
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_mixed_p_and_r_pair_never_renames_a_station() {
+    // The protocol spends one bit per callsign on the suffix, but ONE `i3` per frame
+    // says what that bit MEANS, and either call can force it
+    // (`packjt77.f90:1223` — `if (i1psuffix.ge.4.or.i2psuffix.ge.4) i3=2`). So `/P`
+    // beside `/R` is unrepresentable in Type 1/2. First the hazard, measured:
+    let got = on_air(ModeKind::Ft8, "F4CYH/P KD9TAW/R EN52");
+    assert!(
+        !got.iter().any(|m| m == "F4CYH/P KD9TAW/R EN52"),
+        "no Type 1/2 frame can carry /P beside /R; got {got:?}"
+    );
+    assert!(
+        got.iter().any(|m| m == "F4CYH/P KD9TAW/P EN52"),
+        "…it becomes a DIFFERENT station, silently and well-formed: {got:?}"
+    );
+
+    // So the sequencer must never build one. The hashed i3=4 form carries both calls
+    // verbatim; the grid and the numeric report are the price, and they are the right
+    // price — a missing report costs a retry, a wrong callsign costs the other operator
+    // a confirmation he will never get and cannot diagnose.
+    seed_hash("F4CYH/P");
+    seed_hash("KD9TAW/R");
+    for (my, dx) in [("KD9TAW/R", "F4CYH/P"), ("KD9TAW/P", "F4CYH/R")] {
+        for n in 1..=5 {
+            let q = queued(my, "EN52", dx, n);
+            assert!(
+                q.contains(my) && q.contains(dx),
+                "Tx{n} must name both stations exactly: [{q}]"
+            );
+            assert_on_air(ModeKind::Ft8, &q);
+        }
+    }
+
+    // A CQ has no pair, so it is untouched: a rover's own Type 1 frame still carries
+    // his grid.
+    assert_eq!(
+        Station::calling_cq("KD9TAW/R", "EN52")
+            .pending_text()
+            .as_deref(),
+        Some("CQ KD9TAW/R EN52")
+    );
+}
+
+#[test]
+fn a_suffixed_operator_working_a_hashed_dx_keeps_tx3_distinguishable() {
+    // `pack77_1` refuses Type 1/2 outright when a hashed token sits beside ANY slashed
+    // call (`packjt77.f90:1183-1184`), so a `/P` operator working a genuinely
+    // nonstandard DX drops to i3=4 — no grid field, no numeric-report field. Keeping
+    // them anyway does not send them: it makes Tx1, Tx2 and Tx3 pack to IDENTICAL
+    // bytes, and three intents with one encoding strand the partner's sequencer.
+    let got = on_air(ModeKind::Ft8, "<PJ4/K1ABC> KD9TAW/P R-07");
+    assert!(
+        !got.iter().any(|m| m == "<PJ4/K1ABC> KD9TAW/P R-07"),
+        "a slashed sender opposite a hash cannot carry a report; got {got:?}"
+    );
+
+    seed_hash("PJ4/K1ABC");
+    for my in ["KD9TAW/P", "KD9TAW/R"] {
+        let tx: Vec<String> = (1..=5)
+            .map(|n| queued(my, "EN52", "PJ4/K1ABC", n))
+            .collect();
+        for (i, q) in tx.iter().enumerate() {
+            assert!(
+                q.starts_with("<PJ4/K1ABC> ") && q.contains(my),
+                "Tx{} must name both stations: [{q}]",
+                i + 1
+            );
+            assert_on_air(ModeKind::Ft8, q);
+        }
+        // THE REQUIREMENT: the roger must be tellable from the two overs before it.
+        // i3=4's payload vocabulary is blank / RRR / RR73 / 73, so Tx3 rogers with RRR
+        // — which is what the pre-fix code got right and the fix regressed.
+        assert_eq!(tx[2], format!("<PJ4/K1ABC> {my} RRR"));
+        assert_ne!(tx[2], tx[0], "Tx3 must differ from Tx1");
+        assert_ne!(tx[2], tx[1], "Tx3 must differ from Tx2");
+        assert_ne!(tx[3], tx[2], "Tx4 must differ from Tx3");
+        assert_ne!(tx[4], tx[3], "Tx5 must differ from Tx4");
+    }
+}
+
+#[test]
+fn every_callsign_class_pair_puts_both_calls_on_the_air_verbatim() {
+    // The sweep. Four classes per side — plain standard, `/P`, `/R`, and genuinely
+    // nonstandard — because `/P` and `/R` must be told apart to see the mixed pair at
+    // all. Sixteen quadrants × six overs, each built by the sequencer, packed,
+    // transmitted, decoded, and compared against what was queued.
+    const MINE: [(&str, &str); 4] = [
+        ("KD9TAW", "EN52"),
+        ("KD9TAW/P", "EN52"),
+        ("KD9TAW/R", "EN52"),
+        ("YW18FIFA", "EN52"),
+    ];
+    const THEIRS: [&str; 4] = ["W9XYZ", "F4CYH/P", "F4CYH/R", "PJ4/K1ABC"];
+    for c in ["PJ4/K1ABC", "YW18FIFA", "F4CYH/P", "F4CYH/R", "W9XYZ"] {
+        seed_hash(c);
+    }
+    for (my, grid) in MINE {
+        let cq = Station::calling_cq(my, grid).pending_text().expect("a CQ");
+        assert_on_air(ModeKind::Ft8, &cq);
+        for dx in THEIRS {
+            let tx: Vec<String> = (1..=5).map(|n| queued(my, grid, dx, n)).collect();
+            for (i, q) in tx.iter().enumerate() {
+                assert_on_air(ModeKind::Ft8, q);
+                assert!(
+                    q.contains(my) && q.contains(dx),
+                    "{my} × {dx} Tx{}: both calls must appear verbatim: [{q}]",
+                    i + 1
+                );
+            }
+            // The sequencer advances on Tx3/Tx4/Tx5 being tellable apart; Tx1 and Tx2
+            // may share an encoding (i3=4 has one blank payload, and the receiver's own
+            // state disambiguates "calling you" from "your report").
+            for a in 2..5 {
+                for b in 0..a {
+                    assert_ne!(
+                        tx[a],
+                        tx[b],
+                        "{my} × {dx}: Tx{} collides with Tx{}",
+                        a + 1,
+                        b + 1
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

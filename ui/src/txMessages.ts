@@ -69,22 +69,28 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
   if (!dx) {
     return { tx1: '', tx2: '', tx3: '', tx4: '', tx5: '', tx6: j('CQ', my, grid) }
   }
-  // A 77-bit NONSTANDARD call on either side: mirror the engine's modem-faithful
-  // hashed rewrite (qso.rs::nonstandard_form) so the PANEL SHOWS WHAT GOES ON AIR
-  // and snap.qso.txNow matches a row (the next-dot confirmation). The DX is hashed
-  // `<DX>`; the SENDER decides what the payload can be — a standard sender keeps its
-  // grid and number, a nonstandard one cannot carry either (Tx1/Tx2 → grid-less
-  // call, Tx3 → RRR). `/P` and `/R` are standard and never come down this path.
-  if (!isStdCall(dx) || !isStdCall(my)) {
+  // A pair the plain Type 1/2 forms CANNOT carry: mirror the engine's modem-faithful
+  // hashed rewrite (qso.rs::hashed_form) so the PANEL SHOWS WHAT GOES ON AIR and
+  // snap.qso.txNow matches a row (the next-dot confirmation). Two reasons, and the
+  // second is a property of the PAIR — see suffixConflict: either call is 77-bit
+  // nonstandard, or one carries `/P` while the other carries `/R`.
+  //
+  // The DX is hashed `<DX>`; the SENDER decides what the payload can be, and the test
+  // is packsBesideHash — a plain c28 sender keeps its grid and its number, while a
+  // nonstandard OR slashed sender can carry neither (Tx1/Tx2 → the bare call, Tx3 →
+  // RRR, which is what keeps Tx3 tellable from Tx1/Tx2 for the partner's sequencer).
+  if (!isStdCall(dx) || !isStdCall(my) || suffixConflict(my, dx)) {
     const bdx = `<${dx.replace(/^<|>$/g, '')}>`
-    const meNonstandard = !isStdCall(my)
+    const iCarry = packsBesideHash(my)
     return {
-      tx1: meNonstandard ? j(bdx, my) : j(bdx, my, grid),
-      tx2: meNonstandard ? j(bdx, my) : j(bdx, my, rpt),
-      tx3: meNonstandard ? j(bdx, my, 'RRR') : j(bdx, my, `R${rpt}`),
+      tx1: iCarry ? j(bdx, my, grid) : j(bdx, my),
+      tx2: iCarry ? j(bdx, my, rpt) : j(bdx, my),
+      tx3: iCarry ? j(bdx, my, `R${rpt}`) : j(bdx, my, 'RRR'),
       tx4: j(bdx, my, final),
       tx5: j(bdx, my, '73'),
-      tx6: meNonstandard ? j('CQ', my) : j('CQ', my, grid), // never a hashed CQ
+      // A CQ has no pair, so only MY call decides it: a /P or /R rover's CQ is an
+      // ordinary Type 1/2 frame and keeps its grid. Never a hashed CQ (does not unpack).
+      tx6: isStdCall(my) ? j('CQ', my, grid) : j('CQ', my),
     }
   }
   return {
@@ -109,6 +115,45 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
  */
 export function isStdCall(call: string): boolean {
   return /^([A-Z]{0,2}|[A-Z][0-9]|[0-9][A-Z])([0-9][A-Z]{0,3})(\/R|\/P)?$/i.test(call.trim())
+}
+
+/**
+ * True when two callsigns' `/P` and `/R` suffixes CANNOT share one Type 1/2 frame —
+ * `message.rs::suffix_conflict`, keep the two in lockstep.
+ *
+ * The protocol spends one bit per callsign on the suffix, but a single `i3` for the
+ * whole frame says what that bit MEANS, and either call can force it
+ * (`packjt77.f90:1223` — `if (i1psuffix.ge.4.or.i2psuffix.ge.4) i3=2`). So `/P`+`/P`,
+ * `/R`+`/R`, `/P`+plain and `/R`+plain all pack, but one `/P` anywhere makes the frame
+ * Type 2 and the partner's `/R` comes back off the air as `/P` — `F4CYH/P KD9TAW/R
+ * EN52` decodes as `F4CYH/P KD9TAW/P EN52`, a well-formed message naming a station
+ * that does not exist. The pair must fall back to the hashed forms, which carry both
+ * calls verbatim.
+ *
+ * The `/` must sit at position 4 or later (`index(...).ge.4`), matching the packer.
+ */
+export function suffixConflict(a: string, b: string): boolean {
+  const sfx = (c: string): string => {
+    const t = c.trim().toUpperCase()
+    return t.length >= 5 && (t.endsWith('/P') || t.endsWith('/R')) ? t.slice(-1) : ''
+  }
+  const [x, y] = [sfx(a), sfx(b)]
+  return x !== '' && y !== '' && x !== y
+}
+
+/**
+ * True when `call` can be the plain 28-bit callsign standing opposite a `<...>` hashed
+ * token — the only shape in which a hashed frame still carries a grid or a numeric
+ * report. `message.rs::packs_beside_hash`, keep the two in lockstep.
+ *
+ * `pack77_1` refuses Type 1/2 outright when a hashed token sits beside a call with ANY
+ * slash (`packjt77.f90:1183-1184`), and the frame falls to i3=4, which has a slot for
+ * neither field. So `<PJ4/K1ABC> KD9TAW EN52` keeps the grid while
+ * `<PJ4/K1ABC> KD9TAW/P EN52` loses it. Narrower than isStdCall ON PURPOSE.
+ */
+export function packsBesideHash(call: string): boolean {
+  const c = call.trim()
+  return !c.includes('/') && isStdCall(c)
 }
 
 /** The six messages as an ordered row list (panel rows / Alt+1…6 dispatch). */

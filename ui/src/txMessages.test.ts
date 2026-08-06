@@ -7,7 +7,9 @@ import {
   gridFromMessage,
   isIgnored,
   isStdCall,
+  packsBesideHash,
   snrForCall,
+  suffixConflict,
   stdMessageList,
   toggleIgnored,
   txGrid4,
@@ -198,6 +200,82 @@ describe('nonstandard-call (hashed) display parity', () => {
       expect(isStdCall(c), c).toBe(true)
     for (const c of ['PJ4/K1ABC', 'KD9TAW/QRP', 'KD9TAW/3', 'YW18FIFA', '', 'AB', '<W9XYZ>'])
       expect(isStdCall(c), c).toBe(false)
+  })
+  it('suffixConflict is a property of the PAIR — /P beside /R only', () => {
+    expect(suffixConflict('KD9TAW/R', 'F4CYH/P')).toBe(true)
+    expect(suffixConflict('KD9TAW/P', 'F4CYH/R')).toBe(true)
+    for (const [a, b] of [
+      ['KD9TAW/P', 'F4CYH/P'],
+      ['KD9TAW/R', 'F4CYH/R'],
+      ['KD9TAW/P', 'W9XYZ'],
+      ['KD9TAW', 'F4CYH/R'],
+      ['KD9TAW', 'W9XYZ'],
+      ['W1/P', 'F4CYH/R'], // '/' before position 4 is not a suffix to the packer
+    ])
+      expect(suffixConflict(a, b), `${a} × ${b}`).toBe(false)
+  })
+  it('packsBesideHash is narrower than isStdCall — any slash is refused', () => {
+    for (const c of ['KD9TAW', 'W9XYZ', '9A1A']) expect(packsBesideHash(c), c).toBe(true)
+    for (const c of ['KD9TAW/P', 'KD9TAW/R', 'PJ4/K1ABC', 'YW18FIFA'])
+      expect(packsBesideHash(c), c).toBe(false)
+  })
+})
+
+describe('the pairs the packer cannot express — panel parity with the air', () => {
+  // Every expectation below is the text the RUST round trip actually recovered off the
+  // air (tempo-core/tests/portable_suffix_air.rs, build → pack → waveform → decode),
+  // so the panel is pinned to the modem and not to itself.
+  const grid = 'EN52'
+  const gen = (myCall: string, dxCall: string) =>
+    stdMessageList(genStdMessages({ dxCall, myCall, myGrid: grid, snr: -7 }))
+
+  it('a /P × /R pair falls back to the hashed form rather than rename a station', () => {
+    // One `i3` per frame says what BOTH suffix bits mean, so `F4CYH/P KD9TAW/R EN52`
+    // goes on the air as `F4CYH/P KD9TAW/P EN52` — a station that does not exist. The
+    // hashed form carries both calls verbatim; the grid and the number are the price.
+    expect(gen('KD9TAW/R', 'F4CYH/P')).toEqual([
+      '<F4CYH/P> KD9TAW/R',
+      '<F4CYH/P> KD9TAW/R',
+      '<F4CYH/P> KD9TAW/R RRR',
+      '<F4CYH/P> KD9TAW/R RR73',
+      '<F4CYH/P> KD9TAW/R 73',
+      'CQ KD9TAW/R EN52', // a CQ has no pair — still an ordinary Type 1 frame
+    ])
+    expect(gen('KD9TAW/P', 'F4CYH/R')[0]).toBe('<F4CYH/R> KD9TAW/P')
+    // Same suffix on both sides packs fine and stays in the clear.
+    expect(gen('KD9TAW/P', 'F4CYH/P')[0]).toBe('F4CYH/P KD9TAW/P EN52')
+    expect(gen('KD9TAW/R', 'F4CYH/R')[1]).toBe('F4CYH/R KD9TAW/R -07')
+  })
+
+  it('a /P operator working a hashed DX rogers with RRR, so Tx3 stays tellable', () => {
+    // `packjt77.f90:1183-1184` refuses Type 1/2 when a hash sits beside any slashed
+    // call, so grid and number are unsendable. Showing them anyway made Tx1, Tx2 and
+    // Tx3 pack to identical bytes and stranded the partner's sequencer.
+    const m = gen('KD9TAW/P', 'PJ4/K1ABC')
+    expect(m).toEqual([
+      '<PJ4/K1ABC> KD9TAW/P',
+      '<PJ4/K1ABC> KD9TAW/P',
+      '<PJ4/K1ABC> KD9TAW/P RRR',
+      '<PJ4/K1ABC> KD9TAW/P RR73',
+      '<PJ4/K1ABC> KD9TAW/P 73',
+      'CQ KD9TAW/P EN52',
+    ])
+    expect(m[2]).not.toBe(m[0])
+    expect(m[2]).not.toBe(m[1])
+  })
+
+  it('every callsign-class pair names both stations, and Tx3–Tx5 never collide', () => {
+    for (const my of ['KD9TAW', 'KD9TAW/P', 'KD9TAW/R', 'YW18FIFA'])
+      for (const dx of ['W9XYZ', 'F4CYH/P', 'F4CYH/R', 'PJ4/K1ABC']) {
+        const m = gen(my, dx)
+        for (let i = 0; i < 5; i++) {
+          expect(m[i], `${my} × ${dx} tx${i + 1}`).toContain(my)
+          expect(m[i], `${my} × ${dx} tx${i + 1}`).toContain(dx)
+        }
+        for (let a = 2; a < 5; a++)
+          for (let b = 0; b < a; b++)
+            expect(m[a], `${my} × ${dx}: tx${a + 1} vs tx${b + 1}`).not.toBe(m[b])
+      }
   })
 })
 

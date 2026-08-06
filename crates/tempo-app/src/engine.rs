@@ -7231,7 +7231,7 @@ impl Engine {
         }
         // A 77-bit NONSTANDARD call (PJ4/K1ABC, YW18FIFA, KD9TAW/QRP) packs only as the
         // grid-less i3=4 CQ: that type has a slot for neither a grid nor a directed
-        // token, so mirror `qso::nonstandard_form` and clear BOTH. The packer does not
+        // token, so mirror `qso::hashed_form` and clear BOTH. The packer does not
         // truncate — it discards the affix SILENTLY and re-emits a well-formed CQ naming
         // a different station ("CQ PJ4/K1ABC FK52" decodes as "CQ K1ABC FK52"), which is
         // why we must not hand it one. A standard call keeps its 4-char grid (i3=1/2) and
