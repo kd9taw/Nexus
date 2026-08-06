@@ -32,6 +32,7 @@
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
 mod pouncer;
+mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
 use std::path::PathBuf;
@@ -15049,6 +15050,13 @@ pub fn run() {
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.set_min_size(Some(tauri::LogicalSize::new(900.0, 600.0)));
             }
+            // Restore the main window's saved size/position — clamped against the monitors
+            // attached NOW, not the ones it was saved on — and arm the save-on-close. Runs while
+            // the window is still hidden behind the splash, so the box is correct before the
+            // operator ever sees it (no open-then-jump). Without this call the whole feature is
+            // an unreferenced module: bug #10, the 4K operator who re-dragged the same corner
+            // every session.
+            window_state::install(app.handle());
             // Pounce detector. Emits `pounce` to every window when a rare one appears — the
             // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
             // panel windows get it too without tracking listener lifetimes.

@@ -290,7 +290,10 @@ mod tests {
 
     #[test]
     fn nothing_saved_leaves_the_window_alone() {
-        assert_eq!(restore(None, &[primary()], Some(primary()), MIN_INNER), None);
+        assert_eq!(
+            restore(None, &[primary()], Some(primary()), MIN_INNER),
+            None
+        );
     }
 
     #[test]
@@ -431,10 +434,12 @@ mod tests {
     fn the_last_grabbable_sliver_lands_and_one_px_further_does_not() {
         let inside = geom(1200.0, 800.0, 1920.0 - MARGIN, 100.0);
         let outside = geom(1200.0, 800.0, 1920.0 - MARGIN + 1.0, 100.0);
-        assert!(restore(Some(inside), &[primary()], Some(primary()), MIN_INNER)
-            .unwrap()
-            .position
-            .is_some());
+        assert!(
+            restore(Some(inside), &[primary()], Some(primary()), MIN_INNER)
+                .unwrap()
+                .position
+                .is_some()
+        );
         assert_eq!(
             restore(Some(outside), &[primary()], Some(primary()), MIN_INNER)
                 .unwrap()
@@ -506,15 +511,25 @@ mod tests {
             "logical 2900 is past this monitor's logical right edge (2880)"
         );
         assert_eq!(
-            restore(Some(on), &[primary(), secondary], Some(primary()), MIN_INNER)
-                .unwrap()
-                .position,
+            restore(
+                Some(on),
+                &[primary(), secondary],
+                Some(primary()),
+                MIN_INNER
+            )
+            .unwrap()
+            .position,
             Some((2800.0, 100.0))
         );
         assert_eq!(
-            restore(Some(off), &[primary(), secondary], Some(primary()), MIN_INNER)
-                .unwrap()
-                .position,
+            restore(
+                Some(off),
+                &[primary(), secondary],
+                Some(primary()),
+                MIN_INNER
+            )
+            .unwrap()
+            .position,
             None,
             "a point past the LOGICAL desktop is dropped, not replayed"
         );
@@ -584,7 +599,10 @@ mod tests {
         // Windows parks a minimised window near -32000,-32000; the quit cascade used to
         // persist exactly that for the band map.
         let parked = geom(1500.0, 950.0, -32000.0, -32000.0);
-        assert_eq!(capture(Some(geom(1400.0, 900.0, 10.0, 10.0)), parked, true), None);
+        assert_eq!(
+            capture(Some(geom(1400.0, 900.0, 10.0, 10.0)), parked, true),
+            None
+        );
     }
 
     #[test]
@@ -619,7 +637,10 @@ mod tests {
             maximized: true,
             ..geom(1920.0, 1040.0, 0.0, 0.0)
         };
-        assert_eq!(capture(Some(geom(0.0, 0.0, 0.0, 0.0)), cur, false), Some(cur));
+        assert_eq!(
+            capture(Some(geom(0.0, 0.0, 0.0, 0.0)), cur, false),
+            Some(cur)
+        );
     }
 
     #[test]
