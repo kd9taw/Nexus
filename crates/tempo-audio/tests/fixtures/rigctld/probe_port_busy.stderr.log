@@ -1,0 +1,2 @@
+WinErrorShow: serial error on CreateFileA:  failed with error 231: All pipe instances are busy.
+serial_open: serial port \\.\pipe\nexuscom is already open

@@ -1,0 +1,13 @@
+connect to localhost:60881 failed, (trying next interface): Network error 10061: No connection could be made because the target machine actively refused it.
+
+read_block_generic(): Timed out 1.36928 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+read_block_generic(): Timed out 1.38724 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+main: i/o error
+main: rig_close retcode=0
+connect to localhost:60881 failed, (trying next interface): Network error 10061: No connection could be made because the target machine actively refused it.
+
+read_block_generic(): Timed out 1.40854 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+main: rig_open retcode=0

@@ -749,6 +749,10 @@ pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
 /// Used by the baud ladder, which needs ONE read from a rig at ONE rate and then to be gone —
 /// a one-shot CLI, not a daemon holding a TCP port. Both binaries ship in the same Hamlib
 /// package on every platform Nexus targets, so if `rigctld` is present `rigctl` is too.
+///
+/// Gated on `serial` because its one caller is (`baud_ladder::rigctl_read`); without the gate the
+/// headless `cargo clippy --workspace --all-targets -- -D warnings` CI job fails it as dead code.
+#[cfg(feature = "serial")]
 pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {

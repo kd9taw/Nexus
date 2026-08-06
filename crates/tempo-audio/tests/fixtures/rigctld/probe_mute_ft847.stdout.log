@@ -1,0 +1,22 @@
+Opened rig model 1001, 'FT-847'
+error = rig_get_freq: cache miss age=10005ms, cached_vfo=Main, asked_vfo=Main, use_cached_freq=0
+rig_get_freq(2655): vfo_opt=0, model=1001
+get_freq_and_mode: vfo =Main 
+write_block(): TX 5 bytes
+read_block_generic called, direct=1
+read_block_generic(1202): retrying read timeout 1/1 timeout=500ms
+read_block_generic(): Timed out 1.38724 seconds after 0 chars, direct=1
+ft847: read_block returned -5
+rig_get_freq(2674): freqMainA=0, modeMainA=, widthMainA=0
+rig_get_freq(2674): freqMainB=0, modeMainB=, widthMainB=0
+rig_get_cache(332):  vfo=Main, current_vfo=Main
+rig_get_cache(527): vfo=Main, freq=0, mode=, width=0
+rig_set_cache_freq(172):  vfo=Main, current_vfo=Main
+*1:rig_get_freq: elapsed=1408ms
+rig_lock: client lock disengaged
+*1:rig.c(2791):rig_get_freq returning(-5) Communication timed out
+
+rigctl_parse.c(2216):rigctl_get_freq returning2(-5) Communication timed out
+
+Communication timed out
+

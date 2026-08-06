@@ -435,17 +435,46 @@ pub struct RigctlRead {
 
 /// Read what `rigctl` printed on stdout.
 ///
-/// ⚠️ **The frequency is taken from the FIRST line and only the first line.** rigctl prints the
-/// value it was asked for and nothing before it; when a command FAILS it prints an `error = …`
-/// blob instead — and that blob is many lines of Hamlib's own trace, in which a bare number can
-/// appear (`m`'s passband prints as one). Scanning for "the first line that parses as a number"
-/// would read a passband, or a fragment of a failure, as the rig's frequency.
+/// ⚠️ **The frequency is taken from the first line, or the second when a banner took the first,
+/// and never from further in.** rigctl prints the value it was asked for and nothing else before
+/// it; when a command FAILS it prints an `error = …` blob instead — and that blob is many lines
+/// of Hamlib's own trace, in which a bare number can appear (`m`'s passband prints as one).
+/// Scanning for "the first line that parses as a number" would read a passband, or a fragment of
+/// a failure, as the rig's frequency.
+///
+/// ⭐ **The banner, and why the window is two lines rather than one.** [`probe_args`] passes
+/// `-vvv` (it has to — see that function), and at that verbosity rigctl opens stdout with
+/// `Opened rig model 1001, 'FT-847'` before printing anything it was asked for. Measured against
+/// the bundled rigctl 4.7.1, `-vvv … f m` against a stand-in rig:
+///
+/// ```text
+/// Opened rig model 1001, 'FT-847'
+/// 14074000
+/// USB
+/// 2200
+/// ```
+///
+/// So a one-line window would have read `Opened rig model …` as the answer and turned **every
+/// healthy rung into [`BaudProbe::Silence`]** — which is why `-vvv` and this skip are one change
+/// and cannot be split.
+///
+/// The skip is "one leading line that is not a positive integer", not a match on the banner's
+/// wording, and that choice is deliberate. Wording-matching fails CLOSED if rigctl ever reworded
+/// it: every rung silent, an invented "your rig never answered", and nothing downstream that can
+/// notice. Skipping one non-numeric line fails OPEN in the one case it could be wrong — an error
+/// blob with no banner, whose second line happened to be a bare number — and there the
+/// plausibility conjunction in [`classify_hamlib_probe`] is exactly the backstop that rejects it
+/// (a stray passband like `2200` is inside no rig's RX coverage). Fail toward the check that
+/// exists.
 pub fn parse_rigctl_read(stdout: &str) -> RigctlRead {
     let mut lines = stdout.lines().map(|l| l.trim_end_matches('\r').trim());
-    let freq_hz = lines
-        .next()
-        .and_then(|l| l.parse::<u64>().ok())
-        .filter(|hz| *hz > 0);
+    let first = lines.next().unwrap_or("");
+    let value = if first.parse::<u64>().is_ok() {
+        first
+    } else {
+        lines.next().unwrap_or("")
+    };
+    let freq_hz = value.parse::<u64>().ok().filter(|hz| *hz > 0);
     if freq_hz.is_none() {
         return RigctlRead {
             freq_hz,
@@ -536,6 +565,22 @@ const OPEN_FAILURE_FRAGMENTS: &[&str] = &["does not exist", "is already open", "
 /// The one line of a failed `rigctl` run that says the port could not be opened, if it said so.
 /// A busy COM port is one of the commonest CAT faults and its verdict ("close WSJT-X/flrig") is
 /// completely different from a baud verdict, so it must not be reported as silence.
+///
+/// ⚠️ **Give it STDERR, and only stderr.** Hamlib prints an open failure through `rig_debug`,
+/// which writes to stderr; stdout carries only what rigctl was asked for (plus the `-vvv`
+/// banner) and, when a command failed, an `error = …` blob that names a READ timeout, never the
+/// open. Measured against the bundled rigctl 4.7.1 — `-vvv -m 1001 -s 9600 f`, and the captures
+/// are the four `tests/fixtures/rigctld/probe_*` files:
+///
+/// | state | rc | stdout | stderr |
+/// |---|---|---|---|
+/// | port not there (`-r COM99`) | 2 | *empty* | `serial_open: serial port COM99 does not exist` |
+/// | port held by another program | 2 | *empty* | `… error 231: All pipe instances are busy.` + `serial_open: … is already open` |
+/// | rig mute (opens, never answers) | 0 | banner + `error = …` blob | 13 lines, **no** open-failure fragment |
+/// | rig working | 0 | banner + `14074000` | 2 lines, **no** open-failure fragment |
+///
+/// Handing it stdout as well cannot help (the fragments are never there) and can only widen what
+/// a rig's own chatter could impersonate.
 pub fn open_failure_line(output: &str) -> Option<String> {
     output
         .lines()
@@ -764,17 +809,107 @@ pub fn compose_hamlib_ladder_message(r: &LadderReport, model_name: &str) -> Stri
     )
 }
 
-/// One `rigctl` run against the rig: `commands` executed in a single open, stdout returned.
+/// The argument vector for one rung, built where it can be read and tested — the same discipline
+/// as [`crate::rigctld_proc::rigctld_args`], and for the same reason: what is on this line is the
+/// whole difference between a diagnosis and a guess.
 ///
-/// **Read-only by construction.** The only commands any caller passes are `f` (get frequency)
+/// **Read-only by construction.** The only `commands` any caller passes are `f` (get frequency)
 /// and `m` (get mode) — Hamlib GET verbs. Nothing here can key or retune a radio.
 ///
-/// `--set-conf=timeout=300,retry=0` is a PROBE timeout, and the distinction matters: it governs
-/// only how fast a WRONG rate is abandoned, never how the daemon Nexus actually runs talks to the
-/// rig (that keeps the backend's own value). At a correct rate the answer is bounded by the wire
-/// — an FT-847's 5-byte reply at its slowest rate, 4800 baud, is ~10 ms — so 300 ms is some 30×
-/// headroom. Measured effect on a rung that gets nothing: 8.1 s → 6.2 s (FT-847, bundled
-/// rigctl 4.7.1).
+/// ⭐ **`-vvv`, and it is not optional.** Hamlib prints through `rig_debug`, and rigctl leaves
+/// the debug level at `RIG_DEBUG_NONE` unless it is asked. Measured, bundled rigctl 4.7.1: a port
+/// that does not exist and a port another program is holding **both exit 2 having printed nothing
+/// at all — zero bytes on stdout AND stderr** — so without this flag [`open_failure_line`] has
+/// nothing to find, every rung of a busy port comes back [`BaudProbe::Silence`], and an operator
+/// whose COM port is held by WSJT-X walks the whole sweep to be told to check the cable. The exit
+/// code cannot stand in for it either: a Kenwood rejecting mis-framed bytes fails `rig_open` and
+/// exits 2 as well, with the same empty streams. `rc=2` means "no value", not "no port".
+///
+/// It is also parity: the live daemon is launched with `-vvv` for this very reason
+/// ([`crate::rigctld_proc::rigctld_args`]). Measured cost of the flag: none (3.56 s vs 3.56 s on
+/// a rig that answers, 4.15 s vs 4.14 s on one that does not).
+///
+/// ⚠️ It cannot ship without the [`parse_rigctl_read`] change: `-vvv` also puts an `Opened rig
+/// model …` banner on stdout ahead of the value.
+///
+/// ⭐ **No `--set-conf`, and that is the second fix.** This used to pass
+/// `--set-conf=timeout=300,retry=0`, justified by wire time ("a 5-byte reply at 4800 baud is
+/// ~10 ms"). Wire time is not what those numbers are for — the rig's turnaround is — and every
+/// backend the Hamlib ladder can reach declares a longer budget than 300 ms, most of them with
+/// retries this was deleting (`rigctl -m N -u`, bundled 4.7.1, measured):
+///
+/// | model | declares |
+/// |---|---|
+/// | 1001 FT-847 | 1000 ms, 0 retry |
+/// | 2004 TS-570D · 2016 TS-570S · 2010 TS-870S | 500 ms, **10 retry** |
+/// | 2011 TS-940S | 600 ms, 10 retry |
+/// | 3073 IC-7300 · 2053 FX-4 · 2028 TS-480 | 500–1000 ms, 3 retry |
+/// | 1042 FTDX-10 · 1031 FT-980 | 2000 ms, 3 retry |
+/// | 1020 FT-817 · 1041 FT-818 | 3000 ms, 5 retry |
+///
+/// **The probe is issuing a verdict about the daemon, so it has to hold the daemon's
+/// conversation.** [`crate::rigctld_proc::rigctld_args`] passes no `--set-conf` at all — the
+/// daemon runs at the backend's declared timeout and retries — so any narrowing here makes the
+/// probe answer a question nobody asked, and a rung it calls silent is then a rate the daemon may
+/// well have read. That lands hardest on the three Kenwoods whose transcribed rate rows were
+/// deleted (TS-570D/S, TS-870S: 500 ms × 10 retries), for whom this ladder is now the only thing
+/// there is.
+///
+/// The alternative — read the declared timeout out of the caps dump this module already parses
+/// and pass it back — was rejected as *the same numbers with a parser in front of them*: passing
+/// the declared timeout while keeping `retry=0` would still be stricter than the daemon on eight
+/// of the backends above, and passing declared timeout AND declared retries is byte-for-byte what
+/// Hamlib does when handed nothing. See [`run_hamlib`] for what dropping it costs.
+///
+/// Pure, and separated out so it can be read and asserted on without a rig — but gated with its
+/// caller, like [`crate::rigctld_proc::resolve_rigctl`], so the headless workspace clippy job
+/// does not see it as dead code.
+#[cfg(feature = "serial")]
+fn probe_args(
+    port: &str,
+    baud: u32,
+    rig_model: u32,
+    keying: Option<crate::rig::SerialLine>,
+    commands: &[&str],
+) -> Vec<String> {
+    let mut args = vec![
+        "-vvv".to_string(),
+        "-m".to_string(),
+        rig_model.to_string(),
+        "-r".to_string(),
+        port.to_string(),
+        "-s".to_string(),
+        baud.to_string(),
+    ];
+    // Hand Hamlib the same keying override the live daemon gets, so `rig_open` lowers the line
+    // it keys with instead of leaving the driver's power-on HIGH on a keyed interface. See
+    // [`LadderGate::keying`] — this is parity with the daemon that just failed, not new
+    // behaviour, and it is what keeps a five-rung sweep from being five transmissions.
+    if let Some(line) = keying {
+        args.push("-P".to_string());
+        args.push(crate::rigctld_proc::ptt_type_token(line).to_string());
+        args.push("-p".to_string());
+        args.push(port.to_string());
+    }
+    args.extend(commands.iter().map(|c| c.to_string()));
+    args
+}
+
+/// What one `rigctl` run printed, kept on the stream it printed it on.
+///
+/// They used to be concatenated. They cannot be: [`open_failure_line`] must see stderr and only
+/// stderr, and [`parse_rigctl_read`] must see stdout from its first line — gluing them made the
+/// first impossible (the flag that produces the text was missing) and would now corrupt the
+/// second.
+#[cfg(feature = "serial")]
+struct RigctlOutput {
+    /// What rigctl was asked for, behind the `-vvv` banner.
+    stdout: String,
+    /// What Hamlib had to say about it, including an open failure.
+    stderr: String,
+}
+
+/// One `rigctl` run against the rig: [`probe_args`] executed in a single open.
 #[cfg(feature = "serial")]
 fn rigctl_read(
     port: &str,
@@ -782,30 +917,9 @@ fn rigctl_read(
     rig_model: u32,
     keying: Option<crate::rig::SerialLine>,
     commands: &[&str],
-) -> Result<String, String> {
-    let (model, baud) = (rig_model.to_string(), baud.to_string());
-    let mut args = vec![
-        "-m",
-        model.as_str(),
-        "-r",
-        port,
-        "-s",
-        baud.as_str(),
-        "--set-conf=timeout=300,retry=0",
-    ];
-    // Hand Hamlib the same keying override the live daemon gets, so `rig_open` lowers the line
-    // it keys with instead of leaving the driver's power-on HIGH on a keyed interface. See
-    // [`LadderGate::keying`] — this is parity with the daemon that just failed, not new
-    // behaviour, and it is what keeps a five-rung sweep from being five transmissions.
-    if let Some(line) = keying {
-        args.push("-P");
-        args.push(crate::rigctld_proc::ptt_type_token(line));
-        args.push("-p");
-        args.push(port);
-    }
-    args.extend_from_slice(commands);
+) -> Result<RigctlOutput, String> {
     let mut cmd = std::process::Command::new(crate::rigctld_proc::resolve_rigctl());
-    cmd.args(&args);
+    cmd.args(probe_args(port, baud, rig_model, keying, commands));
     cmd.stdin(std::process::Stdio::null());
     #[cfg(windows)]
     {
@@ -814,15 +928,14 @@ fn rigctl_read(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     match cmd.output() {
-        // rigctl exits 0 even when every command failed (observed), so the exit status says
-        // nothing and stdout is the whole answer. stderr is folded in only to look for an
-        // open failure, whose wording matters more than where it was printed.
-        Ok(out) => {
-            let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
-            s.push('\n');
-            s.push_str(&String::from_utf8_lossy(&out.stderr));
-            Ok(s)
-        }
+        // The exit status is not consulted: rigctl exits 0 when a command failed but the port
+        // opened, and 2 both for a port it could not open AND for a backend whose `rig_open`
+        // handshake was answered with garbage. What separates those is what it PRINTED, and
+        // where.
+        Ok(out) => Ok(RigctlOutput {
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -846,12 +959,15 @@ fn probe_rate_via_hamlib(
         Ok(out) => out,
         Err(e) => return BaudProbe::OpenFailed(e),
     };
-    if let Some(line) = open_failure_line(&out) {
+    // The port first, off STDERR, where Hamlib says so — see [`open_failure_line`]. A port
+    // another program is holding is a different fault with a different cure, and reporting it as
+    // silence sends the operator after a cable.
+    if let Some(line) = open_failure_line(&out.stderr) {
         return BaudProbe::OpenFailed(line);
     }
-    match classify_hamlib_probe(&parse_rigctl_read(&out), caps) {
+    match classify_hamlib_probe(&parse_rigctl_read(&out.stdout), caps) {
         BaudProbe::Reply { .. } => match rigctl_read(port, baud, rig_model, keying, &["f", "m"]) {
-            Ok(confirm) => classify_hamlib_probe(&parse_rigctl_read(&confirm), caps),
+            Ok(confirm) => classify_hamlib_probe(&parse_rigctl_read(&confirm.stdout), caps),
             Err(e) => BaudProbe::OpenFailed(e),
         },
         other => other,
@@ -863,15 +979,34 @@ fn probe_rate_via_hamlib(
 ///
 /// ⏱ **What it costs, and when the operator pays it.** It runs ONLY after a Test CAT that has
 /// already failed — never when a rig is picked, which is the whole point of deleting the rate
-/// rows: choosing a radio now imposes nothing and waits for nothing. Measured per rung that gets
-/// no answer, bundled rigctl 4.7.1 driving a stand-in rig that accepts and stays mute: FT-847
-/// 6.2 s, Kenwood TS-570D/570S/870S 4.6 s. With the rungs bounded by
-/// [`RigCaps::serial_rates`] the worst complete sweep in the covered set is the FT-847's five
-/// rungs — 4800..57600, so 4800/9600/19200/38400/57600 — at about **31 s**, and a rung that
-/// answers ends it early (a hit costs ~2.5 s more for the confirm). A fixed-rate rig is one rung.
+/// rows: choosing a radio now imposes nothing and waits for nothing. A rung that ANSWERS ends the
+/// sweep there, so the full length is only ever paid when nothing answers at all.
 ///
-/// `BUDGET` is a guard against a backend slower than any measured here, not a routine
-/// truncation: at 45 s it cannot fire on the ten rigs on this path. If it ever does, the rungs it
+/// **A silent rung costs whatever the backend's own read budget costs**, and that is the price of
+/// [`probe_args`] no longer narrowing it. Measured per silent rung against a stand-in rig that
+/// accepts and stays mute, bundled rigctl 4.7.1 (same harness, `--set-conf=timeout=300,retry=0`
+/// vs nothing; these absolutes carry ~3.5 s of harness overhead a serial port does not pay, so
+/// read the columns against each other):
+///
+/// | model | declared | with the old override | at the backend's own budget |
+/// |---|---|---|---|
+/// | 2004 TS-570D | 500 ms × 10 | 6.75 s | **6.37 s** (cheaper: `rig_open` fails fast) |
+/// | 1001 FT-847 | 1000 ms × 0 | 11.02 s | 12.25 s |
+/// | 1042 FTDX-10 | 2000 ms × 3 | 11.22 s | **18.15 s** |
+/// | 1020 FT-817 / 1041 FT-818 | 3000 ms × 5 | 12.75 s | **39.93 s** |
+///
+/// So the Kenwoods are unchanged, the FT-847's five-rung sweep goes from ~31 s to ~40 s (the
+/// figure the round-five review measured on real serial), and the Yaesu newcat rigs are the
+/// outlier the old override was hiding: an FT-817 that answers nothing cannot be swept inside any
+/// budget an operator would sit through, and never could — at 12.75 s a rung it already
+/// overran 45 s.
+///
+/// `BUDGET` is a ceiling on the wait, not a routine truncation, and it is sized off that table:
+/// the slowest backend a complete sweep is promised for is the FTDX-10, whose widest ladder is
+/// five rungs, so the last rung must be allowed to START at 4 × 18.15 s ≈ 73 s. **90 s** clears
+/// that; the FT-847 (≈ 61 s for five) and every Kenwood (≈ 45 s for seven) clear it comfortably.
+/// It was 45 s, which the FTDX-10 would now overrun — a budget left there would have converted
+/// this fix into a truncated sweep for a current, common radio. When it does fire, the rungs it
 /// declined are reported as untested rather than as silence.
 #[cfg(feature = "serial")]
 pub fn run_hamlib(
@@ -881,7 +1016,7 @@ pub fn run_hamlib(
     gate: LadderGate,
     caps: &RigCaps,
 ) -> LadderReport {
-    const BUDGET: std::time::Duration = std::time::Duration::from_secs(45);
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(90);
     let deadline = std::time::Instant::now() + BUDGET;
     run_ladder_over(
         port,
@@ -1243,6 +1378,163 @@ mod tests {
             Some("serial_open: serial port COM7 is already open")
         );
         assert!(open_failure_line("14074000\nUSB\n2200\n").is_none());
+    }
+
+    /// ⭐ FAILING-FIRST for D1, half one: the `-vvv` banner.
+    ///
+    /// `probe_args` has to pass `-vvv` or a port another program is holding prints NOTHING and
+    /// comes back as silence (the other half, below). At `-vvv` rigctl opens stdout with
+    /// `Opened rig model 1001, 'FT-847'` — so a one-line window reads the banner as the answer
+    /// and **every healthy rung becomes [`BaudProbe::Silence`]**. The two halves are one change;
+    /// this is the test that fails if only the flag lands.
+    ///
+    /// The capture is verbatim `rigctl.exe -vvv -m 1001 -r <stand-in> -s 9600 f m`, bundled
+    /// 4.7.1.
+    #[test]
+    fn the_vvv_banner_never_becomes_the_answer_and_never_hides_it() {
+        let caps = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ft847.log"));
+        let banner = include_str!("../tests/fixtures/rigctld/probe_working_ft847.stdout.log");
+        assert!(
+            banner
+                .lines()
+                .next()
+                .unwrap()
+                .starts_with("Opened rig model"),
+            "the capture must actually carry the banner or this proves nothing: {banner:?}"
+        );
+        let read = parse_rigctl_read(banner);
+        assert_eq!(
+            read.freq_hz,
+            Some(14_074_000),
+            "behind the banner: {banner:?}"
+        );
+        assert_eq!(read.mode, ModeRead::Named("USB".into()));
+        assert_eq!(
+            classify_hamlib_probe(&read, &caps),
+            BaudProbe::Reply {
+                freq_hz: Some(14_074_000)
+            },
+            "a healthy rung must stay a hit once the flag is on"
+        );
+        // A rig that opens and says nothing still reads as silence THROUGH the banner: the line
+        // under it is the `error = …` blob, not a number.
+        let mute = include_str!("../tests/fixtures/rigctld/probe_mute_ft847.stdout.log");
+        assert_eq!(parse_rigctl_read(mute).freq_hz, None, "{mute}");
+        assert_eq!(
+            classify_hamlib_probe(&parse_rigctl_read(mute), &caps),
+            BaudProbe::Silence
+        );
+        // The window is TWO lines, never three: the skip may step over a banner, never into a
+        // blob. `2200` here is `m`'s passband three lines down — the shape that made the
+        // one-line rule right in the first place.
+        assert_eq!(
+            parse_rigctl_read("Opened rig model 1001, 'FT-847'\nnot a number\n2200\n").freq_hz,
+            None
+        );
+        // And the un-bannered shape still parses, so this is not a rule about position 2.
+        assert_eq!(
+            parse_rigctl_read("14074000\nUSB\n2200\n").freq_hz,
+            Some(14_074_000)
+        );
+    }
+
+    /// ⭐ FAILING-FIRST for D1, half two: WHICH STREAM the open failure is on.
+    ///
+    /// All four captures are verbatim from the bundled rigctl 4.7.1 at `-vvv`; the port-busy one
+    /// is a Windows named pipe whose single instance was held by another process, which is the
+    /// same `ERROR_*` path a COM port held by WSJT-X takes.
+    ///
+    /// The point of the test is the **separation**: an open failure appears on stderr and only
+    /// stderr, and a rig that merely stayed mute puts nothing there that could be mistaken for
+    /// one — including a line that says "failed" for an unrelated reason.
+    #[test]
+    fn the_four_states_a_rung_can_be_in_separate_on_the_streams_rigctl_prints_them_on() {
+        let missing = include_str!("../tests/fixtures/rigctld/probe_missing_port.stderr.log");
+        let busy = include_str!("../tests/fixtures/rigctld/probe_port_busy.stderr.log");
+        let mute_err = include_str!("../tests/fixtures/rigctld/probe_mute_ft847.stderr.log");
+        let mute_out = include_str!("../tests/fixtures/rigctld/probe_mute_ft847.stdout.log");
+        let work_out = include_str!("../tests/fixtures/rigctld/probe_working_ft847.stdout.log");
+        // 1. The port is not there.
+        assert_eq!(
+            open_failure_line(missing).as_deref(),
+            Some("serial_open: serial port COM99 does not exist")
+        );
+        // 2. Another program is holding it — a different fault with a different cure.
+        assert_eq!(
+            open_failure_line(busy).as_deref(),
+            Some("serial_open: serial port \\\\.\\pipe\\nexuscom is already open")
+        );
+        // 3. The port opened and the rig never answered. Nothing on stderr may read as an open
+        //    failure — and this capture DOES contain the word "failed", on a line about an
+        //    unrelated connect retry, which is exactly the impersonation the fragments must not
+        //    fall for.
+        assert!(mute_err.contains("failed"), "precondition: {mute_err}");
+        assert_eq!(open_failure_line(mute_err), None, "{mute_err}");
+        // …and stdout could never have carried it, which is why folding the streams together
+        // could not have worked even with the flag on.
+        assert_eq!(open_failure_line(mute_out), None, "{mute_out}");
+        // 4. The rig answered.
+        assert_eq!(open_failure_line(work_out), None, "{work_out}");
+        assert_eq!(
+            parse_rigctl_read(work_out).freq_hz,
+            Some(14_074_000),
+            "{work_out}"
+        );
+    }
+
+    /// ⭐ FAILING-FIRST for D1 + D2 on the one line that produces all of it: the argument vector.
+    ///
+    /// Two properties, and each is a measured defect:
+    /// - `-vvv`, or Hamlib prints nothing at all for a port it cannot open (rc 2, zero bytes on
+    ///   both streams) and a busy port is reported as silence;
+    /// - no `--set-conf`, because the probe is issuing a verdict about the daemon and
+    ///   [`crate::rigctld_proc::rigctld_args`] gives the daemon none — every narrowing here is a
+    ///   rung the daemon might have read being called silent.
+    #[test]
+    #[cfg(feature = "serial")]
+    fn the_probe_speaks_and_never_narrows_the_budget_the_daemon_itself_runs_at() {
+        let args = probe_args("COM4", 9600, 1001, None, &["f"]);
+        assert!(
+            args.iter().any(|a| a == "-vvv"),
+            "without it a port that cannot be opened prints nothing at all: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.starts_with("--set-conf")),
+            "a probe stricter than the daemon it is judging invents silence: {args:?}"
+        );
+        // The daemon's own line carries no --set-conf either; that is the whole standard.
+        let daemon = crate::rigctld_proc::rigctld_args(
+            1001,
+            "COM4",
+            9600,
+            4532,
+            false,
+            None,
+            crate::rigctld_proc::ControlLines::default(),
+        );
+        assert!(
+            !daemon.iter().any(|a| a.starts_with("--set-conf")),
+            "if the daemon ever narrows its budget, the probe must follow it there: {daemon:?}"
+        );
+        // The rest of the line is unchanged, and the keying override is still on EVERY rung —
+        // without it a serial driver's power-on-HIGH RTS makes a sweep five transmissions.
+        assert_eq!(
+            args,
+            ["-vvv", "-m", "1001", "-r", "COM4", "-s", "9600", "f"]
+        );
+        assert_eq!(
+            probe_args(
+                "COM4",
+                4800,
+                2004,
+                Some(crate::rig::SerialLine::Rts),
+                &["f", "m"]
+            ),
+            [
+                "-vvv", "-m", "2004", "-r", "COM4", "-s", "4800", "-P", "RTS", "-p", "COM4", "f",
+                "m"
+            ]
+        );
     }
 
     // ---- B2: the sweep ----
