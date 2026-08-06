@@ -6006,6 +6006,13 @@ impl Engine {
                 self.station.pending_hunt = None;
             }
         }
+        // MEMORY FIRST — see the contract on `StationCore::append_to_log`. `save`
+        // rewrites the whole log from memory, and the append below stamps the
+        // fingerprint that says disk and memory agree. In the other order that claim
+        // is false until the end of this function, and an unwind inside it (the two
+        // `spawn`s below are the live candidates) leaves the contact on disk, out of
+        // memory and unrecoverable — the next rewrite deletes it.
+        self.station.logbook.add(rec.clone());
         // Through the station's append (not a bare `Logbook::append`) so the shared
         // log's freshness fingerprint moves with the file. Skip it and the recovery
         // gate misses on the next upload stamp / Needed-board poll and re-parses the
@@ -6021,11 +6028,10 @@ impl Engine {
             self.station.pending_uploads.pop_front();
         }
         self.station.pending_uploads.push_back(PendingUpload {
-            rec: rec.clone(),
+            rec,
             legs: upload_legs::ALL,
             attempts: 0,
         });
-        self.station.logbook.add(rec);
         self.station.refresh_worked_index();
     }
 
@@ -18143,6 +18149,33 @@ mod tests {
         // A re-import replaces the set wholesale (the CSV is the full current picture).
         e.set_hunted_parks_import(vec!["US-9999".into()]);
         assert!(e.park_worked("US-9999") && !e.park_worked("US-1234"));
+    }
+
+    #[test]
+    fn a_logged_contact_reaches_memory_before_it_reaches_the_file() {
+        // ORDER, and it is the difference between keeping a QSO and deleting it. The append
+        // stamps the freshness fingerprint that says "the file holds exactly what we hold".
+        // Written before the contact is in memory, that is a lie for the width of everything
+        // that follows it here — two `std::thread::spawn` calls among them, and spawn panics
+        // when the OS refuses a thread. Unwind there and the contact sits on disk, absent from
+        // memory, with the gate suppressing the re-read that would pull it back: the next full
+        // rewrite writes memory over the file and the just-logged QSO is gone.
+        //
+        // The guard is the debug-build invariant inside `StationCore::append_to_log`
+        // (`disk ⊆ memory`); with the two lines in the old order this test panics there.
+        let path =
+            std::env::temp_dir().join(format!("nexus_logqso_order_{}.adi", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_log_path(path.clone());
+
+        e.log_qso(qrec("T22TT", "30m"));
+
+        assert_eq!(e.get_log().len(), 1, "in memory");
+        let on_disk = tempo_core::logbook::Logbook::load(&path);
+        assert_eq!(on_disk.len(), 1, "and on disk");
+        assert_eq!(on_disk.records()[0].call, "T22TT");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

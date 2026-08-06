@@ -589,6 +589,30 @@ impl StationCore {
     /// BEFORE their mutation, while our copy still holds the record being changed.
     /// No-op without a log path or on a read error.
     /// Returns whether the disk was actually re-read (fingerprint moved).
+    ///
+    /// # What this costs: an EDIT made in the OTHER instance arrives as a DUPLICATE
+    ///
+    /// The contract above covers edits made HERE. It cannot cover an edit made
+    /// THERE. A QSO has no stable id in the ADIF, so identity is
+    /// (call, band, mode-class, contact second) — and a correction usually changes
+    /// one of those. Instance A fixes a mis-logged time, 12:00 → 12:05, and rewrites
+    /// the file; we still hold the 12:00 row; this recovery sees 12:05 as a contact
+    /// we do not have and APPENDS it. From then on both instances hold two rows for
+    /// one QSO — stably, permanently, and in the file — and both are eligible to be
+    /// uploaded (`lotw_unsent_indices` counts them separately, so LoTW is offered two
+    /// QSOs for one contact). Same for a corrected callsign or band. An edit that
+    /// keeps all four key fields pairs normally, and OUR copy of the edited field is
+    /// what the next rewrite writes back: that correction is silently reverted.
+    ///
+    /// **This is the chosen trade, not an oversight.** The only key that could
+    /// recognise 12:05 as "the 12:00 row, edited" is a fuzzy one, and fuzz here is
+    /// what mis-paired two distinct contacts with one station inside a day and
+    /// destroyed one of them (see [`tempo_core::reconcile::merge_own_disk`]). A
+    /// duplicate is on screen and one delete away; a silently reverted correction is
+    /// invisible, and a mis-pairing is a QSO gone. Pinned by
+    /// `merge_own_disk_leaves_a_cross_instance_edit_as_a_visible_duplicate`; told to
+    /// the operator in the CHANGELOG. Making an edit detectable instead needs a
+    /// per-record id persisted in the ADIF, which no existing log carries.
     fn recover_external_appends(&mut self) -> bool {
         let Some(path) = self.log_path.clone() else {
             return false;
@@ -646,11 +670,28 @@ impl StationCore {
     /// re-derived through the same [`adif_record`] the append writes; if the two ever
     /// drift the length check simply misses and we fall back to re-reading.
     ///
+    /// # MEMORY FIRST — the caller's half of the contract
+    ///
+    /// `recs` must ALREADY be in `self.logbook`, as its last records, before this is
+    /// called. The fingerprint recorded below says "the file holds exactly what we
+    /// hold"; append a record we have not added to memory yet and that claim is false
+    /// for the width of whatever runs next. Unwind in that window — `Engine::log_qso`
+    /// spawns two threads there, and `std::thread::spawn` panics when the OS refuses
+    /// one — and the contact is on disk, absent from memory, with the gate saying the
+    /// two agree: the next full rewrite writes memory over the file and DELETES the
+    /// contact just logged. Nothing pulls it back, because the gate is what would have
+    /// re-read it. Memory is the source of truth for `save`, so memory is written
+    /// first, always. Checked here in debug builds, where the invariant is relied on.
+    ///
     /// [`adif_record`]: tempo_core::logbook::adif_record
     pub(crate) fn append_to_log(&mut self, recs: &[QsoRecord]) {
         let Some(path) = self.log_path.clone() else {
             return;
         };
+        debug_assert!(
+            self.logbook.records().ends_with(recs),
+            "append_to_log: the records must already be in memory (see the contract above)"
+        );
         let before = log_file_stamp(&path);
         let mut accountable = before.is_some() && before == self.last_log_mtime;
         let mut written = 0u64;
@@ -1267,10 +1308,10 @@ mod grid_tests {
         // Instance A appends a contact we never see in memory.
         Logbook::append(&path, &rec("W3CCC", "40m", "IO91")).unwrap();
 
-        // We log our own contact — append first, then memory, as log_qso does.
+        // We log our own contact — memory first, then the file, as log_qso does.
         let k = rec("K5XYZ", "20m", "FN31");
+        sc.logbook.add(k.clone());
         sc.append_to_log(std::slice::from_ref(&k));
-        sc.logbook.add(k);
         assert!(
             sc.last_log_mtime.is_none(),
             "a file we cannot account for must not be stamped as ours"
