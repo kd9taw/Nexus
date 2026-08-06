@@ -18,28 +18,26 @@
 //! to the synthetic round-trip suite in `tests/roundtrip.rs` — both must
 //! hold for any release.
 //!
-//! **Re-baselined 2026-08-05 (blind mid-picture decode).** The filter
-//! used to be `ImageComplete { partial: false, .. }`, with `partial:
-//! false` as a *literal sub-pattern* — so an `ImageComplete { partial:
-//! true }` did not match, was not counted, and left both assertions
-//! green. That was a hole precisely where this file's whole purpose
-//! lies: the no-VIS decode path emits partials, and a decoder that
-//! hallucinated pictures out of the Zarya noise and stamped them
+//! **Tightened 2026-08-06, and it stays tightened.** The filter used to
+//! be `ImageComplete { partial: false, .. }`, with `partial: false` as a
+//! *literal sub-pattern* — so an `ImageComplete { partial: true }` did
+//! not match, was not counted, and left both assertions green. That was
+//! a hole exactly where this file's purpose lies: a decoder that
+//! hallucinated a picture out of the Zarya noise and stamped it
 //! `partial: true` would have passed the test that exists *because of
-//! that incident*. The guard now counts every `ImageComplete`. It passed
-//! before the blind path was written and passes after — it costs
-//! nothing and closes the hole rather than leaving the feature to fall
-//! into it. Adversarial coverage beyond noise and silence (SSB speech, a
-//! CW pileup keyed on 1200 Hz, a bare periodic sync train, and a sync
-//! train with a steady carrier between the pulses) lives in
-//! `tests/partial_decode.rs`.
+//! that incident*. Counting every `ImageComplete` still left one more
+//! thing unsaid — a decoder that announced a lock and then never emitted
+//! an image would also have passed — so the guard now requires the event
+//! stream to be **empty**, the same bar `tests/nexus_acceptance.rs`
+//! holds noise to.
 //!
-//! **Tightened again 2026-08-06.** Counting images still left one thing
-//! unsaid: a decoder that announced `SyncLocked` on the Zarya noise and
-//! then never emitted an image would have passed. A lock is the claim
-//! "this is a picture", and on this audio that claim is false whether or
-//! not pixels follow, so the guard now requires the event stream to be
-//! empty — the same bar `tests/nexus_acceptance.rs` holds noise to.
+//! Both forms of the hole were found while a no-VIS ("blind") decode
+//! path was being written; that path was reverted on 2026-08-06 as
+//! unsound. The guard is kept in its strict form regardless. It is a
+//! better statement of what this file means — *this audio is not a
+//! picture, and nothing about it may be reported as one* — it costs
+//! nothing, and it holds whether or not anything ever tries to decode
+//! without a header again.
 
 #![allow(clippy::expect_used, clippy::cast_precision_loss)]
 
@@ -70,7 +68,7 @@ impl Lcg {
 }
 
 /// Count every emitted image, partial or not. Do NOT narrow this to
-/// `partial: false` — see the re-baselining note in the module header.
+/// `partial: false` — see the tightening note in the module header.
 fn count_complete_images(events: &[SstvEvent]) -> usize {
     events
         .iter()
