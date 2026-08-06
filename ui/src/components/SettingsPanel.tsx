@@ -251,6 +251,9 @@ export const RIG_FIXED_BAUD = new Map<number, number>([
   [2021, 4800], // K2
   [2050, 9600], // Discovery TX-500
   [2053, 115200], // FX-4/C/CR/L
+  // Icom — the IC-726 alone in its family declares one rate (1200..1200); its
+  // IC-725/728/729 siblings are 1200..9600 and are therefore left to the operator.
+  [3015, 1200], // IC-726
   // Xiegu
   [3088, 19200], // G90
   // Ten-Tec
@@ -2987,44 +2990,30 @@ export function SettingsPanel({
                       Thetis field report was a rig served on a port that is Thetis's TCI
                       default, not its CAT default. Read the port out of the program.
 
-                      ⚠️ WHICH BOX IS THE RIGHT BOX DEPENDS ON THE MODEL, so this sentence is
-                      gated on it. This row renders on `rigConn === 'network'` alone, so an
-                      unconditional claim about port 50001 is a claim about EVERY model — and
-                      "50001 is not a CAT port" is false for the one model the same sentence
-                      sends the operator to find. `rigmodels` ships (7, "TCI (SunSDR /
-                      ExpertSDR)"), the bundled libhamlib-4.dll carries tci1x.c whose own
-                      default is 127.0.0.1:50001, and `service.rs` spawns
-                      `rigctld -m 7 -r <that address>`. Tick Show all models, pick 7, and
-                      50001 is exactly what belongs in this field.
+                      ⚠️ THIS SENTENCE HAS BEEN WRONG TWICE. It first said TCI was "a WebSocket
+                      protocol Nexus can't drive" (false — Hamlib has a TCI backend). It was then
+                      rewritten to send the operator to model 7, on the evidence that
+                      `strings libhamlib-4.dll` contains `tci1x.c`. That does not follow, and it
+                      was checked the wrong way: source strings can be present while the backend
+                      is not registered in the build. Measured on the real delivery path —
+                        rigctld.exe -m 7 -r 127.0.0.1:50001  ->  "Unknown rig num 7, or
+                        initialization error."
+                      while `-m 1` starts fine, and `rigctl -l` lists no TCI/Expert/SunSDR entry
+                      at all. Model 7 was removed from the catalog (2026-08-06); pointing anyone
+                      at it was pointing them at a daemon that refuses to start.
 
-                      Nothing here claims a Hamlib maturity level: `rig_caps.status` in the
-                      shipped DLL is an enum, not a string, so no part of this build can check
-                      such a claim, and an unbacked one in shipped UI text is how the previous
-                      wording went stale. */}
-                  {form.rigModel === 7 ? (
-                    <span className="settings-hint">
-                      Running an SDR program? Read the port out of the program, don't guess it:{' '}
-                      You have the <strong>TCI</strong> model (7) selected, so this field wants
-                      the <em>TCI Server</em> port — <strong>Thetis</strong> → Setup ▸
-                      Serial/Network/Midi CAT ▸ <em>TCI Server</em>, factory 50001, i.e.
-                      127.0.0.1:50001, which is also what Hamlib's TCI backend defaults to.
-                      (The <em>TCP/IP CAT Server</em> box beside it, factory 13013, is the other
-                      route — it needs a CAT profile such as "Thetis", not model 7.) Whatever
-                      the program shows, type that.
-                    </span>
-                  ) : (
-                    <span className="settings-hint">
-                      Running an SDR program? Read the port out of the program, don't guess it:{' '}
-                      <strong>Thetis</strong> → Setup ▸ Serial/Network/Midi CAT ▸{' '}
-                      <em>TCP/IP CAT Server</em> (its own box, factory 13013 — with a CAT
-                      profile selected it is <em>not</em> the TCI Server box next to it,
-                      factory 50001: TCI is a separate protocol with its own Hamlib model,
-                      "TCI (SunSDR / ExpertSDR)" (model 7, under Show all models). Pick that
-                      model and 50001 becomes the right number; with this one, the CAT server
-                      above is the route we recommend); <strong>SmartSDR CAT</strong> → 5002;{' '}
-                      <strong>piHPSDR</strong> → 19090. Whatever it shows, type that.
-                    </span>
-                  )}
+                      The check that settles this class is one command: start rigctld on the
+                      model and see whether it does. Do not infer a backend from a grep. */}
+                  <span className="settings-hint">
+                    Running an SDR program? Read the port out of the program, don't guess it:{' '}
+                    <strong>Thetis</strong> → Setup ▸ Serial/Network/Midi CAT ▸{' '}
+                    <em>TCP/IP CAT Server</em> (its own box, factory 13013 — not the{' '}
+                    <em>TCI Server</em> box beside it, factory 50001; TCI is a different
+                    protocol and the Hamlib we ship has no backend for it, so pick a CAT
+                    profile such as "Thetis" and use the CAT server port);{' '}
+                    <strong>SmartSDR CAT</strong> → 5002; <strong>piHPSDR</strong> → 19090.
+                    Whatever it shows, type that.
+                  </span>
                 </label>
               )}
 

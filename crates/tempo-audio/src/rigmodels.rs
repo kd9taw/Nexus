@@ -52,6 +52,17 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         (3094, "Icom IC-7300MKII"),
         (3070, "Icom IC-7100"),
         (3013, "Icom IC-718"),
+        // The IC-725/726/728/729 family. Added 2026-08-06 from a field report: an operator
+        // with an IC-728 could not find it in either tier, picked "Icom IC-705 (3085)" as the
+        // nearest-looking Icom, and Nexus drove his 1990s rig with the IC-705's CI-V address
+        // and command set — every read timed out, forever, while WSJT-X (which has the model)
+        // worked on the same cable. Selecting 3085 also exposed and armed Native Icom CI-V,
+        // a 115200-baud scope path, on a radio running at 1200. A missing catalog row is not a
+        // cosmetic gap: it makes an operator choose a wrong one.
+        (3014, "Icom IC-725"),
+        (3015, "Icom IC-726"),
+        (3016, "Icom IC-728"),
+        (3017, "Icom IC-729"),
         (3060, "Icom IC-7000"),
         (3023, "Icom IC-746"),
         (3046, "Icom IC-746PRO"),

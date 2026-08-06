@@ -410,6 +410,30 @@
       "max": 19200
     },
     {
+      "model": 3014,
+      "name": "Icom IC-725",
+      "min": 1200,
+      "max": 9600
+    },
+    {
+      "model": 3015,
+      "name": "Icom IC-726",
+      "min": 1200,
+      "max": 1200
+    },
+    {
+      "model": 3016,
+      "name": "Icom IC-728",
+      "min": 1200,
+      "max": 9600
+    },
+    {
+      "model": 3017,
+      "name": "Icom IC-729",
+      "min": 1200,
+      "max": 9600
+    },
+    {
       "model": 3019,
       "name": "Icom IC-735",
       "min": 1200,
