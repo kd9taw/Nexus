@@ -68,9 +68,18 @@ pub fn fmt_report(snr: i32) -> String {
 }
 
 /// The base callsign for matching — uppercased, with a portable prefix/suffix
-/// stripped (`W9XYZ/4` → `W9XYZ`, `KH8/W1AW` → `W1AW`), mirroring WSJT-X's
-/// `Radio::base_callsign`. Used so an "addressed to me" / "from the DX" test still
-/// works under compound/portable operation instead of silently stalling the QSO.
+/// stripped (`W9XYZ/4` → `W9XYZ`, `KH8/W1AW` → `W1AW`). Used so an "addressed to me" /
+/// "from the DX" test still works under compound/portable operation instead of
+/// silently stalling the QSO.
+///
+/// **NOT a transcription of WSJT-X's `Radio::base_callsign`**, though this comment claimed
+/// to be one until the differential gate measured it. Upstream splits on the FIRST `/` and
+/// keeps the LONGER side, so `W1AW/PORTABLE` → `PORTABLE` and `AA1A/QRPP` → `QRPP`: an
+/// operator announcing how he is operating gets matched under the announcement. The rule
+/// below keeps the last callsign-shaped segment instead, which is the right answer for the
+/// job this function actually has. Deliberate, and now recorded — every divergence is
+/// enumerated in `tests/wsjtx_predicate_differential.rs`, which fails both when a new one
+/// appears and when a declared one quietly goes away.
 pub fn base_call(call: &str) -> String {
     // Strip an i3=4 hashed-call wrapper (`<W9XYZ>`, or the unresolved `<...>`) first, so
     // a hashed call matches its plain form in the addressed-to-me / from-the-DX tests.
