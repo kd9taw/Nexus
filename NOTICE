@@ -377,11 +377,14 @@ or FlexRadio.
 
 ## Rust dependencies
 
-Nexus's Rust workspace (`crates/tempofast-sys`, `crates/tempofast`, `crates/tempo-core`,
-`crates/tempo-app`, `crates/tempo-audio`, `crates/tempo-net`,
-`crates/propagation`) and the standalone Tauri shell (`src-tauri/`) depend on
-the crates below. Pull in the full transitive license set with `cargo about` /
-`cargo deny` against `Cargo.lock`; the principal third-party components are:
+Nexus's Rust workspace — 17 crates under `crates/`: `deepcw`, `fst4`, `ft4`, `ft8`, `jt65`,
+`modes`, `msk144`, `propagation`, `q65`, `tempo-app`, `tempo-audio`, `tempo-core`,
+`tempo-fast`, `tempo-fast-sys`, `tempo-net`, `tempo-sstv`, `wspr` — and the standalone Tauri
+shell (`src-tauri/`, which is NOT a workspace member) depend on the crates below.
+`Cargo.lock` plus `deny.toml` are the authoritative, machine-checked license set: CI runs
+cargo-deny over the whole graph with `all-features = true`, and its `licenses.allow` list is
+the gate that actually fails a build. This section is the human-readable summary of the
+principal third-party components, not a substitute for that gate:
 
 - **Tauri** (v2 desktop shell) — MIT OR Apache-2.0.
 - **tauri-plugin-updater** (signed self-update: verifies a minisign signature over each
@@ -400,9 +403,23 @@ the crates below. Pull in the full transitive license set with `cargo about` /
 - **hound** (voice-keyer WAV read/write) — Apache-2.0 OR MIT OR Zlib.
 - **socket2** (shared-UDP socket options for radio sharing) — MIT OR Apache-2.0.
 - **serde** / **serde_json** (serialization) — MIT OR Apache-2.0.
+- **tract-onnx** and its `tract-core` / `tract-hir` / `tract-linalg` / `tract-data` /
+  `tract-nnef` companions (the pure-Rust neural-network inference engine that runs the DeepCW
+  model — see the DeepCW section at the end of this file for the model's own, different,
+  AGPL-3.0-only terms) — MIT OR Apache-2.0.
+- **rustfft** (the FFT behind the SSTV receiver: VIS decode, sync, per-line demodulation and
+  SNR) — MIT OR Apache-2.0.
+- **microfft** (fixed-size in-place FFTs on the hot decode paths — the waterfall spectrum, the
+  RTTY demodulator, and DeepCW's front end) — MIT.
+- **thiserror** (error types in `crates/tempo-sstv`) — MIT OR Apache-2.0.
+- **windows-sys** (Windows only: the Win32 job-object / process calls that make a crashed or
+  killed Nexus take its child `rigctld` with it instead of orphaning the serial port) —
+  MIT OR Apache-2.0.
 
-`crates/tempo-net` (the WSJT-X-compatible UDP API and PSK Reporter spotting)
-is pure `std` Rust with no extra third-party crates of its own.
+`crates/tempo-net` (the WSJT-X-compatible UDP API and PSK Reporter spotting) is otherwise
+pure `std` Rust: **socket2** is its only third-party crate, and only because `std` exposes no
+way to set `SO_REUSEADDR` — which Flex discovery needs in order to share UDP 4992 with a
+co-hosted SmartSDR.
 
 ## JavaScript / UI dependencies
 
@@ -429,6 +446,12 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
   on Feather Icons, MIT).
 - **Radix UI** primitives `@radix-ui/react-dialog`, `-dropdown-menu`, `-toast`,
   and `-tooltip` — **MIT** (© WorkOS / Radix).
+- **@tanstack/react-virtual** — **MIT** (© Tanner Linsley). Row virtualisation for the
+  logbook table, so a log of tens of thousands of QSOs scrolls without mounting every row.
+
+Test-only tooling (**vitest**, **jsdom**, **@testing-library/react** and `/dom`, all MIT) is
+a dev dependency and is **not** part of any shipped bundle. As on the Rust side, the
+authoritative machine-checked set is the lockfile — `ui/package-lock.json` — not this list.
 
 ---
 

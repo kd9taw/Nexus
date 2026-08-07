@@ -14,9 +14,30 @@ IV3NWV, and others), licensed under the **GNU GPL, version 3** (GPL-3.0-only; th
 - Upstream project: <https://sourceforge.net/projects/wsjt/>
 - Full license text: `COPYING` at the repository root.
 
-This is a **subset** of WSJT-X's `lib/` — only the ~70 Fortran/C/C++ DSP sources
-that `libtempo` actually compiles (see the source list in `libtempo/CMakeLists.txt`).
-None of WSJT-X's Qt/GUI code is included.
+This is a **subset** of WSJT-X's `lib/` — the Fortran/C/C++ DSP sources that `libtempo`
+actually builds, and nothing else. Measured against this tree (2026-08-07): **188 source
+files** (158 `.f90`, 28 `.c`, 2 `.cpp`) plus 22 headers. 167 of the 188 are named one by one
+in `libtempo/CMakeLists.txt` — the list is enumerated, never globbed — and the remaining 21
+are the parameter/generator/parity/table files those sources pull in with Fortran `include`,
+so every file here is corresponding source for something the binary contains.
+
+**None of WSJT-X's Qt/GUI code is included, and that claim is about THIS DIRECTORY.**
+Measured: zero occurrences of `#include <Q…>`, `QString`, `QRegularExpression`, `QObject`,
+`Q_OBJECT` or `QCoreApplication` across all 211 files, and zero `.ui`, `.qrc`, `.pro`,
+`.qml` or `moc_*` files. The only two `.cpp` files are `lib/crc13.cpp` and `lib/crc14.cpp`
+(Boost-CRC message checks, no Qt).
+
+⚠️ **The directory scope is the trap, and it has bitten once.** On 2026-08-06 four fragments
+of upstream Qt source — `MainWindow::stdCall`'s regex, both `Radio.cpp` patterns, and the
+body of `Radio::is_77bit_nonstandard_callsign` — reached the repository through a *test
+fixture* under `crates/tempo-core/tests/fixtures/`, nowhere near this directory. The sentence
+above stayed literally true the whole time and said nothing about the leak. So: **this README
+governs `libtempo/vendor/wsjtx/` only.** Upstream expression anywhere else in the tree is
+guarded by `crates/tempo-core/tests/wsjtx_predicate_differential.rs`, which fails the suite if
+a `pattern` text field reappears in that fixture ("upstream pattern TEXT is back in the
+fixture — that is the licence leak"). Upstream is now pinned by sha256 fingerprint instead of
+by reproducing what it says. If you add a WSJT-X-derived measurement anywhere, record the
+**fingerprint**, not the text.
 
 ## Third-party code with its OWN copyright (not the WSJT group's)
 
