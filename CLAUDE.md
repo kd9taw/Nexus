@@ -20,7 +20,7 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
      These rules are generated from the maintainer's rule source and re-emitted verbatim;
      hand edits here are overwritten without warning. To propose a change to one, open an
      issue rather than editing it here — a patch to this block cannot be merged.
-     body-sha256: c92c0ed875bff894670c03c10f030b112b38564c63d81ed14b4c6374050900a0 -->
+     body-sha256: b0f288998c6c397313dccde98ae1642e80c660761b671df356c2438ef1975e90 -->
 
 ## Working protocol (multiple agents/sessions run concurrently)
 
@@ -62,6 +62,15 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
 - Temporary/plan files: `tasks/` is gitignored and machine-local — never `git add -f` it. Don't
   leave pointers to it in shipped material either; a `See tasks/specs/*.md` clause in a code
   comment leaks the shape of a private tree even when the file itself never ships.
+- **A check that found nothing is not a result until a positive control passes.** Before
+  concluding from a search, a guard, or an exit code, run the *same* check against something that
+  MUST trip it. If the control also comes back clean, the check is broken, not the world — this is
+  the project's most-repeated defect class, and it bites hardest when the answer is reassuring.
+  Three things this specifically means: a guard must be shown both to fire and not to fire (one
+  direction is half a test); `exit 0` is not evidence that work happened, so count the artifact —
+  files tracked versus on disk, the version the live URL serves, bytes on the remote; and the
+  control must act on **the artifact the code actually reads**, not a copy of it, so point the
+  tool at your sandbox with its own path override and confirm the path it resolved.
 
 ## Hard rules (approval-gated — ask the maintainer, every time)
 
