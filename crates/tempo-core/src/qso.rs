@@ -118,6 +118,11 @@ pub struct Station {
     /// Distinguishes a QSO that really ran from a `Done` SYNTHESIZED out of a single
     /// decoded RR73/73 the operator double-clicked (see [`Self::report_impossible_exchange`]).
     pub advanced_on_air: bool,
+    /// True once WE have put an over on the air in this QSO — [`Self::after_tx`], the
+    /// same event that feeds `tx_count`, but cumulative instead of per-step (`tx_count`
+    /// is reset by every advance, so it cannot answer "did we ever key?").
+    /// See [`Self::report_impossible_exchange`].
+    pub keyed_on_air: bool,
     /// Human-readable event log.
     pub transcript: Vec<String>,
 }
@@ -144,6 +149,7 @@ impl Station {
             confirm_with_rrr: false,
             quiet_finish: false,
             advanced_on_air: false,
+            keyed_on_air: false,
             transcript: Vec::new(),
         }
     }
@@ -165,6 +171,7 @@ impl Station {
             confirm_with_rrr: false,
             quiet_finish: false,
             advanced_on_air: false,
+            keyed_on_air: false,
             transcript: Vec::new(),
         }
     }
@@ -347,7 +354,7 @@ impl Station {
             _ => fresh_open(),
         };
 
-        Self {
+        let mut station = Self {
             mycall: mycall_s,
             mygrid: mygrid.into(),
             dxcall: Some(dxcall.into()),
@@ -362,10 +369,20 @@ impl Station {
             confirm_with_rrr: prefer_rrr,
             quiet_finish: false,
             // `start()` resumes from a message we ALREADY had; the partner has not
-            // answered US yet. Only `observe` can set this.
+            // answered US yet, and nothing has left our antenna for it. Only `observe`
+            // sets the first; only `after_tx` sets the second.
             advanced_on_air: false,
+            keyed_on_air: false,
             transcript: vec![log_line],
+        };
+        // The resume table above names the Tx we queue; only now, with both calls in
+        // hand, can we tell what that Tx will look like ON THE AIR. A roger the packer
+        // renders as a bare `RRR` closes the QSO for the partner, so it puts us in
+        // `Confirming`, not `AwaitRr73` — see `roger_state`.
+        if station.state == State::AwaitRr73 {
+            station.state = station.roger_state();
         }
+        station
     }
 
     pub fn done(&self) -> bool {
@@ -412,9 +429,14 @@ impl Station {
     /// True when this QSO's overs may arrive — or must go out — in the DEGRADED i3=4
     /// vocabulary, whose ENTIRE payload set is blank / `RRR` / `RR73` / `73`
     /// (`pack77_4` spends 2 bits on `nrpt`; there is no grid field and no report
-    /// field). Gates the [`Self::observe`] arms that must accept a grid-less,
-    /// number-less over as genuine progress. **Never decides what we send** —
-    /// [`Self::hashed_form`] does that.
+    /// field). Gates the [`Self::observe`] arm that must accept an EARLY roger — an
+    /// `RRR`/`RR73` where a plain QSO would still owe us an R-report — as genuine
+    /// progress. **Never decides what we send** — [`Self::hashed_form`] does that.
+    ///
+    /// **Not the gate for the grid-less floor arm.** That one is
+    /// [`Self::needs_hashed_form`] alone: this predicate is deliberately the wider of the
+    /// two, and admitting a plain-form `/P` pair to an arm that ROGERS made a portable
+    /// operator acknowledge a report nobody had sent.
     ///
     /// Two sources, and BOTH have to be here:
     ///
@@ -460,13 +482,25 @@ impl Station {
     /// out of a single decoded RR73/73 the operator double-clicked, and such a seed must
     /// never log a phantom contact. That proxy is measurably wrong for the seven
     /// callsign-class pairs whose every over is i3=4 — they run a genuine QSO to 73 and
-    /// can never produce the number the gate demands, so the contact was dropped. This
-    /// is the same claim stated honestly: the partner advanced us ON THE AIR
-    /// ([`Self::advanced_on_air`], which a synthesized `Done` never sets) and a number
-    /// was impossible throughout. The log then records what really happened — an ABSENT
-    /// RST, never an invented one.
+    /// can never produce the number the gate demands, so the contact was dropped.
+    ///
+    /// **What this predicate requires, and why it is the honest test.** A contact is two
+    /// stations that heard each other, so the evidence has to be one fact from each end:
+    ///
+    /// * [`Self::keyed_on_air`] — WE transmitted. Without it a station that only ever
+    ///   *listened* logged a contact: queue Tx1, never key, decode the DX's `RR73` to
+    ///   somebody, and the state machine walks to `Done` on the partner's messages alone.
+    ///   This is the same evidence the `Confirming` log gate has always demanded
+    ///   (`tx_count >= 1`), made cumulative — `tx_count` is per-step and every advance
+    ///   zeroes it, so at `Done` it is 0 for real QSOs too.
+    /// * [`Self::advanced_on_air`] — the PARTNER answered us, in [`Self::observe`] and
+    ///   not in [`Self::start`]'s resume table, so a synthesized `Done` stays refused.
+    ///
+    /// …and a number was impossible throughout ([`Self::report_can_ride`]) — because the
+    /// protocol has no field for one, not because nothing happened. The log then records
+    /// what really happened: an ABSENT RST, never an invented one.
     pub fn report_impossible_exchange(&self) -> bool {
-        self.advanced_on_air && !self.report_can_ride()
+        self.keyed_on_air && self.advanced_on_air && !self.report_can_ride()
     }
 
     /// Rewrite a message into its modem-faithful hashed form when the pair cannot ride
@@ -562,6 +596,29 @@ impl Station {
         }
     }
 
+    /// The state a just-queued ROGER (`pending` = an R-report, Tx3) really leaves us in.
+    ///
+    /// [`Self::hashed_form`] renders an R-report as a bare `RRR` whenever our own call
+    /// cannot carry a number beside a hash ([`crate::message::packs_beside_hash`]) — and
+    /// a bare `RRR` is not Tx3 on the air, it is the CLOSING roger: the partner's
+    /// `(AwaitRoger, Rrr)` arm takes it as one, logs the contact and signs 73. Staying in
+    /// [`State::AwaitRr73`] after sending it parks us in the RESPONDER'S seat, waiting for
+    /// an RR73 nobody will ever send — so their closing 73 lost to QSB costs us a contact
+    /// the other operator already has, and on a CQ run the run stops with it, while the
+    /// plain initiator in [`State::Confirming`] survives exactly the same loss. (Measured:
+    /// in every pair whose roger degrades, the CQ RUNNER is the side left holding it.)
+    ///
+    /// `Confirming` says what we actually did. The app logs on it once the roger has
+    /// genuinely gone out (`tx_count >= 1`, the same evidence the plain initiator gives)
+    /// and resumes the CQ run from it, and `(Confirming, Bye73)` still closes the QSO when
+    /// the 73 does arrive.
+    fn roger_state(&self) -> State {
+        match self.pending.clone().map(|m| self.hashed_form(m)) {
+            Some(Msg::Rrr { .. }) => State::Confirming,
+            _ => State::AwaitRr73,
+        }
+    }
+
     /// The message to transmit on my next TX slot, if any (RV-agnostic).
     pub fn outgoing(&self) -> Option<Msg> {
         self.pending.clone().map(|m| self.hashed_form(m))
@@ -650,6 +707,10 @@ impl Station {
     pub fn after_tx(&mut self) {
         self.tx_count = self.tx_count.saturating_add(1);
         self.rv_count = (self.tx_count % RV_CYCLE) as u8;
+        // The one place a QSO learns that WE keyed. `tx_count` is per-STEP and every
+        // advance zeroes it, so it cannot be asked "did this QSO ever transmit?" —
+        // this can (see `report_impossible_exchange`).
+        self.keyed_on_air = true;
         if self.state == State::Done {
             self.pending = None;
         }
@@ -707,7 +768,7 @@ impl Station {
                         de: self.mycall.clone(),
                         snr: rpt,
                     });
-                    self.state = State::AwaitRr73;
+                    self.state = self.roger_state();
                     self.log(format!(
                         "got report {snr} → sending R{}",
                         crate::message::fmt_report(rpt)
@@ -756,12 +817,20 @@ impl Station {
                     }
                     self.state = State::Done;
                 }
+                // We rogered and are waiting to be signed off. Any of the three closing
+                // words does it: a bare `73`, or the partner's own `RR73`/`RRR`. We owe
+                // nothing after our roger — a partner who answers it with a roger of their
+                // own (which is what a degraded pair's `RRR` is, and what two stations that
+                // both think they are closing send in the plain forms) has confirmed the
+                // contact, and re-sending ours at them forever is not a courtesy.
                 (State::Confirming, Msg::Bye73 { to, de })
+                | (State::Confirming, Msg::Rr73 { to, de })
+                | (State::Confirming, Msg::Rrr { to, de })
                     if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
                 {
                     self.pending = None;
                     self.state = State::Done;
-                    self.log("got 73 → QSO complete".into());
+                    self.log("got the closing over → QSO complete".into());
                 }
                 // --- Out-of-order / step-skipping partners (mirror the `start()` resume
                 // table so a running QSO can't hang re-sending the same message forever
@@ -823,7 +892,7 @@ impl Station {
                         de: self.mycall.clone(),
                         snr: rpt,
                     });
-                    self.state = State::AwaitRr73;
+                    self.state = self.roger_state();
                     self.log(format!(
                         "{de} answered with a report → R{}",
                         crate::message::fmt_report(rpt)
@@ -843,7 +912,7 @@ impl Station {
                         de: self.mycall.clone(),
                         snr: rpt,
                     });
-                    self.state = State::AwaitRr73;
+                    self.state = self.roger_state();
                     self.log(format!(
                         "got report {snr} while awaiting a roger → sending R{}",
                         crate::message::fmt_report(rpt)
@@ -851,16 +920,21 @@ impl Station {
                 }
                 // --- Compound QSO completion: a compound party can't send a numeric
                 // report through i3=4, so the report exchange inverts — the STANDARD
-                // station reports and the compound station rogers. These arms (guarded to
-                // the DEGRADED vocabulary so standard flows are untouched) advance on the
-                // grid-less i3=4 forms the partner actually delivers. ---
-                // The compound DX answered my call grid-less (no report possible) → I
-                // send MY report (it survives: I'm the standard c28 sender) and await
-                // their roger.
+                // station reports and the compound station rogers. These arms advance on
+                // the grid-less i3=4 forms the partner actually delivers. ---
+                // A GRID addressed to me while I'm awaiting a report → I send MY report
+                // and await their roger. Upstream answers a grid addressed to it with a
+                // report REGARDLESS of state (`processMessage`), and so does this arm: it
+                // is the compound DX answering my call grid-less (no report possible) and
+                // it is equally two plain stations that each answered the other's CQ —
+                // both then sit in `AwaitReport` believing the other owes the report, and
+                // with this arm gated to the degraded vocabulary they traded their grids
+                // for as long as anyone watched (measured: 20 slots, no advance). Half-
+                // duplex slots break the tie by themselves — whoever decodes first
+                // reports, and the other's `(AwaitReport, Report)` arm rogers it — so
+                // answering here cannot cross with the partner doing the same.
                 (State::AwaitReport, Msg::Grid { to, de, grid })
-                    if self.degraded_vocabulary()
-                        && crate::message::same_call(to, &self.mycall)
-                        && self.from_dx(de) =>
+                    if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
                 {
                     self.dxcall.get_or_insert_with(|| de.clone());
                     if !grid.is_empty() {
@@ -872,9 +946,7 @@ impl Station {
                         snr: rpt,
                     });
                     self.state = State::AwaitRoger;
-                    self.log(format!(
-                        "compound DX answered grid-less → sending report {rpt}"
-                    ));
+                    self.log(format!("{de} answered my call → sending report {rpt}"));
                 }
                 // The compound DX rogered my report (RR73/RRR) → QSO complete, send 73.
                 (State::AwaitRoger, Msg::Rr73 { to, de })
@@ -912,9 +984,19 @@ impl Station {
                 // copied our report, and advancing on it would roger a report they never
                 // sent — so a Grid carrying a grid, or any pair the plain forms can express,
                 // falls through to the retransmit as before.
+                //
+                // And the gate is [`Self::needs_hashed_form`], NOT `degraded_vocabulary`,
+                // which is the wider of the two: `is_compound_qso` is merely "either call
+                // has a slash", and a `/P` or `/R` station opposite a standard (or same-
+                // suffixed) partner rides Type 1/2 with grid and number intact. Letting
+                // that pair in here is the very thing the paragraph above forbids — a
+                // portable operator rogering a report nobody sent. The receive-side
+                // tolerance `is_compound_qso` was added for (a partner who degrades where
+                // we would not) is served one step earlier, by the ungated
+                // `(AwaitReport, Grid)` arm, which answers any grid with a report.
                 (State::AwaitRoger, Msg::Grid { to, de, grid })
                     if grid.is_empty()
-                        && self.degraded_vocabulary()
+                        && self.needs_hashed_form()
                         && crate::message::same_call(to, &self.mycall)
                         && self.from_dx(de) =>
                 {
@@ -923,7 +1005,7 @@ impl Station {
                         de: self.mycall.clone(),
                         snr: rpt,
                     });
-                    self.state = State::AwaitRr73;
+                    self.state = self.roger_state();
                     self.log(
                         "DX answered grid-less (i3=4 cannot carry a report) → rogering".into(),
                     );
@@ -1429,6 +1511,139 @@ mod start_context_tests {
         s.resend();
         assert!(!s.stalled(), "Resend clears the directed-call stall");
         assert!(s.outgoing_rv().is_some(), "and it calls again");
+    }
+
+    /// **D3.** A `/P` operator on the PLAIN Type 1/2 path must never roger a report
+    /// nobody sent. The grid-less floor arm was gated on `degraded_vocabulary`, which is
+    /// merely "either call has a slash" once `is_compound_qso` is in it — true for pairs
+    /// the plain forms carry perfectly, grid and number and all. So a `/P` station that
+    /// simply had not copied our report yet, and re-sent its grid, got an `R+nn` back
+    /// acknowledging a number it had never transmitted.
+    #[test]
+    fn a_portable_pair_on_the_plain_path_never_rogers_a_report_nobody_sent() {
+        // KD9TAW/P × W9XYZ: both standard, no suffix conflict, nothing hashed — the pair
+        // rides Type 1/2 with grid and number intact. A grid-LESS call is still ordinary
+        // here: a station with no locator set sends `KD9TAW/P W9XYZ` in the clear, and
+        // upstream does the same. It is a CALL, not a roger-worthy answer.
+        let mut s = Station::calling_cq("KD9TAW/P", MY_GRID);
+        s.observe(&[dec("KD9TAW/P W9XYZ", -7)]);
+        assert_eq!(s.state, State::AwaitRoger, "we answered with our report");
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW/P -07"));
+
+        // They call again — they have not copied our report. The honest reply is the
+        // report again, not a roger for a number that was never sent.
+        s.observe(&[dec("KD9TAW/P W9XYZ", -7)]);
+        assert_eq!(s.state, State::AwaitRoger, "still awaiting their roger");
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("W9XYZ KD9TAW/P -07"),
+            "a plain pair re-sends the report; it must not roger"
+        );
+        assert!(s.rx_report.is_none(), "and no number was invented");
+
+        // The pair the packer really cannot express still advances on the same over —
+        // there `RRR` is all the frame HAS, so the grid-less form is the DX's answer.
+        let mut d = Station::calling_cq("KD9TAW/P", MY_GRID);
+        d.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
+        assert_eq!(d.state, State::AwaitRoger);
+        d.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
+        assert_eq!(
+            d.pending_text().as_deref(),
+            Some("<F4CYH/R> KD9TAW/P RRR"),
+            "the degraded floor still rogers"
+        );
+    }
+
+    /// **D4.** A roger the packer renders as a bare `RRR` is the CLOSING roger — the
+    /// partner takes it as one and signs 73 — so it must leave us in `Confirming` (the
+    /// initiator's seat, which the app logs from once the over is on the air), not in
+    /// `AwaitRr73` waiting for an RR73 nobody will send.
+    #[test]
+    fn a_roger_that_degrades_to_rrr_leaves_us_confirming_not_awaiting() {
+        // Degraded: our own call cannot carry a number beside the hash.
+        let mut d = Station::calling_cq("KD9TAW/P", MY_GRID);
+        d.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]); // their call → we "report"
+        d.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]); // their answer → we roger
+        assert_eq!(d.pending_text().as_deref(), Some("<F4CYH/R> KD9TAW/P RRR"));
+        assert_eq!(
+            d.state,
+            State::Confirming,
+            "a bare RRR closes the QSO for the partner; our state must say so"
+        );
+        // And the closing over still finishes us, whichever of the three words it is.
+        d.observe(&[dec("<KD9TAW/P> F4CYH/R 73", -7)]);
+        assert_eq!(d.state, State::Done);
+
+        // Plain pair: the roger carries a number, so it really is Tx3 and we really are
+        // waiting for the RR73. Unchanged.
+        let mut p = Station::calling_cq(ME, MY_GRID);
+        p.observe(&[dec("KD9TAW W9XYZ -09", -7)]);
+        assert_eq!(p.pending_text().as_deref(), Some("W9XYZ KD9TAW R-07"));
+        assert_eq!(p.state, State::AwaitRr73, "a numeric roger is still Tx3");
+    }
+
+    /// The `(AwaitRoger, Report)` arm, pinned. It is NOT dead — deleting it leaves the
+    /// class-pair sweep passing (the exchange finds a longer route and the sweep's over
+    /// budget is exactly the longer route's length), but the two quadrants whose CQ
+    /// runner is nonstandard go from six overs to eight. What it does: we and the DX
+    /// both sent Tx2, because once a pair falls to i3=4 a call and a report pack to the
+    /// same bytes and they read ours as a call. Theirs is the number that got through —
+    /// capture it and roger it rather than trading reports.
+    #[test]
+    fn a_report_while_awaiting_a_roger_is_captured_and_rogered() {
+        let mut s = Station::calling_cq("PJ4/K1ABC", MY_GRID);
+        s.observe(&[dec("<PJ4/K1ABC> KD9TAW EN52", -7)]); // they answered with their grid
+        assert_eq!(s.state, State::AwaitRoger);
+        assert_eq!(s.pending_text().as_deref(), Some("<KD9TAW> PJ4/K1ABC"));
+
+        // They answer our (blank) report with a REPORT of their own — a standard c28
+        // sender can still carry a number beside our hash.
+        s.observe(&[dec("<PJ4/K1ABC> KD9TAW -09", -7)]);
+        assert_eq!(
+            s.rx_report,
+            Some(-9),
+            "their number is the one that got through"
+        );
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("<KD9TAW> PJ4/K1ABC RRR"),
+            "roger it — do not send a third identical blank"
+        );
+        // Without this arm we would still be at AwaitRoger re-sending the same over.
+        assert_ne!(s.state, State::AwaitRoger);
+    }
+
+    /// The `(AwaitReport, Grid)` arm is ungated: upstream answers a grid addressed to it
+    /// with a report REGARDLESS of state. Gated to the degraded vocabulary, two PLAIN
+    /// stations that each answered the other's CQ both sat in `AwaitReport` believing the
+    /// other owed the report, and traded grids for as long as anyone watched.
+    #[test]
+    fn two_stations_that_each_called_the_other_still_finish_the_qso() {
+        let mut a = Station::answering(ME, MY_GRID, DX);
+        let mut b = Station::answering(DX, "FN31", ME);
+        assert_eq!(a.state, State::AwaitReport);
+        assert_eq!(b.state, State::AwaitReport);
+
+        // Half-duplex: whoever decodes first reports, and the other rogers it. The tie
+        // cannot cross, because only one of them transmits per slot.
+        let over = b.pending_text().unwrap();
+        a.observe(&[dec(&over, -7)]);
+        assert_eq!(a.state, State::AwaitRoger, "a grid to me is answered");
+        assert_eq!(a.pending_text().as_deref(), Some("W9XYZ KD9TAW -07"));
+
+        let over = a.pending_text().unwrap();
+        b.observe(&[dec(&over, -9)]);
+        assert_eq!(b.state, State::AwaitRr73);
+        let over = b.pending_text().unwrap();
+        a.observe(&[dec(&over, -7)]);
+        assert_eq!(a.state, State::Confirming);
+        let over = a.pending_text().unwrap();
+        b.observe(&[dec(&over, -9)]);
+        assert_eq!(
+            b.state,
+            State::Done,
+            "the QSO finishes instead of livelocking"
+        );
     }
 }
 

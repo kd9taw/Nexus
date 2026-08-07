@@ -6656,8 +6656,10 @@ impl Engine {
         // both stations there is no report field in any over of the QSO, so demanding a
         // report demands the impossible and the button no-ops for the whole contact —
         // with auto-log off, that is the only way these contacts reach the log at all.
-        // `report_impossible_exchange` still requires the partner to have answered us on
-        // the air, so a CQ with nobody on it stays unloggable exactly as before.
+        // `report_impossible_exchange` demands one fact from each end of the contact —
+        // that the partner answered us ON THE AIR, and that WE keyed at least once — so
+        // a CQ with nobody on it, and a QSO we have only listened to, stay unloggable
+        // exactly as before.
         if rx_report.is_none() && self.qso_report_sent.is_none() && !report_impossible {
             return false;
         }
@@ -12397,8 +12399,10 @@ impl Engine {
                 // so they auto-logged nothing — and, on a CQ run, `resume_cq` waits on
                 // `qso_logged`, so the run stopped dead there too.
                 // `report_impossible_exchange` is the same claim made honestly: the partner
-                // advanced us ON THE AIR and a number was impossible throughout. The seed
-                // it was guarding against never advances on the air, so it stays blocked.
+                // advanced us ON THE AIR, WE keyed at least once, and a number was
+                // impossible throughout. The seed it was guarding against does neither of
+                // the first two, so it stays blocked — and so does a station that only
+                // listened while the partner's messages walked its sequencer to Done.
                 let report_exchanged =
                     station.rx_report.is_some() || self.qso_report_sent.is_some();
                 let loggable = match station.state {
@@ -17305,6 +17309,18 @@ mod tests {
         }
     }
 
+    /// Put ONE over on the air at the first slot from `from` whose parity the engine
+    /// accepts, and return that slot. Panics if nothing keys — these tests are about
+    /// whether we transmitted, so a silent no-op has to fail them, not pass quietly.
+    fn key_one_over(e: &mut Engine, from: u64) -> u64 {
+        for slot in from..from + 4 {
+            if !e.poll_tx(slot).is_empty() {
+                return slot;
+            }
+        }
+        panic!("no over reached the air at slots {from}..{}", from + 4);
+    }
+
     #[test]
     fn call_station_targets_the_dxcall() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
@@ -17475,11 +17491,17 @@ mod tests {
             Some("<F4CYH/R> KD9TAW/P".into()),
             "Tx1 is grid-less: /P cannot pack a grid opposite a hash"
         );
+        // …and it goes ON THE AIR. This test used to end at the line above and still
+        // claim a contact, which is the whole of the defect the guard below pins: the
+        // sequence walks to Done on the PARTNER'S messages alone, so a station that
+        // only ever listened satisfied every other condition here.
+        key_one_over(&mut e, 0);
 
         // The DX answers. Their Tx1 and Tx2 are the SAME bytes — i3=4 has one blank
         // payload — so this is every over they can send us until the roger.
         e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R", -7)], 1);
-        // They roger with the only acknowledgement the frame carries.
+        key_one_over(&mut e, 2); // our report over — blank, but ours
+                                 // They roger with the only acknowledgement the frame carries.
         e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 3);
 
         let log = e.get_log();
@@ -17487,6 +17509,106 @@ mod tests {
         assert_eq!(log[0].call, "F4CYH/R", "logged under the rover's real call");
         assert_eq!(log[0].rst_rcvd, None, "no number was ever sent to us");
         assert_eq!(log[0].rst_sent, None, "and we could send none either");
+    }
+
+    /// ⛔ THE LOGBOOK-INTEGRITY GUARD. A logbook that invents a contact is worse than one
+    /// that drops it: the operator uploads it to LoTW and QRZ, the other station never
+    /// worked them, and nothing in Nexus can be looked at to find out why.
+    ///
+    /// `report_impossible_exchange` used to be "the partner advanced us AND no number
+    /// could ride" — and the partner's messages alone move our state. So calling a
+    /// station and never keying, then decoding one `RR73` they addressed to us, walked
+    /// the sequencer to `Done` with `tx_count 0` and auto-logged a QSO in which we had
+    /// transmitted nothing at all. The `Confirming` branch one line away had required
+    /// `tx_count >= 1` for exactly this reason since the day it was written.
+    #[test]
+    fn a_station_that_never_transmitted_never_logs_a_contact() {
+        let mut e = Engine::new("KD9TAW/P", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        assert!(e.settings().auto_log, "auto_log on by default");
+        e.call_station("F4CYH/R"); // Tx1 is QUEUED — and never keyed.
+        assert!(
+            e.snapshot().qso.is_some(),
+            "precondition: a QSO station exists to be walked to Done"
+        );
+        // Their roger, addressed to us. Nothing else happens: no TX slot is ever polled.
+        e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 3);
+        assert!(
+            e.get_log().is_empty(),
+            "a contact we never transmitted into must not reach the log: {:?}",
+            e.get_log()
+        );
+        // …and the manual button refuses it on the same evidence (`log_current_qso`
+        // shares the predicate — one root, one fix).
+        assert!(!e.log_current_qso(), "…and Log QSO refuses it too");
+
+        // The converse, so this guard cannot be satisfied by refusing everything: one
+        // over on the air and the same decode logs the contact.
+        let mut ok = Engine::new("KD9TAW/P", "EN52", 0);
+        ok.set_tier(Tier::Ft8);
+        ok.call_station("F4CYH/R");
+        key_one_over(&mut ok, 0);
+        ok.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 3);
+        assert_eq!(ok.get_log().len(), 1, "…once we have actually keyed");
+    }
+
+    /// D2, the same root at the other call site: **Log QSO must not claim a contact
+    /// mid-exchange.** The comment above the guard has always read "refuse a manual log
+    /// while still calling CQ / awaiting the first report", and the report-impossible
+    /// relaxation made it false — one partner over was enough to write a record with no
+    /// roger and no 73 from either side, and nothing of ours on the air.
+    #[test]
+    fn log_qso_refuses_a_contact_we_have_not_yet_keyed() {
+        let mut e = Engine::new("KD9TAW/P", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.call_station("F4CYH/R"); // queued, not keyed
+        e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R", -7)], 1);
+        assert!(
+            !e.log_current_qso(),
+            "one partner over into a QSO we have not transmitted into is not a contact"
+        );
+        assert!(e.get_log().is_empty(), "{:?}", e.get_log());
+    }
+
+    /// D4: a closing `73` lost to QSB must not cost the operator the contact — nor stop
+    /// the CQ run dead.
+    ///
+    /// In a pair whose roger degrades to a bare `RRR`, the roles INVERT: our `RRR` is the
+    /// closing roger, the partner takes it as one, logs us and signs 73. The sequencer
+    /// nevertheless parked us in `AwaitRr73` — the RESPONDER'S seat — so their 73 going
+    /// missing left us re-sending a roger they had already acted on, with no log written
+    /// and `resume_cq` waiting on a claim that would never come. The plain initiator sits
+    /// in `Confirming` and survives the identical loss; now so does this one.
+    #[test]
+    fn a_lost_closing_73_still_logs_the_degraded_contact_and_resumes_the_run() {
+        let mut e = Engine::new("KD9TAW/P", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_enabled(true);
+        e.start_cq(None).unwrap();
+        let cq = key_one_over(&mut e, 0);
+        // F4CYH/R answers. Every over they can send us before the roger is this one
+        // blank frame — i3=4 has a single empty payload.
+        e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R", -7)], cq + 1);
+        let rpt = key_one_over(&mut e, cq + 2); // our "report" over (blank)
+        e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R", -7)], rpt + 1);
+        assert_eq!(
+            e.snapshot().qso.as_ref().and_then(|q| q.tx_now.clone()),
+            Some("<F4CYH/R> KD9TAW/P RRR".into()),
+            "the roger i3=4 can carry"
+        );
+        let rgr = key_one_over(&mut e, rpt + 2); // the roger goes on the air
+                                                 // …and their 73 never decodes. Nothing more arrives, ever.
+        e.ingest_decodes_for_test(&[], rgr + 1);
+
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "the contact is logged off our own roger");
+        assert_eq!(log[0].call, "F4CYH/R");
+        // The run is free again: back to calling CQ, not stuck re-sending the roger.
+        assert_eq!(
+            e.snapshot().qso.as_ref().and_then(|q| q.tx_now.clone()),
+            Some("CQ KD9TAW/P EN52".into()),
+            "the CQ run resumed instead of waiting forever"
+        );
     }
 
     #[test]

@@ -196,6 +196,7 @@ fn a_synthesized_done_is_still_not_a_contact() {
         !seed.advanced_on_air,
         "…and nothing on the air put it there"
     );
+    assert!(!seed.keyed_on_air, "…nor did we key so much as one over");
     assert!(
         !seed.report_impossible_exchange(),
         "a synthesized Done must never claim a report-less contact"

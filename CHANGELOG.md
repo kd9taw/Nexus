@@ -76,8 +76,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logging a contact that never happened, and for these pairs that required the impossible: the QSO
   completed on the air and was then dropped, the Log QSO button no-opped, and a CQ run stopped dead
   because it waits for the contact to be claimed before it calls again. The check against a phantom
-  contact is intact — it now asks whether the station you were working ever actually answered you,
-  which is what it was always after — so double-clicking a stray `RR73` still logs nothing.
+  contact is intact — it now asks whether the station you were working ever actually answered you
+  **and whether you ever transmitted to it**, which is what it was always after — so double-clicking
+  a stray `RR73` still logs nothing.
+
+- **A contact you never transmitted a single time could be written into your log.** This is the one
+  worth reading twice, because a log that invents a contact is worse than a log that drops one: it
+  goes to LoTW and QRZ under your call, the other operator never worked you, and nothing on your
+  screen would ever have told you. Click a station to work it, let the transmission sit queued
+  without ever keying — transmit off, a band change, a rig that never went to transmit, or simply
+  not getting to it — and if that station's `RR73` to you was then decoded, the sequencer walked to
+  the end of the exchange on *their* messages alone and the contact was logged. The Log QSO button
+  had the same hole one step earlier: one over from the other station, no roger and no `73` from
+  either side, and it would write the record. Both now require the same thing, in one place: that
+  **you** put at least one transmission on the air in this QSO. That is the evidence the closing
+  half of the sequence has always demanded, and the relaxation for the report-less callsign pairs
+  above is what let the opening half go without it. Nothing that genuinely reached the air is
+  refused — a real contact keys several times before it ends.
+
+- **A `/P` or `/R` station could acknowledge a signal report nobody had sent it.** The rule that
+  lets the report-less callsign pairs finish reads a bare "you, me" transmission from the station
+  you are working as their answer, because for those pairs the message format has nothing else to
+  put in it. It was reaching too far: it applied to any callsign containing a slash, and a portable
+  or rover call working an ordinary station carries its grid and its numbers perfectly well. A plain
+  station calling you with no locator set sends exactly that bare form — so you rogered a report
+  that was never on the air, and the other operator's own sequence then had nothing to go on.
+  The rule is now limited to the pairs whose transmissions genuinely have no room for a report;
+  everywhere else a repeated call is treated as "they have not copied me yet" and your report goes
+  out again, which is what it means.
+
+- **A contact whose closing `73` never arrived was lost, and a CQ run stopped there.** In the
+  callsign pairs above the roles of the exchange swap over: your roger is the transmission that
+  ends the QSO, the other station takes it as the finish, logs you and signs off. Nexus was still
+  treating that roger as the middle of the exchange, so it sat waiting for a confirmation the other
+  operator had no reason to send, and if their parting `73` was lost to fading — which is precisely
+  the transmission most likely to be lost, since nobody repeats it — the contact went unlogged, and
+  a CQ run stopped calling because it waits for the contact to be claimed. The contact is now
+  claimed off your own roger, once that roger has actually gone out, exactly as an ordinary FT8
+  contact is claimed off your `RR73`; the run carries straight on to the next caller. The other
+  station has logged you either way, so this is the log agreeing with theirs rather than a contact
+  invented out of nothing.
+
+- **Two stations that called each other at the same instant never got past exchanging grids.**
+  Answer a station at the moment it answers you and both sides believed the other owed the first
+  signal report, so both re-sent their grid, over after over, indefinitely — legal, correctly
+  addressed transmissions that went nowhere. WSJT-X answers a grid addressed to it with a report
+  whatever else it is doing, and Nexus does now too: whichever of you decodes first sends the
+  report, the other rogers it, and the contact finishes in the ordinary five overs.
 
 - **The SSTV mode picker understated every mode's airtime by about a second.** The pixel sizes were
   right, but the durations beside them were a hand-maintained copy that had drifted from what the
