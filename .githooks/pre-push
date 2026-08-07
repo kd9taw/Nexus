@@ -1,22 +1,70 @@
 #!/usr/bin/env bash
 # Nexus pre-push gate — enforces the publish rules in CLAUDE.md mechanically.
 #
-# Enable once per clone:   git config core.hooksPath .githooks
-# (core.hooksPath is repo config shared by all worktrees; the path is resolved
-# per-worktree, so a worktree without this file simply runs no hook.)
+# Enable once per clone — with an ABSOLUTE hooksPath, never the relative `.githooks`.
+# Git resolves a relative core.hooksPath inside the CHECKED-OUT WORKTREE, so any branch
+# predating this file runs NO hook at all, silently: 43 of 51 local branches were in that
+# state when this was found. Fail-open is not an acceptable default for the one gate that
+# stops a leak reaching a public remote. Install a shim in the git common dir (shared by
+# every worktree, unaffected by which branch is checked out) that execs
+# "$(git rev-parse --show-toplevel)/.githooks/pre-push" and REFUSES when it is absent, then:
 #
-# Three checks, fail-closed:
+#   git config core.hooksPath "$(git rev-parse --git-common-dir)/nexus-hooks"
+#
+# This file stays the source of truth and the thing to edit; the shim only guarantees it runs.
+#
+# FIVE CHECKS, fail-closed:
 #   1. Wrong-remote guard: kd9taw/tempo is an UNRELATED repo — never push there.
-#   2. Identity: every commit being pushed must carry the project identity.
-#   3. Content scrub: the pushed diff and commit messages must not match any
-#      pattern in the private patterns file. The patterns are NOT in this repo
-#      (this hook is public; committing the patterns would leak the very
-#      strings they protect). Keep them in $HOME/.nexus-leak-patterns, mode
-#      0600, one extended-regex per line; override path via NEXUS_LEAK_PATTERNS.
+#   2. Release-tag gate: refs/tags/v* fires .github/workflows/release.yml, which builds and
+#      PUBLISHES a public GitHub Release. CLAUDE.md makes that maintainer-approval-gated per
+#      action; this makes it mechanical.          Override: NEXUS_RELEASE_APPROVED=1
+#   3. Identity: author AND committer email on every outgoing commit must be the project's.
+#   4. Content scrub: PER COMMIT across the whole pushed range — metadata, message and the
+#      ADDED lines of every commit — plus the endpoint diff. The patterns are NOT in this repo
+#      (this hook is public; committing the patterns would leak the very strings they
+#      protect). Keep them in $HOME/.nexus-leak-patterns, mode 0600, one extended-regex per
+#      line; override the path via NEXUS_LEAK_PATTERNS.
+#   5. Licence/NOTICE guard: a push that adds files under a vendor path, or adds third-party
+#      licence BODY text anywhere, must also touch NOTICE. This is the mechanical half of the
+#      OSS-integration checklist; it does not prove the checklist was run.
+#                                                  Override: NEXUS_ALLOW_VENDOR=1
 #
-# Known limitation: for content, each pushed range is scanned as an endpoint
-# diff (added-then-removed content mid-range is not caught — history rewrites
-# need a manual pass). Commit METADATA is checked per-commit across the range.
+# WHY CHECK 4 IS PER-COMMIT: it used to scan only the endpoint diff, so content added and
+# then removed inside one pushed range was invisible to it. Pushing such a range publishes
+# the string in history forever regardless of the final tree — which is exactly how a
+# personal-identity string reached a test fixture on 2026-08-06 and needed a history rewrite
+# to get out. Rewriting history is still a manual pass; this stops the next one being needed.
+#
+# WHY ADDED LINES ONLY: a REMOVED line carrying a pattern is a commit that SCRUBS the string
+# out of the tree, and blocking those would make the gate forbid its own remedy. Verified
+# against real history 2026-08-07: of 14 published commits whose diff mentions the private
+# name, 9 add it (genuine leaks — these must block) and 5 only remove it (the header cleanup
+# of 2026-08-05, which a whole-diff scan would have refused). Note the consequence honestly:
+# a removal commit still PUBLISHES the string in its own diff, so scrubbing a leak that is
+# already pushed needs a history rewrite, not a follow-up commit. This check stops the leak
+# arriving; it cannot undo one.
+#
+# KNOWN GAPS, written down rather than papered over:
+#   - `git log -p` emits no patch for a merge commit, so content introduced BY a merge is
+#     covered only by the endpoint diff — which is kept for exactly that reason.
+#   - Check 5 matches licence BODY text, not a bare `SPDX-License-Identifier:` header. Our
+#     own files carry none today, but adopting them project-wide would make an SPDX marker
+#     cry wolf on every new file, and a hook that cries wolf gets bypassed. A vendored file
+#     carrying only an SPDX header and no licence body is caught only if it lands under a
+#     vendor path.
+#   - Check 5 proves a NOTICE edit accompanied the addition, not that the edit is correct.
+#   - Check 5 would NOT have caught the incident it was written after. Tested 2026-08-07
+#     against e6512ab5 ("test(ft): gate the WSJT-X callsign predicates against the real Qt
+#     regexes"), the commit that 9a172d03 later had to correct: it copied upstream WSJT-X
+#     source text into scripts/gen-wsjtx-callsign-oracle.mjs — not under a vendor path, and
+#     carrying no licence body text — so both trips stay silent. Copying upstream source into
+#     an ordinary project file is NOT mechanizable here: the only reliable signal is a
+#     substring match against upstream, and the cheap proxies (a "WSJT-X" mention, an
+#     upstream-looking comment) fire constantly in our own code, which would train everyone
+#     to reach for --no-verify. That class remains a human review step — see the
+#     OSS-integration checklist in CLAUDE.md.
+#   - The first push of a line of work with no remote refs at all scans its whole history:
+#     seconds, not minutes (1311 commits is about 5 s per pass). That is correct, not a bug.
 #
 # Emergency bypass (maintainer only, deliberately loud): git push --no-verify
 
@@ -28,42 +76,117 @@ ZERO="0000000000000000000000000000000000000000"
 IDENT="kd9taw@protonmail.com"
 PAT="${NEXUS_LEAK_PATTERNS:-$HOME/.nexus-leak-patterns}"
 
+# Third-party licence BODY text: phrases that appear in a licence itself and never in our own
+# source. Verified 2026-08-07 across the whole tree — the only files that match are the nine
+# that genuinely carry a third-party licence (hamlib, DeepCW, tempo-sstv, cty.dat, cqzones,
+# tempodeep). Zero false positives is the point; widen this only with the same check re-run.
+LICENCE_BODY='GNU GENERAL PUBLIC LICENSE|GNU LESSER GENERAL PUBLIC LICENSE|GNU AFFERO GENERAL PUBLIC LICENSE|Permission is hereby granted, free of charge|Redistribution and use in source and binary forms|Licensed under the Apache License|Mozilla Public License'
+VENDOR_PATH='(^|/)(vendor|vendored|third[-_]party|external)/'
+
 fail() { echo "pre-push: $*" >&2; exit 1; }
 
+scrub_fail() {
+  echo "pre-push: SCRUB HIT — $1:" >&2
+  echo "$2" | cut -c1-160 | sed 's/^/pre-push:   /' >&2
+  echo "pre-push: rule: no personal identity reaches a public surface. A commit that carries" >&2
+  echo "pre-push: it publishes it FOREVER, even if a later commit removes it again." >&2
+  echo "pre-push: fix the history (rebase/amend); do not add a scrub commit on top." >&2
+  exit 1
+}
+
+# 0. Sanity: every check below is a git command whose failure is indistinguishable from
+#    "nothing to report". If we are not in a repo, they all return empty and this would
+#    wave the push through. Refuse instead.
+git rev-parse --git-dir >/dev/null 2>&1 || fail "not inside a git repository — refusing rather than passing every check vacuously."
+
+# 1. Wrong-remote guard.
 case "$url" in
   *kd9taw/tempo*) fail "refusing: '$url' is the unrelated kd9taw/tempo repo" ;;
 esac
 
 [ -r "$PAT" ] || fail "patterns file '$PAT' missing/unreadable — create it (0600, one regex per line) or set NEXUS_LEAK_PATTERNS. Refusing to push unscrubbed."
 
-while read -r _lref lsha _rref rsha; do
+# A blank line in the patterns file is an empty regex: it matches EVERY line and would block
+# every push in the project until someone found it — or, worse, taught everyone --no-verify.
+grep -q '^[[:space:]]*$' "$PAT" && fail "patterns file '$PAT' contains a blank line, which matches everything. Remove it — one regex per line, no blanks."
+
+while read -r _lref lsha rref rsha; do
   [ "$lsha" = "$ZERO" ] && continue   # ref deletion — nothing new leaves
+
+  # 2. Release-tag gate — before any range work; a tag usually adds no new commits.
+  case "$rref" in
+    refs/tags/v*)
+      if [ "${NEXUS_RELEASE_APPROVED:-}" != "1" ]; then
+        echo "pre-push: REFUSING to push release tag '$rref'." >&2
+        echo "pre-push: a v* tag fires .github/workflows/release.yml, which builds every" >&2
+        echo "pre-push: platform and PUBLISHES a public GitHub Release. CLAUDE.md 'Hard" >&2
+        echo "pre-push: rules': a release needs maintainer approval for THAT action, every" >&2
+        echo "pre-push: time — prior approval does not carry over." >&2
+        echo "pre-push: deliberate override:  NEXUS_RELEASE_APPROVED=1 git push $remote $rref" >&2
+        exit 1
+      fi ;;
+  esac
 
   if [ "$rsha" = "$ZERO" ]; then
     # New remote ref: range = commits not already on any ref of this remote;
-    # content = full tree at the tip (first publication of this line of work).
-    range=$(git rev-list "$lsha" --not --remotes="$remote" 2>/dev/null)
+    # endpoint = full tree at the tip (first publication of this line of work).
+    rspec=( "$lsha" --not --remotes="$remote" )
     diff_base=$(git hash-object -t tree /dev/null)
   else
-    range=$(git rev-list "$rsha..$lsha" 2>/dev/null)
+    rspec=( "$rsha..$lsha" )
     diff_base="$rsha"
   fi
-  [ -z "$range" ] && continue
+  git rev-list "${rspec[@]}" 2>/dev/null | grep -q . || continue
 
-  # 2. Identity — author AND committer email on every outgoing commit.
-  bad=$(echo "$range" | while read -r c; do
-    git show -s --format='%ae%n%ce' "$c"
-  done | sort -u | grep -vFx "$IDENT" || true)
+  # 3. Identity — author AND committer email on every outgoing commit.
+  bad=$(git log --format='%ae%n%ce' "${rspec[@]}" 2>/dev/null | sort -u | grep -vFx "$IDENT" || true)
   [ -n "$bad" ] && fail "non-project identity in outgoing commits: $bad (repo config must be KD9TAW <$IDENT>)"
 
-  # 3a. Content scrub of what this push makes public.
-  hits=$(git diff "$diff_base" "$lsha" 2>/dev/null | grep -aiE -f "$PAT" | head -5 || true)
-  [ -n "$hits" ] && { echo "pre-push: SCRUB HIT in pushed content:" >&2; echo "$hits" >&2; exit 1; }
+  # 4a. Metadata + commit messages, PER COMMIT across the range (whole text — a pattern here
+  #     is a leak whichever way it points).
+  hits=$(git log --format='commit %H%n  author %an <%ae>%n  committer %cn <%ce>%n%n%B' \
+           "${rspec[@]}" 2>/dev/null | grep -aiE -f "$PAT" | head -5 || true)
+  [ -n "$hits" ] && scrub_fail "commit metadata or message" "$hits"
 
-  # 3b. Commit messages in the range.
-  msghits=$(echo "$range" | while read -r c; do git show -s --format='%B' "$c"; done \
-            | grep -aiE -f "$PAT" | head -5 || true)
-  [ -n "$msghits" ] && { echo "pre-push: SCRUB HIT in commit messages:" >&2; echo "$msghits" >&2; exit 1; }
+  # 4b. ADDED lines of every commit in the range — what an endpoint diff cannot see.
+  #     See WHY CHECK 4 IS PER-COMMIT and WHY ADDED LINES ONLY above.
+  hits=$(git log -p --no-color --format='' "${rspec[@]}" 2>/dev/null \
+           | grep -a '^+' | grep -aiE -f "$PAT" | head -5 || true)
+  [ -n "$hits" ] && scrub_fail "content added by a pushed commit" "$hits"
+
+  # 4c. Endpoint diff — the one thing 4b misses: content introduced BY a merge commit.
+  hits=$(git diff "$diff_base" "$lsha" 2>/dev/null \
+           | grep -a '^+' | grep -aiE -f "$PAT" | head -5 || true)
+  [ -n "$hits" ] && scrub_fail "content present in the pushed tree" "$hits"
+
+  # 5. Licence/NOTICE guard.
+  if [ "${NEXUS_ALLOW_VENDOR:-}" != "1" ]; then
+    vend=$(git log --diff-filter=A --name-only --format='' "${rspec[@]}" 2>/dev/null \
+             | grep -E "$VENDOR_PATH" | sort -u | head -5 || true)
+    # This file is excluded from its own content scan: LICENCE_BODY above is a list of
+    # licence phrases, so every edit to this gate would otherwise trip it — and a gate that
+    # blocks its own maintenance is a gate people learn to bypass. Root-anchored (':/') so it
+    # does not depend on the hook's working directory.
+    licadd=$(git log -p --no-color --format='' "${rspec[@]}" -- ':/' ':!/.githooks/pre-push' 2>/dev/null \
+             | grep -a '^+' | grep -aiE "$LICENCE_BODY" | head -3 || true)
+    if [ -n "$vend" ] || [ -n "$licadd" ]; then
+      touched=$(git log --name-only --format='' "${rspec[@]}" 2>/dev/null \
+                | grep -E '(^|/)NOTICE(\.md)?$' | head -1 || true)
+      if [ -z "$touched" ]; then
+        echo "pre-push: LICENCE GUARD — this push adds third-party source but never touches NOTICE." >&2
+        [ -n "$vend" ] && { echo "pre-push:   new files under a vendor path:" >&2
+                            echo "$vend" | sed 's/^/pre-push:     /' >&2; }
+        [ -n "$licadd" ] && { echo "pre-push:   added lines carrying licence body text:" >&2
+                              echo "$licadd" | cut -c1-120 | sed 's/^/pre-push:     /' >&2; }
+        echo "pre-push: CLAUDE.md 'Hard rules': vendored/OSS additions need per-file licence" >&2
+        echo "pre-push: review, GPL-3.0-only compatibility, source headers intact, a NOTICE" >&2
+        echo "pre-push: entry and README credit — BEFORE commit, not after." >&2
+        echo "pre-push: add the NOTICE entry, or if this genuinely vendors nothing:" >&2
+        echo "pre-push:   NEXUS_ALLOW_VENDOR=1 git push ..." >&2
+        exit 1
+      fi
+    fi
+  fi
 done
 
 exit 0

@@ -32,12 +32,28 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
 ## Hard rules (approval-gated — ask the maintainer, every time)
 
 - **Never** push, tag, publish a release, deploy, or run a mirror/publish script without explicit
-  maintainer approval for that specific action. Prior approval does not carry over.
+  maintainer approval for that specific action. Prior approval does not carry over. The release
+  half is mechanical: pushing a `v*` tag fires `release.yml` and publishes a public GitHub
+  Release, so the pre-push hook refuses it unless `NEXUS_RELEASE_APPROVED=1` is set for that push.
 - Commits use the **project identity only** (`KD9TAW <kd9taw@protonmail.com>`, repo-local git
-  config). The pre-push hook enforces identity and a content scrub — enable it once per clone:
-  `git config core.hooksPath .githooks` (see `.githooks/pre-push` header for the scrub-pattern file).
+  config — the global gitconfig is a different identity and must never reach a commit here).
+  `.githooks/pre-push` is the one gate in this project that is mechanism rather than prose:
+  wrong-remote guard, release-tag gate, identity, a **per-commit** content scrub, and a
+  licence/NOTICE guard. Each names its own deliberate override; read that file's header before
+  working around one.
+  **Enable it with an ABSOLUTE `core.hooksPath` — never the relative `.githooks`.** Git resolves
+  a relative hooksPath inside the *checked-out worktree*, so on any branch predating
+  `.githooks/pre-push` it silently runs no hook at all (43 of 51 local branches were in that
+  state when this was found). Point `core.hooksPath` at a shim in the git common dir that
+  `exec`s `$(git rev-parse --show-toplevel)/.githooks/pre-push` and *refuses* when it is absent:
+  `git config core.hooksPath "$(git rev-parse --git-common-dir)/nexus-hooks"`.
+  The scrub patterns are deliberately **not** in this repo (it is public); the hook reads
+  `$HOME/.nexus-leak-patterns` (0600, one extended regex per line, no blank lines).
 - **Vendored/OSS additions**: per-file license review, GPL-3.0-only compatibility, source headers
-  intact, NOTICE entry, README credit — before commit, not after.
+  intact, NOTICE entry, README credit — before commit, not after. The pre-push hook enforces the
+  mechanical half only: a push that adds files under a vendor path, or adds third-party licence
+  body text, must also touch `NOTICE` (override `NEXUS_ALLOW_VENDOR=1`). It cannot tell you the
+  entry is *correct*, and it does not review the licence for you.
 - **FT-mode TX/timing/QSO-sequencing changes** require explicit maintainer sign-off. WSJT-X
   behavior is a compatibility contract; on-air correctness cannot be verified in CI.
 - Transmit-path safety invariants (TX enable latch, license-class gate, PTT watchdog) are
