@@ -94,6 +94,11 @@ jobs:
   resolve:
     name: Resolve the release + check the secrets
     runs-on: ubuntu-latest
+    # The four deploy secrets live on the `production` environment, not repo-wide, so only
+    # this workflow can read them — a repo-wide secret is readable by any workflow anyone
+    # adds. Both jobs must opt in or `secrets.*` resolves to empty and the run blocks with
+    # "missing repository secrets", which is exactly what happened on 2026-08-07.
+    environment: production
     outputs:
       tag: ${{ steps.rel.outputs.tag }}
       ver: ${{ steps.rel.outputs.ver }}
@@ -194,6 +199,7 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.proceed == 'true'
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 90
     env:
       TAG: ${{ needs.resolve.outputs.tag }}

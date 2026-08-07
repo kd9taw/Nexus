@@ -36,9 +36,10 @@ A `release:` trigger only fires from the default branch's copy of a workflow.
 
 ---
 
-## 2. The four repository secrets
+## 2. The four secrets — on the `production` ENVIRONMENT, not repo-wide
 
-Add each at **Settings -> Secrets and variables -> Actions -> New repository secret**, on
+Add each at **Settings -> Environments -> production -> Add secret**, on
+(or `gh secret set NAME --repo kd9taw/Nexus --env production`), on
 `kd9taw/nexus`. Names are exact.
 
 | Secret | What it is |
