@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-08-06
+
+
 ### Added
 
 - **SSTV transmit was sending no station identification of any kind. It now burns your callsign
@@ -130,7 +133,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot drift again — which matters more than it did, because the composer now uses that number to
   tell you how long the transmitter will be keyed.
 
-## [1.0.2] — 2026-08-05
 
 ### Fixed
 
