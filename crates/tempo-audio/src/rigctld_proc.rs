@@ -557,10 +557,67 @@ fn assign_kill_on_close_job(child: &Child) -> isize {
     }
 }
 
+/// Extra absolute directories to search for a Hamlib binary once it is neither bundled next to
+/// the app nor found by name below — the last resort before giving up and handing `Command` the
+/// bare name (which fails silently into a PATH lookup).
+///
+/// **Why this exists at all.** A GUI app launched from Finder/Dock/Spotlight is started by
+/// launchd, which on every macOS version hands it the fixed environment
+/// `PATH=/usr/bin:/bin:/usr/sbin:/sbin` — never the interactive shell's `PATH`, and so never
+/// Homebrew's install prefix, no matter what the operator's own `.zshrc` says or how their
+/// terminal resolves `rigctld`. `Command::new("rigctld")` from inside Nexus therefore fails even
+/// on a station where `which rigctld` works fine in Terminal — confirmed on 2026-08-07 (Nexus's
+/// own `PATH` inside a Finder-launched process was verified as exactly those four directories,
+/// while `rigctld` sat in `/opt/homebrew/bin`, on `PATH` for every shell but invisible to Nexus).
+/// Linux desktop launchers can hit the same gap for a Hamlib built from source into
+/// `/usr/local/bin`, so this list is not Homebrew-only.
+#[cfg(unix)]
+const HAMLIB_SEARCH_DIRS: &[&str] = &[
+    "/opt/homebrew/bin", // Homebrew, Apple Silicon
+    "/usr/local/bin",    // Homebrew, Intel Mac; also a common manual/from-source install prefix
+    "/opt/local/bin",    // MacPorts
+];
+
+/// Return the first `dirs` entry that contains a file named `bin_name`, absolute path — the
+/// search core of [`resolve_rigctld`] / [`resolve_rotctld`] / [`resolve_rigctl`]'s fallback,
+/// factored out so it can be driven by a fixture list in tests instead of the real
+/// [`HAMLIB_SEARCH_DIRS`].
+#[cfg(unix)]
+fn find_in_dirs(dirs: &[&str], bin_name: &str) -> Option<std::ffi::OsString> {
+    dirs.iter()
+        .map(|dir| std::path::Path::new(dir).join(bin_name))
+        .find(|p| p.is_file())
+        .map(std::path::PathBuf::into_os_string)
+}
+
+/// Does `path_var` (a `PATH`-shaped, `:`-joined list of directories) resolve `bin_name`? The
+/// testable core of [`on_path`] — takes the value as a parameter instead of reading the real
+/// process environment, so a test can drive it without mutating global state that other tests
+/// (the fixture stand-in below) already depend on being left alone.
+#[cfg(unix)]
+fn path_has(path_var: &std::ffi::OsStr, bin_name: &str) -> bool {
+    std::env::split_paths(path_var).any(|dir| dir.join(bin_name).is_file())
+}
+
+/// Does the CURRENT process's own `PATH` already resolve `bin_name`? Read-only mirror of the
+/// search `Command::new(bin_name)` is about to do itself.
+///
+/// **Why check this instead of just always trying [`HAMLIB_SEARCH_DIRS`] first.** An operator
+/// (or a test) may deliberately put a specific `rigctld` earliest on `PATH` — a version pin, a
+/// wrapper script, a fixture stand-in — and that intent must outrank Nexus's own guess at common
+/// install directories. [`HAMLIB_SEARCH_DIRS`] exists for the case PATH has NOTHING, not to
+/// second-guess a PATH that already has something.
+#[cfg(unix)]
+fn on_path(bin_name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| path_has(&path, bin_name))
+}
+
 /// Locate the `rigctld` binary. Prefers one **bundled next to the app** — the
 /// Windows installer ships Hamlib under the install dir (with its DLLs), so CAT
-/// works with no separate Hamlib install — and falls back to `rigctld` on
-/// `PATH`. Launching the bundled exe by full path lets Windows resolve its
+/// works with no separate Hamlib install — then whatever `rigctld` the process's own `PATH`
+/// already resolves, and only when PATH has NOTHING does it try a handful of common
+/// package-manager install directories (see [`HAMLIB_SEARCH_DIRS`]) before giving up and handing
+/// `Command` the bare name. Launching the bundled exe by full path lets Windows resolve its
 /// co-located DLLs (libhamlib-4.dll etc.) from the exe's own directory.
 fn resolve_rigctld() -> std::ffi::OsString {
     if let Ok(exe) = std::env::current_exe() {
@@ -576,6 +633,12 @@ fn resolve_rigctld() -> std::ffi::OsString {
                     return p.into_os_string();
                 }
             }
+        }
+    }
+    #[cfg(unix)]
+    if !on_path("rigctld") {
+        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rigctld") {
+            return p;
         }
     }
     std::ffi::OsString::from("rigctld")
@@ -596,8 +659,8 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
     args
 }
 
-/// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), falling
-/// back to PATH — same resolution as [`resolve_rigctld`].
+/// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), then the same
+/// [`HAMLIB_SEARCH_DIRS`] fallback, then PATH — same resolution as [`resolve_rigctld`].
 fn resolve_rotctld() -> std::ffi::OsString {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -612,6 +675,12 @@ fn resolve_rotctld() -> std::ffi::OsString {
                     return p.into_os_string();
                 }
             }
+        }
+    }
+    #[cfg(unix)]
+    if !on_path("rotctld") {
+        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rotctld") {
+            return p;
         }
     }
     std::ffi::OsString::from("rotctld")
@@ -767,6 +836,12 @@ pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
                     return p.into_os_string();
                 }
             }
+        }
+    }
+    #[cfg(unix)]
+    if !on_path("rigctl") {
+        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rigctl") {
+            return p;
         }
     }
     std::ffi::OsString::from("rigctl")
@@ -941,6 +1016,75 @@ pub fn spawn_rigctld(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repro for the 2026-08-07 macOS report: `rigctld` installed via Homebrew, `which rigctld`
+    /// works in every terminal, and Nexus still can't spawn it — because a Finder-launched app's
+    /// `PATH` is launchd's fixed `/usr/bin:/bin:/usr/sbin:/sbin`, which never includes
+    /// `/opt/homebrew/bin`. [`find_in_dirs`] is the fix: an explicit directory search that does
+    /// not depend on the process's inherited `PATH` at all.
+    #[cfg(unix)]
+    #[test]
+    fn find_in_dirs_locates_a_binary_path_would_miss() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-rigctld-proc-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("rigctld"), b"#!/bin/sh\n").unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        // Not present in a directory that doesn't have it.
+        assert_eq!(
+            find_in_dirs(&["/nonexistent-nexus-test-dir"], "rigctld"),
+            None
+        );
+        // Found when its directory is in the search list, first hit wins, and the directories
+        // that don't have it are skipped over rather than short-circuiting the search.
+        let found = find_in_dirs(&["/nonexistent-nexus-test-dir", dir_str], "rigctld").unwrap();
+        assert_eq!(std::path::Path::new(&found), dir.join("rigctld"));
+        // A name that isn't in ANY of the search dirs stays a miss.
+        assert_eq!(find_in_dirs(&[dir_str], "rotctld"), None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The priority guard: [`HAMLIB_SEARCH_DIRS`] must never outrank a `rigctld` the operator (or
+    /// a test) deliberately put on `PATH` — that's what a fixture stand-in prepended to `PATH`
+    /// depends on, in [`crate::service::tests::an_ordinary_connect_failure_carries_what_the_daemon_said`].
+    /// Drives [`path_has`] directly (never touches the real `PATH`) so it cannot race that test,
+    /// which mutates the process's actual `PATH` and is never restored by design (its own comment:
+    /// "this is the only test in this binary that resolves a rigctld").
+    #[cfg(unix)]
+    #[test]
+    fn path_has_is_true_only_when_a_search_dir_actually_has_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-rigctld-proc-onpath-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("rigctld"), b"#!/bin/sh\n").unwrap();
+
+        // A PATH that does not mention our fixture dir at all.
+        assert!(!path_has(
+            std::ffi::OsStr::new("/nonexistent-nexus-test-dir"),
+            "rigctld"
+        ));
+        // Prepended, matching how the fixture-stand-in test builds its own PATH — found.
+        let path_var = format!("{}:/nonexistent-nexus-test-dir", dir.display());
+        assert!(path_has(std::ffi::OsStr::new(&path_var), "rigctld"));
+        // A name that isn't in the fixture dir stays a miss even though the dir IS on PATH.
+        assert!(!path_has(std::ffi::OsStr::new(&path_var), "rotctld"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// ⭐ The ring's own contract, at the volume that broke it. `said_ring` is replayed against a
     /// REAL capture in `service::tests::the_daemons_diagnosis_survives_a_stream_that_never_stops`;

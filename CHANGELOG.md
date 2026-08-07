@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS: CAT could fail to connect even with Hamlib installed via Homebrew.** A Finder/Dock-
+  launched app is started by launchd with a fixed `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin` —
+  never the interactive shell's `PATH`, so a Homebrew `rigctld` (`/opt/homebrew/bin` on Apple
+  Silicon, `/usr/local/bin` on Intel) or a MacPorts one (`/opt/local/bin`) was invisible to Nexus
+  even though it worked fine from Terminal. Nexus now also checks those common install
+  directories before giving up, the same way the Windows build already prefers a binary bundled
+  next to the app. A `rigctld` already on `PATH` still always wins.
+
 ## [1.0.2] — 2026-08-06
 
 
