@@ -146,14 +146,13 @@ pub fn is_compound(call: &str) -> bool {
 
 /// True when `call` fits the 77-bit protocol's **standard 28-bit callsign field** —
 /// WSJT-X's `MainWindow::stdCall()` (`widgets/mainwindow.cpp:6627`, transcribed from
-/// upstream master), whose regex is
-///
-/// ```text
-/// ^\s* ( [A-Z]{0,2} | [A-Z][0-9] | [0-9][A-Z] )   # part 1
-///      ( [0-9][A-Z]{0,3} )                        # part 2
-///      (/R | /P)?                                 # optional suffix
-/// \s*$                                            # case-insensitive
-/// ```
+/// upstream master). Its regex is not reproduced here — WSJT-X is GPL-3.0-only and this
+/// tree's NOTICE states that none of its Qt/GUI code is included. Described instead: an
+/// optional-whitespace-delimited, case-insensitive match of a one-or-two-character prefix
+/// group, then a digit followed by up to three letters, then an OPTIONAL `/R` or `/P`.
+/// The exact pattern is pinned by sha256 in `tests/fixtures/wsjtx-callsign-oracle.json`,
+/// and this predicate is checked against upstream's real behaviour by
+/// `tests/wsjtx_predicate_differential.rs` — measurement, not transcription.
 ///
 /// **`/P` and `/R` are standard**, and that is the whole point of this predicate.
 /// They are the only two suffixes the protocol carries NATIVELY: Type 1
@@ -199,7 +198,8 @@ pub fn is_std_call(call: &str) -> bool {
 
 /// True when `call` is what WSJT-X calls a **77-bit nonstandard callsign** —
 /// `Radio::is_77bit_nonstandard_callsign` (`Radio.cpp:147`, transcribed from upstream
-/// master): it is in the callsign alphabet (`^[A-Z0-9/]{3,11}$`) and does NOT match
+/// master): it is in upstream's callsign alphabet (a 3-11 character class, pinned by sha256 in
+/// the oracle fixture) and does NOT match
 /// the strict standard shape (`^([A-Z][0-9]?|[0-9A-Z][A-Z])[0-9][A-Z]{0,3}$`).
 ///
 /// **Coarser than [`is_std_call`], deliberately.** This one has no `/R`//`P`

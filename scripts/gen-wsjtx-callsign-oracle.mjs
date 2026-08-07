@@ -20,7 +20,7 @@
 //   * Qt compiles PCRE2 WITHOUT `PCRE2_UCP`, so `\s` is ASCII-only — narrower than Rust's
 //     `str::trim`, which is Unicode White_Space and eats NBSP and U+2028.
 //   * PCRE2's default `$` also matches BEFORE a final newline, so `"W9XYZ\n"` satisfies
-//     `^[A-Z0-9/]{3,11}$`. Masked inside `stdCall` (its `\s*` eats the newline first) and LIVE
+//     the callsign-alphabet class. Masked inside `stdCall` (its `\s*` eats the newline first) and LIVE
 //     in the two Radio.cpp regexes — a naive port is right where it does not matter and wrong
 //     where it does.
 // Those four are measured here rather than reasoned about. The fixture is the measurement.
@@ -123,17 +123,21 @@ if (alphabetRe.flags || strictRe.flags) {
 // `is_77bit_nonstandard_callsign` is a COMPOSITION of the two Radio.cpp regexes, not a regex of
 // its own. Verify the composition rather than transcribe it, so a change upstream is a hard
 // failure here instead of a wrong column in the fixture.
+const fingerprint = (t) => createHash('sha256').update(t, 'utf8').digest('hex')
+
 const nonstdBody = SOURCES['Radio.cpp'].match(
   /bool\s+is_77bit_nonstandard_callsign\s*\([^)]*\)\s*\{([\s\S]*?)\}/,
 )
 if (!nonstdBody) throw new Error('Radio.cpp: is_77bit_nonstandard_callsign not found')
 const normalised = nonstdBody[1].replace(/\s+/g, ' ').trim()
-const EXPECTED_NONSTD =
-  'return callsign.contains (callsign_alphabet_re) && !callsign.contains (strict_standard_callsign_re);'
-if (normalised !== EXPECTED_NONSTD) {
+// Compared by hash, not by embedding the line: the check is just as strict, and no upstream
+// source text enters this repo. If it trips, read the function at the pinned revision.
+const EXPECTED_NONSTD_SHA = '617274ac8dcbb159ee1e258dbeecd5549770ac0adc6ce6a8485cd80745e1a68a'
+const gotSha = fingerprint(normalised)
+if (gotSha !== EXPECTED_NONSTD_SHA) {
   throw new Error(
-    `Radio.cpp: is_77bit_nonstandard_callsign changed shape.\n  got:      ${normalised}\n` +
-      `  expected: ${EXPECTED_NONSTD}\nRe-derive the fixture columns before regenerating.`,
+    `Radio.cpp: is_77bit_nonstandard_callsign changed shape (sha256 ${gotSha}).\n` +
+      `Re-derive the fixture columns, then update EXPECTED_NONSTD_SHA.`,
   )
 }
 
@@ -373,9 +377,19 @@ int main(int argc, char** argv) {
     // The pattern TEXT and the FLAGS, so a future reader can see what was measured and diff it
     // against a later upstream without re-running anything.
     patterns: {
-      standard_call_re: { pattern: stdCallRe.pattern, flags: stdCallRe.flags },
-      callsign_alphabet_re: { pattern: alphabetRe.pattern, flags: alphabetRe.flags || null },
-      strict_standard_callsign_re: { pattern: strictRe.pattern, flags: strictRe.flags || null },
+      // ⚠️ FINGERPRINTS ONLY — never the upstream pattern text. WSJT-X is GPL-3.0-only and
+      // `libtempo/vendor/wsjtx/README.md` states that none of its Qt/GUI code is included here.
+      // That statement stays true: we record a hash (staleness detection), the Qt flags (facts
+      // about how the pattern was compiled, which the measurement is meaningless without), and
+      // one structural predicate the tests care about. The measurements in `verdicts` are our
+      // own observations of upstream behaviour, not upstream's expression of it.
+      standard_call_re: {
+        sha256: fingerprint(stdCallRe.pattern),
+        flags: stdCallRe.flags,
+        has_suffix_alternation: /\(\s*\/R\s*\|\s*\/P\s*\)\?/.test(stdCallRe.pattern),
+      },
+      callsign_alphabet_re: { sha256: fingerprint(alphabetRe.pattern), flags: alphabetRe.flags || null },
+      strict_standard_callsign_re: { sha256: fingerprint(strictRe.pattern), flags: strictRe.flags || null },
       is_77bit_nonstandard_callsign: EXPECTED_NONSTD,
     },
     // `verdicts[2*i]` = stdCall(inputs[i]); `verdicts[2*i+1]` = is_77bit_nonstandard_callsign.

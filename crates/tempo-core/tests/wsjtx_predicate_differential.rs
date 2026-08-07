@@ -29,7 +29,7 @@
 //! `nexus == upstream` assertion is not the truth and would have to be suppressed within a week:
 //! **Nexus normalises its input and upstream does not.** Both Rust predicates begin
 //! `call.trim().to_ascii_uppercase()`; `Radio::is_77bit_nonstandard_callsign` matches
-//! `^[A-Z0-9/]{3,11}$` against the raw string, case-SENSITIVELY and with no leading-space
+//! the callsign-alphabet class against the raw string, case-SENSITIVELY and with no leading-space
 //! tolerance at all. So on `"w1aw/w4"` upstream says "not nonstandard" (it is not even in the
 //! callsign alphabet) while Nexus says "nonstandard" — thousands of such rows across the 5,233
 //! un-normalised inputs here, none of them a defect. The gate therefore asserts two separate,
@@ -247,13 +247,30 @@ fn the_oracle_fixture_is_intact_and_carries_its_provenance() {
         flags.contains("ExtendedPatternSyntaxOption"),
         "flags: {flags}"
     );
+    // The pattern TEXT is deliberately not in the fixture (GPL-3.0-only Qt source; the NOTICE
+    // says none of it is included here, and that stays true). Its sha256 pins staleness, and
+    // this boolean pins the one structural fact the predicate exists for.
     assert!(
-        v["patterns"]["standard_call_re"]["pattern"]
-            .as_str()
-            .unwrap_or("")
-            .contains("(/R | /P)?"),
+        v["patterns"]["standard_call_re"]["has_suffix_alternation"]
+            .as_bool()
+            .unwrap_or(false),
         "the stdCall pattern lost its suffix alternation — /P and /R are the whole point"
     );
+    for k in [
+        "standard_call_re",
+        "callsign_alphabet_re",
+        "strict_standard_callsign_re",
+    ] {
+        assert_eq!(
+            v["patterns"][k]["sha256"].as_str().map(str::len),
+            Some(64),
+            "{k}: no pattern fingerprint — upstream drift would be invisible"
+        );
+        assert!(
+            v["patterns"][k]["pattern"].is_null(),
+            "{k}: upstream pattern TEXT is back in the fixture — that is the licence leak"
+        );
+    }
     // Both Radio.cpp patterns are case-SENSITIVE and unflagged. That is not a detail: it is the
     // entire reason `is_77bit_nonstandard_call`'s `to_ascii_uppercase` is a divergence and not a
     // no-op, and the normalisation claim below is written around it.
