@@ -6636,9 +6636,14 @@ impl Engine {
         if self.qso_logged {
             return false;
         }
-        let (dxcall, dxgrid, rx_report) = match &self.mode {
+        let (dxcall, dxgrid, rx_report, report_impossible) = match &self.mode {
             Mode::Qso { station, .. } => match &station.dxcall {
-                Some(c) => (c.clone(), station.dxgrid.clone(), station.rx_report),
+                Some(c) => (
+                    c.clone(),
+                    station.dxgrid.clone(),
+                    station.rx_report,
+                    station.report_impossible_exchange(),
+                ),
                 None => return false,
             },
             _ => return false,
@@ -6646,7 +6651,14 @@ impl Engine {
         // Don't create a report-LESS record: a QSO isn't a contact until at least one
         // signal report has been exchanged (WSJT-X only logs after the report exchange).
         // Refuse a manual log while still calling CQ / awaiting the first report.
-        if rx_report.is_none() && self.qso_report_sent.is_none() {
+        //
+        // …unless the pair CANNOT exchange one. When the packer forces the i3=4 forms on
+        // both stations there is no report field in any over of the QSO, so demanding a
+        // report demands the impossible and the button no-ops for the whole contact —
+        // with auto-log off, that is the only way these contacts reach the log at all.
+        // `report_impossible_exchange` still requires the partner to have answered us on
+        // the air, so a CQ with nobody on it stays unloggable exactly as before.
+        if rx_report.is_none() && self.qso_report_sent.is_none() && !report_impossible {
             return false;
         }
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
@@ -12373,14 +12385,24 @@ impl Engine {
                 // on that line, or a companion app auto-replying to it across several
                 // cycles. Such a seed carries neither a received nor a sent report, so
                 // without this each one auto-logged a phantom QSO that never happened
-                // (the "3 identical calls I never worked" report). A real completion
-                // always exchanged reports, so this never blocks one. Mirrors the manual
+                // (the "3 identical calls I never worked" report). Mirrors the manual
                 // `log_current_qso` guard. (qso_logged guards the same-Station double;
                 // `log_qso` dedups as the final net, since call_station resets it.)
+                //
+                // "A real completion always exchanged reports" was the claim, and it is
+                // FALSE for seven callsign-class pairs: once the packer forces the i3=4
+                // forms on BOTH stations (a `/P` opposite a `/R`, or either opposite a
+                // genuinely nonstandard call), no over in the whole QSO has a field to put
+                // a number in. Those contacts run to 73 and could never satisfy the proxy,
+                // so they auto-logged nothing — and, on a CQ run, `resume_cq` waits on
+                // `qso_logged`, so the run stopped dead there too.
+                // `report_impossible_exchange` is the same claim made honestly: the partner
+                // advanced us ON THE AIR and a number was impossible throughout. The seed
+                // it was guarding against never advances on the air, so it stays blocked.
                 let report_exchanged =
                     station.rx_report.is_some() || self.qso_report_sent.is_some();
                 let loggable = match station.state {
-                    QsoState::Done => report_exchanged,
+                    QsoState::Done => report_exchanged || station.report_impossible_exchange(),
                     QsoState::Confirming => station.tx_count >= 1,
                     _ => false,
                 };
@@ -17431,6 +17453,67 @@ mod tests {
             Some("-7"),
             "RST_SENT survives working a station that answered our CQ"
         );
+    }
+
+    #[test]
+    fn a_contact_that_can_carry_no_report_still_reaches_the_log() {
+        // A `/P` station working a `/R` station. One `i3` names what BOTH suffix bits mean
+        // (`packjt77.f90:1223`), so the pair is unrepresentable in Type 1/2 and every over
+        // of the QSO is i3=4 — whose entire payload vocabulary is blank / RRR / RR73 / 73.
+        // There is no report field anywhere in the exchange, in either direction.
+        //
+        // The auto-log gate demanded a report at Done as a proxy for "a real exchange
+        // happened". For this pair the proxy demands the impossible: the contact runs to
+        // 73 and is then dropped on the floor, and on a CQ run the run stops too, because
+        // `resume_cq` waits on the contact being claimed. The record it writes now is the
+        // honest one — the RST fields are ABSENT, not filled with a number nobody sent.
+        let mut e = Engine::new("KD9TAW/P", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.call_station("F4CYH/R");
+        assert_eq!(
+            e.snapshot().qso.as_ref().and_then(|q| q.tx_now.clone()),
+            Some("<F4CYH/R> KD9TAW/P".into()),
+            "Tx1 is grid-less: /P cannot pack a grid opposite a hash"
+        );
+
+        // The DX answers. Their Tx1 and Tx2 are the SAME bytes — i3=4 has one blank
+        // payload — so this is every over they can send us until the roger.
+        e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R", -7)], 1);
+        // They roger with the only acknowledgement the frame carries.
+        e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 3);
+
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "the completed contact auto-logged");
+        assert_eq!(log[0].call, "F4CYH/R", "logged under the rover's real call");
+        assert_eq!(log[0].rst_rcvd, None, "no number was ever sent to us");
+        assert_eq!(log[0].rst_sent, None, "and we could send none either");
+    }
+
+    #[test]
+    fn a_double_clicked_rr73_still_logs_nothing() {
+        // The other side of the same gate. Relaxing it must NOT re-open the phantom-QSO
+        // hole (the "3 identical calls I never worked" report): `call_station` synthesizes
+        // a Done straight out of one decoded RR73, with no exchange behind it. That seed
+        // is report-less AND belongs to a report-impossible pair — exactly the shape the
+        // relaxed gate could have waved through. It never advanced on the air, so it does
+        // not, and the manual Log QSO button refuses it too.
+        let mut e = Engine::new("KD9TAW/P", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 1);
+        e.call_station_ctx(
+            "F4CYH/R",
+            None,
+            Some("<KD9TAW/P> F4CYH/R RR73"),
+            Some(-7),
+            None,
+        );
+        e.ingest_decodes_for_test(&[], 3);
+        assert!(
+            e.get_log().is_empty(),
+            "a synthesized Done is not a contact: {:?}",
+            e.get_log()
+        );
+        assert!(!e.log_current_qso(), "…and Log QSO refuses it too");
     }
 
     #[test]

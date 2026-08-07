@@ -51,6 +51,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An FT8 QSO between two callsigns the message format cannot carry together never finished — the
+  two stations traded the same transmission back and forth until an operator gave up.** Nine of the
+  sixteen combinations of callsign shapes could not complete a contact. The one most people meet is
+  a home station working a DXpedition with a compound call such as `PJ4/K1ABC`; a `/P` station
+  opposite a `/R` station, and either of those opposite any nonstandard call, are the rest.
+  The 77-bit protocol has one message type that puts both callsigns on the air in full, and it has
+  room for nothing else — no grid, no signal report. Its whole payload is a blank, `RRR`, `RR73` or
+  `73`. Some pairs of callsigns force that type, because it is the only way to name both stations
+  correctly, and once it is forced "I am calling you" and "here is your report" become the identical
+  transmission. The auto-sequencer had no rule for that: each station read the other's report as a
+  call, answered it with a report of its own, and then waited for a roger the other was equally
+  waiting to receive. Nothing was malformed and nothing was mis-addressed — every transmission in
+  the deadlock was a legal, correctly-addressed FT8 message to the right station — so nothing on
+  screen said anything was wrong. The sequencer now separates the two the way the protocol intends,
+  by what it last sent itself: if it is waiting for a roger, an over from the station it is working
+  is that station's answer, and the exchange moves on. All sixteen combinations run to 73 in the
+  usual five or six overs.
+
+- **Those contacts also reach the log now, and the signal-report fields are left empty rather than
+  filled with a number nobody sent.** Seven of the sixteen combinations exchange no numeric report
+  in either direction — the messages have no field for one, so neither station can send it and
+  WSJT-X cannot either. Auto-log required a report to have been exchanged, as its check against
+  logging a contact that never happened, and for these pairs that required the impossible: the QSO
+  completed on the air and was then dropped, the Log QSO button no-opped, and a CQ run stopped dead
+  because it waits for the contact to be claimed before it calls again. The check against a phantom
+  contact is intact — it now asks whether the station you were working ever actually answered you,
+  which is what it was always after — so double-clicking a stray `RR73` still logs nothing.
+
 - **The SSTV mode picker understated every mode's airtime by about a second.** The pixel sizes were
   right, but the durations beside them were a hand-maintained copy that had drifted from what the
   encoder actually emits. They are now the exact figures, and a test compares the two tables so they

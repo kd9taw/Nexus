@@ -113,6 +113,11 @@ pub struct Station {
     /// transmitting a parting 73 (the Fox segment must stay clean). Set by the
     /// engine when the operator's special-op mode is Hound.
     pub quiet_finish: bool,
+    /// True once the PARTNER has advanced this exchange at least once on the air —
+    /// i.e. [`Self::observe`] moved the state, not [`Self::start`]'s resume table.
+    /// Distinguishes a QSO that really ran from a `Done` SYNTHESIZED out of a single
+    /// decoded RR73/73 the operator double-clicked (see [`Self::report_impossible_exchange`]).
+    pub advanced_on_air: bool,
     /// Human-readable event log.
     pub transcript: Vec<String>,
 }
@@ -138,6 +143,7 @@ impl Station {
             call_cap: None,
             confirm_with_rrr: false,
             quiet_finish: false,
+            advanced_on_air: false,
             transcript: Vec::new(),
         }
     }
@@ -158,6 +164,7 @@ impl Station {
             call_cap: None,
             confirm_with_rrr: false,
             quiet_finish: false,
+            advanced_on_air: false,
             transcript: Vec::new(),
         }
     }
@@ -354,6 +361,9 @@ impl Station {
             call_cap: None,
             confirm_with_rrr: prefer_rrr,
             quiet_finish: false,
+            // `start()` resumes from a message we ALREADY had; the partner has not
+            // answered US yet. Only `observe` can set this.
+            advanced_on_air: false,
             transcript: vec![log_line],
         }
     }
@@ -397,6 +407,66 @@ impl Station {
                 .dxcall
                 .as_deref()
                 .is_some_and(crate::message::is_compound)
+    }
+
+    /// True when this QSO's overs may arrive — or must go out — in the DEGRADED i3=4
+    /// vocabulary, whose ENTIRE payload set is blank / `RRR` / `RR73` / `73`
+    /// (`pack77_4` spends 2 bits on `nrpt`; there is no grid field and no report
+    /// field). Gates the [`Self::observe`] arms that must accept a grid-less,
+    /// number-less over as genuine progress. **Never decides what we send** —
+    /// [`Self::hashed_form`] does that.
+    ///
+    /// Two sources, and BOTH have to be here:
+    ///
+    /// * [`Self::needs_hashed_form`] — the pairs *we* cannot express in Type 1/2, so
+    ///   this is the vocabulary we put on the air ourselves. [`Self::is_compound_qso`]
+    ///   alone misses them: a 77-bit nonstandard call need carry no slash at all
+    ///   (`YW18FIFA`), and the `/P` × `/R` conflict is a property of neither call on
+    ///   its own. Guarding the degraded arms on the slash test is why those pairs
+    ///   livelocked — every over was legal, and no arm would look at it.
+    /// * [`Self::is_compound_qso`] — receive-side tolerance for a partner who degrades
+    ///   where we would not: a `/P` station running a Nexus from before `c745a842`
+    ///   answers a plain-form QSO grid-less, and we must still advance.
+    fn degraded_vocabulary(&self) -> bool {
+        self.needs_hashed_form() || self.is_compound_qso()
+    }
+
+    /// True when a NUMERIC report can ride this pair's overs in at least one direction.
+    ///
+    /// A plain Type 1/2 pair always can. Once the pair falls to the hashed forms, only
+    /// a plain c28 call standing opposite the hash may still carry one
+    /// ([`crate::message::packs_beside_hash`] — `packjt77.f90:1183-1184` refuses Type
+    /// 1/2 to any slashed call beside a hashed token), and it is the SENDER of each
+    /// over that decides. So `KD9TAW × PJ4/K1ABC` still exchanges one number (mine);
+    /// `KD9TAW/P × F4CYH/R`, `KD9TAW/P × PJ4/K1ABC` and `YW18FIFA × PJ4/K1ABC`
+    /// exchange none at all, in either direction, for the whole QSO.
+    fn report_can_ride(&self) -> bool {
+        if !self.needs_hashed_form() {
+            return true;
+        }
+        crate::message::packs_beside_hash(&self.mycall)
+            || self
+                .dxcall
+                .as_deref()
+                .is_some_and(crate::message::packs_beside_hash)
+    }
+
+    /// True when a real exchange is under way with this station and NO numeric report
+    /// can ever be part of it, **because the protocol has no field for one**
+    /// ([`Self::report_can_ride`]) — not because nothing has happened.
+    ///
+    /// Both log paths otherwise require a report in one direction, as a proxy for "a
+    /// real exchange happened": `call_station` can synthesize a [`State::Done`] straight
+    /// out of a single decoded RR73/73 the operator double-clicked, and such a seed must
+    /// never log a phantom contact. That proxy is measurably wrong for the seven
+    /// callsign-class pairs whose every over is i3=4 — they run a genuine QSO to 73 and
+    /// can never produce the number the gate demands, so the contact was dropped. This
+    /// is the same claim stated honestly: the partner advanced us ON THE AIR
+    /// ([`Self::advanced_on_air`], which a synthesized `Done` never sets) and a number
+    /// was impossible throughout. The log then records what really happened — an ABSENT
+    /// RST, never an invented one.
+    pub fn report_impossible_exchange(&self) -> bool {
+        self.advanced_on_air && !self.report_can_ride()
     }
 
     /// Rewrite a message into its modem-faithful hashed form when the pair cannot ride
@@ -759,16 +829,36 @@ impl Station {
                         crate::message::fmt_report(rpt)
                     ));
                 }
+                // A caller awaiting a ROGER whose DX sends a bare report instead: we both
+                // sent Tx2. The DX read our report as a call — which is exactly what it
+                // looks like once the pair falls to i3=4, where Tx1 and Tx2 pack to the
+                // same bytes — so their number is the one that got through. Capture it and
+                // roger it, the same resume the `start()` table gives a Report context.
+                (State::AwaitRoger, Msg::Report { to, de, snr })
+                    if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
+                {
+                    self.rx_report = Some(*snr);
+                    self.pending = Some(Msg::RReport {
+                        to: de.clone(),
+                        de: self.mycall.clone(),
+                        snr: rpt,
+                    });
+                    self.state = State::AwaitRr73;
+                    self.log(format!(
+                        "got report {snr} while awaiting a roger → sending R{}",
+                        crate::message::fmt_report(rpt)
+                    ));
+                }
                 // --- Compound QSO completion: a compound party can't send a numeric
                 // report through i3=4, so the report exchange inverts — the STANDARD
                 // station reports and the compound station rogers. These arms (guarded to
-                // compound QSOs so standard flows are untouched) advance on the grid-less
-                // i3=4 forms the compound partner actually delivers. ---
+                // the DEGRADED vocabulary so standard flows are untouched) advance on the
+                // grid-less i3=4 forms the partner actually delivers. ---
                 // The compound DX answered my call grid-less (no report possible) → I
                 // send MY report (it survives: I'm the standard c28 sender) and await
                 // their roger.
                 (State::AwaitReport, Msg::Grid { to, de, grid })
-                    if self.is_compound_qso()
+                    if self.degraded_vocabulary()
                         && crate::message::same_call(to, &self.mycall)
                         && self.from_dx(de) =>
                 {
@@ -789,7 +879,7 @@ impl Station {
                 // The compound DX rogered my report (RR73/RRR) → QSO complete, send 73.
                 (State::AwaitRoger, Msg::Rr73 { to, de })
                 | (State::AwaitRoger, Msg::Rrr { to, de })
-                    if self.is_compound_qso()
+                    if self.degraded_vocabulary()
                         && crate::message::same_call(to, &self.mycall)
                         && self.from_dx(de) =>
                 {
@@ -800,6 +890,44 @@ impl Station {
                     self.state = State::Done;
                     self.log("compound DX rogered → sending 73, QSO complete".into());
                 }
+                // THE FLOOR OF THE DEGRADED VOCABULARY, and the arm whose absence
+                // livelocked SEVEN of the sixteen callsign-class pairs — every pair whose
+                // overs are all i3=4. i3=4 has ONE blank payload, so a partner's
+                // Tx1 ("calling you") and Tx2 ("here is your report") are the same bytes:
+                // `<me> them`. Both stations therefore reach AwaitRoger believing they owe
+                // nothing but a roger, and — with no arm here — trade that identical blank
+                // over slot after slot forever, never advancing, never logging.
+                //
+                // Tx1 ≡ Tx2 is the protocol's floor, not a fault to be encoded around: the
+                // RECEIVER'S OWN STATE is what disambiguates them, exactly as it already
+                // does in the working nonstandard-sender quadrants. Awaiting a roger means
+                // we have already sent our report; a grid-less over from the DX is then
+                // their answer to it, whatever they meant by it, and the exchange moves on
+                // to the roger. A number is not merely absent here — the frame HAS no
+                // field for one — so the roger is what advances, and `hashed_form` renders
+                // it as the `RRR` i3=4 can actually carry.
+                //
+                // Narrow on purpose: only a GRID-LESS over, and only in a QSO whose
+                // vocabulary is degraded. In a plain QSO a repeated grid means the DX never
+                // copied our report, and advancing on it would roger a report they never
+                // sent — so a Grid carrying a grid, or any pair the plain forms can express,
+                // falls through to the retransmit as before.
+                (State::AwaitRoger, Msg::Grid { to, de, grid })
+                    if grid.is_empty()
+                        && self.degraded_vocabulary()
+                        && crate::message::same_call(to, &self.mycall)
+                        && self.from_dx(de) =>
+                {
+                    self.pending = Some(Msg::RReport {
+                        to: de.clone(),
+                        de: self.mycall.clone(),
+                        snr: rpt,
+                    });
+                    self.state = State::AwaitRr73;
+                    self.log(
+                        "DX answered grid-less (i3=4 cannot carry a report) → rogering".into(),
+                    );
+                }
                 _ => {}
             }
         }
@@ -808,6 +936,9 @@ impl Station {
         if self.state != state_before {
             self.rv_count = 0;
             self.tx_count = 0;
+            // …and the partner answering us at all is what tells a real QSO from a
+            // `start()` seed. See `completed_report_less`.
+            self.advanced_on_air = true;
         }
     }
 }
