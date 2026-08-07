@@ -1,0 +1,671 @@
+# Nexus downstream publish — the six manual steps that follow a GitHub Release.
+#
+# release.yml ends the moment `gh release create` returns. Everything after that was a
+# human working from prose: mirror the source to SourceForge, upload the installers to
+# SourceForge's file service, bump the site's update endpoint, build and deploy the site,
+# then check that the deploy actually shipped. On 2026-08-05 (1.0.1) that checklist was
+# skipped and the in-app "Check for updates" button told every operator that 1.0.0 was the
+# newest build for two days. On 2026-08-07 it was worked by hand and the deploy step
+# silently shipped nothing (see WRANGLER below). This workflow is those steps, mechanised.
+#
+# THE PUBLISH DECISION STAYS HUMAN. This runs only *downstream* of a release that already
+# exists, which only a human tag push can produce. It never tags, never builds, never
+# creates or edits a release, and never touches application code.
+#
+# WHAT IT DOES NOT DO — read this before assuming a release is finished:
+#
+#   * SourceForge "Default Download". Browser only. There is no API (a scripted POST
+#     returns 401), so this stays manual forever: Files -> the .exe -> (i) -> "Default
+#     Download For: Windows" -> Save. Until that is done, SF's best_release.json — the
+#     app's FALLBACK update feed — keeps serving the previous version. The primary feed
+#     (hamradiotools.io) is moved by this workflow, so the fallback only matters when the
+#     site is unreachable.
+#   * Write the operator's release prose. If docs/RELEASE_NOTES-<ver>.md exists at the tag
+#     it is used for the site endpoint's "notes"; otherwise the GitHub release body is
+#     used and this workflow says loudly that it degraded. Put the prose in the repo
+#     before tagging if you want to control that field.
+#   * Sync the site's copy of the operator manual. scripts/sync-manual.mjs pulls that from
+#     a local Nexus checkout, which does not exist on a runner, so the site build runs in
+#     verify-only mode. A manual change ships with the next hand-run site build.
+#   * Build anything. Every byte published here is downloaded from the GitHub Release, so
+#     SourceForge and the site can never disagree with what GitHub actually served.
+#
+# TRIGGERING — THE ONE THING THAT WILL BITE YOU
+# `on: release: published` does NOT fire for a release created by another workflow using
+# the built-in GITHUB_TOKEN, and release.yml's publish job uses exactly that
+# (`GH_TOKEN: ${{ github.token }}`). GitHub suppresses those events to stop workflow
+# recursion; workflow_dispatch and repository_dispatch are the documented exceptions.
+# So the automatic path fires only when a HUMAN publishes the release (web UI, or
+# `gh release create` under a personal token) — and the workflow_dispatch input below is
+# how you finish a release that release.yml published for you. To make it fully automatic,
+# release.yml needs one line at the end of its publish job:
+#
+#     gh workflow run publish.yml -f tag="$tag"      # with a PAT in GH_TOKEN
+#
+# That is a change to release.yml, which this file's author was not scoped to make.
+# See docs/publish-secrets.md.
+#
+# WRANGLER: `--branch=main` is load-bearing. Without it wrangler deploys a PREVIEW
+# build, prints "Deployment complete", and exits 0 while the live site never moves. That
+# is why the last step polls the real cache-busted URL and fails if it does not answer
+# with the new version. Never trust a deploy tool's exit code as proof of delivery.
+#
+# SECRETS: four, all repository secrets on this repo, all listed with setup steps in
+# docs/publish-secrets.md. A missing one fails the run in the first twenty seconds and
+# names every secret that is absent. Nothing here degrades to a no-op.
+
+name: Publish downstream
+
+on:
+  release:
+    types: [published]
+  # Recovery + the release.yml hook (see TRIGGERING above). This publishes the mechanical
+  # remainder for a release that ALREADY EXISTS; it cannot create or modify one.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to publish downstream (e.g. v1.0.2)'
+        required: true
+
+permissions:
+  contents: read
+
+# Two releases must never interleave: they would race on the SF mirror ref and on the site
+# repo's main. Queue rather than cancel — a half-finished publish is the worst of the three
+# possible outcomes.
+concurrency:
+  group: publish-downstream
+  cancel-in-progress: false
+
+env:
+  SF_HOST: frs.sourceforge.net
+  SF_USER: hamradiotools
+  SF_FRS_ROOT: /home/frs/project/nexus-ham-radio
+  SF_GIT_REMOTE: ssh://hamradiotools@git.code.sf.net/p/nexus-ham-radio/code
+  SITE_REPO: kd9taw/hamradiotools
+  SITE_PROJECT: hamradiotools
+  VERSION_URL: https://hamradiotools.io/nexus/version.json
+
+jobs:
+  # ---------------------------------------------------------------------------------------
+  # Resolve — everything decidable from the API alone, before paying for a checkout or a
+  # half-gigabyte download. Its whole job is to fail fast and say exactly why.
+  # ---------------------------------------------------------------------------------------
+  resolve:
+    name: Resolve the release + check the secrets
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.rel.outputs.tag }}
+      ver: ${{ steps.rel.outputs.ver }}
+      proceed: ${{ steps.rel.outputs.proceed }}
+    steps:
+      # Every secret is checked in ONE pass so the operator sees the complete list rather
+      # than the first failure alphabetically. The `secrets` context cannot be used in a
+      # job-level `if:`, so this is a step that reads them as env and asserts non-empty —
+      # the only shape that cannot quietly turn into a skipped job.
+      - name: Every secret this run needs must exist
+        env:
+          SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SITE_REPO_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=''
+          [ -n "${SF_SSH_KEY:-}" ]           || missing="$missing SF_SSH_KEY"
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ -n "${SITE_REPO_TOKEN:-}" ]      || missing="$missing SITE_REPO_TOKEN"
+          if [ -n "$missing" ]; then
+            {
+              echo "### Publish blocked — missing repository secrets"
+              echo
+              for s in $missing; do echo "- \`$s\`"; done
+              echo
+              echo "Add them under Settings -> Secrets and variables -> Actions ->"
+              echo "New repository secret, on \`${GITHUB_REPOSITORY}\`."
+              echo "What each one is and how to mint it: \`docs/publish-secrets.md\`."
+              echo
+              echo "Nothing was published. The GitHub Release itself is unaffected."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "all four publish secrets are present"
+
+      - name: Resolve the tag and read the release
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Never interpolate event payload straight into a shell script: a release body or
+          # tag name is attacker-influenced text in the general case. Through env it is
+          # data, not code.
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${EVENT_TAG:-${INPUT_TAG:-}}"
+          [ -n "$tag" ] || { echo "no tag: neither a release payload nor a dispatch input"; exit 1; }
+
+          # A junk tag would propagate into a SourceForge directory name, five published
+          # download URLs and the app's update feed. Refuse anything that is not vX.Y.Z.
+          ver="${tag#v}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "tag '$tag' is not vX.Y.Z — refusing to publish it downstream"; exit 1; }
+
+          # Read the release back from the API rather than trusting the payload: on the
+          # dispatch path there is no payload, and on the release path the payload is a
+          # snapshot taken before release.yml finished attaching artifacts.
+          rel=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)
+          draft=$(printf '%s' "$rel" | jq -r .isDraft)
+          pre=$(printf '%s' "$rel" | jq -r .isPrerelease)
+          [ "$draft" = "false" ] || { echo "$tag is still a draft — nothing to publish downstream"; exit 1; }
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+          if [ "$pre" = "true" ]; then
+            # A prerelease must not move the feeds every operator's update check reads.
+            # This is a decision, not a skipped step: it is stated in the run summary so
+            # nobody has to infer it from a grey job badge.
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### $tag is a prerelease — downstream publish deliberately not run"
+              echo
+              echo "The SourceForge mirror/FRS upload and the hamradiotools.io update feed"
+              echo "serve every operator's 'Check for updates'. Moving them to a prerelease"
+              echo "would push a pre-production build at the whole user base."
+              echo
+              echo "To publish it anyway: mark the release as a full release, then run this"
+              echo "workflow with tag \`$tag\`."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          echo "publishing $tag ($ver) downstream"
+
+  # ---------------------------------------------------------------------------------------
+  # Publish — one job on purpose. The ~460 MB of release assets are downloaded once and used
+  # by both the SourceForge upload and the site's sha256 fields; splitting the legs into
+  # separate jobs would push half a gigabyte through the artifact store to buy nothing.
+  # Steps run in the order a human worked them.
+  # ---------------------------------------------------------------------------------------
+  publish:
+    name: SourceForge + site
+    needs: resolve
+    if: needs.resolve.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VER: ${{ needs.resolve.outputs.ver }}
+    steps:
+      # Downloads and the site clone live OUTSIDE the checkout: mirror-to-sourceforge.sh
+      # refuses to run on a dirty tree and `git status --porcelain` counts untracked files,
+      # so a dist/ or site/ inside the repo would break the mirror depending on step order.
+      # (WORK is set here rather than in job-level `env:` because the `runner` context is
+      # not available there.)
+      - name: Scratch space outside the checkout
+        run: |
+          set -euo pipefail
+          echo "WORK=$RUNNER_TEMP/publish" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/publish"
+
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          # The SF mirror is a tree copy of main — that is the shape SF's history requires,
+          # see the script header — so main is what we check out. Full depth for the tag.
+          ref: main
+          fetch-depth: 0
+
+      - name: Gate — the tag is on main and matches the shipped version
+        run: |
+          set -euo pipefail
+          git fetch --quiet --tags --force origin main
+          # Mirror the CURRENT main. If main moved between the release and this run, the
+          # mirror script's own HEAD==origin/main gate would fail; align here so that gate
+          # fires only for a genuine race (a push landing mid-run), not for a normal one.
+          git checkout --quiet -B main origin/main
+
+          # The released source must be present in the tree we are about to mirror.
+          # Otherwise SourceForge would carry source that does not correspond to the
+          # binaries uploaded to it in the next step, which is the GPL obligation.
+          git merge-base --is-ancestor "$TAG" main || {
+            echo "::error::$TAG is not an ancestor of main — the released source is not in"
+            echo "the tree that would be mirrored. Merge the tag's branch to main first."
+            exit 1
+          }
+
+          # The same cross-check release.yml makes, re-made against the tag's own blob:
+          # catches a tag cut before the version bump landed. Via a file, not a pipe:
+          # `git show | grep -m1` can die of SIGPIPE once grep stops reading, and under
+          # `pipefail` that is a release failing at random on a file-size boundary.
+          git show "$TAG:src-tauri/tauri.conf.json" > "$WORK/tauri.conf.json"
+          conf=$(grep -m1 '"version"' "$WORK/tauri.conf.json" | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          [ "$conf" = "$VER" ] || { echo "$TAG says $VER but tauri.conf.json at that tag says $conf"; exit 1; }
+          echo "tag $TAG ($VER) is an ancestor of main @ $(git rev-parse --short main)"
+
+      # release.yml creates the release the instant Windows + Linux are ready, then its
+      # publish-pi job attaches the two Raspberry Pi .debs and REWRITES SHA256SUMS.txt.
+      # The `release: published` event fires at the first of those, so without this wait a
+      # fast runner would mirror an incomplete set to SourceForge and write a version.json
+      # pointing at two URLs that 404. Wait for the complete set — and for SHA256SUMS.txt
+      # to have caught up with it, which is a second upload moments later again.
+      - name: Wait for the release to carry every artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          req=$(printf '%s\n' \
+            "Nexus_${VER}_x64-setup.exe" \
+            "Nexus_${VER}_amd64.AppImage" \
+            "Nexus_${VER}_pc_amd64.deb" \
+            "Nexus_${VER}_pi_arm64_bookworm.deb" \
+            "Nexus_${VER}_pi_arm64_trixie.deb" \
+            "SHA256SUMS.txt")
+          mkdir -p "$WORK/poll"
+          deadline=$(( SECONDS + 1800 ))
+          while :; do
+            have=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            missing=''
+            while read -r f; do
+              printf '%s\n' "$have" | grep -Fxq "$f" || missing="$missing $f"
+            done <<< "$req"
+
+            unsummed=''
+            if [ -z "$missing" ]; then
+              # Attached is not the same as checksummed: the Pi sums are appended to
+              # SHA256SUMS.txt in a separate upload right after the .debs go up.
+              rm -f "$WORK/poll/SHA256SUMS.txt"
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern SHA256SUMS.txt --dir "$WORK/poll" --clobber
+              while read -r f; do
+                [ "$f" = "SHA256SUMS.txt" ] && continue
+                grep -Fq "  $f" "$WORK/poll/SHA256SUMS.txt" || unsummed="$unsummed $f"
+              done <<< "$req"
+              [ -z "$unsummed" ] && break
+            fi
+
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::release $TAG never became complete after 30 minutes."
+              [ -n "$missing" ]  && echo "  never attached:${missing}"
+              [ -n "$unsummed" ] && echo "  attached but absent from SHA256SUMS.txt:${unsummed}"
+              echo "  Check the Release workflow run for $TAG — publish-pi has probably failed."
+              exit 1
+            fi
+            echo "waiting (${SECONDS}s): missing=[${missing:- none}] unsummed=[${unsummed:- none}]"
+            sleep 30
+          done
+          echo "release $TAG carries the complete artifact set"
+
+      - name: Download the release assets and verify every checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK/dist"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$WORK/dist" --clobber
+          cd "$WORK/dist"
+          ls -la
+          # SHA256SUMS.txt is generated by release.yml from the bytes it uploaded. If a
+          # download here is short, or an asset was replaced after publication, this is
+          # where it surfaces — before those bytes reach SourceForge and before their
+          # digests are published on the site as an integrity record.
+          sha256sum -c SHA256SUMS.txt
+          # A missing .sig means release.yml built unsigned (its signing secrets were
+          # absent), which breaks in-app self-update for this version. release.yml
+          # deliberately allows that, so this warns rather than fails — but it must never
+          # pass unremarked.
+          for s in "Nexus_${VER}_x64-setup.exe.sig" "Nexus_${VER}_amd64.AppImage.sig"; do
+            [ -f "$s" ] || echo "::warning::$s is not in the release — this build is UNSIGNED and clients cannot self-update to it"
+          done
+
+      # ---------------------------------------------------------------------------------
+      # 1/4  SourceForge git mirror — the GPL source-availability obligation.
+      # ---------------------------------------------------------------------------------
+      - name: SourceForge — mirror the source tree
+        env:
+          SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          # The mirror script hardcodes this path: ssh must be told which identity to offer
+          # or SourceForge answers "Too many authentication failures". printf supplies the
+          # trailing newline an OpenSSH key needs and a pasted secret often lacks.
+          printf '%s\n' "$SF_SSH_KEY" > ~/.ssh/hamradiotools_ed25519
+          chmod 600 ~/.ssh/hamradiotools_ed25519
+          # Trust on first use, but PRINT the fingerprints: SourceForge publishes its host
+          # keys, so this is checkable by eye once and then never again.
+          ssh-keyscan -T 20 git.code.sf.net "$SF_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "--- SourceForge host keys accepted this run ---"
+          ssh-keygen -lf ~/.ssh/known_hosts
+          echo "-----------------------------------------------"
+
+          git config user.name 'KD9TAW'
+          git config user.email 'kd9taw@protonmail.com'
+          git remote get-url sf >/dev/null 2>&1 || git remote add sf "$SF_GIT_REMOTE"
+
+          # NOT enabling .githooks/pre-push here. Its content scrub needs the private
+          # leak-pattern file, which by design is not in this repo, and the hook fails
+          # closed without it. The mirror script carries its own gates — the staged tree
+          # must hash identical to the GitHub tree, no tasks/, no home paths — and the tree
+          # it pushes is byte-for-byte a tree that is already public on GitHub, so this
+          # push cannot publish anything that is not already published.
+          bash scripts/mirror-to-sourceforge.sh
+
+      # ---------------------------------------------------------------------------------
+      # 2/4  SourceForge FRS — the installers. Eight files, ~460 MB, roughly four minutes.
+      # ---------------------------------------------------------------------------------
+      - name: SourceForge — upload the installers to FRS
+        run: |
+          set -euo pipefail
+          cd "$WORK/dist"
+          # latest.json is the Tauri updater manifest and is served from GitHub. SF's file
+          # service carries the installers, their signatures and the checksum file — the
+          # same eight files a human uploads.
+          files=$(find . -maxdepth 1 -type f ! -name 'latest.json' -printf '%f\n' | sort)
+          echo "uploading:"; printf '  %s\n' $files
+          dir="${SF_FRS_ROOT}/${TAG}"
+
+          # THE TRAP: the SF shell account is restricted to file transfer, so `ssh ... mkdir`
+          # fails outright — the directory has to be created from inside sftp. A leading `-`
+          # on an sftp batch line means "ignore this command's failure", which is what keeps
+          # a re-run over an existing directory clean.
+          {
+            echo "-mkdir ${dir}"
+            echo "cd ${dir}"
+            for f in $files; do echo "put ${f}"; done
+          } > "$WORK/frs.batch"
+          cat "$WORK/frs.batch"
+
+          sftp -b "$WORK/frs.batch" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+            -i ~/.ssh/hamradiotools_ed25519 "${SF_USER}@${SF_HOST}"
+
+      - name: SourceForge — verify the bytes landed
+        run: |
+          set -euo pipefail
+          cd "$WORK/dist"
+          # `put` reports nothing useful about a truncated transfer. Read the directory back
+          # and compare sizes: it is the only evidence that what is on SourceForge is what
+          # we sent. (This is the same discipline as the live-URL check further down —
+          # a tool's exit code is not proof of delivery.)
+          echo "ls -l ${SF_FRS_ROOT}/${TAG}" | sftp -b - \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=30 \
+            -i ~/.ssh/hamradiotools_ed25519 "${SF_USER}@${SF_HOST}" > "$WORK/frs.ls"
+          cat "$WORK/frs.ls"
+          python3 - "$WORK/frs.ls" <<'PY'
+          import os, sys
+
+          remote = {}
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              parts = line.split()
+              # `-rw-rw-r-- 1 uid gid SIZE Mon DD HH:MM name` — regular files only, and only
+              # rows long enough to actually be a listing.
+              if len(parts) >= 9 and parts[0].startswith("-"):
+                  try:
+                      remote[parts[-1]] = int(parts[4])
+                  except ValueError:
+                      pass
+
+          bad = []
+          for name in sorted(os.listdir(".")):
+              if name == "latest.json":
+                  continue
+              want = os.path.getsize(name)
+              got = remote.get(name)
+              if got is None:
+                  bad.append(f"{name}: NOT on SourceForge")
+              elif got != want:
+                  bad.append(f"{name}: {got} bytes on SourceForge, {want} bytes here")
+              else:
+                  print(f"  ok  {name}  {want} bytes")
+
+          if bad:
+              print("\nFRS upload did not land intact:")
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print("\nevery uploaded file verified byte-for-byte on SourceForge")
+          PY
+
+      # ---------------------------------------------------------------------------------
+      # 3/4  The site's update endpoint. This is the feed the in-app "Check for updates"
+      #      button reads; it being stale is the whole reason this workflow exists.
+      # ---------------------------------------------------------------------------------
+      - name: Site — bump version.json and the displayed version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE_REPO_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          # THE BASE GATE, and it is not theoretical. On 2026-08-07 the site repo's
+          # origin/main carried version.json 1.0.0 while hamradiotools.io was serving 1.0.2:
+          # the 1.0.1 and 1.0.2 bumps were built and deployed from a local branch that was
+          # never pushed. `wrangler --branch=main` only LABELS a deployment production, it
+          # does not read git — so main can sit arbitrarily far behind what is live and
+          # nothing says so. Building main and deploying it in that state would roll the
+          # live site back to an older design, silently, as a side effect of a release.
+          #
+          # So: the tree we are about to build must be the tree the live site came from.
+          # Proven by comparing the feed main COMMITS against the feed the site SERVES.
+          live=$(curl -fsSL --max-time 20 -H 'Cache-Control: no-cache' \
+                   "${VERSION_URL}?cb=${GITHUB_RUN_ID}-base" \
+                 | python3 -c 'import json,sys;print(json.load(sys.stdin)["latest"])') || {
+            echo "::error::cannot read ${VERSION_URL} — refusing to deploy onto an unknown"
+            echo "base. Check that hamradiotools.io is up, then re-run."
+            exit 1
+          }
+          git clone --quiet --depth 1 --branch main \
+            "https://x-access-token:${SITE_REPO_TOKEN}@github.com/${SITE_REPO}.git" "$WORK/site"
+          committed=$(SITE_VJ="$WORK/site/public/nexus/version.json" python3 -c \
+            'import json,os;print(json.load(open(os.environ["SITE_VJ"]))["latest"])')
+          if [ "$committed" != "$live" ] && [ "$committed" != "$VER" ]; then
+            # ("$committed" == "$VER" is a resumed run: main is already bumped, the deploy
+            #  is what did not finish. That is not a stale base.)
+            echo "::error::${SITE_REPO}@main is not the tree hamradiotools.io was built from."
+            echo "  main commits version.json  : $committed"
+            echo "  the live site serves       : $live"
+            echo "Building and deploying main now would publish the OLDER site over the"
+            echo "current one. Push the branch the live site was deployed from to main"
+            echo "(then the two agree), and re-run this workflow for $TAG."
+            echo "Nothing has been changed: SourceForge is updated, the site is untouched."
+            exit 1
+          fi
+          echo "site main matches the live feed ($committed) — safe to build from"
+
+          # Release prose: the repo's own convention first (release.yml reads the same
+          # file), then the release body, then a stub. Whichever it was, say so.
+          notes_src=stub
+          if git show "$TAG:docs/RELEASE_NOTES-$VER.md" > "$WORK/notes.md" 2>/dev/null; then
+            notes_src=repo
+          else
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$WORK/notes.md"
+            [ -s "$WORK/notes.md" ] && notes_src=release-body
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt,url > "$WORK/rel.json"
+          echo "notes source: $notes_src"
+          echo "NOTES_SRC=$notes_src" >> "$GITHUB_ENV"
+
+          cd "$WORK/site"
+          DIST="$WORK/dist" NOTES="$WORK/notes.md" REL="$WORK/rel.json" NOTES_SRC="$notes_src" \
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, sys
+
+          ver, tag = os.environ["VER"], os.environ["TAG"]
+          dist = pathlib.Path(os.environ["DIST"])
+          rel = json.load(open(os.environ["REL"], encoding="utf-8"))
+
+          notes = pathlib.Path(os.environ["NOTES"]).read_text(encoding="utf-8").strip()
+          if os.environ["NOTES_SRC"] == "repo":
+              # Hand-written notes open with a "# Nexus <ver>" heading the feed does not want.
+              notes = re.sub(r"^#[^\n]*\n+", "", notes).strip()
+          if not notes:
+              notes = f"Nexus {ver}. See the release notes."
+
+          def digest(name):
+              """sha256 of the bytes GitHub actually served. Already cross-checked against
+              the release's own SHA256SUMS.txt, so a hand-copy error is unrepresentable."""
+              p = dist / name
+              if not p.is_file():
+                  sys.exit(f"asset missing from the download: {name}")
+              h = hashlib.sha256()
+              with p.open("rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          base = f"https://github.com/kd9taw/Nexus/releases/download/{tag}"
+          assets = {
+              "windows":       f"Nexus_{ver}_x64-setup.exe",
+              "linuxAppimage": f"Nexus_{ver}_amd64.AppImage",
+              "linuxDeb":      f"Nexus_{ver}_pc_amd64.deb",
+              "piBookwormDeb": f"Nexus_{ver}_pi_arm64_bookworm.deb",
+              "piTrixieDeb":   f"Nexus_{ver}_pi_arm64_trixie.deb",
+          }
+          # Key order matches the committed file so the diff is the change, not a reshuffle.
+          doc = {
+              "schema": 1,
+              "latest": ver,
+              "publishedUtc": rel["publishedAt"],
+              "notes": notes,
+              "notesUrl": rel["url"],
+              "downloads": {
+                  k: {"url": f"{base}/{n}", "sha256": digest(n)} for k, n in assets.items()
+              },
+          }
+          pathlib.Path("public/nexus/version.json").write_text(
+              json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+          # The site's own copy of the version drives the hero, the download button and the
+          # manual's title on every page. It has been bumped in the same commit as
+          # version.json every release; missing it ships a site advertising the old build.
+          site_ts = pathlib.Path("src/data/site.ts")
+          src = site_ts.read_text(encoding="utf-8")
+          new, n = re.subn(r"(export const nexusVersion = ')[^']*(';)",
+                           lambda m: m.group(1) + ver + m.group(2), src)
+          if n != 1:
+              sys.exit(f"src/data/site.ts: expected exactly one nexusVersion declaration, found {n}"
+                       " — the site repo changed shape; fix this workflow, not the site")
+          site_ts.write_text(new, encoding="utf-8")
+          print(f"version.json -> {ver}, nexusVersion -> {ver}")
+          PY
+
+          git config user.name 'KD9TAW'
+          git config user.email 'kd9taw@protonmail.com'
+          git add public/nexus/version.json src/data/site.ts
+          if git diff --cached --quiet; then
+            # A re-run over an already-bumped site. Not an error — and the deploy and live
+            # verification below still run, because "committed" is not "served".
+            echo "site already at $VER — nothing to commit; continuing to deploy + verify"
+          else
+            git diff --cached --stat
+            git commit --quiet -m "nexus: version.json to $VER"
+            git push --quiet \
+              "https://x-access-token:${SITE_REPO_TOKEN}@github.com/${SITE_REPO}.git" HEAD:main || {
+              echo "::error::push to ${SITE_REPO}@main was rejected — main moved during this"
+              echo "run. Nothing is broken; re-run this workflow for $TAG."
+              exit 1
+            }
+            echo "pushed to ${SITE_REPO}@main"
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          # Matches the site repo's .nvmrc.
+          node-version: 22
+
+      # ---------------------------------------------------------------------------------
+      # 4/4  Build and deploy the site. --branch=main, or the live site never moves.
+      # ---------------------------------------------------------------------------------
+      - name: Site — build and deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cd "$WORK/site"
+          npm ci
+          # prebuild runs scripts/sync-manual.mjs, which finds no Nexus checkout here and so
+          # runs in verify-only mode: it still fails the build if a committed manual page has
+          # drifted from its manifest hash, it just does not re-sync. See WHAT IT DOES NOT DO.
+          npm run build
+          # Prove the artifact we are about to deploy is the one we just wrote. A build that
+          # dropped public/ would otherwise deploy green and serve the old feed.
+          grep -q "\"latest\": \"${VER}\"" dist/nexus/version.json \
+            || { echo "built dist/nexus/version.json is not $VER:"; head -5 dist/nexus/version.json; exit 1; }
+
+          # --branch=main is the difference between a production deploy and a preview that
+          # exits 0 and changes nothing. wrangler is pinned to its major so a CLI release
+          # cannot change deploy semantics under a release; bump it deliberately.
+          npx --yes wrangler@4 pages deploy dist \
+            --project-name="$SITE_PROJECT" --branch=main --commit-dirty=true
+
+      # ---------------------------------------------------------------------------------
+      # The point of the whole workflow: prove the feed the app reads actually moved.
+      # ---------------------------------------------------------------------------------
+      - name: Verify the LIVE update feed
+        run: |
+          set -euo pipefail
+          body=''
+          # Cache-busted on every attempt AND sent with no-cache headers: a stale edge
+          # response reads exactly like a successful deploy, which is the failure this step
+          # exists for. Up to ten minutes — Pages propagation is normally seconds.
+          for attempt in $(seq 1 40); do
+            body=$(curl -fsSL --max-time 20 \
+                     -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                     "${VERSION_URL}?cb=${GITHUB_RUN_ID}-${attempt}" 2>/dev/null || true)
+            got=$(printf '%s' "$body" | python3 -c \
+                    'import json,sys;print(json.load(sys.stdin).get("latest",""))' 2>/dev/null || true)
+            if [ "$got" = "$VER" ]; then
+              echo "live feed serves $VER (attempt $attempt)"
+              exit 0
+            fi
+            echo "attempt $attempt: live feed serves '${got:-<unreadable>}', want $VER"
+            sleep 15
+          done
+          echo "::error::${VERSION_URL} still does not serve $VER after ten minutes."
+          echo "wrangler exits 0 on a deploy that shipped nothing. Open the Cloudflare Pages"
+          echo "deployment list: if the newest deployment is a PREVIEW, the --branch=main"
+          echo "flag did not take effect. Last response body:"
+          printf '%s\n' "${body:-<no response>}" | head -20
+          exit 1
+
+      - name: Verify every published download URL resolves
+        run: |
+          set -euo pipefail
+          # version.json now advertises five URLs to every operator. A 404 here would be a
+          # broken download button that nothing else in the pipeline can see.
+          bad=0
+          for n in "Nexus_${VER}_x64-setup.exe" "Nexus_${VER}_amd64.AppImage" \
+                   "Nexus_${VER}_pc_amd64.deb" "Nexus_${VER}_pi_arm64_bookworm.deb" \
+                   "Nexus_${VER}_pi_arm64_trixie.deb"; do
+            u="https://github.com/kd9taw/Nexus/releases/download/${TAG}/${n}"
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 30 "$u" || echo 000)
+            if [ "$code" = "200" ]; then echo "  200  $n"; else echo "  $code  $u"; bad=1; fi
+          done
+          [ "$bad" = 0 ] || { echo "a URL published in version.json does not resolve"; exit 1; }
+
+      - name: What is still manual
+        if: always()
+        run: |
+          {
+            echo "### Nexus ${VER} — downstream publish: ${{ job.status }}"
+            echo
+            echo "Steps run in order and stop at the first failure, so on a failed run"
+            echo "everything below the failing step did **not** happen. The step list above"
+            echo "is the authority on how far it got."
+            echo
+            echo "**Still yours — there is no API for any of these:**"
+            echo
+            echo "1. SourceForge **Default Download**: Files -> \`${TAG}/Nexus_${VER}_x64-setup.exe\`"
+            echo "   -> (i) -> *Default Download For: Windows* -> Save. Until then SF's"
+            echo "   best_release.json — the app's fallback update feed — serves the previous"
+            echo "   version, and the daily *Release endpoints* workflow will report it stale."
+            echo "2. Release prose: this run used the **${NOTES_SRC:-n/a}** source for the feed's"
+            echo "   \`notes\` field. Put operator prose in \`docs/RELEASE_NOTES-${VER}.md\`"
+            echo "   before tagging to control it."
+            echo "3. The site's copy of the operator manual is not synced by CI."
+          } >> "$GITHUB_STEP_SUMMARY"
