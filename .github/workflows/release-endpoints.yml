@@ -60,16 +60,31 @@ jobs:
 
           GRACE = float(os.environ.get("GRACE_HOURS") or 12)
 
+          TOKEN = os.environ.get("GH_TOKEN", "")
+
           def get(url, tries=3):
               """Fetch with retries. A transient blip must not red the badge, but an
               update endpoint that is genuinely unreachable is itself a real fault --
               so exhausting the retries is reported, never silently tolerated."""
+              hdr = {"User-Agent": "nexus-release-endpoints", "Cache-Control": "no-cache"}
+              # GH_TOKEN goes to api.github.com and NOWHERE else. Two reasons, and
+              # both were live bugs waiting to happen. (1) Without it the API call
+              # below is UNAUTHENTICATED, and an Actions runner shares its egress IP
+              # with the rest of the fleet, so it draws on the 60/hour anonymous
+              # quota and gets a 403 that has nothing to do with feed drift -- this
+              # file's own header argues that a check which cries wolf is worse than
+              # no check, and that is exactly how it would have started. (2) urllib
+              # carries headers across a redirect to a DIFFERENT HOST, and the
+              # releases/latest/download URL redirects to a CDN, so a token attached
+              # to that request is a token handed to the CDN. Hence the prefix test
+              # rather than a blanket header.
+              if TOKEN and url.startswith("https://api.github.com/"):
+                  hdr["Authorization"] = "Bearer " + TOKEN
+                  hdr["Accept"] = "application/vnd.github+json"
               last = None
               for _ in range(tries):
                   try:
-                      req = urllib.request.Request(
-                          url, headers={"User-Agent": "nexus-release-endpoints",
-                                        "Cache-Control": "no-cache"})
+                      req = urllib.request.Request(url, headers=hdr)
                       with urllib.request.urlopen(req, timeout=30) as r:
                           return r.read().decode("utf-8", "replace")
                   except Exception as e:          # noqa: BLE001 - report, don't classify

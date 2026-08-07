@@ -1,0 +1,451 @@
+# Ship state — the nightly "what is stuck?" digest.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTIFY ONLY. This workflow READS. It does not close an issue, comment on one,
+# label one, push a commit, cut a tag, deploy, mirror or publish anything — and
+# that is not a promise in prose. It is the `permissions:` block below: the job's
+# token carries `contents: read` + `issues: read` and nothing else, so an act is
+# not merely forbidden here, it is unrepresentable. If a future edit seems to
+# need a write scope, that is the moment to stop and ask the operator, because at
+# that point it has stopped being this workflow.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY THIS EXISTS (2026-08-07). An architecture review found the VERIFICATION
+# system sound and no DELIVERY system at all. On the night it was written: 46
+# verified commits had sat unpushed for 30 hours, the SourceForge mirror was 125
+# commits behind, the site's update feed was hand-edited, and 7 of 13 GitHub
+# issues had never received a reply. Not one of those is a bug anybody would
+# notice — each is an absence, and an absence is invisible until somebody thinks
+# to go and look. Nobody thinks to go and look at 02:00. So this looks, every
+# night, and says what it found.
+#
+# IT POSTS EVERY NIGHT, INCLUDING "nothing to report". That is deliberate, and it
+# is the whole design. A loop that speaks only when something is wrong is, on a
+# quiet night, indistinguishable from a loop that died three weeks ago — and the
+# failure mode of a dead watchdog is that everything looks fine right up until it
+# very much does not. A digest that arrives saying "nothing to report" proves the
+# loop ran. A MISSING message is therefore itself the alarm, and it is the signal
+# this file exists to make readable. Do not "improve" this by suppressing the
+# quiet nights; that change would delete the only evidence that it is alive.
+#
+# WHAT IT REPORTS, and why each line was asked for:
+#   release     what GitHub currently calls the latest release, and how old it is
+#   unreleased  commits on main that no release contains  (the 46-commit drift)
+#   feeds       GitHub / hamradiotools.io / SourceForge, agreeing or not
+#   mirror      how far the SourceForge git mirror trails main  (the 125 commits)
+#   unshipped   OPEN issues whose fix is already on main but has not shipped
+#   no-reply    OPEN issues with zero comments, older than 24 h  (the 7 of 13)
+#
+# `mirror` is the one line here that was not in the original four-item spec. It
+# was added because the review named the 125-commit mirror lag as one of exactly
+# four delivery failures, and `feeds` does not cover it: `feeds` watches the SF
+# DOWNLOAD feed (best_release.json), which is a different thing from the SF GIT
+# mirror and can be perfectly current while the mirror rots. It costs one
+# anonymous fetch — no credential, and deliberately so; needing the SF deploy key
+# here would have meant a secret, and a check nobody can run is not a check.
+#
+# WHAT IT CANNOT SEE — stated here rather than papered over, because a watchdog
+# that quietly does not cover something is worse than no watchdog. It cannot see
+# an UNPUSHED commit. CI only ever sees what reached the remote, so the original
+# 46-commits-sat-for-30-hours failure would have shown up here as *silence*, not
+# as a number. The pre-push hook and the operator's own `git status` remain the
+# only things that catch that one, and nothing in this file changes that.
+#
+# RELATIONSHIP TO release-endpoints.yml. That workflow is the authoritative feed
+# gate — it runs at 14:00 UTC and it FAILS when a feed is stale past its grace
+# window. This one only reports, three hours after midnight, so that the nightly
+# digest is a complete picture instead of one that omits the single thing most
+# likely to be stale. The two parse the feeds identically and deliberately: the
+# SourceForge filename parse in both is the one the APP performs
+# (crates/tempo-app/src/update.rs, parse_latest_version). They are a PAIR — if you
+# change how a feed is read, change it in both, or the nightly digest will
+# cheerfully contradict the gate.
+#
+# ── SECRET: DISCORD_WEBHOOK ─────────────────────────────────────────────────
+# The digest is delivered to a Discord webhook held in the repo secret
+# DISCORD_WEBHOOK (Settings → Secrets and variables → Actions). If that secret is
+# ABSENT the workflow does not fail and does not go quiet: it writes the digest to
+# the job summary and raises a ::warning:: saying Discord is unconfigured. If the
+# secret is PRESENT and delivery FAILS, the run goes red on purpose — a digest
+# that was never delivered must not look like a quiet night.
+# TODO(docs): this secret belongs in docs/publish-secrets.md alongside the Tauri
+# signing and ClubLog keys. That file did not exist when this workflow landed; add
+# the row when it does — name DISCORD_WEBHOOK, value the webhook URL, consumed by
+# .github/workflows/ship-state.yml, and losing it degrades to the job summary
+# rather than breaking anything.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Ship state
+
+on:
+  schedule:
+    # 07:00 UTC daily = 02:00 America/Chicago while CDT is in force, 01:00 while
+    # CST is. GitHub cron is UTC-only and has no DST notion, so one of the two is
+    # unavoidable; both are the middle of the night, which is the whole point.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  # A dispatch on top of the nightly run should not produce two digests.
+  group: ship-state
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    name: What is committed, unshipped, unanswered or out of sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history AND tags: the unreleased-commit count is computed as
+          # `<latest release tag>..HEAD`, and a shallow clone has neither the tag
+          # nor the commits to count.
+          fetch-depth: 0
+          # fetch-tags is stated rather than inferred. checkout adds --no-tags
+          # when this is false and the refspec carries no tags entry, and whether
+          # fetch-depth: 0 exempts it is version-dependent enough that guessing is
+          # how this ends up printing "tag not in this checkout" every night.
+          fetch-tags: true
+
+      - name: Build the digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ runner.temp }}/digest.txt
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess, urllib.request
+          from datetime import datetime, timezone
+
+          REPO = os.environ.get("GITHUB_REPOSITORY", "kd9taw/Nexus")
+          TOKEN = os.environ.get("GH_TOKEN", "")
+          NO_REPLY_H = 24.0
+          NOW = datetime.now(timezone.utc)
+
+          notes = []   # gathering faults. Reported IN the digest, never fatal, never silent.
+
+          def _get(url, tries=3):
+              hdr = {"User-Agent": "nexus-ship-state", "Cache-Control": "no-cache"}
+              # The token goes to api.github.com and NOWHERE else. urllib carries
+              # headers across a redirect to a different host, and the
+              # releases/latest/download URL below redirects to a CDN -- a token on
+              # that request is a token handed to the CDN. The public feeds need no
+              # auth at all; api.github.com needs it, or a shared Actions runner IP
+              # burns the 60/hour unauthenticated quota and reds the badge for a
+              # reason that has nothing whatever to do with shipping.
+              if TOKEN and url.startswith("https://api.github.com/"):
+                  hdr["Authorization"] = "Bearer " + TOKEN
+                  hdr["Accept"] = "application/vnd.github+json"
+              last = None
+              for _ in range(tries):
+                  try:
+                      req = urllib.request.Request(url, headers=hdr)
+                      with urllib.request.urlopen(req, timeout=30) as r:
+                          return r.read().decode("utf-8", "replace")
+                  except Exception as e:      # noqa: BLE001 - report, don't classify
+                      last = e
+              raise RuntimeError("unreachable after %d tries (%s)" % (tries, last))
+
+          def jget(url):
+              return json.loads(_get(url))
+
+          def git(*args):
+              p = subprocess.run(("git",) + args, capture_output=True, text=True)
+              return p.returncode, p.stdout.strip(), p.stderr.strip()
+
+          def ts(iso):
+              return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+          def age_h(dt):
+              return (NOW - dt).total_seconds() / 3600.0
+
+          def human(h):
+              return ("%.1f h" % h) if h < 48 else ("%.1f d" % (h / 24.0))
+
+          def build():
+              body = []
+
+              # --- 1. the reference: what is actually RELEASED ------------------
+              tag = want = None
+              try:
+                  rel = jget("https://api.github.com/repos/%s/releases/latest" % REPO)
+                  tag = rel["tag_name"]
+                  want = tag.lstrip("v")
+                  body.append("release    %s published %s ago"
+                              % (tag, human(age_h(ts(rel["published_at"])))))
+              except Exception as e:      # noqa: BLE001
+                  notes.append("latest release: %s" % e)
+                  body.append("release    UNKNOWN - the GitHub release API did not answer")
+
+              # --- 2. drift: committed on main, contained in no release ---------
+              # On a scheduled run HEAD *is* the tip of main, so this is the
+              # `origin/main..HEAD` question asked from the only side CI can see.
+              unshipped_range = False
+              if not tag:
+                  body.append("unreleased UNKNOWN - no release to compare main against")
+              else:
+                  rc, _, _ = git("rev-parse", "-q", "--verify", "refs/tags/%s^{commit}" % tag)
+                  if rc != 0:
+                      body.append("unreleased UNKNOWN - tag %s is not in this checkout" % tag)
+                      notes.append("tag %s missing locally (needs fetch-depth: 0)" % tag)
+                  else:
+                      rc, out, err = git("log", "--format=%H%x09%cI", "%s..HEAD" % tag)
+                      if rc != 0:
+                          body.append("unreleased UNKNOWN - git log failed")
+                          notes.append("git log %s..HEAD: %s" % (tag, err[:60]))
+                      elif not out:
+                          body.append("unreleased none - main is exactly %s" % tag)
+                      else:
+                          rows_ = [l.split("\t") for l in out.split("\n")]
+                          unshipped_range = True
+                          oldest = min(datetime.fromisoformat(r[1]) for r in rows_)
+                          body.append("unreleased %d commit(s) on main since %s, oldest %s old"
+                                      % (len(rows_), tag, human(age_h(oldest))))
+
+              # --- 3. the three feeds an operator can actually be served --------
+              feeds = []
+
+              def feed(label, fn):
+                  try:
+                      feeds.append((label, fn()))
+                  except Exception as e:      # noqa: BLE001
+                      feeds.append((label, "unreachable"))
+                      notes.append("%s feed: %s" % (label, e))
+
+              feed("github", lambda: jget(
+                  "https://github.com/%s/releases/latest/download/latest.json" % REPO)
+                  .get("version", "?"))
+              feed("site", lambda: jget(
+                  "https://hamradiotools.io/nexus/version.json").get("latest", "?"))
+
+              def _sf():
+                  # Parsed exactly as the APP parses it (update.rs). Two traps live
+                  # here and both were hit writing release-endpoints.yml: `release`
+                  # is often literally null (SF fills it per the requesting client's
+                  # platform, so a Linux runner sees null where a browser sees a
+                  # value), and the version lives in the FILENAME, not in the
+                  # /vX.Y.Z/ directory the app never looks at.
+                  br = jget("https://sourceforge.net/projects/nexus-ham-radio/best_release.json")
+                  fn = ((br.get("platform_releases") or {}).get("windows") or {}).get("filename") \
+                       or (br.get("release") or {}).get("filename") or ""
+                  m = re.search(r"Nexus_(\d+\.\d+\.\d+)", fn)
+                  return m.group(1) if m else "unparsed"
+              feed("sourceforge", _sf)
+
+              # "DISAGREE" must mean the feeds were READ and differed. A feed nobody
+              # could reach, or no release to compare against, is not disagreement --
+              # calling it that is a false alarm, and this check dies the day it
+              # cries wolf.
+              agree = want is not None and all(v == want for _, v in feeds)
+              if want is None:
+                  verdict = "cannot compare - no release"
+              elif any(v == "unreachable" for _, v in feeds):
+                  verdict = "INCOMPLETE - a feed did not answer"
+              else:
+                  verdict = "agree" if agree else "DISAGREE"
+              body.append("feeds      %s  %s"
+                          % (" | ".join("%s %s" % kv for kv in feeds), verdict))
+
+              # --- 3b. how far the SourceForge GIT MIRROR trails main -----------
+              #
+              # The mirror is not a branch of this history -- scripts/mirror-to-
+              # sourceforge.sh pushes a synthetic squashed commit whose tree is
+              # byte-identical to the mirrored GitHub tree and whose MESSAGE records
+              # which GitHub commit that was (see that script, the `git commit -m
+              # "Mirror GitHub main @ ..."` line). So the lag is not a rev-list
+              # between two tips; it is: read the mirror tip's message, recover the
+              # GitHub SHA it claims, and count from there to main.
+              #
+              # Read ANONYMOUSLY over HTTPS. The SF deploy key is deliberately not
+              # required: a nightly check that needs a credential is a check that
+              # stops working the first time the key moves, and this one only ever
+              # reads. No --depth here on purpose -- a shallow fetch into a full
+              # clone leaves a shallow marker behind and the commit counting below
+              # is exactly what that breaks.
+              mirror_ok = False
+              try:
+                  rc, _, err = git("fetch", "--no-tags", "--quiet",
+                                   "https://git.code.sf.net/p/nexus-ham-radio/code", "main")
+                  if rc != 0:
+                      raise RuntimeError(err[:60] or "fetch failed")
+                  rc, msg, _ = git("log", "-1", "--format=%B", "FETCH_HEAD")
+                  if rc != 0:
+                      raise RuntimeError("FETCH_HEAD unreadable")
+                  m = (re.search(r"\b([0-9a-f]{40})\b", msg)
+                       or re.search(r"Mirror GitHub main @ ([0-9a-f]{7,40})", msg))
+                  if not m:
+                      raise RuntimeError("mirror tip is not a 'Mirror GitHub main @' commit")
+                  sha = m.group(1)
+                  rc, cnt, _ = git("rev-list", "--count", "%s..HEAD" % sha)
+                  if rc != 0:
+                      raise RuntimeError("mirrored commit %s is not in this clone" % sha[:8])
+                  behind = int(cnt)
+                  mirror_ok = behind == 0
+                  body.append("mirror     %s"
+                              % ("sourceforge git carries main (%s)" % sha[:8] if behind == 0
+                                 else "sourceforge git is %d commit(s) behind main, at %s"
+                                      % (behind, sha[:8])))
+              except Exception as e:      # noqa: BLE001
+                  body.append("mirror     UNKNOWN - could not read the SourceForge git mirror")
+                  notes.append("sf mirror: %s" % e)
+
+              # --- 4 + 5. the issues -------------------------------------------
+              issues_ok, landed, silent = True, [], []
+              try:
+                  raw = jget("https://api.github.com/repos/%s/issues?state=open&per_page=100" % REPO)
+                  # This endpoint returns pull requests too. A PR is not an issue,
+                  # and counting one as unanswered is a false alarm every night.
+                  issues = [i for i in raw if "pull_request" not in i]
+                  by_num = dict((i["number"], i) for i in issues)
+
+                  # (a) OPEN issues whose fix has LANDED but is UNSHIPPED. The link
+                  #     is a `#N` in a commit message inside the unreleased range --
+                  #     the same mention GitHub itself turns into a timeline
+                  #     `referenced` event. This repo has no `Fixes #N` convention,
+                  #     so a bare `#N` counts. FALSE POSITIVE ACCEPTED DELIBERATELY:
+                  #     a `#123` that meant something else costs one extra line in a
+                  #     digest (and a CSS hex colour is six digits, so it cannot
+                  #     collide with a two-digit issue). A false NEGATIVE costs a fix
+                  #     that never ships. Wrong in the cheap direction, on purpose.
+                  if unshipped_range and tag:
+                      rc, msgs, _ = git("log", "--format=%B", "%s..HEAD" % tag)
+                      if rc == 0:
+                          for n in sorted(set(int(x) for x in re.findall(r"#(\d+)", msgs))):
+                              if n in by_num:
+                                  landed.append(by_num[n])
+
+                  # (b) OPEN issues nobody has answered. `comments == 0` is the
+                  #     literal question the review asked. KNOWN GAP, written down
+                  #     instead of guessed at: an issue where only the REPORTER
+                  #     followed up has comments > 0 and is not listed here, though
+                  #     nobody has answered it either. Closing that gap costs one API
+                  #     call per issue; add it when the gap actually bites.
+                  for i in issues:
+                      if i.get("comments", 0) == 0 and age_h(ts(i["created_at"])) > NO_REPLY_H:
+                          silent.append(i)
+                  silent.sort(key=lambda i: i["created_at"])
+              except Exception as e:      # noqa: BLE001
+                  issues_ok = False
+                  notes.append("open issues: %s" % e)
+
+              def rows(label, items, cap):
+                  # An empty list after a FAILED read is not "none" -- reporting it
+                  # as "none" is the sentinel trap, and it is the exact shape of a
+                  # watchdog that reassures you about something it never checked.
+                  # Only a SUCCESSFUL read is allowed to say none.
+                  if not issues_ok:
+                      return ["%-10s UNKNOWN - the issues API did not answer" % label]
+                  if not items:
+                      return ["%-10s none" % label]
+                  out = []
+                  for i in items[:cap]:
+                      t = i["title"]
+                      t = t if len(t) <= 40 else t[:39] + "…"
+                      out.append("%-10s #%-3d %-40s %s"
+                                 % (label if not out else "", i["number"], t,
+                                    human(age_h(ts(i["created_at"])))))
+                  if len(items) > cap:
+                      out.append("%-10s + %d more" % ("", len(items) - cap))
+                  return out
+
+              body += rows("unshipped", landed, 3)
+              body += rows("no-reply", silent, 5)
+
+              if (issues_ok and not landed and not silent and agree and mirror_ok
+                      and not unshipped_range and not notes):
+                  body.append("")
+                  body.append("nothing to report.")
+
+              for n in notes[:2]:
+                  body.append("! %s" % n[:70])
+              if len(notes) > 2:
+                  body.append("! + %d more gathering fault(s) - see the run log" % (len(notes) - 2))
+
+              return body
+
+          head = "Nexus ship state · %s UTC" % NOW.strftime("%Y-%m-%d %H:%M")
+          try:
+              lines = [head] + build()
+          except Exception as e:      # noqa: BLE001
+              # A digest generator that crashes must still SAY it crashed. Posting
+              # nothing would be read as a quiet night, which is the one lie this
+              # workflow exists to prevent.
+              lines = [head, "",
+                       "DIGEST GENERATION FAILED - this loop could not gather its own state.",
+                       ("  %s: %s" % (type(e).__name__, e))[:120],
+                       "Nothing above is known. Fix ship-state.yml; until then this loop is blind."]
+
+          text = "\n".join(lines[:20])   # hard cap: a digest is a glance, not a report
+          print(text)
+          with open(os.environ["DIGEST"], "w", encoding="utf-8") as f:
+              f.write(text + "\n")
+          PY
+
+      - name: Deliver the digest
+        # always(): a digest that could not be BUILT still has to be delivered,
+        # because the alternative is silence, and silence is the failure signal
+        # this workflow reserves for "the loop is dead".
+        if: always()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DIGEST: ${{ runner.temp }}/digest.txt
+          PAYLOAD: ${{ runner.temp }}/payload.json
+        run: |
+          if [ ! -s "$DIGEST" ]; then
+            {
+              echo "Nexus ship state"
+              echo
+              echo "THE DIGEST STEP PRODUCED NOTHING AT ALL - it did not even manage to"
+              echo "report its own failure. The workflow itself is broken, not the repo."
+            } > "$DIGEST"
+          fi
+
+          # The job summary is written unconditionally, so the digest survives even
+          # when there is nowhere to send it.
+          {
+            echo '## Nexus ship state'
+            echo
+            echo '```'
+            cat "$DIGEST"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "${DISCORD_WEBHOOK:-}" ]; then
+            echo "::warning title=Discord is unconfigured::DISCORD_WEBHOOK is not set, so tonight's digest went to the job summary and nowhere else. Nobody will see it unless they open this run. Add the secret under Settings -> Secrets and variables -> Actions."
+            echo
+            echo "---- digest (undelivered) ----"
+            cat "$DIGEST"
+            echo "------------------------------"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json, os
+          d = open(os.environ["DIGEST"], encoding="utf-8").read().rstrip("\n")
+          # Issue titles are written by anyone on the internet who can open an
+          # issue. A stray ``` would break out of the code fence and a stray
+          # @everyone would ping the server, so: fence-safe text, and mentions
+          # disarmed at the API level rather than by hoping.
+          d = d.replace("`", "'")[:1800]
+          json.dump({"content": "```\n" + d + "\n```",
+                     "username": "Nexus ship state",
+                     "allowed_mentions": {"parse": []}},
+                    open(os.environ["PAYLOAD"], "w"))
+          PY
+
+          code=$(curl -sS -o "$RUNNER_TEMP/discord.out" -w '%{http_code}' \
+                   -X POST -H 'Content-Type: application/json' \
+                   --data-binary @"$PAYLOAD" "$DISCORD_WEBHOOK" || echo 000)
+          case "$code" in
+            2*)
+              echo "digest delivered to Discord (HTTP $code)"
+              ;;
+            *)
+              echo "::error title=Discord delivery failed::HTTP $code - tonight's digest did NOT arrive. The digest is in this run's job summary. A missing message is supposed to mean the loop is dead, so this run is failed deliberately to say that it is not."
+              cat "$RUNNER_TEMP/discord.out" 2>/dev/null || true
+              exit 1
+              ;;
+          esac
