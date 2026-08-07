@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Tempo dial would not scroll.** Hover a digit of the big frequency readout and roll the
+  wheel, and that digit steps — the 1 kHz digit by 1 kHz, the 1 MHz digit by 1 MHz, carrying the
+  way a real VFO carries. Every cockpit has worked that way for a while except Tempo, which used
+  the same readout with the tuning switched off. There was nothing to see: a readout with digit
+  tuning and one without look identical, so the only symptom was that scrolling did nothing.
+
+- **The wheel tuning sensitivity slider did nothing on four of the six dials.** Settings ▸ Radio
+  says it applies to the frequency readout, and it only reached Phone and CW. On Operate, RTTY and
+  SSTV the digits tuned at the stock rate no matter where the slider sat, so anyone who moved it
+  because a free-spinning mouse was overshooting got no change and no reason why. It now reaches
+  every readout, Tempo's included.
+
 ## [1.0.2] — 2026-08-06
 
 

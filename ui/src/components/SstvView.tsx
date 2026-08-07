@@ -174,6 +174,8 @@ interface Props {
   snap?: AppSnapshot | null
   /** Palette name for the band waterfall (same value the Operate cockpit uses). */
   theme?: string
+  /** Wheel sensitivity (Settings) — how much scroll one tuning step costs on the readout. */
+  wheelSensitivity?: number
   /** Apply a snapshot returned by a command without waiting for the poll. */
   onSnap?: (snap: AppSnapshot) => void
   /** True when SSTV is the visible view. The view stays MOUNTED in its
@@ -458,7 +460,7 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, panels }: Props) {
+export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, panels }: Props) {
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
@@ -1153,6 +1155,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           }
           onCommitDial={onSetFrequency ? commitDial : undefined}
           digitTune={onSetFrequency != null}
+          wheelSensitivity={wheelSensitivity}
           actions={
             host && panels ? (
               <PanelsMenu
