@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install refuses up front instead of handing you an application that cannot open.
   Reported and fixed by Justin Johnson (G0KSC).
 
+- **macOS: RX audio could go permanently silent with no error shown.** The bundle shipped with no
+  `NSMicrophoneUsageDescription` in `Info.plist`, so macOS could never show the audio-input
+  permission prompt at all. Once the OS records a denial for the app's bundle ID, CoreAudio does
+  not surface that as an error — the input stream opens normally and the audio pipeline runs, it
+  just delivers silence, which looked identical to a device-selection or gain problem. Added
+  `src-tauri/Info.plist` with the usage description so macOS can actually ask; anyone hitting this
+  on an existing install also needs `tccutil reset Microphone com.kd9taw.tempo` once to clear the
+  stuck denial before the next launch will prompt again. Reported and fixed by g0fqb. Applies to a
+  build from source — macOS is not a shipped platform.
+
 ## [1.0.5] — 2026-08-08
 
 ### Added
