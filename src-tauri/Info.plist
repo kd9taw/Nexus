@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Nexus decodes received audio from your radio's soundcard interface (FT8/FT4, RTTY, SSTV, CW, and other digital modes) and needs input access to do so.</string>
+</dict>
+</plist>
