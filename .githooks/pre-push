@@ -163,11 +163,13 @@ while read -r _lref lsha rref rsha; do
   if [ "${NEXUS_ALLOW_VENDOR:-}" != "1" ]; then
     vend=$(git log --diff-filter=A --name-only --format='' "${rspec[@]}" 2>/dev/null \
              | grep -E "$VENDOR_PATH" | sort -u | head -5 || true)
-    # This file is excluded from its own content scan: LICENCE_BODY above is a list of
-    # licence phrases, so every edit to this gate would otherwise trip it — and a gate that
-    # blocks its own maintenance is a gate people learn to bypass. Root-anchored (':/') so it
-    # does not depend on the hook's working directory.
-    licadd=$(git log -p --no-color --format='' "${rspec[@]}" -- ':/' ':!/.githooks/pre-push' 2>/dev/null \
+    # .githooks/ is excluded from this content scan, and it has to be: LICENCE_BODY above is
+    # a list of licence phrases, and pre-push.test.sh must contain one as a fixture to prove
+    # the check fires. Both would otherwise trip the gate on every edit — and a gate that
+    # blocks its own maintenance and its own test is a gate people learn to bypass. This
+    # directory holds the gate and its test only; it ships no product code and vendors
+    # nothing. Root-anchored (':/') so it does not depend on the hook's working directory.
+    licadd=$(git log -p --no-color --format='' "${rspec[@]}" -- ':/' ':!/.githooks/' 2>/dev/null \
              | grep -a '^+' | grep -aiE "$LICENCE_BODY" | head -3 || true)
     if [ -n "$vend" ] || [ -n "$licadd" ]; then
       touched=$(git log --name-only --format='' "${rspec[@]}" 2>/dev/null \
