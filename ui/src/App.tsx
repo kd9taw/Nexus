@@ -2377,6 +2377,7 @@ export default function App() {
               bandPlan={bandPlan}
               onSetFrequency={handleSetFrequency}
               onSetTxLevel={handleSetTxLevel}
+              wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
               onToggleCqRun={handleToggleCqRun}
               onResumeCqRun={handleResumeCqRun}
             />,
@@ -2569,6 +2570,7 @@ export default function App() {
               onSnap={setSnap}
               onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
               onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+              wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
               preferRrr={settings?.preferRrr ?? false}
               qsoMacros={macros.qso}
               roster={operateStationsPanel}
@@ -2597,6 +2599,7 @@ export default function App() {
                 onSetFrequency={handleSetFrequency}
                 onSetTxEnabled={handleSetTxEnabled}
                 theme={theme}
+                wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
               />
             </div>
@@ -2610,6 +2613,7 @@ export default function App() {
                 active={effectiveView === 'sstv'}
                 onSetFrequency={handleSetFrequency}
                 onSetTxEnabled={handleSetTxEnabled}
+                wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={sstvPanels}
               />
             </div>

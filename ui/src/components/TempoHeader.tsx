@@ -19,6 +19,8 @@ interface Props {
   bandPlan: BandChannel[]
   onSetFrequency: (dialMhz: number, band: string, mode: string) => void
   onSetTxLevel: (level: number) => void
+  /** Wheel sensitivity (Settings) — how much scroll one tuning step costs. */
+  wheelSensitivity?: number
   /** Toggle the CQ RUN (keep calling every idle TX slot). */
   onToggleCqRun: () => void
   /** Resume a paused run immediately. */
@@ -41,6 +43,7 @@ export function TempoHeader({
   bandPlan,
   onSetFrequency,
   onSetTxLevel,
+  wheelSensitivity,
   onToggleCqRun,
   onResumeCqRun,
 }: Props) {
@@ -85,6 +88,13 @@ export function TempoHeader({
         />
       }
       onCommitDial={commitDial}
+      // Per-digit wheel tuning, the same as the other five main dials. Tempo was the one cockpit
+      // rendering this header without it, so its readout was the only one that did not respond to
+      // a scroll. Digit-only (no uniform `wheelTune`), matching Operate/RTTY/SSTV: Tempo works
+      // agreed calling frequencies, so wheeling the whole readout is not the gesture — Phone and
+      // CW have that because they hunt.
+      digitTune
+      wheelSensitivity={wheelSensitivity}
       frequencyExtras={
         <TuningStrip
           snap={snap}

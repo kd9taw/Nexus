@@ -45,6 +45,8 @@ interface Props {
   /** Light/dark theme — passed straight through to the waterfall colormap.
    * Optional (defaults to dark) so non-theme-aware callers/tests don't have to thread it. */
   theme?: string
+  /** Wheel sensitivity (Settings) — how much scroll one tuning step costs on the readout. */
+  wheelSensitivity?: number
   /** Panel visibility record — host-owned (App) so it survives remounts. Optional: without it
    *  the decode stream shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<RttyPanelId>
@@ -163,7 +165,7 @@ function seqLabel(s: string): string {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', panels }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, panels }: Props) {
   // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
   // bar are pinned; only the decoded-text stream is removable, filling the space between them.
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
@@ -364,6 +366,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           }
           onCommitDial={onSetFrequency ? commitDial : undefined}
           digitTune={onSetFrequency != null}
+          wheelSensitivity={wheelSensitivity}
           actions={
             host && panels ? (
               <PanelsMenu

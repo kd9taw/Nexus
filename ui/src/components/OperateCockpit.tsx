@@ -121,6 +121,8 @@ interface Props {
   onRecallMemory?: (m: Memory) => void
   /** Open the Memories section (manage/groups/import). */
   onOpenMemories?: () => void
+  /** Wheel sensitivity (Settings) — how much scroll one tuning step costs on the readout. */
+  wheelSensitivity?: number
   /** True when the cockpit is the active view. The cockpit stays MOUNTED across
    * navigation (so Band Activity keeps accumulating in the background); this flag
    * pauses the waterfall's render loop while it's hidden. */
@@ -242,6 +244,7 @@ export function OperateCockpit({
   companionAddr,
   onRecallMemory,
   onOpenMemories,
+  wheelSensitivity,
 }: Props) {
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -699,6 +702,7 @@ export function OperateCockpit({
         }
         onCommitDial={commitDial}
         digitTune
+        wheelSensitivity={wheelSensitivity}
         actions={
           <>
             <div
