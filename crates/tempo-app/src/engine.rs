@@ -13283,6 +13283,11 @@ impl Engine {
         self.station.push_sstv_gallery(entry)
     }
 
+    /// See [`StationCore::remove_sstv_gallery`].
+    pub fn remove_sstv_gallery(&mut self, path: &str) -> bool {
+        self.station.remove_sstv_gallery(path)
+    }
+
     /// See [`StationCore::set_sstv_gallery_fsk_id`].
     pub fn set_sstv_gallery_fsk_id(&mut self, path: &str, fsk_id: String) {
         self.station.set_sstv_gallery_fsk_id(path, fsk_id)

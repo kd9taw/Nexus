@@ -1993,6 +1993,120 @@ fn legacy_sstv_gallery_dir() -> PathBuf {
         .join("sstv-gallery")
 }
 
+/// Delete one received SSTV image: the FILE and the index entry, in one action.
+///
+/// ⚠️ IRREVERSIBLE, and that is why it is one command rather than two. A decoded SSTV picture is
+/// the only copy of something a person sent you — there is no re-download. Before this there was
+/// no delete anywhere in the app at all, so the only way to clear the gallery was to remove the
+/// `.bmp` by hand, which is precisely the path that left the index pointing at nothing (#23). Doing
+/// both here is what stops the two drifting again.
+///
+/// The UI confirms first. Deliberately a plain confirm and not the Logbook's type-the-word dialog:
+/// one picture is not a whole logbook, and a ceremony out of proportion to the act teaches people
+/// to click through it.
+///
+/// PATH IS VALIDATED AGAINST THE GALLERY DIRECTORY. This takes a path from the front end and
+/// unlinks it; without the check it is an arbitrary-file-delete command. Compared after
+/// canonicalising both sides so `..` cannot walk out.
+/// `(async)` because it takes the engine mutex AND does file I/O — a delete, a directory read and
+/// an index rewrite. On Windows a plain `#[tauri::command]` runs on the UI thread, so this would
+/// stall the whole window on a slow disk. Caught by `no_engine_locking_command_runs_on_the_ui_thread`.
+#[tauri::command(async)]
+fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(), String> {
+    let dir = sstv_gallery_dir();
+    let target = std::path::Path::new(&path);
+    let canon_dir = dir.canonicalize().map_err(|e| format!("no gallery folder: {e}"))?;
+    let canon = target
+        .canonicalize()
+        .map_err(|e| format!("Could not find {}: {e}", target.display()))?;
+    if !canon.starts_with(&canon_dir) {
+        return Err("That file is not in the SSTV gallery folder".into());
+    }
+    std::fs::remove_file(&canon).map_err(|e| format!("Could not delete {}: {e}", canon.display()))?;
+    {
+        let mut eng = engine_lock(&state);
+        eng.remove_sstv_gallery(&path);
+        // Rewrite the index from what the directory now holds, rather than from the entry we just
+        // dropped: it costs one directory read and it also sweeps up any other drift.
+        let entries = reconcile_gallery(&dir, eng.sstv_gallery().to_vec());
+        if let Ok(text) = serde_json::to_string(&entries) {
+            let p = dir.join("gallery.json");
+            let tmp = p.with_extension("json.tmp");
+            if std::fs::write(&tmp, text).is_ok() {
+                let _ = std::fs::rename(&tmp, &p);
+            }
+        }
+        eng.load_sstv_gallery(entries);
+    }
+    Ok(())
+}
+
+/// Reconcile a gallery index against the files that are actually on disk.
+///
+/// Two drifts, and issue #23 is both of them compounding: the index could name images that are
+/// gone (deleting a `.bmp` by hand left a thumbnail over nothing, because the seed never stat'd
+/// anything), and the directory could hold images the index has never heard of (a hand-copied file,
+/// or one evicted from the in-memory cap and still on disk).
+///
+/// Operator decision, 2026-08-08: a vanished entry is dropped SILENTLY. It is friendlier than a
+/// broken tile, and the file being gone is not news — the operator is the one who removed it.
+///
+/// An adopted file is dated and named from its own filename (`<UTC stamp>_<mode>.bmp`, what the
+/// decoder writes). Frequency and line count are unrecoverable from a bare file, so they are left
+/// at zero rather than invented.
+///
+/// Order is oldest-first by stamp, matching what the decoder appends.
+fn reconcile_gallery(dir: &std::path::Path, entries: Vec<tempo_app::dto::SstvGalleryEntry>)
+    -> Vec<tempo_app::dto::SstvGalleryEntry>
+{
+    let mut kept: Vec<tempo_app::dto::SstvGalleryEntry> =
+        entries.into_iter().filter(|e| std::path::Path::new(&e.path).is_file()).collect();
+    let known: std::collections::HashSet<String> = kept.iter().map(|e| e.path.clone()).collect();
+
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for f in rd.flatten() {
+            let path = f.path();
+            if path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase)
+                != Some("bmp".into())
+            {
+                continue;
+            }
+            let p = path.to_string_lossy().into_owned();
+            if known.contains(&p) {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+            let (stamp, mode) = stem.split_once('_').unwrap_or((stem, ""));
+            kept.push(tempo_app::dto::SstvGalleryEntry {
+                path: p,
+                mode: mode.to_string(),
+                finished_utc: iso_from_stamp(stamp).unwrap_or_default(),
+                freq_mhz: 0.0,
+                lines: 0,
+                fsk_id: None,
+            });
+        }
+    }
+    kept.sort_by(|a, b| a.finished_utc.cmp(&b.finished_utc));
+    kept
+}
+
+/// `20260717T153000Z` (the decoder's filename stamp) → `2026-07-17T15:30:00Z` (the record form).
+/// `None` for anything that is not that shape, so a stray `.bmp` cannot fabricate a date.
+fn iso_from_stamp(stamp: &str) -> Option<String> {
+    let b = stamp.as_bytes();
+    if b.len() != 16 || b[8] != b'T' || b[15] != b'Z' {
+        return None;
+    }
+    if !stamp[..8].bytes().chain(stamp[9..15].bytes()).all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{}T{}:{}:{}Z",
+        &stamp[0..4], &stamp[4..6], &stamp[6..8], &stamp[9..11], &stamp[11..13], &stamp[13..15]
+    ))
+}
+
 /// Bring an existing SSTV gallery to `Pictures/Nexus SSTV` on the first launch after the move.
 ///
 /// ⚠️ WHY THIS IS NOT OPTIONAL. `gallery.json` lives INSIDE the gallery folder and every entry
@@ -14965,6 +15079,7 @@ pub fn run() {
             civ_diagnostic_log,
             all_txt_location,
             recordings_location,
+            sstv_delete_image,
             reveal_recordings,
             reveal_all_txt,
             open_qrz_page,
@@ -15309,11 +15424,18 @@ pub fn run() {
             // appends). Parsed here (not via tempo-audio) so non-radio builds
             // still show the gallery.
             {
-                let entries: Vec<tempo_app::dto::SstvGalleryEntry> =
-                    std::fs::read_to_string(sstv_gallery_dir().join("gallery.json"))
+                // Reconciled against the directory, not trusted. The index could name images
+                // that are gone (a hand-deleted .bmp used to leave a thumbnail over nothing) and
+                // the folder could hold images the index never knew about — a hand-copied file, or
+                // one evicted from the in-memory cap and still on disk. #23.
+                let dir = sstv_gallery_dir();
+                let entries: Vec<tempo_app::dto::SstvGalleryEntry> = reconcile_gallery(
+                    &dir,
+                    std::fs::read_to_string(dir.join("gallery.json"))
                         .ok()
                         .and_then(|text| serde_json::from_str(&text).ok())
-                        .unwrap_or_default();
+                        .unwrap_or_default(),
+                );
                 if !entries.is_empty() {
                     if let Ok(mut eng) = app.state::<SharedEngine>().inner().lock() {
                         eng.load_sstv_gallery(entries);
@@ -15398,6 +15520,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
+        iso_from_stamp, reconcile_gallery,
         migrate_sstv_gallery_between,
         write_qso_wav_in,
        assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
@@ -15495,6 +15618,93 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&from);
         let _ = std::fs::remove_dir_all(&to);
+    }
+
+    fn entry(path: &std::path::Path, iso: &str) -> tempo_app::dto::SstvGalleryEntry {
+        tempo_app::dto::SstvGalleryEntry {
+            path: path.to_string_lossy().into_owned(),
+            mode: "Scottie 1".into(),
+            finished_utc: iso.into(),
+            freq_mhz: 14.23,
+            lines: 256,
+            fsk_id: None,
+        }
+    }
+
+    /// ISSUE #23, first half: deleting a `.bmp` by hand left a thumbnail over nothing, because the
+    /// startup seed handed the index straight to the gallery without stat'ing a single file.
+    #[test]
+    fn an_image_that_is_gone_drops_out_of_the_gallery() {
+        let dir = scratch("sstv-recon");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let there = dir.join("20260717T153000Z_scottie1.bmp");
+        std::fs::write(&there, b"BM").unwrap();
+        let gone = dir.join("20260716T153000Z_martin1.bmp"); // indexed, never written
+
+        let out = reconcile_gallery(
+            &dir,
+            vec![entry(&gone, "2026-07-16T15:30:00Z"), entry(&there, "2026-07-17T15:30:00Z")],
+        );
+        assert_eq!(out.len(), 1, "the missing file's entry is dropped");
+        assert_eq!(out[0].path, there.to_string_lossy());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other direction, which the same issue asks for: a file in the folder that the index has
+    /// never heard of is ADOPTED, so hand-managing the folder works instead of breaking things.
+    /// Its date and mode come from its own filename; frequency and line count are unrecoverable
+    /// from a bare file and stay zero rather than being invented.
+    #[test]
+    fn an_image_the_index_never_knew_about_is_adopted() {
+        let dir = scratch("sstv-adopt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let orphan = dir.join("20260717T153000Z_pd120.bmp");
+        std::fs::write(&orphan, b"BM").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"not an image").unwrap();
+
+        let out = reconcile_gallery(&dir, vec![]);
+        assert_eq!(out.len(), 1, "only the .bmp is adopted, not every file in the folder");
+        assert_eq!(out[0].path, orphan.to_string_lossy());
+        assert_eq!(out[0].mode, "pd120");
+        assert_eq!(out[0].finished_utc, "2026-07-17T15:30:00Z");
+        assert_eq!(out[0].freq_mhz, 0.0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Adoption must not invent a date from a filename that is not the decoder's shape.
+    #[test]
+    fn a_stray_bmp_gets_no_fabricated_timestamp() {
+        assert_eq!(iso_from_stamp("20260717T153000Z").as_deref(), Some("2026-07-17T15:30:00Z"));
+        assert_eq!(iso_from_stamp("holiday-photo"), None);
+        assert_eq!(iso_from_stamp("2026071xT153000Z"), None); // non-digit
+        assert_eq!(iso_from_stamp("20260717X153000Z"), None); // wrong separator
+        assert_eq!(iso_from_stamp(""), None);
+    }
+
+    /// Entries already correct are left exactly as they are, ordered oldest first — the same order
+    /// the decoder appends in, so a reconciled gallery reads the way an untouched one does.
+    #[test]
+    fn a_healthy_gallery_survives_reconciliation_unchanged() {
+        let dir = scratch("sstv-healthy");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("20260716T100000Z_scottie1.bmp");
+        let b = dir.join("20260717T100000Z_scottie1.bmp");
+        std::fs::write(&a, b"BM").unwrap();
+        std::fs::write(&b, b"BM").unwrap();
+
+        let given = vec![entry(&b, "2026-07-17T10:00:00Z"), entry(&a, "2026-07-16T10:00:00Z")];
+        let out = reconcile_gallery(&dir, given);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].path, a.to_string_lossy(), "oldest first");
+        assert_eq!(out[1].path, b.to_string_lossy());
+        assert_eq!(out[0].freq_mhz, 14.23, "a known entry keeps its real metadata");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ISSUE #24 — "recording is not writing the file".

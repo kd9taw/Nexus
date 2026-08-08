@@ -891,6 +891,12 @@ export async function revealRecordings(): Promise<void> {
   await invoke('reveal_recordings')
 }
 
+/** Delete one received SSTV image — the file AND its gallery entry, in one action so the two
+ * cannot drift. Irreversible: the caller confirms first. */
+export async function sstvDeleteImage(path: string): Promise<void> {
+  await invoke('sstv_delete_image', { path })
+}
+
 /** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */
 export async function setSkipTx1(enabled: boolean): Promise<void> {
   await invoke('set_skip_tx1', { enabled })
