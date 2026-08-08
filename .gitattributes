@@ -1,0 +1,52 @@
+# Line endings.
+#
+# WHY THIS FILE EXISTS. Several fixtures are compared BYTE FOR BYTE against a string the
+# code builds with '\n' — `station_identity.rs` and `watch_identity.rs` read
+# `tests/fixtures/*.json` and `assert_eq!` the whole document. With no .gitattributes, a
+# clone on Windows under Git's default `core.autocrlf=true` checks those fixtures out as
+# CRLF, so the comparison cannot pass and a PRISTINE clone fails its own test suite. The
+# failure message reads "Do not rebaseline: find what changed", which sends a new
+# contributor hunting a bug that is not there. Development on Linux never sees it.
+#
+# So: normalise text to LF in the working tree on every platform.
+* text=auto eol=lf
+
+# EXCEPTIONS — these carry CRLF deliberately and must survive byte for byte.
+# `-text` disables eol translation in both directions, so the bytes on disk are the bytes
+# in the object store.
+#
+# Third-party data shipped as published. cty.dat is AD1C's country file and the .tle is a
+# captured Celestrak payload; both are line-oriented formats consumed verbatim, and the
+# TLE is a test fixture whose bytes are the point.
+crates/propagation/data/cty.dat            -text
+crates/propagation/tests/fixtures/*.tle    -text
+
+# Vendored hamlib licence texts, bundled as Tauri resources. Licence files are reproduced
+# as received — rewriting their line endings edits third-party legal text.
+src-tauri/resources/hamlib/*.txt           -text
+
+# Captured rigctld/rigctl output, byte for byte as the Windows binary emitted it — CRLF
+# included, because that IS the data being tested. 14 of these 15 files carry CRLF and none
+# contains a NUL byte, so `text=auto` above classifies every one of them as text.
+#
+# THE HAZARD IS CHECK-IN, NOT CHECKOUT, and the distinction matters because the checkout side
+# looks safe and lulls you: git only ever converts LF->CRLF on checkout, never the reverse, so a
+# fresh clone still gets these files with their CRLF intact. But `git add` on one of them — or the
+# `git add --renormalize .` this file's own PR recommends as a verification step — rewrites it to
+# LF in the index. Measured both ways on probe_working_ft847.stdout.log: without this line,
+# renormalize takes it from 4 CRLF to 0; with it, all 4 survive.
+#
+# And it would not be caught. `baud_ladder.rs` reads these with include_str! and strips CR
+# defensively (`trim_end_matches('\r')`, three sites), so LF-normalised captures keep passing —
+# they just stop exercising the three CR paths they exist to prove. A green suite that no longer
+# proves its thing is worse than a red one.
+crates/tempo-audio/tests/fixtures/rigctld/** -text
+
+# Binary assets: never eol-translated, never diffed as text.
+*.png     binary
+*.webp    binary
+*.wav     binary
+*.bin     binary
+*.ico     binary
+*.icns    binary
+*.onnx    binary

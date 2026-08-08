@@ -22,7 +22,20 @@ The enforcement: `cockpit-panes.test.ts`, `cockpit-shells.test.ts`, `responsive-
 | New full view | Bounded shell with ONE scroll owner (either the view scrolls, or exactly one designated inner scroller does). Copy Operate/Connect/Stats patterns, not Phone-pre-overhaul. |
 | Modal / dialog | `ui/Dialog` (portaled; its content auto-applies `--ui-zoom`, its box measures the real window — do not fight either half). Give any new modal a `--vh-eff` max-height + internal scroll. |
 | Pop-out window | `DetachedPanel` branch with className `app detached …` (the `app` class carries zoom — its omission was a shipped bug). Min sizes live in `open_panel_window` (src-tauri). |
-| TX-adjacent control | Default to the cockpit TX dock or header. THE STOP LINE is the rule (CLAUDE.md, `panelState.ts`): *the operator must never be unable to stop a transmission* — mechanically, in every cockpit at least one control that STOPS one renders outside every ⊞-removable pane, so those controls have no id in any vocabulary. A pane that merely SENDS may be hidden (six ship that way), and a pane may host a stop of its own (two do). Adding a stop control? Put it outside the panes and add it to that cockpit's census + sweep. |
+| TX-adjacent control | Default to the cockpit TX dock or header. **THE STOP LINE governs this — read the generated section immediately below the table before placing anything that starts or stops a transmission.** |
+
+<!-- BEGIN GENERATED skill-rules — DO NOT EDIT INSIDE THIS BLOCK.
+     Generated from SKILL-RULE blocks in the memory corpus. Edit the memory that owns the
+     rule and re-run the generator; a hand-edit here is overwritten and, worse, silently
+     diverges from the long form in CLAUDE.md. That divergence is not hypothetical: it is
+     what left a falsified transmit-path rule alive in this file across 6 worktrees.
+     pairs-with: ## UI layout contract (2026-07 overhaul — read before building any view or pane) · long-form-sha256: 91c01c113c72624e
+-->
+
+## THE STOP LINE — read before placing any TX-adjacent control
+
+Default to the cockpit TX dock or header. THE STOP LINE is the rule (CLAUDE.md, `panelState.ts`): *the operator must never be unable to stop a transmission* — mechanically, in every cockpit at least one control that STOPS one renders outside every ⊞-removable pane, and hiding every id in that cockpit's vocabulary (singly and all at once) leaves the controls on that cockpit's census still on screen and no more disabled than they were. **Those census controls carry no vocabulary id**, which is what makes hiding one unrepresentable rather than merely guarded. But the guarantee is a property of **the screen that remains**, not of any pane or control: a pane MAY host a stop of its own, and two ship that way (Phone's voice keyer ■ Stop, RTTY's `stream` Auto toggle) — conveniences built on the guarantee, never what holds it up. A pane that merely SENDS may be hidden; six ship that way. Adding a stop control? Put it outside the panes and add it to that cockpit's census + sweep — and never add a **pane-resident** one to a sweep's `stopControls`, which would demand its pane be unhideable.
+<!-- END GENERATED skill-rules -->
 
 ## 2. The role question (ask it of every pane, every time)
 

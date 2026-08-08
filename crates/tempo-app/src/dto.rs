@@ -666,6 +666,15 @@ pub struct RadioStatus {
     /// A config warning (self-clears once the ports differ); surfaced in the status lane.
     #[serde(default)]
     pub radio_config_warning: Option<String>,
+    /// The last per-QSO recording failed, with the full path it failed at. Surfaced in the status
+    /// lane and cleared by the next recording that succeeds.
+    ///
+    /// A recording that fails silently is the same honesty defect as a feature that reports
+    /// success while doing nothing — both the directory create and the WAV write used to discard
+    /// their result, so a full disk or an unwritable profile dir produced no file and no word of
+    /// it anywhere (#24).
+    #[serde(default)]
+    pub recording_warning: Option<String>,
     /// Transmit on even/"1st" slots (true) or odd/"2nd" slots (false). Two
     /// stations must use OPPOSITE periods to complete a QSO.
     #[serde(default = "default_true")]

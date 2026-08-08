@@ -127,9 +127,34 @@ pub struct Station {
     pub transcript: Vec<String>,
 }
 
+/// The operator's grid AS IT GOES ON AIR: the 4-character field+square, upper-cased.
+///
+/// ⚠️ A STANDARD FT8/FT4 MESSAGE CARRIES FOUR CHARACTERS AND NO MORE (#42). Hand the packer a
+/// six-character locator and it cannot build the standard grid message at all — it falls out to
+/// free text, which the station you are working cannot auto-sequence against, so the QSO stalls
+/// on their side for reasons invisible on yours.
+///
+/// Baselined against real WSJT-X rather than reasoned about: `MainWindow::genStdMsgs` opens with
+/// `auto const& my_grid = m_config.my_grid ().left (4);` and every standard message it builds uses
+/// that, as does `genCQMsg` (`grid.left (4)`). So stock
+/// truncates ONCE at the message boundary and never transmits six. This is that boundary here:
+/// `Station::mygrid` is message content and nothing else reads it.
+///
+/// The operator's SETTINGS grid is untouched, and so is the logbook — a six-character locator is
+/// correct there and is what awards want. Only what leaves the antenna is cut.
+fn air_grid(mygrid: &str) -> String {
+    mygrid
+        .trim()
+        .chars()
+        .take(4)
+        .collect::<String>()
+        .to_uppercase()
+}
+
 impl Station {
     /// A station that calls CQ to start a QSO.
     pub fn calling_cq(mycall: &str, mygrid: &str) -> Self {
+        let mygrid = &air_grid(mygrid);
         Self {
             mycall: mycall.into(),
             mygrid: mygrid.into(),
@@ -156,6 +181,7 @@ impl Station {
 
     /// A station that listens and answers the first CQ it hears.
     pub fn monitoring(mycall: &str, mygrid: &str) -> Self {
+        let mygrid = &air_grid(mygrid);
         Self {
             mycall: mycall.into(),
             mygrid: mygrid.into(),
@@ -221,6 +247,7 @@ impl Station {
         skip_tx1: bool,
     ) -> Self {
         let mycall_s: String = mycall.into();
+        let mygrid = &air_grid(mygrid);
         let mut dxgrid: Option<String> = None;
         let mut rx_report: Option<i32> = None;
 
@@ -1136,6 +1163,48 @@ mod start_context_tests {
     //! to the grid (Tx1) — it must advance to the correct next message.
     use super::*;
     use crate::message::Msg;
+
+    /// ISSUE #42 — "FTx sends 6 element Maidenhead grid. Expected 4 element, got six."
+    ///
+    /// A standard FT8/FT4 message has room for four characters of locator. Six cannot be packed
+    /// as the standard grid message at all, so it degrades to free text — which the station you
+    /// are working cannot auto-sequence against. The QSO stalls on their side for a reason that
+    /// is invisible on yours.
+    ///
+    /// Nexus's CQ TEXT builder already truncated (engine.rs, `chars().take(4)`); the QSO exchange
+    /// did not, so an operator with a six-character locator in Settings called CQ correctly and
+    /// then put six characters on the air in Tx1. Every constructor goes through `air_grid` now.
+    ///
+    /// Parity, not preference: WSJT-X `MainWindow::genStdMsgs` opens with `my_grid ().left (4)`
+    /// and `genCQMsg` uses `grid.left (4)`.
+    #[test]
+    fn a_six_character_locator_goes_on_air_as_four() {
+        let s = Station::start("KD9TAW", "EN52ab", "W1AW", None, false, false);
+        assert_eq!(
+            s.outgoing().expect("Tx1 is pending").to_text(),
+            "W1AW KD9TAW EN52",
+            "a standard message carries four characters of grid and no more"
+        );
+        assert_eq!(s.mygrid, "EN52");
+
+        let cq = Station::calling_cq("KD9TAW", "EN52ab");
+        assert_eq!(
+            cq.outgoing().expect("CQ is pending").to_text(),
+            "CQ KD9TAW EN52"
+        );
+
+        assert_eq!(Station::monitoring("KD9TAW", "EN52ab").mygrid, "EN52");
+    }
+
+    /// Four characters are untouched, and a lower-case locator comes out matching the CQ path —
+    /// the packer is case-insensitive, so this is about the two paths agreeing, not about the air.
+    #[test]
+    fn a_four_character_locator_is_unchanged_and_case_is_normalised() {
+        let s = Station::start("KD9TAW", "EN52", "W1AW", None, false, false);
+        assert_eq!(s.outgoing().unwrap().to_text(), "W1AW KD9TAW EN52");
+        let lower = Station::start("KD9TAW", "en52ab", "W1AW", None, false, false);
+        assert_eq!(lower.outgoing().unwrap().to_text(), "W1AW KD9TAW EN52");
+    }
 
     const ME: &str = "KD9TAW";
     const MY_GRID: &str = "EN61";

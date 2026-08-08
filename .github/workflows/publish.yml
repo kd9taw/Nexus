@@ -495,6 +495,28 @@ jobs:
           echo "notes source: $notes_src"
           echo "NOTES_SRC=$notes_src" >> "$GITHUB_ENV"
 
+          # 1.0.2 shipped with the auto-generated commit list as its release prose, on BOTH
+          # public surfaces, and every gate stayed green — because the live-feed check below
+          # only ever compared `latest`. Nothing looked at what the notes SAID, so an operator
+          # opening the update prompt read "release-prep: 1.0.2" and "test(cat): the flood
+          # capture was 549 lines". It was found by accident, not by a gate or a report.
+          #
+          # The detector is deliberately narrow: three or more bullets opening with a
+          # conventional-commit type. Operator prose does not look like that — checked against
+          # the real 1.0.2 and 0.15.14 notes (both pass) and the 1.0.2 fallback body (trips).
+          # One line on purpose: a multi-line -c script has to start at column 0, and a column-0
+          # line ends the YAML block scalar this step is written in. It parsed fine as shell and
+          # broke the workflow file.
+          if python3 -c "import re,sys; CC=re.compile(r'^- (feat|fix|test|docs|chore|refactor|build|ci|perf|style|revert)[(:]', re.M); sys.exit(0 if len(CC.findall(open(sys.argv[1],encoding='utf-8').read()))>=3 else 1)" "$WORK/notes.md"; then
+            echo "::error::the release prose for $TAG is an auto-generated commit list, not operator notes."
+            echo "That is what the site endpoint and the in-app update prompt would show every operator."
+            echo "Fix whichever source applies, then re-run this workflow with the same tag:"
+            echo "  * preferred — add docs/RELEASE_NOTES-$VER.md; it is read at the tag"
+            echo "  * already tagged — gh release edit $TAG --notes-file <prose file>"
+            echo "SourceForge is idempotent and has already run, so a re-run is safe and cheap."
+            exit 1
+          fi
+
           cd "$WORK/site"
           DIST="$WORK/dist" NOTES="$WORK/notes.md" REL="$WORK/rel.json" NOTES_SRC="$notes_src" \
           python3 - <<'PY'

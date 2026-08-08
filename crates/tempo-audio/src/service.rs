@@ -4851,6 +4851,56 @@ impl RadioLoop {
             }
         }
 
+        // Every logged contact → a WSJT-X `QsoLogged` (type 5) datagram. This is the message
+        // N1MM+, HRD and Log4OM log FROM, and until now `send_qso_logged` had exactly one call
+        // site, inside the Field Day block below, so an ordinary contact produced Status and
+        // Decode datagrams and never this one. The link therefore looked alive — N1MM's WSJT
+        // decode window fills up — while nothing was ever logged (issue #37), and
+        // `docs/manual/FAQ.md` told operators the path was supported.
+        //
+        // ⚠️ DRAINED HERE, IN THE TICK, deliberately. The obvious home is beside the Field Day
+        // emitter in `emit_boundary_housekeeping`, and that would be wrong: that runs only on an
+        // FT slot boundary, so a Phone, CW, RTTY, SSTV or hand-entered Logbook contact would
+        // queue and never be sent. `log_qso` is the single funnel for all of them.
+        //
+        // Field Day contacts do not arrive twice: they never pass through `log_qso` at all, an
+        // invariant pinned by `a_field_day_contact_never_enters_the_general_upload_queue`.
+        //
+        // Take unconditionally, even with no sink configured — otherwise a queue nobody drains
+        // just sits at its 256 cap holding contacts that will never go anywhere.
+        let logged_qsos = eng.take_pending_udp_qsos();
+        if let Some(server) = sinks.wsjtx {
+            let (mycall, mygrid) = {
+                let s = eng.settings();
+                (s.mycall.clone(), s.mygrid.clone())
+            };
+            for q in &logged_qsos {
+                let time_on = q.when_unix as i64;
+                let _ = server.send_qso_logged(&WsjtxQso {
+                    time_off: q.time_off_unix.unwrap_or(q.when_unix) as i64,
+                    dx_call: &q.call,
+                    dx_grid: q.grid.as_deref().unwrap_or(""),
+                    // The contact's own frequency, not the rig's current dial — by the time this
+                    // drains the operator may have moved on, and a logger stamping the wrong band
+                    // on a contact is worse than one stamping none.
+                    tx_freq: (q.freq_mhz * 1e6).round().max(0.0) as u64,
+                    mode: &q.mode,
+                    report_sent: q.rst_sent.as_deref().unwrap_or(""),
+                    report_recvd: q.rst_rcvd.as_deref().unwrap_or(""),
+                    tx_power: "",
+                    comments: q.comment.as_deref().unwrap_or(""),
+                    name: q.name.as_deref().unwrap_or(""),
+                    time_on,
+                    op_call: q.operator.as_deref().unwrap_or(&mycall),
+                    my_call: q.station_callsign.as_deref().unwrap_or(&mycall),
+                    my_grid: &mygrid,
+                    exchange_sent: "",
+                    exchange_recvd: "",
+                    adif_propmode: q.prop_mode.as_deref().unwrap_or(""),
+                });
+            }
+        }
+
         // Deferred "Disable Tx after sending 73": only once the final over has
         // fully played out (tx_until cleared). A mid-over disable no longer cuts
         // the 73 (a SLOT over completes on a plain disarm), but the deferral stays:

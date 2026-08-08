@@ -62,6 +62,17 @@ issue() {
   local id="$1" wave="$2" labels="$3" title="$4" body
   body="$(cat)"
 
+  # Match the tracker's existing convention: every issue already on the repo carries a
+  # [bug]/[feat] prefix, and a half-prefixed tracker stops being scannable in a list view.
+  # The GitHub label is still applied — this is what shows in notifications and search.
+  # Prefixing BEFORE the duplicate check below is deliberate, so a re-run compares the
+  # title that was actually created.
+  case "$labels" in
+    *bug*)           title="[bug] $title" ;;
+    *documentation*) title="[docs] $title" ;;
+    *enhancement*)   title="[feat] $title" ;;
+  esac
+
   if [ "$WAVE" != all ] && [ "$wave" != "$WAVE" ]; then return 0; fi
 
   if [ -n "$EXISTING" ] && printf '%s\n' "$EXISTING" | grep -Fxq "$title"; then

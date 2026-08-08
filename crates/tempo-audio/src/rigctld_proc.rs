@@ -557,10 +557,67 @@ fn assign_kill_on_close_job(child: &Child) -> isize {
     }
 }
 
+/// Extra absolute directories to search for a Hamlib binary once it is neither bundled next to
+/// the app nor found by name below — the last resort before giving up and handing `Command` the
+/// bare name (which fails silently into a PATH lookup).
+///
+/// **Why this exists at all.** A GUI app launched from Finder/Dock/Spotlight is started by
+/// launchd, which on every macOS version hands it the fixed environment
+/// `PATH=/usr/bin:/bin:/usr/sbin:/sbin` — never the interactive shell's `PATH`, and so never
+/// Homebrew's install prefix, no matter what the operator's own `.zshrc` says or how their
+/// terminal resolves `rigctld`. `Command::new("rigctld")` from inside Nexus therefore fails even
+/// on a station where `which rigctld` works fine in Terminal — confirmed on 2026-08-07 (Nexus's
+/// own `PATH` inside a Finder-launched process was verified as exactly those four directories,
+/// while `rigctld` sat in `/opt/homebrew/bin`, on `PATH` for every shell but invisible to Nexus).
+/// Linux desktop launchers can hit the same gap for a Hamlib built from source into
+/// `/usr/local/bin`, so this list is not Homebrew-only.
+#[cfg(unix)]
+const HAMLIB_SEARCH_DIRS: &[&str] = &[
+    "/opt/homebrew/bin", // Homebrew, Apple Silicon
+    "/usr/local/bin",    // Homebrew, Intel Mac; also a common manual/from-source install prefix
+    "/opt/local/bin",    // MacPorts
+];
+
+/// Return the first `dirs` entry that contains a file named `bin_name`, absolute path — the
+/// search core of [`resolve_rigctld`] / [`resolve_rotctld`] / [`resolve_rigctl`]'s fallback,
+/// factored out so it can be driven by a fixture list in tests instead of the real
+/// [`HAMLIB_SEARCH_DIRS`].
+#[cfg(unix)]
+fn find_in_dirs(dirs: &[&str], bin_name: &str) -> Option<std::ffi::OsString> {
+    dirs.iter()
+        .map(|dir| std::path::Path::new(dir).join(bin_name))
+        .find(|p| p.is_file())
+        .map(std::path::PathBuf::into_os_string)
+}
+
+/// Does `path_var` (a `PATH`-shaped, `:`-joined list of directories) resolve `bin_name`? The
+/// testable core of [`on_path`] — takes the value as a parameter instead of reading the real
+/// process environment, so a test can drive it without mutating global state that other tests
+/// (the fixture stand-in below) already depend on being left alone.
+#[cfg(unix)]
+fn path_has(path_var: &std::ffi::OsStr, bin_name: &str) -> bool {
+    std::env::split_paths(path_var).any(|dir| dir.join(bin_name).is_file())
+}
+
+/// Does the CURRENT process's own `PATH` already resolve `bin_name`? Read-only mirror of the
+/// search `Command::new(bin_name)` is about to do itself.
+///
+/// **Why check this instead of just always trying [`HAMLIB_SEARCH_DIRS`] first.** An operator
+/// (or a test) may deliberately put a specific `rigctld` earliest on `PATH` — a version pin, a
+/// wrapper script, a fixture stand-in — and that intent must outrank Nexus's own guess at common
+/// install directories. [`HAMLIB_SEARCH_DIRS`] exists for the case PATH has NOTHING, not to
+/// second-guess a PATH that already has something.
+#[cfg(unix)]
+fn on_path(bin_name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| path_has(&path, bin_name))
+}
+
 /// Locate the `rigctld` binary. Prefers one **bundled next to the app** — the
 /// Windows installer ships Hamlib under the install dir (with its DLLs), so CAT
-/// works with no separate Hamlib install — and falls back to `rigctld` on
-/// `PATH`. Launching the bundled exe by full path lets Windows resolve its
+/// works with no separate Hamlib install — then whatever `rigctld` the process's own `PATH`
+/// already resolves, and only when PATH has NOTHING does it try a handful of common
+/// package-manager install directories (see [`HAMLIB_SEARCH_DIRS`]) before giving up and handing
+/// `Command` the bare name. Launching the bundled exe by full path lets Windows resolve its
 /// co-located DLLs (libhamlib-4.dll etc.) from the exe's own directory.
 fn resolve_rigctld() -> std::ffi::OsString {
     if let Ok(exe) = std::env::current_exe() {
@@ -576,6 +633,12 @@ fn resolve_rigctld() -> std::ffi::OsString {
                     return p.into_os_string();
                 }
             }
+        }
+    }
+    #[cfg(unix)]
+    if !on_path("rigctld") {
+        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rigctld") {
+            return p;
         }
     }
     std::ffi::OsString::from("rigctld")
@@ -596,8 +659,8 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
     args
 }
 
-/// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), falling
-/// back to PATH — same resolution as [`resolve_rigctld`].
+/// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), then the same
+/// [`HAMLIB_SEARCH_DIRS`] fallback, then PATH — same resolution as [`resolve_rigctld`].
 fn resolve_rotctld() -> std::ffi::OsString {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -612,6 +675,12 @@ fn resolve_rotctld() -> std::ffi::OsString {
                     return p.into_os_string();
                 }
             }
+        }
+    }
+    #[cfg(unix)]
+    if !on_path("rotctld") {
+        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rotctld") {
+            return p;
         }
     }
     std::ffi::OsString::from("rotctld")
@@ -767,6 +836,12 @@ pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
                     return p.into_os_string();
                 }
             }
+        }
+    }
+    #[cfg(unix)]
+    if !on_path("rigctl") {
+        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rigctl") {
+            return p;
         }
     }
     std::ffi::OsString::from("rigctl")
@@ -941,6 +1016,75 @@ pub fn spawn_rigctld(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repro for the 2026-08-07 macOS report: `rigctld` installed via Homebrew, `which rigctld`
+    /// works in every terminal, and Nexus still can't spawn it — because a Finder-launched app's
+    /// `PATH` is launchd's fixed `/usr/bin:/bin:/usr/sbin:/sbin`, which never includes
+    /// `/opt/homebrew/bin`. [`find_in_dirs`] is the fix: an explicit directory search that does
+    /// not depend on the process's inherited `PATH` at all.
+    #[cfg(unix)]
+    #[test]
+    fn find_in_dirs_locates_a_binary_path_would_miss() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-rigctld-proc-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("rigctld"), b"#!/bin/sh\n").unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        // Not present in a directory that doesn't have it.
+        assert_eq!(
+            find_in_dirs(&["/nonexistent-nexus-test-dir"], "rigctld"),
+            None
+        );
+        // Found when its directory is in the search list, first hit wins, and the directories
+        // that don't have it are skipped over rather than short-circuiting the search.
+        let found = find_in_dirs(&["/nonexistent-nexus-test-dir", dir_str], "rigctld").unwrap();
+        assert_eq!(std::path::Path::new(&found), dir.join("rigctld"));
+        // A name that isn't in ANY of the search dirs stays a miss.
+        assert_eq!(find_in_dirs(&[dir_str], "rotctld"), None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The priority guard: [`HAMLIB_SEARCH_DIRS`] must never outrank a `rigctld` the operator (or
+    /// a test) deliberately put on `PATH` — that's what a fixture stand-in prepended to `PATH`
+    /// depends on, in [`crate::service::tests::an_ordinary_connect_failure_carries_what_the_daemon_said`].
+    /// Drives [`path_has`] directly (never touches the real `PATH`) so it cannot race that test,
+    /// which mutates the process's actual `PATH` and is never restored by design (its own comment:
+    /// "this is the only test in this binary that resolves a rigctld").
+    #[cfg(unix)]
+    #[test]
+    fn path_has_is_true_only_when_a_search_dir_actually_has_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-rigctld-proc-onpath-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("rigctld"), b"#!/bin/sh\n").unwrap();
+
+        // A PATH that does not mention our fixture dir at all.
+        assert!(!path_has(
+            std::ffi::OsStr::new("/nonexistent-nexus-test-dir"),
+            "rigctld"
+        ));
+        // Prepended, matching how the fixture-stand-in test builds its own PATH — found.
+        let path_var = format!("{}:/nonexistent-nexus-test-dir", dir.display());
+        assert!(path_has(std::ffi::OsStr::new(&path_var), "rigctld"));
+        // A name that isn't in the fixture dir stays a miss even though the dir IS on PATH.
+        assert!(!path_has(std::ffi::OsStr::new(&path_var), "rotctld"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// ⭐ The ring's own contract, at the volume that broke it. `said_ring` is replayed against a
     /// REAL capture in `service::tests::the_daemons_diagnosis_survives_a_stream_that_never_stops`;
@@ -1685,6 +1829,118 @@ mod tests {
                     \tDefault: /dev/rig, Value: \\\\.\\COM1\n\tString.\n";
         assert_eq!(conf_param(dump, "rig_pathname").unwrap().0, "\\\\.\\COM1");
     }
+    /// THE GUARD THAT MAKES THE SWEEP SAFE, and the one thing here that can be proven on a box
+    /// with no Hamlib on it. A process that never exits must be killed, not waited on: that is
+    /// exactly what wedged every CI run on this repo for six hours at a time, with no output
+    /// naming the test responsible.
+    #[test]
+    fn run_bounded_kills_a_process_that_would_never_finish() {
+        let t0 = std::time::Instant::now();
+        let out = run_bounded(std::ffi::OsStr::new("sleep"), &["300"], 1);
+        assert!(
+            out.is_none(),
+            "a process that outlives the deadline yields None"
+        );
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(20),
+            "it must give up at the deadline, not wait the process out: {:?}",
+            t0.elapsed()
+        );
+    }
+
+    /// ...and the other direction, so the guard is not passing by simply never working: a command
+    /// that DOES finish comes back with its output intact.
+    #[test]
+    fn run_bounded_returns_the_output_of_a_command_that_finishes() {
+        let out = run_bounded(std::ffi::OsStr::new("echo"), &["hello"], 10)
+            .expect("a command that exits must produce output");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");
+    }
+
+    /// A binary that is not there is a skip, not a panic — the sweep is opportunistic.
+    #[test]
+    fn run_bounded_is_none_when_the_binary_does_not_exist() {
+        assert!(run_bounded(std::ffi::OsStr::new("nexus-no-such-binary"), &["-l"], 5).is_none());
+    }
+
+    /// The daemon/client swap the sweep depends on.
+    #[test]
+    fn rigctl_is_found_beside_rigctld() {
+        use std::ffi::OsString;
+        assert_eq!(
+            rigctl_beside(OsString::from("/usr/bin/rigctld")),
+            OsString::from("/usr/bin/rigctl")
+        );
+        // The .exe arm, as a bare name: a Windows-style path with backslashes is a single
+        // file_name on Unix (only `/` separates there), so spelling one here would test the host's
+        // path rules rather than this function.
+        assert_eq!(
+            rigctl_beside(OsString::from("rigctld.exe")),
+            OsString::from("rigctl.exe")
+        );
+        assert_eq!(
+            rigctl_beside(OsString::from("/opt/hamlib/bin/rigctld.exe")),
+            OsString::from("/opt/hamlib/bin/rigctl.exe")
+        );
+        // A bare name (nothing resolved) is left alone rather than rewritten into a guess.
+        assert_eq!(
+            rigctl_beside(OsString::from("rigctld")),
+            OsString::from("rigctl")
+        );
+        assert_eq!(
+            rigctl_beside(OsString::from("something-else")),
+            OsString::from("something-else")
+        );
+    }
+
+    /// `rigctl` sitting beside a resolved `rigctld` — same Hamlib package, same directory, so
+    /// swapping the final component is enough. Done here rather than calling `resolve_rigctl`
+    /// because that is `#[cfg(feature = "serial")]` and this test runs without it.
+    fn rigctl_beside(rigctld: std::ffi::OsString) -> std::ffi::OsString {
+        let p = std::path::PathBuf::from(&rigctld);
+        match p.file_name().and_then(|f| f.to_str()) {
+            Some("rigctld") => p.with_file_name("rigctl").into_os_string(),
+            Some("rigctld.exe") => p.with_file_name("rigctl.exe").into_os_string(),
+            _ => rigctld,
+        }
+    }
+
+    /// Run a command and GIVE UP after `secs`, killing it. `None` for "could not run, or would not
+    /// finish" — both of which mean the same thing to the sweep: skip this model.
+    ///
+    /// This exists because `Command::output()` has no timeout, and a process that never exits
+    /// therefore hangs the whole test binary with no output to say which test it was. That is not
+    /// hypothetical: it wedged every CI run on this repo for six hours at a time.
+    fn run_bounded(
+        bin: &std::ffi::OsStr,
+        args: &[&str],
+        secs: u64,
+    ) -> Option<std::process::Output> {
+        use std::process::Stdio;
+        let mut child = Command::new(bin)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .ok()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return child.wait_with_output().ok(),
+                Ok(None) => {}
+                Err(_) => return None,
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                eprintln!("run_bounded: {bin:?} {args:?} did not finish in {secs}s — killed");
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
 
     /// THE ENUMERATION, against the operator's own Hamlib rather than a fixture: for EVERY
     /// model `rigctld -l` lists, the flags Nexus would emit must not name the line that model's
@@ -1698,15 +1954,27 @@ mod tests {
     /// machine, or point `NEXUS_RIGCTLD` at a bundled binary.
     #[test]
     fn no_model_is_ever_given_the_line_its_backend_keys_with() {
-        let bin = std::env::var_os("NEXUS_RIGCTLD").unwrap_or_else(resolve_rigctld);
-        let Ok(list) = Command::new(&bin).arg("-l").output() else {
+        // ⚠️ rigctl, THE CLIENT — never rigctld, the DAEMON. This asked the daemon to dump each
+        // model's config and collected it with `.output()`, which waits for EOF. rigctld does not
+        // exit, so on any machine that HAS Hamlib the first model blocked forever: `cargo test
+        // --workspace` hung, and every CI run on this repo was killed at the six-hour limit having
+        // never reported. It was invisible to anyone without Hamlib installed, because then the
+        // binary is missing and the skip below fires instantly. `gen-hamlib-serial-speeds.mjs`
+        // already uses `rigctl --dump-caps` for exactly this reason.
+        let bin = std::env::var_os("NEXUS_RIGCTL")
+            .or_else(|| std::env::var_os("NEXUS_RIGCTLD").map(rigctl_beside))
+            .unwrap_or_else(|| rigctl_beside(resolve_rigctld()));
+        // Bounded even so. The binary is right today; a future Hamlib could change what a flag
+        // means, and the cost of being wrong here was six hours per run and a CI signal nobody
+        // could trust.
+        let Some(list) = run_bounded(&bin, &["-l"], 20) else {
             eprintln!(
-                "SKIPPED: no rigctld to ask ({bin:?}). Set NEXUS_RIGCTLD to run the full sweep."
+                "SKIPPED: no usable rigctl to ask ({bin:?}). Set NEXUS_RIGCTL to run the full sweep."
             );
             return;
         };
         if !list.status.success() {
-            eprintln!("SKIPPED: `rigctld -l` failed ({bin:?}).");
+            eprintln!("SKIPPED: `rigctl -l` failed ({bin:?}).");
             return;
         }
         let models: Vec<u32> = String::from_utf8_lossy(&list.stdout)
@@ -1721,10 +1989,7 @@ mod tests {
         );
         let mut keyed_by_a_line = Vec::new();
         for m in models {
-            let Ok(out) = Command::new(&bin)
-                .args(["-m", &m.to_string(), "-L"])
-                .output()
-            else {
+            let Some(out) = run_bounded(&bin, &["-m", &m.to_string(), "-L"], 10) else {
                 continue;
             };
             let dump = String::from_utf8_lossy(&out.stdout);

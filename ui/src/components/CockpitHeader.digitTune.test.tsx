@@ -17,8 +17,11 @@
 // event (`resolveStepHz`). Nothing was removed — the step selector still drives the nudge buttons
 // and the scope wheel, and wheeling a NON-digit part of the readout still uses it.
 //
-// All five main dials (Operate, Phone, CW, RTTY, SSTV) render through this one component, so
-// every assertion here covers all five.
+// All six main dials (Operate, Phone, CW, RTTY, SSTV, Tempo) render through this one component,
+// so every assertion here covers all six. Tempo was added last and is the reason to say the count
+// out loud: it rendered this header for months WITHOUT `digitTune`, and nothing here could see
+// that — this file proves the mechanism, never that a given cockpit asked for it. What each
+// cockpit passes is pinned where that cockpit is (see `TempoHeader.digitTune.test.tsx`).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, fireEvent } from '@testing-library/react'
 import { CockpitHeader } from './CockpitHeader'

@@ -18,8 +18,169 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on an existing install also needs `tccutil reset Microphone com.kd9taw.tempo` once to clear the
   stuck denial before the next launch will prompt again.
 
-## [1.0.2] — 2026-08-06
+### Fixed
 
+- **FT8 and FT4 were putting a six-character grid square on the air.** A standard FT8 or FT4
+  message has room for four characters of locator and no more, so if you had set a six-character
+  grid in Settings, your calls to another station carried something the message format cannot hold.
+  The station you were working could not decode it as a grid at all, which means their software had
+  nothing to auto-reply to and the contact stalled on their side for a reason that looked like
+  nothing at all on yours. Curiously your CQ was fine — that path already trimmed it — so this only
+  bit once you actually answered somebody.
+
+  Nexus now sends four characters, the same as WSJT-X, which trims to four in exactly one place for
+  exactly this reason. Your settings and your log are untouched: a six-character locator is correct
+  in both, and it is only what leaves the antenna that is cut. Reported by kr4fqg.
+
+### Fixed
+
+- **macOS: CAT could fail to connect even with Hamlib installed via Homebrew.** A Finder/Dock-
+  launched app is started by launchd with a fixed `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin` —
+  never the interactive shell's `PATH`, so a Homebrew `rigctld` (`/opt/homebrew/bin` on Apple
+  Silicon, `/usr/local/bin` on Intel) or a MacPorts one (`/opt/local/bin`) was invisible to Nexus
+  even though it worked fine from Terminal. Nexus now also checks those common install
+  directories before giving up, the same way the Windows build already prefers a binary bundled
+  next to the app. A `rigctld` already on `PATH` still always wins.
+
+- **The Linux download now says which Linux it needs.** Both PC Linux files require Ubuntu 24.04 or
+  newer, and nothing said so — not the download page, not the README, not the package itself. On
+  anything older the `.deb` installs without a word of complaint and then the app does not start,
+  which is how a report from a Mint 21.3 operator reached us. The AppImage is no help there either,
+  despite what portability usually means: an AppImage carries the application's own libraries but
+  not the system C library, so it needs exactly the same minimum. The requirement is now stated
+  everywhere the files are listed, with the one command that checks it (`ldd --version`).
+
+  Behind that, the build that produces those files was pinned. It had been following whatever image
+  GitHub happened to call "latest", so the oldest distro Nexus ran on was never a decision anyone
+  made — and the next time that label moved it would have risen again and cut off working
+  installations, with a completely green build and nothing to point at. The release now refuses to
+  publish a Linux binary that needs more than the stated minimum.
+
+- **The Tempo dial would not scroll.** Hover a digit of the big frequency readout and roll the
+  wheel, and that digit steps — the 1 kHz digit by 1 kHz, the 1 MHz digit by 1 MHz, carrying the
+  way a real VFO carries. Every cockpit has worked that way for a while except Tempo, which used
+  the same readout with the tuning switched off. There was nothing to see: a readout with digit
+  tuning and one without look identical, so the only symptom was that scrolling did nothing.
+
+- **The wheel tuning sensitivity slider did nothing on four of the six dials.** Settings ▸ Radio
+  says it applies to the frequency readout, and it only reached Phone and CW. On Operate, RTTY and
+  SSTV the digits tuned at the stock rate no matter where the slider sat, so anyone who moved it
+  because a free-spinning mouse was overshooting got no change and no reason why. It now reaches
+  every readout, Tempo's included.
+
+- **Clicking the waterfall moved your transmit frequency as well as your receive frequency.** The
+  hint under the waterfall says left-click sets RX, Shift or right sets TX, Ctrl sets both, and that
+  is what WSJT-X does — but a plain left-click in Nexus was moving both markers, so a click meant to
+  listen to someone also moved you on top of them. The only way to stop it was to switch Hold Tx Freq
+  on, which is a workaround for a bug rather than what that switch is for. A plain click now moves
+  the green RX marker and leaves your TX frequency exactly where you put it, whatever Hold Tx Freq is
+  set to. Double-clicking a decode to work a station is unchanged and still brings TX with it unless
+  you are holding — that is what Hold Tx Freq is actually for, and it is what WSJT-X does too.
+  Reported by akhepcat.
+
+- **The Pwr slider now changes your drive straight away instead of several seconds later.** Moving
+  it only affected audio Nexus had not generated yet, and it generates well ahead — an FT8 over is
+  built and queued in one go, all thirteen seconds of it — so the level was already baked into
+  everything waiting to go out. Hold Tune, move the slider, and the rig's ALC sat where it was for
+  a good few seconds before catching up, which makes it very easy to overshoot into compression
+  while chasing a control that has not responded yet. The level is now applied to each sample as it
+  leaves for the sound card, so what you set is what goes out on the next fraction of a second,
+  including audio already queued. The waveform is scaled rather than dropped and rebuilt, so there
+  is no gap or click when you move it mid-transmission. Affects every mode that transmits through
+  the sound card. Reported by g0fqb, who also found the cause.
+
+- **Contacts never reached N1MM+, HRD or Log4OM unless you were running Field Day.** Nexus speaks
+  the WSJT-X UDP protocol on 2237, and loggers pick up your decodes and your status from it — which
+  is exactly why this was so hard to spot. The connection looked alive: N1MM's WSJT window filled up
+  with decodes. But the one message a logger actually writes a contact from, `QsoLogged`, was only
+  ever sent for Field Day contacts. Every ordinary QSO went into your own log and nowhere else, with
+  no error and nothing to suggest anything was missing, and the FAQ told you the path was supported.
+  Every logged contact now goes out on it — FT8 and FT4, phone, CW, RTTY, SSTV, and rows you type
+  into the Logbook by hand.
+
+  Worth knowing if you were chasing this: the **N1MM contact broadcast** in Settings is a different
+  thing and was never going to help. N1MM does not read those packets back in — they exist for club
+  dashboards and live maps. The 2237 path is the one N1MM logs from.
+
+- **Two ways the "new band" and "new mode" badges could tell you something was new when it was
+  not.** Both came from comparing what the log happens to say against what the radio happens to
+  say, as plain text.
+
+  A contact logged on **USB** did not match one logged on **LSB**, so working a country on one
+  sideband told you it was a mode you had never worked there — they are the same mode, and ADIF
+  says so. That is now folded, along with a couple of spellings of the same digital mode. Nothing
+  else is: FM and AM stay separate from SSB, and FT4 stays separate from FT8, because those are
+  genuinely different modes even where an award groups them together. Where the log is honestly
+  ambiguous — a bare `MFSK` row that could be several things, or the generic `PH` some loggers
+  write — it is left alone rather than guessed at.
+
+  Separately, an imported contact whose band field did not name a band Nexus recognises matched
+  nothing at all, so the band you were sitting on read as new against it every single time, and no
+  amount of operating would ever clear it. The frequency is now used to work out the band when the
+  band field itself is no help. When there is neither — old imports often carry no usable band and
+  a frequency of zero — Nexus now says nothing rather than claiming the band is new, because it
+  genuinely cannot tell.
+
+  Entities are untouched and were already right: European Russia, Asiatic Russia, Kaliningrad and
+  Franz Josef Land are four separate DXCC entities and are each tracked on their own.
+
+- **A station Nexus had given up calling stayed armed to transmit, with no time limit.** When you
+  call a station in FT8 or FT4 and it never answers, Nexus stops calling after eight overs. It kept
+  the QSO open while it waited, which is what you want — but the TX watchdog, the six-minute limit
+  that exists to stop an unattended radio, was only ever checked at the moment an over was being
+  built. A held-back over is not built, so the clock was never looked at. The QSO sat there armed
+  with Enable TX still lit, and if that station was decoded again later — minutes or hours — Nexus
+  answered it without you touching anything.
+
+  On the shipping defaults the give-up always came first: eight FT8 overs is four minutes against a
+  six-minute watchdog, so on a called station the watchdog could not fire at all. The watchdog now
+  runs while a station is being held back, so the six minutes you set is the six minutes you get,
+  and when it expires TX disarms as it does everywhere else. Nothing about the message sequence,
+  slot timing or when Nexus decides to stop calling has changed — only that being stopped is now
+  bounded by the clock. If you are simply monitoring with TX armed and waiting for a decode, you are
+  unaffected: the watchdog still does not start until there is something it is holding back.
+
+### Changed
+
+- **Your recordings and your received SSTV pictures now live where you would look for them.**
+  Recordings go to **Documents ▸ Nexus ▸ Recordings** and received SSTV images to
+  **Pictures ▸ Nexus SSTV**. Both used to sit in Nexus's own configuration folder, which is hidden,
+  is not the same place for a second radio, and is not somewhere anyone thinks to look — several
+  people concluded recording was simply broken, and they were reasonable to. Pictures you were sent
+  are worth being able to find, open and share without going through the app.
+
+  **Your existing SSTV gallery comes with you.** The first time you start this version, the images
+  and their index are moved into the new folder, so the gallery looks exactly as it did — nothing
+  is left stranded and nothing needs re-importing. Recordings you already have are left where they
+  are rather than moved out from under you; only new ones go to Documents. If Windows cannot tell
+  Nexus where your Documents or Pictures folders are, it carries on using the old location rather
+  than guessing at a path.
+
+  Voice-keyer messages are unchanged. Those are app state rather than something you browse — they
+  are referenced from your settings by name, and the keyer already has its own recording controls.
+
+### Fixed
+
+- **A QSO recording that could not be saved said nothing at all.** Both steps — creating the folder
+  and writing the file — threw their result away, so a full disk, a read-only folder or a
+  permissions problem produced no file, no message and nothing in any log. The only evidence was an
+  empty folder, which is also exactly what a perfectly healthy Nexus looks like before your first
+  recording lands. If a recording cannot be written you now get told, and the message names the
+  full path it was trying to write, so you can see straight away whether it is a permissions
+  problem or you were looking in the wrong place. The contact itself is unaffected — it is logged
+  either way; only the audio failed.
+
+### Added
+
+- **Settings now shows you where recordings actually go, with a button to open the folder.** This
+  is the other half of the same report, and probably the bigger half: the recordings folder lives
+  under the config directory *for that radio profile*, so a second radio keeps its recordings
+  somewhere else entirely, and the folder is not created at all until the first recording lands.
+  Between those two, an operator looking in the obvious place finds nothing and reasonably concludes
+  the feature is broken. The decode log has shown its path this way for a while; recordings do now
+  too, and the button creates the folder if it does not exist yet rather than doing nothing.
+
+## [1.0.2] — 2026-08-06
 
 ### Added
 
@@ -64,6 +225,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anything — exactly how long the rig will be transmitting.
 
 ### Fixed
+
+- **Nexus reopens at the size and the place you left it.** The main window went back to its stock
+  1200×720, centred, on every single launch — resize it to suit your screen, quit, and the next
+  start threw that away. It was most visible to operators running a manual UI scale on a 4K display,
+  because the scale itself *was* being remembered: the app came back at 150% in a window sized for
+  100%, the wrong shape for the setting it had just restored. The size was in fact being lost at
+  every scale; the scale mismatch only made it obvious. Nexus now records the window's size and
+  position when you close it and restores both next time, per radio, so two rigs do not fight over
+  one size. Maximized stays maximized, and un-maximizing afterwards gives you back the size you had
+  before rather than the whole screen; closing while minimized keeps your last real size rather than
+  the minimized one. Nothing is replayed blindly: a window saved on a monitor you have since
+  unplugged, or saved bigger than the display you are sitting at today, opens centred and clamped to
+  the screen you actually have instead of off-screen or overhanging — the main window is the whole
+  app, so stranding it where you cannot reach it would leave no way back. The box is applied before
+  the window is drawn, so there is no open-then-jump.
+
+  *(This entry was missing when 1.0.2 shipped — the fix was in the release, the note was not. The
+  wording is Justin G0KSC's, from the parallel fix he sent as PR #11, written before either of us
+  knew the other was on it.)*
 
 - **An FT8 QSO between two callsigns the message format cannot carry together never finished — the
   two stations traded the same transmission back and forth until an operator gave up.** Nine of the

@@ -398,6 +398,86 @@ jobs:
           --target x86_64-pc-windows-gnu
           --features radio,custom-protocol
 
+  # Job 5b — macOS compile check. ⚠️ A COMPILE CHECK, NOT A SUPPORTED PLATFORM.
+  #
+  # READ THIS BEFORE TREATING A GREEN RUN HERE AS ANYTHING: Nexus does not ship a macOS
+  # build. There is no release artifact, no SourceForge file, no version.json entry, no
+  # code signing identity and no notarization. This job exists for exactly one reason —
+  # two macOS fixes landed from an operator running Nexus on a Mac from source (a Hamlib
+  # PATH search and the microphone usage string), and without a job here the next change
+  # that breaks the darwin build would not be noticed until someone else tried it.
+  #
+  # It is deliberately the same shape as `windows-cross` above: prove it LINKS, ship
+  # nothing. No `cargo tauri build`, no .app bundle, no .dmg, no signing secrets. Making
+  # macOS supported is a separate decision with three gates on it (an Apple Developer ID
+  # carries a legal entity name into every signed binary, the signing secrets are
+  # credential handling, and a published artifact is a publish) — see issue #6. Do not
+  # add a bundle step here as an increment; that decision is not this job's to make.
+  #
+  # Unsigned and hardened-runtime-off is fine for a compile check. A SIGNED macOS build
+  # would additionally need `bundle.macOS.entitlements` with
+  # com.apple.security.device.audio-input, or the microphone is unreachable at runtime
+  # however good the Info.plist is. That belongs with the decision, not here.
+  #
+  # NATIVE arch only (aarch64), not a universal binary and not x86_64. libtempo is a Fortran +
+  # FFTW + Boost CMake project, so a universal build means building that native tree twice and
+  # lipo-ing it; one architecture is enough to catch a darwin regression, which is all this is for.
+  # It must be the RUNNER's arch: macos-14 is Apple Silicon, and targeting x86_64 there means
+  # cross-compiling and then reaching for an Intel libgfortran that Homebrew's native gcc does not
+  # ship — which is exactly how the first run failed (`ld: library 'gfortran' not found`, after the
+  # Fortran itself had built fine). Apple Silicon is also what most Mac operators are on.
+  #
+  # ⚠️ UNPROVEN UNTIL IT FIRST RUNS, and said plainly rather than discovered. The step
+  # list mirrors `windows-cross` exactly (same node, same UI build, same AICW escape
+  # hatch, same cargo invocation), but no macOS runner was available to author it
+  # against. The likely first failure is libtempo's CMake step not finding Homebrew's
+  # gfortran/fftw/boost under the `gcc` formula's versioned binary names — that is a
+  # brew-prefix/CMAKE_Fortran_COMPILER fix in this job, not a source problem. Expect one
+  # or two iterations; do not let a red run here be read as "macOS is broken".
+  macos-check:
+    name: macOS compile check (not a shipped platform)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # gfortran (via gcc), cmake/ninja for the libtempo CMake project, fftw and boost
+      # for the modem — the darwin equivalents of the apt list the Linux job installs.
+      - name: Install build dependencies
+        run: |
+          brew install cmake ninja gcc fftw boost
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          targets: aarch64-apple-darwin
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # src-tauri embeds the built web assets, so the UI has to exist before it links.
+      - name: Build the web UI
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+
+      # The DeepCW model is gitignored (AGPL-3.0 (c) e04) and absent here on purpose:
+      # build.rs offers NEXUS_ALLOW_MISSING_AICW for exactly this case, and its absence
+      # affects only the AI CW panel — nothing this job is trying to prove.
+      # Homebrew keeps libgfortran under the gcc formula's own lib dir, which is not on the
+      # default linker search path — the modem links `-lgfortran` and `-lfftw3f`, so both prefixes
+      # have to be told to the linker or the build dies at the very last step.
+      - name: Compile src-tauri for macOS
+        env:
+          NEXUS_ALLOW_MISSING_AICW: 1
+        run: |
+          export LIBRARY_PATH="$(brew --prefix gcc)/lib/gcc/current:$(brew --prefix fftw)/lib:${LIBRARY_PATH:-}"
+          cargo build --release \
+            --manifest-path src-tauri/Cargo.toml \
+            --target aarch64-apple-darwin \
+            --features radio,custom-protocol
+
   # Job 6 — Raspberry Pi .deb, one per live Pi OS base. Runs on GitHub's hosted
   # arm64 runner (free for public repos), so the aarch64 build is NATIVE: the same
   # image under QEMU on a dev box takes 45+ minutes and is 5-20x slower.

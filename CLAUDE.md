@@ -16,18 +16,61 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
 | Toolchain pinned 1.93.1 | CI pins exact stable; match it locally for clippy parity |
 | CI is the source of truth | `.github/workflows/ci.yml` — its comments document known traps. Read them before changing build wiring. When you learn a new trap, encode it there (or here), not in session memory. |
 
+<!-- BEGIN GENERATED operating-rules — DO NOT EDIT INSIDE THIS BLOCK.
+     These rules are generated from the maintainer's rule source and re-emitted verbatim;
+     hand edits here are overwritten without warning. To propose a change to one, open an
+     issue rather than editing it here — a patch to this block cannot be merged.
+     body-sha256: b0f288998c6c397313dccde98ae1642e80c660761b671df356c2438ef1975e90 -->
+
 ## Working protocol (multiple agents/sessions run concurrently)
 
-- **Before your first edit**: `git fetch`; check `git rev-list --count HEAD..origin/main` (a stale
-  base wastes the whole change set) and `git status` — if the tree carries uncommitted work that
-  is not yours, do not edit, stash, or commit it. Use a fresh worktree:
-  `git worktree add -b <branch> <path> origin/main`.
+- **Before your first edit**: `git fetch` (check its EXIT STATUS — a failed fetch leaves a stale
+  remote ref that looks exactly as authoritative as a current one); check
+  `git rev-list --count HEAD..origin/main` (a stale base wastes the whole change set) and
+  `git status` — if the tree carries uncommitted work that is not yours, do not edit, stash, or
+  commit it. Use a fresh worktree: `git worktree add -b <branch> <path> origin/main`.
 - **Independent fixes get their own branch off origin/main.** Never fold unrelated work into a
-  topic branch — it entangles unrelated approval decisions at push time.
+  topic branch — it entangles unrelated approval decisions at push time. Before proposing a merge
+  target, ask what else that target would drag along: count the commits and look for `vendor/`,
+  `NOTICE`, `COPYING`.
 - **Before any merge**: re-check `git status`; record the pre-merge SHA. Branches move while you
   work here.
 - Land small and often. Long-lived branches merge `origin/main` forward regularly.
-- Temporary/plan files: `tasks/` is gitignored and machine-local — never `git add -f` it.
+- **Every git call takes `git -C <absolute path>`** — `status`, `log` and `diff` included. A shell
+  cwd persists between commands, and an absolute path in an editor is not protection: it makes the
+  mismatch *harder* to spot, because the file edit lands in the right tree while the commit runs in
+  the wrong one. A branch name resolves from any worktree, so a push can "succeed" and carry a tip
+  that does not contain your fix. **Verify a push by reading the remote ref back**
+  (`git -C <abs> show origin/main:<path>`), never by the push output.
+- **A worktree is a single-writer resource** — one agent, one session, one worktree. Two writers in
+  one tree revert each other's edits mid-flight and produce a red typecheck at a seam neither
+  diff explains. If files change under you that you did not write, stop and report rather than
+  working through it.
+- **Stage by explicit path.** `git add <paths>` then `git commit -- <those paths>` — never
+  `git add -A`, `git add .`, or `git commit -a`. The staging area is shared state: between your
+  `git add` and your `git commit`, a concurrent agent's broad add can sweep your files into *its*
+  commit under a message describing none of them. The damage is silent — both sets of gates pass
+  and nothing looks wrong until someone reads the log. Confirm with
+  `git diff --cached --name-only` that every path is yours before committing.
+- **Never run a working-tree-wide destructive git op in a shared checkout**: `reset --hard`,
+  `checkout .` / `restore .`, `clean -fd`, or `git stash`. They destroy every concurrent agent's
+  uncommitted work, and uncommitted work leaves no git object — there is no reflog entry and
+  nothing to recover. `git stash` is the trap: it looks successful and silently pockets everyone
+  else's changes, so the loss is found later. To undo your own commit use
+  `git reset --soft HEAD~1` (moves the branch pointer, leaves every working tree alone); to get a
+  clean tree, clone to a throwaway path instead.
+- Temporary/plan files: `tasks/` is gitignored and machine-local — never `git add -f` it. Don't
+  leave pointers to it in shipped material either; a `See tasks/specs/*.md` clause in a code
+  comment leaks the shape of a private tree even when the file itself never ships.
+- **A check that found nothing is not a result until a positive control passes.** Before
+  concluding from a search, a guard, or an exit code, run the *same* check against something that
+  MUST trip it. If the control also comes back clean, the check is broken, not the world — this is
+  the project's most-repeated defect class, and it bites hardest when the answer is reassuring.
+  Three things this specifically means: a guard must be shown both to fire and not to fire (one
+  direction is half a test); `exit 0` is not evidence that work happened, so count the artifact —
+  files tracked versus on disk, the version the live URL serves, bytes on the remote; and the
+  control must act on **the artifact the code actually reads**, not a copy of it, so point the
+  tool at your sandbox with its own path override and confirm the path it resolved.
 
 ## Hard rules (approval-gated — ask the maintainer, every time)
 
@@ -35,9 +78,15 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
   maintainer approval for that specific action. Prior approval does not carry over. The release
   half is mechanical: pushing a `v*` tag fires `release.yml` and publishes a public GitHub
   Release, so the pre-push hook refuses it unless `NEXUS_RELEASE_APPROVED=1` is set for that push.
-- Commits use the **project identity only** (`KD9TAW <kd9taw@protonmail.com>`, repo-local git
-  config — the global gitconfig is a different identity and must never reach a commit here).
-  `.githooks/pre-push` is the one gate in this project that is mechanism rather than prose:
+- The operator's personal identity must never reach a public surface — not a commit, not a
+  fixture, not a comment, not a doc. Commits use the **project identity only**
+  (`KD9TAW <kd9taw@protonmail.com>`, repo-local git config — the global gitconfig is a different
+  identity and must never reach a commit here). This is the one leak that cannot be fixed by a
+  follow-up commit: once pushed, the string is in public history until someone rewrites it.
+- **Destructive history operations on a public remote** — force-push, history rewrite, branch
+  deletion — are break-glass only and need their own approval, with a mirror backup taken first.
+  They are never the fix for a mistake you can fix by moving forward.
+- `.githooks/pre-push` is the one gate in this project that is mechanism rather than prose:
   wrong-remote guard, release-tag gate, identity, a **per-commit** content scrub, and a
   licence/NOTICE guard. Each names its own deliberate override; read that file's header before
   working around one.
@@ -50,14 +99,27 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
   The scrub patterns are deliberately **not** in this repo (it is public); the hook reads
   `$HOME/.nexus-leak-patterns` (0600, one extended regex per line, no blank lines).
 - **Vendored/OSS additions**: per-file license review, GPL-3.0-only compatibility, source headers
-  intact, NOTICE entry, README credit — before commit, not after. The pre-push hook enforces the
-  mechanical half only: a push that adds files under a vendor path, or adds third-party licence
+  intact, NOTICE entry, README credit — before commit, not after. Check the licence **per file
+  (headers)**, not the repo-level claim, and where it cannot be confirmed say so rather than
+  asserting it. **GPL-2-only or proprietary is not compatible — stop.** The pre-push hook enforces
+  the mechanical half only: a push that adds files under a vendor path, or adds third-party licence
   body text, must also touch `NOTICE` (override `NEXUS_ALLOW_VENDOR=1`). It cannot tell you the
   entry is *correct*, and it does not review the licence for you.
+- **Credential and key handling** — anything that could cause a secret to be printed, logged,
+  embedded in a build, or committed — changes only with approval. Keys live in the OS keychain or
+  a machine-local file outside the repo, never in it, and never in a test fixture.
 - **FT-mode TX/timing/QSO-sequencing changes** require explicit maintainer sign-off. WSJT-X
-  behavior is a compatibility contract; on-air correctness cannot be verified in CI.
-- Transmit-path safety invariants (TX enable latch, license-class gate, PTT watchdog) are
-  load-bearing: never weaken one to fix a test.
+  behavior is a compatibility contract; on-air correctness cannot be verified in CI. A change that
+  makes Nexus behave differently from WSJT-X on the air needs sign-off even when it looks like an
+  improvement — restoring parity is the goal, not improving on it.
+- Transmit-path safety invariants are load-bearing: **never weaken one to fix a test.** The
+  TX-enable latch (defaults OFF at launch and stays the universal TX gate), license-privilege
+  gating, identity validation at the keying boundary, and the wall-clock TX watchdog each exist
+  because its absence caused or would cause an on-air incident. A failing test is evidence about
+  your change, not about the invariant — fix the change or the test setup, never relax the guard,
+  widen its window, or delete its assertion.
+
+<!-- END GENERATED operating-rules -->
 
 ## Conventions
 

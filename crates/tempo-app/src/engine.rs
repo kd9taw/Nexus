@@ -1283,6 +1283,22 @@ pub struct Engine {
     /// One-shot: the operator hit Erase — the radio loop tells cooperating
     /// apps via an outbound Clear (window byte; 0 = Band, 1 = Rx, 2 = both).
     pending_udp_clear: Option<u8>,
+    /// Contacts waiting to go out as a WSJT-X `QsoLogged` (type 5) datagram, drained by the
+    /// radio loop, which is the side that owns the bound socket. Same shape as
+    /// [`Self::pending_udp_clear`] and for the same reason: the engine decides, the loop sends.
+    ///
+    /// ⚠️ **This is what N1MM+, HRD and Log4OM actually log from.** Nexus also broadcasts an
+    /// N1MM `<contactinfo>` datagram per QSO, but N1MM itself never accepts that inbound — it is
+    /// for club dashboards (see `tempo_net::n1mm`'s header). Until this queue existed,
+    /// `send_qso_logged` had exactly ONE call site, inside the Field Day block, so an ordinary
+    /// contact produced Status and Decode datagrams and never the one a logger needs. The link
+    /// looked alive in N1MM's WSJT decode window and logged nothing (issue #37), while
+    /// `docs/manual/FAQ.md` told operators this was supported.
+    ///
+    /// Field Day contacts do NOT arrive here: they never pass through `log_qso`, which is pinned
+    /// by `a_field_day_contact_never_enters_the_general_upload_queue`. That is what keeps this
+    /// from emitting a second datagram per FD contact.
+    pending_udp_qsos: std::collections::VecDeque<QsoRecord>,
     /// The last ingest's decodes as they were ON AIR (pre hound-split/rewrite)
     /// — what UDP consumers receive. Identical to `last_decodes` outside Hound.
     last_wire_decodes: Vec<modes::Decode>,
@@ -1588,6 +1604,9 @@ pub struct Engine {
     /// Set by the radio loop when the sound card failed to open, so the UI can
     /// explain a blank waterfall instead of failing silently.
     audio_error: Option<String>,
+    /// The last per-QSO recording that failed, with the path. Set by the shell (which owns the
+    /// file write), carried out in the snapshot, cleared by the next recording that succeeds.
+    recording_warning: Option<String>,
     /// Coordinated-QSY ("move together") state machine — a SEPARATE, opt-in
     /// function. Fully inert unless `settings.qsy_enabled` is true, so the primary
     /// Chat/QSO/Field-Day paths are unaffected when the operator hasn't enabled it.
@@ -2881,6 +2900,7 @@ impl Engine {
             highlight_seq: 0,
             clear_tick: 0,
             pending_udp_clear: None,
+            pending_udp_qsos: std::collections::VecDeque::new(),
             cq_dir: None,
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
@@ -2967,6 +2987,7 @@ impl Engine {
             radio_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
+            recording_warning: None,
             qsy,
             rtty_armed: false,
             rtty_audio: Vec::new(),
@@ -6020,6 +6041,16 @@ impl Engine {
         self.station.append_to_log(std::slice::from_ref(&rec));
         self.push_to_hrd(&rec);
         self.push_to_n1mm(&rec);
+        // ...and to the WSJT-X UDP sink, which is the one a logger actually logs from. The
+        // N1MM push above is a `<contactinfo>` broadcast that N1MM itself never reads inbound
+        // (dashboards do); this is the `QsoLogged` datagram N1MM+, HRD and Log4OM consume on
+        // 2237. Bounded like `pending_uploads` below so a sink that is never drained — the UDP
+        // server is off by default — cannot grow without limit; oldest goes first, because a
+        // stale contact is the one worth dropping.
+        if self.pending_udp_qsos.len() >= 256 {
+            self.pending_udp_qsos.pop_front();
+        }
+        self.pending_udp_qsos.push_back(rec.clone());
         // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
         // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
         // Logbook entries all pass through here, so the Settings auto-upload
@@ -6477,12 +6508,17 @@ impl Engine {
         {
             self.apply_cycle_parity(s % 2 == 0);
         }
-        // Move our RX onto the DX's audio frequency (and TX with it, unless Hold Tx
-        // Freq is on) — WSJT-X's double-click-to-work behavior. set_rx_offset clamps to
-        // the passband and drags TX along when Hold is off. Ignore a non-positive offset
-        // (absent/malformed) so we don't yank the rig to the band edge.
+        // Move our RX onto the DX's audio frequency, and TX with it unless Hold Tx Freq is on —
+        // WSJT-X's double-click-to-work behavior, and the ONLY place that Hold test belongs
+        // (mainwindow.cpp:6065 and :6149 gate exactly this on `cbHoldTxFreq`). It used to live
+        // inside `set_rx_offset`, which meant a plain waterfall click moved TX too — issue #38.
+        // `set_rx_offset`/`set_tx_offset` both clamp to the passband. Ignore a non-positive
+        // offset (absent/malformed) so we don't yank the rig to the band edge.
         if let Some(hz) = dx_freq.filter(|h| *h > 0.0) {
             self.set_rx_offset(hz);
+            if !self.hold_tx_freq {
+                self.set_tx_offset(hz);
+            }
         }
         // Hound rule (stock DXpedition mode): initial calls to the Fox must be
         // ABOVE 1000 Hz — the Fox listens there; 300–900 is the Fox's own
@@ -10373,6 +10409,13 @@ impl Engine {
     }
 
     /// Set (or clear) the sound-card error surfaced to the UI.
+    /// Record the outcome of the last per-QSO recording write: `Some(msg)` when it failed (the
+    /// message names the full path), `None` when it succeeded. The shell calls this because the
+    /// shell owns the file I/O; the engine only carries it to the snapshot.
+    pub fn set_recording_warning(&mut self, warning: Option<String>) {
+        self.recording_warning = warning;
+    }
+
     pub fn set_audio_error(&mut self, err: Option<String>) {
         self.audio_error = err;
     }
@@ -10433,12 +10476,22 @@ impl Engine {
     }
     /// Set the receive audio offset (Hz) — the green waterfall marker. When
     /// "Hold Tx Freq" is off, the TX offset follows it (the common case).
+    /// Move the RX marker, and ONLY the RX marker.
+    ///
+    /// ⚠️ This used to drag TX along whenever Hold Tx Freq was off, and that was issue #38: a
+    /// plain left-click on the waterfall moved both markers, so the operator had to switch Hold
+    /// Tx Freq on to stop it. In real WSJT-X the waterfall click never moves TX at all —
+    /// `widgets/plotter.cpp` passes the OLD tx frequency up for an unmodified click
+    /// (`emit setFreq1(newFreq, oldTxFreq)`; Shift sends tx, Ctrl sends both) and
+    /// `MainWindow::setFreq4` applies what it is handed with no Hold test anywhere in it.
+    ///
+    /// Hold Tx Freq belongs to the DECODE double-click instead (mainwindow.cpp:6065, :6149),
+    /// which is [`Self::call_station_ctx`] here — so the test lives there now. Keeping it in this
+    /// setter made it apply to every caller, including the one gesture that must never move TX,
+    /// and a function called `set_rx_offset` that also set TX could not be read as what it said.
     pub fn set_rx_offset(&mut self, hz: f32) {
         self.rx_offset_hz = hz.clamp(200.0, 4000.0);
         self.settings.rx_offset_hz = self.rx_offset_hz;
-        if !self.hold_tx_freq {
-            self.set_tx_offset(hz);
-        }
     }
     /// Hold the TX offset fixed when the RX offset changes (WSJT-X "Hold Tx Freq").
     pub fn set_hold_tx_freq(&mut self, on: bool) {
@@ -10572,6 +10625,14 @@ impl Engine {
     /// Consume the queued outbound Clear (radio loop).
     pub fn take_pending_udp_clear(&mut self) -> Option<u8> {
         self.pending_udp_clear.take()
+    }
+
+    /// Contacts waiting to go out as WSJT-X `QsoLogged` datagrams. Drained by the radio loop's
+    /// tick — deliberately the TICK and not the slot boundary, because a Phone, CW, RTTY, SSTV
+    /// or hand-entered Logbook contact never reaches a boundary path and would otherwise sit
+    /// here forever.
+    pub fn take_pending_udp_qsos(&mut self) -> Vec<QsoRecord> {
+        self.pending_udp_qsos.drain(..).collect()
     }
 
     /// UDP Location (type 11): a GPS feeder updates our grid. Accepts a bare
@@ -10810,6 +10871,7 @@ impl Engine {
         }
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
+        s.radio.recording_warning = self.recording_warning.clone();
         s.radio.radio_config_warning =
             crate::settings::serial_port_conflicts(&self.settings.radios)
                 .or_else(|| {
@@ -11369,6 +11431,11 @@ impl Engine {
         // auto-sequencer escalates it (on unacknowledged retransmissions); Chat
         // and Field Day always send RV0.
         let mut tx_rv: i32 = 0;
+        // Did the directed call cap WITHHOLD an over this slot, as opposed to there simply
+        // being nothing to send? Only the QSO arm can set it, and only when the station has
+        // a pending message it is refusing to emit. This is what lets the `None` arm below
+        // tell a capped station apart from ordinary silence — see the watchdog block there.
+        let mut withheld_by_call_cap = false;
         let text: Option<String> = match &mut self.mode {
             Mode::Chat => {
                 // Open broadcasts have priority and send unconditionally — no
@@ -11513,7 +11580,14 @@ impl Engine {
                         };
                         Some(m.to_text())
                     }
-                    None => None,
+                    None => {
+                        // `stalled()` is exactly "we have something to send and `tx_capped()`
+                        // is refusing it" — not "the QSO is over" and not "this is an RX
+                        // slot". Reading it here rather than re-deriving the cap keeps one
+                        // definition of capped in tempo-core.
+                        withheld_by_call_cap = station.stalled();
+                        None
+                    }
                 }
             }
             Mode::FieldDay { station, .. } => {
@@ -11667,6 +11741,44 @@ impl Engine {
             }
             None => {
                 self.app.set_transmitting(false);
+                // ⭐ THE CAPPED STATION IS STILL AN ARMED TRANSMITTER — bound it.
+                //
+                // Everything above about the wall-clock watchdog lives in the `Some(t)` arm,
+                // because that is where an over is built. A directed station whose call cap
+                // has been spent lands HERE instead, every TX slot, forever: `tx_capped()`
+                // only withholds the message, so `Mode::Qso` stays, `dxcall` stays and
+                // `tx_enabled` stays true. Nothing else ends it either — `abandon_stalled` is
+                // gated on `cq_running` and `tempo_step_capped` on the chat tiers, so neither
+                // covers FT8/FT4 search-and-pounce. The result was an armed transmitter with
+                // no time bound at all, which a decode arriving minutes or hours later would
+                // re-key with no operator action.
+                //
+                // On stock defaults the cap ALWAYS gets there first, so this was the shipped
+                // configuration: `directed_max_calls` 8 x 30 s = 240 s against a
+                // `tx_watchdog_min` of 6 = 360 s. The watchdog could not fire on a directed
+                // QSO at all.
+                //
+                // SCOPE, and it is the whole care in this change: `withheld_by_call_cap`, not
+                // the bare `None`. Running the watchdog on every silent slot would start the
+                // clock the moment TX was armed and disarm an operator who is monitoring and
+                // waiting — every RX-parity slot, an empty queue and `QsoState::Listening` all
+                // arrive here too. `an_operator_armed_and_simply_waiting_is_never_disarmed_by_
+                // the_watchdog` is the guard on that and must keep passing.
+                //
+                // No `slot_tx_abort` here, deliberately: that arms the loop's mid-over cut,
+                // and there is no over in flight to cut. Setting it would leave a one-shot
+                // abort primed for the next over the OPERATOR deliberately starts.
+                if withheld_by_call_cap {
+                    let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
+                    if limit_secs > 0 {
+                        let now = now_unix_secs();
+                        let start = *self.tx_watchdog_start.get_or_insert(now);
+                        if now.saturating_sub(start) >= limit_secs {
+                            self.tx_watchdog = true;
+                            self.tx_enabled = false;
+                        }
+                    }
+                }
                 None
             }
         }
@@ -16511,24 +16623,54 @@ mod tests {
         assert!(!a.snapshot().radio.tx_even);
     }
 
+    /// ISSUE #38. A plain left-click on the waterfall moved BOTH markers, and the operator who
+    /// reported it had to switch Hold Tx Freq on to stop it — which is a workaround, not the
+    /// supported way.
+    ///
+    /// Baselined against real WSJT-X, not against our own consistency. `widgets/plotter.cpp`
+    /// decides the target from the modifiers and passes BOTH frequencies up:
+    ///
+    ///     if (ctrl)       emit setFreq1(newFreq, newFreq);   // both
+    ///     else if (shift) emit setFreq1(oldRxFreq, newFreq); // Tx only
+    ///     else            emit setFreq1(newFreq, oldTxFreq); // Rx only — Tx PRESERVED
+    ///
+    /// and `MainWindow::setFreq4` applies exactly what it was handed, with no Hold-Tx test in it
+    /// at all. So a plain click never moves Tx in WSJT-X, whatever Hold Tx Freq is set to. Hold
+    /// Tx Freq gates the DECODE double-click instead (mainwindow.cpp:6065 and :6149) — which is
+    /// the behaviour `call_station_ctx` implements, and which is correct and unchanged.
+    ///
+    /// The defect was that the Hold test lived in `set_rx_offset`, one level too low, so it
+    /// applied to every caller including the click that must never move Tx.
     #[test]
-    fn set_offset_clamps_and_follows_hold() {
+    fn a_waterfall_click_moves_only_rx_whatever_hold_tx_freq_says() {
+        for hold in [false, true] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_tx_offset(1800.0);
+            e.set_hold_tx_freq(hold);
+            e.set_rx_offset(1200.0);
+            assert_eq!(
+                e.rx_offset_hz(),
+                1200.0,
+                "hold={hold}: RX moves to the click"
+            );
+            assert_eq!(
+                e.tx_offset_hz(),
+                1800.0,
+                "hold={hold}: a plain waterfall click must never move TX"
+            );
+        }
+    }
+
+    #[test]
+    fn set_offset_clamps_and_surfaces_in_the_snapshot() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_tx_offset(1800.0);
         assert_eq!(e.tx_offset_hz(), 1800.0);
-        // Hold off: setting RX drags TX along (the common case).
         e.set_rx_offset(1200.0);
         assert_eq!(e.rx_offset_hz(), 1200.0);
-        assert_eq!(
-            e.tx_offset_hz(),
-            1200.0,
-            "TX follows RX when Hold Tx is off"
-        );
-        // Hold on: RX no longer moves TX.
         e.set_hold_tx_freq(true);
         e.set_rx_offset(900.0);
         assert_eq!(e.rx_offset_hz(), 900.0);
-        assert_eq!(e.tx_offset_hz(), 1200.0, "TX held when Hold Tx is on");
         // Clamp to the usable passband + surface in the snapshot.
         e.set_rx_offset(50.0);
         assert_eq!(e.rx_offset_hz(), 200.0, "clamped to the low edge");
@@ -18023,6 +18165,70 @@ mod tests {
     /// never appear in the upload queue, even with an FD session live. If a
     /// future change routes FD contacts through `log_qso`, this fails, and the
     /// N1MM/N3FJP standing forwarders need a Field-Day exclusion before it lands.
+    /// ISSUE #37: "I try to broadcast a new QSO that appears in the log correctly to N1MM. This
+    /// works perfect with WSJT-X to N1MM but with the same (suggested) settings it does not work
+    /// out of Nexus."
+    ///
+    /// He was right and the settings were right. `send_qso_logged` had exactly ONE call site in
+    /// the tree, inside the Field Day block of the radio loop, so an ordinary contact emitted
+    /// Status and Decode datagrams — which is why N1MM's WSJT decode window filled up and the
+    /// link looked alive — and never the type 5 a logger actually logs from. `docs/manual/FAQ.md`
+    /// told operators this path was supported.
+    ///
+    /// Nexus's OTHER logger push, the N1MM `<contactinfo>` broadcast, does fire for ordinary
+    /// QSOs and cannot help: N1MM never accepts that inbound (`tempo_net::n1mm`'s header says so
+    /// outright) — it is for club dashboards.
+    ///
+    /// Every mode's contact goes through `log_qso`, so this covers a hand-entered Logbook row
+    /// and a Phone or CW contact as much as an auto-logged FT8 one.
+    #[test]
+    fn every_logged_contact_is_queued_for_the_wsjtx_udp_sink() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "nothing logged yet, nothing queued"
+        );
+
+        e.log_qso(qrec("W1AW", "20m"));
+        e.log_qso(qrec("K1ABC", "40m"));
+        let queued = e.take_pending_udp_qsos();
+        assert_eq!(queued.len(), 2, "both contacts reach the WSJT-X sink");
+        assert_eq!(queued[0].call, "W1AW");
+        assert_eq!(queued[1].call, "K1ABC", "and in the order they were made");
+
+        // Draining is a take: the loop must not re-send a contact on every tick.
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "a drained contact must not be emitted twice"
+        );
+    }
+
+    #[test]
+    fn a_field_day_contact_is_never_queued_for_the_wsjtx_sink_twice() {
+        // The Field Day emitter in the radio loop sends its own type 5 per contest contact. That
+        // stays correct only while FD contacts do not ALSO arrive through `log_qso` — the same
+        // disjointness the upload-queue test below pins, now load-bearing for the UDP sink too.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "the Field Day emitter owns this contact — queueing it here would send it twice"
+        );
+
+        // Control: an ordinary contact during the same FD session still reaches the sink, so the
+        // emptiness above is the exclusion working and not the queue being broken.
+        e.log_qso(qrec("N0CALL", "20m"));
+        assert_eq!(e.take_pending_udp_qsos().len(), 1);
+    }
+
     #[test]
     fn a_field_day_contact_never_enters_the_general_upload_queue() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
@@ -25913,6 +26119,152 @@ mod tests {
         );
         assert!(e.tx_watchdog, "the trip must be visible to the operator");
         assert!(!e.tx_enabled(), "a trip disarms TX");
+    }
+
+    /// Drive a directed QSO until `call_cap` withholds the over, and return the next
+    /// own-parity slot. Asserts the capped state was actually reached — a helper that
+    /// silently failed to cap would make every assertion below vacuously true.
+    fn cap_a_directed_call(e: &mut Engine, cap: u32) -> u64 {
+        let mut slot = 0;
+        let mut sent = 0;
+        while sent < cap + 2 && slot < 40 {
+            if !e.poll_tx(slot).is_empty() {
+                sent += 1;
+            }
+            slot += 1;
+        }
+        let stalled = e.snapshot().qso.as_ref().is_some_and(|q| q.stalled);
+        assert!(
+            stalled,
+            "precondition: {cap} overs should have spent the directed call cap"
+        );
+        slot
+    }
+
+    #[test]
+    fn a_call_capped_station_is_still_bounded_by_the_wall_clock_watchdog() {
+        // ⭐ THE SAFETY DEFECT. The whole watchdog block lives inside plan_tx's `Some(t)`
+        // arm — the branch taken when an over is actually being built. An over WITHHELD by
+        // `tx_capped()` takes the `None` arm instead, whose entire body is
+        // `set_transmitting(false); None`. So while a directed station is capped the
+        // wall-clock watchdog is never evaluated at all, and `tx_enabled` stays armed with
+        // `dxcall` set and `Mode::Qso` live, with NO time bound of any kind. A decode
+        // arriving at an arbitrary later time zeroes `tx_count` and keys an over with no
+        // operator click.
+        //
+        // On stock defaults the cap ALWAYS bites first, so this is the shipped configuration
+        // and not an edge case: `directed_max_calls` defaults to 8 and `tx_watchdog_min` to
+        // 6, and eight FT8 overs is 8 x 30 s = 240 s against a 360 s limit.
+        //
+        // Relative to WSJT-X this is transmit-MORE, not transmit-less: stock keeps calling,
+        // its watchdog disarms Tx, and it would not have transmitted.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2); // reach the cap in two overs, not eight
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+
+        let slot = cap_a_directed_call(&mut e, 2);
+
+        // The operator has now been sitting on a capped station for longer than the limit.
+        // Backdating is how the beacon watchdog test above expresses elapsed time, and it is
+        // the only part of this the test controls — the point is what the ENGINE does next.
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+
+        for s in slot..slot + 4 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "a capped station must not key while the watchdog limit is exceeded"
+            );
+        }
+        assert!(
+            e.tx_watchdog,
+            "the watchdog must TRIP on a capped station — it is the only time bound there is"
+        );
+        assert!(
+            !e.tx_enabled(),
+            "a trip disarms TX; without this the capped QSO stays armed forever"
+        );
+    }
+
+    #[test]
+    fn a_tripped_watchdog_survives_a_decode_that_would_otherwise_re_arm_the_station() {
+        // WHY THE `sequence_advanced` RESET NEEDS NO CHANGE, written down so the next reader
+        // does not "fix" it too. Once the watchdog has tripped, `tx_enabled` is false, and
+        // plan_tx returns at its very first gate (`if !self.tx_enabled ... return None`).
+        // `tx_enabled = true` has exactly two writers in this engine — `send_cw` (a deliberate
+        // CW keying action) and `set_tx_enabled` (the operator's own control) — and neither is
+        // on any decode path. So a later decode CANNOT key an over, whatever it does to
+        // `tx_count` or to the watchdog clock.
+        //
+        // That is what keeps the fix scoped to one arm: within the live window the partner IS
+        // responding, and resetting the clock on real QSO progress is correct.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2);
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+
+        let slot = cap_a_directed_call(&mut e, 2);
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        for s in slot..slot + 4 {
+            let _ = e.poll_tx(s);
+        }
+        assert!(!e.tx_enabled(), "precondition: the watchdog tripped");
+
+        // The DX finally answers — the exact event that zeroes `tx_count` and clears the
+        // watchdog clock. It must not put us back on the air.
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -05", -5)], slot + 4);
+        for s in slot + 5..slot + 9 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "a decode re-keyed a station the watchdog had already disarmed"
+            );
+        }
+    }
+
+    #[test]
+    fn an_operator_armed_and_simply_waiting_is_never_disarmed_by_the_watchdog() {
+        // ⭐ THE GUARD ON THE FIX'S SCOPE, and the reason the obvious version is wrong.
+        // Hoisting the watchdog out of the `Some(t)` arm to the whole `None` arm would make
+        // it run on EVERY silent slot — plain armed monitoring, every RX-parity slot, an
+        // empty queue, QsoState::Listening. `tx_watchdog_start.get_or_insert(now)` would then
+        // start the clock the moment TX was armed and disarm an operator who is doing nothing
+        // but waiting for a decode. That is a behaviour change far outside the reported
+        // defect, on the gated FT transmit path.
+        //
+        // Both silences that are NOT a withheld over, held against an exceeded limit.
+        for (what, call) in [
+            ("monitoring with TX armed", false),
+            ("a QSO with nothing pending", true),
+        ] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            let mut s = e.settings().clone();
+            s.tx_watchdog_min = 6;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            if call {
+                e.call_station("W9XYZ");
+                let _ = e.set_mode("qso-monitor"); // drop the pending over without disarming TX
+            }
+            e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+
+            for slot in 0..8 {
+                let _ = e.poll_tx(slot);
+            }
+            assert!(
+                e.tx_enabled(),
+                "{what}: TX was disarmed by the watchdog with no over ever withheld"
+            );
+            assert!(
+                !e.tx_watchdog,
+                "{what}: the watchdog tripped on plain silence"
+            );
+        }
     }
 
     #[test]

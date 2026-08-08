@@ -28,6 +28,21 @@ use crate::resample::resample_linear;
 
 const MODEM_RATE: u32 = 12_000;
 
+/// Pop the next mono TX sample and apply the level **as it stands right now**.
+///
+/// ⚠️ THE ATOMIC IS READ PER SAMPLE, DELIBERATELY. Issue #14 was that the level was baked into
+/// each sample in [`AudioBackend::play`] and then queued, so `out_ring` held committed amplitudes
+/// and a slider move could not reach anything already in flight. The ring is deep — the FT slot
+/// path enqueues a whole 13.14 s over in one call — so "already in flight" meant seconds, and the
+/// operator overshot chasing a control that had not caught up. Reading here is what makes the
+/// change audible on the next buffer instead. A relaxed load per sample is a plain move on every
+/// target we ship; hoisting it per block would save nothing measurable and would put the liveness
+/// back out of reach of a test.
+#[inline]
+fn next_tx_sample(ring: &mut VecDeque<f32>, level: &AtomicU32) -> f32 {
+    ring.pop_front().unwrap_or(0.0) * f32::from_bits(level.load(Ordering::Relaxed))
+}
+
 fn err_fn(e: cpal::StreamError) {
     eprintln!("tempo-audio: cpal stream error: {e}");
 }
@@ -289,8 +304,18 @@ pub struct CpalBackend {
     /// thread. Live-updatable from Settings for a quiet interface; 1.0 = unchanged. Atomic because
     /// the realtime input callback reads it every block.
     rx_gain: Arc<AtomicU32>,
-    /// Tx audio level (0.0–1.0) applied to outgoing samples in [`Self::play`].
-    tx_level: f32,
+    /// Tx audio level (f32 bits, 0.0–1.0), applied by the realtime OUTPUT callback as each sample
+    /// leaves the ring — the same shape as [`Self::rx_gain`] and for the same reason.
+    ///
+    /// ⚠️ IT USED TO BE A PLAIN `f32` BAKED IN AT GENERATION TIME, and that was issue #14. `play`
+    /// multiplied by it and pushed the already-scaled samples into `out_ring`, so the ring held
+    /// committed amplitudes rather than modem audio, and moving the slider could not affect
+    /// anything already queued. The queue is deep: the FT slot path enqueues an entire over —
+    /// 13.14 s of FT8 — in one call, so the operator moved Pwr and watched the ALC sit at the old
+    /// drive for seconds, then overshot chasing a control that had not caught up. Applying it on
+    /// the way OUT means the level is whatever it is at the instant a sample reaches the card, so
+    /// there is nothing queued to be stale.
+    tx_level: Arc<AtomicU32>,
     /// Wait-free tee of the capture stream feeding the waterfall producer (see rxtap.rs). The
     /// caller publishes this to the RxTap after a successful open.
     spectrum_tap: Arc<SpscRing>,
@@ -464,6 +489,9 @@ impl CpalBackend {
         let out_ring = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         let rx_level = Arc::new(Mutex::new(0.0f32));
         let rx_gain = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+        // TX level starts at unity and is read by the output callback each block — see the field's
+        // doc for why it is applied on the way OUT rather than baked in at generation.
+        let tx_level = Arc::new(AtomicU32::new(1.0f32.to_bits()));
 
         // ---- headphone monitor shared state (DARK; nothing drains it until the
         // operator enables the monitor, which opens the output stream). Sized ~0.5 s
@@ -631,13 +659,14 @@ impl CpalBackend {
 
         // ---- output: mono f32 from out_ring → all channels ----
         let out_ring_cb = out_ring.clone();
+        let tx_level_cb = tx_level.clone();
         let out_stream = match out_cfg.sample_format() {
             SampleFormat::F32 => out_dev.build_output_stream(
                 &out_cfg.config(),
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     let mut ring = out_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks_mut(out_ch.max(1)) {
-                        let s = ring.pop_front().unwrap_or(0.0);
+                        let s = next_tx_sample(&mut ring, &tx_level_cb);
                         for x in frame.iter_mut() {
                             *x = s;
                         }
@@ -651,7 +680,8 @@ impl CpalBackend {
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                     let mut ring = out_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks_mut(out_ch.max(1)) {
-                        let v = (ring.pop_front().unwrap_or(0.0).clamp(-1.0, 1.0) * 32767.0) as i16;
+                        let v = (next_tx_sample(&mut ring, &tx_level_cb).clamp(-1.0, 1.0) * 32767.0)
+                            as i16;
                         for x in frame.iter_mut() {
                             *x = v;
                         }
@@ -667,8 +697,8 @@ impl CpalBackend {
                 move |data: &mut [u8], _: &cpal::OutputCallbackInfo| {
                     let mut ring = out_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks_mut(out_ch.max(1)) {
-                        let v = (ring.pop_front().unwrap_or(0.0).clamp(-1.0, 1.0) * 127.0 + 128.0)
-                            as u8;
+                        let v = (next_tx_sample(&mut ring, &tx_level_cb).clamp(-1.0, 1.0) * 127.0
+                            + 128.0) as u8;
                         for x in frame.iter_mut() {
                             *x = v;
                         }
@@ -682,8 +712,8 @@ impl CpalBackend {
                 move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
                     let mut ring = out_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks_mut(out_ch.max(1)) {
-                        let v = (ring.pop_front().unwrap_or(0.0).clamp(-1.0, 1.0) * 2_147_483_647.0)
-                            as i32;
+                        let v = (next_tx_sample(&mut ring, &tx_level_cb).clamp(-1.0, 1.0)
+                            * 2_147_483_647.0) as i32;
                         for x in frame.iter_mut() {
                             *x = v;
                         }
@@ -710,7 +740,7 @@ impl CpalBackend {
             tx_rs: CaptureResampler::new(MODEM_RATE, out_rate),
             rx_level,
             rx_gain,
-            tx_level: 1.0,
+            tx_level,
             monitor: Monitor::new(mon_ring, mon_enabled, mon_level, in_rate),
             spectrum_tap: tap_ring,
             in_rate,
@@ -761,9 +791,11 @@ impl AudioBackend for CpalBackend {
         // `resample_linear` here put a periodic amplitude ripple on the constant-envelope
         // FT8/FT4 waveform; the polyphase reconstruction keeps it flat like WSJT-X.
         let dev = self.tx_rs.process(samples);
-        let level = self.tx_level;
+        // UNSCALED on purpose — the level is applied by the output callback as each sample
+        // leaves. See `tx_level`: baking it in here is what made the Pwr slider unable to change
+        // audio that was already queued.
         let mut ring = self.out_ring.lock().unwrap_or_else(|e| e.into_inner());
-        ring.extend(dev.iter().map(|s| s * level));
+        ring.extend(dev.iter().copied());
     }
 
     fn set_tx_tee(&mut self, tee: Option<crate::backend::TxTee>) {
@@ -781,7 +813,8 @@ impl AudioBackend for CpalBackend {
     ///
     /// [`play`]: AudioBackend::play
     fn set_tx_level(&mut self, level: f32) {
-        self.tx_level = level.clamp(0.0, 1.0);
+        self.tx_level
+            .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     /// Set the RX capture gain (a ≥1.0 multiplier applied to captured samples on the audio
@@ -845,6 +878,78 @@ impl AudioBackend for CpalBackend {
             .as_ref()
             .map(CaptureStream::drain)
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tx_level_tests {
+    use super::next_tx_sample;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn ring(v: &[f32]) -> VecDeque<f32> {
+        v.iter().copied().collect()
+    }
+
+    /// ISSUE #14, and the whole point of the change: audio that is ALREADY QUEUED must respond to
+    /// the Pwr slider.
+    ///
+    /// The level used to be multiplied into each sample inside `play` and then pushed, so
+    /// `out_ring` held committed amplitudes. Nothing already queued could ever change, and the
+    /// queue is deep — the FT slot path enqueues an entire 13.14 s over in one call — so the
+    /// operator moved the slider, watched the ALC hold the old drive for seconds, and overshot
+    /// chasing a control that had not caught up. The reporter measured exactly this against his
+    /// rig's ALC meter while holding Tune.
+    ///
+    /// This is the test that could not exist while the multiply lived in the realtime callback,
+    /// which is why the read was factored out rather than hoisted per block.
+    #[test]
+    fn a_level_change_reaches_audio_that_is_already_queued() {
+        let mut r = ring(&[1.0, 1.0, 1.0, 1.0]);
+        let level = AtomicU32::new(1.0f32.to_bits());
+
+        assert_eq!(next_tx_sample(&mut r, &level), 1.0, "unity passes through");
+
+        // The operator moves Pwr mid-transmission. Everything still in the ring was generated
+        // before this instant — under the old code it would keep going out at full drive.
+        level.store(0.25f32.to_bits(), Ordering::Relaxed);
+        assert_eq!(next_tx_sample(&mut r, &level), 0.25);
+        assert_eq!(next_tx_sample(&mut r, &level), 0.25);
+
+        // ...and back up again, same buffer.
+        level.store(0.5f32.to_bits(), Ordering::Relaxed);
+        assert_eq!(next_tx_sample(&mut r, &level), 0.5);
+    }
+
+    /// The waveform is scaled, not gated: shape is preserved and only amplitude moves, which is
+    /// what a real drive control does. A flush-and-refill would have stepped the envelope.
+    #[test]
+    fn the_queued_waveform_keeps_its_shape() {
+        let mut r = ring(&[1.0, -0.5, 0.25, -1.0]);
+        let level = AtomicU32::new(0.5f32.to_bits());
+        let out: Vec<f32> = (0..4).map(|_| next_tx_sample(&mut r, &level)).collect();
+        assert_eq!(out, vec![0.5, -0.25, 0.125, -0.5]);
+    }
+
+    /// An empty ring is silence, not the last sample held — and silence stays silence whatever
+    /// the level says, so an underrun can never emit a click scaled up by a high drive setting.
+    #[test]
+    fn an_empty_ring_is_silence_at_every_level() {
+        let mut r = ring(&[]);
+        for bits in [0.0f32, 0.5, 1.0] {
+            let level = AtomicU32::new(bits.to_bits());
+            assert_eq!(next_tx_sample(&mut r, &level), 0.0);
+        }
+    }
+
+    /// Zero really is zero. `set_tx_level` clamps to 0.0–1.0, and an operator who drags Pwr to
+    /// the bottom mid-over must get silence out of the samples already queued.
+    #[test]
+    fn zero_silences_audio_that_was_already_queued() {
+        let mut r = ring(&[1.0, -1.0]);
+        let level = AtomicU32::new(0.0f32.to_bits());
+        assert_eq!(next_tx_sample(&mut r, &level), 0.0);
+        assert_eq!(next_tx_sample(&mut r, &level), 0.0);
     }
 }
 
