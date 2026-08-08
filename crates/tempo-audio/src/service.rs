@@ -11219,7 +11219,14 @@ mod tests {
 
         state
             .step(
-                &engine, &mut backend, &mut rig, &sinks, 0.0, &mut ra, &mut rr, &mut station,
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
             )
             .unwrap();
         let first_chunk_len = backend.played.len();
@@ -11232,7 +11239,14 @@ mod tests {
         // 40ms, to reproduce the mismatch that overflowed out_ring.
         state
             .step(
-                &engine, &mut backend, &mut rig, &sinks, 20.0, &mut ra, &mut rr, &mut station,
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
             )
             .unwrap();
         let second_chunk_len = backend.played.len() - first_chunk_len;
