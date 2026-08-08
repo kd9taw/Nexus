@@ -235,6 +235,43 @@ describe('the basis rule: a row exists only where the backend says there is ONE 
   })
 })
 
+describe('every rig in the catalog can actually be loaded by the Hamlib we ship', () => {
+  // ISSUE #34. A model number can be real in Hamlib's riglist and still have no backend compiled
+  // into the library that goes in the installer. Pick that rig and rigctld simply never starts —
+  // there is no error to read and nothing in the build catches it. It has happened.
+  //
+  // The check that MISSED it last time is instructive: someone ran `strings libhamlib-4.dll | grep`
+  // for the backend name, found matches, and concluded it shipped. It does not follow — source
+  // strings can be present while the backend is not registered in the build. The honest question is
+  // whether the library will load the model, and only the library can answer it.
+  //
+  // ⚠️ ASKED OF THE BUNDLED HAMLIB, AT GENERATION TIME — never live in CI. CI's distro Hamlib is
+  // older (4.5.5) and genuinely does not carry every model this catalog is anchored on: model 1051
+  // (FTX-1) has a backend dated 2025-12 and 3094 is off the 4.7.0 riglist. A sweep run in CI would
+  // fail on rigs that are perfectly fine in the shipped installer, which is worse than no guard —
+  // it would train people to ignore it.
+  it('no catalog model is missing from the bundled library', () => {
+    expect(hamlibSerialSpeeds.missing).toEqual([])
+  })
+
+  it('a backend that merely needs a live daemon is NOT counted as missing', () => {
+    // The discriminator, and the reason this signal was unusable before: rigctl says
+    // "Unknown rig num" on stderr for a model it has no backend for, and "Unable to open rigctld"
+    // for NET rigctl (model 2), which is present and simply cannot dump caps on its own. The
+    // generator was discarding stderr, so the two looked identical and everything undumpable had
+    // to be tolerated.
+    expect(hamlibSerialSpeeds.needsDaemon).toContain(2)
+    expect(hamlibSerialSpeeds.missing).not.toContain(2)
+  })
+
+  it('the fixture really was generated from a Hamlib that answered — not an empty sweep', () => {
+    // A positive control on the sweep itself: an empty `missing` proves nothing if the generator
+    // never managed to dump anything at all.
+    expect(hamlibSerialSpeeds.rigs.length).toBeGreaterThan(100)
+    expect(hamlibSerialSpeeds.hamlib).toMatch(/^Hamlib 4\.7\.1 /)
+  })
+})
+
 describe('a listed rig gets its one rate, whatever the box said before', () => {
   // There is no judgement left to get wrong. On a one-rate rig every other value is a setting
   // that cannot work, so there is nothing to protect — which is why the clobber that broke
