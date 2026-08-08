@@ -72,6 +72,42 @@ No MSYS2 needed; produces the same installer.
 
 ---
 
+## Path C — Native macOS (Homebrew)
+
+Produces an **unsigned** `Nexus.app` (Gatekeeper: right-click → Open). Official Apple-signed / notarized packages are a separate maintainer decision; this path is for operators building from source or community builds.
+
+1. **Install Xcode Command Line Tools** (WKWebView is already part of macOS):
+
+   ```bash
+   xcode-select --install
+   ```
+
+2. **Install Homebrew deps + Rust + Node:**
+
+   ```bash
+   brew install cmake ninja gcc fftw boost pkgconf
+   # CAT / rig control (not bundled in the .app):
+   brew install hamlib
+   ```
+
+   - Rust via [rustup](https://rustup.rs) (match the toolchain pin in CI, currently 1.93.1).
+   - [Node.js LTS](https://nodejs.org/) for the UI build.
+   - `cargo install tauri-cli --version "^2"` (the script installs it if missing).
+
+3. **Stage the DeepCW model** into `src-tauri/resources/deepcw/` (see that folder’s README), **or** pass `--allow-missing-aicw` / `NEXUS_ALLOW_MISSING_AICW=1` for a build without the AI CW decoder.
+
+4. **Build:**
+
+   ```bash
+   ./scripts/build-macos.sh
+   ```
+
+   Artifact: `src-tauri/target/release/bundle/macos/Nexus.app`.
+
+The script sets `LIBRARY_PATH` for Homebrew’s `libgfortran` and `libfftw3f`, and temporarily turns off Tauri updater artifact signing for the local run (no private key on a community machine).
+
+---
+
 ## Headless modem / engine tests (any platform)
 
 You don't need WebView2 or a radio to run the test suite — just the native modem toolchain so `ft1-sys` can build `libtempo` via CMake.

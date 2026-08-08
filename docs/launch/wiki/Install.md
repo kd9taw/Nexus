@@ -14,7 +14,8 @@ come here for the complete picture.
 
 - **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **64-bit Raspberry Pi**
   (Pi 3/4/5). All three build from the same tree and ship together every release.
-  macOS does not ship yet. On a slower Pi, **Settings ▸ Modes ▸ Digital (FT8/FT4) ▸
+  macOS is not an official release target yet (unsigned `.app` via
+  `./scripts/build-macos.sh`). On a slower Pi, **Settings ▸ Modes ▸ Digital (FT8/FT4) ▸
   Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
 - **A radio with CAT + audio**, or a network rig (FlexRadio, remote `rigctld`).
   You can install and explore without a radio — the wizard and every panel open —

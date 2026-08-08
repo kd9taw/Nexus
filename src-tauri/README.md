@@ -140,7 +140,11 @@ A graphical session (X11 or Wayland) is required to actually open the window.
 
 - **Xcode Command Line Tools**: `xcode-select --install`
   (WKWebView ships with macOS — no extra runtime needed).
+- Homebrew modem deps: `brew install cmake ninja gcc fftw boost pkgconf`
+  (and `brew install hamlib` for `rigctld` on PATH — CAT is not bundled in the `.app`).
 - Rust via `rustup` and Node.js + npm.
+- From the repo root: `./scripts/build-macos.sh` →
+  `src-tauri/target/release/bundle/macos/Nexus.app` (unsigned; Gatekeeper right-click → Open).
 
 ---
 

@@ -5,6 +5,15 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **macOS from-source `.app` build path.** `./scripts/build-macos.sh` produces an unsigned
+  `Nexus.app` on a Mac with Homebrew’s modem toolchain (cmake/ninja/gcc/fftw/boost). The
+  bundle merges a microphone usage string into Info.plist. This is packaging for operators
+  building locally or sharing community builds — not an Apple-signed official installer.
+
 ## [1.0.5] — 2026-08-08
 
 ### Added

@@ -82,6 +82,11 @@
       "deb": {
         "depends": ["libhamlib-utils"]
       }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "hardenedRuntime": false,
+      "infoPlist": "Info.plist.macos"
     }
   },
   "plugins": {

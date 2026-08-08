@@ -179,9 +179,11 @@ for you and AppImage users run `sudo apt install libhamlib-utils` once. On a slo
 **Settings ▸ Modes ▸ Digital (FT8/FT4) ▸ Decode depth ▸ Fast** keeps FT8 and FT4
 decoding in real time.
 
-**macOS does not ship.** The codebase is cross-platform Rust and Tauri, so it is a
-packaging and testing job rather than a port. If you want it, say so on the issue
-tracker — interest is what prioritises it.
+**macOS is not an official release target yet** (no signed/notarized installer on the
+project’s Releases). The codebase is cross-platform Rust and Tauri — packaging rather
+than a port. You can build an unsigned `Nexus.app` from source with
+`./scripts/build-macos.sh` (see [Building from Source](../manual/Building-from-Source.md));
+community interest and reports live on the issue tracker.
 
 ### Will there be automatic updates?
 
