@@ -463,8 +463,42 @@ mod tests {
     /// have quietly dropped the only check that the DSP output itself does not drift. Same
     /// arithmetic input (a deterministic sawtooth at the modem rate), digest over the whole row.
     ///
-    /// A DIFF HERE IS A DSP BEHAVIOUR CHANGE. Justify it, then update the digest — do not
-    /// loosen the assertion.
+    /// How far a bin may move before it counts as drift. A one-ULP `log10f` difference reaches
+    /// roughly 1e-7 in these 0..=1 display values; a real DSP change moves every bin by O(0.1)
+    /// (see the history below). 1e-3 sits four orders of magnitude clear of the noise and three
+    /// clear of any change worth catching, so it discriminates rather than splitting the
+    /// difference.
+    const ROW_TOLERANCE: f32 = 1e-3;
+
+    /// The reference row, generated on a known-good tree by the same code path this test drives.
+    fn reference_row() -> Vec<f32> {
+        include_str!("../tests/fixtures/rxdsp_reference_row.txt")
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                l.trim()
+                    .parse::<f32>()
+                    .expect("reference row is decimal floats")
+            })
+            .collect()
+    }
+
+    /// A DIFF HERE IS A DSP BEHAVIOUR CHANGE. Justify it, then regenerate the reference — do not
+    /// widen the tolerance.
+    ///
+    /// ⚠️ IT WAS AN EXACT DIGEST OVER THE ROW'S BIT PATTERNS UNTIL 2026-08-08, AND THAT PINNED THE
+    /// HOST'S libm AS MUCH AS OUR DSP. Every bin goes through `f32::log10` (and `cosf` in the
+    /// window), which resolve to the platform's `log10f`/`cosf`. glibc's are not correctly-rounded
+    /// and are free to move between releases — and did: `log10f(3.3e-05)` differs by ONE MANTISSA
+    /// BIT between glibc 2.39 and 2.43. With 512 bins hashed by bit pattern, one bin landing on
+    /// such an input changes the digest, which is exactly what a bit-pattern hash is designed to
+    /// notice. Reported on (K)ubuntu 26.04 (#18) with nothing in Nexus changed between the pass and
+    /// the fail, and it would have gone red in our own CI the day the runners rolled forward.
+    ///
+    /// So the row is compared against a REFERENCE ROW within [`ROW_TOLERANCE`] instead. That keeps
+    /// the drift-detection this test exists for — the two real changes in the history below moved
+    /// every value by O(0.1), four orders of magnitude clear of the bound — while tolerating a
+    /// libm that rounds a hair differently. Values are display intensity in 0..=1.
     ///
     /// Digest history:
     /// - 2026-08-01: WINDOW/FFT_N 4096 → 2048 for display liveliness (see `WINDOW`). The row
@@ -478,6 +512,7 @@ mod tests {
     ///   unconditionally (`flat4.f90:18-20`, "If nflatten=0, convert to dB but do not flatten")
     ///   and indexes its palette linearly in dB (`plotter.cpp:194`). Axis behaviour is proved by
     ///   the three tests in `tempo_core::spectrum`; this digest only pins that it does not drift.
+
     #[test]
     fn the_row_for_a_known_input_is_byte_stable() {
         // The exact generator the golden used: a sawtooth over the analysis window.
@@ -493,17 +528,21 @@ mod tests {
         let row = feed.row().expect("published").row;
 
         assert_eq!(row.len(), 512, "bin count is part of the contract");
-        // FNV-1a over the row's bit patterns — a compact byte-identity check.
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for v in &row {
-            for b in v.to_bits().to_le_bytes() {
-                h ^= u64::from(b);
-                h = h.wrapping_mul(0x0000_0100_0000_01b3);
-            }
-        }
-        assert_eq!(
-            h, 2_880_453_805_003_294_649,
-            "waterfall row digest drifted for a fixed input"
+        let reference = reference_row();
+        assert_eq!(reference.len(), 512, "the reference fixture is 512 bins");
+        let (worst_bin, worst) = row
+            .iter()
+            .zip(&reference)
+            .map(|(a, b)| (a - b).abs())
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("512 bins");
+        assert!(
+            worst <= ROW_TOLERANCE,
+            "waterfall row drifted for a fixed input: bin {worst_bin} is off by {worst}, \
+             tolerance {ROW_TOLERANCE}. A libm rounding difference is ~1e-7 here; this is not \
+             that. Justify the DSP change, then regenerate \
+             tests/fixtures/rxdsp_reference_row.txt on a known-good tree."
         );
     }
 

@@ -380,7 +380,7 @@ cd ui && npm install && npm test        # UI suites (vitest)
 ```
 
 The modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is required. See
-**[Building from Source](docs/manual/Building-from-Source.md)** and [WINDOWS.md](WINDOWS.md).
+**[Building from Source](docs/manual/Building-from-Source.md)**, [WINDOWS.md](WINDOWS.md) and [LINUX.md](LINUX.md).
 
 ## Documentation
 
