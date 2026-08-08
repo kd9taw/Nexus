@@ -206,6 +206,58 @@ mod tests {
         }
     }
 
+    /// ISSUE #37. The datagram a LOGGER logs from — N1MM+, HRD and Log4OM all consume type 5.
+    /// `send_qso_logged` had exactly one call site in the whole tree, inside the Field Day block
+    /// of the radio loop, so an ordinary contact put Status and Decode on the wire and never
+    /// this. The link looked alive (N1MM's WSJT decode window fills) and logged nothing.
+    ///
+    /// This proves the delivery end: it really leaves the socket and really parses back as a
+    /// QsoLogged carrying the call we sent — not merely that the encoder was called.
+    #[test]
+    fn qso_logged_roundtrips_over_loopback() {
+        let listener = UdpSocket::bind(loopback(0)).unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let target = listener.local_addr().unwrap();
+
+        let server = WsjtxServer::new(loopback(0), target).unwrap();
+        server
+            .send_qso_logged(&QsoLogged {
+                time_off: 1_700_000_100,
+                dx_call: "W1AW",
+                dx_grid: "FN31",
+                tx_freq: 14_074_000,
+                mode: "FT8",
+                report_sent: "-12",
+                report_recvd: "-08",
+                tx_power: "",
+                comments: "",
+                name: "",
+                time_on: 1_700_000_000,
+                op_call: "KD9TAW",
+                my_call: "KD9TAW",
+                my_grid: "EN52",
+                exchange_sent: "",
+                exchange_recvd: "",
+                adif_propmode: "",
+            })
+            .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener.recv_from(&mut buf).unwrap();
+        match wsjtx::parse_inbound(&buf[..n]).unwrap() {
+            Inbound::QsoLogged { id, qso } => {
+                assert_eq!(id, APP_ID);
+                assert_eq!(qso.dx_call, "W1AW", "the logger must see who was worked");
+                assert_eq!(qso.mode, "FT8");
+                assert_eq!(qso.tx_freq, 14_074_000);
+                assert_eq!(qso.report_sent, "-12");
+            }
+            other => panic!("expected a QsoLogged datagram, got: {other:?}"),
+        }
+    }
+
     #[test]
     fn poll_returns_none_when_idle() {
         let server = WsjtxServer::new(loopback(0), loopback(2237)).unwrap();

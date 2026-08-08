@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Contacts never reached N1MM+, HRD or Log4OM unless you were running Field Day.** Nexus speaks
+  the WSJT-X UDP protocol on 2237, and loggers pick up your decodes and your status from it — which
+  is exactly why this was so hard to spot. The connection looked alive: N1MM's WSJT window filled up
+  with decodes. But the one message a logger actually writes a contact from, `QsoLogged`, was only
+  ever sent for Field Day contacts. Every ordinary QSO went into your own log and nowhere else, with
+  no error and nothing to suggest anything was missing, and the FAQ told you the path was supported.
+  Every logged contact now goes out on it — FT8 and FT4, phone, CW, RTTY, SSTV, and rows you type
+  into the Logbook by hand.
+
+  Worth knowing if you were chasing this: the **N1MM contact broadcast** in Settings is a different
+  thing and was never going to help. N1MM does not read those packets back in — they exist for club
+  dashboards and live maps. The 2237 path is the one N1MM logs from.
+
 ## [1.0.2] — 2026-08-06
 
 
