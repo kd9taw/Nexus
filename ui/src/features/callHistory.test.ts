@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { callHistory, entitySlots, historySummary, isNewEntity } from './callHistory'
+import { bandKey, callHistory, entitySlots, historySummary, isNewEntity, modeKey } from './callHistory'
 import type { LoggedQso } from '../types'
 
 function qso(call: string, band: string, mode: string, whenUnix: number, confirmed = false): LoggedQso {
@@ -89,10 +89,11 @@ describe('entitySlots', () => {
   ]
 
   it('unworked or blank country → not worked, empty slots', () => {
-    expect(entitySlots(log, 'Fiji')).toEqual({ workedEver: false, bandsWorked: [], modesWorked: [] })
-    expect(entitySlots(log, '')).toEqual({ workedEver: false, bandsWorked: [], modesWorked: [] })
-    expect(entitySlots(log, null)).toEqual({ workedEver: false, bandsWorked: [], modesWorked: [] })
-    expect(entitySlots([], 'Japan')).toEqual({ workedEver: false, bandsWorked: [], modesWorked: [] })
+    const none = { workedEver: false, bandsWorked: [], modesWorked: [], bandUnknown: false }
+    expect(entitySlots(log, 'Fiji')).toEqual(none)
+    expect(entitySlots(log, '')).toEqual(none)
+    expect(entitySlots(log, null)).toEqual(none)
+    expect(entitySlots([], 'Japan')).toEqual(none)
   })
 
   it('collects distinct entity bands/modes across calls, case/whitespace-insensitive on country', () => {
@@ -128,5 +129,100 @@ describe('historySummary', () => {
   it('omits band/mode when absent', () => {
     const log = [qso('N0B', '', '', 1000)]
     expect(historySummary(callHistory(log, 'N0B', ''))).toBe('1 QSO — last 1 Jan 1970')
+  })
+})
+
+describe('modeKey — spellings of one mode fold, different modes never do', () => {
+  it('USB and LSB are SSB: sideband is not a mode you can newly work', () => {
+    // The false badge this kills: an operator with a log full of LSB contacts works one on USB
+    // and is told it is a mode they have never worked. ADIF models both as SUBMODEs of SSB.
+    expect(modeKey('USB')).toBe('SSB')
+    expect(modeKey('LSB')).toBe('SSB')
+    expect(modeKey('ssb')).toBe('SSB')
+    expect(modeKey(' usb ')).toBe('SSB')
+  })
+
+  it('the same waveform under two spellings folds', () => {
+    expect(modeKey('BPSK31')).toBe('PSK31')
+    expect(modeKey('PSK31')).toBe('PSK31')
+    expect(modeKey('BPSK63')).toBe('PSK63')
+  })
+
+  it('⭐ does NOT fold different modes together — this is not the DXCC class', () => {
+    // Folding to CW/Phone/Digital would say an FT8 contact covers FT4, and an FM contact covers
+    // SSB. Correct for what DXCC awards, wrong for a board that shows specific modes.
+    expect(modeKey('FM')).toBe('FM')
+    expect(modeKey('AM')).toBe('AM')
+    expect(modeKey('FT4')).toBe('FT4')
+    expect(modeKey('FT8')).toBe('FT8')
+    expect(modeKey('RTTY')).toBe('RTTY')
+    for (const m of ['FM', 'AM', 'FT4', 'FT8', 'RTTY', 'CW']) {
+      expect(modeKey(m)).not.toBe('SSB')
+    }
+  })
+
+  it('leaves ambiguous tokens alone rather than guessing', () => {
+    // A bare MFSK row may be FT4, JS8 or something else — current imports promote ADIF SUBMODE
+    // so they store FT4 directly, and this is older residue. PH is N1MM/N3FJP's generic phone
+    // token and may have been FM. Mapping either invents a contact that was never made.
+    expect(modeKey('MFSK')).toBe('MFSK')
+    expect(modeKey('PH')).toBe('PH')
+    expect(modeKey('')).toBe('')
+    expect(modeKey(null)).toBe('')
+  })
+})
+
+describe('bandKey — resolve the band, or admit it cannot be known', () => {
+  it('a token that names a band wins', () => {
+    expect(bandKey({ band: '20m' })).toBe('20M')
+    expect(bandKey({ band: ' 40M ' })).toBe('40M')
+  })
+
+  it('falls back to the frequency when the token names nothing', () => {
+    // The issue: `from_band_token` and `from_label` disagree on suffixes like `-fm`, so some
+    // stored tokens parse in one path and not the other, and the frequency was never tried.
+    expect(bandKey({ band: '20m-fm', freqMhz: 14.074 })).toBe('20M')
+    expect(bandKey({ band: '', freqMhz: 7.074 })).toBe('40M')
+    expect(bandKey({ band: null, freqMhz: 14.074 })).toBe('20M')
+  })
+
+  it('⭐ null when neither is usable — the case that made a permanent false badge', () => {
+    // Every imported row in the 11k log this came from carries FREQ=0.000000, so an unparseable
+    // BAND has nothing to fall back on. That is not "not worked" — it is not knowable.
+    expect(bandKey({ band: 'nonsense', freqMhz: 0 })).toBeNull()
+    expect(bandKey({ band: 'nonsense' })).toBeNull()
+    expect(bandKey({ band: '', freqMhz: 0 })).toBeNull()
+    expect(bandKey({})).toBeNull()
+    expect(bandKey({ band: '20m-fm', freqMhz: 0 })).toBeNull() // token unusable, no frequency
+  })
+})
+
+describe('entitySlots resolves through those keys', () => {
+  it('a sideband spelling does not read as a new mode', () => {
+    const log = [{ call: 'G0A', country: 'England', band: '20m', mode: 'LSB' }]
+    const s = entitySlots(log, 'England')
+    expect(s.modesWorked).toEqual(['SSB'])
+    expect(s.modesWorked.includes(modeKey('USB'))).toBe(true)
+  })
+
+  it('an unparseable band is recovered from the frequency', () => {
+    const log = [{ call: 'G0A', country: 'England', band: '20m-fm', mode: 'SSB', freqMhz: 14.2 }]
+    const s = entitySlots(log, 'England')
+    expect(s.bandsWorked).toEqual(['20M'])
+    expect(s.bandUnknown).toBe(false)
+  })
+
+  it('⭐ an unrecoverable band is flagged, not silently counted as some other band', () => {
+    const log = [{ call: 'G0A', country: 'England', band: 'nonsense', mode: 'SSB', freqMhz: 0 }]
+    const s = entitySlots(log, 'England')
+    expect(s.workedEver).toBe(true)
+    expect(s.bandsWorked).toEqual([]) // never a phantom token that matches nothing forever
+    expect(s.bandUnknown).toBe(true) // the caller must not claim "new band" on this
+  })
+
+  it('a row with no band at all is silent, not unknown', () => {
+    // Distinct from the case above: nothing was recorded, so there is nothing unresolvable.
+    const log = [{ call: 'G0A', country: 'England', mode: 'SSB' }]
+    expect(entitySlots(log, 'England').bandUnknown).toBe(false)
   })
 })

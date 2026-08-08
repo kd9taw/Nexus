@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
 import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
-import { callHistory, entitySlots, isNewEntity } from '../features/callHistory'
+import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 import { isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
@@ -485,10 +485,20 @@ export function LogEntry({
   // `newEntity` above; a blank/unresolved entity yields workedEver=false and falls through
   // to the plain "not in your log" line). Bands/modes are entity-wide; band wins over mode.
   const slots = useMemo(() => entitySlots(allLog, entityForBadge), [allLog, entityForBadge])
+  // Both sides go through the same key functions — the live band/mode and the stored ones. A raw
+  // string compare here was half of the false-badge family: USB against a log of LSB read as a
+  // mode never worked, and a stored band token that named no band matched nothing forever.
+  // `bandUnknown` suppresses the band badge outright: a contact whose band cannot be recovered
+  // means we do not know whether this band is new, and a guess in that state is wrong for as long
+  // as the row exists.
+  const liveBand = bandKey({ band: snap.radio.band, freqMhz: snap.radio.dialMhz })
   const newBandSlot =
-    slots.workedEver && !slots.bandsWorked.includes(snap.radio.band.trim().toUpperCase())
+    slots.workedEver &&
+    !slots.bandUnknown &&
+    liveBand !== null &&
+    !slots.bandsWorked.includes(liveBand)
   const newModeSlot =
-    slots.workedEver && !newBandSlot && !slots.modesWorked.includes(mode.trim().toUpperCase())
+    slots.workedEver && !newBandSlot && !slots.modesWorked.includes(modeKey(mode))
 
   // QRZ callbook autofill — fills ONLY blank fields, never clobbers operator input. The
   // explicit button toasts; the on-blur auto-lookup is silent on failure so an operator
