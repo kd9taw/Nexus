@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Call Roster never showed which station you were actually working.** In a busy roster there
+  was nothing to say which of those calls belonged to the contact in progress — and not because the
+  highlight was too subtle, but because the roster was never told. It was being handed the Tempo
+  chat peer, which is empty for the whole of an FT8 or FT4 session, so nothing ever matched. The
+  station the sequencer is working now stands out in the transmit colour, stays legible instead of
+  fading with age like the other rows, and reads as "working now" to a screen reader. It is
+  separate from the row you last clicked, so you can look at one station while working another.
+  Asked for by m7jyfradio and akhepcat.
+
+### Fixed
+
 - **FT8 and FT4 were putting a six-character grid square on the air.** A standard FT8 or FT4
   message has room for four characters of locator and no more, so if you had set a six-character
   grid in Settings, your calls to another station carried something the message format cannot hold.

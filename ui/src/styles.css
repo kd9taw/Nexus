@@ -13349,6 +13349,15 @@ button.cq-skiptx1.on {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   box-shadow: inset 2px 0 0 var(--accent);
 }
+/* The station the sequencer is WORKING right now. Deliberately the transmit colour rather than
+   the accent `.selected` uses: the operator's eye already reads --tx as "this is the contact in
+   progress", and the two states are different questions — what I clicked, versus who I am working.
+   Listed after `.selected` so a row that is both reads as working, which is the more urgent fact.
+   --tx is defined in both themes. */
+.or-row.working {
+  background: color-mix(in srgb, var(--tx) 22%, transparent);
+  box-shadow: inset 3px 0 0 var(--tx);
+}
 .or-row.ignored {
   opacity: 0.3;
   filter: grayscale(0.8);

@@ -34,6 +34,14 @@ interface Props {
   band?: string
   feedMode?: string
   selectedCall: string | null
+  /** The station the sequencer is actually WORKING right now (`snap.qso.dxcall`), which is not
+   * the same thing as the row the operator last clicked. Two operators asked for this (#16): in a
+   * busy roster there was nothing at all to say which call the QSO in progress belongs to.
+   *
+   * Kept separate from `selectedCall` rather than folded into it — selection drives the Spot
+   * button and the roving-focus model, and the station being worked is not a selection. A row can
+   * be both, and then the working treatment wins. */
+  workingCall?: string | null
   onSelect: (call: string) => void
   onCall: (call: string, grid?: string) => void
   /** Session-only ignore set (Alt-double-click) — ignored calls render dimmed. */
@@ -82,6 +90,7 @@ export function OperateRoster({
   needByCall,
   needAlertsByCall,
   selectedCall,
+  workingCall = null,
   onSelect,
   onCall,
   ignoredCalls,
@@ -329,14 +338,18 @@ export function OperateRoster({
                 key={s.call}
                 role="row"
                 aria-selected={s.call === selectedCall}
-                aria-label={`${s.call}${s.grid ? `, grid ${s.grid}` : ''}${need ? `, needed ${need}` : ''}${s.worked ? ', worked' : ''}`}
+                aria-label={`${s.call}${s.grid ? `, grid ${s.grid}` : ''}${need ? `, needed ${need}` : ''}${s.worked ? ', worked' : ''}${s.call === workingCall ? ', working now' : ''}`}
                 tabIndex={rp.tabIndex}
                 ref={rp.ref as (el: HTMLDivElement | null) => void}
                 onFocus={rp.onFocus}
-                className={`or-row${s.call === selectedCall ? ' selected' : ''}${s.worked ? ' worked' : ''}${
+                className={`or-row${s.call === selectedCall ? ' selected' : ''}${
+                  s.call === workingCall ? ' working' : ''
+                }${s.worked ? ' worked' : ''}${
                   chip ? ` need-${chip.cls}` : ''
                 }${ignoredRow ? ' ignored' : ''}`}
-                style={{ opacity: s.call === selectedCall ? 1 : freshness(age) }}
+                style={{
+                  opacity: s.call === selectedCall || s.call === workingCall ? 1 : freshness(age),
+                }}
                 onClick={() => {
                   roving.setActive(i)
                   onSelect(s.call)

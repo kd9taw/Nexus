@@ -1012,6 +1012,11 @@ export function OperateCockpit({
                     band={snap.radio.band}
                     feedMode={tier}
                     selectedCall={selectedCall}
+                    // The station the sequencer is working, straight off the QSO status. NOT
+                    // `selectedCall` — App binds that to `activePeer`, which is the Tempo CHAT
+                    // peer and is null throughout an FT8 session, so the roster had nothing to
+                    // highlight and #16 was reported.
+                    workingCall={snap.qso?.dxcall ?? null}
                     onSelect={onSelect}
                     onCall={onCall}
                     ignoredCalls={ignored}
