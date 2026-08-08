@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directories before giving up, the same way the Windows build already prefers a binary bundled
   next to the app. A `rigctld` already on `PATH` still always wins.
 
+- **The Linux download now says which Linux it needs.** Both PC Linux files require Ubuntu 24.04 or
+  newer, and nothing said so — not the download page, not the README, not the package itself. On
+  anything older the `.deb` installs without a word of complaint and then the app does not start,
+  which is how a report from a Mint 21.3 operator reached us. The AppImage is no help there either,
+  despite what portability usually means: an AppImage carries the application's own libraries but
+  not the system C library, so it needs exactly the same minimum. The requirement is now stated
+  everywhere the files are listed, with the one command that checks it (`ldd --version`).
+
+  Behind that, the build that produces those files was pinned. It had been following whatever image
+  GitHub happened to call "latest", so the oldest distro Nexus ran on was never a decision anyone
+  made — and the next time that label moved it would have risen again and cut off working
+  installations, with a completely green build and nothing to point at. The release now refuses to
+  publish a Linux binary that needs more than the stated minimum.
+
 ## [1.0.2] — 2026-08-06
 
 

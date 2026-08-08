@@ -37,6 +37,25 @@ env:
   DEEPCW_RELEASE: deepcw-model-v1
   MODEL_SHA: a7b3b4aa2610d3e88b8c7d4420eceee31be2d0ae595b3413264334f3ffb1eab5
   MODEL_JSON_SHA: b4342157b90229ee7380e165f3d8036179b80d1e6ae02f2557388b7fcd558c01
+  # The highest glibc symbol version the published x86_64 Linux binaries may require, and
+  # therefore the oldest distro they run on. 2.39 = Ubuntu 24.04, which is what the pinned
+  # `ubuntu-24.04` runner below produces today; docs/install.md states the same floor to
+  # operators and the two must be changed together.
+  #
+  # WHY THIS IS A GATE AND NOT A COMMENT. Before it, the floor was an emergent property of the
+  # string `ubuntu-latest`: nothing pinned it, nothing declared it, and nothing checked it. It
+  # silently excluded Ubuntu 22.04 and every Mint 21.x built on it (glibc 2.35 — issue #3), and
+  # the day GitHub rolls that label to a newer image it would rise again and break the operators
+  # who work today, with no commit to blame and a fully green build. An AppImage cannot absorb
+  # it either: an AppImage bundles application libraries, not libc.
+  #
+  # The .deb declares no `libc6 (>= x.y)` to catch it at install time, and it deliberately must
+  # not: `bundle.linux.deb.depends` in tauri.conf.json is the ONLY deb-depends config in the
+  # repo and ALL FIVE .debs build from it — scripts/Dockerfile.pi seds the bundle list and
+  # createUpdaterArtifacts, never depends — so an x86 floor stamped there would make the Pi
+  # bookworm package (glibc 2.36) refuse to install on the Pis it serves today. Any declared
+  # floor has to be per-target.
+  GLIBC_FLOOR: '2.39'
 
 jobs:
   # ---------------------------------------------------------------------------------------
@@ -44,7 +63,13 @@ jobs:
   # ---------------------------------------------------------------------------------------
   linux-x86:
     name: Linux x86_64 (.deb + AppImage)
-    runs-on: ubuntu-latest
+    # PINNED, not `ubuntu-latest`. The build host's glibc IS the floor of every published
+    # x86_64 artifact, so an unpinned label makes the supported-distro list move on GitHub's
+    # schedule rather than ours. The arm64 jobs below have always been pinned AND containerised
+    # (`debian:${BASE}`) and name their base in the filename; this is the same discipline for
+    # x86_64. Changing this line changes who can run Nexus — keep it in step with GLIBC_FLOOR
+    # and docs/install.md.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -101,6 +126,38 @@ jobs:
           m=/tmp/dc/usr/lib/Nexus/resources/deepcw/model.onnx
           [ -s "$m" ] || { echo "DeepCW model missing from the .deb"; exit 1; }
           echo "$MODEL_SHA  $m" | sha256sum -c -
+          # GLIBC FLOOR — the check that makes the supported-distro list a decision instead of
+          # a side effect of the runner image. Both shipped binaries are read: the .deb's
+          # payload and the AppImage's INNER binary, because an AppImage bundles application
+          # libraries but not libc, so it carries exactly the same requirement and papers over
+          # nothing. A binary needing more than GLIBC_FLOOR cannot start on the oldest distro we
+          # say we support, which is the failure operators actually meet: the package installs,
+          # the menu entry appears, and clicking it does nothing at all.
+          #
+          # Sorted with `sort -V` because glibc versions are not lexical — 2.9 sorts after 2.39
+          # as text and before it as a version.
+          appdir=$(mktemp -d)
+          chmod +x "$app"
+          app_abs=$(readlink -f "$app")
+          ( cd "$appdir" && "$app_abs" --appimage-extract >/dev/null )
+          floor_ok() {
+            # `|| true` on the pipeline, not on the assignment: under `set -e` a grep that
+            # matches nothing would abort the step before the empty-result check below could
+            # report WHY. An empty result means the check itself is broken (wrong path, objdump
+            # missing, a statically linked binary) and must fail loudly, not pass quietly.
+            need=$( { objdump -T "$2" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' \
+                      | sort -uV | tail -1; } || true )
+            [ -n "$need" ] || { echo "$1: no GLIBC symbol versions found in $2 — check broken"; exit 1; }
+            if [ "$(printf '%s\n%s\n' "$GLIBC_FLOOR" "$need" | sort -V | tail -1)" != "$GLIBC_FLOOR" ]; then
+              echo "$1 requires GLIBC_$need, above the declared floor GLIBC_$GLIBC_FLOOR."
+              echo "The build host moved, or a new dependency raised it. Do NOT just bump the"
+              echo "floor: that silently drops every operator between the two versions."
+              exit 1
+            fi
+            echo "$1: needs GLIBC_$need, floor GLIBC_$GLIBC_FLOOR — ok"
+          }
+          floor_ok "deb payload" /tmp/dc/usr/bin/Nexus
+          floor_ok "AppImage inner binary" "$appdir/squashfs-root/usr/bin/Nexus"
           mkdir -p out && cp "$app" out/
           # NAME THE PC PACKAGE FOR THE MACHINE IT INSTALLS ON, not just its architecture
           # (operator ask, 1.0.0). Tauri emits Nexus_<ver>_amd64.deb; the Pi jobs emit
