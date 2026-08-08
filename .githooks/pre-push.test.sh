@@ -120,6 +120,39 @@ GIT_AUTHOR_EMAIL="someone@example.com" git commit -qm "chore: w"
 expect BLOCK "non-project author email" origin wrongid:refs/heads/main
 git checkout -q main; git branch -qD wrongid
 
+# The allowlist (added 2026-08-08). Default deny is kept: the case above must STAY blocked,
+# which is why it is left immediately before these. An allowlist that admits everything and
+# an allowlist that admits nothing both look "green" without a pair of tests pointing
+# opposite ways, so every case below has its opposite.
+ALLOW="$LAB/contributors"
+printf '%s\n' '# a real outside contributor' 'contrib@example.org' > "$ALLOW"
+
+git checkout -qb goodcontrib
+echo ok > c.txt; git add c.txt
+GIT_AUTHOR_EMAIL="contrib@example.org" GIT_AUTHOR_NAME="A Contributor" git commit -qm "fix: c"
+# Unlisted FIRST, then listed. Order matters and this is a real trap: a blocked push sends
+# nothing, but a PASSED one puts the commit on the remote, and the new-ref path only scans
+# commits not already on SOME ref of that remote — so running these the other way round left
+# the second push with an empty range and it was waved through, reporting a false PASS.
+ENVV="NEXUS_CONTRIBUTORS=$LAB/nonexistent" \
+  expect BLOCK "unlisted contributor refuses" origin goodcontrib:refs/heads/contribno
+# ... and the SAME commit is accepted once the name is listed. Without this pair, a hook that
+# admitted everything and one that admitted nothing would each pass one case and look right.
+ENVV="NEXUS_CONTRIBUTORS=$ALLOW" \
+  expect PASS "  ... same commit passes once allowlisted" origin goodcontrib:refs/heads/contribok
+git checkout -q main; git branch -qD goodcontrib
+
+# THE ONE THAT MATTERS: the maintainer's other identity is denied BEFORE the allowlist is
+# consulted, so listing it cannot readmit it. If this ever reports PASS, the deny/allow
+# ordering in check 3 has been reversed and the gate no longer does its job.
+printf '%s\n' 'work-identity@example.com' >> "$ALLOW"
+git checkout -qb privid
+echo ok > p.txt; git add p.txt
+GIT_AUTHOR_EMAIL="work-identity@example.com" git commit -qm "chore: p"
+ENVV="NEXUS_CONTRIBUTORS=$ALLOW NEXUS_PRIVATE_IDENT=work-identity@example.com" \
+  expect BLOCK "maintainer's own identity, even when allowlisted" origin privid:refs/heads/privtest
+git checkout -q main; git branch -qD privid
+
 # --- 5: licence / NOTICE guard -------------------------------------------------
 note "licence guard"
 git checkout -qb vend

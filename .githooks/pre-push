@@ -18,7 +18,11 @@
 #   2. Release-tag gate: refs/tags/v* fires .github/workflows/release.yml, which builds and
 #      PUBLISHES a public GitHub Release. CLAUDE.md makes that maintainer-approval-gated per
 #      action; this makes it mechanical.          Override: NEXUS_RELEASE_APPROVED=1
-#   3. Identity: author AND committer email on every outgoing commit must be the project's.
+#   3. Identity: author AND committer email on every outgoing commit must be the project's,
+#      or an identity named in .githooks/contributors. DEFAULT DENY — an unlisted identity
+#      still refuses the push. The maintainer's own non-project identity is denied FIRST,
+#      from the machine's global gitconfig at runtime, so no allowlist entry can readmit it.
+#      No override: this one is not a judgement call.
 #   4. Content scrub: PER COMMIT across the whole pushed range — metadata, message and the
 #      ADDED lines of every commit — plus the endpoint diff. The patterns are NOT in this repo
 #      (this hook is public; committing the patterns would leak the very strings they
@@ -75,6 +79,20 @@ url="${2:-}"
 ZERO="0000000000000000000000000000000000000000"
 IDENT="kd9taw@protonmail.com"
 PAT="${NEXUS_LEAK_PATTERNS:-$HOME/.nexus-leak-patterns}"
+
+# Identities accepted besides the project identity. Tracked and reviewable — see the header
+# of that file for why default-deny is kept. Overridable for the regression suite only.
+CONTRIB="${NEXUS_CONTRIBUTORS:-$(git rev-parse --show-toplevel 2>/dev/null)/.githooks/contributors}"
+
+# The maintainer's OTHER identity — the global gitconfig is a work identity here. Taken from
+# the machine at runtime so the value never lands in this public repo, and denied in 3a ahead
+# of the allowlist. Empty (no global config) simply means 3a has nothing to match, and 3b's
+# default deny still stands.
+PRIVATE_IDENT="${NEXUS_PRIVATE_IDENT-$(git config --global user.email 2>/dev/null || true)}"
+
+# Scratch for the allowlist; removed on exit however the hook leaves.
+tmp_allow=$(mktemp "${TMPDIR:-/tmp}/nexus-prepush-allow.XXXXXX")
+trap 'rm -f "$tmp_allow"' EXIT
 
 # Third-party licence BODY text: phrases that appear in a licence itself and never in our own
 # source. Verified 2026-08-07 across the whole tree — the only files that match are the nine
@@ -139,8 +157,34 @@ while read -r _lref lsha rref rsha; do
   git rev-list "${rspec[@]}" 2>/dev/null | grep -q . || continue
 
   # 3. Identity — author AND committer email on every outgoing commit.
-  bad=$(git log --format='%ae%n%ce' "${rspec[@]}" 2>/dev/null | sort -u | grep -vFx "$IDENT" || true)
-  [ -n "$bad" ] && fail "non-project identity in outgoing commits: $bad (repo config must be KD9TAW <$IDENT>)"
+  #
+  #    DEFAULT DENY, with a named allowlist. This used to demand the project identity on
+  #    every outgoing commit full stop, which is correct for the maintainer and wrong for
+  #    everyone else: it refused every external contribution, and could not be worked
+  #    around, because any branch built on main carries the contributor commits already in
+  #    main's history. It blocked PR #13 and PR #22 on 2026-08-08.
+  ids=$(git log --format='%ae%n%ce' "${rspec[@]}" 2>/dev/null | sort -u)
+
+  # 3a. DENY FIRST — the maintainer's OTHER identity (the global gitconfig is a work
+  #     identity). Read from the machine at runtime so the value is never written into this
+  #     public repo, and checked BEFORE the allowlist so no allowlist entry can readmit it.
+  #     This is the leak the whole gate exists for; keep it ahead of 3b.
+  if [ -n "$PRIVATE_IDENT" ] && [ "$PRIVATE_IDENT" != "$IDENT" ] \
+     && printf '%s\n' "$ids" | grep -qFx "$PRIVATE_IDENT"; then
+    fail "outgoing commits carry the maintainer's non-project identity. This is the leak the
+pre-push gate exists to stop, and the contributor allowlist deliberately cannot admit it.
+Fix the history (rebase/amend) — a follow-up commit does not unpublish an author line."
+  fi
+
+  # 3b. ALLOW — the project identity, plus identities named in .githooks/contributors.
+  #     Anything else still refuses the push: an unexpected author is worth stopping on.
+  allow="$tmp_allow"
+  printf '%s\n' "$IDENT" > "$allow"
+  [ -f "$CONTRIB" ] && sed -e 's/#.*//' -e 's/[[:space:]]//g' "$CONTRIB" | grep -v '^$' >> "$allow"
+  bad=$(printf '%s\n' "$ids" | grep -vFxf "$allow" || true)
+  [ -n "$bad" ] && fail "unknown identity in outgoing commits: $(printf '%s' "$bad" | tr '\n' ' ')
+Your own commits must be KD9TAW <$IDENT> (check the repo-local user.email).
+A genuine outside contributor is added, deliberately, to .githooks/contributors."
 
   # 4a. Metadata + commit messages, PER COMMIT across the range (whole text — a pattern here
   #     is a leak whichever way it points).

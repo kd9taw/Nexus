@@ -1,0 +1,37 @@
+# Contributor identities the pre-push identity gate accepts, besides the project identity
+# (KD9TAW <kd9taw@protonmail.com>).
+#
+# WHY THIS FILE EXISTS. Check 3 of .githooks/pre-push used to demand that EVERY outgoing
+# commit — author and committer — carry the project identity. That is right for the
+# maintainer's own commits and wrong for everyone else's: it refused every external
+# contribution outright. It blocked the merge of PR #13 and PR #22 on 2026-08-08, and it
+# could not have been worked around locally, because a push of any branch built on main
+# also carries the contributor commits already in main's history.
+#
+# WHAT IT DOES NOT DO. This is NOT a relaxation to "any identity passes". The gate is still
+# DEFAULT DENY: an identity that is not the project identity and not listed here still
+# refuses the push. Adding a line is a deliberate act, which is the point — an unexpected
+# author is exactly the signal worth stopping on.
+#
+# THE MAINTAINER'S OTHER IDENTITY CAN NEVER BE ADMITTED HERE. The hook reads it from the
+# machine's global gitconfig at runtime and denies it BEFORE consulting this file, so no
+# entry below can re-admit it. That ordering is deliberate; do not reverse it. The private
+# value is never written into this repo — the repo is public.
+#
+# The content scrub (check 4) still runs over every contributor commit's metadata, message
+# and added lines. Being listed here buys an identity nothing except the right to appear as
+# an author.
+#
+# This gate is about WHOSE NAME is on a commit, never about whether the code is any good.
+# Contributed code still goes through PR review, CI, cargo-deny and the licence/NOTICE
+# guard. Do not read a name here as "this person's patches are pre-approved".
+#
+# These addresses are already public in the commit metadata of this repo's history; listing
+# them here exposes nothing new. One email per line, # starts a comment.
+
+# PR #4 — .gitattributes / Windows clone fix; PR #13 — .deb runtime dependencies
+justinjohnson256@gmail.com
+
+# PR #16 — macOS Hamlib discovery; PR #22 — macOS microphone usage description;
+# the TX drive live-apply and tune-carrier work
+g0fqb1@gmail.com
