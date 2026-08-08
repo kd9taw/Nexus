@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FT8 and FT4 were putting a six-character grid square on the air.** A standard FT8 or FT4
+  message has room for four characters of locator and no more, so if you had set a six-character
+  grid in Settings, your calls to another station carried something the message format cannot hold.
+  The station you were working could not decode it as a grid at all, which means their software had
+  nothing to auto-reply to and the contact stalled on their side for a reason that looked like
+  nothing at all on yours. Curiously your CQ was fine — that path already trimmed it — so this only
+  bit once you actually answered somebody.
+
+  Nexus now sends four characters, the same as WSJT-X, which trims to four in exactly one place for
+  exactly this reason. Your settings and your log are untouched: a six-character locator is correct
+  in both, and it is only what leaves the antenna that is cut. Reported by kr4fqg.
+
+### Fixed
+
 - **macOS: CAT could fail to connect even with Hamlib installed via Homebrew.** A Finder/Dock-
   launched app is started by launchd with a fixed `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin` —
   never the interactive shell's `PATH`, so a Homebrew `rigctld` (`/opt/homebrew/bin` on Apple
