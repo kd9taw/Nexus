@@ -64,6 +64,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Nexus reopens at the size and the place you left it.** The main window went back to its stock
+  1200×720, centred, on every single launch — resize it to suit your screen, quit, and the next
+  start threw that away. It was most visible to operators running a manual UI scale on a 4K display,
+  because the scale itself *was* being remembered: the app came back at 150% in a window sized for
+  100%, the wrong shape for the setting it had just restored. The size was in fact being lost at
+  every scale; the scale mismatch only made it obvious. Nexus now records the window's size and
+  position when you close it and restores both next time, per radio, so two rigs do not fight over
+  one size. Maximized stays maximized, and un-maximizing afterwards gives you back the size you had
+  before rather than the whole screen; closing while minimized keeps your last real size rather than
+  the minimized one. Nothing is replayed blindly: a window saved on a monitor you have since
+  unplugged, or saved bigger than the display you are sitting at today, opens centred and clamped to
+  the screen you actually have instead of off-screen or overhanging — the main window is the whole
+  app, so stranding it where you cannot reach it would leave no way back. The box is applied before
+  the window is drawn, so there is no open-then-jump.
+
+  *(This entry was missing when 1.0.2 shipped — the fix was in the release, the note was not. The
+  wording is Justin G0KSC's, from the parallel fix he sent as PR #11, written before either of us
+  knew the other was on it.)*
+
 - **An FT8 QSO between two callsigns the message format cannot carry together never finished — the
   two stations traded the same transmission back and forth until an operator gave up.** Nine of the
   sixteen combinations of callsign shapes could not complete a contact. The one most people meet is
