@@ -216,13 +216,20 @@ export function CockpitHeader({
               max={power.unit === '%' ? 100 : 1}
               step={power.unit === '%' ? 1 : 0.01}
               // Drive-unit sliders (tx_level, 0-1) use a square-law curve between slider
-              // POSITION and the underlying level: position² -> level, √level -> position. The
-              // real hardware-usable drive range (0 up to just past where ALC engages) sits in
-              // only the bottom ~15-20% of a linear slider, so this spreads that critical
-              // region across most of the travel. The '%' RF-power sliders (Phone/SSTV) are a
-              // different backend value entirely and stay linear. What tx_level itself means is
-              // completely unchanged — only how far the slider travels to reach a given level.
-              value={power.unit === 'drive' ? Math.sqrt(power.value) : power.value}
+              // POSITION and the underlying level: position^2 -> level, sqrt(level) ->
+              // position. The real hardware-usable drive range (0 up to just past where ALC
+              // engages) sits in only the bottom ~15-20% of a linear slider, so this spreads
+              // that critical region across most of the travel. The '%' RF-power sliders
+              // (Phone/SSTV) are a different backend value entirely and stay linear. What
+              // tx_level itself means is completely unchanged - only how far the slider
+              // travels to reach a given level. Rounded to the 0.01 step grid: an unrounded
+              // sqrt() rarely lands on a step boundary, and a step-mismatched range input
+              // value fails HTML5 constraint validation.
+              value={
+                power.unit === 'drive'
+                  ? Math.round(Math.sqrt(power.value) * 100) / 100
+                  : power.value
+              }
               onChange={(e) => {
                 const raw = Number(e.target.value)
                 power.onChange(power.unit === 'drive' ? raw ** 2 : raw)

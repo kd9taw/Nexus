@@ -4110,13 +4110,18 @@ export function SettingsPanel({
                   min="0"
                   max="1"
                   step="0.01"
-                  // Slider POSITION is not tx_level directly: position² -> level, √level ->
-                  // position. The real hardware-usable drive range (0 up to just past where
+                  // Slider POSITION is not tx_level directly: position^2 -> level, sqrt(level)
+                  // -> position. The real hardware-usable drive range (0 up to just past where
                   // ALC engages) sits in only the bottom ~15-20% of a linear slider, so a
                   // square-law curve spreads that critical region across most of the travel.
-                  // The stored/persisted tx_level meaning is completely unchanged — only how
-                  // far the slider has to travel to reach a given level.
-                  value={String(Math.sqrt(form.txLevel))}
+                  // The stored/persisted tx_level meaning is completely unchanged - only how
+                  // far the slider has to travel to reach a given level. Rounded to the 0.01
+                  // step grid: an unrounded sqrt() rarely lands on a step boundary, and a
+                  // range input with a step-mismatched value fails HTML5 constraint validation
+                  // - which silently blocks the WHOLE settings form's submit, not just this
+                  // field, the moment this component mounts with a level that doesn't happen
+                  // to have a perfect-square root.
+                  value={String(Math.round(Math.sqrt(form.txLevel) * 100) / 100)}
                   onChange={(e) => {
                     const level = Number(e.target.value) ** 2
                     updateNum('txLevel', level)
