@@ -113,6 +113,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Entities are untouched and were already right: European Russia, Asiatic Russia, Kaliningrad and
   Franz Josef Land are four separate DXCC entities and are each tracked on their own.
 
+- **A station Nexus had given up calling stayed armed to transmit, with no time limit.** When you
+  call a station in FT8 or FT4 and it never answers, Nexus stops calling after eight overs. It kept
+  the QSO open while it waited, which is what you want — but the TX watchdog, the six-minute limit
+  that exists to stop an unattended radio, was only ever checked at the moment an over was being
+  built. A held-back over is not built, so the clock was never looked at. The QSO sat there armed
+  with Enable TX still lit, and if that station was decoded again later — minutes or hours — Nexus
+  answered it without you touching anything.
+
+  On the shipping defaults the give-up always came first: eight FT8 overs is four minutes against a
+  six-minute watchdog, so on a called station the watchdog could not fire at all. The watchdog now
+  runs while a station is being held back, so the six minutes you set is the six minutes you get,
+  and when it expires TX disarms as it does everywhere else. Nothing about the message sequence,
+  slot timing or when Nexus decides to stop calling has changed — only that being stopped is now
+  bounded by the clock. If you are simply monitoring with TX armed and waiting for a decode, you are
+  unaffected: the watchdog still does not start until there is something it is holding back.
+
 ### Changed
 
 - **Your recordings and your received SSTV pictures now live where you would look for them.**
@@ -154,23 +170,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too, and the button creates the folder if it does not exist yet rather than doing nothing.
 
 ## [1.0.2] — 2026-08-06
-
-- **A station Nexus had given up calling stayed armed to transmit, with no time limit.** When you
-  call a station in FT8 or FT4 and it never answers, Nexus stops calling after eight overs. It kept
-  the QSO open while it waited, which is what you want — but the TX watchdog, the six-minute limit
-  that exists to stop an unattended radio, was only ever checked at the moment an over was being
-  built. A held-back over is not built, so the clock was never looked at. The QSO sat there armed
-  with Enable TX still lit, and if that station was decoded again later — minutes or hours — Nexus
-  answered it without you touching anything.
-
-  On the shipping defaults the give-up always came first: eight FT8 overs is four minutes against a
-  six-minute watchdog, so on a called station the watchdog could not fire at all. The watchdog now
-  runs while a station is being held back, so the six minutes you set is the six minutes you get,
-  and when it expires TX disarms as it does everywhere else. Nothing about the message sequence,
-  slot timing or when Nexus decides to stop calling has changed — only that being stopped is now
-  bounded by the clock. If you are simply monitoring with TX armed and waiting for a decode, you are
-  unaffected: the watchdog still does not start until there is something it is holding back.
-
 
 ### Added
 
