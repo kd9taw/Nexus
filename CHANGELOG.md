@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Your recordings and your received SSTV pictures now live where you would look for them.**
+  Recordings go to **Documents ▸ Nexus ▸ Recordings** and received SSTV images to
+  **Pictures ▸ Nexus SSTV**. Both used to sit in Nexus's own configuration folder, which is hidden,
+  is not the same place for a second radio, and is not somewhere anyone thinks to look — several
+  people concluded recording was simply broken, and they were reasonable to. Pictures you were sent
+  are worth being able to find, open and share without going through the app.
+
+  **Your existing SSTV gallery comes with you.** The first time you start this version, the images
+  and their index are moved into the new folder, so the gallery looks exactly as it did — nothing
+  is left stranded and nothing needs re-importing. Recordings you already have are left where they
+  are rather than moved out from under you; only new ones go to Documents. If Windows cannot tell
+  Nexus where your Documents or Pictures folders are, it carries on using the old location rather
+  than guessing at a path.
+
+  Voice-keyer messages are unchanged. Those are app state rather than something you browse — they
+  are referenced from your settings by name, and the keyer already has its own recording controls.
+
 ### Fixed
 
 - **A QSO recording that could not be saved said nothing at all.** Both steps — creating the folder

@@ -1977,11 +1977,85 @@ fn all_txt_location() -> String {
 /// as `<UTC stamp>_<mode>.bmp` with a `gallery.json` metadata sidecar beside
 /// the images (written by the `sstvrx` decode thread).
 fn sstv_gallery_dir() -> PathBuf {
+    match PICTURES_DIR.get() {
+        Some(p) => p.join("Nexus SSTV"),
+        None => legacy_sstv_gallery_dir(),
+    }
+}
+
+/// The pre-Pictures location, `<local data>/Nexus/sstv-gallery`. Still needed after the move: it is
+/// the fallback when Pictures cannot be resolved, and it is what [`migrate_sstv_gallery`] reads.
+fn legacy_sstv_gallery_dir() -> PathBuf {
     all_txt_path()
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
         .join("sstv-gallery")
+}
+
+/// Bring an existing SSTV gallery to `Pictures/Nexus SSTV` on the first launch after the move.
+///
+/// ⚠️ WHY THIS IS NOT OPTIONAL. `gallery.json` lives INSIDE the gallery folder and every entry
+/// holds an ABSOLUTE path. Point the decoder at Pictures without doing anything else and the app
+/// reads a fresh, empty index — to the operator their entire received-picture history has vanished,
+/// even though every file is still on disk. Images people were sent are not something to be casual
+/// with.
+///
+/// Runs before the gallery seed in `setup`, and only when the destination has no index yet, so it
+/// happens once and a later launch is a no-op. Best-effort throughout: any failure leaves the old
+/// folder untouched and the app simply starts with an empty new gallery rather than a broken one.
+fn migrate_sstv_gallery() {
+    migrate_sstv_gallery_between(&legacy_sstv_gallery_dir(), &sstv_gallery_dir());
+}
+
+/// [`migrate_sstv_gallery`] between two explicit folders — the testable core, since the real pair
+/// is derived from the operator's own Pictures folder and a test cannot redirect it.
+fn migrate_sstv_gallery_between(from: &std::path::Path, to: &std::path::Path) {
+    if from == to || to.join("gallery.json").exists() || !from.join("gallery.json").exists() {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(from.join("gallery.json")) else {
+        return;
+    };
+    let Ok(mut entries) = serde_json::from_str::<Vec<tempo_app::dto::SstvGalleryEntry>>(&text)
+    else {
+        return;
+    };
+    if std::fs::create_dir_all(to).is_err() {
+        return;
+    }
+    let mut moved = 0usize;
+    for e in &mut entries {
+        let src = PathBuf::from(&e.path);
+        let Some(name) = src.file_name() else { continue };
+        // An entry whose file is already gone is left pointing where it always pointed. It renders
+        // exactly as it did before — this is a move, not the gallery reconciliation that issue #23
+        // is about, and quietly dropping someone's rows here would be answering that question by
+        // accident.
+        if !src.is_file() {
+            continue;
+        }
+        let dst = to.join(name);
+        // Rename first (instant on one volume); copy+remove when Documents and the config dir are
+        // on different drives, which is ordinary on a station with a small SSD.
+        let ok = std::fs::rename(&src, &dst).is_ok()
+            || (std::fs::copy(&src, &dst).is_ok() && {
+                let _ = std::fs::remove_file(&src);
+                true
+            });
+        if ok {
+            e.path = dst.to_string_lossy().into_owned();
+            moved += 1;
+        }
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&entries) {
+        if std::fs::write(to.join("gallery.json"), json).is_ok() {
+            // Only once the new index is safely written: the old one is what we would need to try
+            // again if anything above failed.
+            let _ = std::fs::remove_file(from.join("gallery.json"));
+            eprintln!("nexus: moved {moved} SSTV image(s) to {}", to.display());
+        }
+    }
 }
 
 /// Open the ALL.TXT location so the operator can find the decode log: reveal the file
@@ -2069,15 +2143,32 @@ fn voice_dir() -> PathBuf {
         .join("voice")
 }
 
-/// Directory for QSO recordings (audio bridge): `<settings dir>/recordings` (12 kHz mono WAVs).
+/// Where per-QSO recordings land: **`Documents/Nexus/Recordings`**.
 ///
-/// ⚠️ THIS IS PER-PROFILE and that is the whole of the "recording is not writing the file" report
-/// (#24). A second radio runs under a profile-suffixed config dir (`tempo-r<id>`), so the
-/// recordings for it are NOT beside the first radio's — and the folder does not exist at all until
-/// the first recording lands. An operator looking in the obvious place finds nothing and concludes
-/// the write failed. `recordings_location` exists so the panel can show the resolved path instead
-/// of leaving them to guess.
+/// These are the operator's own files — audio of their contacts, which they may want to keep, send
+/// to someone, or clip. They used to live under the per-profile config directory, which is both
+/// hidden and (because it is per profile) somewhere different for a second radio; between those two
+/// an operator looking in the obvious place found nothing and reasonably concluded recording was
+/// broken (#24). Documents rather than Music deliberately: a Music folder is media-library
+/// territory and these WAVs would be indexed into playlists.
+///
+/// One shared folder for every radio profile, not one each. The filename already carries the call
+/// and a millisecond stamp, so there is nothing to collide, and an operator hunting last night's
+/// contact should not have to know which profile was active.
+///
+/// Falls back to the legacy location when the Documents folder could not be resolved — and in
+/// tests, where [`DOCUMENTS_DIR`] is never set.
 fn recordings_dir() -> PathBuf {
+    match DOCUMENTS_DIR.get() {
+        Some(d) => d.join("Nexus").join("Recordings"),
+        None => legacy_recordings_dir(),
+    }
+}
+
+/// The pre-Documents location: `<settings dir>/recordings`. Kept because it is the fallback when
+/// Documents cannot be resolved, and because it is where an existing station's recordings already
+/// are — nothing moves them, so they stay exactly where that operator last saw them.
+fn legacy_recordings_dir() -> PathBuf {
     settings_path()
         .parent()
         .map(|p| p.to_path_buf())
@@ -4087,6 +4178,16 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
 /// `current_exe()` alone is what made the DeepCW model invisible on Linux
 /// while it shipped in the bundle.
 static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// The operator's own Documents and Pictures folders, captured once in `setup` from Tauri's path
+/// resolver. Free functions like [`recordings_dir`] cannot reach an `AppHandle`, and these must NOT
+/// be guessed from `USERPROFILE\Documents`: both are redirectable known folders and OneDrive
+/// commonly moves them, so a guess writes somewhere the operator does not consider theirs.
+///
+/// Unset outside a running app — tests and any non-Tauri context — where both fall back to the
+/// legacy in-config location, which keeps them hermetic and writes nothing into a real home dir.
+static DOCUMENTS_DIR: OnceLock<PathBuf> = OnceLock::new();
+static PICTURES_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// The bundled TLE seed snapshot — `resources/tles/tles.json`, the mirror
 /// payload verbatim. Resource dir first (the packaged app), then the
@@ -15122,6 +15223,17 @@ pub fn run() {
             if let Ok(res) = app.path().resource_dir() {
                 let _ = RESOURCE_DIR.set(res);
             }
+            // The operator-facing folders. Captured here for the same reason as the resource dir:
+            // the functions that need them are free functions with no handle. A failure to resolve
+            // is not an error — the legacy in-config location is still a working default.
+            if let Ok(d) = app.path().document_dir() {
+                let _ = DOCUMENTS_DIR.set(d);
+            }
+            if let Ok(p) = app.path().picture_dir() {
+                let _ = PICTURES_DIR.set(p);
+            }
+            // Bring an existing gallery along to Pictures before anything reads the index below.
+            migrate_sstv_gallery();
             // Enforce the minimum window size at runtime too. The tauri.conf `minWidth`/
             // `minHeight` are set (both — Tauri no-ops minWidth alone), but re-applying here
             // in DPI-aware logical px is belt-and-suspenders across platforms. 900x600 is the
@@ -15286,6 +15398,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
+        migrate_sstv_gallery_between,
         write_qso_wav_in,
        assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
         engine_lock, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
@@ -15305,6 +15418,83 @@ mod tests {
     /// dependency), cleaned up by the caller.
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("nexus-test-{}-{name}", std::process::id()))
+    }
+
+    /// The SSTV gallery move (`Pictures/Nexus SSTV`) must bring an existing gallery WITH it.
+    ///
+    /// `gallery.json` lives inside the folder and every entry holds an absolute path, so pointing
+    /// the decoder somewhere new without migrating reads a fresh empty index — to the operator
+    /// their whole received-picture history has vanished, though every file is still on disk.
+    #[test]
+    fn migrating_the_sstv_gallery_moves_the_files_and_rewrites_their_paths() {
+        let from = scratch("sstv-from");
+        let to = scratch("sstv-to");
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
+        std::fs::create_dir_all(&from).unwrap();
+
+        let img = from.join("2026-08-08T00-00-00Z_Scottie1.bmp");
+        std::fs::write(&img, b"BM-not-really-a-bitmap").unwrap();
+        let gone = from.join("deleted-by-hand.bmp"); // indexed but no longer on disk
+        let entries = format!(
+            r#"[{{"path":{:?},"mode":"Scottie 1","finishedUtc":"2026-08-08T00:00:00Z","freqMhz":14.23,"lines":256}},
+                {{"path":{:?},"mode":"Martin 1","finishedUtc":"2026-08-07T00:00:00Z","freqMhz":14.23,"lines":256}}]"#,
+            img.to_string_lossy(),
+            gone.to_string_lossy(),
+        );
+        std::fs::write(from.join("gallery.json"), entries).unwrap();
+
+        migrate_sstv_gallery_between(&from, &to);
+
+        // The file moved, and the index that points at it moved with it.
+        let moved = to.join("2026-08-08T00-00-00Z_Scottie1.bmp");
+        assert!(moved.is_file(), "the image must be in the new folder");
+        assert!(!img.exists(), "and not left behind in the old one");
+        let text = std::fs::read_to_string(to.join("gallery.json")).expect("new index written");
+        assert!(
+            text.contains(&moved.to_string_lossy().replace('\\', "\\\\")),
+            "the entry must point at the NEW path, or the gallery renders nothing: {text}"
+        );
+        assert!(
+            text.contains("Martin 1"),
+            "an entry whose file was already gone stays in the index untouched — this is a move, \
+             not the gallery reconciliation issue #23 is about"
+        );
+        assert!(
+            !from.join("gallery.json").exists(),
+            "the old index is removed only after the new one is safely written"
+        );
+
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
+    }
+
+    /// Idempotent: a second launch must not run again and must not disturb what is there.
+    #[test]
+    fn the_gallery_migration_runs_once_and_never_again() {
+        let from = scratch("sstv-from2");
+        let to = scratch("sstv-to2");
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.join("gallery.json"), "[]").unwrap();
+        std::fs::write(to.join("gallery.json"), r#"[{"already":"here"}]"#).unwrap();
+
+        migrate_sstv_gallery_between(&from, &to);
+
+        assert_eq!(
+            std::fs::read_to_string(to.join("gallery.json")).unwrap(),
+            r#"[{"already":"here"}]"#,
+            "a destination that already has an index is left completely alone"
+        );
+        assert!(
+            from.join("gallery.json").exists(),
+            "and the source is not touched either"
+        );
+
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
     }
 
     /// ISSUE #24 — "recording is not writing the file".

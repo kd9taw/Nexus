@@ -6288,8 +6288,8 @@ export function SettingsPanel({
                     Auto-records the last ~60 s of RX audio on log.
                     {recordingsPath && (
                       <>
-                        {' '}Saved in <code>{recordingsPath}</code> — this folder is per radio
-                        profile, and it is only created once the first recording lands.
+                        {' '}Saved in <code>{recordingsPath}</code>, created the first time
+                        you record.
                       </>
                     )}
                   </span>
