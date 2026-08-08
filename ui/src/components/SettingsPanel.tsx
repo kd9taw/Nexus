@@ -842,8 +842,15 @@ export function SettingsPanel({
 
   // Apply TX drive (Pwr) to the LIVE radio, the SAME value as the cockpit "Pwr" slider —
   // set_tx_level persists + updates the snapshot, so the cockpit reflects it immediately.
-  // Commit on release (not per drag tick) to avoid disk-thrash.
-  const applyTxLevelLive = (value: number) => {
+  // Throttled to ~16 Hz while dragging (not gated entirely on release): set_tx_level writes
+  // the whole settings.json to disk on every call, so applying on every onChange tick would
+  // trade release-only jank for disk-thrash on every drag pixel. `force` (pointerUp/keyUp)
+  // bypasses the throttle window so the final settled value is never silently dropped by it.
+  const txLevelThrottleRef = useRef(0)
+  const applyTxLevelLive = (value: number, force = false) => {
+    const now = Date.now()
+    if (!force && now - txLevelThrottleRef.current < 60) return
+    txLevelThrottleRef.current = now
     void setTxLevel(value).catch(() => pushToast('Could not set TX power', 'error'))
   }
 
@@ -4103,10 +4110,24 @@ export function SettingsPanel({
                   min="0"
                   max="1"
                   step="0.01"
-                  value={String(form.txLevel)}
-                  onChange={(e) => updateNum('txLevel', Number(e.target.value))}
-                  onPointerUp={(e) => applyTxLevelLive(Number((e.target as HTMLInputElement).value))}
-                  onKeyUp={(e) => applyTxLevelLive(Number((e.target as HTMLInputElement).value))}
+                  // Slider POSITION is not tx_level directly: position² -> level, √level ->
+                  // position. The real hardware-usable drive range (0 up to just past where
+                  // ALC engages) sits in only the bottom ~15-20% of a linear slider, so a
+                  // square-law curve spreads that critical region across most of the travel.
+                  // The stored/persisted tx_level meaning is completely unchanged — only how
+                  // far the slider has to travel to reach a given level.
+                  value={String(Math.sqrt(form.txLevel))}
+                  onChange={(e) => {
+                    const level = Number(e.target.value) ** 2
+                    updateNum('txLevel', level)
+                    applyTxLevelLive(level)
+                  }}
+                  onPointerUp={(e) =>
+                    applyTxLevelLive(Number((e.target as HTMLInputElement).value) ** 2, true)
+                  }
+                  onKeyUp={(e) =>
+                    applyTxLevelLive(Number((e.target as HTMLInputElement).value) ** 2, true)
+                  }
                   aria-label="Transmit drive level"
                 />
                 <span className="settings-hint">

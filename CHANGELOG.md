@@ -48,6 +48,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The TX Level (Pwr) slider lagged several seconds behind what was actually going out, and its
+  useful range was crushed into the bottom of the travel.** Holding Tune while trimming drive
+  against a rig's ALC meter, the slider looked like it was doing nothing and then suddenly
+  jumped: the tune carrier was generated in fixed 40ms chunks regardless of how often the
+  driving loop actually ticked, so the queued backlog grew without bound for as long as Tune
+  was held — audio reaching the rig could run several seconds stale. Separately, the Settings
+  panel's own Tx Power slider only applied its value on release, not while dragging, so it gave
+  no feedback until you let go, unlike the matching cockpit "Pwr" slider. TX drive now tracks
+  both sliders live while dragging. And now that it does: the drive range that actually matters
+  on real hardware — 0 up to just past where ALC engages — turned out to live in only the bottom
+  15-20% of the old linear slider, so both sliders now use a curve that gives that range most of
+  the travel. What a saved drive level means is unchanged either way.
+
 - **FT8 and FT4 were putting a six-character grid square on the air.** A standard FT8 or FT4
   message has room for four characters of locator and no more, so if you had set a six-character
   grid in Settings, your calls to another station carried something the message format cannot hold.
