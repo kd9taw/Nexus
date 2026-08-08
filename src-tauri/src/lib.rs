@@ -15734,6 +15734,62 @@ mod tests {
     /// reaches the engine without taking it as state.
     /// Verified failing first: it named all 149 offenders before the sweep, and
     /// re-named the six the name-keyed version missed.
+    /// ⭐ THE BUNDLE IDENTIFIER IS A LANDMINE, AND THIS IS THE TRIPWIRE. It is still
+    /// `com.kd9taw.tempo` while the product is called Nexus, so it reads like leftover
+    /// tidying — and renaming it would be one of the most destructive one-line changes
+    /// available in this repo, on every installed machine at once, silently.
+    ///
+    /// WHAT IT OWNS. WebView2 keys its data folder on the identifier, and 37 localStorage
+    /// keys live in that folder — including real operator data with no Rust side and no
+    /// other copy: `nexus.memory.bank.v2` (the radio memory channels), `nexus.watchlist`,
+    /// `nexus.sats.chasing` / `nexus.dxped.chasing` (the chase sets that drive the schedule
+    /// and the alarms), `nexus.sats.alarms` / `nexus.dxped.alarms` (armed wake-me alarms),
+    /// `nexus.profiles`, and `nexus-ui-scale-mode` / `nexus-ui-scale-cap`, which are
+    /// accessibility settings. A rename orphans all of it: no error, no migration, nothing
+    /// to recover, and the operator simply finds their memories gone after an update.
+    ///
+    /// AND IT IS NOW IN SHIPPED PROSE. The macOS microphone fix tells operators to run
+    /// `tccutil reset Microphone com.kd9taw.tempo` to clear a stuck permission denial. That
+    /// string is in the CHANGELOG, so a rename also invalidates published instructions
+    /// people will still be following.
+    ///
+    /// So the identifier is not cosmetic and it is not free. If it is ever to change, the
+    /// migration ships FIRST — read the old origin's keys and write them to the new one —
+    /// and this test changes in the same commit as the deliberate act it then is, never as
+    /// a drive-by fixup. `settings.json` is unaffected either way: it is a real file under
+    /// the config dir, not browser storage.
+    #[test]
+    fn the_bundle_identifier_is_pinned_because_renaming_it_wipes_operator_data() {
+        let conf = include_str!("../tauri.conf.json");
+        let v: serde_json::Value = serde_json::from_str(conf).expect("tauri.conf.json parses");
+        assert_eq!(
+            v["identifier"].as_str(),
+            Some("com.kd9taw.tempo"),
+            "the bundle identifier changed — see this test's comment. Renaming it orphans \
+             every localStorage key on every installed machine (memory channels, watchlist, \
+             chase sets, armed alarms, accessibility scale) with no migration and nothing to \
+             recover, and invalidates the tccutil line already published in the CHANGELOG."
+        );
+    }
+
+    /// The pin above is only worth having if it can actually fail. Guard the guard: prove
+    /// the file really is being read and really is being parsed, so a future refactor that
+    /// broke the path or the key would show up here rather than leaving the assertion
+    /// above passing against nothing.
+    #[test]
+    fn the_identifier_pin_reads_the_real_config() {
+        let conf = include_str!("../tauri.conf.json");
+        let v: serde_json::Value = serde_json::from_str(conf).unwrap();
+        assert!(
+            v["identifier"].is_string(),
+            "tauri.conf.json has no `identifier` key — the pin above would be vacuous"
+        );
+        // A key that is definitely there, and one that is definitely not: if BOTH of these
+        // behaved the same way, the lookup would be broken rather than the config wrong.
+        assert!(v["productName"].is_string());
+        assert!(v["nexus_no_such_key"].is_null());
+    }
+
     #[test]
     fn no_engine_locking_command_runs_on_the_ui_thread() {
         let src = include_str!("lib.rs");
