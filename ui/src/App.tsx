@@ -466,6 +466,17 @@ export default function App() {
     )
   }, [snap?.radio.radioConfigWarning])
 
+  // A per-QSO recording that could not be written. The contact IS logged — only the audio failed —
+  // so this is a warning in the lane rather than an error on the log action, and it names the full
+  // path because "it did not save" without saying where is exactly the report that prompted it.
+  useEffect(() => {
+    const warn = snap?.radio.recordingWarning
+    setStatus(
+      'recording',
+      warn ? { tier: 'warning', message: 'RECORDING', detail: warn } : null,
+    )
+  }, [snap?.radio.recordingWarning])
+
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —
   // the operator SEES every upload land (or fail) regardless of which path

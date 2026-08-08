@@ -1097,6 +1097,9 @@ export interface RadioStatus {
   audioError?: string | null
   /** Set when two radios are on the same serial COM port (explains a red pill). */
   radioConfigWarning?: string | null
+  /** The last per-QSO recording failed, with the path it failed at. Surfaced in the status lane;
+   * cleared by the next recording that succeeds. */
+  recordingWarning?: string | null
   /** Transmit on even/"1st" slots (true) or odd/"2nd" (false). */
   txEven: boolean
   /** Smart auto-cycle on: answering a heard station auto-picks the opposite cycle

@@ -99,6 +99,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Entities are untouched and were already right: European Russia, Asiatic Russia, Kaliningrad and
   Franz Josef Land are four separate DXCC entities and are each tracked on their own.
 
+### Changed
+
+- **Your recordings and your received SSTV pictures now live where you would look for them.**
+  Recordings go to **Documents ▸ Nexus ▸ Recordings** and received SSTV images to
+  **Pictures ▸ Nexus SSTV**. Both used to sit in Nexus's own configuration folder, which is hidden,
+  is not the same place for a second radio, and is not somewhere anyone thinks to look — several
+  people concluded recording was simply broken, and they were reasonable to. Pictures you were sent
+  are worth being able to find, open and share without going through the app.
+
+  **Your existing SSTV gallery comes with you.** The first time you start this version, the images
+  and their index are moved into the new folder, so the gallery looks exactly as it did — nothing
+  is left stranded and nothing needs re-importing. Recordings you already have are left where they
+  are rather than moved out from under you; only new ones go to Documents. If Windows cannot tell
+  Nexus where your Documents or Pictures folders are, it carries on using the old location rather
+  than guessing at a path.
+
+  Voice-keyer messages are unchanged. Those are app state rather than something you browse — they
+  are referenced from your settings by name, and the keyer already has its own recording controls.
+
+### Fixed
+
+- **A QSO recording that could not be saved said nothing at all.** Both steps — creating the folder
+  and writing the file — threw their result away, so a full disk, a read-only folder or a
+  permissions problem produced no file, no message and nothing in any log. The only evidence was an
+  empty folder, which is also exactly what a perfectly healthy Nexus looks like before your first
+  recording lands. If a recording cannot be written you now get told, and the message names the
+  full path it was trying to write, so you can see straight away whether it is a permissions
+  problem or you were looking in the wrong place. The contact itself is unaffected — it is logged
+  either way; only the audio failed.
+
+### Added
+
+- **Settings now shows you where recordings actually go, with a button to open the folder.** This
+  is the other half of the same report, and probably the bigger half: the recordings folder lives
+  under the config directory *for that radio profile*, so a second radio keeps its recordings
+  somewhere else entirely, and the folder is not created at all until the first recording lands.
+  Between those two, an operator looking in the obvious place finds nothing and reasonably concludes
+  the feature is broken. The decode log has shown its path this way for a while; recordings do now
+  too, and the button creates the folder if it does not exist yet rather than doing nothing.
+
 ## [1.0.2] — 2026-08-06
 
 - **A station Nexus had given up calling stayed armed to transmit, with no time limit.** When you

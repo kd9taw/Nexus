@@ -1604,6 +1604,9 @@ pub struct Engine {
     /// Set by the radio loop when the sound card failed to open, so the UI can
     /// explain a blank waterfall instead of failing silently.
     audio_error: Option<String>,
+    /// The last per-QSO recording that failed, with the path. Set by the shell (which owns the
+    /// file write), carried out in the snapshot, cleared by the next recording that succeeds.
+    recording_warning: Option<String>,
     /// Coordinated-QSY ("move together") state machine — a SEPARATE, opt-in
     /// function. Fully inert unless `settings.qsy_enabled` is true, so the primary
     /// Chat/QSO/Field-Day paths are unaffected when the operator hasn't enabled it.
@@ -2984,6 +2987,7 @@ impl Engine {
             radio_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
+            recording_warning: None,
             qsy,
             rtty_armed: false,
             rtty_audio: Vec::new(),
@@ -10405,6 +10409,13 @@ impl Engine {
     }
 
     /// Set (or clear) the sound-card error surfaced to the UI.
+    /// Record the outcome of the last per-QSO recording write: `Some(msg)` when it failed (the
+    /// message names the full path), `None` when it succeeded. The shell calls this because the
+    /// shell owns the file I/O; the engine only carries it to the snapshot.
+    pub fn set_recording_warning(&mut self, warning: Option<String>) {
+        self.recording_warning = warning;
+    }
+
     pub fn set_audio_error(&mut self, err: Option<String>) {
         self.audio_error = err;
     }
@@ -10860,6 +10871,7 @@ impl Engine {
         }
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
+        s.radio.recording_warning = self.recording_warning.clone();
         s.radio.radio_config_warning =
             crate::settings::serial_port_conflicts(&self.settings.radios)
                 .or_else(|| {
