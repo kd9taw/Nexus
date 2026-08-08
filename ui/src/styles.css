@@ -687,16 +687,21 @@ button.nb-chip:hover {
 .ba-rows {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 .ba-row {
   display: grid;
   grid-template-columns: 44px 72px 82px minmax(96px, 1fr) 58px minmax(0, 1.2fr);
   gap: var(--space-2);
   align-items: center;
-  padding: var(--space-1) var(--space-2);
+  /* Density pass 2026-08-08, operator from the 1.0.4 bench run: "the text in the openings
+     and band advisor are too large, make them smaller so there is less scrolling". One step
+     down the scale AND a tighter row box — most of a row's height is its padding, not its
+     text, so the font alone would barely have moved it.
+     ~24px -> ~20px a row, about one extra band per six. */
+  padding: 1px var(--space-2);
   border-radius: var(--radius-sm);
-  font-size: var(--fs-label);
+  font-size: var(--fs-micro);
 }
 .ba-row:hover {
   background: var(--bg-elev);
@@ -14065,7 +14070,7 @@ button.cq-skiptx1.on {
   border-radius: 999px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-weight: 700;
   padding: 2px 10px;
   cursor: pointer;
@@ -14078,11 +14083,11 @@ button.cq-skiptx1.on {
 .openings-log-count {
   margin-left: auto;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-micro);
 }
 .openings-log-empty {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--fs-micro);
 }
 .openings-log-list {
   list-style: none;
@@ -14090,7 +14095,7 @@ button.cq-skiptx1.on {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   overflow-y: auto;
   min-height: 0;
 }
@@ -14098,8 +14103,13 @@ button.cq-skiptx1.on {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
-  padding: 3px 2px;
-  font-size: 12px;
+  /* Density pass 2026-08-08, operator from the 1.0.4 bench run: "the text in the openings
+     and band advisor are too large, make them smaller so there is less scrolling". One step
+     down the scale AND a tighter row box — most of a row's height is its padding, not its
+     text, so the font alone would barely have moved it.
+     Was a hardcoded 12px/3px; on the scale now so it tracks any future change. */
+  padding: 1px 2px;
+  font-size: var(--fs-micro);
   border-bottom: 1px solid var(--border-soft);
 }
 .openings-log-band {

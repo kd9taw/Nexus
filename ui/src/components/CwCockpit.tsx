@@ -47,6 +47,8 @@ import {
   setTune,
   setFrequency,
   haltTx,
+  startQsoRecording,
+  stopQsoRecording,
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
@@ -230,6 +232,21 @@ export function CwCockpit({
       return 100
     }
   })
+
+  // QSO recording. Phone has had this since the audio bridge landed; CW never got one, so the
+  // only way to record a CW contact was to switch cockpits. Same session-level toggle driven by
+  // the snapshot, so the TopBar REC badge and its stop work here identically.
+  const [recBusy, setRecBusy] = useState(false)
+  const recording = snap.radio.qsoRecording
+  const toggleRecord = () => {
+    if (recBusy) return
+    setRecBusy(true)
+    const fn = recording ? stopQsoRecording : startQsoRecording
+    fn()
+      .then((snapshot) => onSnap?.(snapshot))
+      .catch(() => pushToast(`Could not ${recording ? 'stop' : 'start'} recording`, 'error'))
+      .finally(() => setRecBusy(false))
+  }
   useEffect(() => {
     try {
       localStorage.setItem('nexus.cw.tuneStep', String(tuneStep))
@@ -1219,6 +1236,24 @@ export function CwCockpit({
             SPLIT ▲
           </span>
         )}
+        {/* Glyph only, and the same `.ph-rec` class Phone uses. This header already carries the
+            band picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the
+            rotator, and its own density note records that width here is what wraps it at 1024.
+            A bullet costs ~24px. The accessible name is explicit rather than left to the glyph. */}
+        <button
+          type="button"
+          className={`ph-rec${recording ? ' on' : ''}`}
+          onClick={toggleRecord}
+          disabled={recBusy}
+          aria-label={recording ? 'Stop recording this QSO' : 'Record QSO audio'}
+          title={
+            recording
+              ? 'Recording — click to stop recording this QSO'
+              : 'Record the received audio to a WAV in the recordings folder'
+          }
+        >
+          {recording ? '■' : '●'}
+        </button>
       </CockpitHeader>
 
       {keyerError && (

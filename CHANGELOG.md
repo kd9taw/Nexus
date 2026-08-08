@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CW can record a contact without switching cockpits.** Phone has had a record button since the
+  audio bridge landed and CW never got one, so recording a CW QSO meant leaving the cockpit to do
+  it. Same ● in the header, same stop in the top bar.
+
+### Changed
+
+- **The Openings and Band Advisor panes fit more on screen.** Both were set a size larger than they
+  needed and were costing more scrolling than the information warranted — about one extra row now
+  fits per six. The Openings log was also using hardcoded sizes rather than the app's text scale, so
+  it ignored the rest of the sizing system; it follows it now.
+
+### Added
+
 - **You can delete a received SSTV image from inside the app.** There was no delete anywhere — once
   a picture decoded it was permanent as far as Nexus was concerned, and the gallery only ever grew.
   Hover a thumbnail and a ✕ appears; it asks first, naming the picture rather than just "are you

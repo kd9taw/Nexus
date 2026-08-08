@@ -42,7 +42,7 @@
 // wraps to two rows the win is ~28px smaller than modelled and RIG_STRIP is the constant to
 // re-measure. Re-measure it; do not nudge it.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, screen } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import { loadSheets, css, pxOf, borderY, padY, marginY, lineBox, fontSizeOf, atToken } from '../cssCascade.testkit'
 import type { AppSnapshot } from '../types'
@@ -481,5 +481,30 @@ describe('the deleted chrome said nothing the frame does not say', () => {
     document.body.appendChild(bare)
     expect(padY(bare), 'the flatten leaked outside .pane-body').toBeGreaterThan(0)
     bare.remove()
+  })
+})
+
+describe('CW can record a contact without switching cockpits', () => {
+  // Reported from the 1.0.4 bench run: "the record button is now missing from cw and phone".
+  // Phone's is present and always has been — reduced to a bare ● by the 2026-08-04 density pass,
+  // which is why it reads as missing. CW's never existed at all, so recording a CW QSO meant
+  // leaving the cockpit. Same glyph, same snapshot-driven toggle, so the TopBar REC badge and the
+  // stop that lives there work identically in both.
+  it('the record control is in the header, and names itself for a screen reader', () => {
+    render(<CwCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} />)
+    const rec = screen.getByRole('button', { name: /record qso audio/i })
+    expect(rec).not.toBeNull()
+    // The glyph alone must never be the accessible name — a bare bullet says nothing.
+    expect(rec.getAttribute('aria-label')).toMatch(/record/i)
+    expect(rec.className).toContain('ph-rec')
+    expect(rec.className).not.toContain(' on')
+  })
+
+  it('reads as recording when the snapshot says so, and offers the stop', () => {
+    const snap = makeSnap()
+    ;(snap.radio as unknown as Record<string, unknown>).qsoRecording = true
+    render(<CwCockpit snap={snap} theme="dark" onWorkSpot={() => {}} spots={[]} />)
+    const rec = screen.getByRole('button', { name: /stop recording this qso/i })
+    expect(rec.className).toContain('on')
   })
 })
