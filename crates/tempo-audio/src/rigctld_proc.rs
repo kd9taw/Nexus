@@ -1829,6 +1829,118 @@ mod tests {
                     \tDefault: /dev/rig, Value: \\\\.\\COM1\n\tString.\n";
         assert_eq!(conf_param(dump, "rig_pathname").unwrap().0, "\\\\.\\COM1");
     }
+    /// THE GUARD THAT MAKES THE SWEEP SAFE, and the one thing here that can be proven on a box
+    /// with no Hamlib on it. A process that never exits must be killed, not waited on: that is
+    /// exactly what wedged every CI run on this repo for six hours at a time, with no output
+    /// naming the test responsible.
+    #[test]
+    fn run_bounded_kills_a_process_that_would_never_finish() {
+        let t0 = std::time::Instant::now();
+        let out = run_bounded(std::ffi::OsStr::new("sleep"), &["300"], 1);
+        assert!(
+            out.is_none(),
+            "a process that outlives the deadline yields None"
+        );
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(20),
+            "it must give up at the deadline, not wait the process out: {:?}",
+            t0.elapsed()
+        );
+    }
+
+    /// ...and the other direction, so the guard is not passing by simply never working: a command
+    /// that DOES finish comes back with its output intact.
+    #[test]
+    fn run_bounded_returns_the_output_of_a_command_that_finishes() {
+        let out = run_bounded(std::ffi::OsStr::new("echo"), &["hello"], 10)
+            .expect("a command that exits must produce output");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");
+    }
+
+    /// A binary that is not there is a skip, not a panic — the sweep is opportunistic.
+    #[test]
+    fn run_bounded_is_none_when_the_binary_does_not_exist() {
+        assert!(run_bounded(std::ffi::OsStr::new("nexus-no-such-binary"), &["-l"], 5).is_none());
+    }
+
+    /// The daemon/client swap the sweep depends on.
+    #[test]
+    fn rigctl_is_found_beside_rigctld() {
+        use std::ffi::OsString;
+        assert_eq!(
+            rigctl_beside(OsString::from("/usr/bin/rigctld")),
+            OsString::from("/usr/bin/rigctl")
+        );
+        // The .exe arm, as a bare name: a Windows-style path with backslashes is a single
+        // file_name on Unix (only `/` separates there), so spelling one here would test the host's
+        // path rules rather than this function.
+        assert_eq!(
+            rigctl_beside(OsString::from("rigctld.exe")),
+            OsString::from("rigctl.exe")
+        );
+        assert_eq!(
+            rigctl_beside(OsString::from("/opt/hamlib/bin/rigctld.exe")),
+            OsString::from("/opt/hamlib/bin/rigctl.exe")
+        );
+        // A bare name (nothing resolved) is left alone rather than rewritten into a guess.
+        assert_eq!(
+            rigctl_beside(OsString::from("rigctld")),
+            OsString::from("rigctl")
+        );
+        assert_eq!(
+            rigctl_beside(OsString::from("something-else")),
+            OsString::from("something-else")
+        );
+    }
+
+    /// `rigctl` sitting beside a resolved `rigctld` — same Hamlib package, same directory, so
+    /// swapping the final component is enough. Done here rather than calling `resolve_rigctl`
+    /// because that is `#[cfg(feature = "serial")]` and this test runs without it.
+    fn rigctl_beside(rigctld: std::ffi::OsString) -> std::ffi::OsString {
+        let p = std::path::PathBuf::from(&rigctld);
+        match p.file_name().and_then(|f| f.to_str()) {
+            Some("rigctld") => p.with_file_name("rigctl").into_os_string(),
+            Some("rigctld.exe") => p.with_file_name("rigctl.exe").into_os_string(),
+            _ => rigctld,
+        }
+    }
+
+    /// Run a command and GIVE UP after `secs`, killing it. `None` for "could not run, or would not
+    /// finish" — both of which mean the same thing to the sweep: skip this model.
+    ///
+    /// This exists because `Command::output()` has no timeout, and a process that never exits
+    /// therefore hangs the whole test binary with no output to say which test it was. That is not
+    /// hypothetical: it wedged every CI run on this repo for six hours at a time.
+    fn run_bounded(
+        bin: &std::ffi::OsStr,
+        args: &[&str],
+        secs: u64,
+    ) -> Option<std::process::Output> {
+        use std::process::Stdio;
+        let mut child = Command::new(bin)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .ok()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return child.wait_with_output().ok(),
+                Ok(None) => {}
+                Err(_) => return None,
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                eprintln!("run_bounded: {bin:?} {args:?} did not finish in {secs}s — killed");
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
 
     /// THE ENUMERATION, against the operator's own Hamlib rather than a fixture: for EVERY
     /// model `rigctld -l` lists, the flags Nexus would emit must not name the line that model's
@@ -1842,15 +1954,27 @@ mod tests {
     /// machine, or point `NEXUS_RIGCTLD` at a bundled binary.
     #[test]
     fn no_model_is_ever_given_the_line_its_backend_keys_with() {
-        let bin = std::env::var_os("NEXUS_RIGCTLD").unwrap_or_else(resolve_rigctld);
-        let Ok(list) = Command::new(&bin).arg("-l").output() else {
+        // ⚠️ rigctl, THE CLIENT — never rigctld, the DAEMON. This asked the daemon to dump each
+        // model's config and collected it with `.output()`, which waits for EOF. rigctld does not
+        // exit, so on any machine that HAS Hamlib the first model blocked forever: `cargo test
+        // --workspace` hung, and every CI run on this repo was killed at the six-hour limit having
+        // never reported. It was invisible to anyone without Hamlib installed, because then the
+        // binary is missing and the skip below fires instantly. `gen-hamlib-serial-speeds.mjs`
+        // already uses `rigctl --dump-caps` for exactly this reason.
+        let bin = std::env::var_os("NEXUS_RIGCTL")
+            .or_else(|| std::env::var_os("NEXUS_RIGCTLD").map(rigctl_beside))
+            .unwrap_or_else(|| rigctl_beside(resolve_rigctld()));
+        // Bounded even so. The binary is right today; a future Hamlib could change what a flag
+        // means, and the cost of being wrong here was six hours per run and a CI signal nobody
+        // could trust.
+        let Some(list) = run_bounded(&bin, &["-l"], 20) else {
             eprintln!(
-                "SKIPPED: no rigctld to ask ({bin:?}). Set NEXUS_RIGCTLD to run the full sweep."
+                "SKIPPED: no usable rigctl to ask ({bin:?}). Set NEXUS_RIGCTL to run the full sweep."
             );
             return;
         };
         if !list.status.success() {
-            eprintln!("SKIPPED: `rigctld -l` failed ({bin:?}).");
+            eprintln!("SKIPPED: `rigctl -l` failed ({bin:?}).");
             return;
         }
         let models: Vec<u32> = String::from_utf8_lossy(&list.stdout)
@@ -1865,10 +1989,7 @@ mod tests {
         );
         let mut keyed_by_a_line = Vec::new();
         for m in models {
-            let Ok(out) = Command::new(&bin)
-                .args(["-m", &m.to_string(), "-L"])
-                .output()
-            else {
+            let Some(out) = run_bounded(&bin, &["-m", &m.to_string(), "-L"], 10) else {
                 continue;
             };
             let dump = String::from_utf8_lossy(&out.stdout);
