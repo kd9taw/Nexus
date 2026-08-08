@@ -661,5 +661,9 @@
       "min": 9600,
       "max": 9600
     }
+  ],
+  "missing": [],
+  "needsDaemon": [
+    2
   ]
 }

@@ -45,23 +45,32 @@ if (uniq.length < 100) throw new Error(`only ${uniq.length} models parsed from $
 
 let hamlib = ''
 const rigs = []
-const undumpable = []
+const missing = []
+const needsDaemon = []
 for (const model of uniq) {
   // Non-zero exit is normal here: NET rigctl tries to reach a live rigctld and fails, and a
   // model the bundled Hamlib does not carry prints "Unknown rig num". Keep whatever it wrote
   // and let the missing caps header be what marks it, so a genuine failure is loud, not absent.
   // stdio 'ignore' on stdin: rigctl reads it, and inheriting the loop's would eat the model list.
   let caps = ''
+  let err = ''
   try {
     caps = execFileSync(rigctl, ['-m', String(model), '--dump-caps'], {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch (e) {
     caps = e.stdout ?? ''
+    err = e.stderr ?? ''
   }
   if (!caps.includes('Caps dump for model')) {
-    undumpable.push(model)
+    // TWO VERY DIFFERENT REASONS, and only one of them is a bug. `Unknown rig num` on STDERR
+    // means this Hamlib has no backend for that model at all — select that rig and rigctld never
+    // starts (issue #34). Anything else is a backend that IS present but cannot dump caps
+    // standalone: NET rigctl (model 2) tries to reach a live rigctld first and says
+    // "Unable to open rigctld". Lumping the two together is why this signal was never usable —
+    // and stderr was being discarded, so the discriminator was not even being read.
+    ;(err.includes('Unknown rig num') ? missing : needsDaemon).push(model)
     continue
   }
   hamlib ||= caps.match(/^Hamlib version:\s*(.+)$/m)?.[1].trim() ?? ''
@@ -71,7 +80,15 @@ for (const model of uniq) {
   rigs.push({ model, name: name.trim(), min: Number(speed[1]), max: Number(speed[2]) })
 }
 
-writeFileSync(out, JSON.stringify({ hamlib, rigs }, null, 2) + '\n')
+// `undumpable` is the WHOLE POINT of issue #34 and used to be printed and thrown away. A model in
+// the catalog that the BUNDLED Hamlib cannot dump caps for is a backend that is not in the library
+// we ship, so selecting that rig produces a rigctld that never starts — silent until an operator
+// picks it. Recording it here turns that into a test (`rigpicker`), and recording it from the
+// bundled binary is what makes the test meaningful: CI's distro Hamlib is older (4.5.5) and does
+// not carry every model this catalog is anchored on, so a live sweep there would fail on rigs that
+// are perfectly fine in the shipped installer.
+writeFileSync(out, JSON.stringify({ hamlib, rigs, missing, needsDaemon }, null, 2) + '\n')
 const fixed = rigs.filter((r) => r.min === r.max)
 console.log(`${out}: ${rigs.length} serial rigs, ${fixed.length} with min == max (${hamlib})`)
-if (undumpable.length) console.log(`no caps at all (network-only or not in this Hamlib): ${undumpable.join(' ')}`)
+if (needsDaemon.length) console.log(`present but needs a live daemon to dump: ${needsDaemon.join(' ')}`)
+if (missing.length) console.log(`⚠ NOT IN THIS HAMLIB (rigctld will not start for these): ${missing.join(' ')}`)
