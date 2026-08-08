@@ -100,6 +100,10 @@ sudo apt install gfortran cmake ninja-build libfftw3-dev libboost-dev pkg-config
 
 You need **single-precision FFTW3** (libfftw3-single, included in
 `libfftw3-dev`), **Boost headers**, **CMake**, **Ninja**, and **gfortran**.
+
+> **That list runs the TESTS, not the app.** Building the desktop app needs the GTK/WebKit stack as
+> well (`libwebkit2gtk-4.1-dev` is the one people miss). The complete list, and the tests whose
+> behaviour depends on whether you have Hamlib installed, are in **[LINUX.md](LINUX.md)**.
 Then, from the repo root:
 
 ```sh
