@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Pwr slider now changes your drive straight away instead of several seconds later.** Moving
+  it only affected audio Nexus had not generated yet, and it generates well ahead — an FT8 over is
+  built and queued in one go, all thirteen seconds of it — so the level was already baked into
+  everything waiting to go out. Hold Tune, move the slider, and the rig's ALC sat where it was for
+  a good few seconds before catching up, which makes it very easy to overshoot into compression
+  while chasing a control that has not responded yet. The level is now applied to each sample as it
+  leaves for the sound card, so what you set is what goes out on the next fraction of a second,
+  including audio already queued. The waveform is scaled rather than dropped and rebuilt, so there
+  is no gap or click when you move it mid-transmission. Affects every mode that transmits through
+  the sound card. Reported by g0fqb, who also found the cause.
+
 ## [1.0.2] — 2026-08-06
 
 
