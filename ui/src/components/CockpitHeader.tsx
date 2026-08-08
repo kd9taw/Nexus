@@ -215,8 +215,18 @@ export function CockpitHeader({
               min={0}
               max={power.unit === '%' ? 100 : 1}
               step={power.unit === '%' ? 1 : 0.01}
-              value={power.value}
-              onChange={(e) => power.onChange(Number(e.target.value))}
+              // Drive-unit sliders (tx_level, 0-1) use a square-law curve between slider
+              // POSITION and the underlying level: position² -> level, √level -> position. The
+              // real hardware-usable drive range (0 up to just past where ALC engages) sits in
+              // only the bottom ~15-20% of a linear slider, so this spreads that critical
+              // region across most of the travel. The '%' RF-power sliders (Phone/SSTV) are a
+              // different backend value entirely and stay linear. What tx_level itself means is
+              // completely unchanged — only how far the slider travels to reach a given level.
+              value={power.unit === 'drive' ? Math.sqrt(power.value) : power.value}
+              onChange={(e) => {
+                const raw = Number(e.target.value)
+                power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
+              }}
               onPointerDown={power.onPointerDown}
               onPointerUp={power.onPointerUp}
               aria-label={power.label ?? 'Power'}
