@@ -186,20 +186,49 @@ impl ModeClass {
 /// voice, and on HF they pin the exact data spot regardless of band-edge fuzz. A spot of one of
 /// these signals is reported at the dial up to ~+3.5 kHz (dial + audio offset), so each hole
 /// matches a small window from 1 kHz below to 4 kHz above.
-const DIGITAL_HOLES: &[f64] = &[
-    1.840, // 160m FT8
-    3.573, 3.575,  // 80m FT8 / FT4
-    5.3715, // 60m FT8 (US channel, 5373.0 kHz centre)
-    7.074, 7.0475, // 40m FT8 / FT4
-    10.136, 10.140, // 30m FT8 / FT4
-    14.074, 14.080, // 20m FT8 / FT4
-    18.100, 18.104, // 17m FT8 / FT4
-    21.074, 21.140, // 15m FT8 / FT4
-    24.915, 24.919, // 12m FT8 / FT4
-    28.074, 28.180, // 10m FT8 / FT4
-    50.260, 50.313, 50.318, 50.323, // 6m MSK144 / FT8 / FT4
-    144.150, 144.170, 144.174, // 2m MSK144 / FT4 / FT8
+/// The digital watering holes, each WITH THE MODE IT IS. The mode used to live only in the
+/// comments here, which is why a cluster spot on 14.074 reached the Needed board labelled
+/// "Digital" while a PSK Reporter row for the same station said "FT8" — the board showed both,
+/// on the same band, and the operator could not tell why (reported on 1.0.3).
+const DIGITAL_HOLES: &[(f64, &str)] = &[
+    (1.840, "FT8"), // 160m
+    (3.573, "FT8"), // 80m
+    (3.575, "FT4"),
+    (5.3715, "FT8"), // 60m (US channel, 5373.0 kHz centre)
+    (7.074, "FT8"),  // 40m
+    (7.0475, "FT4"),
+    (10.136, "FT8"), // 30m
+    (10.140, "FT4"),
+    (14.074, "FT8"), // 20m
+    (14.080, "FT4"),
+    (18.100, "FT8"), // 17m
+    (18.104, "FT4"),
+    (21.074, "FT8"), // 15m
+    (21.140, "FT4"),
+    (24.915, "FT8"), // 12m
+    (24.919, "FT4"),
+    (28.074, "FT8"), // 10m
+    (28.180, "FT4"),
+    (50.260, "MSK144"), // 6m
+    (50.313, "FT8"),
+    (50.318, "FT8"),
+    (50.323, "FT4"),
+    (144.150, "MSK144"), // 2m
+    (144.170, "FT4"),
+    (144.174, "FT8"),
 ];
+
+/// The SPECIFIC digital mode a frequency identifies, or `None` when it is not a watering hole.
+///
+/// The band plan is the only thing a comment-only cluster spot lets us believe, and on these
+/// frequencies it says more than "digital" — 14.074 is FT8, 14.080 is FT4. Everywhere else the
+/// class is genuinely all that is knowable, and the caller keeps using it.
+pub fn digital_hole_mode(freq_mhz: f64) -> Option<&'static str> {
+    DIGITAL_HOLES
+        .iter()
+        .find(|&&(h, _)| freq_mhz >= h - 0.001 && freq_mhz <= h + 0.004)
+        .map(|&(_, mode)| mode)
+}
 
 /// The band's primary digital (FT8) watering-hole dial (MHz) — the frequency a
 /// digital-first prediction engine models the band at. VHF returns the FT8
@@ -223,9 +252,7 @@ pub fn band_digital_mhz(band: Band) -> f64 {
 }
 
 fn is_digital_hole(freq_mhz: f64) -> bool {
-    DIGITAL_HOLES
-        .iter()
-        .any(|&h| freq_mhz >= h - 0.001 && freq_mhz <= h + 0.004)
+    digital_hole_mode(freq_mhz).is_some()
 }
 
 /// Classify the operating-mode CLASS of a raw DX-cluster / RBN spot for ROUTING (which cockpit)
@@ -591,6 +618,45 @@ pub fn classify_vhf_mode(median_km: f64, max_km: f64, wx: &SpaceWx) -> PropMode 
 
 #[cfg(test)]
 mod tests {
+
+    /// Reported on 1.0.3: the Needed board showed "Digital" for some rows and "FT8" for others,
+    /// on the same band — and the "Digital" ones were FT8 when clicked.
+    ///
+    /// Two producers fill that column. A PSK Reporter row carries the real mode ("FT8"); a
+    /// cluster spot was stamped with `classify_spot_mode().label()`, which is only ever the CLASS.
+    /// The band plan knows better on these frequencies and always did — the mode was sitting in
+    /// the comments of the hole table instead of in the data.
+    #[test]
+    fn a_watering_hole_names_the_mode_it_actually_is() {
+        assert_eq!(digital_hole_mode(14.074), Some("FT8"));
+        assert_eq!(digital_hole_mode(14.080), Some("FT4"));
+        assert_eq!(digital_hole_mode(7.074), Some("FT8"));
+        assert_eq!(digital_hole_mode(7.0475), Some("FT4"));
+        assert_eq!(digital_hole_mode(144.174), Some("FT8"));
+        assert_eq!(digital_hole_mode(144.150), Some("MSK144"));
+        // The tolerance the classifier already used: a spot a little off the centre still counts.
+        assert_eq!(digital_hole_mode(14.0745), Some("FT8"));
+    }
+
+    /// Off a hole there is genuinely nothing more specific to say, and the caller keeps using the
+    /// class. This is the half that stops the fix inventing a mode from a bare frequency.
+    #[test]
+    fn a_frequency_that_is_not_a_hole_names_no_mode() {
+        assert_eq!(digital_hole_mode(14.030), None); // 20m CW
+        assert_eq!(digital_hole_mode(14.250), None); // 20m phone
+        assert_eq!(digital_hole_mode(14.100), None); // NCDXF beacons, not a hole
+        assert_eq!(digital_hole_mode(0.0), None);
+    }
+
+    /// The classifier itself is untouched — it still answers with the class, so every existing
+    /// routing and gating decision built on it behaves exactly as before.
+    #[test]
+    fn naming_the_mode_did_not_change_how_a_spot_is_classified() {
+        assert_eq!(classify_spot_mode(14.074), ModeClass::Digital);
+        assert_eq!(classify_spot_mode(14.080), ModeClass::Digital);
+        assert_eq!(classify_spot_mode(14.030), ModeClass::Cw);
+        assert_eq!(classify_spot_mode(14.250), ModeClass::Phone);
+    }
     use super::*;
 
     #[test]

@@ -202,7 +202,18 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
     tx.offer(pouncer::SpotHint {
         call: sp.dx_call.clone(),
         freq_mhz,
-        mode: propagation::classify_spot_mode(freq_mhz).label().to_string(),
+        // The SPECIFIC mode when the dial says one, else the class. A cluster spot on 14.074 is
+        // FT8 and the band plan knows it, but this used to send only the class — so the Needed
+        // board showed "Digital" for a spot and "FT8" for a PSK Reporter row describing the same
+        // FT8 station, with nothing to explain the difference (reported on 1.0.3).
+        //
+        // Display only, verified before changing it: `workTarget` picks a cockpit by matching
+        // 'CW' / 'Phone' / 'RTTY' exactly and defaulting everything else to Operate, and
+        // `modeDefaultMhz` returns null for anything that is not CW or Phone. "Digital" and "FT8"
+        // therefore take the same arm in both, so where a click lands is unchanged.
+        mode: propagation::digital_hole_mode(freq_mhz)
+            .map(str::to_string)
+            .unwrap_or_else(|| propagation::classify_spot_mode(freq_mhz).label().to_string()),
         spotted_unix: sp.received_unix as i64,
     });
 }

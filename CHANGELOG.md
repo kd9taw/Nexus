@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Needed board said "Digital" for some stations and "FT8" for others, and they were all
+  FT8.** Rows reach that board two ways. One carries the real mode and says FT8; the other comes
+  from a DX cluster spot, where the only thing worth believing is the frequency on the dial — and
+  that path was only ever asking "is this digital, voice or CW?" and showing the answer. But the
+  band plan knows more than that on those frequencies: 14.074 is FT8 and 14.080 is FT4, and it has
+  always known, the detail was just being thrown away. Spots on a known FT8 or FT4 watering hole
+  now say so. Anywhere else there genuinely is nothing more specific to be had from a bare
+  frequency, so those still read Digital rather than Nexus inventing a mode. Clicking a row takes
+  you exactly where it did before. Reported from the 1.0.3 test build.
+
+### Fixed
+
 - **FT8 and FT4 were putting a six-character grid square on the air.** A standard FT8 or FT4
   message has room for four characters of locator and no more, so if you had set a six-character
   grid in Settings, your calls to another station carried something the message format cannot hold.
