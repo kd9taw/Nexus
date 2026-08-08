@@ -1283,6 +1283,22 @@ pub struct Engine {
     /// One-shot: the operator hit Erase — the radio loop tells cooperating
     /// apps via an outbound Clear (window byte; 0 = Band, 1 = Rx, 2 = both).
     pending_udp_clear: Option<u8>,
+    /// Contacts waiting to go out as a WSJT-X `QsoLogged` (type 5) datagram, drained by the
+    /// radio loop, which is the side that owns the bound socket. Same shape as
+    /// [`Self::pending_udp_clear`] and for the same reason: the engine decides, the loop sends.
+    ///
+    /// ⚠️ **This is what N1MM+, HRD and Log4OM actually log from.** Nexus also broadcasts an
+    /// N1MM `<contactinfo>` datagram per QSO, but N1MM itself never accepts that inbound — it is
+    /// for club dashboards (see `tempo_net::n1mm`'s header). Until this queue existed,
+    /// `send_qso_logged` had exactly ONE call site, inside the Field Day block, so an ordinary
+    /// contact produced Status and Decode datagrams and never the one a logger needs. The link
+    /// looked alive in N1MM's WSJT decode window and logged nothing (issue #37), while
+    /// `docs/manual/FAQ.md` told operators this was supported.
+    ///
+    /// Field Day contacts do NOT arrive here: they never pass through `log_qso`, which is pinned
+    /// by `a_field_day_contact_never_enters_the_general_upload_queue`. That is what keeps this
+    /// from emitting a second datagram per FD contact.
+    pending_udp_qsos: std::collections::VecDeque<QsoRecord>,
     /// The last ingest's decodes as they were ON AIR (pre hound-split/rewrite)
     /// — what UDP consumers receive. Identical to `last_decodes` outside Hound.
     last_wire_decodes: Vec<modes::Decode>,
@@ -2881,6 +2897,7 @@ impl Engine {
             highlight_seq: 0,
             clear_tick: 0,
             pending_udp_clear: None,
+            pending_udp_qsos: std::collections::VecDeque::new(),
             cq_dir: None,
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
@@ -6020,6 +6037,16 @@ impl Engine {
         self.station.append_to_log(std::slice::from_ref(&rec));
         self.push_to_hrd(&rec);
         self.push_to_n1mm(&rec);
+        // ...and to the WSJT-X UDP sink, which is the one a logger actually logs from. The
+        // N1MM push above is a `<contactinfo>` broadcast that N1MM itself never reads inbound
+        // (dashboards do); this is the `QsoLogged` datagram N1MM+, HRD and Log4OM consume on
+        // 2237. Bounded like `pending_uploads` below so a sink that is never drained — the UDP
+        // server is off by default — cannot grow without limit; oldest goes first, because a
+        // stale contact is the one worth dropping.
+        if self.pending_udp_qsos.len() >= 256 {
+            self.pending_udp_qsos.pop_front();
+        }
+        self.pending_udp_qsos.push_back(rec.clone());
         // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
         // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
         // Logbook entries all pass through here, so the Settings auto-upload
@@ -10587,6 +10614,14 @@ impl Engine {
     /// Consume the queued outbound Clear (radio loop).
     pub fn take_pending_udp_clear(&mut self) -> Option<u8> {
         self.pending_udp_clear.take()
+    }
+
+    /// Contacts waiting to go out as WSJT-X `QsoLogged` datagrams. Drained by the radio loop's
+    /// tick — deliberately the TICK and not the slot boundary, because a Phone, CW, RTTY, SSTV
+    /// or hand-entered Logbook contact never reaches a boundary path and would otherwise sit
+    /// here forever.
+    pub fn take_pending_udp_qsos(&mut self) -> Vec<QsoRecord> {
+        self.pending_udp_qsos.drain(..).collect()
     }
 
     /// UDP Location (type 11): a GPS feeder updates our grid. Accepts a bare
@@ -18118,6 +18153,70 @@ mod tests {
     /// never appear in the upload queue, even with an FD session live. If a
     /// future change routes FD contacts through `log_qso`, this fails, and the
     /// N1MM/N3FJP standing forwarders need a Field-Day exclusion before it lands.
+    /// ISSUE #37: "I try to broadcast a new QSO that appears in the log correctly to N1MM. This
+    /// works perfect with WSJT-X to N1MM but with the same (suggested) settings it does not work
+    /// out of Nexus."
+    ///
+    /// He was right and the settings were right. `send_qso_logged` had exactly ONE call site in
+    /// the tree, inside the Field Day block of the radio loop, so an ordinary contact emitted
+    /// Status and Decode datagrams — which is why N1MM's WSJT decode window filled up and the
+    /// link looked alive — and never the type 5 a logger actually logs from. `docs/manual/FAQ.md`
+    /// told operators this path was supported.
+    ///
+    /// Nexus's OTHER logger push, the N1MM `<contactinfo>` broadcast, does fire for ordinary
+    /// QSOs and cannot help: N1MM never accepts that inbound (`tempo_net::n1mm`'s header says so
+    /// outright) — it is for club dashboards.
+    ///
+    /// Every mode's contact goes through `log_qso`, so this covers a hand-entered Logbook row
+    /// and a Phone or CW contact as much as an auto-logged FT8 one.
+    #[test]
+    fn every_logged_contact_is_queued_for_the_wsjtx_udp_sink() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "nothing logged yet, nothing queued"
+        );
+
+        e.log_qso(qrec("W1AW", "20m"));
+        e.log_qso(qrec("K1ABC", "40m"));
+        let queued = e.take_pending_udp_qsos();
+        assert_eq!(queued.len(), 2, "both contacts reach the WSJT-X sink");
+        assert_eq!(queued[0].call, "W1AW");
+        assert_eq!(queued[1].call, "K1ABC", "and in the order they were made");
+
+        // Draining is a take: the loop must not re-send a contact on every tick.
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "a drained contact must not be emitted twice"
+        );
+    }
+
+    #[test]
+    fn a_field_day_contact_is_never_queued_for_the_wsjtx_sink_twice() {
+        // The Field Day emitter in the radio loop sends its own type 5 per contest contact. That
+        // stays correct only while FD contacts do not ALSO arrive through `log_qso` — the same
+        // disjointness the upload-queue test below pins, now load-bearing for the UDP sink too.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "the Field Day emitter owns this contact — queueing it here would send it twice"
+        );
+
+        // Control: an ordinary contact during the same FD session still reaches the sink, so the
+        // emptiness above is the exclusion working and not the queue being broken.
+        e.log_qso(qrec("N0CALL", "20m"));
+        assert_eq!(e.take_pending_udp_qsos().len(), 1);
+    }
+
     #[test]
     fn a_field_day_contact_never_enters_the_general_upload_queue() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
