@@ -1742,6 +1742,13 @@ struct RadioLoop {
     tune_was_data: bool,
     tune_phase: f32,
     tune_started_ms: Option<f64>,
+    /// Wall-clock timestamp (ms) the last tune-carrier chunk was generated from, so the NEXT
+    /// chunk can be sized off real elapsed time instead of a fixed constant. Without this,
+    /// `TUNE_CHUNK_MS`-sized chunks queued on a faster tick cadence made `out_ring` grow
+    /// unbounded for as long as Tune was held (confirmed live: past 190,000 queued samples,
+    /// zero drainage). `None` between tune holds and for the first chunk of a new hold, which
+    /// still seeds off `TUNE_CHUNK_MS` before there's an elapsed-time baseline.
+    tune_last_chunk_ms: Option<f64>,
     applied: Transport,
     /// Set when a handoff bailed on the pool lock: step() skips ONE rig_differs rebuild
     /// tick so the handoff (not a fresh spawn racing the monitor's port) wins.
@@ -2068,6 +2075,7 @@ impl RadioLoop {
             tune_was_data: false,
             tune_phase: 0.0,
             tune_started_ms: None,
+            tune_last_chunk_ms: None,
             applied,
             rigctld_proc,
             cat_hold_active: false,
@@ -4984,7 +4992,20 @@ impl RadioLoop {
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
                 self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
             }
-            let n = (tempo_fast::SAMPLE_RATE * (TUNE_CHUNK_MS / 1000.0)) as usize;
+            // Size this chunk off real elapsed wall-clock time since the last one, not the
+            // fixed TUNE_CHUNK_MS constant. The driving loop's actual tick period doesn't
+            // match TUNE_CHUNK_MS, and queuing a fixed-duration chunk every tick regardless of
+            // how much real time passed is what let out_ring grow without bound for as long as
+            // Tune was held. Clamped so a stalled tick (e.g. a slow CAT read) can't queue one
+            // huge catch-up burst. TUNE_CHUNK_MS still seeds the FIRST chunk of a hold, before
+            // there's an elapsed-time baseline.
+            let elapsed_ms = self
+                .tune_last_chunk_ms
+                .map(|last| (now - last) as f32)
+                .unwrap_or(TUNE_CHUNK_MS)
+                .clamp(0.0, TUNE_CHUNK_MS * 4.0);
+            self.tune_last_chunk_ms = Some(now);
+            let n = (tempo_fast::SAMPLE_RATE * (elapsed_ms / 1000.0)) as usize;
             let chunk = tune_carrier(
                 TUNE_FREQ_HZ,
                 n,
@@ -5007,6 +5028,7 @@ impl RadioLoop {
             }
             self.tuning_keyed = false;
             self.tune_started_ms = None;
+            self.tune_last_chunk_ms = None;
             self.last_slot = None;
             self.prev_slot_was_tx = false;
         }
@@ -11175,6 +11197,50 @@ mod tests {
         assert!(
             state.last_slot.is_none(),
             "slot decode skipped while tuning"
+        );
+    }
+
+    #[test]
+    fn tune_chunk_pacing_follows_elapsed_time_not_a_fixed_constant() {
+        // Regression test for the out_ring-growth bug: a chunk sized off the fixed
+        // TUNE_CHUNK_MS constant (40ms) every ~20ms driving-loop tick queued audio twice as
+        // fast as it could ever play, so out_ring grew without bound for as long as Tune was
+        // held (confirmed live: past 190,000 queued samples, zero drainage). The SECOND chunk
+        // of a hold must be sized off real elapsed time since the first, not TUNE_CHUNK_MS
+        // again — only the very first chunk of a hold still seeds off the constant, before
+        // there's an elapsed-time baseline.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tune(true);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+
+        state
+            .step(
+                &engine, &mut backend, &mut rig, &sinks, 0.0, &mut ra, &mut rr, &mut station,
+            )
+            .unwrap();
+        let first_chunk_len = backend.played.len();
+        assert_eq!(
+            first_chunk_len, 480,
+            "first chunk of a hold still seeds off TUNE_CHUNK_MS (40ms @ 12kHz)"
+        );
+
+        // The real driving loop ticks every 20ms — simulate that cadence, not TUNE_CHUNK_MS's
+        // 40ms, to reproduce the mismatch that overflowed out_ring.
+        state
+            .step(
+                &engine, &mut backend, &mut rig, &sinks, 20.0, &mut ra, &mut rr, &mut station,
+            )
+            .unwrap();
+        let second_chunk_len = backend.played.len() - first_chunk_len;
+        assert_eq!(
+            second_chunk_len, 240,
+            "second chunk must be sized off the real 20ms elapsed (240 samples @ 12kHz), not \
+             the fixed 40ms TUNE_CHUNK_MS (480 samples) — the bug queued a 480-sample chunk \
+             every 20ms tick, doubling out_ring's backlog every tick with zero drainage"
         );
     }
 
