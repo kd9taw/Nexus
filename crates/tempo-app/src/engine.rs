@@ -11369,6 +11369,11 @@ impl Engine {
         // auto-sequencer escalates it (on unacknowledged retransmissions); Chat
         // and Field Day always send RV0.
         let mut tx_rv: i32 = 0;
+        // Did the directed call cap WITHHOLD an over this slot, as opposed to there simply
+        // being nothing to send? Only the QSO arm can set it, and only when the station has
+        // a pending message it is refusing to emit. This is what lets the `None` arm below
+        // tell a capped station apart from ordinary silence — see the watchdog block there.
+        let mut withheld_by_call_cap = false;
         let text: Option<String> = match &mut self.mode {
             Mode::Chat => {
                 // Open broadcasts have priority and send unconditionally — no
@@ -11513,7 +11518,14 @@ impl Engine {
                         };
                         Some(m.to_text())
                     }
-                    None => None,
+                    None => {
+                        // `stalled()` is exactly "we have something to send and `tx_capped()`
+                        // is refusing it" — not "the QSO is over" and not "this is an RX
+                        // slot". Reading it here rather than re-deriving the cap keeps one
+                        // definition of capped in tempo-core.
+                        withheld_by_call_cap = station.stalled();
+                        None
+                    }
                 }
             }
             Mode::FieldDay { station, .. } => {
@@ -11667,6 +11679,44 @@ impl Engine {
             }
             None => {
                 self.app.set_transmitting(false);
+                // ⭐ THE CAPPED STATION IS STILL AN ARMED TRANSMITTER — bound it.
+                //
+                // Everything above about the wall-clock watchdog lives in the `Some(t)` arm,
+                // because that is where an over is built. A directed station whose call cap
+                // has been spent lands HERE instead, every TX slot, forever: `tx_capped()`
+                // only withholds the message, so `Mode::Qso` stays, `dxcall` stays and
+                // `tx_enabled` stays true. Nothing else ends it either — `abandon_stalled` is
+                // gated on `cq_running` and `tempo_step_capped` on the chat tiers, so neither
+                // covers FT8/FT4 search-and-pounce. The result was an armed transmitter with
+                // no time bound at all, which a decode arriving minutes or hours later would
+                // re-key with no operator action.
+                //
+                // On stock defaults the cap ALWAYS gets there first, so this was the shipped
+                // configuration: `directed_max_calls` 8 x 30 s = 240 s against a
+                // `tx_watchdog_min` of 6 = 360 s. The watchdog could not fire on a directed
+                // QSO at all.
+                //
+                // SCOPE, and it is the whole care in this change: `withheld_by_call_cap`, not
+                // the bare `None`. Running the watchdog on every silent slot would start the
+                // clock the moment TX was armed and disarm an operator who is monitoring and
+                // waiting — every RX-parity slot, an empty queue and `QsoState::Listening` all
+                // arrive here too. `an_operator_armed_and_simply_waiting_is_never_disarmed_by_
+                // the_watchdog` is the guard on that and must keep passing.
+                //
+                // No `slot_tx_abort` here, deliberately: that arms the loop's mid-over cut,
+                // and there is no over in flight to cut. Setting it would leave a one-shot
+                // abort primed for the next over the OPERATOR deliberately starts.
+                if withheld_by_call_cap {
+                    let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
+                    if limit_secs > 0 {
+                        let now = now_unix_secs();
+                        let start = *self.tx_watchdog_start.get_or_insert(now);
+                        if now.saturating_sub(start) >= limit_secs {
+                            self.tx_watchdog = true;
+                            self.tx_enabled = false;
+                        }
+                    }
+                }
                 None
             }
         }
@@ -25913,6 +25963,152 @@ mod tests {
         );
         assert!(e.tx_watchdog, "the trip must be visible to the operator");
         assert!(!e.tx_enabled(), "a trip disarms TX");
+    }
+
+    /// Drive a directed QSO until `call_cap` withholds the over, and return the next
+    /// own-parity slot. Asserts the capped state was actually reached — a helper that
+    /// silently failed to cap would make every assertion below vacuously true.
+    fn cap_a_directed_call(e: &mut Engine, cap: u32) -> u64 {
+        let mut slot = 0;
+        let mut sent = 0;
+        while sent < cap + 2 && slot < 40 {
+            if !e.poll_tx(slot).is_empty() {
+                sent += 1;
+            }
+            slot += 1;
+        }
+        let stalled = e.snapshot().qso.as_ref().is_some_and(|q| q.stalled);
+        assert!(
+            stalled,
+            "precondition: {cap} overs should have spent the directed call cap"
+        );
+        slot
+    }
+
+    #[test]
+    fn a_call_capped_station_is_still_bounded_by_the_wall_clock_watchdog() {
+        // ⭐ THE SAFETY DEFECT. The whole watchdog block lives inside plan_tx's `Some(t)`
+        // arm — the branch taken when an over is actually being built. An over WITHHELD by
+        // `tx_capped()` takes the `None` arm instead, whose entire body is
+        // `set_transmitting(false); None`. So while a directed station is capped the
+        // wall-clock watchdog is never evaluated at all, and `tx_enabled` stays armed with
+        // `dxcall` set and `Mode::Qso` live, with NO time bound of any kind. A decode
+        // arriving at an arbitrary later time zeroes `tx_count` and keys an over with no
+        // operator click.
+        //
+        // On stock defaults the cap ALWAYS bites first, so this is the shipped configuration
+        // and not an edge case: `directed_max_calls` defaults to 8 and `tx_watchdog_min` to
+        // 6, and eight FT8 overs is 8 x 30 s = 240 s against a 360 s limit.
+        //
+        // Relative to WSJT-X this is transmit-MORE, not transmit-less: stock keeps calling,
+        // its watchdog disarms Tx, and it would not have transmitted.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2); // reach the cap in two overs, not eight
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+
+        let slot = cap_a_directed_call(&mut e, 2);
+
+        // The operator has now been sitting on a capped station for longer than the limit.
+        // Backdating is how the beacon watchdog test above expresses elapsed time, and it is
+        // the only part of this the test controls — the point is what the ENGINE does next.
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+
+        for s in slot..slot + 4 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "a capped station must not key while the watchdog limit is exceeded"
+            );
+        }
+        assert!(
+            e.tx_watchdog,
+            "the watchdog must TRIP on a capped station — it is the only time bound there is"
+        );
+        assert!(
+            !e.tx_enabled(),
+            "a trip disarms TX; without this the capped QSO stays armed forever"
+        );
+    }
+
+    #[test]
+    fn a_tripped_watchdog_survives_a_decode_that_would_otherwise_re_arm_the_station() {
+        // WHY THE `sequence_advanced` RESET NEEDS NO CHANGE, written down so the next reader
+        // does not "fix" it too. Once the watchdog has tripped, `tx_enabled` is false, and
+        // plan_tx returns at its very first gate (`if !self.tx_enabled ... return None`).
+        // `tx_enabled = true` has exactly two writers in this engine — `send_cw` (a deliberate
+        // CW keying action) and `set_tx_enabled` (the operator's own control) — and neither is
+        // on any decode path. So a later decode CANNOT key an over, whatever it does to
+        // `tx_count` or to the watchdog clock.
+        //
+        // That is what keeps the fix scoped to one arm: within the live window the partner IS
+        // responding, and resetting the clock on real QSO progress is correct.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2);
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+
+        let slot = cap_a_directed_call(&mut e, 2);
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        for s in slot..slot + 4 {
+            let _ = e.poll_tx(s);
+        }
+        assert!(!e.tx_enabled(), "precondition: the watchdog tripped");
+
+        // The DX finally answers — the exact event that zeroes `tx_count` and clears the
+        // watchdog clock. It must not put us back on the air.
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -05", -5)], slot + 4);
+        for s in slot + 5..slot + 9 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "a decode re-keyed a station the watchdog had already disarmed"
+            );
+        }
+    }
+
+    #[test]
+    fn an_operator_armed_and_simply_waiting_is_never_disarmed_by_the_watchdog() {
+        // ⭐ THE GUARD ON THE FIX'S SCOPE, and the reason the obvious version is wrong.
+        // Hoisting the watchdog out of the `Some(t)` arm to the whole `None` arm would make
+        // it run on EVERY silent slot — plain armed monitoring, every RX-parity slot, an
+        // empty queue, QsoState::Listening. `tx_watchdog_start.get_or_insert(now)` would then
+        // start the clock the moment TX was armed and disarm an operator who is doing nothing
+        // but waiting for a decode. That is a behaviour change far outside the reported
+        // defect, on the gated FT transmit path.
+        //
+        // Both silences that are NOT a withheld over, held against an exceeded limit.
+        for (what, call) in [
+            ("monitoring with TX armed", false),
+            ("a QSO with nothing pending", true),
+        ] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            let mut s = e.settings().clone();
+            s.tx_watchdog_min = 6;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            if call {
+                e.call_station("W9XYZ");
+                let _ = e.set_mode("qso-monitor"); // drop the pending over without disarming TX
+            }
+            e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+
+            for slot in 0..8 {
+                let _ = e.poll_tx(slot);
+            }
+            assert!(
+                e.tx_enabled(),
+                "{what}: TX was disarmed by the watchdog with no over ever withheld"
+            );
+            assert!(
+                !e.tx_watchdog,
+                "{what}: the watchdog tripped on plain silence"
+            );
+        }
     }
 
     #[test]
