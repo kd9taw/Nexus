@@ -178,3 +178,64 @@ describe('OperateRoster composes the surface gate with strongest-need ranking', 
     expect(screen.queryByLabelText(/needed NewMode/)).not.toBeNull()
   })
 })
+
+describe('the station being worked is visible in the roster', () => {
+  // ISSUE #16, asked for by two operators: "Cannot easily see what station is being worked in
+  // Call Roster." There was nothing to see, and not because the highlight was subtle — the roster
+  // was never told. App binds `selectedCall` to `activePeer`, which is the Tempo CHAT peer and is
+  // null for the whole of an FT8 session, so nothing ever matched.
+  function renderWith(props: Record<string, unknown>) {
+    return render(
+      <OperateRoster
+        stations={[station('W1AW', 100), station('K1ABC', 100)]}
+        myGrid="EN52"
+        currentSlot={100}
+        needByCall={new Map()}
+        needAlertsByCall={new Map()}
+        band="20m"
+        feedMode="FT8"
+        selectedCall={null}
+        onSelect={() => {}}
+        onCall={() => {}}
+        {...props}
+      />,
+    )
+  }
+  const row = (call: string) =>
+    screen.getByRole('row', { name: new RegExp(`^${call}`) })
+
+  it('marks the worked station and only that one', () => {
+    renderWith({ workingCall: 'W1AW' })
+    expect(row('W1AW').className).toContain('working')
+    expect(row('K1ABC').className).not.toContain('working')
+  })
+
+  it('says so for a screen reader too — the colour is not the only carrier', () => {
+    renderWith({ workingCall: 'W1AW' })
+    expect(row('W1AW').getAttribute('aria-label')).toContain('working now')
+    expect(row('K1ABC').getAttribute('aria-label')).not.toContain('working now')
+  })
+
+  it('is not dimmed by the age fade — the contact in progress must stay legible', () => {
+    // Rows fade with age; the one you are working must not, however long the QSO runs.
+    renderWith({ workingCall: 'W1AW', currentSlot: 102 })
+    expect(row('W1AW').style.opacity).toBe('1')
+  })
+
+  it('is independent of selection, and a row can be both', () => {
+    renderWith({ workingCall: 'W1AW', selectedCall: 'K1ABC' })
+    expect(row('W1AW').className).toContain('working')
+    expect(row('W1AW').className).not.toContain('selected')
+    expect(row('K1ABC').className).toContain('selected')
+    cleanup()
+    renderWith({ workingCall: 'W1AW', selectedCall: 'W1AW' })
+    expect(row('W1AW').className).toContain('working')
+    expect(row('W1AW').className).toContain('selected')
+  })
+
+  it('omitted behaves exactly as before — no row is marked', () => {
+    renderWith({})
+    expect(row('W1AW').className).not.toContain('working')
+    expect(row('K1ABC').className).not.toContain('working')
+  })
+})
