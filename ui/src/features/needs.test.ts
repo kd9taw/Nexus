@@ -442,3 +442,41 @@ describe('alertsForSurface (gate, then rank)', () => {
     expect(chaseRank(gated, 'NewEntity')).toBe(100)
   })
 })
+
+describe('the mode label the Needed board shows never changes where a click lands', () => {
+  // Reported on 1.0.3: some rows read "Digital" and some "FT8" for the same kind of station.
+  // The backend now sends the specific mode when the dial identifies one. That is a DISPLAY
+  // change only, and this is the guard that keeps it one: routing matches 'CW'/'Phone'/'RTTY'
+  // exactly and defaults everything else to Operate, so both labels must take the same arm.
+  const alert = (mode: string, freqMhz: number | null = 14.074) =>
+    ({
+      call: 'W1AW',
+      band: '20m',
+      mode,
+      freqMhz,
+      entity: 'United States',
+      zone: 5,
+      tags: [],
+      headline: '',
+      priority: 1,
+    }) as unknown as Parameters<typeof workTarget>[0]
+
+  it('FT8 and Digital pick the same cockpit and the same dial', () => {
+    const a = workTarget(alert('Digital'), [])
+    const b = workTarget(alert('FT8'), [])
+    expect(a).not.toBeNull()
+    expect(b).toEqual(a)
+    expect(b?.view).toBe('operate')
+  })
+
+  it('...and so does FT4, the other label the spot path can now produce', () => {
+    expect(workTarget(alert('FT4'), [])?.view).toBe('operate')
+    expect(workTarget(alert('MSK144'), [])?.view).toBe('operate')
+  })
+
+  it('CW and Phone are still routed by name — the change must not disturb them', () => {
+    expect(workTarget(alert('CW', null), [])?.view).toBe('cw')
+    expect(workTarget(alert('Phone', null), [])?.view).toBe('phone')
+    expect(workTarget(alert('RTTY'), [])?.view).toBe('rtty')
+  })
+})
