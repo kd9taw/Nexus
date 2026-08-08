@@ -7501,25 +7501,45 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--tx);
   line-height: 1.5;
 }
+/* Record. Carries a "REC" label, and the dot is sized and coloured independently of it: a red dot
+   is what a record control looks like everywhere, so it is what makes this button findable, and it
+   stays red at rest rather than only while recording.
+
+   The 2026-08-04 density pass cut the label and left this rule's `gap` and horizontal padding sized
+   for text that was no longer there — a bordered box with a faint 11px bullet adrift in the middle
+   of it. Reported twice by the operator, first as the button being MISSING from Phone and then, once
+   found, as "hardly visible for anyone" (2026-08-08). Costs ~25px of header width; that is the
+   trade, and visibility won it.
+
+   `--danger` was never defined in either theme, so all three uses below fell through to a hardcoded
+   #e5484d — a red picked for the dark background, leaving the recording state washed out in light.
+   `--tx` is the app's real transmit red and is defined in both. 32 other `var(--danger, ...)` uses
+   remain in this file with the same latent bug; out of scope here. */
 .ph-rec {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  font-size: 11px;
+  gap: 5px;
+  padding: 3px var(--space-2);
+  font-size: var(--fs-label);
   font-weight: 700;
+  letter-spacing: 0.04em;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
-  color: var(--text-dim);
+  color: var(--text);
+}
+.ph-rec-dot {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--tx);
 }
 .ph-rec:hover {
-  border-color: var(--danger, #e5484d);
-  color: var(--danger, #e5484d);
+  border-color: var(--tx);
+  color: var(--tx);
 }
 .ph-rec.on {
-  border-color: var(--danger, #e5484d);
-  color: var(--danger, #e5484d);
+  border-color: var(--tx);
+  color: var(--tx);
   font-weight: 800;
   animation: ph-rec-pulse 1.4s ease-in-out infinite;
 }

@@ -1236,10 +1236,13 @@ export function CwCockpit({
             SPLIT ▲
           </span>
         )}
-        {/* Glyph only, and the same `.ph-rec` class Phone uses. This header already carries the
-            band picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the
-            rotator, and its own density note records that width here is what wraps it at 1024.
-            A bullet costs ~24px. The accessible name is explicit rather than left to the glyph. */}
+        {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
+            picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
+            and its own density note records that width here is what wraps it at 1024, so this was
+            first built glyph-only to cost ~24px. That is exactly what made Phone's copy unfindable
+            (operator, 2026-08-08), so it carries the label and costs ~50px. The accessible name is
+            explicit rather than left to the glyph, and the glyph is aria-hidden so it is not read
+            twice. */}
         <button
           type="button"
           className={`ph-rec${recording ? ' on' : ''}`}
@@ -1252,7 +1255,10 @@ export function CwCockpit({
               : 'Record the received audio to a WAV in the recordings folder'
           }
         >
-          {recording ? '■' : '●'}
+          <span className="ph-rec-dot" aria-hidden="true">
+            {recording ? '■' : '●'}
+          </span>
+          REC
         </button>
       </CockpitHeader>
 

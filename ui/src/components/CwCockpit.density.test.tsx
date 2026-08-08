@@ -488,14 +488,21 @@ describe('CW can record a contact without switching cockpits', () => {
   // Reported from the 1.0.4 bench run: "the record button is now missing from cw and phone".
   // Phone's is present and always has been — reduced to a bare ● by the 2026-08-04 density pass,
   // which is why it reads as missing. CW's never existed at all, so recording a CW QSO meant
-  // leaving the cockpit. Same glyph, same snapshot-driven toggle, so the TopBar REC badge and the
+  // leaving the cockpit. Same markup, same snapshot-driven toggle, so the TopBar REC badge and the
   // stop that lives there work identically in both.
   it('the record control is in the header, and names itself for a screen reader', () => {
     render(<CwCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} />)
     const rec = screen.getByRole('button', { name: /record qso audio/i })
     expect(rec).not.toBeNull()
-    // The glyph alone must never be the accessible name — a bare bullet says nothing.
+    // The glyph alone must never be the accessible name — a bare bullet says nothing — and it
+    // must not be the only VISIBLE name either, which is the state that got Phone's copy
+    // reported as missing and then as barely visible (operator, 2026-08-08).
     expect(rec.getAttribute('aria-label')).toMatch(/record/i)
+    expect(rec.textContent, 'the record control is a bare glyph again').toMatch(/REC/)
+    expect(
+      rec.querySelector('.ph-rec-dot')!.getAttribute('aria-hidden'),
+      'the record dot is read out as well as the label',
+    ).toBe('true')
     expect(rec.className).toContain('ph-rec')
     expect(rec.className).not.toContain(' on')
   })

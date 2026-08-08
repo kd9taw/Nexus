@@ -431,8 +431,18 @@ describe('what the deleted chrome said is still said', () => {
 
   it('the header labels that repeat their own control are gone, and nothing lost its name', () => {
     const { container } = renderCockpit()
+    // Record is the ONE control in this header that is not self-describing: a bare ● names
+    // nothing, and this assertion used to require exactly that. Stripped to the glyph by this
+    // density pass, it was reported as MISSING and then as "hardly visible for anyone"
+    // (operator, 2026-08-08). It keeps a visible label, and the glyph is aria-hidden so the
+    // accessible name stays the explicit one rather than the bullet.
     const rec = container.querySelector('.ph-rec')!
-    expect(rec.textContent, 'the Record button still spells out its own glyph').toBe('●')
+    expect(rec.textContent, 'the Record button lost its visible label and is a bare glyph again')
+      .toMatch(/REC/)
+    expect(
+      rec.querySelector('.ph-rec-dot')!.getAttribute('aria-hidden'),
+      'the record dot is read out as well as the label',
+    ).toBe('true')
     expect(
       rec.getAttribute('aria-label'),
       'the Record button lost the only name it had',

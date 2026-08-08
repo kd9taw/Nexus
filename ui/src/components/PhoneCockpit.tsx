@@ -1024,7 +1024,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               : 'Record the received audio to a WAV in the recordings folder'
           }
         >
-          {recording ? '■' : '●'}
+          <span className="ph-rec-dot" aria-hidden="true">
+            {recording ? '■' : '●'}
+          </span>
+          REC
         </button>
         {/* No visible 'RX': the meter is a role="meter" already named "RX audio level", and
             the label element keeps the same string as its tooltip. */}

@@ -11,10 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **CW can record a contact without switching cockpits.** Phone has had a record button since the
   audio bridge landed and CW never got one, so recording a CW QSO meant leaving the cockpit to do
-  it. Same ● in the header, same stop in the top bar.
+  it. Same button in the header, same stop in the top bar.
 
 ### Changed
 
+- **The record button is findable again.** It was reduced to a bare dot in a box last week, in a
+  header that also carries the band picker, tuning strip, Tune and Stop TX — small enough that it
+  was reported as missing before it was reported as hard to see. It says REC next to the dot now,
+  and the dot is red at rest rather than only while recording, which is what makes a record button
+  look like one. The recording state was also using a red that had never been defined, so it fell
+  back to a shade picked for the dark theme and washed out on the light one; it uses the app's
+  transmit red now and reads properly in both.
 - **The Openings and Band Advisor panes fit more on screen.** Both were set a size larger than they
   needed and were costing more scrolling than the information warranted — about one extra row now
   fits per six. The Openings log was also using hardcoded sizes rather than the app's text scale, so
