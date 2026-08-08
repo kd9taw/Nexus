@@ -1103,6 +1103,16 @@ impl StationCore {
     /// Best-effort — a no-op if no entry matches (e.g. the gallery rolled past
     /// its cap before the burst decoded). Decode-thread only, like the other
     /// `sstv_gallery` mutators.
+    /// Drop one image from the gallery by path. `true` when it was there. The FILE is the
+    /// shell's business — this is only the in-memory index, and the two are kept in step by the
+    /// single command that does both (`sstv_delete_image`), so they cannot drift the way the
+    /// index and the directory used to.
+    pub fn remove_sstv_gallery(&mut self, path: &str) -> bool {
+        let before = self.sstv_gallery.len();
+        self.sstv_gallery.retain(|e| e.path != path);
+        self.sstv_gallery.len() != before
+    }
+
     pub fn set_sstv_gallery_fsk_id(&mut self, path: &str, fsk_id: String) {
         if let Some(entry) = self.sstv_gallery.iter_mut().rev().find(|e| e.path == path) {
             entry.fsk_id = Some(fsk_id);

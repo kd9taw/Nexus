@@ -18740,6 +18740,27 @@ button.sat-chip:disabled {
   border-radius: var(--radius-sm);
   background: #000;
 }
+/* Delete, on the thumbnail. Only on hover or keyboard focus: the gallery is something you
+   browse, and a row of ✕ buttons over people's pictures reads as a demand to tidy up. Always
+   reachable by keyboard, so hiding it visually never hides it from a Tab. */
+.sstv-thumb { position: relative; }
+.sstv-thumb-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--tx);
+  border-radius: 4px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.sstv-thumb:hover .sstv-thumb-del,
+.sstv-thumb-del:focus-visible {
+  opacity: 1;
+}
 .sstv-thumb-caption {
   display: flex;
   flex-direction: column;

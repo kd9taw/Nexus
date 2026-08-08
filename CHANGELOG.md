@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **You can delete a received SSTV image from inside the app.** There was no delete anywhere — once
+  a picture decoded it was permanent as far as Nexus was concerned, and the gallery only ever grew.
+  Hover a thumbnail and a ✕ appears; it asks first, naming the picture rather than just "are you
+  sure", because the tiles are small and several look alike. It is not recoverable afterwards: a
+  received picture is the only copy of something somebody sent you.
+
+### Fixed
+
+- **Deleting an image by hand no longer leaves a broken thumbnail — and pictures you copy in show
+  up.** The gallery kept its own list of images and never checked it against the folder, so removing
+  a `.bmp` yourself left an entry pointing at nothing, which is exactly what you had to do given
+  there was no delete. It now reconciles with the folder when it loads: entries whose file is gone
+  drop out quietly, and images sitting in the folder that Nexus has not seen before are picked up,
+  dated and named from their own filename. Managing the folder yourself works now instead of
+  breaking things — which matters more since the gallery moved to Pictures.
+
 ### Fixed
 
 - **The Needed board said "Digital" for some stations and "FT8" for others, and they were all

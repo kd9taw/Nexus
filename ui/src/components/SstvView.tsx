@@ -31,6 +31,7 @@ import {
   setTune,
   sstvArm,
   sstvAutoArm,
+  sstvDeleteImage,
   sstvSend,
   sstvStop,
 } from '../api'
@@ -691,6 +692,19 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
 
   // Gallery arrives oldest-first; show newest first.
   const gallery = sstv?.gallery && sstv.gallery.length > 0 ? [...sstv.gallery].reverse() : []
+
+  // Delete one received image, after asking. The message names the PICTURE rather than saying
+  // "are you sure", so the operator can tell which one they are about to lose — the tiles are
+  // small and several look alike.
+  const deleteImage = async (g: { path: string; mode: string; finishedUtc: string }) => {
+    const what = `${g.mode} received ${fmtUtc(g.finishedUtc)}`
+    if (!window.confirm(`Delete the ${what}?\n\nThe image file is removed and cannot be recovered.`))
+      return
+    await withErrorToast(async () => {
+      await sstvDeleteImage(g.path)
+      setSstv(await getSstvState())
+    }, 'Could not delete the image')
+  }
 
   // ---------------------------------------------------------------------------
   // TX: compose an image and transmit it. Nothing here keys the rig until the
@@ -1395,6 +1409,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               gallery.map((g) => (
                 <figure key={g.path} className="sstv-thumb" title={g.path}>
                   <GalleryThumb entry={g} />
+                  {/* Irreversible — a received picture is the only copy of something somebody
+                      sent you, and there is no re-download. Confirmed before it happens, but a
+                      plain confirm rather than the Logbook's type-the-word dialog: one image is
+                      not a whole logbook, and ceremony out of proportion to the act just teaches
+                      people to click through it. */}
+                  <button
+                    type="button"
+                    className="sstv-thumb-del"
+                    aria-label={`Delete the ${g.mode} image received ${fmtUtc(g.finishedUtc)}`}
+                    title="Delete this image"
+                    onClick={() => void deleteImage(g)}
+                  >
+                    ✕
+                  </button>
                   <figcaption className="sstv-thumb-caption">
                     <span className="sstv-thumb-mode">{g.mode}</span>
                     {g.fskId && <span className="sstv-thumb-call">{g.fskId}</span>}
