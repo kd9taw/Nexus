@@ -73,7 +73,7 @@ import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
-import { allTxtLocation, revealAllTxt } from '../api'
+import { allTxtLocation, recordingsLocation, revealAllTxt, revealRecordings } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
@@ -548,6 +548,7 @@ export function SettingsPanel({
     return () => window.removeEventListener('resize', onResize)
   }, [MAX_STEP])
   const [allTxtPath, setAllTxtPath] = useState('')
+  const [recordingsPath, setRecordingsPath] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'saved'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [rigModels, setRigModels] = useState<[number, string][]>([])
@@ -594,6 +595,11 @@ export function SettingsPanel({
     allTxtLocation()
       .then((p) => {
         if (alive) setAllTxtPath(p)
+      })
+      .catch(() => {})
+    recordingsLocation()
+      .then((p) => {
+        if (alive) setRecordingsPath(p)
       })
       .catch(() => {})
     return () => {
@@ -6278,7 +6284,24 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">Auto-records the last ~60 s of RX audio to the recordings folder on log</span>
+                  <span className="settings-hint">
+                    Auto-records the last ~60 s of RX audio on log.
+                    {recordingsPath && (
+                      <>
+                        {' '}Saved in <code>{recordingsPath}</code> — this folder is per radio
+                        profile, and it is only created once the first recording lands.
+                      </>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => {
+                      revealRecordings().catch(() => {})
+                    }}
+                  >
+                    Open recordings folder
+                  </button>
                 </div>
 
                 <label className="settings-field">

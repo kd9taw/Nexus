@@ -2070,12 +2070,72 @@ fn voice_dir() -> PathBuf {
 }
 
 /// Directory for QSO recordings (audio bridge): `<settings dir>/recordings` (12 kHz mono WAVs).
+///
+/// ⚠️ THIS IS PER-PROFILE and that is the whole of the "recording is not writing the file" report
+/// (#24). A second radio runs under a profile-suffixed config dir (`tempo-r<id>`), so the
+/// recordings for it are NOT beside the first radio's — and the folder does not exist at all until
+/// the first recording lands. An operator looking in the obvious place finds nothing and concludes
+/// the write failed. `recordings_location` exists so the panel can show the resolved path instead
+/// of leaving them to guess.
 fn recordings_dir() -> PathBuf {
     settings_path()
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
         .join("recordings")
+}
+
+/// The resolved absolute recordings folder, for the Settings panel to show the operator exactly
+/// where per-QSO audio lands — the same affordance `all_txt_location` gives the decode log, and
+/// for the same reason: the path is per-profile and not guessable.
+#[tauri::command]
+fn recordings_location() -> String {
+    recordings_dir().to_string_lossy().into_owned()
+}
+
+/// Open the recordings folder. Creates it first, deliberately: an operator who has not recorded
+/// anything yet would otherwise click Reveal and have nothing happen, which is the same silence
+/// this issue is about.
+#[tauri::command]
+fn reveal_recordings(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = recordings_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Write one per-QSO RX recording, naming the FULL path in any error.
+///
+/// ⚠️ Both steps used to be `let _ =` — the directory create AND the WAV write — so a full disk, a
+/// read-only profile dir or a permissions problem produced exactly nothing: no file, no message,
+/// no log line. That is the honesty defect in #24, independent of whether a write was ever really
+/// failing for the operator who reported it. The path is in the message because "it did not save"
+/// without saying where is the report we got, and it cost a round trip to answer.
+fn write_qso_wav(call: &str, pcm: &[i16]) -> Result<PathBuf, String> {
+    write_qso_wav_in(&recordings_dir(), call, pcm)
+}
+
+/// [`write_qso_wav`] against an explicit directory — the testable core. `recordings_dir()` is
+/// derived from the live profile's settings path, which a test cannot redirect, so the policy
+/// (create, name, write, and name the path in any error) lives here where it can be driven.
+fn write_qso_wav_in(dir: &std::path::Path, call: &str, pcm: &[i16]) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("Could not create the recordings folder {}: {e}", dir.display()))?;
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let safe: String = call.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    // The millisecond stamp exists so a stop-then-start inside one second cannot clobber the
+    // previous file.
+    let path = dir.join(format!("qso-{safe}-{ms}.wav"));
+    // 12 kHz: the engine's RX-audio rate (tempo_fast::SAMPLE_RATE).
+    tempo_core::wavfile::write_wav_i16(&path, pcm, 12_000)
+        .map_err(|e| format!("Could not save the QSO recording {}: {e}", path.display()))?;
+    Ok(path)
 }
 
 /// Full UI snapshot (`AppSnapshot`) — the UI renders all three zones from this.
@@ -10061,16 +10121,15 @@ fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnaps
     };
     if let Some(pcm) = wav {
         if !pcm.is_empty() {
-            let dir = recordings_dir();
-            let _ = std::fs::create_dir_all(&dir);
-            let ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let safe: String = call.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-            let path = dir.join(format!("qso-{safe}-{ms}.wav"));
-            // 12 kHz: the engine's RX-audio rate (tempo_fast::SAMPLE_RATE).
-            let _ = tempo_core::wavfile::write_wav_i16(&path, &pcm, 12_000);
+            // Outside the lock (I/O), and the OUTCOME goes back into the engine so the next
+            // snapshot poll carries it to the status lane. The QSO itself is already logged, so a
+            // failed recording must never fail this command — that would tell the operator the
+            // contact was lost when it was not.
+            let outcome = write_qso_wav(&call, &pcm).err();
+            if let Some(e) = &outcome {
+                eprintln!("nexus: {e}");
+            }
+            engine_lock(&state).set_recording_warning(outcome);
         }
     }
     Ok(snap)
@@ -14804,6 +14863,8 @@ pub fn run() {
             save_text_to_downloads,
             civ_diagnostic_log,
             all_txt_location,
+            recordings_location,
+            reveal_recordings,
             reveal_all_txt,
             open_qrz_page,
             open_dxped_page,
@@ -15225,6 +15286,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
+        write_qso_wav_in,
        assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
         engine_lock, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
         load_tle_snapshot_from, own_decode_heards, parse_sstv_mode, profile_dir_name, qso_is_sat,
@@ -15243,6 +15305,51 @@ mod tests {
     /// dependency), cleaned up by the caller.
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("nexus-test-{}-{name}", std::process::id()))
+    }
+
+    /// ISSUE #24 — "recording is not writing the file".
+    ///
+    /// Both steps used to be `let _ =`: the directory create AND the WAV write. A full disk, a
+    /// read-only profile directory or a permissions problem produced no file, no message and no
+    /// log line — the operator's only evidence was an absent folder, which is also what a
+    /// perfectly healthy build looks like before the first recording lands.
+    #[test]
+    fn a_qso_recording_that_cannot_be_written_says_so_and_names_the_path() {
+        let dir = scratch("rec-blocked");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&dir);
+        // A FILE where the folder should be: create_dir_all cannot succeed against it, which is
+        // the same shape as an unwritable or occupied path on a real station.
+        std::fs::write(&dir, b"not a directory").unwrap();
+
+        let err = write_qso_wav_in(&dir, "W1AW", &[0i16, 1, -1])
+            .expect_err("a write that cannot happen must not report success");
+        assert!(
+            err.contains(&dir.display().to_string()),
+            "the message must name the path it failed at, or the report is \"it did not save\" \
+             again and costs a round trip: {err}"
+        );
+
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// The other direction, so the guard above is not passing for the wrong reason: a writable
+    /// directory really does produce a file, named for the call, in the folder we said.
+    #[test]
+    fn a_qso_recording_lands_in_the_folder_the_operator_is_shown() {
+        let dir = scratch("rec-ok");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let path = write_qso_wav_in(&dir, "W1AW/P", &[0i16, 100, -100]).expect("write must succeed");
+        assert!(path.exists(), "the file the call returned must actually be there");
+        assert_eq!(path.parent(), Some(dir.as_path()));
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        // The slash is stripped rather than becoming a directory separator.
+        assert!(name.starts_with("qso-W1AWP-"), "unexpected name: {name}");
+        assert!(name.ends_with(".wav"));
+        assert!(std::fs::metadata(&path).unwrap().len() > 0, "an empty file is not a recording");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// REGRESSION (operator 2026-08-05, the 6 m false-alert): `get_propagation`

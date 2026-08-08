@@ -813,6 +813,13 @@ export async function allTxtLocation(): Promise<string> {
   return invoke<string>('all_txt_location')
 }
 
+/** The absolute folder where per-QSO recordings land (to show in Settings). Per-PROFILE: a second
+ * radio records under its own config dir, which is the whole of why "it is not writing the file"
+ * gets reported when nothing has failed. */
+export async function recordingsLocation(): Promise<string> {
+  return invoke<string>('recordings_location')
+}
+
 /** The app version string (e.g. "0.15.8") from tauri.conf.json — shown under the wordmark. */
 export async function appVersion(): Promise<string> {
   return invoke<string>('app_version')
@@ -878,6 +885,10 @@ export async function openDxpedPage(call: string, url?: string | null): Promise<
 
 export async function revealAllTxt(): Promise<void> {
   await invoke('reveal_all_txt')
+}
+
+export async function revealRecordings(): Promise<void> {
+  await invoke('reveal_recordings')
 }
 
 /** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */

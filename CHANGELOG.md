@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A QSO recording that could not be saved said nothing at all.** Both steps — creating the folder
+  and writing the file — threw their result away, so a full disk, a read-only folder or a
+  permissions problem produced no file, no message and nothing in any log. The only evidence was an
+  empty folder, which is also exactly what a perfectly healthy Nexus looks like before your first
+  recording lands. If a recording cannot be written you now get told, and the message names the
+  full path it was trying to write, so you can see straight away whether it is a permissions
+  problem or you were looking in the wrong place. The contact itself is unaffected — it is logged
+  either way; only the audio failed.
+
+### Added
+
+- **Settings now shows you where recordings actually go, with a button to open the folder.** This
+  is the other half of the same report, and probably the bigger half: the recordings folder lives
+  under the config directory *for that radio profile*, so a second radio keeps its recordings
+  somewhere else entirely, and the folder is not created at all until the first recording lands.
+  Between those two, an operator looking in the obvious place finds nothing and reasonably concludes
+  the feature is broken. The decode log has shown its path this way for a while; recordings do now
+  too, and the button creates the folder if it does not exist yet rather than doing nothing.
+
 ## [1.0.2] — 2026-08-06
 
 
