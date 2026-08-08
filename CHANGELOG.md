@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Clicking the waterfall moved your transmit frequency as well as your receive frequency.** The
+  hint under the waterfall says left-click sets RX, Shift or right sets TX, Ctrl sets both, and that
+  is what WSJT-X does — but a plain left-click in Nexus was moving both markers, so a click meant to
+  listen to someone also moved you on top of them. The only way to stop it was to switch Hold Tx Freq
+  on, which is a workaround for a bug rather than what that switch is for. A plain click now moves
+  the green RX marker and leaves your TX frequency exactly where you put it, whatever Hold Tx Freq is
+  set to. Double-clicking a decode to work a station is unchanged and still brings TX with it unless
+  you are holding — that is what Hold Tx Freq is actually for, and it is what WSJT-X does too.
+  Reported by akhepcat.
+
 ## [1.0.2] — 2026-08-06
 
 

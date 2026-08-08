@@ -6477,12 +6477,17 @@ impl Engine {
         {
             self.apply_cycle_parity(s % 2 == 0);
         }
-        // Move our RX onto the DX's audio frequency (and TX with it, unless Hold Tx
-        // Freq is on) — WSJT-X's double-click-to-work behavior. set_rx_offset clamps to
-        // the passband and drags TX along when Hold is off. Ignore a non-positive offset
-        // (absent/malformed) so we don't yank the rig to the band edge.
+        // Move our RX onto the DX's audio frequency, and TX with it unless Hold Tx Freq is on —
+        // WSJT-X's double-click-to-work behavior, and the ONLY place that Hold test belongs
+        // (mainwindow.cpp:6065 and :6149 gate exactly this on `cbHoldTxFreq`). It used to live
+        // inside `set_rx_offset`, which meant a plain waterfall click moved TX too — issue #38.
+        // `set_rx_offset`/`set_tx_offset` both clamp to the passband. Ignore a non-positive
+        // offset (absent/malformed) so we don't yank the rig to the band edge.
         if let Some(hz) = dx_freq.filter(|h| *h > 0.0) {
             self.set_rx_offset(hz);
+            if !self.hold_tx_freq {
+                self.set_tx_offset(hz);
+            }
         }
         // Hound rule (stock DXpedition mode): initial calls to the Fox must be
         // ABOVE 1000 Hz — the Fox listens there; 300–900 is the Fox's own
@@ -10433,12 +10438,22 @@ impl Engine {
     }
     /// Set the receive audio offset (Hz) — the green waterfall marker. When
     /// "Hold Tx Freq" is off, the TX offset follows it (the common case).
+    /// Move the RX marker, and ONLY the RX marker.
+    ///
+    /// ⚠️ This used to drag TX along whenever Hold Tx Freq was off, and that was issue #38: a
+    /// plain left-click on the waterfall moved both markers, so the operator had to switch Hold
+    /// Tx Freq on to stop it. In real WSJT-X the waterfall click never moves TX at all —
+    /// `widgets/plotter.cpp` passes the OLD tx frequency up for an unmodified click
+    /// (`emit setFreq1(newFreq, oldTxFreq)`; Shift sends tx, Ctrl sends both) and
+    /// `MainWindow::setFreq4` applies what it is handed with no Hold test anywhere in it.
+    ///
+    /// Hold Tx Freq belongs to the DECODE double-click instead (mainwindow.cpp:6065, :6149),
+    /// which is [`Self::call_station_ctx`] here — so the test lives there now. Keeping it in this
+    /// setter made it apply to every caller, including the one gesture that must never move TX,
+    /// and a function called `set_rx_offset` that also set TX could not be read as what it said.
     pub fn set_rx_offset(&mut self, hz: f32) {
         self.rx_offset_hz = hz.clamp(200.0, 4000.0);
         self.settings.rx_offset_hz = self.rx_offset_hz;
-        if !self.hold_tx_freq {
-            self.set_tx_offset(hz);
-        }
     }
     /// Hold the TX offset fixed when the RX offset changes (WSJT-X "Hold Tx Freq").
     pub fn set_hold_tx_freq(&mut self, on: bool) {
@@ -16511,24 +16526,54 @@ mod tests {
         assert!(!a.snapshot().radio.tx_even);
     }
 
+    /// ISSUE #38. A plain left-click on the waterfall moved BOTH markers, and the operator who
+    /// reported it had to switch Hold Tx Freq on to stop it — which is a workaround, not the
+    /// supported way.
+    ///
+    /// Baselined against real WSJT-X, not against our own consistency. `widgets/plotter.cpp`
+    /// decides the target from the modifiers and passes BOTH frequencies up:
+    ///
+    ///     if (ctrl)       emit setFreq1(newFreq, newFreq);   // both
+    ///     else if (shift) emit setFreq1(oldRxFreq, newFreq); // Tx only
+    ///     else            emit setFreq1(newFreq, oldTxFreq); // Rx only — Tx PRESERVED
+    ///
+    /// and `MainWindow::setFreq4` applies exactly what it was handed, with no Hold-Tx test in it
+    /// at all. So a plain click never moves Tx in WSJT-X, whatever Hold Tx Freq is set to. Hold
+    /// Tx Freq gates the DECODE double-click instead (mainwindow.cpp:6065 and :6149) — which is
+    /// the behaviour `call_station_ctx` implements, and which is correct and unchanged.
+    ///
+    /// The defect was that the Hold test lived in `set_rx_offset`, one level too low, so it
+    /// applied to every caller including the click that must never move Tx.
     #[test]
-    fn set_offset_clamps_and_follows_hold() {
+    fn a_waterfall_click_moves_only_rx_whatever_hold_tx_freq_says() {
+        for hold in [false, true] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_tx_offset(1800.0);
+            e.set_hold_tx_freq(hold);
+            e.set_rx_offset(1200.0);
+            assert_eq!(
+                e.rx_offset_hz(),
+                1200.0,
+                "hold={hold}: RX moves to the click"
+            );
+            assert_eq!(
+                e.tx_offset_hz(),
+                1800.0,
+                "hold={hold}: a plain waterfall click must never move TX"
+            );
+        }
+    }
+
+    #[test]
+    fn set_offset_clamps_and_surfaces_in_the_snapshot() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_tx_offset(1800.0);
         assert_eq!(e.tx_offset_hz(), 1800.0);
-        // Hold off: setting RX drags TX along (the common case).
         e.set_rx_offset(1200.0);
         assert_eq!(e.rx_offset_hz(), 1200.0);
-        assert_eq!(
-            e.tx_offset_hz(),
-            1200.0,
-            "TX follows RX when Hold Tx is off"
-        );
-        // Hold on: RX no longer moves TX.
         e.set_hold_tx_freq(true);
         e.set_rx_offset(900.0);
         assert_eq!(e.rx_offset_hz(), 900.0);
-        assert_eq!(e.tx_offset_hz(), 1200.0, "TX held when Hold Tx is on");
         // Clamp to the usable passband + surface in the snapshot.
         e.set_rx_offset(50.0);
         assert_eq!(e.rx_offset_hz(), 200.0, "clamped to the low edge");
