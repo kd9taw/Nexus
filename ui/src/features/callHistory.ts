@@ -3,6 +3,7 @@
 // DXer questions: have I worked them, on this band (dupe), when last, how confirmed.
 
 import type { LoggedQso } from '../types'
+import { bandLabelForMhz, bandRangeForLabel } from '../band'
 
 export interface CallHistory {
   /** Prior QSOs with this call (in the order given by the log). */
@@ -45,6 +46,65 @@ export function entityKey(q: { entity?: string | null; country?: string | null }
   return (q.entity ?? q.country ?? '').trim().toUpperCase()
 }
 
+/** The slot identity of a MODE: spellings of one identical mode fold together, and nothing
+ * else does.
+ *
+ * ⚠️ THIS IS DELIBERATELY NOT `reconcile::mode_class`. That buckets everything into
+ * CW / Phone / Digital, which is the granularity DXCC awards at — correct for matching a LoTW
+ * confirmation, and far too coarse here. Folding to classes would tell an operator who has
+ * worked an entity on FT8 that FT4 is not a new mode, and that an FM contact covers SSB. The
+ * board shows specific modes and must keep doing so.
+ *
+ * What folds, and why each one is the SAME mode rather than a near neighbour:
+ *   USB / LSB → SSB   ADIF models both as SUBMODEs of SSB; a contact on USB and one on LSB
+ *                     are two SSB contacts, so badging "new mode — LSB" is simply wrong.
+ *   BPSK31 → PSK31,   the same waveform under two spellings, both common in imported logs.
+ *   BPSK63 → PSK63
+ *
+ * What does NOT fold, on purpose: FM and AM stay distinct from SSB (different modes, however
+ * DXCC groups them); FT4 stays distinct from FT8. And the genuinely ambiguous tokens are left
+ * exactly as they are rather than guessed at — a bare `MFSK` row may be FT4, JS8 or something
+ * else entirely (the import promotes ADIF SUBMODE, so current imports store `FT4` directly;
+ * bare MFSK is older residue), and `PH` is N3FJP's generic phone token which may have been FM.
+ * Mapping either of those would invent a contact the operator never made. */
+export function modeKey(mode: string | null | undefined): string {
+  const m = (mode ?? '').trim().toUpperCase()
+  switch (m) {
+    case 'USB':
+    case 'LSB':
+      return 'SSB'
+    case 'BPSK31':
+      return 'PSK31'
+    case 'BPSK63':
+      return 'PSK63'
+    default:
+      return m
+  }
+}
+
+/** The slot identity of a BAND: the stored token when it names a real band, else derived from
+ * the contact's own frequency, else `null` for "cannot be known".
+ *
+ * Two things combined into a permanent false badge. The stored token is free text and does not
+ * always name a band this app knows (`-fm` suffixes and similar), and the frequency was never
+ * consulted as a fallback — so a row that did not parse contributed a token matching nothing,
+ * and the live band read as new against it forever, on every poll, with no way for an operator
+ * to clear it by operating.
+ *
+ * `null` is the honest third answer and is not the same as "not worked": a real imported log can
+ * carry rows with an unparseable band AND `FREQ 0`, where the band the contact was made on is
+ * genuinely unrecoverable. See [`entitySlots`] for what that then suppresses. */
+export function bandKey(q: { band?: string | null; freqMhz?: number | null }): string | null {
+  const token = (q.band ?? '').trim()
+  if (token && bandRangeForLabel(token.toLowerCase())) return token.toUpperCase()
+  const mhz = q.freqMhz ?? 0
+  if (mhz > 0) {
+    const derived = bandLabelForMhz(mhz)
+    if (derived) return derived.toUpperCase()
+  }
+  return null
+}
+
 /** True only when the entity is KNOWN (non-empty resolved entity, or country as
  * the caller's fallback) and no log row's award identity matches it — never
  * claims "new DXCC" for a blank/unresolved entity. */
@@ -60,10 +120,18 @@ export function isNewEntity(
 export interface EntitySlots {
   /** The entity (country) has at least one prior QSO in the log. */
   workedEver: boolean
-  /** Distinct bands worked for the entity, normalized (trim + UPPER), first-seen order. */
+  /** Distinct bands worked for the entity, resolved through [`bandKey`], first-seen order. */
   bandsWorked: string[]
-  /** Distinct modes worked for the entity, normalized (trim + UPPER), first-seen order. */
+  /** Distinct modes worked for the entity, folded through [`modeKey`], first-seen order. */
   modesWorked: string[]
+  /** At least one contact with this entity has a band that cannot be determined at all — an
+   * unparseable token and no frequency to fall back on, which a real imported log does carry.
+   *
+   * The caller must not raise a New Band badge while this is set. We know the operator has
+   * worked the entity and we do NOT know on which band, so "you have never worked them here"
+   * is a claim the data does not support. Silence is the honest answer; the alternative is a
+   * badge that is wrong for as long as the row exists and that no amount of operating clears. */
+  bandUnknown: boolean
 }
 
 /** Per-ENTITY band/mode-slot summary — the DXCC-Challenge axis that per-call
@@ -78,23 +146,36 @@ export function entitySlots(
     country?: string | null
     band?: string | null
     mode?: string | null
+    freqMhz?: number | null
   }[],
   entity: string | null | undefined,
 ): EntitySlots {
   const c = (entity ?? '').trim().toUpperCase()
-  if (!c) return { workedEver: false, bandsWorked: [], modesWorked: [] }
+  if (!c) {
+    return { workedEver: false, bandsWorked: [], modesWorked: [], bandUnknown: false }
+  }
   const bandsWorked: string[] = []
   const modesWorked: string[] = []
   let workedEver = false
+  let bandUnknown = false
   for (const q of log) {
     if (entityKey(q) !== c) continue
     workedEver = true
-    const b = (q.band ?? '').trim().toUpperCase()
-    const m = (q.mode ?? '').trim().toUpperCase()
-    if (b && !bandsWorked.includes(b)) bandsWorked.push(b)
+    // Through the SAME two key functions the live side uses. Comparing the raw stored strings
+    // is what produced the false badges: a band token that named no band matched nothing, and
+    // USB against a log full of LSB read as a mode never worked.
+    const b = bandKey(q)
+    const m = modeKey(q.mode)
+    if (b === null) {
+      // Only when the row genuinely carried a band we could not place. A row with no band at
+      // all is a different thing and stays silent as it always did.
+      if ((q.band ?? '').trim() || (q.freqMhz ?? 0) > 0) bandUnknown = true
+    } else if (!bandsWorked.includes(b)) {
+      bandsWorked.push(b)
+    }
     if (m && !modesWorked.includes(m)) modesWorked.push(m)
   }
-  return { workedEver, bandsWorked, modesWorked }
+  return { workedEver, bandsWorked, modesWorked, bandUnknown }
 }
 
 /** Summarize a call's prior contacts from the full log. Case-insensitive on the call;

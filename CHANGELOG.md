@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two ways the "new band" and "new mode" badges could tell you something was new when it was
+  not.** Both came from comparing what the log happens to say against what the radio happens to
+  say, as plain text.
+
+  A contact logged on **USB** did not match one logged on **LSB**, so working a country on one
+  sideband told you it was a mode you had never worked there — they are the same mode, and ADIF
+  says so. That is now folded, along with a couple of spellings of the same digital mode. Nothing
+  else is: FM and AM stay separate from SSB, and FT4 stays separate from FT8, because those are
+  genuinely different modes even where an award groups them together. Where the log is honestly
+  ambiguous — a bare `MFSK` row that could be several things, or the generic `PH` some loggers
+  write — it is left alone rather than guessed at.
+
+  Separately, an imported contact whose band field did not name a band Nexus recognises matched
+  nothing at all, so the band you were sitting on read as new against it every single time, and no
+  amount of operating would ever clear it. The frequency is now used to work out the band when the
+  band field itself is no help. When there is neither — old imports often carry no usable band and
+  a frequency of zero — Nexus now says nothing rather than claiming the band is new, because it
+  genuinely cannot tell.
+
+  Entities are untouched and were already right: European Russia, Asiatic Russia, Kaliningrad and
+  Franz Josef Land are four separate DXCC entities and are each tracked on their own.
+
 ## [1.0.2] — 2026-08-06
 
 
