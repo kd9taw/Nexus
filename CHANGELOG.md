@@ -13,7 +13,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audio bridge landed and CW never got one, so recording a CW QSO meant leaving the cockpit to do
   it. Same button in the header, same stop in the top bar.
 
+- **You can delete a received SSTV image from inside the app.** There was no delete anywhere — once
+  a picture decoded it was permanent as far as Nexus was concerned, and the gallery only ever grew.
+  Hover a thumbnail and a ✕ appears; it asks first, naming the picture rather than just "are you
+  sure", because the tiles are small and several look alike. It is not recoverable afterwards: a
+  received picture is the only copy of something somebody sent you.
+
+- **Settings now shows you where recordings actually go, with a button to open the folder.** This
+  is the other half of the same report, and probably the bigger half: the recordings folder lives
+  under the config directory *for that radio profile*, so a second radio keeps its recordings
+  somewhere else entirely, and the folder is not created at all until the first recording lands.
+  Between those two, an operator looking in the obvious place finds nothing and reasonably concludes
+  the feature is broken. The decode log has shown its path this way for a while; recordings do now
+  too, and the button creates the folder if it does not exist yet rather than doing nothing.
+
 ### Changed
+
+- **Your recordings and your received SSTV pictures now live where you would look for them.**
+  Recordings go to **Documents ▸ Nexus ▸ Recordings** and received SSTV images to
+  **Pictures ▸ Nexus SSTV**. Both used to sit in Nexus's own configuration folder, which is hidden,
+  is not the same place for a second radio, and is not somewhere anyone thinks to look — several
+  people concluded recording was simply broken, and they were reasonable to. Pictures you were sent
+  are worth being able to find, open and share without going through the app.
+
+  **Your existing SSTV gallery comes with you.** The first time you start this version, the images
+  and their index are moved into the new folder, so the gallery looks exactly as it did — nothing
+  is left stranded and nothing needs re-importing. Recordings you already have are left where they
+  are rather than moved out from under you; only new ones go to Documents. If Windows cannot tell
+  Nexus where your Documents or Pictures folders are, it carries on using the old location rather
+  than guessing at a path.
+
+  Voice-keyer messages are unchanged. Those are app state rather than something you browse — they
+  are referenced from your settings by name, and the keyer already has its own recording controls.
 
 - **The record button is findable again.** It was reduced to a bare dot in a box last week, in a
   header that also carries the band picker, tuning strip, Tune and Stop TX — small enough that it
@@ -22,133 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   look like one. The recording state was also using a red that had never been defined, so it fell
   back to a shade picked for the dark theme and washed out on the light one; it uses the app's
   transmit red now and reads properly in both.
+
 - **The Openings and Band Advisor panes fit more on screen.** Both were set a size larger than they
   needed and were costing more scrolling than the information warranted — about one extra row now
   fits per six. The Openings log was also using hardcoded sizes rather than the app's text scale, so
   it ignored the rest of the sizing system; it follows it now.
 
-### Added
-
-- **You can delete a received SSTV image from inside the app.** There was no delete anywhere — once
-  a picture decoded it was permanent as far as Nexus was concerned, and the gallery only ever grew.
-  Hover a thumbnail and a ✕ appears; it asks first, naming the picture rather than just "are you
-  sure", because the tiles are small and several look alike. It is not recoverable afterwards: a
-  received picture is the only copy of something somebody sent you.
-
 ### Fixed
-
-- **Deleting an image by hand no longer leaves a broken thumbnail — and pictures you copy in show
-  up.** The gallery kept its own list of images and never checked it against the folder, so removing
-  a `.bmp` yourself left an entry pointing at nothing, which is exactly what you had to do given
-  there was no delete. It now reconciles with the folder when it loads: entries whose file is gone
-  drop out quietly, and images sitting in the folder that Nexus has not seen before are picked up,
-  dated and named from their own filename. Managing the folder yourself works now instead of
-  breaking things — which matters more since the gallery moved to Pictures.
-
-### Fixed
-
-- **The Needed board said "Digital" for some stations and "FT8" for others, and they were all
-  FT8.** Rows reach that board two ways. One carries the real mode and says FT8; the other comes
-  from a DX cluster spot, where the only thing worth believing is the frequency on the dial — and
-  that path was only ever asking "is this digital, voice or CW?" and showing the answer. But the
-  band plan knows more than that on those frequencies: 14.074 is FT8 and 14.080 is FT4, and it has
-  always known, the detail was just being thrown away. Spots on a known FT8 or FT4 watering hole
-  now say so. Anywhere else there genuinely is nothing more specific to be had from a bare
-  frequency, so those still read Digital rather than Nexus inventing a mode. Clicking a row takes
-  you exactly where it did before. Reported from the 1.0.3 test build.
-
-- **The Call Roster never showed which station you were actually working.** In a busy roster there
-  was nothing to say which of those calls belonged to the contact in progress — and not because the
-  highlight was too subtle, but because the roster was never told. It was being handed the Tempo
-  chat peer, which is empty for the whole of an FT8 or FT4 session, so nothing ever matched. The
-  station the sequencer is working now stands out in the transmit colour, stays legible instead of
-  fading with age like the other rows, and reads as "working now" to a screen reader. It is
-  separate from the row you last clicked, so you can look at one station while working another.
-  Asked for by m7jyfradio and akhepcat.
-
-### Fixed
-
-- **The TX Level (Pwr) slider lagged several seconds behind what was actually going out, and its
-  useful range was crushed into the bottom of the travel.** Holding Tune while trimming drive
-  against a rig's ALC meter, the slider looked like it was doing nothing and then suddenly
-  jumped: the tune carrier was generated in fixed 40ms chunks regardless of how often the
-  driving loop actually ticked, so the queued backlog grew without bound for as long as Tune
-  was held — audio reaching the rig could run several seconds stale. Separately, the Settings
-  panel's own Tx Power slider only applied its value on release, not while dragging, so it gave
-  no feedback until you let go, unlike the matching cockpit "Pwr" slider. TX drive now tracks
-  both sliders live while dragging. And now that it does: the drive range that actually matters
-  on real hardware — 0 up to just past where ALC engages — turned out to live in only the bottom
-  15-20% of the old linear slider, so both sliders now use a curve that gives that range most of
-  the travel. What a saved drive level means is unchanged either way.
-
-- **FT8 and FT4 were putting a six-character grid square on the air.** A standard FT8 or FT4
-  message has room for four characters of locator and no more, so if you had set a six-character
-  grid in Settings, your calls to another station carried something the message format cannot hold.
-  The station you were working could not decode it as a grid at all, which means their software had
-  nothing to auto-reply to and the contact stalled on their side for a reason that looked like
-  nothing at all on yours. Curiously your CQ was fine — that path already trimmed it — so this only
-  bit once you actually answered somebody.
-
-  Nexus now sends four characters, the same as WSJT-X, which trims to four in exactly one place for
-  exactly this reason. Your settings and your log are untouched: a six-character locator is correct
-  in both, and it is only what leaves the antenna that is cut. Reported by kr4fqg.
-
-### Fixed
-
-- **macOS: CAT could fail to connect even with Hamlib installed via Homebrew.** A Finder/Dock-
-  launched app is started by launchd with a fixed `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin` —
-  never the interactive shell's `PATH`, so a Homebrew `rigctld` (`/opt/homebrew/bin` on Apple
-  Silicon, `/usr/local/bin` on Intel) or a MacPorts one (`/opt/local/bin`) was invisible to Nexus
-  even though it worked fine from Terminal. Nexus now also checks those common install
-  directories before giving up, the same way the Windows build already prefers a binary bundled
-  next to the app. A `rigctld` already on `PATH` still always wins.
-
-- **The Linux download now says which Linux it needs.** Both PC Linux files require Ubuntu 24.04 or
-  newer, and nothing said so — not the download page, not the README, not the package itself. On
-  anything older the `.deb` installs without a word of complaint and then the app does not start,
-  which is how a report from a Mint 21.3 operator reached us. The AppImage is no help there either,
-  despite what portability usually means: an AppImage carries the application's own libraries but
-  not the system C library, so it needs exactly the same minimum. The requirement is now stated
-  everywhere the files are listed, with the one command that checks it (`ldd --version`).
-
-  Behind that, the build that produces those files was pinned. It had been following whatever image
-  GitHub happened to call "latest", so the oldest distro Nexus ran on was never a decision anyone
-  made — and the next time that label moved it would have risen again and cut off working
-  installations, with a completely green build and nothing to point at. The release now refuses to
-  publish a Linux binary that needs more than the stated minimum.
-
-- **The Tempo dial would not scroll.** Hover a digit of the big frequency readout and roll the
-  wheel, and that digit steps — the 1 kHz digit by 1 kHz, the 1 MHz digit by 1 MHz, carrying the
-  way a real VFO carries. Every cockpit has worked that way for a while except Tempo, which used
-  the same readout with the tuning switched off. There was nothing to see: a readout with digit
-  tuning and one without look identical, so the only symptom was that scrolling did nothing.
-
-- **The wheel tuning sensitivity slider did nothing on four of the six dials.** Settings ▸ Radio
-  says it applies to the frequency readout, and it only reached Phone and CW. On Operate, RTTY and
-  SSTV the digits tuned at the stock rate no matter where the slider sat, so anyone who moved it
-  because a free-spinning mouse was overshooting got no change and no reason why. It now reaches
-  every readout, Tempo's included.
-
-- **Clicking the waterfall moved your transmit frequency as well as your receive frequency.** The
-  hint under the waterfall says left-click sets RX, Shift or right sets TX, Ctrl sets both, and that
-  is what WSJT-X does — but a plain left-click in Nexus was moving both markers, so a click meant to
-  listen to someone also moved you on top of them. The only way to stop it was to switch Hold Tx Freq
-  on, which is a workaround for a bug rather than what that switch is for. A plain click now moves
-  the green RX marker and leaves your TX frequency exactly where you put it, whatever Hold Tx Freq is
-  set to. Double-clicking a decode to work a station is unchanged and still brings TX with it unless
-  you are holding — that is what Hold Tx Freq is actually for, and it is what WSJT-X does too.
-  Reported by akhepcat.
-
-- **The Pwr slider now changes your drive straight away instead of several seconds later.** Moving
-  it only affected audio Nexus had not generated yet, and it generates well ahead — an FT8 over is
-  built and queued in one go, all thirteen seconds of it — so the level was already baked into
-  everything waiting to go out. Hold Tune, move the slider, and the rig's ALC sat where it was for
-  a good few seconds before catching up, which makes it very easy to overshoot into compression
-  while chasing a control that has not responded yet. The level is now applied to each sample as it
-  leaves for the sound card, so what you set is what goes out on the next fraction of a second,
-  including audio already queued. The waveform is scaled rather than dropped and rebuilt, so there
-  is no gap or click when you move it mid-transmission. Affects every mode that transmits through
-  the sound card. Reported by g0fqb, who also found the cause.
 
 - **Contacts never reached N1MM+, HRD or Log4OM unless you were running Field Day.** Nexus speaks
   the WSJT-X UDP protocol on 2237, and loggers pick up your decodes and your status from it — which
@@ -162,6 +73,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Worth knowing if you were chasing this: the **N1MM contact broadcast** in Settings is a different
   thing and was never going to help. N1MM does not read those packets back in — they exist for club
   dashboards and live maps. The 2237 path is the one N1MM logs from.
+
+- **FT8 and FT4 were putting a six-character grid square on the air.** A standard FT8 or FT4
+  message has room for four characters of locator and no more, so if you had set a six-character
+  grid in Settings, your calls to another station carried something the message format cannot hold.
+  The station you were working could not decode it as a grid at all, which means their software had
+  nothing to auto-reply to and the contact stalled on their side for a reason that looked like
+  nothing at all on yours. Curiously your CQ was fine — that path already trimmed it — so this only
+  bit once you actually answered somebody.
+
+  Nexus now sends four characters, the same as WSJT-X, which trims to four in exactly one place for
+  exactly this reason. Your settings and your log are untouched: a six-character locator is correct
+  in both, and it is only what leaves the antenna that is cut. Reported by kr4fqg.
+
+- **Clicking the waterfall moved your transmit frequency as well as your receive frequency.** The
+  hint under the waterfall says left-click sets RX, Shift or right sets TX, Ctrl sets both, and that
+  is what WSJT-X does — but a plain left-click in Nexus was moving both markers, so a click meant to
+  listen to someone also moved you on top of them. The only way to stop it was to switch Hold Tx Freq
+  on, which is a workaround for a bug rather than what that switch is for. A plain click now moves
+  the green RX marker and leaves your TX frequency exactly where you put it, whatever Hold Tx Freq is
+  set to. Double-clicking a decode to work a station is unchanged and still brings TX with it unless
+  you are holding — that is what Hold Tx Freq is actually for, and it is what WSJT-X does too.
+  Reported by akhepcat.
+
+- **A station Nexus had given up calling stayed armed to transmit, with no time limit.** When you
+  call a station in FT8 or FT4 and it never answers, Nexus stops calling after eight overs. It kept
+  the QSO open while it waited, which is what you want — but the TX watchdog, the six-minute limit
+  that exists to stop an unattended radio, was only ever checked at the moment an over was being
+  built. A held-back over is not built, so the clock was never looked at. The QSO sat there armed
+  with Enable TX still lit, and if that station was decoded again later — minutes or hours — Nexus
+  answered it without you touching anything.
+
+  On the shipping defaults the give-up always came first: eight FT8 overs is four minutes against a
+  six-minute watchdog, so on a called station the watchdog could not fire at all. The watchdog now
+  runs while a station is being held back, so the six minutes you set is the six minutes you get,
+  and when it expires TX disarms as it does everywhere else. Nothing about the message sequence,
+  slot timing or when Nexus decides to stop calling has changed — only that being stopped is now
+  bounded by the clock. If you are simply monitoring with TX armed and waiting for a decode, you are
+  unaffected: the watchdog still does not start until there is something it is holding back.
+
+- **The Pwr slider lagged several seconds behind what was actually going out, and its useful range
+  was crushed into the bottom of the travel.** Moving it only affected audio Nexus had not generated
+  yet, and it generates well ahead — an FT8 over is built and queued in one go, all thirteen seconds
+  of it — so the level was already baked into everything waiting to go out. Hold Tune, move the
+  slider, and the rig's ALC sat where it was for a good few seconds before catching up, which makes
+  it very easy to overshoot into compression while chasing a control that has not responded yet. The
+  level is now applied to each sample as it leaves for the sound card, so what you set is what goes
+  out on the next fraction of a second, including audio already queued. The waveform is scaled rather
+  than dropped and rebuilt, so there is no gap or click when you move it mid-transmission. Affects
+  every mode that transmits through the sound card.
+
+  Holding Tune made it worse than it had to be: the tune carrier was generated in fixed 40ms chunks
+  regardless of how often the driving loop actually ticked, so the queued backlog grew without bound
+  for as long as Tune was held and a long hold took a moment to stop. Separately, the Settings
+  panel's own Tx Power slider only applied its value on release rather than while dragging, so it
+  gave no feedback until you let go, unlike the matching cockpit Pwr slider. Both track live now.
+
+  And now that they do: the drive range that actually matters on real hardware — 0 up to just past
+  where ALC engages — turned out to live in only the bottom 15-20% of the old linear slider, so both
+  sliders now use a curve that gives that range most of the travel. **What a saved drive level means
+  is unchanged — only how far along the slider you move to reach it**, so check your usual drive is
+  where you want it before working anyone. Reported by g0fqb, who also found the cause.
 
 - **Two ways the "new band" and "new mode" badges could tell you something was new when it was
   not.** Both came from comparing what the log happens to say against what the radio happens to
@@ -185,42 +157,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Entities are untouched and were already right: European Russia, Asiatic Russia, Kaliningrad and
   Franz Josef Land are four separate DXCC entities and are each tracked on their own.
 
-- **A station Nexus had given up calling stayed armed to transmit, with no time limit.** When you
-  call a station in FT8 or FT4 and it never answers, Nexus stops calling after eight overs. It kept
-  the QSO open while it waited, which is what you want — but the TX watchdog, the six-minute limit
-  that exists to stop an unattended radio, was only ever checked at the moment an over was being
-  built. A held-back over is not built, so the clock was never looked at. The QSO sat there armed
-  with Enable TX still lit, and if that station was decoded again later — minutes or hours — Nexus
-  answered it without you touching anything.
+- **The Needed board said "Digital" for some stations and "FT8" for others, and they were all
+  FT8.** Rows reach that board two ways. One carries the real mode and says FT8; the other comes
+  from a DX cluster spot, where the only thing worth believing is the frequency on the dial — and
+  that path was only ever asking "is this digital, voice or CW?" and showing the answer. But the
+  band plan knows more than that on those frequencies: 14.074 is FT8 and 14.080 is FT4, and it has
+  always known, the detail was just being thrown away. Spots on a known FT8 or FT4 watering hole
+  now say so. Anywhere else there genuinely is nothing more specific to be had from a bare
+  frequency, so those still read Digital rather than Nexus inventing a mode. Clicking a row takes
+  you exactly where it did before. Reported from the 1.0.3 test build.
 
-  On the shipping defaults the give-up always came first: eight FT8 overs is four minutes against a
-  six-minute watchdog, so on a called station the watchdog could not fire at all. The watchdog now
-  runs while a station is being held back, so the six minutes you set is the six minutes you get,
-  and when it expires TX disarms as it does everywhere else. Nothing about the message sequence,
-  slot timing or when Nexus decides to stop calling has changed — only that being stopped is now
-  bounded by the clock. If you are simply monitoring with TX armed and waiting for a decode, you are
-  unaffected: the watchdog still does not start until there is something it is holding back.
+- **The Call Roster never showed which station you were actually working.** In a busy roster there
+  was nothing to say which of those calls belonged to the contact in progress — and not because the
+  highlight was too subtle, but because the roster was never told. It was being handed the Tempo
+  chat peer, which is empty for the whole of an FT8 or FT4 session, so nothing ever matched. The
+  station the sequencer is working now stands out in the transmit colour, stays legible instead of
+  fading with age like the other rows, and reads as "working now" to a screen reader. It is
+  separate from the row you last clicked, so you can look at one station while working another.
+  Asked for by m7jyfradio and akhepcat.
 
-### Changed
-
-- **Your recordings and your received SSTV pictures now live where you would look for them.**
-  Recordings go to **Documents ▸ Nexus ▸ Recordings** and received SSTV images to
-  **Pictures ▸ Nexus SSTV**. Both used to sit in Nexus's own configuration folder, which is hidden,
-  is not the same place for a second radio, and is not somewhere anyone thinks to look — several
-  people concluded recording was simply broken, and they were reasonable to. Pictures you were sent
-  are worth being able to find, open and share without going through the app.
-
-  **Your existing SSTV gallery comes with you.** The first time you start this version, the images
-  and their index are moved into the new folder, so the gallery looks exactly as it did — nothing
-  is left stranded and nothing needs re-importing. Recordings you already have are left where they
-  are rather than moved out from under you; only new ones go to Documents. If Windows cannot tell
-  Nexus where your Documents or Pictures folders are, it carries on using the old location rather
-  than guessing at a path.
-
-  Voice-keyer messages are unchanged. Those are app state rather than something you browse — they
-  are referenced from your settings by name, and the keyer already has its own recording controls.
-
-### Fixed
+- **Deleting an image by hand no longer leaves a broken thumbnail — and pictures you copy in show
+  up.** The gallery kept its own list of images and never checked it against the folder, so removing
+  a `.bmp` yourself left an entry pointing at nothing, which is exactly what you had to do given
+  there was no delete. It now reconciles with the folder when it loads: entries whose file is gone
+  drop out quietly, and images sitting in the folder that Nexus has not seen before are picked up,
+  dated and named from their own filename. Managing the folder yourself works now instead of
+  breaking things — which matters more since the gallery moved to Pictures.
 
 - **A QSO recording that could not be saved said nothing at all.** Both steps — creating the folder
   and writing the file — threw their result away, so a full disk, a read-only folder or a
@@ -231,15 +193,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   problem or you were looking in the wrong place. The contact itself is unaffected — it is logged
   either way; only the audio failed.
 
-### Added
+- **The Tempo dial would not scroll.** Hover a digit of the big frequency readout and roll the
+  wheel, and that digit steps — the 1 kHz digit by 1 kHz, the 1 MHz digit by 1 MHz, carrying the
+  way a real VFO carries. Every cockpit has worked that way for a while except Tempo, which used
+  the same readout with the tuning switched off. There was nothing to see: a readout with digit
+  tuning and one without look identical, so the only symptom was that scrolling did nothing.
 
-- **Settings now shows you where recordings actually go, with a button to open the folder.** This
-  is the other half of the same report, and probably the bigger half: the recordings folder lives
-  under the config directory *for that radio profile*, so a second radio keeps its recordings
-  somewhere else entirely, and the folder is not created at all until the first recording lands.
-  Between those two, an operator looking in the obvious place finds nothing and reasonably concludes
-  the feature is broken. The decode log has shown its path this way for a while; recordings do now
-  too, and the button creates the folder if it does not exist yet rather than doing nothing.
+- **The wheel tuning sensitivity slider did nothing on four of the six dials.** Settings ▸ Radio
+  says it applies to the frequency readout, and it only reached Phone and CW. On Operate, RTTY and
+  SSTV the digits tuned at the stock rate no matter where the slider sat, so anyone who moved it
+  because a free-spinning mouse was overshooting got no change and no reason why. It now reaches
+  every readout, Tempo's included.
+
+- **macOS: CAT could fail to connect even with Hamlib installed via Homebrew.** A Finder/Dock-
+  launched app is started by launchd with a fixed `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin` —
+  never the interactive shell's `PATH`, so a Homebrew `rigctld` (`/opt/homebrew/bin` on Apple
+  Silicon, `/usr/local/bin` on Intel) or a MacPorts one (`/opt/local/bin`) was invisible to Nexus
+  even though it worked fine from Terminal. Nexus now also checks those common install
+  directories before giving up, the same way the Windows build already prefers a binary bundled
+  next to the app. A `rigctld` already on `PATH` still always wins.
+
+- **The Linux download now says which Linux it needs.** Both PC Linux files require Ubuntu 24.04 or
+  newer, and nothing said so — not the download page, not the README, not the package itself. On
+  anything older the `.deb` installs without a word of complaint and then the app does not start,
+  which is how a report from a Mint 21.3 operator reached us. The AppImage is no help there either,
+  despite what portability usually means: an AppImage carries the application's own libraries but
+  not the system C library, so it needs exactly the same minimum. The requirement is now stated
+  everywhere the files are listed, with the one command that checks it (`ldd --version`).
+
+  Behind that, the build that produces those files was pinned. It had been following whatever image
+  GitHub happened to call "latest", so the oldest distro Nexus ran on was never a decision anyone
+  made — and the next time that label moved it would have risen again and cut off working
+  installations, with a completely green build and nothing to point at. The release now refuses to
+  publish a Linux binary that needs more than the stated minimum.
 
 ## [1.0.2] — 2026-08-06
 
