@@ -42,6 +42,14 @@ pub struct N1mmContact {
     pub points: u32,
     /// "ARRL-FIELD-DAY" | "WFD" | [`GENERAL_LOG`] for an ordinary QSO.
     pub contestname: String,
+    /// WHICH RADIO made this contact — N1MM's `<radionr>`, 1-based (#33).
+    ///
+    /// Emitted as a literal `1` before, which is right by accident for a single-radio station
+    /// and wrong for every other: a two-radio operator's whole session was attributed to radio
+    /// 1, and SILENTLY — the receiving logger has no way to tell a wrong radio number from a
+    /// right one, so nothing surfaces until someone reads the log and the bands do not make
+    /// sense. Nexus supports simultaneous radios, so this is ordinary operating, not a corner.
+    pub radionr: u32,
     /// RX/TX frequency in units of 10 Hz (N1MM convention).
     pub freq_10hz: u64,
     /// Our sent exchange, e.g. "3A WI".
@@ -78,7 +86,7 @@ pub fn build_contactinfo(c: &N1mmContact) -> String {
             "<section>{sect}</section>",
             "{grid}",
             "<points>{pts}</points>",
-            "<radionr>1</radionr>",
+            "<radionr>{radionr}</radionr>",
             "<IsRunQSO>0</IsRunQSO>",
             "<StationName>NEXUS</StationName>",
             "<ID>{id}</ID>",
@@ -103,6 +111,9 @@ pub fn build_contactinfo(c: &N1mmContact) -> String {
             format!("<gridsquare>{}</gridsquare>", esc(c.gridsquare.trim()))
         },
         pts = c.points,
+        // 1-based; a 0 would be meaningless to N1MM, so a caller that has no radio id
+        // should pass 1 rather than 0 (#33).
+        radionr = c.radionr.max(1),
         id = esc(&c.id),
         sent = esc(&c.sent_exchange),
     )
@@ -297,6 +308,8 @@ mod tests {
 
     fn fd_contact() -> N1mmContact {
         N1mmContact {
+            // Field Day is the multi-op case this field exists for (#33).
+            radionr: 1,
             mycall: "W9XYZ".into(),
             call: "W1AW".into(),
             band: "20".into(),

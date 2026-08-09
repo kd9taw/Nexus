@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Contacts broadcast to N1MM+ or N3FJP now say which radio made them.** Every packet claimed
+  radio 1, so a two-radio station had its whole session attributed to one rig — and silently,
+  because a logger receiving the feed has no way to tell a wrong radio number from a right one.
+  Nothing looks broken until someone reads the log and the bands make no sense. Both the ordinary
+  log broadcast and the Field Day feed now carry the radio that actually made the contact. A
+  single-radio station is unchanged: still radio 1.
+
 - **Changing band no longer leaves the radio on the wrong sideband.** Picking 20m while you were
   on 40m carried LSB across with you: the menu offered 14.230 USB and the rig was commanded to
   14.230 LSB. Typing a frequency by hand did the same thing. Transmitting on the wrong sideband is

@@ -5920,6 +5920,10 @@ impl RadioLoop {
                         let new_qsos: Vec<_> =
                             fd.log[station.last_fd_qsos.min(fd.log.len())..].to_vec();
                         let mycall = snap.mycall.clone();
+                        // Which radio N1MM should attribute these to (#33) — the ACTIVE radio's
+                        // 1-based position, derived by the one helper so this emitter and the
+                        // ordinary log broadcast can never disagree about the same station.
+                        let n1mm_radio_nr = tempo_app::engine::n1mm_radio_nr(st);
                         // The operator at the key (FD rotates ops) — the settable
                         // fd_operator when set, else the station call.
                         let operator = {
@@ -5975,6 +5979,11 @@ impl RadioLoop {
                                 }
                                 if !n1_addr.is_empty() {
                                     let c = tempo_net::n1mm::N1mmContact {
+                                        // Field Day IS the multi-op case #33 is about, so this
+                                        // emitter carries the active radio's number too — the
+                                        // dashboards bucket by it and a whole station reading
+                                        // as radio 1 is exactly the wrong answer here.
+                                        radionr: n1mm_radio_nr,
                                         mycall: mycall.clone(),
                                         call: q.call.clone(),
                                         band: band_for_interop(&q.band),

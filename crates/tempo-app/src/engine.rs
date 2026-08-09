@@ -955,6 +955,7 @@ pub fn n1mm_broadcast_target(s: &Settings) -> Option<String> {
 pub fn n1mm_contact_for(
     rec: &tempo_core::logbook::QsoRecord,
     mycall: &str,
+    radionr: u32,
 ) -> tempo_net::n1mm::N1mmContact {
     tempo_net::n1mm::N1mmContact {
         mycall: mycall.to_string(),
@@ -978,7 +979,22 @@ pub fn n1mm_contact_for(
         // Field Day's, and Field Day does not come through here).
         operator: mycall.to_string(),
         id: tempo_net::n1mm::dedup_id(rec.when_unix, &rec.call, 0),
+        radionr,
     }
+}
+
+/// N1MM's `<radionr>` for the ACTIVE radio (#33) — its 1-based POSITION in the roster.
+///
+/// Position, not `active_radio`, because that field is an ID: ids are not required to be dense
+/// or to start at zero, so emitting one directly would hand N1MM a radio number that does not
+/// correspond to any radio it is being told about. An unknown or empty roster is radio 1, which
+/// is what a single-radio station is and what was hardcoded before.
+pub fn n1mm_radio_nr(s: &Settings) -> u32 {
+    s.radios
+        .iter()
+        .position(|r| r.id == s.active_radio)
+        .map(|i| i as u32 + 1)
+        .unwrap_or(1)
 }
 
 /// WHO authored a dial write — declared BY THE WRITE SITE, never inferred afterwards.
@@ -6156,7 +6172,7 @@ impl Engine {
         let Some(addr) = n1mm_broadcast_target(&self.settings) else {
             return;
         };
-        let contact = n1mm_contact_for(rec, &self.settings.mycall);
+        let contact = n1mm_contact_for(rec, &self.settings.mycall, n1mm_radio_nr(&self.settings));
         std::thread::spawn(move || {
             if let Err(e) = tempo_net::n1mm::send_contact(&addr, &contact) {
                 eprintln!("tempo: N1MM broadcast failed: {e}");
@@ -18406,7 +18422,7 @@ mod tests {
     /// ORDINARY QSO: who, where, which band/frequency, which mode, when.
     #[test]
     fn an_ordinary_qso_broadcasts_the_fields_a_map_plots_from() {
-        let c = n1mm_contact_for(&plain_qso(), "KD9TAW");
+        let c = n1mm_contact_for(&plain_qso(), "KD9TAW", 1);
         let xml = tempo_net::n1mm::build_contactinfo(&c);
         for needle in [
             "<call>W1AW</call>",
@@ -18438,7 +18454,7 @@ mod tests {
             grid: None,
             ..plain_qso()
         };
-        let xml = tempo_net::n1mm::build_contactinfo(&n1mm_contact_for(&rec, "KD9TAW"));
+        let xml = tempo_net::n1mm::build_contactinfo(&n1mm_contact_for(&rec, "KD9TAW", 1));
         assert!(!xml.contains("gridsquare"), "{xml}");
     }
 
@@ -26809,6 +26825,59 @@ mod tests {
             snap.mycall, "W9XYZ",
             "a poisoned engine degrades to usable state, not a dead loop"
         );
+    }
+
+    /// #33: the broadcast emitted a literal `<radionr>1</radionr>`, so a two-radio station had
+    /// its whole session attributed to radio 1 — silently, because the receiving logger cannot
+    /// tell a wrong radio number from a right one.
+    #[test]
+    fn the_broadcast_carries_the_radio_that_made_the_contact() {
+        let s = Settings {
+            radios: vec![
+                crate::settings::RadioProfile {
+                    id: 7,
+                    ..Default::default()
+                },
+                crate::settings::RadioProfile {
+                    id: 3,
+                    ..Default::default()
+                },
+            ],
+            active_radio: 3,
+            ..Default::default()
+        };
+        // POSITION, not the id: ids are not required to be dense or zero-based, and emitting
+        // one directly would name a radio N1MM was never told about.
+        assert_eq!(n1mm_radio_nr(&s), 2);
+
+        let xml = tempo_net::n1mm::build_contactinfo(&n1mm_contact_for(
+            &plain_qso(),
+            "KD9TAW",
+            n1mm_radio_nr(&s),
+        ));
+        assert!(xml.contains("<radionr>2</radionr>"), "{xml}");
+        assert!(
+            !xml.contains("<radionr>1</radionr>"),
+            "the hardcoded 1 is back: {xml}"
+        );
+    }
+
+    /// A single-radio station — nearly everyone — must be unchanged: radio 1, exactly as the
+    /// hardcoded value happened to be right for.
+    #[test]
+    fn a_single_radio_station_is_still_radio_one() {
+        let s = Settings {
+            radios: vec![crate::settings::RadioProfile {
+                id: 0,
+                ..Default::default()
+            }],
+            active_radio: 0,
+            ..Default::default()
+        };
+        assert_eq!(n1mm_radio_nr(&s), 1);
+        // ...and so is an empty/unknown roster, rather than a 0 that means nothing to N1MM.
+        let empty = Settings::default();
+        assert_eq!(n1mm_radio_nr(&empty), 1);
     }
 
     #[test]
