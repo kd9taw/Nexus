@@ -183,6 +183,30 @@ fn base_call(up: &str) -> &str {
     }
 }
 
+/// Is `base` a Guantanamo Bay call under the 2×2 rule? (#52)
+///
+/// cty.dat gives Guantanamo the bare `KG4` prefix plus a list of exact calls, and a prefix that
+/// broad is wrong: **only a KG4 call with exactly TWO characters after it is Guantanamo Bay.**
+/// `KG4ABC` and `KG4A` are ordinary United States calls — the block is shared, and the length of
+/// the suffix is what separates them. Reported by graafpeter-web against 1.0.5, and he is right:
+/// every KG4 with a 3-letter suffix was being credited to Guantanamo.
+///
+/// cty.dat DOES enumerate the exceptions — 63 `=KG4…` exact entries, some under United States,
+/// some under Alaska and Hawaii — and those still win, because they are checked before this and
+/// they encode real operators whose entity the suffix length alone cannot tell you. But an
+/// enumeration only covers the calls AD1C already knew: any newly issued 2×3 KG4 lands on the
+/// prefix and is misfiled until the next file refresh. The rule is structural, so apply it
+/// structurally.
+///
+/// A bare `KG4` with no suffix stays Guantanamo — that is the prefix itself, not a callsign.
+fn kg4_is_guantanamo(base: &str) -> bool {
+    match base.strip_prefix("KG4") {
+        None => false,
+        Some("") => true,
+        Some(suffix) => suffix.len() == 2 && suffix.chars().all(|c| c.is_ascii_alphabetic()),
+    }
+}
+
 /// Resolve a callsign to a DXCC entity + representative location.
 pub fn resolve(call: &str) -> Option<DxccInfo> {
     let r = resolver();
@@ -198,6 +222,14 @@ pub fn resolve(call: &str) -> Option<DxccInfo> {
     let base = base_call(&full);
     let mut n = base.len();
     while n > 0 {
+        // The one prefix in the file that is wrong on its own: `KG4` covers a block shared with
+        // the United States, and only a 2-character suffix is Guantanamo Bay (#52). Skipping the
+        // entry rather than special-casing the RESULT lets the walk carry on to `K`, so the call
+        // picks up the United States entity, its CQ zone and its continent by the ordinary path.
+        if &base[..n] == "KG4" && !kg4_is_guantanamo(base) {
+            n -= 1;
+            continue;
+        }
         if let Some(&(i, zone)) = r.prefixes.get(&base[..n]) {
             return Some(info(r, i, zone));
         }
@@ -400,5 +432,80 @@ mod zone_tests {
             340,
             "current ARRL DXCC entities (matches ARRL 2026)"
         );
+    }
+}
+
+#[cfg(test)]
+mod kg4_suffix_rule {
+    use super::{kg4_is_guantanamo, resolve};
+
+    /// #52 (graafpeter-web, on 1.0.5): "A KG4-callsign with a 3-letter suffix is decoded as
+    /// Guantanamo Bay. This is not correct. Only 2-letter suffixes after KG4 are really from
+    /// Guantanamo Bay." He is right — the KG4 block is shared with the United States and the
+    /// suffix length is what separates them.
+    #[test]
+    fn only_a_two_character_suffix_is_guantanamo() {
+        for call in ["KG4AB", "KG4ZZ"] {
+            assert_eq!(
+                resolve(call).map(|d| d.entity),
+                Some("Guantanamo Bay"),
+                "{call} is a 2x2 KG4 and IS Guantanamo"
+            );
+        }
+    }
+
+    /// The bug itself. Every one of these resolved to Guantanamo Bay before the fix, which
+    /// mis-credits the entity on the Needed board, in the log and in any award count built on it.
+    #[test]
+    fn a_three_character_suffix_is_the_united_states() {
+        for call in ["KG4ABC", "KG4XYZ", "KG4QQQ"] {
+            assert_eq!(
+                resolve(call).map(|d| d.entity),
+                Some("United States"),
+                "{call} is an ordinary US call, not Guantanamo"
+            );
+        }
+    }
+
+    /// The other end of the rule, and easy to miss: a ONE-character suffix is US too.
+    #[test]
+    fn a_one_character_suffix_is_also_the_united_states() {
+        assert_eq!(resolve("KG4A").map(|d| d.entity), Some("United States"));
+    }
+
+    /// ⚠️ cty.dat's exact-call overrides must still win. Some KG4 holders are genuinely in
+    /// Alaska or Hawaii, and no suffix-length rule can know that — only the enumeration does.
+    /// If this ever flips to United States, the structural rule has been applied too early.
+    #[test]
+    fn an_exact_override_still_beats_the_suffix_rule() {
+        assert_eq!(
+            resolve("KG4BBX").map(|d| d.entity),
+            Some("Alaska"),
+            "cty.dat names this one explicitly; the rule must not override the file"
+        );
+    }
+
+    /// A bare prefix with no callsign after it is the prefix itself, not a 2x0 call.
+    #[test]
+    fn the_bare_prefix_stays_guantanamo() {
+        assert!(kg4_is_guantanamo("KG4"));
+    }
+
+    /// Digits are not a callsign suffix of the kind this rule is about — `KG44WW` is in
+    /// cty.dat's exact list, and the predicate must not claim it on shape alone.
+    #[test]
+    fn a_numeric_suffix_is_not_matched_on_shape() {
+        assert!(!kg4_is_guantanamo("KG44W"));
+        // ...and the real call still resolves via the exact override.
+        assert_eq!(resolve("KG44WW").map(|d| d.entity), Some("Guantanamo Bay"));
+    }
+
+    /// Nothing outside the KG4 block is touched.
+    #[test]
+    fn other_entities_are_unaffected() {
+        assert_eq!(resolve("KD9TAW").map(|d| d.entity), Some("United States"));
+        assert_eq!(resolve("KH6ABC").map(|d| d.entity), Some("Hawaii"));
+        assert_eq!(resolve("KL7ABC").map(|d| d.entity), Some("Alaska"));
+        assert_eq!(resolve("G0ABC").map(|d| d.entity), Some("England"));
     }
 }

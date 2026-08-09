@@ -66,6 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **KG4 callsigns are no longer all credited to Guantanamo Bay.** Only a KG4 call with exactly two
+  characters after it — KG4AB — is Guantanamo; KG4ABC and KG4A are ordinary United States calls
+  sharing the same block. Every KG4 was being filed as Guantanamo, which is a rare entity, so it
+  showed up as a burst of activity from a place that was not on the air and could put a wrong
+  entity in your log and on the Needed board. The country file names some of these exceptions
+  individually and those are still honoured — a few KG4 holders really are in Alaska or Hawaii —
+  but it can only list the calls it already knows, so the rule is now applied by shape as well.
+  Reported by graafpeter-web.
+
 - **A callsign with a stroke in it resolves in the callbook again.** Looking up `W1AW/1` found
   nothing, while clicking through to QRZ loaded the record straight away — which made it look like
   Nexus could not find a call QRZ plainly has. The two are genuinely different: QRZ's website
