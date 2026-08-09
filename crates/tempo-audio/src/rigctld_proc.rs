@@ -95,6 +95,29 @@ impl LineState {
 pub struct ControlLines {
     pub rts: LineState,
     pub dtr: LineState,
+    /// Emit `-C serial_handshake=None`, so RTS stops being flow control and CAN be held.
+    ///
+    /// Set only by [`resolve_lines`], and only when the hardware-handshake declaration is the
+    /// ONE thing standing between us and holding RTS low — see [`SettableLines`] refusal #2.
+    /// On ~50 backends (TS-2000, TS-590, FTDX10, FT-991, FT-891…) Hamlib refuses `rts_state`
+    /// outright, so before this Nexus fell back to `Untouched` and the port came up with RTS
+    /// asserted by flow control: on a Digirig-style cable, where RTS IS the PTT, that is the
+    /// rig keyed from the moment you connect and for the whole session. Reported by vk6mo
+    /// (#44, TS-2000 + Digirig Mobile) — and note his symptom, that it happened whatever the
+    /// PTT setting was, which is exactly what a flow-control line does: it is not keying, so
+    /// no PTT choice touches it.
+    ///
+    /// Legal because `rig_open` tests `rp->parm.serial.handshake`, the RUNTIME value, not
+    /// `caps->serial_handshake` — verified against Hamlib 4.7.1 `src/rig.c`, so a handshake
+    /// set through `-C` before open genuinely frees the line rather than merely disagreeing
+    /// with the backend.
+    ///
+    /// ⚠️ The cost, stated: a station that genuinely runs RTS/CTS flow control loses it.
+    /// Judged the better trade (operator, 2026-08-08) because an unattended keyed transmitter
+    /// is the worse failure, ham CAT is short messages where flow control is near-vestigial,
+    /// and WSJT-X drives these same rigs with handshake None. Untested on hardware — there is
+    /// no serial rig on the dev box.
+    pub handshake_none: bool,
 }
 
 impl ControlLines {
@@ -103,6 +126,7 @@ impl ControlLines {
         Self {
             rts: LineState::Low,
             dtr: LineState::Low,
+            handshake_none: false,
         }
     }
 }
@@ -146,13 +170,25 @@ pub struct SettableLines {
     pub rts: bool,
     /// Hamlib accepts `dtr_state`. False for the keying line.
     pub dtr: bool,
+    /// `rts` is false for ONE recoverable reason: refusal #2, the hardware-handshake
+    /// declaration — the line is offered and we are not keying with it. Distinguished from
+    /// the other reasons because it is the only one an override can lift: keying with RTS is
+    /// a real conflict, and a backend that offers no `rts_state` at all has nothing to set.
+    /// Drives [`ControlLines::handshake_none`].
+    pub rts_taken_by_handshake: bool,
 }
 
 /// Narrow the operator's wishes to what this rig's Hamlib will actually accept. A line we
 /// cannot positively prove settable is left [`Untouched`](LineState::Untouched) — 1.0.1.
 fn resolve_lines(settable: SettableLines, want: ControlLines) -> ControlLines {
+    // Refusal #2 is the one refusal we can lift: drop the rig's declared hardware handshake so
+    // RTS stops being flow control, and the line we could not hold becomes holdable. Only when
+    // the operator actually wants it held — an `Untouched` wish buys nothing and would trade
+    // away someone's flow control for no gain. See [`ControlLines::handshake_none`].
+    let free_rts =
+        !settable.rts && settable.rts_taken_by_handshake && want.rts != LineState::Untouched;
     ControlLines {
-        rts: if settable.rts {
+        rts: if settable.rts || free_rts {
             want.rts
         } else {
             LineState::Untouched
@@ -162,6 +198,7 @@ fn resolve_lines(settable: SettableLines, want: ControlLines) -> ControlLines {
         } else {
             LineState::Untouched
         },
+        handshake_none: free_rts,
     }
 }
 
@@ -247,6 +284,14 @@ pub fn rigctld_args(
     // unsettable; this second, independent guard means a caller that hand-builds `lines` (a
     // test, a future call site) still cannot ask Hamlib to hold the line it is keying with.
     if !addr.is_empty() && !network {
+        // Drop the declared hardware handshake FIRST. Order is cosmetic to Hamlib — rigctld
+        // applies every -C before rig_open, and rig_open is where both are read — but it reads
+        // as the precondition it is, and the daemon's own log line then shows why RTS was
+        // settable on a backend that declares otherwise.
+        if lines.handshake_none {
+            args.push("-C".to_string());
+            args.push("serial_handshake=None".to_string());
+        }
         if ptt_line != Some(crate::rig::SerialLine::Rts) {
             if let Some(v) = lines.rts.value() {
                 args.push("-C".to_string());
@@ -914,11 +959,19 @@ fn parse_settable_lines(show_conf: &str) -> SettableLines {
         .chain(HANDSHAKE_RTS_TAKEN.iter())
         .copied()
         .collect();
-    let rts_free = known_conf_value(show_conf, "serial_handshake", &handshake_vocabulary)
-        .is_some_and(|h| HANDSHAKE_RTS_FREE.contains(&h));
+    let handshake = known_conf_value(show_conf, "serial_handshake", &handshake_vocabulary);
+    let rts_free = handshake.is_some_and(|h| HANDSHAKE_RTS_FREE.contains(&h));
+    let not_keying_rts = ptt != ptt_type_token(crate::rig::SerialLine::Rts);
     SettableLines {
-        rts: rts_offered && rts_free && ptt != ptt_type_token(crate::rig::SerialLine::Rts),
+        rts: rts_offered && rts_free && not_keying_rts,
         dtr: dtr_offered && ptt != ptt_type_token(crate::rig::SerialLine::Dtr),
+        // Positively Hardware, not merely "not free": an unreadable or unrecognised handshake
+        // is the stale-vocabulary case, and the whole discipline here is that such a case
+        // claims nothing. Overriding on a token we could not classify would be guessing with
+        // someone's flow control.
+        rts_taken_by_handshake: rts_offered
+            && not_keying_rts
+            && handshake.is_some_and(|h| HANDSHAKE_RTS_TAKEN.contains(&h)),
     }
 }
 
@@ -1541,6 +1594,7 @@ mod tests {
         ControlLines {
             rts: LineState::High,
             dtr: LineState::High,
+            ..Default::default()
         }
     }
 
@@ -1549,17 +1603,108 @@ mod tests {
     /// handshake "COM99"`, observed on model 1042). DTR is not a flow-control line and is
     /// unaffected — also observed.
     #[test]
-    fn a_hardware_handshake_backend_keeps_its_rts_and_still_drops_dtr() {
+    /// ⚠️ REVERSED 2026-08-08 (#44). This used to assert RTS was left alone on a
+    /// hardware-handshake backend, and leaving it alone is what keyed vk6mo's TS-2000 the
+    /// moment Nexus connected: RTS asserted as flow control, and a Digirig keys on RTS. We now
+    /// drop the declared handshake so the line can be held low. The rest of the old assertion
+    /// stands — DTR was never the problem.
+    fn a_hardware_handshake_backend_gives_up_its_handshake_so_rts_can_be_held() {
         let lines = resolve_lines(
             parse_settable_lines(&show_conf("RIG", Some("Hardware"))),
             ControlLines::hold_low(),
         );
         let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
         assert!(
-            says_nothing_about(&args, "rts"),
-            "RTS is this backend's flow control — Hamlib refuses to open: {args:?}"
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=None"),
+            "the handshake has to go first or Hamlib refuses rts_state: {args:?}"
+        );
+        assert!(
+            holds(&args, "rts", "OFF"),
+            "the whole point: RTS held low so connecting cannot key: {args:?}"
         );
         assert!(holds(&args, "dtr", "OFF"), "DTR is still free: {args:?}");
+    }
+
+    /// The override is not a blanket one. A backend that already leaves RTS free gets no
+    /// handshake flag — without this, the test above passes just as well for a hook that
+    /// emits it unconditionally, and every operator loses their flow control for nothing.
+    #[test]
+    fn a_handshake_free_backend_is_left_alone() {
+        let lines = resolve_lines(
+            parse_settable_lines(&show_conf("RIG", Some("None"))),
+            ControlLines::hold_low(),
+        );
+        let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
+        assert!(
+            !args.iter().any(|a| a.starts_with("serial_handshake")),
+            "nothing to free — the line was already ours: {args:?}"
+        );
+        assert!(
+            holds(&args, "rts", "OFF"),
+            "and RTS is still held: {args:?}"
+        );
+    }
+
+    /// Keying with RTS is refusal #1, and no handshake override can lift it — Hamlib refuses
+    /// `rts_state` on the keying line whatever the flow control is. Trading the operator's
+    /// handshake away here would buy nothing at all.
+    #[test]
+    fn keying_with_rts_is_not_something_the_override_can_rescue() {
+        let settable = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
+        assert!(
+            !settable.rts_taken_by_handshake,
+            "the handshake is not why this line is unavailable — the keying is"
+        );
+        let lines = resolve_lines(settable, ControlLines::hold_low());
+        let args = rigctld_args(
+            1042,
+            "COM5",
+            38400,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Rts),
+            lines,
+        );
+        assert!(
+            !args.iter().any(|a| a.starts_with("serial_handshake")),
+            "no handshake was given up for a line we still cannot set: {args:?}"
+        );
+        assert!(says_nothing_about(&args, "rts"), "{args:?}");
+    }
+
+    /// An operator who asked for `Untouched` keeps their flow control. The override exists to
+    /// deliver a hold that was asked for, never as an opinion about handshakes.
+    #[test]
+    fn an_untouched_wish_gives_up_no_handshake() {
+        let lines = resolve_lines(
+            parse_settable_lines(&show_conf("RIG", Some("Hardware"))),
+            ControlLines {
+                rts: LineState::Untouched,
+                dtr: LineState::Low,
+                handshake_none: false,
+            },
+        );
+        assert!(!lines.handshake_none, "nothing was asked for on RTS");
+        let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
+        assert!(
+            !args.iter().any(|a| a.starts_with("serial_handshake")),
+            "{args:?}"
+        );
+    }
+
+    /// A handshake token we cannot classify claims NOTHING — it must not be read as "not
+    /// Hardware, therefore fine" NOR as "not free, therefore override". This is the
+    /// stale-vocabulary guard the module is built around, applied to the new field.
+    #[test]
+    fn an_unclassifiable_handshake_buys_no_override() {
+        let odd = show_conf("RIG", Some("Hardware")).replace("Hardware", "RtsCtsPlus");
+        let settable = parse_settable_lines(&odd);
+        assert!(!settable.rts, "unreadable means claim nothing");
+        assert!(
+            !settable.rts_taken_by_handshake,
+            "and claiming nothing must not turn into overriding on a guess"
+        );
     }
 
     /// A TCP transport has no control lines at all, and Hamlib does not even offer the config
@@ -1596,7 +1741,8 @@ mod tests {
             parse_settable_lines(SHOW_CONF_FT757GXII),
             SettableLines {
                 rts: true,
-                dtr: false
+                dtr: false,
+                ..Default::default()
             },
             "FT-757GXII keys on DTR by default: `rig_open: cannot set DTR with PTT by DTR`"
         );
@@ -1605,7 +1751,8 @@ mod tests {
             parse_settable_lines(SHOW_CONF_FT980),
             SettableLines {
                 rts: false,
-                dtr: true
+                dtr: true,
+                ..Default::default()
             },
             "FT-980 keys on RTS by default: `rig_open: cannot set RTS with PTT by RTS`"
         );
@@ -1656,6 +1803,7 @@ mod tests {
                 SettableLines {
                     rts: token != "RTS",
                     dtr: token != "DTR",
+                    ..Default::default()
                 },
                 "wrong decision for ptt_type={token}"
             );
@@ -1690,7 +1838,8 @@ mod tests {
             parse_settable_lines(&grown_handshake),
             SettableLines {
                 rts: false,
-                dtr: true
+                dtr: true,
+                ..Default::default()
             }
         );
         // A vocabulary that is no longer printed at all. Without it we cannot tell a token we
@@ -1752,6 +1901,7 @@ mod tests {
         let free = SettableLines {
             rts: true,
             dtr: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_lines(free, ControlLines::hold_low()),
@@ -1787,12 +1937,14 @@ mod tests {
         let taken = SettableLines {
             rts: false,
             dtr: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_lines(taken, high_both()),
             ControlLines {
                 rts: LineState::Untouched,
-                dtr: LineState::High
+                dtr: LineState::High,
+                ..Default::default()
             }
         );
     }
@@ -1816,7 +1968,8 @@ mod tests {
             ControlLines::default(),
             ControlLines {
                 rts: LineState::Untouched,
-                dtr: LineState::Untouched
+                dtr: LineState::Untouched,
+                ..Default::default()
             }
         );
     }

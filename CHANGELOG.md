@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Some rigs were keyed the moment Nexus connected, whatever you set PTT to.** Reported on a
+  TS-2000 with a Digirig, and it is not specific to either: about fifty radios tell Hamlib they use
+  hardware flow control on the serial port — the Kenwood TS-2000, TS-590 and TS-990S, the Yaesu
+  FTDX10, FT-991 and FT-891 among them. On those, the RTS line belongs to flow control and sits
+  raised for the whole session, and Hamlib refuses to let anything hold it down. On the very common
+  interfaces that key from RTS — Digirig and most homebrew cables — a raised RTS *is* transmit. So
+  the radio went into transmit as the port opened and stayed there, which is also why changing the
+  PTT setting made no difference: flow control is not keying, so no PTT choice ever touched it.
+
+  Nexus now turns that flow control off on those rigs, but only when it is the one thing preventing
+  it from holding the line down, and never when you are deliberately keying with RTS. Hardware flow
+  control is close to meaningless for the short messages CAT exchanges — WSJT-X drives these same
+  radios without it — and a radio that transmits unattended is the worse outcome by a distance.
+  Reported by vk6mo.
+
 - **The Linux .deb installed cleanly and then would not start.** The package named Hamlib, WebKit
   and GTK as its dependencies but never mentioned the Fortran runtime or single-precision FFTW
   that the modem is linked against — so `apt` reported success, the menu entry appeared, and the

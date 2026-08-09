@@ -1107,6 +1107,9 @@ fn monitor_loop(
             let lines = crate::rigctld_proc::ControlLines {
                 rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
                 dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
+                // Not an operator wish and never read from settings: `resolve_lines` sets it,
+                // and only where dropping the handshake is what makes `rts` above achievable.
+                handshake_none: false,
             };
             let want = s
                 .radios
@@ -6296,6 +6299,9 @@ impl Transport {
             control_lines: crate::rigctld_proc::ControlLines {
                 rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
                 dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
+                // Not an operator wish and never read from settings: `resolve_lines` sets it,
+                // and only where dropping the handshake is what makes `rts` above achievable.
+                handshake_none: false,
             },
             baud: s.baud,
             icom_native_cat: s.icom_native_cat,
