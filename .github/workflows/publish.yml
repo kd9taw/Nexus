@@ -37,13 +37,20 @@
 # recursion; workflow_dispatch and repository_dispatch are the documented exceptions.
 # So the automatic path fires only when a HUMAN publishes the release (web UI, or
 # `gh release create` under a personal token) — and the workflow_dispatch input below is
-# how you finish a release that release.yml published for you. To make it fully automatic,
-# release.yml needs one line at the end of its publish job:
+# how you finish a release that release.yml published for you.
 #
-#     gh workflow run publish.yml -f tag="$tag"      # with a PAT in GH_TOKEN
+# ✅ RESOLVED 2026-08-09: release.yml's publish job now dispatches this workflow itself, so a
+# tag push publishes downstream with no human step. Until then it NEVER fired on its own —
+# every run in this repo's history was a manual dispatch, and 1.0.5 needed one.
 #
-# That is a change to release.yml, which this file's author was not scoped to make.
-# See docs/publish-secrets.md.
+# ⚠️ The note here used to say that hand-off needed "a PAT in GH_TOKEN". That was WRONG and
+# would have made the fix look impossible: GITHUB_TOKEN cannot raise most events, but
+# workflow_dispatch is a documented exception — "workflow_dispatch and repository_dispatch
+# events always create workflow runs" (GitHub Actions docs, "Trigger a workflow"). What it
+# does need is `actions: write` on the dispatching job, which release.yml now sets.
+#
+# The manual dispatch below stays: it is the recovery path when a release was published by
+# hand, or when the hand-off itself failed. See docs/publish-secrets.md.
 #
 # WRANGLER: `--branch=main` is load-bearing. Without it wrangler deploys a PREVIEW
 # build, prints "Deployment complete", and exits 0 while the live site never moves. That

@@ -363,6 +363,12 @@ jobs:
     needs: [linux-x86, windows, smoke-windows]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # `actions: write` is for the downstream hand-off at the end of this job. Job-level
+    # permissions REPLACE the workflow-level block rather than adding to it, so `contents:
+    # write` is repeated here — without it this job loses its ability to create the release.
+    permissions:
+      contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -471,6 +477,50 @@ jobs:
   # Second wave (operator's release order: Windows + Linux first, then Pi): attach the
   # Raspberry Pi .debs to the already-published release as their builds finish. Waits on
   # publish so the release exists; a Pi failure never blocks the primary platforms.
+      # ── HAND OFF TO THE DOWNSTREAM PUBLISH ────────────────────────────────────────────
+      # Without this, publish.yml never runs on its own and the release reaches NOBODY: the
+      # SourceForge upload, the site's version.json and the Cloudflare deploy all wait on it,
+      # and nothing goes red — which is exactly how 1.0.1 shipped while the in-app update check
+      # told every operator 1.0.0 was newest for two days. It was still true at 1.0.5 (every
+      # run of publish.yml in this repo's history has been a manual dispatch), so this closes it.
+      #
+      # `on: release: published` cannot do the job: GitHub suppresses events raised by
+      # GITHUB_TOKEN to stop recursion, and this job creates the release with exactly that.
+      # workflow_dispatch is the documented exception — "workflow_dispatch and
+      # repository_dispatch events always create workflow runs" — so NO PAT is needed, only
+      # `actions: write` above. publish.yml's own header says a PAT is required; that is wrong,
+      # and it is corrected there.
+      #
+      # Fired from THIS job rather than publish-pi on purpose. publish.yml opens by polling for
+      # all five installers and their checksums with a 30-minute deadline, so it is built to be
+      # started before the Pi .debs land and to wait for them. And publish-pi SKIPS when the Pi
+      # build fails (0.18.0), which would leave the hand-off unreachable in the one case where
+      # someone most needs to be told — this way it times out loudly instead.
+      #
+      # `|| true`: the release itself is already published and correct at this point. A failed
+      # hand-off must not turn a good release red; the run summary carries the warning and the
+      # manual dispatch is still there.
+      - name: Hand off to the downstream publish (SourceForge + site)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if gh workflow run publish.yml --repo "${{ github.repository }}" -f tag="$tag"; then
+            echo "Dispatched publish.yml for $tag" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### ⚠️ Downstream publish was NOT dispatched"
+              echo "The release is published and correct, but SourceForge, the site's"
+              echo "\`version.json\` and the Cloudflare deploy have not run."
+              echo ""
+              echo "Run it by hand:"
+              echo '```'
+              echo "gh workflow run publish.yml --repo ${{ github.repository }} -f tag=$tag"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   publish-pi:
     name: Attach Raspberry Pi .debs
     needs: [publish, pi]
