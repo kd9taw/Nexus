@@ -341,7 +341,13 @@ export function DetachedPanel({ panel }: { panel: string }) {
               return
             }
             const opMode = t.view === 'operate' ? 'digital' : t.view
-            apply(workSpot(opMode, t.freqMhz, t.band, t.call))
+            // A digital spot's FT8/FT4 protocol rides the same atomic call (the engine
+            // no-ops on a same-tier request) — the pop-out used to not switch the tier at
+            // all, leaving an FT4 click decoding FT8, and doing it as a second call would
+            // recreate the main window's default-dial-first double retune.
+            const m = a.mode?.toUpperCase()
+            const spotTier = opMode === 'digital' && (m === 'FT4' || m === 'FT8') ? m : undefined
+            apply(workSpot(opMode, t.freqMhz, t.band, t.call, spotTier))
           }}
         />
       </div>

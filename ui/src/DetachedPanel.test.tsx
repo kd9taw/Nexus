@@ -32,14 +32,24 @@ vi.mock('./components/ConnectView', () => ({
 // when the Phone cockpit is a DISABLED feature, a plain QSY (setFrequency) — the bug.
 vi.mock('./components/NeededPanel', () => ({
   NeededPanel: ({ onWork }: { onWork: (a: NeedAlert) => void }) => (
-    <button
-      data-testid="work"
-      onClick={() =>
-        onWork({ call: 'DX1ABC', band: '20m', mode: 'Phone', freqMhz: null } as NeedAlert)
-      }
-    >
-      work
-    </button>
+    <>
+      <button
+        data-testid="work"
+        onClick={() =>
+          onWork({ call: 'DX1ABC', band: '20m', mode: 'Phone', freqMhz: null } as NeedAlert)
+        }
+      >
+        work
+      </button>
+      <button
+        data-testid="work-ft4"
+        onClick={() =>
+          onWork({ call: 'DX2DEF', band: '20m', mode: 'FT4', freqMhz: 14.083 } as NeedAlert)
+        }
+      >
+        work ft4
+      </button>
+    </>
   ),
 }))
 
@@ -163,7 +173,24 @@ describe('DetachedPanel Needed board work-guard', () => {
       await Promise.resolve()
     })
     fireEvent.click(screen.getByTestId('work'))
-    expect(mockedWorkSpot).toHaveBeenCalledWith('phone', 14.25, '20m', 'DX1ABC')
+    // 5th arg: no tier for a Phone spot — the tier rides only digital FT8/FT4 clicks.
+    expect(mockedWorkSpot).toHaveBeenCalledWith('phone', 14.25, '20m', 'DX1ABC', undefined)
+    expect(mockedSetFrequency).not.toHaveBeenCalled()
+  })
+
+  // The spot-click double-retune (operator report, 2026-08-09: "hitting a default first,
+  // then switching"): a digital spot's FT8/FT4 protocol must ride the SAME atomic workSpot
+  // call. The pop-out previously passed no tier at all — an FT4 click left the decoder on
+  // FT8 — and adding it as a separate set_tier call would recreate the main window's gap,
+  // where the radio loop commands the tier's default dial before the spot's frequency.
+  it('an FT4 spot carries its tier inside the one atomic workSpot call', async () => {
+    render(<DetachedPanel panel="needed" />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    fireEvent.click(screen.getByTestId('work-ft4'))
+    expect(mockedWorkSpot).toHaveBeenCalledWith('digital', 14.083, '20m', 'DX2DEF', 'FT4')
     expect(mockedSetFrequency).not.toHaveBeenCalled()
   })
 })

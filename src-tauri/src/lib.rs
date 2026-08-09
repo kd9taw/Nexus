@@ -9603,7 +9603,20 @@ fn work_spot(
     freq_mhz: f64,
     band: String,
     call: Option<String>,
+    tier: Option<String>,
 ) -> Result<AppSnapshot, String> {
+    // A digital spot names its protocol (FT8/FT4). The tier switch must happen under the
+    // SAME engine lock as the QSY: as two commands, the radio loop could tick in the gap
+    // and command the tier's default dial to the rig before the spot's exact frequency
+    // (operator report, 2026-08-09 — "hitting a default first, then switching", with the
+    // stale read-back able to race the correction on slow serial).
+    let tier: Option<Tier> = match tier {
+        Some(t) => Some(
+            serde_json::from_value(serde_json::Value::String(t.clone()))
+                .map_err(|_| format!("invalid tier {t:?}"))?,
+        ),
+        None => None,
+    };
     // Pile-up SPLIT: if the freshest cluster spot for this call names a listening
     // offset ("UP 2" / "QSX …"), configure rig split so TX lands where the DX is
     // listening — the N1MM behavior, using the spot we already hold. Tolerant
@@ -9631,7 +9644,7 @@ fn work_spot(
         })
     });
     let mut eng = engine_lock(&state);
-    eng.work_spot_split(&mode, freq_mhz, &band, split_up_khz);
+    eng.work_spot_tiered(tier, &mode, freq_mhz, &band, split_up_khz);
     eng.note_work_call(call); // cross-window prefill hint (pop-out band map → main window log)
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: failed to persist worked spot: {e}");
@@ -15015,10 +15028,12 @@ pub fn run() {
             match sync_qrz_since(&sync_engine, Some(last)) {
                 Ok(r) => {
                     {
+                        // The NARROW mutation — never `apply_settings` for one field: its
+                        // heavyweight reset (mode → Chat, TX queue cleared) evaporated an
+                        // in-flight QSO once an hour with nothing on screen saying why
+                        // (#54; the 1.0.5 "intermittent mode drift" field report).
                         let mut eng = engine_lock(&sync_engine);
-                        let mut s = eng.settings().clone();
-                        s.qrz_last_sync_unix = now;
-                        eng.apply_settings(s);
+                        eng.set_qrz_sync_cursor(now);
                         if let Err(e) = eng.settings().save(&settings_path()) {
                             eprintln!("[qrz-sync] settings save failed: {e}");
                         }

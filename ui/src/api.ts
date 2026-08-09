@@ -990,10 +990,21 @@ export async function workSpot(
   freqMhz: number,
   band: string,
   call?: string,
+  tier?: 'FT8' | 'FT4',
 ): Promise<AppSnapshot> {
   // `call` lets the backend look up the spot's pile-up split ("UP 2") and
-  // configure rig split automatically — the N1MM behavior.
-  return invoke<AppSnapshot>('work_spot', { mode, freqMhz, band, call: call ?? null })
+  // configure rig split automatically — the N1MM behavior. `tier` is the digital
+  // spot's protocol: passing it here makes the tier switch and the QSY ONE atomic
+  // backend call — as two calls, the radio loop could command the tier's default
+  // dial to the rig in the gap before the spot's exact frequency ("hitting a
+  // default first, then switching" — operator report, 2026-08-09).
+  return invoke<AppSnapshot>('work_spot', {
+    mode,
+    freqMhz,
+    band,
+    call: call ?? null,
+    tier: tier ?? null,
+  })
 }
 
 /** Set (`txMhz`) or clear (`null`) manual rig split — the TX dial when working split

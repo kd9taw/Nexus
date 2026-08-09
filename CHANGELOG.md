@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Clicking a spot no longer bounces the rig off a default frequency on the way.** Working an
+  FT4 spot while on FT8 (or the other way round) used to switch the mode first — briefly
+  commanding the mode's standard calling frequency — and then jump to the spot. On a slow CAT
+  link the two commands could land out of order, intermittently leaving the radio on the wrong
+  frequency or mode after the click. The mode switch and the QSY are now one atomic command:
+  the rig hears only the spot's exact frequency. The same click from the torn-off Needed board
+  also now switches FT8/FT4 to match the spot — it previously left the decoder on the old mode.
+
+- **The hourly QRZ logbook sync no longer wipes out a QSO in progress.** With auto-sync on,
+  the timer's bookkeeping ran through the same heavyweight path as a full Settings save, which
+  resets the operating state and clears anything queued to transmit — once an hour, mid-QSO,
+  with nothing on screen saying why. The sync now records its progress without touching the
+  operating state.
+
 ### Added
 
 - **Field mode — one tap for operating outdoors.** A POTA activator reported the screen was

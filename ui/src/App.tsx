@@ -1550,25 +1550,21 @@ export default function App() {
       const opMode: 'digital' | 'phone' | 'cw' | 'rtty' =
         t.view === 'operate' ? 'digital' : t.view
       void (async () => {
-        // A digital spot carries its protocol in alert.mode — switch the FT8/FT4 tier to
-        // match, else clicking an FT4 spot QSYs but leaves the decoder on FT8. set_tier moves
-        // the rig to the tier's DEFAULT dial (FT8 14.074 → FT4 14.080), so it must run BEFORE
-        // workSpot — whose QSY to the spot's exact frequency then wins over the tier default.
+        // A digital spot carries its protocol in alert.mode — the FT8/FT4 tier rides the
+        // SAME atomic workSpot call, else clicking an FT4 spot QSYs but leaves the decoder
+        // on FT8. It used to be a separate set_tier call first, and in the gap between the
+        // two the radio loop could command the tier's DEFAULT dial (FT8 14.074 → FT4
+        // 14.080) to the rig before the spot's exact frequency — the "hits a default
+        // first, then switches" double-retune, whose stale read-back could race the
+        // correction on slow serial and leave the wrong dial standing (operator report,
+        // 2026-08-09). tierRef syncs from the returned snapshot (setSnap → link.tier).
+        let tier: 'FT8' | 'FT4' | undefined
         if (opMode === 'digital') {
           const m = alert.mode?.toUpperCase()
-          if ((m === 'FT4' || m === 'FT8') && tierRef.current !== m) {
-            const st = await withErrorToast(
-              () => apiSetTier(m as Tier),
-              'Could not switch FT8/FT4',
-            )
-            if (st) {
-              setSnap(st)
-              tierRef.current = m as Tier
-            }
-          }
+          if ((m === 'FT4' || m === 'FT8') && tierRef.current !== m) tier = m
         }
         const s = await withErrorToast(
-          () => workSpot(opMode, t.freqMhz, t.band, t.call),
+          () => workSpot(opMode, t.freqMhz, t.band, t.call, tier),
           `Could not work ${t.call} — check CAT`,
         )
         // On failure DON'T navigate or poison the guard ref — the backend made no change

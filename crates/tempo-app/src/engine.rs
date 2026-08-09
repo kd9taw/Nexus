@@ -3477,6 +3477,16 @@ impl Engine {
         self.settings.clone()
     }
 
+    /// Advance the QRZ auto-sync high-water mark (persisted by the caller). The
+    /// lightweight mutation, same rationale as the upload toggles: the hourly sync
+    /// thread used to persist this ONE field through [`apply_settings`](Self::apply_settings),
+    /// whose heavyweight reset (mode back to Chat, TX + broadcast queues cleared)
+    /// landed mid-QSO once an hour with nothing on screen saying why (#54 — the
+    /// 1.0.5 "intermittent mode drift" field report).
+    pub fn set_qrz_sync_cursor(&mut self, unix: u64) {
+        self.settings.qrz_last_sync_unix = unix;
+    }
+
     /// Change band / dial frequency / mode **live** — without resetting the
     /// operating mode or queues (unlike [`Engine::apply_settings`]). Updates the
     /// settings + the UI radio readout; the radio loop re-tunes the rig from
@@ -4479,6 +4489,31 @@ impl Engine {
         self.work_tick += 1;
         self.work_view = Some(mode.to_string());
         self.work_call = None; // the command that has the call sets it via note_work_call
+    }
+
+    /// As [`work_spot_split`], optionally switching the FT8/FT4 tier FIRST — under the SAME
+    /// lock, so `set_tier`'s WSJT-X-parity retune to the tier's default dial is a transient
+    /// the radio loop can never observe: the spot's exact frequency is the only dial that
+    /// stands when the lock drops. The UI used to issue the tier switch and the spot QSY as
+    /// TWO backend calls, and in the window between them the loop could command the tier
+    /// default to the rig before the spot's QSY (operator report, 2026-08-09: "hitting a
+    /// default first, then switching") — with the first write's CAT read-back then racing
+    /// the second command on a slow serial link. A same-tier or `None` request degrades to
+    /// exactly [`work_spot_split`].
+    pub fn work_spot_tiered(
+        &mut self,
+        tier: Option<Tier>,
+        mode: &str,
+        freq_mhz: f64,
+        band: &str,
+        split_up_khz: Option<f64>,
+    ) {
+        if let Some(t) = tier {
+            if self.app.tier() != t {
+                self.set_tier(t);
+            }
+        }
+        self.work_spot_split(mode, freq_mhz, band, split_up_khz);
     }
 
     /// Record the callsign of the just-worked spot, right after [`work_spot_split`] (same lock).
@@ -17250,6 +17285,65 @@ mod tests {
         assert!(
             e.app.inbox.roster.is_empty(),
             "old-tier roster entries carry slot numbers the new tier renumbered"
+        );
+    }
+
+    /// The spot-click double-command (operator report, 2026-08-09: "it moved to that
+    /// mode/band, but instantly then went to the spot — like hitting a default first").
+    /// POSITIVE CONTROL first: a bare tier switch really does move the dial to the new
+    /// tier's default — that transient is WSJT-X parity and is why composing the two verbs
+    /// across two locks was a bug worth fixing rather than a cosmetic flash.
+    #[test]
+    fn a_bare_tier_switch_moves_the_dial_to_the_tier_default() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let before = e.settings().dial_mhz;
+        e.set_tier(Tier::Ft4);
+        let after = e.settings().dial_mhz;
+        assert_ne!(before, after, "control: the tier default retune must exist");
+    }
+
+    /// …and the atomic verb: tier switch + spot QSY under one call leaves the SPOT's exact
+    /// dial as the only standing frequency, with the tier switched. The radio loop reads
+    /// state between engine locks, so one call = the tier-default hop is unobservable.
+    #[test]
+    fn working_a_spot_with_a_tier_switch_lands_on_the_spot_dial() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        assert_eq!(e.app.tier(), Tier::Ft8, "harness: FT8 is the starting tier");
+        e.work_spot_tiered(Some(Tier::Ft4), "digital", 14.083, "20m", None);
+        assert_eq!(e.app.tier(), Tier::Ft4, "the tier followed the spot's protocol");
+        assert!(
+            (e.settings().dial_mhz - 14.083).abs() < 1e-9,
+            "the spot's exact dial stands — not the FT4 default ({})",
+            e.settings().dial_mhz
+        );
+    }
+
+    /// The hourly QRZ auto-sync persists ONE field. Persisting it through apply_settings
+    /// tore down the whole session (#54): CONTROL — apply_settings really does reset the
+    /// mode and drop the TX queue (that is why the narrow setter exists); then the narrow
+    /// setter advances the cursor and touches neither.
+    #[test]
+    fn the_qrz_sync_cursor_advances_without_the_heavyweight_reset() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        e.call_station("PJ4DX");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
+        // Control: the heavyweight path kills it.
+        let s = e.settings().clone();
+        e.apply_settings(s);
+        assert!(
+            e.snapshot().qso.is_none(),
+            "control: apply_settings must reset the mode, or the narrow setter is pointless"
+        );
+        // Re-arm, then the narrow path: cursor moves, QSO survives.
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
+        e.call_station("PJ4DX");
+        assert!(e.snapshot().qso.is_some(), "harness: re-armed");
+        e.set_qrz_sync_cursor(1_754_700_000);
+        assert_eq!(e.settings().qrz_last_sync_unix, 1_754_700_000);
+        assert!(
+            e.snapshot().qso.is_some(),
+            "advancing the sync cursor must not evaporate an in-flight QSO"
         );
     }
 
