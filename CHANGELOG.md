@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A callsign with a stroke in it resolves in the callbook again.** Looking up `W1AW/1` found
+  nothing, while clicking through to QRZ loaded the record straight away — which made it look like
+  Nexus could not find a call QRZ plainly has. The two are genuinely different: QRZ's website
+  redirects a stroked call to its base, and the data service Nexus queries does not. Nexus now asks
+  for the call exactly as you typed it and, only if no callbook has it, asks again for the base
+  call. That order matters — a portable or club call can hold a record of its own, and looking up
+  the base first would hand you a different operator's details without saying so. Reported by
+  kr4fqg.
+
 - **Your memory channels, watchlist and chase lists were being kept somewhere that does not
   survive a reinstall.** They lived in the browser storage inside the app window, along with your
   profile list, your armed satellite and DXpedition alarms, and your UI scale — which is an

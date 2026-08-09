@@ -12448,6 +12448,32 @@ fn hamqth_lookup_attempt(
 /// no stored password) or has **no match**, the lookup falls through to the FREE
 /// HamQTH fallback so it works without a QRZ subscription. Each path uses the same
 /// bounded cached-session → login-once → retry pattern; both produce the same DTO, so
+
+/// The callsigns a callbook lookup should try, in order (#46).
+///
+/// QRZ's WEB page redirects `W1AW/1` to `W1AW`; its XML API does not — it answers NOT_FOUND for
+/// the stroked call. So the operator clicks the QRZ image, sees the record load, and reasonably
+/// reports that Nexus cannot find a call QRZ plainly has. Same for HamQTH.
+///
+/// ⚠️ The base is a FALLBACK, never a pre-emptive strip. Some stroked calls are registered in
+/// their own right — a club or DXpedition call can hold its own record — and rewriting the query
+/// before asking would hand back a DIFFERENT operator's record with a straight face, which is
+/// worse than not finding one. So: ask exactly what was typed, and only if every callbook misses
+/// ask again for the base.
+///
+/// `base_call` is `tempo_core::message`'s, already used for callsign matching and already tested
+/// (including against the WSJT-X predicates) — a second stroke-stripper here would be a second
+/// definition of "the same operator", which is how two answers to one question start to drift.
+fn callbook_candidates(call: &str) -> Vec<String> {
+    let typed = call.trim().to_string();
+    let base = tempo_core::message::base_call(&typed);
+    if base.is_empty() || base.eq_ignore_ascii_case(&typed) {
+        vec![typed]
+    } else {
+        vec![typed, base]
+    }
+}
+
 /// the command's return type and the whole UI are unchanged.
 #[tauri::command]
 async fn qrz_lookup(
@@ -12478,31 +12504,44 @@ async fn qrz_lookup(
     // Logbook API key, which the callbook lookup never uses).
     let mut queried_any = false;
 
-    // 1) QRZ first, when configured (username + stored password). A missing username,
-    //    a missing password, or a QRZ "not found" all fall through to HamQTH below.
-    if !qrz_username.is_empty() {
-        if let Ok(password) = qrz_keychain()?.get_password() {
-            queried_any = true;
-            if let Some(dto) =
-                qrz_lookup_attempt(&call, &qrz_username, &password, qrz_session.inner())?
-            {
-                return Ok(dto);
+    // The call as typed, then its base if it carries a stroke (#46). BOTH callbooks are asked
+    // for the typed call before either is asked for the base — a stroked call may be registered
+    // in its own right, and the operator asked for THAT call.
+    let candidates = callbook_candidates(&call);
+    for (i, cand) in candidates.iter().enumerate() {
+        let last_candidate = i + 1 == candidates.len();
+
+        // 1) QRZ first, when configured (username + stored password). A missing username,
+        //    a missing password, or a QRZ "not found" all fall through to HamQTH below.
+        if !qrz_username.is_empty() {
+            if let Ok(password) = qrz_keychain()?.get_password() {
+                queried_any = true;
+                if let Some(dto) =
+                    qrz_lookup_attempt(cand, &qrz_username, &password, qrz_session.inner())?
+                {
+                    return Ok(dto);
+                }
             }
         }
-    }
 
-    // 2) HamQTH fallback, when configured. A free HamQTH account returns
-    //    name/grid/us_state, so callsign lookup works without a QRZ subscription.
-    if !hamqth_username.is_empty() {
-        if let Ok(password) = hamqth_keychain()?.get_password() {
-            queried_any = true;
-            if let Some(dto) =
-                hamqth_lookup_attempt(&call, &hamqth_username, &password, hamqth_session.inner())?
-            {
-                return Ok(dto);
+        // 2) HamQTH fallback, when configured. A free HamQTH account returns
+        //    name/grid/us_state, so callsign lookup works without a QRZ subscription.
+        if !hamqth_username.is_empty() {
+            if let Ok(password) = hamqth_keychain()?.get_password() {
+                queried_any = true;
+                if let Some(dto) =
+                    hamqth_lookup_attempt(cand, &hamqth_username, &password, hamqth_session.inner())?
+                {
+                    return Ok(dto);
+                }
+                // HamQTH was queried and answered — a genuine miss for THIS candidate. Only the
+                // last one is a miss for the lookup; before that there is still the base to try,
+                // and returning here is what would make the whole fix unreachable on any station
+                // with HamQTH configured.
+                if last_candidate {
+                    return Err(not_found());
+                }
             }
-            // HamQTH was queried and answered — a genuine miss.
-            return Err(not_found());
         }
     }
 
@@ -15601,6 +15640,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
+        callbook_candidates,
         iso_from_stamp, reconcile_gallery,
         migrate_sstv_gallery_between,
         write_qso_wav_in,
@@ -18750,4 +18790,45 @@ mod tests {
             "an incremental cursor is a lie about an empty log"
         );
     }
+
+    /// #46 (kr4fqg): "W1AW/1 doesn't resolve, but clicking the image loads the QRZ page."
+    /// QRZ's web page redirects a stroked call to its base; the XML API answers NOT_FOUND. So
+    /// the lookup has to ask twice, and the ORDER is the whole design.
+    #[test]
+    fn a_stroked_call_falls_back_to_its_base() {
+        assert_eq!(callbook_candidates("W1AW/1"), vec!["W1AW/1", "W1AW"]);
+        assert_eq!(callbook_candidates("DL/W1AW"), vec!["DL/W1AW", "W1AW"]);
+        assert_eq!(callbook_candidates("W1AW/P"), vec!["W1AW/P", "W1AW"]);
+    }
+
+    /// ⚠️ The typed call is asked FIRST, always. A club or DXpedition call can hold its own QRZ
+    /// record under the stroked form, and stripping before asking would return a DIFFERENT
+    /// operator's record with a straight face — worse than finding nothing, because it is wrong
+    /// and confident. If this ever reverses, that is the bug.
+    #[test]
+    fn the_call_as_typed_is_always_asked_first() {
+        let c = callbook_candidates("W1AW/1");
+        assert_eq!(c[0], "W1AW/1", "the operator asked for this call, not for its base");
+    }
+
+    /// An ordinary call must not cost a second network round trip on every miss.
+    #[test]
+    fn a_plain_call_is_looked_up_exactly_once() {
+        assert_eq!(callbook_candidates("KD9TAW"), vec!["KD9TAW"]);
+        assert_eq!(callbook_candidates("  kd9taw  "), vec!["kd9taw"]);
+    }
+
+    /// A call whose base IS itself (bare suffix, nothing callsign-shaped to fall back to) must
+    /// not produce a pointless duplicate query.
+    #[test]
+    fn no_duplicate_candidate_when_the_base_is_the_call() {
+        for c in ["W1AW", "W1AW/W1AW"] {
+            let got = callbook_candidates(c);
+            assert!(
+                got.len() == 1 || got[0] != got[1],
+                "{c} produced a duplicate lookup: {got:?}"
+            );
+        }
+    }
+
 }
