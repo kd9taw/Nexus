@@ -164,6 +164,19 @@ const BASIC_FIELDS: FieldDef[] = [
     hint: 'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.',
   },
   { key: 'opName', label: 'Operator name', type: 'text', placeholder: 'Seth', hint: 'Used by the CW {NAME} macro and logging.' },
+  // #25 — who is AT THE KEY, as opposed to whose station it is. Two different questions, and
+  // ADIF has two fields because the answers differ: STATION_CALLSIGN is the callsign above,
+  // OPERATOR is this. Set it and every contact you log carries it, so a two-person activation
+  // can be split by operator afterwards instead of hand-edited. This setting already existed
+  // but only inside the Field Day view, where a POTA pair would never find it — and it only
+  // ever reached the N3FJP feed, never the operator's own log.
+  {
+    key: 'fdOperator',
+    label: 'Operator at the key',
+    type: 'text',
+    placeholder: 'leave blank if that is you',
+    hint: 'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op and nothing is stamped. Change it when you swap seats.',
+  },
   { key: 'opState', label: 'State', type: 'text', placeholder: 'WI', hint: 'Your US state/province — the CW {MYSTATE} macro (ragchew QTH).' },
 ]
 

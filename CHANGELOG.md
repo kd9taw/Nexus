@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Two of you on one radio? Your contacts can now say who made them.** Set *Operator at the key*
+  in Settings ▸ Station and every contact you log carries it, so a shared POTA activation or a
+  Field Day shift can be split by operator afterwards instead of hand-edited — both programs want
+  each operator to submit their own log. It is the ADIF `OPERATOR` field, which is a different
+  question from your station callsign: one is who was operating, the other is whose station it
+  was, and that distinction is exactly what the two fields exist for.
+
+  Leave it blank if it is just you and nothing is stamped — an operator equal to the station call
+  in every record says nothing. This setting existed before but only inside Field Day, where a
+  POTA pair would never have found it, and it only ever reached an N3FJP feed rather than your own
+  log. Asked for by a POTA operator running two ops on one laptop.
+
 - **You can run VarAC, FreeDV or WSJT-X against the same radio, without closing Nexus.** A serial
   port can only be opened by one program at a time, so while Nexus has your rig nothing else can
   reach it — which made "quit Nexus first" look like the only answer. It was not. Nexus does not

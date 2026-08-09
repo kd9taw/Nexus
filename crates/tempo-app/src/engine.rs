@@ -5985,6 +5985,33 @@ impl Engine {
         if is_dup {
             return;
         }
+        // WHO WAS AT THE KEY (#25). `QsoRecord::operator` has existed since the logbook was
+        // written, is exported as ADIF `OPERATOR`, is parsed on import, and was never once
+        // filled in — plumbed end to end and permanently empty, because nothing above the
+        // record had an operator concept to fill it from.
+        //
+        // `fd_operator` IS that concept and already exists; it was only ever read on the
+        // N3FJP push, so the operator at the key reached a contest logger's network feed and
+        // never the operator's own log. Reading it here is what makes it general: Field Day
+        // rotates ops, and so does a two-person POTA activation, which is the report behind
+        // this (#25 — POTA requires each operator to submit their own log, and today the
+        // choice is losing the second op's credit or hand-editing the ADIF afterwards).
+        //
+        // ⚠️ Empty stays EMPTY, deliberately — not defaulted to `mycall`. For the single-op
+        // station that is every other operator, `OPERATOR` equal to `STATION_CALLSIGN` is
+        // noise in every exported record, and worse it would make a field that means "someone
+        // chose this" indistinguishable from one nothing ever set. STATION_CALLSIGN is the
+        // station's call and export already inserts it; this is the person, and it is present
+        // only when a person was actually named.
+        //
+        // A record that arrives carrying its own operator — an imported multi-op log, or a
+        // row the operator repaired by hand — is left alone. Same rule as `country` below.
+        if rec.operator.is_none() {
+            let op = self.settings.fd_operator.trim();
+            if !op.is_empty() {
+                rec.operator = Some(op.to_ascii_uppercase());
+            }
+        }
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs.
         if rec.country.is_none() {
@@ -17905,6 +17932,63 @@ mod tests {
         let e = Engine::new("K2DEF", "FN31", 0);
         let rec = e.qso_record("W9XYZ".into(), None, None);
         assert_eq!(rec.grid, None);
+    }
+
+    /// WHO WAS AT THE KEY (#25). `operator` was plumbed end to end — a field on the record, an
+    /// ADIF `OPERATOR` on export, parsed on import — and nothing ever filled it, so a two-op
+    /// POTA activation could not tell the two operators' contacts apart without hand-editing the
+    /// exported ADIF. Same funnel argument as the state fill above: every logging path goes
+    /// through `log_qso`.
+    #[test]
+    fn log_qso_stamps_the_operator_at_the_key() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.fd_operator = "w1abc".into();
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+
+        assert_eq!(
+            e.get_log()[0].operator.as_deref(),
+            Some("W1ABC"),
+            "the operator at the key must reach the log, not only the N3FJP push"
+        );
+        // The station's call is a different field and a different question; the operator being
+        // named must never overwrite whose station it is.
+        assert_ne!(
+            e.get_log()[0].operator.as_deref(),
+            e.get_log()[0].station_callsign.as_deref(),
+            "OPERATOR is the person, STATION_CALLSIGN is the station"
+        );
+    }
+
+    /// The negative twin, and the one that matters for everyone who is NOT running multi-op:
+    /// with no operator set the field stays empty rather than being defaulted to the station
+    /// call. `OPERATOR` equal to `STATION_CALLSIGN` in every record is noise, and it would make
+    /// "someone chose this" indistinguishable from "nothing ever set it".
+    #[test]
+    fn log_qso_invents_no_operator_for_a_single_op_station() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert!(e.settings().fd_operator.is_empty());
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+
+        assert_eq!(e.get_log()[0].operator, None);
+    }
+
+    /// An imported multi-op log, or a row repaired by hand, already knows who worked it. The
+    /// stamp fills a gap; it never relabels somebody else's contact with whoever happens to be
+    /// at the key now — which on an import would rewrite a whole club log in one pass.
+    #[test]
+    fn log_qso_never_overwrites_an_operator_the_record_arrived_with() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.fd_operator = "W1ABC".into();
+
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.operator = Some("G0PQR".into());
+        e.log_qso(rec);
+
+        assert_eq!(e.get_log()[0].operator.as_deref(), Some("G0PQR"));
     }
 
     /// The funnel itself, mode-independent: every path (auto-log, cockpit Log button, manual
