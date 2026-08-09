@@ -36,7 +36,7 @@ import { RotorStrip } from './RotorStrip'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { setFrequency, setSplit, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
-import { bandLabelForMhz } from '../band'
+import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
@@ -439,7 +439,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
       return
     }
-    void setFrequency(mhz, band, snap.radio.sideband || 'USB')
+    // In-band keeps the current sideband; crossing 10 MHz follows the band convention (#45).
+    void setFrequency(mhz, band, sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband))
       .then((s) => s && onSnap?.(s))
       .catch(() => {})
   }

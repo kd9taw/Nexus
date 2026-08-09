@@ -79,3 +79,31 @@ export function cwRangeForLabel(label: string): { lo: number; hi: number } | nul
   const r = BAND_RANGES.find((b) => b.label === label)
   return top !== undefined && r ? { lo: r.lo, hi: top } : null
 }
+
+/** The sideband convention for a dial: LSB below 10 MHz, USB at or above. */
+export function sidebandForMhz(mhz: number): 'LSB' | 'USB' {
+  return mhz < 10 ? 'LSB' : 'USB'
+}
+
+/**
+ * Which sideband to command when moving the dial from `fromMhz` to `toMhz` (#45).
+ *
+ * Every QSY call site used to pass `snap.radio.sideband` — whatever the rig is on RIGHT NOW —
+ * which is correct for tuning inside a band and wrong the moment the band changes. Picking 20 m
+ * from 40 m carried LSB across, so the menu offered "14.230 USB" and the rig was commanded to
+ * 14.230 LSB. Reported by patpell on an FT-710, and he noted it happens in more places than
+ * SSTV, which fits: four call sites shared the same expression.
+ *
+ * ⚠️ It corrects only when the move CROSSES the 10 MHz convention boundary. Inside one side the
+ * current sideband is kept, because an operator who has deliberately put the rig on USB down on
+ * 40 m — legitimate for some digital work — must not have it reverted by an ordinary retune. The
+ * bug was carrying a sideband ACROSS the boundary, not keeping one within it.
+ *
+ * Anything that is not a plain sideband (FM, AM, a DATA submode) passes straight through: those
+ * are a mode class rather than a side, and this convention has nothing to say about them.
+ */
+export function sidebandForQsy(toMhz: number, fromMhz: number, current?: string | null): string {
+  const cur = (current ?? '').trim().toUpperCase()
+  if (cur !== 'LSB' && cur !== 'USB') return cur || sidebandForMhz(toMhz)
+  return sidebandForMhz(toMhz) === sidebandForMhz(fromMhz) ? cur : sidebandForMhz(toMhz)
+}

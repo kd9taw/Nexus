@@ -35,7 +35,7 @@ import {
   sstvSend,
   sstvStop,
 } from '../api'
-import { bandLabelForMhz } from '../band'
+import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
 
@@ -563,7 +563,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
       return
     }
-    onSetFrequency?.(mhz, band, snap?.radio.sideband || 'USB')
+    // #45: the CURRENT sideband is right for a retune inside a band and wrong the moment the
+    // band changes — picking 20 m from 40 m carried LSB across, so the menu offered USB and the
+    // rig went to 14.230 LSB. `sidebandForQsy` corrects only across the 10 MHz boundary.
+    onSetFrequency?.(mhz, band, sidebandForQsy(mhz, snap?.radio.dialMhz ?? mhz, snap?.radio.sideband))
   }
 
   // In-flight preview → canvas at the preview's NATIVE size; CSS upscales it

@@ -66,6 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Changing band no longer leaves the radio on the wrong sideband.** Picking 20m while you were
+  on 40m carried LSB across with you: the menu offered 14.230 USB and the rig was commanded to
+  14.230 LSB. Typing a frequency by hand did the same thing. Transmitting on the wrong sideband is
+  as bad as transmitting on the wrong frequency — nobody hears you, and nothing tells you why.
+
+  Crossing 10 MHz now follows the usual convention, LSB below and USB above. Moving around
+  *within* one side still keeps whatever sideband you are on, so if you have deliberately put the
+  rig on USB down on 40m for digital work, an ordinary retune leaves it alone. FM, AM and the data
+  submodes are untouched. Reported by patpell.
+
 - **KG4 callsigns are no longer all credited to Guantanamo Bay.** Only a KG4 call with exactly two
   characters after it — KG4AB — is Guantanamo; KG4ABC and KG4A are ordinary United States calls
   sharing the same block. Every KG4 was being filed as Guantanamo, which is a rare entity, so it

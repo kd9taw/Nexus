@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { setFrequency, setRit, setXit, setVfo } from '../api'
-import { bandLabelForMhz } from '../band'
+import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
@@ -57,7 +57,8 @@ export function TuningStrip({
       return
     }
     // Keep the current sideband so an in-band nudge/entry never flips the mode.
-    const s = await setFrequency(mhz, band, snap.radio.sideband || 'USB').catch(() => null)
+    // In-band keeps the current sideband; crossing 10 MHz follows the band convention (#45).
+    const s = await setFrequency(mhz, band, sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband)).catch(() => null)
     if (s) onSnap?.(s)
   }
   // Round to the nearest Hz to avoid float drift accumulating on repeated nudges.
