@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Back up your whole setup to a file, and restore it on another computer.** Settings ▸ Radio
+  now has Back up and Restore. One file holds your radios, operating preferences, memory
+  channels, watchlist and chase sets — for a new laptop before a contest, a rebuild after a disk
+  failure, or a second machine that should match the first. Until now there was no way to keep a
+  copy of any of it: it lives in a configuration folder most operators never open.
+
+  **It holds no passwords or API keys.** Those stay in your operating system's keychain, so a
+  restore asks for them again and the file is safe to carry on a USB stick or email to yourself.
+  Your contact log is separate and is not included — export that from the Logbook. Restoring
+  replaces your current setup and says so before it does anything.
+
 - **The operator at the key is shown in the top bar, and swaps in one click.** Set an operator and
   it appears beside Help, in the one group no cockpit hides — because a wrong operator is silent:
   nothing misbehaves and you find out at submission, when the log is already wrong. Click it to

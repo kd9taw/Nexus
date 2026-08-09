@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { SAT_VFO_MAPS } from '../features/satVfo'
-import { confirmSatUplink } from '../api'
+import {
+  confirmSatUplink,
+  exportSettingsBundle,
+  importSettingsBundle,
+  saveTextToDownloads,
+} from '../api'
 import type {
   AudioDevices,
   BandChannel,
@@ -545,6 +550,29 @@ export function SettingsPanel({
   features,
   onRerunWizard,
 }: Props) {
+  // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
+  // import uses — Tauri has no native picker wired here and this needs none.
+  const backupFileRef = useRef<HTMLInputElement | null>(null)
+  const onRestoreBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    e.target.value = '' // so re-picking the SAME file fires onChange again
+    if (!f) return
+    // Destructive and not undoable, so it asks — and names what goes, because "restore" sounds
+    // additive and is not.
+    if (
+      !window.confirm(
+        `Replace your current setup with ${f.name}?\n\nYour radios, preferences, memory ` +
+          `channels, watchlist and chase sets will be replaced. Your contact log is not ` +
+          `affected. This cannot be undone.`,
+      )
+    ) {
+      return
+    }
+    await withErrorToast(async () => {
+      await importSettingsBundle(await f.text())
+      pushToast('Settings restored — check your radio and Test CAT', 'success')
+    }, 'Restore failed')
+  }
   const [form, setForm] = useState<Settings | null>(null)
   // Highest scale the CURRENT window can auto-fit (Auto never upscales past what
   // fits). Cap chips above this are dead — they all yield this same scale — so we
@@ -3633,6 +3661,54 @@ export function SettingsPanel({
 
                 The address existed all along — `rigctld_port` is per-radio and validated
                 unique — and was simply never shown to anyone. That is the whole defect. */}
+            {/* Back up / restore the whole station (#28 item 4). Until now there was no way
+                to keep a copy of any of this: settings.json sits in a config folder most
+                operators never open, and the honest answer to "how do I move to a new laptop"
+                was to go and find it. */}
+            <div className="settings-field">
+              <span className="settings-label">Back up your setup</span>
+              <div className="rig-share-row">
+                <button
+                  type="button"
+                  className="settings-linkbtn"
+                  onClick={() =>
+                    withErrorToast(async () => {
+                      const text = await exportSettingsBundle()
+                      const stamp = new Date().toISOString().slice(0, 10)
+                      const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
+                      pushToast(`Settings backed up → ${path}`, 'success')
+                    }, 'Backup failed')
+                  }
+                  title="Save your radios, preferences, memory channels and watchlist to a file"
+                >
+                  Back up
+                </button>
+                <input
+                  ref={backupFileRef}
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={onRestoreBackup}
+                />
+                <button
+                  type="button"
+                  className="settings-linkbtn"
+                  onClick={() => backupFileRef.current?.click()}
+                  title="Replace your current setup with a saved backup"
+                >
+                  Restore…
+                </button>
+              </div>
+              <span className="settings-hint">
+                Your radios, operating preferences, memory channels, watchlist and chase sets in
+                one file — for a new computer, or before a rebuild. <strong>It holds no
+                passwords or API keys</strong>: those stay in your operating system&apos;s
+                keychain, so a restore asks for them again, and the file is safe to keep on a USB
+                stick. Your contact log is separate — export that from the Logbook. Restoring
+                replaces your current setup.
+              </span>
+            </div>
+
             <div className="settings-field">
               <span className="settings-label">Share this radio with other programs</span>
               <div className="rig-share-row">

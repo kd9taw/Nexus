@@ -2058,3 +2058,16 @@ export async function logOperators(): Promise<string[]> {
 export async function exportLogForOperator(operator: string): Promise<string> {
   return invoke<string>('export_log_for_operator', { operator })
 }
+
+/** Everything that makes this station THIS station, as one JSON file (#28) — settings plus the
+ *  durable UI state. Carries NO secrets: passwords and API keys live in the OS keychain, and the
+ *  ClubLog key is redacted because ClubLog auto-revokes one that becomes public. */
+export async function exportSettingsBundle(): Promise<string> {
+  return invoke<string>('export_settings_bundle')
+}
+
+/** Restore a bundle written by `exportSettingsBundle`. Refuses anything that is not one, by
+ *  name and schema — a partial restore is worse than a refusal. */
+export async function importSettingsBundle(text: string): Promise<void> {
+  return invoke<void>('import_settings_bundle', { text })
+}

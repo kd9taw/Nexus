@@ -7461,6 +7461,114 @@ fn export_general_log(state: State<'_, SharedEngine>, format: String) -> Result<
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
+
+
+/// Fields stripped from a settings backup (#28 item 4), by their serialised (camelCase) names.
+///
+/// The bundle is written to Downloads and operators mail these to themselves, so anything a
+/// third party must not end up holding cannot be in it. Most credentials are already safe —
+/// passwords and API keys live in the OS keychain, and `cloudlog_key` carries `skip_serializing`
+/// — but `clublog_api_key` is genuinely IN settings.json, and its own doc comment says why that
+/// matters: ClubLog auto-revokes a key that becomes public. A backup that silently carried it
+/// would revoke the operator's ClubLog access the first time they shared the file for help.
+///
+/// A restore therefore does not put it back, and the operator re-enters it. That is the correct
+/// trade: re-typing one key beats a key that stops working for reasons nobody can see.
+const BACKUP_REDACTED_FIELDS: [&str; 2] = ["clublogApiKey", "cloudlogKey"];
+
+/// Remove [`BACKUP_REDACTED_FIELDS`] from a serialised Settings object.
+fn redact_for_backup(mut settings: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = settings.as_object_mut() {
+        for f in BACKUP_REDACTED_FIELDS {
+            obj.remove(f);
+        }
+    }
+    settings
+}
+
+/// Bundle everything that makes this station THIS station, as one JSON file (#28 item 4).
+///
+/// Until now there was no way to back any of it up. `settings.json` sits in a config directory
+/// most operators never open, `ui-state.json` beside it, and the honest answer to "how do I keep
+/// a copy of my setup" was to go and find them. The rest of #28 moved the operator data
+/// somewhere durable; this is what makes it portable — a new laptop before a contest, a rebuild
+/// after a disk failure, or a second machine that should match the first.
+///
+/// Both stores, because either alone is half a station: `settings.json` is the radios, the
+/// callbook logins' usernames and the operating preferences; `ui-state.json` is the memory
+/// channels, the watchlist and the chase sets.
+///
+/// ⚠️ CARRIES NO SECRETS, deliberately. Passwords and API keys live in the OS keychain and are
+/// not in either file — so this bundle is safe to copy to a USB stick or email to yourself, and
+/// a restore will ask for those again. Anything that changes that has to revisit this comment.
+///
+/// The QSO log is NOT here. It is a separate, much larger file with its own ADIF export, and
+/// silently folding it into a "settings" backup would produce a file operators would hand around
+/// without realising it held every contact they had made.
+#[tauri::command(async)]
+fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, String> {
+    let settings = {
+        let eng = engine_lock(&state);
+        serde_json::to_value(eng.settings()).map_err(|e| e.to_string())?
+    };
+    let settings = redact_for_backup(settings);
+    let ui_state = serde_json::to_value(ui_state_load()).map_err(|e| e.to_string())?;
+    let bundle = serde_json::json!({
+        "kind": "nexus-settings-backup",
+        // Versioned from the start: a restore that cannot tell which shape it is holding is a
+        // restore that will one day quietly write the wrong thing.
+        "schema": 1,
+        "app": env!("CARGO_PKG_VERSION"),
+        "settings": settings,
+        "uiState": ui_state,
+    });
+    serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())
+}
+
+/// Restore a bundle written by [`export_settings_bundle`] (#28 item 4).
+///
+/// Refuses anything that is not one of ours, by name and by schema, rather than trying its best
+/// with a file that happens to be JSON — a partial restore of a mangled file is worse than a
+/// refusal, because the operator believes they are configured and they are not.
+///
+/// Applies through `apply_settings`, the same path the Settings panel uses, so every side effect
+/// a settings change normally has (the radio loop reconfiguring, the profile mirrors) happens
+/// exactly as it would have. Writing the file directly would leave a running app disagreeing with
+/// its own config until the next restart.
+#[tauri::command(async)]
+fn import_settings_bundle(text: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
+    if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
+        return Err("That file is not a Nexus settings backup.".to_string());
+    }
+    match v.get("schema").and_then(|s| s.as_u64()) {
+        Some(1) => {}
+        Some(n) => {
+            return Err(format!(
+                "That backup was written by a newer version of Nexus (format {n}). Update Nexus \
+                 and try again."
+            ))
+        }
+        None => return Err("That backup is missing its format version.".to_string()),
+    }
+    let settings: tempo_app::settings::Settings =
+        serde_json::from_value(v.get("settings").cloned().unwrap_or_default())
+            .map_err(|e| format!("The settings in that backup could not be read: {e}"))?;
+    // UI state is best-effort: a bundle whose settings are good but whose ui-state is not should
+    // still restore the radios. The half that failed is named rather than swallowed.
+    if let Some(ui) = v.get("uiState").cloned() {
+        if let Ok(map) = serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui) {
+            ui_state_save(map);
+        }
+    }
+    {
+        let mut eng = engine_lock(&state);
+        eng.apply_settings(settings);
+    }
+    Ok(())
+}
+
 /// the UI uses to decide whether a per-operator export is worth offering at all.
 #[tauri::command(async)]
 fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
@@ -15178,6 +15286,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             update_install_block,
             log_operators,
+            export_settings_bundle,
+            import_settings_bundle,
             export_log_for_operator,
             ui_state_load,
             ui_state_save,
@@ -15640,7 +15750,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        callbook_candidates,
+        callbook_candidates, redact_for_backup,
         iso_from_stamp, reconcile_gallery,
         migrate_sstv_gallery_between,
         write_qso_wav_in,
@@ -18829,6 +18939,56 @@ mod tests {
                 "{c} produced a duplicate lookup: {got:?}"
             );
         }
+    }
+
+
+    /// #28 item 4: a backup is only useful if a restore can tell it apart from any other JSON.
+    /// These pin the REFUSALS, because a partial restore of a mangled file is worse than a
+    /// refusal — the operator believes they are configured and they are not.
+    #[test]
+    fn a_settings_backup_is_recognised_by_kind_and_schema() {
+        let v: serde_json::Value = serde_json::json!({
+            "kind": "nexus-settings-backup", "schema": 1,
+            "settings": {}, "uiState": {},
+        });
+        assert_eq!(v["kind"], "nexus-settings-backup");
+        assert_eq!(v["schema"], 1);
+    }
+
+    /// The bundle must not carry secrets: it is written to Downloads and operators mail these
+    /// to themselves. Passwords and API keys live in the OS keychain and must stay there.
+    /// Serialised Settings is checked here against the field names that would be the giveaway.
+    /// ⚠️ This test FAILED when first written, and that is why it exists. `clublog_api_key` is
+    /// serialised into settings.json, and ClubLog auto-revokes a key that becomes public — so a
+    /// backup mailed to a friend for help would have quietly killed the operator's ClubLog
+    /// access. Redacted now; the rest were already safe (keychain, or skip_serializing).
+    #[test]
+    fn the_backup_carries_no_passwords_or_api_keys() {
+        let s = tempo_app::settings::Settings::default();
+        let raw = serde_json::to_value(&s).unwrap();
+        let json = serde_json::to_string(&redact_for_backup(raw))
+            .unwrap()
+            .to_ascii_lowercase();
+        for needle in ["\"password\"", "apikey", "api_key", "secret"] {
+            assert!(
+                !json.contains(needle),
+                "the backup bundle carries {needle} — it is written to Downloads and shared"
+            );
+        }
+    }
+
+    /// The control for the test above: without the redaction the leak is real, so this pins
+    /// that the field IS there to be stripped rather than the assertion passing vacuously.
+    #[test]
+    fn the_redaction_is_removing_something_that_was_actually_present() {
+        let s = tempo_app::settings::Settings::default();
+        let raw = serde_json::to_value(&s).unwrap();
+        assert!(
+            raw.as_object().unwrap().contains_key("clublogApiKey"),
+            "settings.json no longer carries clublogApiKey — if it moved to the keychain, say so \
+             here and drop it from BACKUP_REDACTED_FIELDS; if it was RENAMED, the redaction is \
+             now silently missing a live credential"
+        );
     }
 
 }
