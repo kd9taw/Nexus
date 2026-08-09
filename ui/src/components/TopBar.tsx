@@ -427,9 +427,14 @@ export function TopBar({
           Auto{' '}
           <small>{radio.txCycleAuto ? (radio.txEven ? '1st' : '2nd') : 'cycle'}</small>
         </button>
+        {/* `derived`: the cycle auto-pick landed on this side (POTA field report — the
+            flip on answering a station showed only in the Auto button's small text, so a
+            correct flip read as a no-op and got reported as one). Distinct from `active`
+            on purpose: active is the operator's LOCK, derived is the sequencer's current
+            answer, and dressing one as the other would misreport who chose it. */}
         <button
           type="button"
-          className={`tier-btn${!radio.txCycleAuto && radio.txEven ? ' active' : ''}`}
+          className={`tier-btn${!radio.txCycleAuto && radio.txEven ? ' active' : ''}${radio.txCycleAuto && radio.txEven ? ' derived' : ''}`}
           aria-pressed={!radio.txCycleAuto && radio.txEven}
           onClick={() => onSetTxEven(true)}
           title="Lock transmit to the even (1st) T/R slots — the station you work must be Tx 2nd"
@@ -438,7 +443,7 @@ export function TopBar({
         </button>
         <button
           type="button"
-          className={`tier-btn${!radio.txCycleAuto && !radio.txEven ? ' active' : ''}`}
+          className={`tier-btn${!radio.txCycleAuto && !radio.txEven ? ' active' : ''}${radio.txCycleAuto && !radio.txEven ? ' derived' : ''}`}
           aria-pressed={!radio.txCycleAuto && !radio.txEven}
           onClick={() => onSetTxEven(false)}
           title="Lock transmit to the odd (2nd) T/R slots — the station you work must be Tx 1st"

@@ -9989,6 +9989,13 @@ select.settings-input {
   color: var(--tx);
   font-weight: 700;
 }
+/* The auto-picked TX cycle (POTA report): when Auto holds a side, that side's button shows
+   it — visibly, but NOT as `active`, which is the operator's manual lock. An underline in
+   the TX accent reads as "currently here" rather than "you pressed this". */
+.tier-btn.derived {
+  box-shadow: inset 0 -2px 0 0 var(--tx);
+  color: var(--text);
+}
 .rig-share-row {
   display: flex;
   align-items: center;

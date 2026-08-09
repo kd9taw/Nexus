@@ -85,6 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **You can now see which transmit cycle the app picked for you.** Double-clicking a station has
+  always set your cycle opposite to theirs — that part worked — but the big Tx 1st / Tx 2nd
+  buttons only light when you lock a cycle by hand, so the automatic flip showed only as tiny
+  text and looked like nothing happened. The side the app is currently on now carries a clear
+  underline, distinct from the lit look of a manual lock, so a working flip finally looks like
+  one. From the same field report as Field mode.
+
 - **Contacts broadcast to N1MM+ or N3FJP now say which radio made them.** Every packet claimed
   radio 1, so a two-radio station had its whole session attributed to one rig — and silently,
   because a logger receiving the feed has no way to tell a wrong radio number from a right one.
