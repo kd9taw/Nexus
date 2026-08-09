@@ -72,6 +72,7 @@ import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { readEnabledModes } from './useFeatures'
 import { useTheme } from './useTheme'
+import { useFieldMode } from './useFieldMode'
 import { useScale } from './useScale'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
@@ -90,10 +91,13 @@ function loadOperateLayout(): OperateLayout {
 
 export function DetachedPanel({ panel }: { panel: string }) {
   const [theme] = useTheme()
+  // Pop-outs follow field mode: a separate document re-applies the attribute itself, the
+  // same way it mirrors the theme — outdoors is a fact about the station, not a window.
+  const [fieldMode] = useFieldMode()
   // A torn-off window is its OWN document — it must publish the same layout/responsive
   // state the main app does, or the CSS falls back to the broken narrow/stacked layout
   // (vertical rails go horizontal, the map collapses to zero height). Mirror App.tsx.
-  const { scale } = useScale()
+  const { scale } = useScale(fieldMode)
   useViewport(scale)
   useDensity()
   useMotion()

@@ -79,7 +79,7 @@ const POPOUT_NATURAL: Natural = { w: 640, h: 520 }
  * `panel_min_inner` in src-tauri/src/lib.rs — `popout-natural.test.ts` parses those and
  * enforces `natural ≤ default_inner` and `natural ≤ min_inner / 0.65`, per axis.
  */
-const PANEL_NATURAL = new Map<string, Natural>([
+export const PANEL_NATURAL = new Map<string, Natural>([
   // The SAME dense cockpit as the main window — 1200×900 genuinely IS its question, and
   // it is the one surface whose natural exceeds the window it opens in (1140×760 → 80%,
   // exactly as before). Keep the asymmetry; it is not an oversight.
@@ -143,6 +143,31 @@ export function fitScale(
     return prev
   }
   return z
+}
+
+/** FIELD MODE's shrink factor for the natural footprint (POTA field report).
+ *
+ * 0.85 is not taste — it is the layout contract's boundary. Field mode buys its larger type by
+ * shrinking the EFFECTIVE viewport (zoom up = fewer effective pixels), and the supported floor
+ * is 1024×768. 0.85 × MAIN_NATURAL (1200×900) = 1020×765: within a rounding error of the
+ * floor, so the bump spends exactly the margin the contract allows and no more. A smaller
+ * factor would push real windows below the floor; a larger one buys less type. Pinned by
+ * `keeps the effective viewport at or above the supported floor` in useScale.test.ts. */
+export const FIELD_FIT = 0.85
+
+/** [`fitScale`] with field mode's inputs: the natural shrunk by [`FIELD_FIT`] and the cap
+ *  raised to the ladder top. A swap of the pure function's INPUTS, deliberately — nothing is
+ *  written to the scale keys, so switching field off restores the previous scale exactly,
+ *  with no snapshot to manage and no macro trap (the operator's other settings were never
+ *  touched). Auto mode only; a Manual pin stays verbatim (the pin doctrine above). */
+export function fieldFitScale(
+  innerW: number,
+  innerH: number,
+  prev?: Scale,
+  nat: Natural = MAIN_NATURAL,
+): Scale {
+  const shrunk: Natural = { w: nat.w * FIELD_FIT, h: nat.h * FIELD_FIT }
+  return fitScale(innerW, innerH, MAX_STEP, prev, shrunk)
 }
 
 /**
@@ -216,7 +241,7 @@ export interface ScaleControl {
   setCap: (c: Scale) => void
 }
 
-export function useScale(): ScaleControl {
+export function useScale(field = false): ScaleControl {
   const [mode, setModeState] = useState<ScaleMode>(readMode)
   const [cap, setCapState] = useState<Scale>(readCap)
   // The natural footprint is read from the URL HERE, not at module scope: a pop-out
@@ -228,7 +253,9 @@ export function useScale(): ScaleControl {
   const [scale, setScaleState] = useState<Scale>(() => {
     const nat = naturalFor(surfacePanel())
     return mode === 'auto'
-      ? pickInitialZoom(window.innerWidth, window.innerHeight, nat)
+      ? field
+        ? fieldFitScale(window.innerWidth, window.innerHeight, undefined, nat)
+        : pickInitialZoom(window.innerWidth, window.innerHeight, nat)
       : capPinnedScale(mode, surfaceId() === 'main', window.innerWidth, window.innerHeight, nat)
   })
   // Latest applied scale, for hysteresis — read inside the resize handler without
@@ -274,7 +301,10 @@ export function useScale(): ScaleControl {
     }
     let raf = 0
     const apply = () => {
-      const z = fitScale(window.innerWidth, window.innerHeight, cap, scaleRef.current, nat)
+      // Field mode swaps the fit's INPUTS (smaller natural, top cap) — see fieldFitScale.
+      const z = field
+        ? fieldFitScale(window.innerWidth, window.innerHeight, scaleRef.current, nat)
+        : fitScale(window.innerWidth, window.innerHeight, cap, scaleRef.current, nat)
       if (z !== scaleRef.current) setScaleState(z)
     }
     const onResize = () => {
@@ -287,7 +317,7 @@ export function useScale(): ScaleControl {
       window.removeEventListener('resize', onResize)
       cancelAnimationFrame(raf)
     }
-  }, [mode, cap])
+  }, [mode, cap, field])
 
   const setMode = useCallback((m: ScaleMode) => {
     setModeState(m)

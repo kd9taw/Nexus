@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
-import { fitScale, naturalFor } from './useScale'
+import { fitScale, fieldFitScale, naturalFor } from './useScale'
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
 // between launch and a first-paint flash, and it must mirror the React hooks EXACTLY
@@ -163,5 +163,41 @@ describe('index.html preseed: per-surface natural footprint', () => {
         String(fitScale(w, h) / 100),
       )
     }
+  })
+})
+
+describe('index.html preseed: field mode', () => {
+  // BOTH halves must seed — the attribute (high-contrast tokens key off it) and the larger
+  // fit arithmetic — or every launch in field mode flashes the indoor look, then snaps.
+  it('seeds data-contrast AND the field fit, matching fieldFitScale exactly', () => {
+    const cases: Array<[number, number]> = [[1024, 768], [1366, 768], [1536, 864], [1920, 1080]]
+    for (const [w, h] of cases) {
+      localStorage.clear()
+      localStorage.setItem('nexus-field-mode', '1')
+      document.documentElement.removeAttribute('style')
+      document.documentElement.removeAttribute('data-contrast')
+      window.history.replaceState(null, '', '/')
+      setWin(w, h)
+      runPreseed()
+      expect(document.documentElement.getAttribute('data-contrast'), `${w}x${h}`).toBe('high')
+      const want = String(fieldFitScale(w, h) / 100)
+      expect(
+        document.documentElement.style.getPropertyValue('--ui-zoom'),
+        `${w}x${h}: seed disagrees with fieldFitScale — first-paint flash`,
+      ).toBe(want)
+    }
+  })
+
+  it('field OFF seeds neither the attribute nor the bump', () => {
+    localStorage.clear()
+    document.documentElement.removeAttribute('style')
+    document.documentElement.removeAttribute('data-contrast')
+    window.history.replaceState(null, '', '/')
+    setWin(1366, 768)
+    runPreseed()
+    expect(document.documentElement.getAttribute('data-contrast')).toBeNull()
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(
+      String(fitScale(1366, 768) / 100),
+    )
   })
 })

@@ -48,6 +48,7 @@ import { Announcer } from './components/Announcer'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { loadWatchlist, type WatchFilter } from './watchlist'
 import { useTheme } from './useTheme'
+import { useFieldMode } from './useFieldMode'
 import { useScale } from './useScale'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
@@ -213,7 +214,10 @@ const OPERATE_TIERS: Tier[] = [
 
 export default function App() {
   const [theme, setTheme] = useTheme()
-  const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale()
+  // Field mode (outdoor/POTA): high contrast via data-contrast on <html>, larger auto-fit via
+  // the useScale argument. Global — a fact about the station, like the theme.
+  const [fieldMode, setFieldMode] = useFieldMode()
+  const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale(fieldMode)
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)
@@ -2494,6 +2498,8 @@ export default function App() {
         theme={theme}
         onThemeChange={setTheme}
         onOpenGuide={() => setShowGuide(true)}
+        field={fieldMode}
+        onFieldChange={setFieldMode}
         // Who is at the key (#25). Absent/empty renders nothing — the single-op case.
         operator={settings?.fdOperator ?? ''}
         operatorRoster={opRoster}

@@ -110,6 +110,9 @@ interface Props {
   onThemeChange: (t: Theme) => void
   /** Open the Getting started guide (Help ▸ Getting started). */
   onOpenGuide: () => void
+  /** Field mode (outdoor/POTA) — see useFieldMode. Optional: absent hides the chip. */
+  field?: boolean
+  onFieldChange?: (on: boolean) => void
   /** Callsign of whoever is at the key, when that is NOT the station call (#25 multi-op).
    *  Empty/absent is the single-op case and renders nothing at all. */
   operator?: string
@@ -208,6 +211,8 @@ export function TopBar({
   theme,
   onThemeChange,
   onOpenGuide,
+  field,
+  onFieldChange,
   operator,
   operatorRoster,
   onSetOperator,
@@ -490,7 +495,7 @@ export function TopBar({
           }
           items={[{ label: 'Getting started', onSelect: onOpenGuide }]}
         />
-        <ThemeSwitcher theme={theme} onChange={onThemeChange} />
+        <ThemeSwitcher theme={theme} onChange={onThemeChange} field={field} onFieldChange={onFieldChange} />
       </div>
     </header>
   )

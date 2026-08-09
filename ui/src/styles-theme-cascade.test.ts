@@ -25,128 +25,40 @@ import { join } from 'node:path'
 // and then measures contrast on what actually paints. Nothing here pins a hex; every
 // assertion is a computed relationship, so re-tuning a colour is free and breaking one is not.
 
+// The resolver itself moved to src/cssCascade.ts (2026-08-09) so the field-mode contrast
+// guard shares it instead of growing a second, weaker parser. This file keeps the loading,
+// the suites, and the runtime-token scan; the machinery is imported. MODES extends the sweep
+// to theme × contrast, so every suite below runs against field mode's high-contrast surfaces
+// automatically — with no high block in the sheet, a high mode resolves identically to its
+// base theme, so the extension cannot go red on its own.
+import {
+  MODES,
+  contrast,
+  expandWith,
+  matchesRoot,
+  parseHex,
+  parseRules,
+  rgbHex as hex,
+  rootTokensFrom,
+  toRgb,
+  topSplit,
+  type Mode,
+  type Rgb,
+} from './cssCascade'
+
 const CSS_PATH = fileURLToPath(new URL('./styles.css', import.meta.url))
 const RAW = readFileSync(CSS_PATH, 'utf8')
 // Prose must never read as a declaration, but line/offset arithmetic has to survive: blank
 // the comment bodies in place rather than deleting them.
 const CSS = RAW.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 
-interface Decl {
-  prop: string
-  value: string
-}
-interface Rule {
-  selector: string
-  decls: Decl[]
-  order: number
-  spec: readonly [number, number, number]
-}
-
-/** (ids, classes+attrs+pseudo-classes, types+pseudo-elements) — enough for the root
- *  selectors this file arbitrates, and it is the tie that mattered: `:root` and
- *  `[data-theme='light']` both score (0,1,0). */
-function specificity(sel: string): readonly [number, number, number] {
-  const attrs = (sel.match(/\[[^\]]*\]/g) || []).length
-  const bare = sel.replace(/\[[^\]]*\]/g, ' ')
-  const pseudoEls = (bare.match(/::[\w-]+/g) || []).length
-  const s = bare.replace(/::[\w-]+/g, ' ')
-  const ids = (s.match(/#[\w-]+/g) || []).length
-  const cls = (s.match(/\.[\w-]+/g) || []).length + attrs + (s.match(/:[\w-]+/g) || []).length
-  const typ = (s.replace(/[.#:][\w-]+/g, ' ').match(/[a-zA-Z][\w-]*/g) || []).length + pseudoEls
-  return [ids, cls, typ] as const
-}
-
-const cmpSpec = (a: readonly number[], b: readonly number[]) =>
-  a[0] - b[0] || a[1] - b[1] || a[2] - b[2]
-
-function declsOf(body: string): Decl[] {
-  const out: Decl[] = []
-  let depth = 0
-  let buf = ''
-  for (const ch of body) {
-    if (ch === '(') depth++
-    else if (ch === ')') depth--
-    if (ch === ';' && depth === 0) {
-      const i = buf.indexOf(':')
-      if (i > 0) out.push({ prop: buf.slice(0, i).trim(), value: buf.slice(i + 1).trim() })
-      buf = ''
-    } else buf += ch
-  }
-  const i = buf.indexOf(':')
-  if (i > 0) out.push({ prop: buf.slice(0, i).trim(), value: buf.slice(i + 1).trim() })
-  return out
-}
-
-/** Brace-aware rule walk. Descends into @media/@supports (a token redefined inside one still
- *  competes); skips @keyframes, whose frame selectors are not rules on elements. */
-function parseRules(sheet: string, order = { n: 0 }): Rule[] {
-  const out: Rule[] = []
-  let i = 0
-  let selStart = 0
-  while (i < sheet.length) {
-    if (sheet[i] !== '{') {
-      i++
-      continue
-    }
-    const sel = sheet.slice(selStart, i).trim().replace(/\s+/g, ' ')
-    i++
-    const bodyStart = i
-    let depth = 1
-    while (i < sheet.length && depth > 0) {
-      if (sheet[i] === '{') depth++
-      else if (sheet[i] === '}') depth--
-      i++
-    }
-    const body = sheet.slice(bodyStart, i - 1)
-    if (sel.startsWith('@')) {
-      if (/^@(media|supports|layer|container)/.test(sel)) out.push(...parseRules(body, order))
-    } else {
-      const decls = declsOf(body)
-      for (const one of sel.split(',').map((s) => s.trim()).filter(Boolean)) {
-        out.push({ selector: one, decls, order: order.n++, spec: specificity(one) })
-      }
-    }
-    selStart = i
-  }
-  return out
-}
-
 const RULES = parseRules(CSS)
-const THEMES = ['dark', 'light'] as const
-type Theme = (typeof THEMES)[number]
+const THEMES = MODES
+type Theme = Mode
 
-/** Does this selector match documentElement under `theme`? `data-theme` is set on
- *  document.documentElement (useTheme.ts), so `:root`, `html` and `[data-theme='…']` all
- *  target the SAME element — which is why their equal specificity was decisive. */
-function matchesRoot(sel: string, theme: Theme): boolean {
-  const rest = sel
-    .replace(/:root/g, '')
-    .replace(/^html/, '')
-    .replace(new RegExp(`\\[data-theme='${theme}'\\]`, 'g'), '')
-    .trim()
-  if (rest !== '') return false
-  return sel.includes(':root') || sel.startsWith('html') || sel.includes('[data-theme=')
-}
-
-/** The cascade, for custom properties on the root element. */
-function rootTokens(theme: Theme): Map<string, string> {
-  const win = new Map<string, { spec: readonly [number, number, number]; value: string }>()
-  for (const r of RULES) {
-    if (!matchesRoot(r.selector, theme)) continue
-    for (const d of r.decls) {
-      if (!d.prop.startsWith('--')) continue
-      const prev = win.get(d.prop)
-      // >= 0: equal specificity means the LATER declaration wins, which is the whole bug.
-      if (!prev || cmpSpec(r.spec, prev.spec) >= 0) win.set(d.prop, { spec: r.spec, value: d.value })
-    }
-  }
-  return new Map([...win].map(([k, v]) => [k, v.value]))
-}
-
-const TOKENS: Record<Theme, Map<string, string>> = {
-  dark: rootTokens('dark'),
-  light: rootTokens('light'),
-}
+const TOKENS = Object.fromEntries(
+  MODES.map((m) => [m, rootTokensFrom(RULES, m)]),
+) as Record<Mode, Map<string, string>>
 
 /** Custom properties injected from TypeScript at runtime — invisible to a CSS parser, so they
  *  are legitimately absent from the sheet and must not read as undefined. */
@@ -168,112 +80,11 @@ const RUNTIME_TOKENS = (() => {
   return found
 })()
 
-/** Split a comma list at depth 0 (var()/color-mix() arguments nest). */
-function topSplit(s: string): string[] {
-  const out: string[] = []
-  let depth = 0
-  let buf = ''
-  for (const ch of s) {
-    if (ch === '(') depth++
-    else if (ch === ')') depth--
-    if (ch === ',' && depth === 0) {
-      out.push(buf.trim())
-      buf = ''
-    } else buf += ch
-  }
-  if (buf.trim()) out.push(buf.trim())
-  return out
-}
-
 /** Substitute every var() against a theme's resolved tokens, fallbacks included. */
-function expand(value: string, theme: Theme, seen = new Set<string>()): string {
-  let v = value
-  for (let guard = 0; guard < 24; guard++) {
-    const at = v.indexOf('var(')
-    if (at === -1) return v
-    let i = at + 4
-    let depth = 1
-    while (i < v.length && depth > 0) {
-      if (v[i] === '(') depth++
-      else if (v[i] === ')') depth--
-      i++
-    }
-    const inner = v.slice(at + 4, i - 1)
-    const [name, ...fb] = topSplit(inner)
-    let repl: string
-    if (seen.has(name)) repl = ''
-    else {
-      const declared = TOKENS[theme].get(name)
-      const next = new Set(seen).add(name)
-      repl =
-        declared !== undefined
-          ? expand(declared, theme, next)
-          : fb.length
-            ? expand(fb.join(','), theme, next)
-            : ''
-    }
-    v = v.slice(0, at) + repl + v.slice(i)
-  }
-  return v
-}
+const expand = (value: string, theme: Theme, seen?: Set<string>) =>
+  expandWith(TOKENS[theme], value, seen)
 
-type Rgb = readonly [number, number, number]
-
-function parseHex(h: string): Rgb | null {
-  const m = /^#([0-9a-fA-F]{3,8})$/.exec(h.trim())
-  if (!m) return null
-  let d = m[1]
-  if (d.length === 3 || d.length === 4) d = [...d].map((c) => c + c).join('')
-  if (d.length !== 6 && d.length !== 8) return null
-  return [0, 2, 4].map((i) => parseInt(d.slice(i, i + 2), 16)) as unknown as Rgb
-}
-
-/** A colour, already var()-expanded, over an opaque backdrop. Handles the subset this sheet
- *  uses for the surfaces under text: hex, rgb/rgba, transparent, and color-mix(in srgb, …). */
-function toRgb(value: string, backdrop: Rgb): Rgb | null {
-  const v = value.trim()
-  if (v === '' || v === 'transparent') return backdrop
-  const hex = parseHex(v)
-  if (hex) return hex
-  const rgb = /^rgba?\(([^)]*)\)$/.exec(v)
-  if (rgb) {
-    const parts = rgb[1].split(/[,/\s]+/).filter(Boolean).map(Number)
-    const [r, g, b] = parts
-    const a = parts.length > 3 ? parts[3] : 1
-    return [0, 1, 2].map((i) => Math.round([r, g, b][i] * a + backdrop[i] * (1 - a))) as unknown as Rgb
-  }
-  const mixArgs = /^color-mix\(([\s\S]*)\)$/.exec(v)
-  if (mixArgs) {
-    const args = topSplit(mixArgs[1])
-    if (args.length !== 3 || !/^in\s+srgb$/.test(args[0])) return null
-    const one = (a: string): { c: Rgb | null; p: number | null } => {
-      const pm = /\s([\d.]+)%$/.exec(a)
-      return { c: toRgb(pm ? a.slice(0, pm.index) : a, backdrop), p: pm ? Number(pm[1]) / 100 : null }
-    }
-    const A = one(args[1])
-    const B = one(args[2])
-    if (!A.c || !B.c) return null
-    const pa = A.p ?? (B.p !== null ? 1 - B.p : 0.5)
-    return [0, 1, 2].map((i) => Math.round(A.c![i] * pa + B.c![i] * (1 - pa))) as unknown as Rgb
-  }
-  return null
-}
-
-const hex = (c: Rgb) => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('')
-
-function luminance(c: Rgb): number {
-  const f = (x: number) => {
-    const s = x / 255
-    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
-  }
-  return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
-}
-function contrast(fg: Rgb, bg: Rgb): number {
-  const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a)
-  return (hi + 0.05) / (lo + 0.05)
-}
-
-/** The colour a token resolves to in a theme, over the theme's panel. */
+/** The colour a token resolves to in a theme, over the theme's page. */
 function tokenRgb(token: string, theme: Theme): Rgb | null {
   const page = parseHex(expand('var(--bg)', theme)) ?? ([255, 255, 255] as const)
   return toRgb(expand(`var(${token})`, theme), page)

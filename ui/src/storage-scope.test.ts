@@ -59,6 +59,9 @@ export const PER_SURFACE = [
 const SHARED = [
   'nexus.navOrder', // left-rail section order — a person/station preference, same in every window
   'nexus-density',
+  // Field mode: being outdoors is a fact about the STATION, not a window — a pop-out beside
+  // the main window in the same sunlight must follow it (DetachedPanel mirrors the hook).
+  'nexus-field-mode',
   'nexus-motion',
   'nexus-ui-scale-cap',
   'nexus.connect.chaseDefault.v1',

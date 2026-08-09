@@ -3111,6 +3111,57 @@ button.nb-chip:hover {
   /* The light --need-* inks do NOT live here — see the palette further down. */
 }
 
+/* ---- FIELD MODE: HIGH-CONTRAST TOKENS (data-contrast='high') -----------
+   The outdoor/POTA treatment (field report 2026-08-09: "very difficult to see
+   outdoors, even shaded, light or dark mode"). Sun on the panel adds a constant
+   veiling luminance to ink and surface alike, compressing every ratio toward
+   1:1 — and it kills the de-emphasised text first: at R=0.15 (open shade) the
+   dark theme's --text-dim measures 2.8:1 and --text-faint 2.2:1, under the 3:1
+   NON-text floor, with ~700 dim/faint sites in this sheet. So high contrast is
+   mostly about collapsing the dim/faint ladder toward full ink, not about size.
+
+   AN ORTHOGONAL AXIS, NOT A THIRD THEME — deliberately. The light theme is this
+   token block PLUS ~22 component-scoped override rules below; a third theme
+   would have to duplicate all of them forever. Composing on data-contrast
+   inherits every one for free, and answers the report's "light OR dark".
+
+   TWO-ATTRIBUTE SELECTORS ARE THE MECHANISM: (0,2,0) beats every (0,1,0)
+   :root/[data-theme] palette REGARDLESS of source order. Source order is how
+   the light --need-* palette died for a month; specificity is the fix.
+
+   THE ELEVATION STEP IS WIDENED, NEVER FLATTENED — all-white surfaces read
+   washed-out precisely because the structure went flat (see the light-block
+   notes above). Page and panel stay distinct in both modes.
+
+   The hexes are starting values, not the spec: styles-field-contrast.test.ts
+   is the spec (every ink ≥4.5:1 on --panel under R=0.15 glare, computed from
+   the cascade winner). Tune freely; the guard says when you have gone too far.
+   The --need-, --snr- and --status- families are NOT overridden — their inks were tuned
+   against a near-white panel and carry over; the extended cascade guard sweeps
+   them in both high modes, so a miss is loud rather than shipped. */
+[data-theme='light'][data-contrast='high'] {
+  --text: #000000;
+  --text-dim: #1c2733;
+  --text-faint: #26323f;
+  --bg: #dfe5ec;
+  --panel: #ffffff;
+  --bg-elev: #ffffff;
+  --bg-elev-2: #f2f5f9;
+  --border: #7d8899;
+  --border-soft: #a8b3c2;
+}
+[data-theme='dark'][data-contrast='high'] {
+  --text: #ffffff;
+  --text-dim: #e8eef6;
+  --text-faint: #dae2ec;
+  --bg: #000000;
+  --panel: #0c1219;
+  --bg-elev: #0c1219;
+  --bg-elev-2: #161d27;
+  --border: #5a6980;
+  --border-soft: #3a475c;
+}
+
 /* ---- LIGHT-MODE INK OVERRIDES ------------------------------------------
    Dark-tuned pastel text/icon colors that sit on PAGE backgrounds (not on
    solid colored chips) — each gets a same-hue ink readable on white. Scoped
@@ -9930,6 +9981,13 @@ select.settings-input {
   font-size: var(--fs-micro);
   color: var(--text-dim);
   cursor: pointer;
+}
+/* The Field chip (outdoor mode). Active state borrows the TX accent — it is the one chip in
+   the theme group whose ON state changes how everything reads, so it earns a stronger ON. */
+.theme-chip.field-chip.active {
+  border-color: var(--tx);
+  color: var(--tx);
+  font-weight: 700;
 }
 .rig-share-row {
   display: flex;

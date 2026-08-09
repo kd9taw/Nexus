@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Field mode — one tap for operating outdoors.** A POTA activator reported the screen was
+  very difficult to read outdoors even shaded, in either theme, and he is right about "either":
+  daylight on the panel washes out low-contrast text first, and about two-thirds of the text in
+  Nexus is deliberately de-emphasised grey — that, not the type size, is what disappears in the
+  sun. The new **Field** chip beside Light/Dark turns the de-emphasised text near-solid, pushes
+  the surfaces to full black-and-white (in whichever theme you are in), and steps the whole
+  interface up a size or two to match what your window can hold. Tap it again and you are back
+  exactly where you were — it never touches your theme or your saved scale. Pop-out windows
+  follow it. The tooltip will tell you the Light theme reads best in daylight, but the choice
+  stays yours.
+
 - **You can skip the burned-in callsign for a picture that already shows it.** A pre-made QSO
   card carries your call as part of the artwork, and the burn-in was covering it to repeat it.
   Tick *My picture already shows my callsign* under the transmit preview and the plate is left

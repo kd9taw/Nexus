@@ -7,6 +7,8 @@ import {
   naturalFor,
   MAIN_NATURAL,
   SCALE_STEPS,
+  fieldFitScale,
+  PANEL_NATURAL,
 } from './useScale'
 
 // Fit model: the MAIN window fits against MAIN_NATURAL (1200×900). Auto NEVER upscales
@@ -274,5 +276,49 @@ describe('main-window fit is byte-identical to the pre-change model', () => {
     expect(fitScale(900, 600)).toBe(65)
     expect(fitScale(3440, 1440)).toBe(100)
     expect(fitScale(3440, 1440, 175)).toBe(150)
+  })
+})
+
+describe('field mode scale (fieldFit)', () => {
+  // The POTA report's size half. Field mode swaps fitScale's INPUTS — the natural shrunk by
+  // FIELD_FIT and the cap raised to the ladder top — so switching it off restores the prior
+  // scale exactly (nothing is ever written to the scale keys). These are pure-function tests;
+  // written failing-first before fieldFitScale existed.
+  it('is monotonic: field never yields a SMALLER step than auto, at any sweep size', () => {
+    const sizes: Array<[number, number]> = [
+      [1024, 768], [1280, 800], [1366, 768], [1536, 864], [1920, 1080], [2560, 1440], [3440, 1440],
+    ]
+    for (const [w, h] of sizes) {
+      const auto = fitScale(w, h)
+      const field = fieldFitScale(w, h)
+      expect(field, `${w}x${h}: field ${field} < auto ${auto}`).toBeGreaterThanOrEqual(auto)
+      for (const nat of PANEL_NATURAL.values()) {
+        const a = fitScale(w, h, undefined, undefined, nat)
+        const f = fieldFitScale(w, h, undefined, nat)
+        expect(f, `${w}x${h} panel ${nat.w}x${nat.h}: field ${f} < auto ${a}`).toBeGreaterThanOrEqual(a)
+      }
+    }
+  })
+
+  it('delivers the designed bumps at the common field sizes', () => {
+    expect(fieldFitScale(1366, 768)).toBe(100) // auto: 85
+    expect(fieldFitScale(1536, 864)).toBe(110) // auto: 90
+    expect(fieldFitScale(1920, 1080)).toBe(125) // auto: 100 (capped)
+  })
+
+  it('keeps the effective viewport at or above the supported floor', () => {
+    // FIELD_FIT=0.85 is exactly the boundary: 0.85 x MAIN_NATURAL = 1020x765 vs the 1024x768
+    // floor. A smaller factor would push the effective box BELOW the floor at real sizes —
+    // this is the one genuine layout-contract risk, pinned here.
+    const sizes: Array<[number, number]> = [[1024, 768], [1366, 768], [1920, 1080]]
+    for (const [w, h] of sizes) {
+      const z = fieldFitScale(w, h) / 100
+      expect(w / z, `${w}x${h}: effective width ${(w / z).toFixed(0)} under the floor`).toBeGreaterThanOrEqual(1020)
+      expect(h / z, `${w}x${h}: effective height ${(h / z).toFixed(0)} under the floor`).toBeGreaterThanOrEqual(765)
+    }
+  })
+
+  it('never exceeds the ladder top', () => {
+    expect(fieldFitScale(10000, 10000)).toBeLessThanOrEqual(175)
   })
 })

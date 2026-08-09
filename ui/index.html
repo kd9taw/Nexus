@@ -13,6 +13,11 @@
           var den = localStorage.getItem('nexus-density')
           if (den === 'guided' || den === 'standard' || den === 'dense') d.setAttribute('data-density', den)
           if (localStorage.getItem('nexus-motion') === 'reduce') d.setAttribute('data-motion', 'reduce')
+          // Field mode (outdoor/POTA): high-contrast tokens key off this attribute, and the
+          // zoom seed below mirrors its larger fit — BOTH halves must seed or field mode
+          // flashes the indoor look on every launch.
+          var fieldOn = localStorage.getItem('nexus-field-mode') === '1'
+          if (fieldOn) d.setAttribute('data-contrast', 'high')
           // First-paint zoom seed — keep in sync with useScale.ts (SCALE_STEPS, the
           // per-surface natural fit model, keys nexus-ui-scale-mode /
           // nexus-ui-scale-cap): a pinned Manual scale applies directly (capped in a
@@ -50,6 +55,9 @@
             var n = Object.prototype.hasOwnProperty.call(NAT, panel) ? NAT[panel] : [640, 520]
             natW = n[0]; natH = n[1]
           }
+          // Field mode fits against a 0.85-shrunk natural at the ladder-top cap — the
+          // mirror of fieldFitScale in src/useScale.ts (auto mode only; a pin is verbatim).
+          if (fieldOn) { natW = natW * 0.85; natH = natH * 0.85 }
           var target = Math.min(window.innerWidth / natW, window.innerHeight / natH) * 100
           var fitCeil = 65
           for (var i = 0; i < STEPS.length; i++) {
@@ -61,6 +69,7 @@
           } else {
             var cap = Number(localStorage.getItem('nexus-ui-scale-cap'))
             if (STEPS.indexOf(cap) === -1) cap = 100
+            if (fieldOn) cap = STEPS[STEPS.length - 1]
             z = Math.min(cap, fitCeil)
           }
           var zoom = z / 100

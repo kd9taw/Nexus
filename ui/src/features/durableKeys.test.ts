@@ -31,7 +31,7 @@ describe('what counts as operator data', () => {
       expect(isDurable(k), `${k} holds operator data and must be durable`).toBe(true)
     }
     // The other half of the classification: these are preference, and belong in localStorage.
-    for (const k of ['nexus.awardsTab', 'nexus-density', 'nexus.connect.map3d', 'nexus.dev.xray']) {
+    for (const k of ['nexus.awardsTab', 'nexus-density', 'nexus.connect.map3d', 'nexus.dev.xray', 'nexus-field-mode']) {
       expect(isDurable(k), `${k} is cosmetic — durability buys nothing`).toBe(false)
     }
   })
