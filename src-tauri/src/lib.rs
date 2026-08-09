@@ -7460,6 +7460,25 @@ fn export_general_log(state: State<'_, SharedEngine>, format: String) -> Result<
     Ok(eng.export_logbook(&format))
 }
 
+/// Distinct operators present in the log (#25). Empty for a single-op station, which is what
+/// the UI uses to decide whether a per-operator export is worth offering at all.
+#[tauri::command(async)]
+fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
+    let eng = engine_lock(&state);
+    Ok(eng.log_operators())
+}
+
+/// ADIF for ONE operator's contacts (#25) — POTA and Field Day both require each operator to
+/// submit their own log.
+#[tauri::command(async)]
+fn export_log_for_operator(
+    state: State<'_, SharedEngine>,
+    operator: String,
+) -> Result<String, String> {
+    let eng = engine_lock(&state);
+    Ok(eng.export_logbook_for_operator(&operator))
+}
+
 /// Write export text to a file in the operator's Downloads folder and return the FULL saved path.
 /// The Logbook "Export ADIF/CSV" buttons use this instead of a webview `<a download>` blob — that
 /// browser trick is unreliable in a WebView2 window (a synchronous URL revoke can abort the write,
@@ -15119,6 +15138,8 @@ pub fn run() {
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
             update_install_block,
+            log_operators,
+            export_log_for_operator,
             ui_state_load,
             ui_state_save,
             get_snapshot,

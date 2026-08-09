@@ -1161,6 +1161,16 @@ impl StationCore {
             _ => self.logbook.adif(),
         }
     }
+
+    /// Distinct operators in the log (#25) — what a per-operator export offers to split by.
+    pub fn log_operators(&self) -> Vec<String> {
+        self.logbook.operators()
+    }
+
+    /// ADIF containing only `operator`'s contacts (#25).
+    pub fn export_logbook_for_operator(&self, operator: &str) -> String {
+        self.logbook.adif_for_operator(operator)
+    }
 }
 
 #[cfg(test)]

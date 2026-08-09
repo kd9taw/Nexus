@@ -914,6 +914,53 @@ impl Logbook {
         s
     }
 
+    /// Every distinct operator in the log, uppercased and sorted (#25).
+    ///
+    /// POTA and Field Day both require each operator to submit their OWN log, and until the
+    /// operator was stamped on the record there was nothing to split on — the choice was losing
+    /// the second op's credit or hand-editing the exported ADIF. This is the list a per-operator
+    /// export offers.
+    ///
+    /// Contacts with no operator are NOT represented here. That is the single-op case (the stamp
+    /// is deliberately absent rather than defaulted to the station call), and inventing a bucket
+    /// named after the station would claim someone said something they never did. Callers that
+    /// need those records have the combined export, which is every record either way.
+    pub fn operators(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .records
+            .iter()
+            .filter_map(|r| r.operator.as_deref())
+            .map(|o| o.trim().to_ascii_uppercase())
+            .filter(|o| !o.is_empty())
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// The log as ADIF, containing ONLY the contacts `operator` made.
+    ///
+    /// Case- and whitespace-insensitive, because the operator is typed by a human mid-activation
+    /// and `w1abc` and `W1ABC ` are the same person. A caller asking for an operator with no
+    /// contacts gets a valid, EMPTY ADIF file (header and nothing else) rather than an error —
+    /// an empty log is a real answer, and an export that silently produced the whole log instead
+    /// would upload one operator's contacts under another's name.
+    pub fn adif_for_operator(&self, operator: &str) -> String {
+        let want = operator.trim().to_ascii_uppercase();
+        let mut s = adif_header();
+        for r in &self.records {
+            let is_theirs = r
+                .operator
+                .as_deref()
+                .map(|o| o.trim().to_ascii_uppercase() == want)
+                .unwrap_or(false);
+            if is_theirs {
+                s.push_str(&adif_record(r));
+            }
+        }
+        s
+    }
+
     /// The whole logbook as RFC-4180 CSV (for spreadsheet / quick export).
     pub fn csv(&self) -> String {
         let mut s =
@@ -3542,5 +3589,121 @@ mod tests {
         assert!(by("K5XYZ").qsl_rcvd.lotw, "LOTW_QSL_RCVD=V likewise");
         assert!(by("DL1ABC").award_confirmed, "a padded Y is still a Y");
         assert!(!by("JA1XYZ").confirmed, "I = ignore/invalid is not a QSL");
+    }
+}
+
+#[cfg(test)]
+mod operator_split_tests {
+    use super::*;
+
+    fn rec(call: &str, operator: Option<&str>) -> QsoRecord {
+        QsoRecord {
+            call: call.into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: "20m".into(),
+            freq_mhz: 14.074,
+            mode: "FT8".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: 1_700_000_000,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: operator.map(|o| o.to_string()),
+            station_callsign: None,
+            extra: Vec::new(),
+        }
+    }
+
+    /// #25: POTA and Field Day both want each operator to submit their own log. Before the
+    /// operator was stamped there was nothing to split on.
+    #[test]
+    fn operators_lists_each_distinct_operator_once() {
+        let lb = Logbook {
+            records: vec![
+                rec("W9AAA", Some("W1ABC")),
+                rec("W9BBB", Some("G0PQR")),
+                rec("W9CCC", Some("W1ABC")),
+            ],
+        };
+        assert_eq!(
+            lb.operators(),
+            vec!["G0PQR".to_string(), "W1ABC".to_string()]
+        );
+    }
+
+    /// The single-op case, and the one that must NOT grow a bucket: an unstamped contact belongs
+    /// to nobody in particular, and naming a bucket after the station would claim the operator
+    /// said something they never did.
+    #[test]
+    fn operators_invents_no_bucket_for_unstamped_contacts() {
+        let lb = Logbook {
+            records: vec![rec("W9AAA", None), rec("W9BBB", Some("  "))],
+        };
+        assert!(lb.operators().is_empty());
+    }
+
+    #[test]
+    fn an_operators_export_carries_only_their_contacts() {
+        let lb = Logbook {
+            records: vec![
+                rec("W9AAA", Some("W1ABC")),
+                rec("W9BBB", Some("G0PQR")),
+                rec("W9CCC", None),
+            ],
+        };
+        let out = lb.adif_for_operator("W1ABC");
+        assert!(out.contains("W9AAA"), "their own contact is missing");
+        assert!(
+            !out.contains("W9BBB"),
+            "another operator's contact leaked into this export"
+        );
+        assert!(
+            !out.contains("W9CCC"),
+            "an unstamped contact was attributed to someone"
+        );
+    }
+
+    /// Typed by a human, mid-activation, on a phone in a car park.
+    #[test]
+    fn matching_an_operator_ignores_case_and_stray_spaces() {
+        let lb = Logbook {
+            records: vec![rec("W9AAA", Some(" w1abc "))],
+        };
+        assert!(lb.adif_for_operator("W1ABC").contains("W9AAA"));
+        assert_eq!(lb.operators(), vec!["W1ABC".to_string()]);
+    }
+
+    /// An operator with nothing logged gets a valid EMPTY file. The failure this forbids is
+    /// falling back to the whole log, which would upload one operator's contacts under another's
+    /// name — worse than an empty file, and silent.
+    #[test]
+    fn an_operator_with_no_contacts_gets_an_empty_file_not_everyone_elses() {
+        let lb = Logbook {
+            records: vec![rec("W9AAA", Some("W1ABC"))],
+        };
+        let out = lb.adif_for_operator("K9NOBODY");
+        assert!(!out.contains("W9AAA"));
+        assert!(
+            out.contains("<EOH>"),
+            "still a valid ADIF file, just an empty one"
+        );
     }
 }

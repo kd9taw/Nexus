@@ -13,6 +13,8 @@ import {
   deleteQso,
   editQso,
   exportGeneralLog,
+  exportLogForOperator,
+  logOperators,
   getLog,
   importAdif,
   logQso,
@@ -161,6 +163,27 @@ export function Logbook({
     txPower: '',
   }))
   const [err, setErr] = useState<string | null>(null)
+  // Operators present in the log (#25) — drives whether the per-operator export is offered.
+  // Recomputed when the log size changes, which is when a new operator can first appear.
+  const [operators, setOperators] = useState<string[]>([])
+  useEffect(() => {
+    // Nothing to ask about an empty log, and asking anyway is not free: this fires on mount,
+    // before the log has loaded, and the extra state update it lands shifts the first few
+    // renders. That is what put the Purge button's disabled read on the wrong side of a
+    // waitFor in Logbook.test.tsx — a real timing change, not a flaky test.
+    if (log.length === 0) {
+      setOperators((prev) => (prev.length === 0 ? prev : []))
+      return
+    }
+    void logOperators()
+      .then((next) =>
+        // Identity-stable when unchanged, so a reload of the same log does not re-render.
+        setOperators((prev) =>
+          prev.length === next.length && prev.every((v, i) => v === next[i]) ? prev : next,
+        ),
+      )
+      .catch(() => {}) // no bridge / older core — just don't offer the split
+  }, [log.length])
   const [qrzBusy, setQrzBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [search, setSearch] = useState('')
@@ -703,6 +726,36 @@ export function Logbook({
           >
             Export ADIF
           </button>
+          {/* Per-operator export (#25). Shown only when the log actually HAS more than one
+              operator in it — for the single-op station that is nearly everyone, a button that
+              would produce exactly one file identical to Export ADIF is noise. POTA and Field
+              Day both require each operator to submit their own log, and these get uploaded
+              from a phone in a car park, so the filenames carry the callsign. */}
+          {operators.length > 1 && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() =>
+                withErrorToast(async () => {
+                  const stamp = new Date().toISOString().slice(0, 10)
+                  const saved: string[] = []
+                  for (const op of operators) {
+                    const text = await exportLogForOperator(op)
+                    const safe = op.replace(/[^A-Za-z0-9]+/g, '-')
+                    saved.push(await saveTextToDownloads(`nexus-log-${stamp}-${safe}.adi`, text))
+                  }
+                  // The combined file as well, always: it is the only one that carries contacts
+                  // logged with no operator set, and it is what the station itself uploads.
+                  const all = await exportGeneralLog('adif')
+                  saved.push(await saveTextToDownloads(`nexus-log-${stamp}.adi`, all))
+                  pushToast(`Exported ${saved.length} files → Downloads`, 'success')
+                }, 'Export failed')
+              }
+              title={`One ADIF per operator (${operators.join(', ')}) plus the combined log`}
+            >
+              Export per operator
+            </button>
+          )}
           <button
             type="button"
             className="export-btn"

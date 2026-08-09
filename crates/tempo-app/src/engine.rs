@@ -13350,6 +13350,17 @@ impl Engine {
         self.station.export_logbook(format)
     }
 
+    /// Distinct operators in the log (#25).
+    pub fn log_operators(&self) -> Vec<String> {
+        self.station.log_operators()
+    }
+
+    /// ADIF containing only `operator`'s contacts (#25) — POTA and Field Day both require each
+    /// operator to submit their own log.
+    pub fn export_logbook_for_operator(&self, operator: &str) -> String {
+        self.station.export_logbook_for_operator(operator)
+    }
+
     /// Two-instance freshness: re-read + reconcile the shared log iff another instance touched
     /// it (mtime-gated, so a no-op stat when unchanged). Call on the Needed-board poll so a
     /// monitoring radio's needs never go stale relative to the other radio. Returns true if it

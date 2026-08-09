@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Export one ADIF per operator.** With more than one operator in your log, the Logbook grows an
+  *Export per operator* button: one file per operator, named with their callsign, plus the
+  combined log — which is still the one carrying any contacts logged with no operator set. POTA
+  and Field Day both want each operator to submit their own, and these get uploaded from a phone
+  in a car park, so the filenames say who they belong to at a glance. A single-op station never
+  sees the button, because the file it produced would be a copy of the one beside it.
+
 - **Two of you on one radio? Your contacts can now say who made them.** Set *Operator at the key*
   in Settings ▸ Station and every contact you log carries it, so a shared POTA activation or a
   Field Day shift can be split by operator afterwards instead of hand-edited — both programs want

@@ -2046,3 +2046,15 @@ export async function uiStateLoad(): Promise<Record<string, string>> {
 export async function uiStateSave(state: Record<string, string>): Promise<boolean> {
   return invoke<boolean>('ui_state_save', { state })
 }
+
+/** Distinct operators present in the log (#25). Empty for a single-op station — the Logbook
+ *  uses that to decide whether a per-operator export is worth offering at all. */
+export async function logOperators(): Promise<string[]> {
+  return invoke<string[]>('log_operators')
+}
+
+/** ADIF for ONE operator's contacts (#25). POTA and Field Day both require each operator to
+ *  submit their own log. */
+export async function exportLogForOperator(operator: string): Promise<string> {
+  return invoke<string>('export_log_for_operator', { operator })
+}

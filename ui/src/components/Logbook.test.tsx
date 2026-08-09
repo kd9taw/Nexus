@@ -22,6 +22,11 @@ vi.mock('../api', () => {
   return {
     getLog: vi.fn(),
     deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    // #25 per-operator export: the Logbook asks on mount, so the mock must answer.
+    // A vi.fn WITH a default implementation: the Logbook calls this on its own during render,
+    // so a bare vi.fn returning undefined blows up on .then — and mockResolvedValue can still
+    // override it per test.
+    logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
@@ -120,5 +125,43 @@ describe('purge confirmation dialog', () => {
     expect(text).toMatch(/re-?downloads?[^.]*confirmation history/i)
     // And that it sets the expectation about duration — the whole point of telling them.
     expect(text).toMatch(/longer|slower/i)
+  })
+})
+
+// Per-operator export (#25). POTA and Field Day both require each operator to submit their own
+// log; before the operator was stamped on the record there was nothing to split on.
+describe('per-operator export', () => {
+  it('is not offered to a single-op station', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    ;(api.logOperators as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    // One operator, or none, means the split file would be identical to Export ADIF.
+    expect(
+      [...container.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Export per operator'),
+      ),
+      'a button that produces a duplicate of the file beside it is noise',
+    ).toBe(false)
+  })
+
+  it('appears once the log holds more than one operator', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    ;(api.logOperators as ReturnType<typeof vi.fn>).mockResolvedValue(['G0PQR', 'W1ABC'])
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    const btn = await waitFor(() => {
+      const b = [...container.querySelectorAll('button')].find((x) =>
+        x.textContent?.includes('Export per operator'),
+      )
+      expect(b).toBeTruthy()
+      return b as HTMLButtonElement
+    })
+    // The tooltip names them, because a wrong operator is silent until submission.
+    expect(btn.title).toMatch(/G0PQR/)
+    expect(btn.title).toMatch(/W1ABC/)
   })
 })
