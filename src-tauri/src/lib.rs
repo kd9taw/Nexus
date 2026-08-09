@@ -2235,6 +2235,53 @@ fn write_conversations_atomic(text: &str) -> bool {
     write_json_atomic(&conversations_path(), text)
 }
 
+/// The durable UI-state store: `ui-state.json`, a SIBLING of settings.json inside the current
+/// profile's config directory.
+///
+/// **Why this exists (#28).** Real operator data was living in WebView2 `localStorage`: the radio
+/// memory channels, the watchlist, the satellite and DXpedition chase sets, their armed alarms,
+/// the profile list, and the UI scale — which is an ACCESSIBILITY setting, so losing it is not
+/// cosmetic. That store is invisible to the operator, is not beside settings.json, is not covered
+/// by any backup of it, is not per-profile, and is origin-scoped, so it evaporates on a WebView2
+/// data reset, an uninstall-then-reinstall, or an asset-protocol change. Worst of all, WebView2
+/// keys its data folder on the bundle identifier, so a tidy-up rename of `com.kd9taw.tempo` would
+/// silently wipe every key on every installed machine — that landmine is pinned by
+/// `the_bundle_identifier_is_pinned_because_renaming_it_wipes_operator_data`, and this store is
+/// what eventually defuses it.
+///
+/// Deliberately a flat `string -> string` map and NOT part of `Settings`: the values are already
+/// JSON-encoded blobs owned and versioned by their own UI modules, and giving each one a typed
+/// Rust mirror would put the schema in two places and invite exactly the drift that produced
+/// `nexus.memory.bank.v1` AND `.v2`. Cosmetics stay in `localStorage`, which is what it is for.
+fn ui_state_path() -> PathBuf {
+    config_dir().join("ui-state.json")
+}
+
+/// Read the durable UI state. A missing, unreadable or malformed file is an EMPTY map, never an
+/// error: the caller's fallback is `localStorage`, so "nothing durable yet" is a normal first-run
+/// state and must not look like a failure.
+#[tauri::command]
+fn ui_state_load() -> std::collections::BTreeMap<String, String> {
+    std::fs::read_to_string(ui_state_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Replace the durable UI state. Whole-map write rather than per-key: the data is small (tens of
+/// keys, a few KB), and one atomic replace cannot leave the store half-updated the way a series
+/// of per-key writes interrupted by a crash could. `BTreeMap` so the file is key-ordered and a
+/// diff between two backups is readable.
+///
+/// Returns whether the write landed, so the UI can keep `localStorage` as a live fallback rather
+/// than believing a save that did not happen.
+#[tauri::command]
+fn ui_state_save(state: std::collections::BTreeMap<String, String>) -> bool {
+    serde_json::to_string_pretty(&state)
+        .map(|t| write_json_atomic(&ui_state_path(), &t))
+        .unwrap_or(false)
+}
+
 /// Export + atomically persist the engine's conversation threads. Used for the
 /// flush-on-exit (so quitting within the periodic-save window doesn't lose recent
 /// chat or resurrect an archived thread). Recovers a poisoned lock.
@@ -15072,6 +15119,8 @@ pub fn run() {
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
             update_install_block,
+            ui_state_load,
+            ui_state_save,
             get_snapshot,
             send_message,
             resend_chat,

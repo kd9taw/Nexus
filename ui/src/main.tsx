@@ -4,6 +4,7 @@ import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
+import { loadDurable } from './features/durableStore'
 import './styles.css'
 // AFTER styles.css, deliberately: the cockpit pane grid's structural rules are all flat
 // single-class selectors, so an equal-specificity tie with anything in styles.css must
@@ -46,7 +47,7 @@ if (!panel) {
 // window reload: at this level there is no navigation left to fall back to.
 const reload = { label: 'Reload window', onClick: () => window.location.reload() }
 
-createRoot(document.getElementById('root')!).render(
+const tree = (
   <StrictMode>
     {panel ? (
       <ErrorBoundary label={`The ${panel} window`} action={reload}>
@@ -57,5 +58,19 @@ createRoot(document.getElementById('root')!).render(
         <App />
       </ErrorBoundary>
     )}
-  </StrictMode>,
+  </StrictMode>
 )
+
+// Load the durable store BEFORE the first render, because the modules it backs — the memory
+// bank, the watchlist, the chase sets and their alarms — read synchronously during their own
+// module init and on first paint. Reading them before the store is loaded would fall through to
+// `localStorage` and, worse, a subsequent write would then persist that stale answer over the
+// durable copy. See features/durableStore.ts.
+//
+// `loadDurable` never rejects: with no bridge it leaves the cache empty and every call site
+// falls back to `localStorage` exactly as before. `.finally` rather than `.then` so a future
+// change that does let it throw still renders the app rather than a blank window — the 0.24.6
+// failure mode, and not one to re-create over a preferences file.
+void loadDurable().finally(() => {
+  createRoot(document.getElementById('root')!).render(tree)
+})

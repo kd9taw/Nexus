@@ -14,6 +14,7 @@
 import { useSyncExternalStore } from 'react'
 import { bearingDeg, gridToLatLon, haversineKm } from '../grid'
 import type { View } from './registry'
+import { durableGet, durableSet } from './durableStore'
 
 // ---------------------------------------------------------------------------
 // Model
@@ -303,10 +304,10 @@ export function coerceBank(raw: unknown): MemoriesBank {
 
 function loadBank(): MemoriesBank {
   try {
-    const rawV2 = window.localStorage.getItem(STORAGE_KEY)
+    const rawV2 = durableGet(STORAGE_KEY)
     if (rawV2 != null) return coerceBank(JSON.parse(rawV2))
     // First run on v2: migrate the v1 flat list (left in place for rollback).
-    const rawV1 = window.localStorage.getItem(V1_STORAGE_KEY)
+    const rawV1 = durableGet(V1_STORAGE_KEY)
     if (rawV1 != null) {
       const parsed: unknown = JSON.parse(rawV1)
       const bank = emptyBank()
@@ -327,7 +328,7 @@ function loadBank(): MemoriesBank {
 
 function saveBank(bank: MemoriesBank): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(bank))
+    durableSet(STORAGE_KEY, JSON.stringify(bank))
   } catch {
     /* full/unavailable — in-memory state still applies this session */
   }

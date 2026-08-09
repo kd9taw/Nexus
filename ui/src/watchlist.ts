@@ -8,6 +8,7 @@
 // the matcher is pure so it's fully unit-tested.
 
 import type { DecodeRow } from './types'
+import { durableGet, durableSet } from './features/durableStore'
 
 export type WatchKind = 'call' | 'dxcc'
 
@@ -70,7 +71,7 @@ export function watchLabel(f: WatchFilter): string {
 /** Load the saved watch list (empty on first run or any parse error). */
 export function loadWatchlist(): WatchFilter[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = durableGet(STORAGE_KEY)
     if (!raw) return []
     const arr = JSON.parse(raw)
     if (!Array.isArray(arr)) return []
@@ -86,7 +87,7 @@ export function loadWatchlist(): WatchFilter[] {
 /** Persist the watch list. */
 export function saveWatchlist(filters: WatchFilter[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(filters))
+    durableSet(STORAGE_KEY, JSON.stringify(filters))
   } catch {
     // storage full / unavailable — non-fatal; the list just isn't remembered
   }

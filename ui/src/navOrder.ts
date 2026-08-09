@@ -1,3 +1,4 @@
+import { durableGet, durableSet, durableRemove } from './features/durableStore'
 // Operator's custom order for the left nav rail's global-section icons (ModeNav's ITEMS —
 // Connect, Needed, Spots, Logbook, Awards, Stats, …). The operating group (Phone/CW/Digital)
 // and the Settings gear keep their fixed spec order; only the situational/logging sections
@@ -41,7 +42,7 @@ export function moveNav(ids: string[], id: string, beforeId: string | null): str
 
 export function loadNavOrder(): string[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = durableGet(KEY)
     const arr = raw ? JSON.parse(raw) : null
     return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []
   } catch {
@@ -51,7 +52,7 @@ export function loadNavOrder(): string[] {
 
 export function saveNavOrder(order: string[]): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(order))
+    durableSet(KEY, JSON.stringify(order))
   } catch {
     /* storage full/unavailable — the order still applies for this session */
   }
@@ -59,7 +60,7 @@ export function saveNavOrder(order: string[]): void {
 
 export function resetNavOrder(): void {
   try {
-    localStorage.removeItem(KEY)
+    durableRemove(KEY)
   } catch {
     /* ignore */
   }

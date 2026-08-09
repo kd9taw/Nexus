@@ -5,6 +5,7 @@
 
 import { disarmSatAlarm } from './satAlarm'
 import { surfaceGet, surfaceSet } from './windowScope'
+import { durableGet, durableSet } from './durableStore'
 
 const KEY = 'nexus.sats.chasing'
 const NORAD_KEY = 'nexus.sats.chasingNorad'
@@ -28,7 +29,7 @@ function notifyChanged(): void {
 /** The persisted chased-bird set (uppercase names). Empty when storage is blocked. */
 export function satChasingSet(): Set<string> {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = durableGet(KEY)
     if (!raw) return new Set()
     const arr = JSON.parse(raw)
     return new Set(Array.isArray(arr) ? arr.map((c) => String(c).toUpperCase()) : [])
@@ -46,7 +47,7 @@ export function satChasingSet(): Set<string> {
  * emptied theirs. Blocked storage reads as "no record". */
 export function satChasingEverSet(): boolean {
   try {
-    return localStorage.getItem(KEY) != null
+    return durableGet(KEY) != null
   } catch {
     return false
   }
@@ -60,7 +61,7 @@ export function satChasingEverSet(): boolean {
  * storage is blocked/corrupt. */
 export function satChasingNorads(): Record<string, number> {
   try {
-    const raw = localStorage.getItem(NORAD_KEY)
+    const raw = durableGet(NORAD_KEY)
     if (!raw) return {}
     const obj = JSON.parse(raw)
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {}
@@ -101,13 +102,13 @@ export function toggleSatChasing(name: string, norad?: number | null): boolean {
     }
   }
   try {
-    localStorage.setItem(KEY, JSON.stringify([...set]))
+    durableSet(KEY, JSON.stringify([...set]))
   } catch {
     /* storage blocked — applies this session via the read-back failure mode */
   }
   if (n != null) {
     try {
-      localStorage.setItem(NORAD_KEY, JSON.stringify({ ...norads, [key]: n }))
+      durableSet(NORAD_KEY, JSON.stringify({ ...norads, [key]: n }))
     } catch {
       /* storage blocked — degrades exactly like the name set above */
     }

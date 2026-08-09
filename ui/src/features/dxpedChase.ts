@@ -9,6 +9,7 @@
 import { doubleBeep } from '../alerts'
 import { pushToast } from '../toast'
 import type { DxpedWindow, WorkableCard } from '../types'
+import { durableGet, durableSet } from './durableStore'
 
 const KEY = 'nexus.dxped.chasing'
 const CHASE_BEEP_HZ = 590
@@ -18,7 +19,7 @@ const OPEN_THRESHOLD = 0.3
 /** The persisted chased-call set (uppercase). Empty when storage is blocked. */
 export function chasingSet(): Set<string> {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = durableGet(KEY)
     if (!raw) return new Set()
     const arr = JSON.parse(raw)
     return new Set(Array.isArray(arr) ? arr.map((c) => String(c).toUpperCase()) : [])
@@ -39,7 +40,7 @@ export function toggleChasing(call: string): boolean {
   if (now) set.add(key)
   else set.delete(key)
   try {
-    localStorage.setItem(KEY, JSON.stringify([...set]))
+    durableSet(KEY, JSON.stringify([...set]))
   } catch {
     /* storage blocked — the toggle still applies this session via chasingSet's failure mode */
   }

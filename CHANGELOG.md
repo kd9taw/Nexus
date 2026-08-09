@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Your memory channels, watchlist and chase lists were being kept somewhere that does not
+  survive a reinstall.** They lived in the browser storage inside the app window, along with your
+  profile list, your armed satellite and DXpedition alarms, and your UI scale — which is an
+  accessibility setting, so losing it is not a cosmetic matter. None of it sat beside your
+  settings file, none of it was covered by a backup of that file, and none of it was per-profile.
+  Reinstalling rather than upgrading in place could clear the lot, with no warning and no way
+  back.
+
+  All of it now lives in `ui-state.json`, next to your settings, and is carried across
+  automatically the first time you run this version. Nothing is deleted from the old location, so
+  going back a version loses nothing either. Genuinely cosmetic things — a collapsed panel, the
+  tab you were last on — stay where they were, which is what that storage is for.
+
 - **Some rigs were keyed the moment Nexus connected, whatever you set PTT to.** Reported on a
   TS-2000 with a Digirig, and it is not specific to either: about fifty radios tell Hamlib they use
   hardware flow control on the serial port — the Kenwood TS-2000, TS-590 and TS-990S, the Yaesu

@@ -2034,3 +2034,15 @@ export async function exportChannels(
 ): Promise<string> {
   return invoke<string>('export_channels', { channels, format, nameCap, attribution })
 }
+
+/** Load the durable UI-state store (`ui-state.json`, beside settings.json). See
+ *  `features/durableStore.ts` for why some browser-storage keys are mirrored there. */
+export async function uiStateLoad(): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>('ui_state_load')
+}
+
+/** Replace the durable UI-state store. Returns whether the write landed — the caller keeps
+ *  `localStorage` as a live fallback rather than trusting a save that did not happen. */
+export async function uiStateSave(state: Record<string, string>): Promise<boolean> {
+  return invoke<boolean>('ui_state_save', { state })
+}

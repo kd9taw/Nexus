@@ -4,6 +4,7 @@
 // through the normal settings-save path, so there's no separate apply mechanism to drift.
 
 import type { Settings } from './types'
+import { durableGet, durableSet } from './features/durableStore'
 
 const KEY = 'nexus.profiles'
 
@@ -62,7 +63,7 @@ export function mergeProfile(current: Settings, profile: Settings): Settings {
 /** All saved profiles (name-sorted). Tolerates absent/blocked/corrupt storage → []. */
 export function loadProfiles(): Profile[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = durableGet(KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -76,7 +77,7 @@ export function loadProfiles(): Profile[] {
 
 function persist(profiles: Profile[]): Profile[] {
   try {
-    localStorage.setItem(KEY, JSON.stringify(profiles))
+    durableSet(KEY, JSON.stringify(profiles))
   } catch {
     /* storage blocked — the returned list still applies for this session */
   }
