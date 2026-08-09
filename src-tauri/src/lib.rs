@@ -10445,7 +10445,7 @@ fn call_station(
     // `freq` = the decoded station's audio offset (Hz); move our RX/TX onto it (WSJT-X
     // double-click). Ignore non-positive values (no usable frequency).
     let dx_freq = freq.filter(|f| *f > 0.0);
-    eng.call_station_ctx(&call, g, msg, snr, dx_freq);
+    eng.call_station_ctx(&call, g, msg, snr, dx_freq)?;
     Ok(eng.snapshot())
 }
 

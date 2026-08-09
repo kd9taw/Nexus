@@ -5185,13 +5185,24 @@ impl RadioLoop {
                         // onto the DX's frequency, not always from the grid at band-center.
                         let parsed = Msg::parse(&message);
                         if let Some(sender) = parsed.sender() {
-                            eng.call_station_ctx(
+                            // A refusal (no derivable parity — the context was just flushed
+                            // by a QSY/tier switch) must NOT fall through to the arm below:
+                            // arming TX for a QSO that was never started is exactly the
+                            // unattended-keying shape the refusal exists to prevent. The
+                            // companion sent a message, so the reason goes to the diag log
+                            // rather than vanishing.
+                            if let Err(reason) = eng.call_station_ctx(
                                 sender,
                                 None,
                                 Some(&message),
                                 Some(snr),
                                 Some(delta_freq as f32),
-                            );
+                            ) {
+                                crate::civ::diag::note(&format!(
+                                    "UDP Reply for {sender} refused: {reason}"
+                                ));
+                                continue;
+                            }
                             // Stock parity: "double-click sets Tx enable" governs
                             // only OUR OWN UI clicks — an inbound UDP Reply
                             // (JTAlert/GridTracker) always arms TX in WSJT-X.

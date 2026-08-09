@@ -6401,7 +6401,7 @@ impl Engine {
     /// queues, and opens a fresh auto-log window (so the contact logs once when
     /// the sequence completes).
     pub fn call_station(&mut self, dxcall: &str) {
-        self.call_station_ctx(dxcall, None, None, None, None);
+        let _ = self.call_station_ctx(dxcall, None, None, None, None);
     }
 
     /// Toggle Skip Tx1 (WSJT-X parity) — a session-only preference (see the field).
@@ -6420,7 +6420,7 @@ impl Engine {
     ///
     /// [`call_station`]: Engine::call_station
     pub fn call_station_with_grid(&mut self, dxcall: &str, dxgrid: Option<&str>) {
-        self.call_station_ctx(dxcall, dxgrid, None, None, None);
+        let _ = self.call_station_ctx(dxcall, dxgrid, None, None, None);
     }
 
     /// The faithful WSJT-X "double-click to work" entry point. `reply_msg` is the
@@ -6438,7 +6438,7 @@ impl Engine {
         reply_msg: Option<&str>,
         reply_snr: Option<i32>,
         dx_freq: Option<f32>,
-    ) {
+    ) -> Result<(), String> {
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
 
@@ -6446,7 +6446,7 @@ impl Engine {
         // band activity) must not start a QSO with ourselves — stock WSJT-X
         // ignores it; without this we'd key up calling our own callsign.
         if tempo_core::message::same_call(dxcall, &mycall) {
-            return;
+            return Ok(()); // benign — matches the old silent behaviour (App shows its own info toast)
         }
         // Same reasoning on a receive-only tier: this arms TX, picks answer parity
         // and moves RX to the DX — a whole QSO the radio can never take part in.
@@ -6459,7 +6459,7 @@ impl Engine {
         // is not a thing the mode does.
         let t = self.app.tier();
         if self.tier_is_rx_only(t) || self.tier_is_beacon(t) {
-            return;
+            return Ok(()); // benign — the tier cannot answer; unchanged silent behaviour
         }
 
         // Resolve the message we're answering → (parsed Msg, the report we send =
@@ -6517,6 +6517,24 @@ impl Engine {
                 .map(|g| g.trim().to_uppercase())
                 .filter(|g| !g.is_empty());
         }
+        // ⚠️ REFUSE BEFORE ANY STATE CHANGES. The parity APPLY happens below (after the
+        // mode enter, where it always did), but the DECISION that it cannot happen must be
+        // taken here — the first version of this refusal returned from the parity block
+        // itself, after Mode::Qso was already entered, and left a half-armed QSO behind the
+        // error message. Same rule as the failed mode-set during click-to-work: bail must
+        // mean nothing happened.
+        if context_slot
+            .or_else(|| self.latest_decode_slot_from(dxcall))
+            .or(self.last_decode_slot)
+            .is_none()
+            && reply_msg.is_some()
+        {
+            return Err(format!(
+                "No recent decode from {dxcall} — wait for their next transmission, \
+                 then click again."
+            ));
+        }
+
         // The station we just built may ALREADY have a report armed — that's the CQ case: a
         // caller answered our CQ, `Station::observe` advanced CallingCq→AwaitRoger and queued
         // the report, and only then did the operator click to work them. Capture it here,
@@ -6545,6 +6563,13 @@ impl Engine {
         // (A decode's audio is from the slot before its ingest slot, so the
         // opposite of the DX's period is exactly `ingest_slot % 2`.) This is a DERIVED
         // parity (the sequencer answering), not a manual pick — keep auto-cycle on.
+        // NO source here means a BLIND call (typed callsign, no message) — the
+        // clicked-line-with-no-source case was REFUSED above, before any state changed, and
+        // the stale-roster click cannot occur because the roster is wiped with the context
+        // (set_tier / cross-band QSY). A blind call proceeds on the operator's CURRENT
+        // parity, untouched — exactly WSJT-X's typed-DX-Call flow, where generating messages
+        // for a typed call never touches m_txFirst: the period is the operator's standing
+        // choice and calling blind is their deliberate act.
         if let Some(s) = context_slot
             .or_else(|| self.latest_decode_slot_from(dxcall))
             .or(self.last_decode_slot)
@@ -6603,6 +6628,7 @@ impl Engine {
         self.qso_report_sent = opening_report;
         self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
         self.harq_reset_locked(); // fresh exchange: drop stale receive-side IR-HARQ state
+        Ok(())
     }
 
     /// Drop everything answer-context derives from: the decode history (message
@@ -6954,6 +6980,13 @@ impl Engine {
         // Tier switch changes the slot period (FT8 15 s / FT4 7.5 s) — slot indices
         // from the old tier are meaningless for answer parity. Flush the context.
         self.clear_decode_context();
+        // ...and the Stations roster WITH it (POTA field report). Its entries carry
+        // heard-slots in the old numbering, so they are stale in a load-bearing way: the
+        // decode panes already wipe on a tier change (decodeHistory.ts setScope), and the
+        // roster surviving is what left old-tier stations clickable in the window where no
+        // parity source could answer for them. It repopulates with the first new-tier
+        // decodes, exactly like the panes.
+        self.app.inbox.roster.clear();
         // Captured BEFORE the swap: the halt below asks what we are LEAVING.
         let from = self.app.tier();
         self.app.set_tier(tier);
@@ -10726,7 +10759,14 @@ impl Engine {
         let on_dx = matches!(&self.mode, Mode::Qso { station, .. }
             if station.dxcall.as_deref().map(|c| tempo_core::message::same_call(c, dxcall)).unwrap_or(false));
         if !on_dx {
-            self.call_station_ctx(dxcall, dxgrid, None, None, None);
+            // A refusal here (no derivable parity) leaves the override below un-armed too —
+            // correct: the override rides a QSO that was never started.
+            if self
+                .call_station_ctx(dxcall, dxgrid, None, None, None)
+                .is_err()
+            {
+                return;
+            }
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.override_next(Msg::parse(text));
@@ -15471,7 +15511,7 @@ mod tests {
         // Double-click-to-work with the decode's audio freq → RX moves onto it, and TX
         // follows unless Hold Tx Freq is set (WSJT-X behavior).
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.call_station_ctx("W1AW", None, None, None, Some(1200.0));
+        let _ = e.call_station_ctx("W1AW", None, None, None, Some(1200.0));
         assert_eq!(e.rx_offset_hz(), 1200.0, "RX moved to the DX's audio freq");
         assert_eq!(e.tx_offset_hz(), 1200.0, "TX follows when Hold Tx is off");
 
@@ -15479,14 +15519,14 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tx_offset(1500.0);
         e.set_hold_tx_freq(true);
-        e.call_station_ctx("W1AW", None, None, None, Some(800.0));
+        let _ = e.call_station_ctx("W1AW", None, None, None, Some(800.0));
         assert_eq!(e.rx_offset_hz(), 800.0, "RX moves");
         assert_eq!(e.tx_offset_hz(), 1500.0, "TX held with Hold Tx on");
 
         // No freq supplied (e.g. a roster click) → offsets unchanged.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_rx_offset(1000.0);
-        e.call_station_ctx("W1AW", None, None, None, None);
+        let _ = e.call_station_ctx("W1AW", None, None, None, None);
         assert_eq!(e.rx_offset_hz(), 1000.0, "no freq → no move");
     }
 
@@ -17136,6 +17176,83 @@ mod tests {
         );
     }
 
+    /// THE TIER-SWITCH HOLE (POTA field report, 2026-08-09). FT8→FT4 renumbers the slot
+    /// clock, so `set_tier` rightly flushes the decode context — but the Stations roster
+    /// survives, still listing every old-tier station. Clicking one in that window found all
+    /// four parity sources empty and SILENTLY kept the pre-switch parity, whose meaning the
+    /// renumbering had just destroyed. A wrong parity transmits while the DX transmits:
+    /// never heard, no error, nothing on screen.
+    ///
+    /// The rule this pins: an answer whose parity cannot be derived is REFUSED, loudly.
+    /// WSJT-X cannot reach this state at all — its double-click derives the period from the
+    /// clicked line's own timestamp (mainwindow.cpp:8963) — so refusing an underivable
+    /// answer is unreachable-state handling, not a parity divergence; proceeding on stale
+    /// parity was the divergence.
+    #[test]
+    fn a_clicked_line_that_cannot_be_placed_is_refused_not_answered_on_stale_parity() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        // An FT8-era decode on screen, then the operator moves FT8 → FT4: slot numbering
+        // changes meaning and the context flushes — but the old line was still clickable.
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        e.set_tier(Tier::Ft4);
+
+        // Clicking that stale LINE used to silently keep the pre-switch parity. It must
+        // refuse: no QSO armed, parity untouched, and the reason names the one-decode wait.
+        let before = e.tx_even();
+        let r = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX FK52"), Some(-10), None);
+        assert!(r.is_err(), "an unplaceable clicked line must be refused");
+        assert!(
+            r.unwrap_err().contains("PJ4DX"),
+            "the refusal names the station"
+        );
+        assert!(e.snapshot().qso.is_none(), "no QSO armed on a stale cycle");
+        assert_eq!(
+            e.tx_even(),
+            before,
+            "a refused answer must not touch parity either"
+        );
+    }
+
+    /// The other side of the same line, and it is WSJT-X parity: a TYPED call — no clicked
+    /// message — proceeds on the operator's CURRENT parity, exactly as typing into DX Call
+    /// and generating messages leaves m_txFirst alone. Calling blind is the operator's
+    /// deliberate act; the stale-roster click cannot masquerade as one because the roster is
+    /// wiped with the context.
+    #[test]
+    fn a_typed_blind_call_after_a_tier_switch_proceeds_on_current_parity() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft4);
+        let before = e.tx_even();
+        e.call_station("PJ4DX");
+        assert!(
+            e.snapshot().qso.is_some(),
+            "a typed call arms, as in WSJT-X"
+        );
+        assert_eq!(
+            e.tx_even(),
+            before,
+            "and the operator's standing period is untouched"
+        );
+    }
+
+    /// The other half of the same hole: after a tier switch the roster's entries are stale in
+    /// a load-bearing way — their heard-slots are in the OLD numbering — so the switch must
+    /// wipe them, exactly as the decode panes already wipe (decodeHistory.ts setScope).
+    #[test]
+    fn a_tier_switch_wipes_the_roster_with_the_decode_context() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "harness check: the decode reached the roster at all"
+        );
+        e.set_tier(Tier::Ft4);
+        assert!(
+            e.app.inbox.roster.is_empty(),
+            "old-tier roster entries carry slot numbers the new tier renumbered"
+        );
+    }
+
     #[test]
     fn roster_click_on_a_cqing_station_picks_the_opposite_cycle() {
         // THE same-cycle bug (operator report, 6m): the DX is calling CQ (so
@@ -17394,7 +17511,7 @@ mod tests {
         e.set_tx_offset(450.0); // operator parked in the Fox's segment
                                 // Double-click the Fox's CQ.
         e.ingest_decodes_for_test(&[dec_at("CQ DX PJ4DX", -10, 400.0)], 1);
-        e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
         assert!(
             e.tx_offset_hz() >= 1000.0,
             "hound calls ABOVE 1000 Hz, got {}",
@@ -17441,7 +17558,7 @@ mod tests {
         e.set_tier(Tier::Ft8);
         e.settings.special_op = crate::settings::SpecialOp::Hound;
         e.ingest_decodes_for_test(&[dec_at("CQ DX PJ4DX", -10, 400.0)], 1);
-        e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
         e.ingest_decodes_for_test(&[dec_at("K1ABC RR73; W9XYZ PJ4DX -08", -10, 320.0)], 3);
         // A bystander signs a free-text 73 that happens to carry OUR call.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ 73", -3)], 5);
@@ -17823,7 +17940,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW/P", "EN52", 0);
         e.set_tier(Tier::Ft8);
         e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 1);
-        e.call_station_ctx(
+        let _ = e.call_station_ctx(
             "F4CYH/R",
             None,
             Some("<KD9TAW/P> F4CYH/R RR73"),
@@ -18766,7 +18883,7 @@ mod tests {
         // The DX's RR73 addressed to us appears in the decodes...
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ T22TT RR73", -10)], 1);
         // ...and we "work" it (double-click / companion Reply) — seeds Done, tx_count 0.
-        e.call_station_ctx(
+        let _ = e.call_station_ctx(
             "T22TT",
             None,
             Some("W9XYZ T22TT RR73"),

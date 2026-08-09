@@ -85,6 +85,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Answering a station right after a mode switch could transmit on their own cycle.** Switching
+  FT8 to FT4 (or back) changes the length of the transmit periods, so everything Nexus knew about
+  who transmits in which half is discarded — correctly. But the Stations list survived the
+  switch, still offering every station from the old mode, and answering one silently kept
+  whatever cycle you were already on. If that was the DX's own cycle, you transmitted every time
+  they did: they could never hear you, and nothing anywhere said so. From the same POTA field
+  report as Field mode.
+
+  Three things changed. The Stations list now clears on a mode switch, exactly as the decode
+  panes always have — it refills with the first decodes in the new mode. Clicking a leftover
+  decode line that can no longer be placed on the right cycle is refused with a message telling
+  you to wait for the station's next transmission, instead of calling blind — the wait is one
+  decode long. And typing a callsign in by hand still works exactly as before, on whatever cycle
+  you have set, which is what WSJT-X does with a typed call too.
+
 - **You can now see which transmit cycle the app picked for you.** Double-clicking a station has
   always set your cycle opposite to theirs — that part worked — but the big Tx 1st / Tx 2nd
   buttons only light when you lock a cycle by hand, so the automatic flip showed only as tiny
