@@ -17310,7 +17310,11 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         assert_eq!(e.app.tier(), Tier::Ft8, "harness: FT8 is the starting tier");
         e.work_spot_tiered(Some(Tier::Ft4), "digital", 14.083, "20m", None);
-        assert_eq!(e.app.tier(), Tier::Ft4, "the tier followed the spot's protocol");
+        assert_eq!(
+            e.app.tier(),
+            Tier::Ft4,
+            "the tier followed the spot's protocol"
+        );
         assert!(
             (e.settings().dial_mhz - 14.083).abs() < 1e-9,
             "the spot's exact dial stands — not the FT4 default ({})",
