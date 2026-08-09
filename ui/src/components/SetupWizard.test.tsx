@@ -14,18 +14,22 @@ vi.mock('../api', () => ({
 
 const importAdif = api.importAdif as ReturnType<typeof vi.fn>
 
-function renderWizard() {
+/** `guide: true` supplies onOpenGuide, which is what makes the last step offer
+ *  the Getting started walkthrough. Omitted, the offer must not appear at all. */
+function renderWizard(opts: { guide?: boolean } = {}) {
   const onApply = vi.fn()
   const onSkip = vi.fn()
+  const onOpenGuide = vi.fn()
   render(
     <SetupWizard
       settings={null}
       onApply={onApply}
       onTestCat={vi.fn(() => Promise.resolve({} as never))}
       onSkip={onSkip}
+      onOpenGuide={opts.guide ? onOpenGuide : undefined}
     />,
   )
-  return { onApply, onSkip }
+  return { onApply, onSkip, onOpenGuide }
 }
 
 const clickNext = () => fireEvent.click(screen.getByRole('button', { name: /Next/ }))
@@ -134,5 +138,70 @@ describe('SetupWizard starter-pack offer', () => {
     const modes = onApply.mock.calls[0][2] as string[]
     expect(modes).toContain('rtty')
     expect(modes).toContain('sstv')
+  })
+})
+
+// The walkthrough is offered "instead of dismissing": the wizard's last step can
+// hand the operator the Getting started guide for what they just set up. Both
+// completion paths go through one `finish`, so both must honour the offer — and
+// neither may open the guide unasked, which is the whole point of it being an
+// offer. Skipping setup is not a completion and must open nothing.
+describe('SetupWizard walkthrough offer', () => {
+  const gotoGoals = () => {
+    clickNext() // 0 → 1
+    clickNext() // 1 → 2
+    clickNext() // 2 → 3 goals
+  }
+
+  beforeEach(() => {
+    cleanup()
+    memoriesStore.set(emptyBank())
+  })
+
+  it('is not offered at all when the host cannot open the guide', () => {
+    renderWizard()
+    gotoGoals()
+    expect(screen.queryByText(/Want a walkthrough/)).toBeNull()
+  })
+
+  it('stays quiet unless the operator asks for it', () => {
+    const { onApply, onOpenGuide } = renderWizard({ guide: true })
+    gotoGoals()
+    expect(screen.getByText(/Want a walkthrough/)).toBeTruthy()
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-goal')!)
+    fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ })) // on
+    fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ })) // off again
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-go')!)
+    expect(onApply).toHaveBeenCalledTimes(1)
+    expect(onOpenGuide).not.toHaveBeenCalled()
+  })
+
+  it('opens the guide after applying, on the goal path', () => {
+    const { onApply, onOpenGuide } = renderWizard({ guide: true })
+    gotoGoals()
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-goal')!)
+    fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ }))
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-go')!)
+    expect(onApply).toHaveBeenCalledTimes(1)
+    expect(onOpenGuide).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens the guide on the "turn everything on" path too', () => {
+    const { onApply, onOpenGuide } = renderWizard({ guide: true })
+    gotoGoals()
+    fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Turn everything on/ }))
+    expect(onApply).toHaveBeenCalledTimes(1)
+    expect(onOpenGuide).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens nothing when the operator skips setup instead of finishing it', () => {
+    const { onSkip, onApply, onOpenGuide } = renderWizard({ guide: true })
+    gotoGoals()
+    fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ }))
+    fireEvent.click(screen.getByRole('button', { name: /set it up myself/ }))
+    expect(onSkip).toHaveBeenCalledTimes(1)
+    expect(onApply).not.toHaveBeenCalled()
+    expect(onOpenGuide).not.toHaveBeenCalled()
   })
 })

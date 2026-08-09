@@ -39,6 +39,9 @@ interface Props {
   onTestCat: (draft: WizardDraft) => Promise<CatTestResult>
   /** Close without changing the current feature set (also ESC / backdrop). */
   onSkip: () => void
+  /** Open the Getting started guide once the wizard finishes, if the operator
+   * asked for the walkthrough on the last step. Omitted ⇒ no offer is shown. */
+  onOpenGuide?: () => void
 }
 
 // Goal cards are the five goal profiles; "Everything" is its own one-click button.
@@ -79,7 +82,7 @@ const gridOk = isValidGrid
  * Settings ▸ re-open path acts as an editor. Built on the Radix [`Dialog`].
  * See feature-modularity.md §4.6.
  */
-export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
+export function SetupWizard({ settings, onApply, onTestCat, onSkip, onOpenGuide }: Props) {
   const [step, setStep] = useState(0) // 0 station · 1 rig · 2 log · 3 goals
 
   // --- Step 3: optional ADIF log import (seeds worked-before / needs / awards) ---
@@ -210,6 +213,20 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
     if (audioIn !== (settings?.audioIn ?? '')) d.audioIn = audioIn
     if (audioOut !== (settings?.audioOut ?? '')) d.audioOut = audioOut
     return d
+  }
+
+  // --- Step 3: the optional walkthrough. Offered on the last step only, and
+  // honoured on either completion path — "instead of dismissing", the wizard
+  // hands the operator the Getting started guide for what they just set up.
+  const [wantGuide, setWantGuide] = useState(false)
+
+  /** The one exit that applies: seed packs, write the settings, then open the
+   * guide if it was asked for. Both finish buttons go through here so they can
+   * never drift apart. */
+  const finish = (profileIds: ProfileId[], view: View, modeIds: FeatureId[]) => {
+    seedPacks()
+    onApply(profileIds, view, modeIds, license, draft())
+    if (wantGuide) onOpenGuide?.()
   }
 
   const ids = [...selected]
@@ -681,6 +698,25 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
               </div>
             </>
           )}
+
+          {onOpenGuide && (
+            <>
+              <h3 className="wizard-modes-title">Want a walkthrough of what you just set up?</h3>
+              <div className="wizard-modes">
+                <button
+                  type="button"
+                  className={`wizard-mode${wantGuide ? ' sel' : ''}`}
+                  aria-pressed={wantGuide}
+                  onClick={() => setWantGuide(!wantGuide)}
+                >
+                  <span className="wizard-mode-label">Show me Getting started</span>
+                  <span className="wizard-mode-blurb">
+                    The four things, in order — opens when this closes
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -689,10 +725,7 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
           <button
             type="button"
             className="wizard-everything"
-            onClick={() => {
-              seedPacks()
-              onApply(['everything'], 'operate', [], license, draft())
-            }}
+            onClick={() => finish(['everything'], 'operate', [])}
           >
             Turn everything on (expert)
           </button>
@@ -723,10 +756,7 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip }: Props) {
               type="button"
               className="wizard-go"
               disabled={ids.length === 0}
-              onClick={() => {
-                seedPacks()
-                onApply(ids, landing, [...modes], license, draft())
-              }}
+              onClick={() => finish(ids, landing, [...modes])}
             >
               {goLabel}
             </button>

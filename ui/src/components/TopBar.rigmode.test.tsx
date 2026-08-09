@@ -55,6 +55,7 @@ function renderBar(r: RadioStatus) {
       onTierChange={noop}
       theme="dark"
       onThemeChange={noop}
+      onOpenGuide={noop}
     />,
   )
 }

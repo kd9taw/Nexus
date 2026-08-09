@@ -3,6 +3,7 @@ import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '..
 import { isRxOnly } from '../types'
 import type { Theme } from '../useTheme'
 import { ThemeSwitcher } from './ThemeSwitcher'
+import { Menu } from './ui/Menu'
 import { FrequencyControl } from './FrequencyControl'
 import { StatusLane } from './StatusLane'
 import { LiveLevelMeter } from './LiveMeters'
@@ -107,6 +108,8 @@ interface Props {
   onTierChange: (t: Tier) => void
   theme: Theme
   onThemeChange: (t: Theme) => void
+  /** Open the Getting started guide (Help ▸ Getting started). */
+  onOpenGuide: () => void
 }
 
 // The robust tier is TempoDeep — a non-coherent, fading-resilient 15 s mode that
@@ -196,6 +199,7 @@ export function TopBar({
   onTierChange,
   theme,
   onThemeChange,
+  onOpenGuide,
   hideTxControls,
   hideFrequencyControl,
   hideDigitalChrome,
@@ -431,6 +435,17 @@ export function TopBar({
       )}
 
       <div className="topbar-group">
+        {/* Help lives in the one group that renders in every section — the
+            cockpits hide the TX cluster, the readout and the digital chrome,
+            but never this one, so the guide is one click away everywhere. */}
+        <Menu
+          trigger={
+            <button type="button" className="theme-chip" title="Help">
+              Help
+            </button>
+          }
+          items={[{ label: 'Getting started', onSelect: onOpenGuide }]}
+        />
         <ThemeSwitcher theme={theme} onChange={onThemeChange} />
       </div>
     </header>

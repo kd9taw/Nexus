@@ -148,6 +148,7 @@ import { useSelfUpdate } from './useSelfUpdate'
 import { usePounce, type PounceAlert } from './usePounce'
 import { RevealNudge } from './components/RevealNudge'
 import { SetupWizard, type WizardDraft } from './components/SetupWizard'
+import { GettingStartedGuide } from './components/GettingStartedGuide'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { maybeCheckForUpdate } from './features/updateCheck'
@@ -228,6 +229,10 @@ export default function App() {
   const [showWizard, setShowWizard] = useState<boolean>(
     () => features.firstRun && storageWritable() && !wizardSeen(),
   )
+  // Getting started guide — Help ▸ Getting started, and the wizard's optional
+  // walkthrough offer. Pure documentation: it writes nothing and is never
+  // shown unasked, so there is no "seen" flag to persist.
+  const [showGuide, setShowGuide] = useState(false)
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
   const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
@@ -2472,6 +2477,7 @@ export default function App() {
         onTierChange={handleTier}
         theme={theme}
         onThemeChange={setTheme}
+        onOpenGuide={() => setShowGuide(true)}
       />
 
       <UpdateBanner update={selfUpdate} />
@@ -2667,8 +2673,11 @@ export default function App() {
           onApply={handleWizardApply}
           onTestCat={handleWizardTestCat}
           onSkip={handleWizardSkip}
+          onOpenGuide={() => setShowGuide(true)}
         />
       )}
+
+      {showGuide && <GettingStartedGuide onClose={() => setShowGuide(false)} />}
 
       {snap.pendingLog && (
         <LogConfirm

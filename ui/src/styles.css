@@ -20545,3 +20545,626 @@ tr.sel .aprs-sym {
 .sstv-tx-notice.error {
   color: var(--alert-critical);
 }
+
+/* ===========================================================================
+   Getting started guide (Help ▸ Getting started · GettingStartedGuide.tsx)
+   ---------------------------------------------------------------------------
+   Documentation, not an operating surface: it renders inside `ui/Dialog`, owns
+   no radio state, and the wizard recreations in each step's right column reuse
+   the app's real `.wizard-*` classes so a restyle of the wizard carries here.
+   Every variable used below is defined in BOTH themes; the accent tints go
+   through color-mix on --accent rather than a hardcoded rgba, for the same
+   reason. The one place raw viewport units appear is the dialog BOX, which is
+   the sanctioned exception (it is portaled outside `.app`'s zoom and must
+   measure the real window — see the comment in Dialog.tsx).
+   =========================================================================== */
+
+/* The guide is a two-column document, not a 640px form. */
+.ui-dialog.gsg-dialog {
+  width: min(1152px, calc(100vw - 2 * var(--space-4)));
+  top: 6vh;
+  max-height: 88vh;
+}
+
+.gsg {
+  font-family: var(--font-sans);
+  color: var(--text);
+}
+
+/* --- breadcrumb strip: this guide's whole chrome inside the app --- */
+.gsg-crumb {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-faint);
+}
+.gsg-crumb-mark {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  /* The brand mark as pure CSS — an antenna mast with two arcs. No asset to
+     ship, and it recolours with the theme because it is currentColor. */
+  background:
+    linear-gradient(var(--accent), var(--accent)) center 12px / 2px 6px no-repeat,
+    radial-gradient(circle at 50% 12px, var(--accent) 1.5px, transparent 2px),
+    radial-gradient(circle at 50% 5px, transparent 2.5px, var(--accent) 2.5px, transparent 3.5px);
+}
+.gsg-crumb-app {
+  color: var(--text);
+  font-weight: 600;
+}
+.gsg-crumb-dot {
+  color: var(--rx);
+}
+.gsg-crumb-note {
+  margin-left: auto;
+  color: var(--text-faint);
+}
+
+/* --- body grid: sticky step rail + content --- */
+.gsg-body {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 44px;
+  align-items: start;
+  padding-top: var(--space-6);
+}
+.gsg-content {
+  min-width: 0;
+}
+
+.gsg-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Sticky over scrolling prose needs its own ground. */
+  background: var(--panel);
+  z-index: 1;
+}
+.gsg-rail-head {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gsg-rail-btn {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  width: 100%;
+  padding: var(--space-3) 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  transition: var(--transition);
+}
+.gsg-rail-btn:hover {
+  border-color: var(--border);
+}
+.gsg-rail-btn.cur {
+  background: var(--bg-elev);
+  border-color: var(--accent);
+}
+/* Step 4 is the one that matters — it gets the extra inner hairline. */
+.gsg-rail-btn.cur.hero {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.gsg-rail-num {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 20px;
+  width: 20px;
+  flex: none;
+  text-align: center;
+  color: var(--text-faint);
+}
+.gsg-rail-btn.cur .gsg-rail-num {
+  color: var(--accent);
+}
+.gsg-rail-btn.done .gsg-rail-num {
+  color: var(--rx);
+}
+.gsg-rail-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.gsg-rail-label {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.gsg-rail-btn.cur .gsg-rail-label {
+  color: var(--text);
+}
+.gsg-rail-blurb {
+  font-size: var(--fs-micro);
+  line-height: 1.35;
+  color: var(--text-faint);
+}
+.gsg-progress {
+  margin-top: 18px;
+  height: 2px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.gsg-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.gsg-progress-label {
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+
+/* --- step head --- */
+.gsg-eyebrow {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.gsg-eyebrow.ok {
+  color: var(--rx);
+}
+/* The app's global `h2` is a 13px uppercase section label; a document heading
+   is a different thing and says so. */
+.gsg-h2 {
+  margin: 14px 0 0;
+  font-family: var(--font-sans);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--text);
+}
+.gsg-h2.big {
+  font-size: 30px;
+}
+.gsg-lede {
+  margin: 14px 0 0;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-width: 62ch;
+  text-wrap: pretty;
+}
+.gsg-lede.wide {
+  max-width: 64ch;
+  margin-top: var(--space-4);
+}
+
+.gsg-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 36px;
+  margin-top: var(--space-7);
+  align-items: start;
+}
+.gsg-split.wide {
+  margin-top: 36px;
+}
+
+/* --- prose column --- */
+.gsg-prose {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.gsg-prose p {
+  margin: 0;
+}
+.gsg-prose p + p {
+  margin-top: 1.1em;
+}
+.gsg-prose strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.gsg-prose ul {
+  list-style: none;
+  margin: 18px 0 0;
+  padding-left: 0;
+}
+.gsg-prose li {
+  position: relative;
+  padding-left: 22px;
+}
+.gsg-prose li + li {
+  margin-top: 14px;
+}
+.gsg-prose li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: var(--rx);
+}
+.gsg-prose ul.tight {
+  margin-top: var(--space-4);
+}
+.gsg-prose ul.tight li + li {
+  margin-top: 10px;
+}
+.gsg-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  color: var(--accent);
+}
+.gsg-prose-h3 {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 26px 0 var(--space-3);
+}
+.gsg-prose > .gsg-prose-h3:first-child {
+  margin-top: 0;
+}
+
+/* --- callouts --- */
+.gsg-callout {
+  margin-top: 22px;
+  border-radius: var(--radius-sm);
+  padding: 14px var(--space-4);
+}
+.gsg-callout.accent {
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.gsg-callout.neutral {
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.gsg-callout.ok {
+  border: 1px solid color-mix(in srgb, var(--rx) 30%, transparent);
+  background: color-mix(in srgb, var(--rx) 5%, transparent);
+}
+.gsg-callout-label {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.gsg-callout.accent .gsg-callout-label {
+  color: var(--accent);
+}
+.gsg-callout.neutral .gsg-callout-label {
+  color: var(--text-faint);
+}
+.gsg-callout.ok .gsg-callout-label {
+  color: var(--rx);
+}
+.gsg-callout-body {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+/* --- step 4: the hero card --- */
+.gsg-hero-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 6%, transparent),
+    transparent 60%
+  );
+  border-radius: var(--radius);
+  padding: 34px 34px 30px;
+}
+.gsg-hero-card-glow {
+  pointer-events: none;
+  position: absolute;
+  top: -120px;
+  right: -80px;
+  width: 420px;
+  height: 220px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  filter: blur(80px);
+}
+.gsg-hero-card-inner {
+  position: relative;
+}
+/* Hairline-gap grid. The gap colour is painted by the CELLS (a 1px outer
+   shadow each, meeting in the gap) rather than by the container showing
+   through: an odd cell on the last row would otherwise turn the empty tracks
+   beside it into a solid block of border colour. */
+.gsg-compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-top: var(--space-7);
+}
+.gsg-compare-cell {
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--border);
+  padding: 18px var(--space-4);
+}
+.gsg-compare-label {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.gsg-compare-label.faint {
+  color: var(--text-faint);
+}
+.gsg-compare-label.ok {
+  color: var(--rx);
+}
+.gsg-compare-body {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+/* --- step 4: what to do next --- */
+.gsg-closing {
+  margin-top: 44px;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-7);
+}
+.gsg-closing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--space-4);
+  margin-top: 18px;
+}
+.gsg-closing-card {
+  padding: 18px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.gsg-closing-num {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--accent);
+}
+.gsg-closing-body {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.gsg-closing-body strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* --- step footer --- */
+.gsg-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: 44px;
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border);
+}
+.gsg-btn {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  border-radius: 6px;
+  padding: 10px var(--space-5);
+  transition: var(--transition);
+}
+.gsg-btn.back {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+}
+.gsg-btn.back:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.gsg-btn.next {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.gsg-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.gsg-nav-label {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-faint);
+}
+
+/* --- WSJT-X short path --- */
+.gsg-wsjtx {
+  display: block;
+  margin-top: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  border-radius: var(--radius);
+  padding: 22px var(--space-6);
+}
+.gsg-wsjtx-label {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.gsg-wsjtx-body {
+  margin: var(--space-3) 0 0;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-dim);
+  max-width: 78ch;
+  text-wrap: pretty;
+}
+.gsg-wsjtx-body code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  color: var(--accent);
+}
+
+/* --- the recreated wizard panel ---
+   Chrome mirrors `.ui-dialog`, because that is what the wizard renders in.
+   Everything INSIDE reuses the wizard's own classes; only the pieces the
+   wizard styles by ELEMENT (its `input`s) need a static stand-in here. */
+.gsg-shot-label {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gsg-shot {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--elev-3);
+  padding: var(--space-5);
+}
+.gsg-shot-cap {
+  margin: 10px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+/* Stands in for `.wizard-field input` — a picture of a filled field, never a
+   control the operator can put a caret in. */
+.gsg-shot-input {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: var(--fs-body);
+  padding: 6px 10px;
+}
+.gsg-shot-h3 {
+  margin: 0 0 10px;
+  font-size: var(--fs-body);
+  font-weight: 800;
+  color: var(--text);
+}
+.gsg-shot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.gsg-shot-log {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.gsg-shot-toast {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gsg-shot-toast-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--tx);
+}
+.gsg-shot-toast-msg {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+/* --- narrow: the rail stops being a sidebar and both splits stack ---
+   Driven by [data-viewport], never a size-based @media: the app is zoomed, so
+   a pixel media query is blind to what the operator actually sees. The guide is
+   portaled OUTSIDE `.app`, so the attribute is read off <html> (useViewport
+   stamps it on document.documentElement).
+   The attribute key stands in for a media CONDITION, so it goes in `:where()`
+   and contributes nothing to specificity. Written bare, `html[data-viewport]
+   .gsg-rail-btn` would be (0,2,1) and out-cascade `.gsg-rail-btn.cur` (0,2,0) —
+   the current step would silently lose its accent border on a narrow window,
+   which is the exact failure this vocabulary was written to stop. */
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-body {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+}
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-rail {
+  position: static;
+  flex-direction: row;
+  align-items: stretch;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+}
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-rail-head,
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-progress,
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-progress-label,
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-rail-blurb {
+  display: none;
+}
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-rail-btn {
+  width: auto;
+  flex: none;
+  border-color: var(--border);
+}
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-rail-label {
+  white-space: nowrap;
+}
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-split {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+}
+:where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-hero-card {
+  padding: var(--space-6) var(--space-5) 22px;
+}

@@ -11,15 +11,27 @@ interface DialogProps {
   /** Hide the visible title but keep it for screen readers. */
   hideTitle?: boolean
   description?: string
+  /** Extra class on the dialog BOX, for a dialog that needs a different width or
+   * height than the 640px default. Sizing rules on it are the sanctioned raw-unit
+   * exception (see the comment inside) — they must measure the real window. */
+  className?: string
   children: ReactNode
 }
 
-export function Dialog({ open, onOpenChange, title, hideTitle, description, children }: DialogProps) {
+export function Dialog({
+  open,
+  onOpenChange,
+  title,
+  hideTitle,
+  description,
+  className,
+  children,
+}: DialogProps) {
   return (
     <RD.Root open={open} onOpenChange={onOpenChange}>
       <RD.Portal>
         <RD.Overlay className="ui-dialog-overlay" />
-        <RD.Content className="ui-dialog">
+        <RD.Content className={className ? `ui-dialog ${className}` : 'ui-dialog'}>
           {/* The portal lands on document.body — OUTSIDE `.app`'s zoom:var(--ui-zoom) —
               so dialog content rendered at 1/zoom of the app (1.54x too large at
               auto-65; 0.57x at pinned 175, inverting the accessibility setting).
