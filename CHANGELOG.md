@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **You can run VarAC, FreeDV or WSJT-X against the same radio, without closing Nexus.** A serial
+  port can only be opened by one program at a time, so while Nexus has your rig nothing else can
+  reach it — which made "quit Nexus first" look like the only answer. It was not. Nexus does not
+  hold the radio directly: it drives it through Hamlib's `rigctld`, and that is a server. Settings
+  ▸ Radio now shows the address it is listening on, with a Copy button. Point the other program at
+  it as a **Hamlib NET rigctl** rig, leave its own serial port blank, and both run at once. Each
+  radio you have configured has its own address. Fair warning: both programs really can command
+  the rig, so they will argue if you tune in both. Asked for by rogerloxton.
+
 - **The band map tunes now — click it, or scroll on it.** It has always been a frequency scale
   with your dial marked on it, but it was the one place showing frequencies that you could not
   act on: the readout digits and the waterfall both tune by wheel, so the map staying inert read

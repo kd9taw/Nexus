@@ -9908,6 +9908,22 @@ select.settings-input {
 .bandmap-track.tunable .bandmap-spot {
   cursor: pointer;
 }
+/* Share-the-rig address (#48): the NET rigctl endpoint other programs connect to. Sits on the
+   spacing ladder so the per-breakpoint --space-scale reaches it, and takes its colours from the
+   same tokens as the rest of Settings — both themes, no new values. */
+.rig-share-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rig-share-addr {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 5%, var(--bg));
+  color: var(--text);
+  user-select: all; /* one click selects the whole address for anyone not using Copy */
+}
 .bandmap-track {
   position: relative;
   flex: 1;

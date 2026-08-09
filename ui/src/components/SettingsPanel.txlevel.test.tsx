@@ -165,17 +165,29 @@ describe('Tx Power slider: throttled live-apply', () => {
   })
 
   it('suppresses a second change inside the throttle window, but pointerUp force-applies', async () => {
+    // FAKE TIMERS, and they are not optional. The throttle compares `Date.now()`, so this case
+    // used to rely on two fireEvents landing inside a ~60ms real-time window — which holds on an
+    // idle machine and does NOT under load: seen failing twice during parallel builds on
+    // 2026-08-08, passing alone every time. A timing test that only passes when the box is quiet
+    // is a test that eventually fails in CI for no reason anyone can reproduce.
+    // ...and enabled AFTER the async setup: testing-library's findBy* polls on timers, so
+    // faking them before `openRadioTab` hangs it until the 5s test timeout.
     await openRadioTab()
-    fireEvent.change(slider(), { target: { value: '0.4' } })
-    expect(api.spies.setTxLevel).toHaveBeenCalledTimes(1)
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(slider(), { target: { value: '0.4' } })
+      expect(api.spies.setTxLevel).toHaveBeenCalledTimes(1)
 
-    // Fired immediately after — well inside the ~60ms throttle window in real time.
-    fireEvent.change(slider(), { target: { value: '0.9' } })
-    expect(api.spies.setTxLevel).toHaveBeenCalledTimes(1)
+      // No time has passed at all now, so this is unambiguously inside the window.
+      fireEvent.change(slider(), { target: { value: '0.9' } })
+      expect(api.spies.setTxLevel).toHaveBeenCalledTimes(1)
 
-    // Release must still land the final value even though the throttle window is open.
-    fireEvent.pointerUp(slider(), { target: { value: '0.9' } } as never)
-    expect(api.spies.setTxLevel).toHaveBeenCalledTimes(2)
-    expect(api.spies.setTxLevel).toHaveBeenLastCalledWith(0.9 ** 2)
+      // Release must still land the final value even though the throttle window is open.
+      fireEvent.pointerUp(slider(), { target: { value: '0.9' } } as never)
+      expect(api.spies.setTxLevel).toHaveBeenCalledTimes(2)
+      expect(api.spies.setTxLevel).toHaveBeenLastCalledWith(0.9 ** 2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

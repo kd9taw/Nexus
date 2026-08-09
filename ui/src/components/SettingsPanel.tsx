@@ -3609,6 +3609,46 @@ export function SettingsPanel({
               separate install), and reads your rig&apos;s frequency to confirm CAT. For CAT, pick
               your <em>Rig Model</em> and <em>Serial Port</em>; serial RTS/DTR and VOX need no model.
             </p>
+
+            {/* Sharing the rig with another program (#48, rogerloxton). A serial port is
+                exclusive-open, so while Nexus holds it nothing else can — which is why VarAC
+                and FreeDV cannot reach the radio and why the answer looks like "quit Nexus".
+                But Nexus does not hoard the rig: it drives it through Hamlib's rigctld, which
+                is a SERVER, and VarAC, FreeDV, WSJT-X, JS8Call, N1MM and fldigi all speak that
+                protocol as "Hamlib NET rigctl". Pointing them here shares the radio live, both
+                programs at once, no swapping cables and nothing to release.
+
+                The address existed all along — `rigctld_port` is per-radio and validated
+                unique — and was simply never shown to anyone. That is the whole defect. */}
+            <div className="settings-field">
+              <span className="settings-label">Share this radio with other programs</span>
+              <div className="rig-share-row">
+                <code className="rig-share-addr mono">127.0.0.1:{form.rigctldPort || 4532}</code>
+                <button
+                  type="button"
+                  className="settings-linkbtn"
+                  onClick={() => {
+                    void navigator.clipboard
+                      ?.writeText(`127.0.0.1:${form.rigctldPort || 4532}`)
+                      .catch(() => {})
+                  }}
+                  title="Copy the address to paste into the other program"
+                >
+                  Copy
+                </button>
+              </div>
+              <span className="settings-hint">
+                Nexus drives your radio through <code>rigctld</code>, and that is a server — so
+                other software can use the same rig at the same time instead of fighting over the
+                serial port. In <strong>VarAC</strong>, <strong>FreeDV</strong>,{' '}
+                <strong>WSJT-X</strong>, <strong>JS8Call</strong> or <strong>fldigi</strong>, pick
+                the rig <em>Hamlib NET rigctl</em> (VarAC and FreeDV call it a network or rigctld
+                connection) and give it the address above. Leave their serial port blank — they
+                talk to Nexus, not to the radio. Each radio you have configured has its own
+                address. Both programs can command the rig, so expect them to argue if you tune in
+                both at once.
+              </span>
+            </div>
           </fieldset>
 
           {/* ---- Satellite Doppler + rotator manners (Phase 1 sat station) ---- */}
