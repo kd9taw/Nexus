@@ -167,6 +167,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **When an audio device will not open, Nexus now says what it actually found.** The old message
+  claimed the device was "missing, or in use by another application" without having established
+  either, which sent at least one operator chasing a busy device for two releases. It now names
+  the device you asked for, counts and lists the devices the audio backend could see at that
+  moment, and explains the case that actually bites: a device can be on the menu and still be
+  missing from that list, because the menu and the opening code ask the system in different ways.
+  Selecting one sound card for both input and output is the usual way to hit it.
+
 - **Your recordings and your received SSTV pictures now live where you would look for them.**
   Recordings go to **Documents ▸ Nexus ▸ Recordings** and received SSTV images to
   **Pictures ▸ Nexus SSTV**. Both used to sit in Nexus's own configuration folder, which is hidden,

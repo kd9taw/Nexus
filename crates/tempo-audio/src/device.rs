@@ -265,12 +265,31 @@ pub(crate) fn resolve_configured<D: NamedDevice>(
 ) -> Result<D, String> {
     match name.map(str::trim).filter(|n| !n.is_empty()) {
         None => default.ok_or_else(|| format!("this system has no default {what} device")),
-        Some(wanted) => pick_device(devices, Some(wanted), None).ok_or_else(|| {
-            format!(
-                "audio {what} device {wanted:?} is not available \
-                 (missing, or in use by another application)"
-            )
-        }),
+        Some(wanted) => {
+            // Collected first so a FAILURE can name what the open path could actually see.
+            // The old message guessed at a cause ("missing, or in use by another application")
+            // and named neither, which is how #2 (akhepcat) stayed unexplained across two
+            // releases: the operator picks from OUR ALSA-hint enumeration, which opens nothing,
+            // while resolution happens against CPAL's, which probe-opens every hint and drops
+            // whatever will not open. A name that is legitimately on the menu can therefore be
+            // absent HERE — and be reported as in use when nothing of the sort was established.
+            let all: Vec<D> = devices.map(|it| it.collect()).unwrap_or_default();
+            let seen: Vec<String> = all.iter().filter_map(|d| d.device_name()).collect();
+            pick_device(Some(all.into_iter()), Some(wanted), None).ok_or_else(|| {
+                format!(
+                    "audio {what} device {wanted:?} is not available. The audio backend offered \
+                     {n} {what} device(s) when opening{list} If it is on the menu but not in \
+                     that list, the backend dropped it while probing — commonly because it is \
+                     already open, which selecting one card for BOTH input and output can do.",
+                    n = seen.len(),
+                    list = if seen.is_empty() {
+                        ".".to_string()
+                    } else {
+                        format!(": {}.", seen.join(", "))
+                    },
+                )
+            })
+        }
     }
 }
 
@@ -989,7 +1008,20 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("plughw:CARD=CODEC,DEV=0"), "{err}");
-        assert!(err.contains("in use by another application"), "{err}");
+        // The load-bearing half is above and in `unwrap_err()`: an explicit choice that cannot
+        // be resolved is an ERROR, never a silent fall back to the default — that is what put a
+        // dead carrier on the air. The message itself changed in #2: it used to assert "in use
+        // by another application" without establishing it, which sent akhepcat chasing a busy
+        // device across two releases when the real asymmetry is that the menu and the open path
+        // enumerate differently. It now reports what the backend actually offered.
+        assert!(
+            err.contains("input device(s)"),
+            "says what it could see: {err}"
+        );
+        assert!(
+            !err.contains("in use by another application"),
+            "must not assert a cause it has not established: {err}"
+        );
     }
 
     #[test]
@@ -1066,5 +1098,81 @@ mod tests {
                 "cpal's name must be what the operator reads"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_diagnostics {
+    use super::{resolve_configured, NamedDevice};
+
+    impl NamedDevice for &'static str {
+        fn device_name(&self) -> Option<String> {
+            Some((*self).to_string())
+        }
+    }
+
+    /// The success path must be untouched by the diagnostics — collecting the list to report
+    /// on failure must not stop a present device resolving. (My first attempt at this returned
+    /// Err even on a hit.)
+    #[test]
+    fn a_present_device_still_resolves() {
+        let got = resolve_configured(
+            Some(["plughw:CARD=CODEC,DEV=0", "default"].into_iter()),
+            Some("plughw:CARD=CODEC,DEV=0"),
+            None,
+            "output",
+        );
+        assert_eq!(got.ok(), Some("plughw:CARD=CODEC,DEV=0"));
+    }
+
+    /// #2 (akhepcat): the message used to assert "missing, or in use by another application"
+    /// while establishing neither. It now reports what the backend actually offered, which is
+    /// the difference between a report we can act on and two releases of guessing.
+    #[test]
+    fn a_missing_device_names_what_the_backend_did_offer() {
+        let err = resolve_configured(
+            Some(["default", "plughw:CARD=Generic,DEV=0"].into_iter()),
+            Some("plughw:CARD=CODEC,DEV=0"),
+            None,
+            "output",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("plughw:CARD=CODEC,DEV=0"),
+            "names what was asked for: {err}"
+        );
+        assert!(
+            err.contains("2 output device(s)"),
+            "counts what was seen: {err}"
+        );
+        assert!(
+            err.contains("plughw:CARD=Generic,DEV=0"),
+            "lists them: {err}"
+        );
+        // The old wording claimed a cause it had not established.
+        assert!(
+            !err.contains("missing, or in use by another application"),
+            "must not assert a cause it did not establish: {err}"
+        );
+    }
+
+    /// An empty list is its own diagnosis — and must not read as a list of nothing.
+    #[test]
+    fn an_empty_backend_list_says_so() {
+        let err = resolve_configured(
+            None::<std::vec::IntoIter<&'static str>>,
+            Some("plughw:CARD=CODEC,DEV=0"),
+            None,
+            "input",
+        )
+        .unwrap_err();
+        assert!(err.contains("0 input device(s)"), "{err}");
+    }
+
+    /// No name configured still falls back to the system default, unchanged.
+    #[test]
+    fn no_configured_name_uses_the_default() {
+        let got = resolve_configured(Some(["a"].into_iter()), None, Some("the-default"), "output");
+        assert_eq!(got.ok(), Some("the-default"));
     }
 }
