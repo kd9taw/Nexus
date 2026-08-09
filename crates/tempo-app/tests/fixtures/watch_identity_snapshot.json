@@ -130,19 +130,6 @@
       "snr": 72,
       "tier": "FT4",
       "worked": false
-    },
-    {
-      "call": "K2DEF",
-      "country": null,
-      "grid": "FN31",
-      "gridRarity": null,
-      "heardCount": 1,
-      "lastHeardSlot": 100,
-      "lotwUser": false,
-      "presence": "active",
-      "snr": 72,
-      "tier": "FT8",
-      "worked": false
     }
   ],
   "uploadNote": null,
