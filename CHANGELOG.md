@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **You can skip the burned-in callsign for a picture that already shows it.** A pre-made QSO
+  card carries your call as part of the artwork, and the burn-in was covering it to repeat it.
+  Tick *My picture already shows my callsign* under the transmit preview and the plate is left
+  off — for that picture only. The tick clears every time you load a new image, on purpose: it is
+  a statement about one picture, and identification is your responsibility when you make it —
+  Nexus cannot read your artwork. With the box unticked nothing changes, and a station with no
+  callsign set still cannot transmit at all. Asked for by akhepcat.
+
 - **Back up your whole setup to a file, and restore it on another computer.** Settings ▸ Radio
   now has Back up and Restore. One file holds your radios, operating preferences, memory
   channels, watchlist and chase sets — for a new laptop before a contest, a rebuild after a disk

@@ -9920,6 +9920,17 @@ select.settings-input {
   font-weight: 700;
   letter-spacing: 0.03em;
 }
+/* SSTV per-picture ID affirmation (#50): a quiet row under the ident caption. The checkbox is
+   the operator's word that THIS image already identifies them, so it reads as a statement, not
+   a setting. */
+.sstv-tx-idopt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  cursor: pointer;
+}
 .rig-share-row {
   display: flex;
   align-items: center;

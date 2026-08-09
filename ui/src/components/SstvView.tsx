@@ -825,8 +825,12 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     ctx.imageSmoothingEnabled = true
     ctx.clearRect(0, 0, m.width, m.height)
     ctx.drawImage(cur, sx, sy, sw, sh, 0, 0, m.width, m.height)
-    // ⭐ THE STATION ID, after everything that could shrink or crop it away.
-    drawIdPlate(ctx, m.width, m.height, callsignRef.current)
+    // ⭐ THE STATION ID, after everything that could shrink or crop it away — unless the
+    // operator has affirmed this picture already carries it (#50): then drawing ours would
+    // cover the artwork that identifies them, to repeat what the image already says.
+    if (!idInImageRef.current) {
+      drawIdPlate(ctx, m.width, m.height, callsignRef.current)
+    }
 
     if (!pack) return
     try {
@@ -914,7 +918,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     return { img: cv, w: t.w, h: t.h }
   }
 
+  // #50: the operator's per-picture affirmation that the callsign is already IN the image (a
+  // pre-made QSO card), so the plate should not be drawn over it. Deliberately per-image —
+  // reset every load, never persisted: a sticky opt-out would quietly carry one picture's
+  // affirmation onto the next, which is exactly how an unidentified picture goes on the air.
+  const [idInImage, setIdInImage] = useState(false)
+  const idInImageRef = useRef(false)
+  idInImageRef.current = idInImage
+
   const loadImage = async (file: File) => {
+    setIdInImage(false)
     setNotice(null)
     // Header only, through Blob.slice — a 100 MB file must not land in memory just to
     // be refused for being 100 MB.
@@ -1082,7 +1095,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       // backend — nothing keys until the radio loop takes it behind every gate.
       const s1 = await setOperatingMode('phone', false)
       onSnap?.(s1)
-      return sstvSend(packed.b64, packed.width, packed.height, packed.slug)
+      return sstvSend(packed.b64, packed.width, packed.height, packed.slug, idInImageRef.current)
     }, 'SSTV send refused').then((s) => {
       if (s) {
         setSstv(s)
@@ -1368,15 +1381,37 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 {txMode.name} · {fmtClock(txMode.seconds)} key-down
               </span>
             )}
-            {/* ⭐ THE IDENT, SAID OUT LOUD. Unconditional, so the only thing worth
-                reporting is WHERE it is — and, if the operator has no callsign set, that
-                Send is going to refuse and why. */}
+            {/* ⭐ THE IDENT, SAID OUT LOUD — where it is, or whose word says it is already
+                in the picture (#50), or that Send is going to refuse and why. */}
             {packed && (
               <span className={`sstv-tx-id${callsign ? '' : ' missing'}`}>
                 {callsign
-                  ? `${callsign} burned in · top left`
+                  ? idInImage
+                    ? `${callsign} — you've said it's already in the picture`
+                    : `${callsign} burned in · top left`
                   : 'No callsign set — Settings → Station. SSTV identifies by burning your call into the picture, so it will not transmit without one.'}
               </span>
+            )}
+            {/* #50 (akhepcat): a pre-made QSO card already shows the call, and the plate
+                would cover artwork to repeat it. Per-image on purpose — it RESETS when a
+                new image loads, because an affirmation is about one picture, and a sticky
+                toggle would quietly carry it onto the next image, which may not identify
+                anyone. The identification is the operator's responsibility either way;
+                this checkbox is them telling us where it lives. */}
+            {packed && callsign && (
+              <label className="sstv-tx-idopt" title="Skip the burned-in callsign for this picture only — use when the image already shows your call, e.g. a pre-made QSO card">
+                <input
+                  type="checkbox"
+                  checked={idInImage}
+                  onChange={(e) => {
+                    setIdInImage(e.target.checked)
+                    // The preview must show what will actually transmit, immediately.
+                    idInImageRef.current = e.target.checked
+                    renderTx(modeSlugRef.current, true)
+                  }}
+                />
+                My picture already shows my callsign
+              </label>
             )}
             {/* Warnings that must survive to Send time, so a badge in the composer
                 rather than a toast that has already gone. */}

@@ -8808,6 +8808,11 @@ fn sstv_send(
     width: u32,
     height: u32,
     rgb_base64: String,
+    // #50 (akhepcat): the operator AFFIRMS the picture already shows their callsign — a
+    // pre-made QSO card — so the ID plate would cover artwork to repeat information the image
+    // already carries. §97.119(b)(4) is satisfied by the call being in the image emission; it
+    // does not say WE must have drawn it. Optional so every existing caller keeps the plate.
+    id_in_image: Option<bool>,
 ) -> Result<SstvStateDto, String> {
     let sstv_mode = parse_sstv_mode(&mode).ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
     let spec = tempo_sstv::for_mode(sstv_mode);
@@ -8864,7 +8869,14 @@ fn sstv_send(
                 .to_string(),
         );
     }
-    tempo_sstv::draw_id(&mut rgb, width, height, &mycall);
+    // The no-callsign gate above is NOT relaxed by the affirmation: a station with no call
+    // configured has no identity to be in the image either, and the affirmation is about
+    // where the identification lives, never whether the station has one. Only the DRAW is
+    // conditional — the operator has told us, for THIS picture, that the identification is
+    // already in the pixels, and drawing ours on top would cover the artwork that carries it.
+    if !id_in_image.unwrap_or(false) {
+        tempo_sstv::draw_id(&mut rgb, width, height, &mycall);
+    }
     let img = tempo_sstv::SourceImage { width, height, rgb };
     // Encode the whole 12 kHz waveform OFF the engine lock (tens of ms even for PD290).
     let samples = tempo_sstv::encode_image(sstv_mode, &img, 12_000).map_err(|e| e.to_string())?;

@@ -1723,8 +1723,17 @@ export async function sstvSend(
   width: number,
   height: number,
   mode: string,
+  /** #50: the operator affirms THIS picture already shows their callsign (a pre-made QSO
+   *  card), so the ID plate is skipped rather than drawn over it. Per-image, never sticky. */
+  idInImage?: boolean,
 ): Promise<SstvState> {
-  return invoke<SstvState>('sstv_send', { mode, width, height, rgbBase64: rgbB64 })
+  return invoke<SstvState>('sstv_send', {
+    mode,
+    width,
+    height,
+    rgbBase64: rgbB64,
+    idInImage: idInImage ?? false,
+  })
 }
 
 /** Stop the SSTV transmission now: abort the image in progress, drop the queued job,
