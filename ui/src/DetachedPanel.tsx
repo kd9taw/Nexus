@@ -268,6 +268,12 @@ export function DetachedPanel({ panel }: { panel: string }) {
           typeByCall={typeByCall}
           workedCalls={workedCalls}
           onDock={(side) => void dockBandmapWindow(side)}
+          // Tuning from the map (#39). The map is a frequency scale, so it can act as one.
+          sideband={snap.radio.sideband || 'USB'}
+          tuneEnabled={
+            snap.radio.catOk === true && !snap.radio.txBusyReason && !snap.radio.transmitting
+          }
+          onSnap={setSnap}
           onWorkSpot={(s) =>
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })
           }

@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import type { SpotRow, NeedTag } from '../types'
+import type { SpotRow, NeedTag, AppSnapshot } from '../types'
 import { bandRangeForLabel } from '../band'
+import { useWheelTune } from '../useWheelTune'
+import { useScopeTune } from '../useScopeTune'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
@@ -41,6 +43,23 @@ interface Props {
   /** When set (detached window only), shows Dock L/R buttons that snap this window to the
    *  screen edge as a full-height strip (persisted across launches). */
   onDock?: (side: 'left' | 'right' | 'none') => void
+
+  // ── Tuning from the map itself (#39, kr4fqg) ───────────────────────────────────────────
+  // The map has always been a frequency SCALE — `yOf` places every tick — so a position on
+  // it already means a frequency; it just had no way to act on one. The readout digits and
+  // the waterfall both tune by wheel, which is what made the band map's silence read as an
+  // inconsistency rather than a missing feature. All optional: with these absent the map is
+  // exactly the read-only scale it was, which is what keeps the existing tests honest.
+  /** Sideband to preserve so a map tune never flips the mode. */
+  sideband?: string
+  /** Tune only when CAT is up and nothing is transmitting. Absent ⇒ read-only map. */
+  tuneEnabled?: boolean
+  /** Wheel step (Hz), the operator's tuning step — same value the cockpit dials use. */
+  stepHz?: number
+  /** Settings ▸ Radio wheel sensitivity, so the map matches every other dial. */
+  wheelSensitivity?: number
+  /** Fresh snapshot after a tune, so the dial marker moves without waiting for a poll. */
+  onSnap?: (s: AppSnapshot) => void
 }
 
 /** Compact "how long ago" for a spot tooltip. */
@@ -73,6 +92,11 @@ export function BandMap({
   typeByCall,
   workedCalls,
   onDock,
+  sideband,
+  tuneEnabled,
+  stepHz,
+  wheelSensitivity,
+  onSnap,
 }: Props) {
   // PER-SURFACE (matching BandStrip, which writes the same key): a wide second-monitor
   // board can afford the legend where the docked strip cannot.
@@ -94,9 +118,14 @@ export function BandMap({
   // band was off the plan and the track wasn't rendered at all.
   const roRef = useRef<ResizeObserver | null>(null)
   const [trackH, setTrackH] = useState(TRACK_H)
+  // The element itself, as a RefObject, because `useWheelTune` attaches its listener to one.
+  // The callback ref below still owns the ResizeObserver; this just records the node so both
+  // needs are served by the ONE ref the track already had.
+  const trackEl = useRef<HTMLDivElement | null>(null)
   const trackRef = useCallback((el: HTMLDivElement | null) => {
     roRef.current?.disconnect()
     roRef.current = null
+    trackEl.current = el
     if (el && typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() => setTrackH(el.clientHeight || TRACK_H))
       ro.observe(el)
@@ -139,6 +168,47 @@ export function BandMap({
     const span = Math.max(win.hi - win.lo, 1e-6)
     return (mhz: number) => (1 - (Math.min(win.hi, Math.max(win.lo, mhz)) - win.lo) / span) * 100
   }, [win])
+
+  // Wheel-tune the track, through the SAME hook the readout digits and the waterfall use — so
+  // the coalescer, the band-edge handling, the per-event step cap and the sensitivity setting
+  // are all the ones the operator already knows, rather than a second implementation that
+  // drifts. `enabled` false makes it inert, which is the read-only case.
+  useWheelTune(trackEl, {
+    dialMhz,
+    sideband: sideband || 'USB',
+    enabled: tuneEnabled === true,
+    stepHz: stepHz ?? 1000,
+    sensitivity: wheelSensitivity,
+    onSnap,
+  })
+
+  // Click-to-tune, through the scope's hook for the same reason.
+  const scopeTune = useScopeTune({
+    sideband: sideband || 'USB',
+    enabled: tuneEnabled === true,
+    onSnap,
+  })
+
+  /** Invert `yOf`: a point on the track is already a frequency, this just reads it back. */
+  const onTrackClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (tuneEnabled !== true || !win) return
+      // A spot's label is de-collided AWAY from its true frequency, so a click that lands on
+      // one means "work this station", never "tune to wherever the label drifted to". Those
+      // buttons carry their own onWorkSpot and it already QSYs; tuning as well would fight it
+      // with a frequency that is visibly not the spot's.
+      if ((e.target as HTMLElement).closest('.bandmap-spot')) return
+      const el = trackEl.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      if (rect.height <= 0) return
+      const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
+      // Top of the track is the HIGH edge (yOf is inverted), so walk down from `hi`.
+      const mhz = win.hi - frac * (win.hi - win.lo)
+      scopeTune({ dialHz: mhz * 1e6, kind: 'click' })
+    },
+    [tuneEnabled, win, scopeTune],
+  )
 
   // Frequency gridlines/labels across the window (top = hi … bottom = lo).
   const grid = useMemo(() => {
@@ -248,8 +318,13 @@ export function BandMap({
       {showLegend && <SpotLegend />}
       <div
         ref={trackRef}
-        className="bandmap-track"
-        title={`${band} — high at top, low at bottom (MHz)`}
+        onClick={onTrackClick}
+        className={`bandmap-track${tuneEnabled === true ? ' tunable' : ''}`}
+        title={
+          tuneEnabled === true
+            ? `${band} — high at top, low at bottom (MHz). Click to tune here; scroll to tune.`
+            : `${band} — high at top, low at bottom (MHz)`
+        }
       >
         {grid.map((g, k) => (
           <div className="bandmap-grid" key={k} style={{ top: `${g.y}%` }}>

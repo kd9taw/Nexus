@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The band map tunes now — click it, or scroll on it.** It has always been a frequency scale
+  with your dial marked on it, but it was the one place showing frequencies that you could not
+  act on: the readout digits and the waterfall both tune by wheel, so the map staying inert read
+  as something broken rather than something missing. Click anywhere on the track to go there, or
+  scroll to tune the way every other dial in Nexus does — same step, same sensitivity setting.
+  Clicking a spot still works that station rather than tuning to it, because a spot's label is
+  nudged aside from its true frequency to keep a crowded band readable, so the label is not where
+  the signal is. The map stays read-only while CAT is down or you are transmitting. Asked for by
+  kr4fqg.
+
 ### Fixed
 
 - **Your memory channels, watchlist and chase lists were being kept somewhere that does not

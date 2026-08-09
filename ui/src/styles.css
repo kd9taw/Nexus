@@ -9898,6 +9898,16 @@ select.settings-input {
   flex-direction: column;
   padding: var(--space-2);
 }
+/* Tunable band map (#39): the track acts as a dial, so it says so with the cursor. Only when
+   tuning is actually live — a crosshair over a read-only scale would be a lie, and the operator
+   would click at it. The spot buttons keep their own pointer cursor: clicking one works the
+   station rather than tuning to where its de-collided label happens to sit. */
+.bandmap-track.tunable {
+  cursor: crosshair;
+}
+.bandmap-track.tunable .bandmap-spot {
+  cursor: pointer;
+}
 .bandmap-track {
   position: relative;
   flex: 1;
