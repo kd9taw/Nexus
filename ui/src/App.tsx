@@ -12,6 +12,7 @@ import {
   discardPendingLog as apiDiscardPendingLog,
   getBandPlan,
   getSettings,
+  logOperators,
   getSnapshot,
   selectPeer as apiSelectPeer,
   archiveConversation as apiArchiveConversation,
@@ -817,6 +818,21 @@ export default function App() {
   const [typingTick, setTypingTick] = useState(0)
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
+  // Operators this log has already seen (#25) — the seat-swap roster. Refreshed when the
+  // operator changes, which is the moment a new name can have entered the log.
+  const [opRoster, setOpRoster] = useState<string[]>([])
+  useEffect(() => {
+    void logOperators()
+      .then(setOpRoster)
+      .catch(() => {}) // older core / no bridge — the chip just offers no switch targets
+  }, [settings?.fdOperator])
+  /** Switch (or clear) the operator at the key, persisting it like any other setting. */
+  const handleSetOperator = useCallback(async (call: string) => {
+    const current = await getSettings()
+    const patched = { ...current, fdOperator: call.trim().toUpperCase() }
+    await apiSetSettings(patched)
+    setSettings(patched)
+  }, [])
   // Live mirror for the app-wide 30 s poll effect — the ISS SSTV auto-arm reads
   // its opt-in here (the effect's empty deps can't see `settings` directly).
   const settingsRef = useRef<Settings | null>(null)
@@ -2478,6 +2494,10 @@ export default function App() {
         theme={theme}
         onThemeChange={setTheme}
         onOpenGuide={() => setShowGuide(true)}
+        // Who is at the key (#25). Absent/empty renders nothing — the single-op case.
+        operator={settings?.fdOperator ?? ''}
+        operatorRoster={opRoster}
+        onSetOperator={handleSetOperator}
       />
 
       <UpdateBanner update={selfUpdate} />

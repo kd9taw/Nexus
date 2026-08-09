@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The operator at the key is shown in the top bar, and swaps in one click.** Set an operator and
+  it appears beside Help, in the one group no cockpit hides — because a wrong operator is silent:
+  nothing misbehaves and you find out at submission, when the log is already wrong. Click it to
+  hand over to anyone already in the log, or to go back to single-operator when the activation
+  ends. Nothing shows at all if you have not set one, which is the normal single-op case.
+
 - **Export one ADIF per operator.** With more than one operator in your log, the Logbook grows an
   *Export per operator* button: one file per operator, named with their callsign, plus the
   combined log — which is still the one carrying any contacts logged with no operator set. POTA

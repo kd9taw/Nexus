@@ -9911,6 +9911,15 @@ select.settings-input {
 /* Share-the-rig address (#48): the NET rigctl endpoint other programs connect to. Sits on the
    spacing ladder so the per-breakpoint --space-scale reaches it, and takes its colours from the
    same tokens as the rest of Settings — both themes, no new values. */
+/* Operator-at-the-key chip (#25). Only rendered in multi-op, so it costs the single-op
+   station no width. Carries the transmit accent rather than a new colour, because it is
+   saying something about what will be stamped on the air. */
+.op-chip {
+  border-color: var(--tx);
+  color: var(--tx);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
 .rig-share-row {
   display: flex;
   align-items: center;
