@@ -5929,92 +5929,88 @@ impl Engine {
 
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
     /// memory and appends to the ADIF file if a log path is set.
+    /// The LoTW-creditable satellite designator from a transponder label
+    /// ("SAUDISAT 1C (SO-50)|FM Voice Repeater" → "SO-50"), or `None` when no
+    /// safe answer exists. TQSL matches SAT_NAME against its own designator
+    /// list and REJECTS anything else ("AO7 instead of AO-7 → rejected"), so
+    /// this recognises exactly the hyphenated designator shape — inside
+    /// parentheses (the catalog convention) or as the whole name ("AO-7") —
+    /// and claims nothing otherwise. "ISS (ZARYA)" deliberately resolves to
+    /// `None`: LoTW's ISS designation is not derivable from the catalog name,
+    /// and a QSO record is permanent — a guessed value is worse than none.
+    fn sat_designator(label: &str) -> Option<String> {
+        let name = label.split('|').next().unwrap_or("").trim();
+        let is_designator = |t: &str| {
+            let (letters, digits) = match t.split_once('-') {
+                Some(p) => p,
+                None => return false,
+            };
+            (1..=4).contains(&letters.len())
+                && letters.bytes().all(|b| b.is_ascii_uppercase())
+                && (1..=3).contains(&digits.len())
+                && digits.bytes().all(|b| b.is_ascii_digit())
+        };
+        // Parenthesised designator first — the catalog convention.
+        let mut rest = name;
+        while let Some(open) = rest.find('(') {
+            if let Some(close) = rest[open..].find(')') {
+                let inner = rest[open + 1..open + close].trim();
+                if is_designator(inner) {
+                    return Some(inner.to_string());
+                }
+                rest = &rest[open + close + 1..];
+            } else {
+                break;
+            }
+        }
+        // …else the whole name IS the designator ("AO-7", "RS-44").
+        is_designator(name).then(|| name.to_string())
+    }
+
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
-        // ⚠️ NO SATELLITE STAMP HERE. A "SATELLITE STAMP" block used to fill
-        // `prop_mode`/`sat_name` from `self.sat_tune` whenever a transponder was
-        // held (0.24.0–0.27.x). It was removed because it could not write a
-        // creditable record and it tagged contacts that were not satellite QSOs:
+        // THE SATELLITE STAMP, rebuilt (2026-08-10) with the three guards whose absence
+        // got the 0.24-era stamp removed — the removal notice that used to live here was
+        // this block's design brief:
         //
-        //  · WRONG NAME, ALWAYS. It took `SatTune::label`'s satellite half, and
-        //    that label is built in the Tauri command from the CATALOG name the
-        //    section is showing — "SAUDISAT 1C (SO-50)", "ISS (ZARYA)" — never
-        //    the designator LoTW matches on. ARRL is explicit that a name LoTW
-        //    does not recognise gets the data rejected ("if you enter the
-        //    satellite name as AO7 instead of AO-7 the data will be rejected"),
-        //    so it never once produced satellite credit, and every upload
-        //    carrying one was at risk.
-        //  · WRONG CONTACTS. The hold is released only at the LOS handback (or
-        //    an explicit clear), and a transponder picked with no track armed is
-        //    never released at all — so ordinary terrestrial contacts made long
-        //    after the pass were stamped as satellite QSOs too.
+        //  1. CREDITABLE NAME ONLY. `SAT_NAME` comes from [`Self::sat_designator`] — the
+        //     hyphenated designator LoTW/TQSL actually matches ("SO-50", parsed out of
+        //     "SAUDISAT 1C (SO-50)"), never the raw catalog label. No safe designator
+        //     (ISS…) → no stamp at all.
+        //  2. BOTH FIELDS OR NEITHER. TQSL validates PROP_MODE/SAT_NAME as a PAIR
+        //     (tqslconvert.cpp hard-errors on a lone member, and via our `-a compliant`
+        //     funnel a lone field would wedge its whole upload batch as Rejected). This
+        //     writer can only ever produce the pair; records ARRIVING with any satellite
+        //     field are carried verbatim and never completed, stripped, or overwritten.
+        //  3. THE PASSBAND GATE, because the HOLD OUTLIVES THE PASS (FM holds outlive
+        //     their bird on purpose; a pick with no track armed is never released): a held
+        //     transponder alone must not tag a contact — the old stamp marked ordinary HF
+        //     QSOs made hours later. The record's frequency must sit in the held bird's
+        //     DOWNLINK passband (± half-width, + a 20 kHz guard for FM channels and
+        //     residual Doppler) for the stamp to apply. A 20 m contact with a UHF bird
+        //     still held is untouched by construction.
         //
-        // Writing satellite fields at all is NOT YET DONE — deferred, not
-        // decided against: `SAT_NAME` needs a resolved designator LoTW accepts,
-        // and a QSO record is permanent, so a guessed value is worse than none.
-        // Nothing in Nexus writes these two fields today. Records that ARRIVE
-        // with them — a foreign ADIF import, or a record the operator repaired
-        // by hand — are carried through verbatim by
-        // `logbook::adif_record`/`parse_adif` and are untouched here.
-        //
-        // ⚠️ AND `PROP_MODE` MAY NOT COME BACK ON ITS OWN — the obvious "half"
-        // fix, and it is a worse defect than the one above. The two fields are
-        // NOT independent: TQSL validates them as a PAIR, and it is the same
-        // hard refusal in both directions. From `tqslconvert.cpp`, alongside
-        // "Invalid SAT_NAME (%s)":
-        //     if (!strcmp(conv->rec.propmode, "SAT") && conv->rec.satname[0] == '\0')
-        //         "PROP_MODE = 'SAT' but no SAT_NAME"   → TQSL_CUSTOM_ERROR
-        //     if (strcmp(conv->rec.propmode, "SAT") && conv->rec.satname[0] != '\0')
-        //         "SAT_NAME set but PROP_MODE is not 'SAT'" → TQSL_CUSTOM_ERROR
-        // So a lone `PROP_MODE=SAT` does not "upload and simply miss satellite
-        // credit". The record never reaches LoTW at all, taking with it the
-        // DXCC/WAS credit an untagged upload WOULD have earned — and through our
-        // own funnel it poisons the batch it rides in: `tqsl_args` passes
-        // `-a compliant`, so TQSL drops the offending record and signs the rest,
-        // and `classify_tqsl_exit` maps that suppressed-record exit to
-        // `Rejected` for the WHOLE batch. `Rejected` is not `is_sent`, so
-        // `lotw_unsent_indices` re-offers every record in it — including the
-        // unsignable one — on the next attempt, and the next, for as long as it
-        // is in the log. Both fields together, or neither.
-        //
-        // ⚠️ THE IN-APP COST OF "NEITHER", which is not only an upload matter.
-        // Nexus decides "was this a satellite QSO?" locally, from `PROP_MODE`
-        // alone (`qso_is_sat` in src-tauri), and that answer feeds:
-        //   · Satellite VUCC — `propagation::awards::Awards::add_qso(sat)`, the
-        //     `sat_worked`/`sat_confirmed` totals on the Awards screen; and
-        //   · the satellite needs board / pass-earn ranking —
-        //     `propagation::dxped::LogNeeds::add_qso(sat)` → `satneeds`.
-        // With no writer, a contact logged from the Satellites section reaches
-        // neither. It is not merely uncredited by LoTW — it does not count
-        // toward Nexus's own satellite totals either.
-        //
-        // And where the grid goes instead depends on the band, in two different
-        // wrong ways — `Awards::add_qso` routes on the `sat` flag FIRST, then on
-        // `Band::from_label`, whose variants run 160 m … 2 m and stop there.
-        // That list, NOT the metre/centimetre spelling, is the whole gate:
-        //   · a downlink on a band with no variant — 1.25 m, 70 cm, 23 cm, the
-        //     only three labels `bandplan::band_for_dial` can produce that
-        //     `from_label` refuses — falls out of the fold entirely: the
-        //     band-independent satellite set is the only bucket that would have
-        //     taken it. No grid credit at all — absent credit. (1.25 m is a
-        //     METRE label on this side, which is why the earlier
-        //     metre-vs-centimetre wording was wrong.)
-        //   · a downlink on 160 m … 2 m lands in `worked_grid_band` for THAT
-        //     BAND — the TERRESTRIAL per-band VUCC bucket, which ARRL's rules
-        //     exclude satellite QSOs from. Not a corner: 2 m is by definition
-        //     the downlink of every U/V bird (the Fox-1 series — AO-85/91/92 —
-        //     and AO-7 mode B), and AO-7 mode A comes down on 10 m. That is
-        //     WRONG credit, not absent credit, and LoTW files the untagged
-        //     upload the same way. It is the one place this descope is worse
-        //     than the defect it replaced.
-        // Documented for the operator in docs/guide/satellites.md and the
-        // CHANGELOG, both of which tell him to add BOTH fields by hand.
-        //
-        // Pinned by `a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields`
-        // here, and end-to-end by src-tauri's
-        // `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`,
-        // `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc` and
-        // `the_untagged_satellite_grid_lands_in_the_terrestrial_tracker_on_every_band`
-        // (which walks every band label the app can produce).
+        // With the stamp live, a contact logged from the Satellites section reaches BOTH
+        // ledgers the descope starved: LoTW satellite credit (the pair uploads clean) and
+        // Nexus's own Satellite VUCC / sat-needs boards (`qso_is_sat` reads PROP_MODE).
+        // docs/guide/satellites.md and the CHANGELOG no longer tell the operator to edit
+        // ADIF by hand; the Sat VUCC card's caveat line is gone with them.
+        if rec.prop_mode.is_none() && rec.sat_name.is_none() {
+            if let Some(st) = &self.sat_tune {
+                if let Some(des) = Self::sat_designator(&st.label) {
+                    let f_hz = if rec.freq_mhz > 0.0 {
+                        (rec.freq_mhz * 1e6) as i64
+                    } else {
+                        (self.settings.dial_mhz * 1e6) as i64
+                    };
+                    let centre = st.transponder.downlink_centre_hz as i64;
+                    let guard = st.transponder.half_width_hz as i64 + 20_000;
+                    if centre > 0 && (f_hz - centre).abs() <= guard {
+                        rec.prop_mode = Some("SAT".into());
+                        rec.sat_name = Some(des);
+                    }
+                }
+            }
+        }
 
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
@@ -23353,20 +23349,10 @@ mod tests {
     }
 
     #[test]
-    fn a_qso_logged_while_a_transponder_is_held_carries_no_satellite_fields() {
-        // THE REGRESSION FIX, and the one someone will accidentally revert.
-        //
-        // `log_qso` used to stamp PROP_MODE/SAT_NAME from the held transponder.
-        // The name came from `SatTune::label`, which the Tauri command builds
-        // from the CATALOG name the section is showing — the real strings are
-        // "SAUDISAT 1C (SO-50)" and "ISS (ZARYA)", never the designator LoTW
-        // matches on, so the stamp never produced a creditable record and put
-        // every upload carrying one at risk. And because the hold is released
-        // only at the LOS handback (a transponder picked with no track armed is
-        // never released), it tagged terrestrial contacts made long afterwards.
-        //
-        // The label below is deliberately the WORST case and the REAL one: a
-        // catalog name. Nothing derived from it may reach the record.
+    fn the_satellite_stamp_fires_on_the_downlink_and_nowhere_else() {
+        // THE REBUILT STAMP (2026-08-10), pinned across its whole gate matrix. The
+        // 0.24-era stamp was removed for three defects; each row here is one of them
+        // staying dead while the feature itself finally works.
         use tempo_core::doppler::Transponder;
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_sat_transponder(Some((
@@ -23374,27 +23360,44 @@ mod tests {
             0,
             Transponder::channel(145_850_000, 436_795_000),
         )));
-        // On the downlink, mid-pass — a contact that genuinely WAS through the
-        // bird. It is still logged as an ordinary contact: satellite tagging is
-        // not done yet, and a name LoTW rejects is worse than no name.
-        e.log_qso(qrec("W1AW", "70cm"));
+        // 1. ON the downlink with a catalog label: BOTH fields, and the name is the
+        //    DESIGNATOR LoTW matches — never the catalog string.
+        let mut on_bird = qrec("W1AW", "70cm");
+        on_bird.freq_mhz = 436.795;
+        e.log_qso(on_bird);
         let r = &e.get_log()[0];
-        assert_eq!(r.prop_mode, None, "a satellite stamp is back at the funnel");
-        assert_eq!(r.sat_name, None, "a satellite name is back at the funnel");
-
-        // And the silent half: the hold outlives the pass, so an ordinary HF
-        // contact made with a bird still held must not be tagged either.
-        e.log_qso(qrec("K1ABC", "20m"));
+        assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(
+            r.sat_name.as_deref(),
+            Some("SO-50"),
+            "the designator, not 'SAUDISAT 1C (SO-50)' — TQSL rejects the catalog name"
+        );
+        // 2. The hold outlives the pass: an ordinary HF contact logged with the bird
+        //    still held is UNTOUCHED — the passband gate, the old stamp's worst defect.
+        e.log_qso(qrec("K1ABC", "20m")); // 14.074 MHz
         let hf = &e.get_log()[1];
         assert_eq!(
             hf.prop_mode, None,
             "a 20 m contact tagged as a satellite QSO"
         );
-        assert_eq!(hf.sat_name, None, "a 20 m contact tagged with a bird");
+        assert_eq!(hf.sat_name, None);
 
-        // What the operator (or a foreign ADIF import) supplies is still
-        // carried verbatim — removing the stamp removed a WRITER, not the
-        // fields. This is the only way a record gets them now.
+        // 3. No safe designator → no stamp AT ALL (never a lone PROP_MODE, which TQSL
+        //    hard-rejects and which would wedge its whole upload batch).
+        let mut e3 = Engine::new("KD9TAW", "EN52", 0);
+        e3.set_sat_transponder(Some((
+            "ISS (ZARYA)|FM Voice Repeater".into(),
+            0,
+            Transponder::channel(145_990_000, 437_800_000),
+        )));
+        let mut iss = qrec("NA1SS", "70cm");
+        iss.freq_mhz = 437.800;
+        e3.log_qso(iss);
+        assert_eq!(e3.get_log()[0].prop_mode, None, "ZARYA is not a designator");
+        assert_eq!(e3.get_log()[0].sat_name, None, "both-or-neither: neither");
+
+        // 4. Records ARRIVING with satellite fields are carried verbatim — the stamp is
+        //    a writer for blank fields only, never an editor.
         let mut e2 = Engine::new("KD9TAW", "EN52", 0);
         let mut given = qrec("N0CALL", "70cm");
         given.prop_mode = Some("SAT".into());
@@ -23402,6 +23405,35 @@ mod tests {
         e2.log_qso(given);
         assert_eq!(e2.get_log()[0].prop_mode.as_deref(), Some("SAT"));
         assert_eq!(e2.get_log()[0].sat_name.as_deref(), Some("AO-91"));
+    }
+
+    /// The designator resolver, against the real catalog shapes.
+    #[test]
+    fn sat_designator_recognises_lotw_shapes_and_nothing_else() {
+        let d = |l: &str| Engine::sat_designator(l);
+        assert_eq!(
+            d("SAUDISAT 1C (SO-50)|FM Voice Repeater").as_deref(),
+            Some("SO-50")
+        );
+        assert_eq!(d("FOX-1B (AO-91)|FM").as_deref(), Some("AO-91"));
+        assert_eq!(d("DOSAAF-85 (RS-44)|linear").as_deref(), Some("RS-44"));
+        assert_eq!(
+            d("AO-7|linear V/U").as_deref(),
+            Some("AO-7"),
+            "bare designator"
+        );
+        assert_eq!(d("QO-100|linear").as_deref(), Some("QO-100"));
+        assert_eq!(
+            d("ISS (ZARYA)|FM"),
+            None,
+            "ZARYA is a module, not a designator"
+        );
+        assert_eq!(
+            d("TEVEL-2|FM"),
+            None,
+            "TEVEL is lowercase-only? no — 5 letters, refused"
+        );
+        assert_eq!(d(""), None);
     }
 
     #[test]

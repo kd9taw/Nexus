@@ -178,49 +178,33 @@ credit. LoTW recognises a satellite QSO by two ADIF fields:
 - `SAT_NAME` — the satellite, spelled the way LoTW spells it (`AO-7`, not
   `AO7`).
 
-**Nexus writes neither, for any contact it logs.** Getting `SAT_NAME` right
-means resolving the bird's designator, and ARRL is explicit that a name LoTW
-does not recognise gets the data rejected — so a guess is worse than nothing,
-and a logged QSO is permanent. That resolution is not built yet. Until it is, if
-you want satellite credit you have to add the two fields yourself: set them in
-whatever logger you upload from, or add them to the ADIF before you sign it. Any
-record that already carries them — a foreign import, or one you repaired — keeps
-them: Nexus writes them out on export and reads them back on import untouched.
+**Nexus writes both, automatically, when the contact was really through the
+bird.** Log a QSO while a transponder is held **and your dial is inside that
+bird's downlink passband**, and the record gets `PROP_MODE=SAT` plus the
+LoTW-spelled designator (`SO-50`, parsed from the catalog name) — always as a
+pair, because TQSL refuses a half-tag in either direction. The passband check
+is what keeps an ordinary HF contact, made while a bird is still held from an
+earlier pass, from being mistagged. Records that arrive already tagged — a
+foreign import, or one you repaired — are kept untouched.
 
-**It has to be both fields, and that is why Nexus writes neither rather than the
-easy one.** `PROP_MODE=SAT` on its own would be trivial to write and it would be
-true — but TQSL will not sign a contact whose propagation mode is `SAT` when it
-names no satellite ("PROP_MODE = 'SAT' but no SAT_NAME"), just as it will not
-sign one naming a satellite it doesn't know. Either way the contact never
-reaches LoTW, so it earns nothing at all: not the satellite credit you were
-after, and not the DXCC or WAS credit an ordinary untagged upload does earn. A
-half-tag costs you the whole QSO. When you add the fields by hand, add both.
+**The one bird that stays untagged: the ISS.** Its catalog name carries no
+designator Nexus can safely derive, and a `SAT_NAME` LoTW does not recognise
+gets the whole record rejected — so ISS contacts are logged untagged, and if
+you want credit for one, add both fields yourself before you sign.
 
-#### Three things this strip does not do yet
+#### Two things this strip does not do yet
 
-None of the three is a decision that satellite work should stay this way. They
-are the price of dropping the Phone/CW log strip in unchanged rather than
-building a satellite-aware one, and each is meant to be closed.
+Neither is a decision that satellite work should stay this way. They are the
+price of dropping the Phone/CW log strip in unchanged rather than building a
+satellite-aware one, and each is meant to be closed. (A third — satellite
+tagging itself — closed 2026-08-10: Nexus now stamps the pair automatically.)
 
-**Your satellite grids land in the wrong place — in Nexus and at ARRL.**
-Nexus decides "was this a satellite QSO?" from `PROP_MODE=SAT` in the record.
-(LoTW asks for more than Nexus does: it wants that field *and* the satellite's
-name.) With nothing writing it, a contact logged here counts toward neither the
-**Satellite VUCC** totals on the Awards screen nor the satellite needs board
-that ranks which pass is worth chasing.
-
-Where the grid goes instead: **the terrestrial grid tracker for whatever band
-the record names — on every band, 70 cm and 1.25 m included.** For satellite
-work that means **2 m** (the downlink of every U/V bird, the Fox-1 satellites
-and AO-7 on mode B), **10 m** (AO-7 mode A) and **70 cm** (V/U birds like
-SO-50). The grid is counted toward your **terrestrial** grid totals for that
-band, which is credit ARRL's rules say a satellite contact does not earn, and
-LoTW files the untagged upload the same way. If you chase VUCC, this one
-matters: add both fields before you sign.
-
-Adding the two fields by hand puts the contact where it belongs in both counts:
-edit the ADIF with Nexus closed, exactly as below, and the totals pick it up the
-next time Nexus starts.
+**Your satellite grids land where they belong.** A tagged pass contact counts
+toward the **Satellite VUCC** totals on the Awards screen and the satellite
+needs board — and never toward the terrestrial per-band grids ARRL excludes
+bird QSOs from. An untagged contact (an ISS QSO, or an import without the
+fields) still lands in the terrestrial tracker for its band; hand-add both
+fields to move it.
 
 **During Field Day, this strip logs to the ordinary log, not the contest log.**
 The Phone and CW strips switch to the Field Day log while a session is running;

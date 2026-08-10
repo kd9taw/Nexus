@@ -50,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with nothing on screen saying why. The sync now records its progress without touching the
   operating state.
 
+### Added
+
+- **Satellite contacts tag themselves now.** Log a QSO while a transponder is held and your
+  dial is on that bird's downlink, and the record gets `PROP_MODE=SAT` plus the satellite's
+  LoTW designator (`SO-50`, not the catalog name) — written as a pair, which is what TQSL
+  demands. Your pass QSOs now count toward Satellite VUCC and the new Satellite DXCC figure
+  in the app, and upload to LoTW as creditable satellite contacts, with nothing to edit by
+  hand. The passband check means an HF contact made while a bird is still held from an
+  earlier pass is never mistagged. One honest exception: ISS contacts stay untagged (there
+  is no LoTW designator Nexus can safely derive from the catalog name) — add the two fields
+  yourself for those.
+
 ### Fixed (CAT — tester-build regression, never released)
 
 - **Yaesu CAT came back.** The 1.0.6 tester build killed CAT on every rig whose Hamlib

@@ -532,22 +532,12 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
         })()}
 
         {/* Satellite VUCC — its own ARRL category, and the ONLY place a grid
-            worked through a bird is ALLOWED to count, so the bucket must be
-            visible or those contacts vanish from the awards surface entirely.
-
-            ⚠️ THIS CARD CANNOT MOVE ON A CONTACT NEXUS LOGGED, and says so
-            nowhere on screen. The count comes from `PROP_MODE=SAT`
-            (`qso_is_sat`), and nothing in Nexus writes that field — the
-            tracked-pass stamp was removed and satellite tagging is not yet
-            built (see `Engine::log_qso`). Only an imported or hand-repaired
-            record answers.
-
-            ⚠️ AND THE TERRESTRIAL CARD ABOVE TAKES THEM INSTEAD. Its exclusion
-            is keyed on the same flag, so it excludes only TAGGED satellite
-            QSOs; an untagged one on a band with a per-band slot (2 m — every
-            U/V bird's downlink) is counted there. Over-count, not under-count.
-            Both stated for the operator in the CHANGELOG and
-            docs/guide/satellites.md; an in-card line is the open item. */}
+            worked through a bird is ALLOWED to count. Since 2026-08-10 Nexus
+            tags these ITSELF: a contact logged on the held bird's downlink gets
+            PROP_MODE=SAT + the LoTW designator stamped as a pair
+            (Engine::log_qso), so this card moves on Nexus-logged pass QSOs, not
+            only imports. Residual: birds with no derivable designator (ISS)
+            stay untagged. */}
         <div className={`aw-card${aw.vucc.satConfirmed >= VUCC_GRIDS ? ' aw-card-elite' : ''}`}>
           <span className="aw-k">
             <Satellite size={13} aria-hidden="true" /> Sat VUCC
@@ -568,13 +558,9 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
               : `${VUCC_GRIDS - aw.vucc.satConfirmed} more to confirm`}{' '}
             · {aw.vucc.satWorked} grids worked · Sat DXCC {aw.satDxccConfirmed ?? 0} confirmed
           </span>
-          {/* The disclosed limitation (see get_awards / the satellites guide): the sat
-              buckets key on PROP_MODE=SAT, which only imported/hand-tagged records
-              carry today — the open item this line closes is the operator wondering
-              why a pass they just logged didn't move the card. */}
           <span className="aw-note">
-            Counts contacts tagged as satellite (PROP_MODE=SAT) — contacts logged in
-            Nexus aren&rsquo;t tagged yet; tag the ADIF by hand for now
+            Pass contacts are tagged automatically when logged on the bird&rsquo;s
+            downlink (ISS excepted — no LoTW designator to derive)
           </span>
         </div>
 

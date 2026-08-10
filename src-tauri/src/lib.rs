@@ -10668,26 +10668,15 @@ fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
 /// flag the award/needs folds state per record so satellite grid credit lands in
 /// the Satellite-VUCC buckets, never the per-band ones.
 ///
-/// ⚠️ NOTHING IN NEXUS WRITES `PROP_MODE` TODAY. The tracked-pass stamp that
-/// used to set it was removed (see `Engine::log_qso`, which also records why the
-/// `PROP_MODE` half must not come back alone: TQSL refuses to sign a QSO that is
-/// SAT with no `SAT_NAME`), and satellite tagging is not yet built, so the only
-/// records that answer `true` here are ones that ARRIVED with the field — a
-/// foreign ADIF import, or one the operator repaired by hand.
-///
-/// A contact logged from the Satellites section therefore earns no in-app
-/// satellite credit either, and where its grid goes instead splits on
-/// `Band::from_label` — variants 160 m … 2 m — and NOT on whether the band is
-/// spelled in metres. A downlink on 1.25 m, 70 cm or 23 cm (the only labels
-/// `bandplan::band_for_dial` produces that `from_label` refuses, and 1.25 m is
-/// a metre one) earns no grid slot at all; a downlink on 160 m … 2 m — for
-/// satellite work 2 m, every U/V bird's, and 10 m, AO-7 mode A's — is credited
-/// to the TERRESTRIAL per-band VUCC bucket ARRL excludes satellite QSOs from.
-/// Both are consequences for the operator and are stated as such in
-/// docs/guide/satellites.md. Pinned by
-/// `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`,
-/// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc` and
-/// `the_untagged_satellite_grid_lands_in_the_terrestrial_tracker_on_every_band`.
+/// Since 2026-08-10 `Engine::log_qso` WRITES the pair itself: a contact logged
+/// on the held bird's downlink passband, with a designator LoTW accepts, gets
+/// `PROP_MODE=SAT` + `SAT_NAME` stamped as a pair (see the stamp block in
+/// `log_qso` for the three guards). Records arriving tagged (imports, hand
+/// repairs) are carried verbatim as before. Residual: a bird with no derivable
+/// designator (ISS) stays untagged — a guessed SAT_NAME breaks TQSL signing.
+/// Pinned by `a_contact_logged_during_a_pass_earns_satellite_credit`,
+/// `a_two_metre_satellite_contact_is_credited_to_satellite_vucc` and
+/// `the_satellite_stamp_splits_the_grid_fold_on_the_downlink_passband`.
 fn qso_is_sat(prop_mode: Option<&str>) -> bool {
     prop_mode.is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
 }
@@ -16775,61 +16764,37 @@ mod tests {
         awards.summary()
     }
 
-    /// ⚠️ THE DISCLOSED COST OF DESCOPING THE SATELLITE STAMP — pinned so the
-    /// docs cannot drift away from it, and so the person who finally builds
-    /// satellite tagging is told which sentences to delete.
-    ///
-    /// The CHANGELOG and docs/guide/satellites.md both say, in as many words,
-    /// that a contact logged from the Satellites section earns no satellite
-    /// credit **inside Nexus** either — not just on LoTW. This walks the real
-    /// chain that makes that true: `Engine::log_qso` with a transponder held
-    /// writes no `PROP_MODE`, `qso_is_sat` therefore answers `false`, and the
-    /// awards fold `get_awards` performs puts the contact's grid in no bucket
-    /// at all (the band-independent satellite set is the only one that accepts
-    /// a 70 cm grid).
-    ///
-    /// ⚠️ THIS IS THE BENIGN HALF, and only on the three bands that have no
-    /// `Band::from_label` variant (1.25 m, 70 cm, 23 cm). On 160 m … 2 m the
-    /// same absence puts the grid in the WRONG bucket instead of none — see
-    /// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`, and
-    /// `the_untagged_satellite_grid_lands_in_the_terrestrial_tracker_on_every_band`
-    /// for the whole partition.
-    ///
-    /// Written as an assertion on the CURRENT, DEFERRED behaviour. When
-    /// satellite tagging lands, this test goes red — which is the point: the
-    /// two "not yet" paragraphs must come out in the same change.
+    /// THE SATELLITE STAMP, END TO END (2026-08-10 — the descope this test used
+    /// to pin is closed): a contact logged from the Satellites section on the
+    /// held bird's downlink carries the PROP_MODE=SAT + SAT_NAME pair with the
+    /// designator TQSL matches, `qso_is_sat` answers true, and the awards fold
+    /// lands its grid in the Satellite-VUCC bucket — the only one ARRL credits
+    /// a bird QSO to. The old "not yet" paragraphs in the guide and CHANGELOG
+    /// came out in the same change, as the descope notice demanded.
     #[test]
-    fn a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit() {
+    fn a_contact_logged_during_a_pass_earns_satellite_credit() {
         // SO-50: a V/U bird, so the operator's dial — and the record's band —
         // is the 70 cm downlink.
         let mut e = engine_holding("SAUDISAT 1C (SO-50)|FM Voice Repeater", 145_850_000, 436_795_000);
         e.log_qso(pass_qso("W1AW", "FN31", "70cm", 436.795));
 
         let logged = &e.get_log()[0];
-        assert_eq!(logged.prop_mode, None, "a satellite stamp is back");
+        // THE STAMP IS LIVE (2026-08-10): logged on the held bird's downlink, the record
+        // carries the PAIR, and the name is the designator TQSL matches.
+        assert_eq!(logged.prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(logged.sat_name.as_deref(), Some("SO-50"));
         assert!(
-            !qso_is_sat(logged.prop_mode.as_deref()),
+            qso_is_sat(logged.prop_mode.as_deref()),
             "the contact reads as a satellite QSO to the award fold"
         );
 
-        // The exact fold `get_awards` runs over the logbook.
+        // The exact fold `get_awards` runs over the logbook: the grid lands in the
+        // SATELLITE bucket — the only one ARRL credits a bird QSO to — and nowhere else.
         let s = awards_fold_over(logged);
+        assert_eq!(s.vucc.sat_worked, 1, "Satellite VUCC gained the grid");
         assert_eq!(
-            s.vucc.sat_worked, 0,
-            "the Satellite-VUCC total counted a contact Nexus never tagged"
-        );
-        // Since the label-keyed grid fold (N9UM audit, 2026-08-09) the untagged
-        // grid is WRONG credit on every band, no longer absent credit on the
-        // centimetre ones: the record claims a terrestrial 70 cm QSO, and the
-        // tracker takes the record at its word. The absent-credit half of the
-        // old partition is dead — the guide's bullets were rewritten with it.
-        assert_eq!(
-            s.vucc.worked, 1,
-            "the untagged grid lands in the terrestrial tracker (wrong credit, stated)"
-        );
-        assert!(
-            s.vucc.bands.iter().any(|b| b.band == "70cm" && b.worked == 1),
-            "…in the 70 cm per-band bucket the label-keyed fold now has"
+            s.vucc.worked, 0,
+            "…and the terrestrial tracker did NOT (the old wrong-credit defect)"
         );
         // `Band::from_label` still has no centimetre variants — that keeps the
         // centimetre bands out of the DXCC fold, which is a separate ledger.
@@ -16861,52 +16826,40 @@ mod tests {
     /// CURRENT behaviour, so whoever lands satellite tagging is handed this test
     /// and the paragraphs that go with it.
     #[test]
-    fn a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc() {
+    fn a_two_metre_satellite_contact_is_credited_to_satellite_vucc() {
         // AO-91: a U/V bird, so the dial the log strip reads — and the band it
         // records — is the 2 m downlink. Same catalog-name label as above.
         let mut e = engine_holding("FOX-1B (AO-91)|FM Voice Repeater", 435_250_000, 145_960_000);
         e.log_qso(pass_qso("W1AW", "FN31", "2m", 145.960));
 
         let logged = &e.get_log()[0];
-        assert_eq!(logged.prop_mode, None, "a satellite stamp is back");
+        // The stamp fires on the 2 m downlink exactly as on 70 cm — the wrong-credit
+        // defect (bird grids feeding terrestrial 2 m VUCC) is dead.
+        assert_eq!(logged.prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(logged.sat_name.as_deref(), Some("AO-91"));
 
         let s = awards_fold_over(logged);
+        assert_eq!(s.vucc.sat_worked, 1, "Satellite VUCC gained the grid");
         assert_eq!(
-            s.vucc.sat_worked, 0,
-            "the Satellite-VUCC total counted a contact Nexus never tagged"
+            s.vucc.worked, 0,
+            "terrestrial 2 m VUCC did NOT absorb a bird QSO"
         );
-        // THE DEFECT. Not "no bucket" — the terrestrial one.
-        assert_eq!(
-            s.vucc.worked, 1,
-            "the 2 m satellite grid stopped reaching the terrestrial fold — \
-             if satellite tagging landed, delete the wrong-credit paragraphs"
-        );
-        let two_m = s
-            .vucc
-            .bands
-            .iter()
-            .find(|b| b.band == "2m")
-            .expect("the grid is credited to the terrestrial 2 m VUCC slot");
-        assert_eq!(two_m.worked, 1, "terrestrial 2 m VUCC gained the grid");
     }
 
-    /// ⚠️ WRONG CREDIT, UNIFORMLY — since the label-keyed grid fold (N9UM
-    /// audit, 2026-08-09) there is no falls-out side any more: every label
-    /// `tempo_app::bandplan::band_for_dial` can put on a record has a per-band
-    /// tracker slot, so an untagged satellite grid lands in the TERRESTRIAL
-    /// tracker on every band, 1.25 m / 70 cm / 23 cm included. The old
-    /// partition (thirteen bands wrong-credit, three absent-credit, gated on
-    /// `Band::from_label`) is dead, and the guide's bullets were rewritten
-    /// with it. The fix for the wrong credit remains satellite tagging at log
-    /// time — this census goes red the day that lands, which is the cue to
-    /// rewrite the "not yet" prose.
+    /// THE PASSBAND GATE, censused across every band label the app can produce
+    /// (2026-08-10, tagging live): a logged contact whose dial sits in the held
+    /// bird's downlink passband is stamped and credited to the SATELLITE
+    /// bucket; every other dial — the hold-outlives-the-pass case the 0.24
+    /// stamp got wrong — stays untagged and lands in the terrestrial tracker
+    /// as the ordinary contact it is. The census is closed against
+    /// `band_for_dial`, so a new band label meets the gate the day it exists.
     ///
     /// The census is closed against `band_for_dial` itself, so a new band
     /// reaches this test the day it reaches the app, and it goes red the day
     /// `Band::from_label` gains a variant — which is the cue to rewrite the
     /// guide's two bullets rather than let them drift.
     #[test]
-    fn the_untagged_satellite_grid_lands_in_the_terrestrial_tracker_on_every_band() {
+    fn the_satellite_stamp_splits_the_grid_fold_on_the_downlink_passband() {
         // (label, a dial inside it, does the TERRESTRIAL per-band slot take it?)
         const CENSUS: &[(&str, f64, bool)] = &[
             ("160m", 1.840, true),
@@ -16968,23 +16921,25 @@ mod tests {
             // engine — as the Satellites strip builds it, mid-pass, untagged.
             let mut e = engine_holding("FOX-1B (AO-91)|FM Voice Repeater", 435_250_000, 145_960_000);
             e.log_qso(pass_qso("W1AW", "FN31", band, mhz));
-            let s = awards_fold_over(&e.get_log()[0]);
+            let logged = &e.get_log()[0];
+            let s = awards_fold_over(logged);
+            // THE PASSBAND GATE, censused across every label the app can produce
+            // (2026-08-10): AO-91's downlink is 145.960 MHz, so exactly the 2 m row
+            // sits inside the held bird's passband — THAT row is stamped and lands in
+            // the SATELLITE bucket; every other dial is out of passband (the
+            // hold-outlives-the-pass case), stays untagged, and lands in the
+            // terrestrial tracker as the ordinary contact it is.
+            let on_bird = band == "2m";
             assert_eq!(
-                s.vucc.sat_worked, 0,
-                "{band}: the Satellite-VUCC total counted a contact Nexus never tagged"
+                logged.prop_mode.as_deref(),
+                on_bird.then_some("SAT"),
+                "{band}: the stamp must fire exactly on the downlink"
             );
-            // Label-keyed grid fold (N9UM audit): EVERY band takes the untagged
-            // grid into the terrestrial tracker now — `terrestrial` in the census
-            // still records which bands the DXCC Band enum carries, but the grid
-            // fold no longer splits on it. Wrong credit uniformly, absent credit
-            // nowhere; the fix for both remains satellite tagging at log time.
+            assert_eq!(s.vucc.sat_worked, usize::from(on_bird), "{band}: sat bucket");
             assert_eq!(
-                s.vucc.worked, 1,
-                "{band}: the untagged grid must land in the terrestrial tracker"
-            );
-            assert!(
-                s.vucc.bands.iter().any(|b| b.band == band && b.worked == 1),
-                "{band}: the per-band tracker slot disagrees with the total"
+                s.vucc.worked,
+                usize::from(!on_bird),
+                "{band}: terrestrial tracker takes only the untagged contact"
             );
         }
     }

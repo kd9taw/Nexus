@@ -100,9 +100,12 @@ describe('award-tile semantics (N9UM audit)', () => {
     expect(screen.getByText(/weakest of the 5 classic bands/)).toBeTruthy()
   })
 
-  it('the Sat VUCC card carries the tagging caveat and the Satellite DXCC count', async () => {
+  it('the Sat VUCC card states auto-tagging and the Satellite DXCC count', async () => {
     await renderAwards()
     expect(screen.getByText(/Sat DXCC 16 confirmed/)).toBeTruthy()
-    expect(screen.getByText(/tagged as satellite \(PROP_MODE=SAT\)/)).toBeTruthy()
+    // The tagging is LIVE (2026-08-10): the card says pass contacts tag automatically,
+    // with the honest ISS residual — not the old edit-your-ADIF-by-hand caveat.
+    expect(screen.getByText(/tagged automatically when logged on the bird/)).toBeTruthy()
+    expect(screen.queryByText(/tag the ADIF by hand/)).toBeNull()
   })
 })
