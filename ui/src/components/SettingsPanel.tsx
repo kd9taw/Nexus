@@ -407,7 +407,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
 /** Pick just the per-radio CAT/audio/PTT/rotator/native fields — the flat rig form and a radio
  * profile share these exact field names, so this serves BOTH directions: build the save patch
  * from the form, and load a radio's profile into the form (`{...form, ...radioPatch(profile)}`). */
-function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
+export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
   // `??` only fills genuinely-absent (null/undefined) fields — 0 / '' legit values are preserved.
   return {
     pttMethod: s.pttMethod ?? 'vox',

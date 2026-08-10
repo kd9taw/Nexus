@@ -12,6 +12,9 @@ vi.mock('../api', () => ({
   getAudioDevices: vi.fn(() => Promise.resolve({ input: [], output: [] })),
   getRigModels: vi.fn(() => Promise.resolve([])),
   probeCatPorts: vi.fn(() => Promise.resolve({ found: false, detail: 'no rig answered' })),
+  addRadio: vi.fn(() => Promise.resolve(null)),
+  getSettings: vi.fn(() => Promise.resolve({ radios: [] })),
+  updateRadioProfile: vi.fn(() => Promise.resolve(null)),
 }))
 
 const importAdif = api.importAdif as ReturnType<typeof vi.fn>
@@ -148,6 +151,80 @@ describe('SetupWizard rig-step pipeline (setup re-envisioning, 2026-08-09)', () 
     expect(draft.baud).toBe(19200)
     expect(draft.pttMethod).toBe('cat')
     expect(draft.serialPort).toBe('COM9')
+  })
+})
+
+describe('SetupWizard second-radio card', () => {
+  beforeEach(() => {
+    cleanup()
+    vi.mocked(api.detectRigs).mockReset()
+    vi.mocked(api.probeCatPorts).mockReset()
+    vi.mocked(api.addRadio).mockClear()
+    vi.mocked(api.updateRadioProfile).mockClear()
+  })
+
+  it('adds, probes with radio 1 excluded, and writes radio 2 BY ID with its OWN codec', async () => {
+    // The scan's 1:1 codec pass gave each port its own device; the card must write the
+    // NEW port's grant to the NEW profile — never radio 1's — through the by-id verb
+    // (updateRadioProfile), which is what dodges the Edit-vs-Active trap.
+    vi.mocked(api.detectRigs).mockResolvedValue([
+      {
+        portName: 'COM5',
+        suggestedModel: 1042,
+        suggestedModelName: 'Yaesu FTDX10',
+        suggestedAudio: 'CODEC A',
+        suggestedAudioOut: 'CODEC A OUT',
+        chip: 'CP210x',
+        civSide: null,
+        interfaceName: null,
+        interfacePttMethod: null,
+      },
+      {
+        portName: 'COM7',
+        suggestedModel: 1035,
+        suggestedModelName: 'Yaesu FT-991',
+        suggestedAudio: 'CODEC B',
+        suggestedAudioOut: 'CODEC B OUT',
+        chip: 'CP210x',
+        civSide: null,
+        interfaceName: null,
+        interfacePttMethod: null,
+      },
+    ] as never)
+    vi.mocked(api.getSettings).mockResolvedValue({
+      radios: [
+        { id: 0, serialPort: 'COM5', baud: 38400 },
+        { id: 1, serialPort: '', baud: 38400 },
+      ],
+    } as never)
+    vi.mocked(api.probeCatPorts).mockResolvedValue({
+      found: true,
+      portName: 'COM7',
+      baud: 38400,
+      model: 1035,
+      modelName: 'Yaesu FT-991',
+      freqMhz: 7.074,
+      detail: 'FT-991 on COM7',
+      modelSeeded: false,
+    } as never)
+    renderWizard()
+    clickNext() // → rig step; scan-on-entry populates the roster rows
+    // Radio 1: pick the FTDX10 row so the card has a first radio to exclude.
+    fireEvent.click(await screen.findByRole('button', { name: /FTDX10/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /second radio/ }))
+    await waitFor(() => expect(api.updateRadioProfile).toHaveBeenCalledTimes(1))
+    expect(api.addRadio).toHaveBeenCalledTimes(1)
+    const [id, patch] = vi.mocked(api.updateRadioProfile).mock.calls[0]
+    expect(id).toBe(1)
+    expect(patch.serialPort).toBe('COM7')
+    expect(patch.pttMethod).toBe('cat')
+    expect(patch.audioIn).toBe('CODEC B')
+    expect(patch.audioOut).toBe('CODEC B OUT')
+    // Radio 1's codec must NOT have been given to radio 2.
+    expect(patch.audioIn).not.toBe('CODEC A')
+    await screen.findByText(/Second radio: .*FT-991 on COM7/)
+    // The run-both-at-once fact, surfaced at last (it lived only in a picker subtitle).
+    expect(screen.getByText(/open Nexus twice/)).toBeTruthy()
   })
 })
 

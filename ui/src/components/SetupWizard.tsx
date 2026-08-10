@@ -4,14 +4,17 @@ import { PROFILE_LIST, PROFILES, type ProfileId } from '../features/profiles'
 import type { FeatureId, View } from '../features/registry'
 import type { AudioDevices, CatTestResult, DetectedRig, ImportStats, Settings } from '../types'
 import {
+  addRadio,
   detectRigs,
   discoverFlex,
   getAudioDevices,
   getRigModels,
+  getSettings,
   importAdif,
   probeCatPorts,
+  updateRadioProfile,
 } from '../api'
-import { baudForRig } from './SettingsPanel'
+import { baudForRig, radioPatch } from './SettingsPanel'
 import { SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
@@ -233,6 +236,114 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     if (fixed != null) setBaud(fixed)
     if (pttMethod === 'vox') setPttMethod('cat')
   }
+  // --- The SECOND radio: a card in this step, not a fifth step (multi-radio had zero
+  // wizard presence — ~11 steps across three Settings sections, with a recorded field
+  // failure in the Edit-vs-Active trap; updateRadioProfile is the by-id verb that
+  // dodges it). Flow: add → probe with radio 1's port excluded (server-side) → the
+  // probed CAT + this port's 1:1-assigned codec written to the NEW profile.
+  const [second, setSecond] = useState<null | {
+    id: number
+    probing: boolean
+    note: string | null
+    portName?: string
+    model?: number
+    modelName?: string
+    seeded?: boolean
+  }>(null)
+  const [secondElapsed, setSecondElapsed] = useState(0)
+  const [swapOffer, setSwapOffer] = useState(false)
+  useEffect(() => {
+    if (!second?.probing) return
+    setSecondElapsed(0)
+    const id = window.setInterval(() => setSecondElapsed((t) => t + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [second?.probing])
+  const addSecondRadio = async () => {
+    try {
+      await addRadio()
+      const s = await getSettings()
+      const roster = s.radios ?? []
+      if (roster.length === 0) throw new Error('no radio profiles after add')
+      const newId = Math.max(...roster.map((p) => p.id))
+      setSecond({ id: newId, probing: true, note: null })
+      const r = await probeCatPorts(newId)
+      if (!r.found) {
+        setSecond({ id: newId, probing: false, note: r.detail })
+        return
+      }
+      // This port's roster row carries its 1:1-assigned codec (never radio 1's — the
+      // assignment pass hands generic codecs out one per rig).
+      const row = detected?.find((d) => d.portName === r.portName)
+      const p = roster.find((x) => x.id === newId)
+      await updateRadioProfile(
+        newId,
+        radioPatch({
+          ...p,
+          serialPort: r.portName,
+          baud: r.baud,
+          rigModel: r.model,
+          rigModelName: r.modelName,
+          rigConn: 'serial',
+          pttMethod: 'cat',
+          ...(row?.suggestedAudio ? { audioIn: row.suggestedAudio } : {}),
+          ...(row?.suggestedAudioOut || row?.suggestedAudio
+            ? { audioOut: row?.suggestedAudioOut ?? row?.suggestedAudio ?? '' }
+            : {}),
+        }),
+      )
+      setSecond({
+        id: newId,
+        probing: false,
+        note: r.detail,
+        portName: r.portName,
+        model: r.model,
+        modelName: r.modelName,
+        seeded: r.modelSeeded,
+      })
+      // Two rigs whose codecs both came from the generic pool are told apart only by
+      // position — the 1:1 pass makes the worst case a SWAP, and this is the one
+      // binary question that fixes it. Product-named codecs are unambiguous: no offer.
+      const generic = (name: string | null | undefined) =>
+        !!name && !/\b(FT|IC|TS|TX)-?\d/i.test(name)
+      setSwapOffer(generic(row?.suggestedAudio) && generic(audioIn))
+    } catch (e) {
+      setSecond({
+        id: -1,
+        probing: false,
+        note: `Couldn't add the radio: ${e instanceof Error ? e.message : String(e)}`,
+      })
+    }
+  }
+  /** Confirm the second radio's exact model (a seeded probe guessed it). */
+  const pickSecondModel = async (num: number, name: string) => {
+    if (!second || second.id < 0) return
+    const s = await getSettings()
+    const p = (s.radios ?? []).find((x) => x.id === second.id)
+    if (!p) return
+    const fixed = baudForRig(num, p.baud)
+    await updateRadioProfile(
+      second.id,
+      radioPatch({ ...p, rigModel: num, rigModelName: name, ...(fixed != null ? { baud: fixed } : {}) }),
+    )
+    setSecond({ ...second, model: num, modelName: name, seeded: false })
+  }
+  /** The swap answer: exchange the two radios' audio devices in their profiles. */
+  const swapAudio = async () => {
+    if (!second || second.id < 0) return
+    const s = await getSettings()
+    const roster = s.radios ?? []
+    const b = roster.find((x) => x.id === second.id)
+    // Radio 1 = the radio this wizard pass configured (the active/flat one).
+    const a = roster.find((x) => x.id !== second.id && x.serialPort === serialPort) ?? roster[0]
+    if (!a || !b) return
+    await updateRadioProfile(a.id, radioPatch({ ...a, audioIn: b.audioIn, audioOut: b.audioOut }))
+    await updateRadioProfile(b.id, radioPatch({ ...b, audioIn: a.audioIn, audioOut: a.audioOut }))
+    // The wizard's own draft mirrors radio 1's new devices so the final apply agrees.
+    setAudioIn(b.audioIn)
+    setAudioOut(b.audioOut)
+    setSwapOffer(false)
+  }
+
   const scannedOnEntry = useRef(false)
   useEffect(() => {
     if (step !== 1) return
@@ -742,6 +853,83 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               shared component), so the wizard ends on evidence, not faith: Rig / RX dB /
               TX, with Prove TX keying a bounded carrier behind its confirm. */}
           <SetupHealth radio={radio} catResult={catResult} onProveTx={onProveTx} />
+
+          {/* The SECOND radio — a card, not a fifth step. Offered once radio 1 has a
+              port; the probe automatically skips radio 1's port (it's held). */}
+          {rigConn === 'serial' && serialPort && (
+            <div className="wizard-detect">
+              {!second && (
+                <button
+                  type="button"
+                  className="wizard-btn"
+                  onClick={() => void addSecondRadio()}
+                  title="Adds a radio profile and probes the remaining USB ports for it"
+                >
+                  ＋ I have a second radio
+                </button>
+              )}
+              {second?.probing && (
+                <span className="wizard-field-hint" role="status">
+                  Probing the other ports — {secondElapsed}s (radio 1&rsquo;s port is skipped;
+                  this can take up to a minute)…
+                </span>
+              )}
+              {second && !second.probing && (
+                <span className="wizard-field-hint" role="status">
+                  {second.portName
+                    ? `Second radio: ${second.modelName ?? 'radio'} on ${second.portName} — saved to its own profile.`
+                    : second.note}
+                </span>
+              )}
+              {second && !second.probing && second.seeded && (
+                <label className="wizard-field">
+                  <span>Which radio is the second one?</span>
+                  <select
+                    className="bad"
+                    aria-invalid
+                    value={second.model ?? 0}
+                    onChange={(e) => {
+                      const num = Number(e.target.value)
+                      const name = models.find(([m]) => m === num)?.[1] ?? ''
+                      void pickSecondModel(num, name)
+                    }}
+                  >
+                    <option value={0} disabled>
+                      Pick the model…
+                    </option>
+                    {second.model != null && !models.some(([m]) => m === second.model) && (
+                      <option value={second.model}>{second.modelName ?? `Model ${second.model}`}</option>
+                    )}
+                    {models.map(([num, name]) => (
+                      <option key={num} value={num}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="wizard-field-hint bad" role="alert">
+                    The port answered but the exact model is a guess — pick the radio so its
+                    real command set is used.
+                  </span>
+                </label>
+              )}
+              {second && !second.probing && second.portName && swapOffer && (
+                <span className="wizard-field-hint">
+                  Both radios use identical USB sound cards, shared out one each. If you later
+                  see the <em>wrong</em> rig&rsquo;s meters move when audio plays,&nbsp;
+                  <button type="button" className="settings-linkbtn" onClick={() => void swapAudio()}>
+                    swap them
+                  </button>
+                  .
+                </span>
+              )}
+              {second && !second.probing && second.portName && (
+                <span className="wizard-field-hint">
+                  To run both radios at the same time, open Nexus twice — each window drives
+                  one radio (the launcher asks which).
+                </span>
+              )}
+            </div>
+          )}
         </>
       )}
 
