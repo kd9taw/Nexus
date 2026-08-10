@@ -3822,6 +3822,14 @@ body.resizing {
 .topbar-row > .topbar-group:last-child {
   margin-left: auto;
 }
+/* The RX/slot/clock cluster absorbs row 1's slack and centers in it — without this the
+   whole surplus sat as one dead field between the clock and Help (operator screenshot,
+   2026-08-09), which is what kept dragging the eye away from the chip corner. */
+.topbar-row > .topbar-group.txrx {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 0;
+}
 
 .topbar-group {
   display: flex;
@@ -4485,7 +4493,9 @@ select optgroup {
 .theme-chip {
   border: none;
   background: transparent;
-  color: var(--text-dim);
+  /* Full-strength ink (operator, 2026-08-09: stared at the Field chip and could not
+     see it — dim 11px text in a far corner is camouflage, not de-emphasis). */
+  color: var(--text);
   font-weight: 600;
   font-size: 11px;
   /* Tightened (operator, 2026-08-09: "buttons could be smaller on their outlines and
