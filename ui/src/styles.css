@@ -3830,6 +3830,17 @@ body.resizing {
   justify-content: center;
   min-width: 0;
 }
+/* The chip cluster in the pills row fills the gap FROM THE RIGHT, sitting beside the
+   Tx-cycle group — the operator's own placement ("use the blank space between the
+   modes and Tx 1st"). Bigger targets here than the old corner: match the tier pills. */
+.topbar-row-pills > .topbar-chips {
+  margin-left: auto;
+}
+.topbar-row-pills .theme-chip {
+  font-size: 12px;
+  min-height: 30px;
+  padding: var(--space-1) var(--space-3);
+}
 
 .topbar-group {
   display: flex;

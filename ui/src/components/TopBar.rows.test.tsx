@@ -66,22 +66,23 @@ function renderBar(over: Record<string, unknown> = {}) {
 }
 
 describe('the top bar rows', () => {
-  it('row 1 ends with the chip cluster, and the pills get their own row (digital)', () => {
+  it('digital: the chips fill the pills-row gap, beside the Tx-cycle group', () => {
+    // The operator's own placement (2026-08-09, screenshot 4): "use the blank space
+    // between the modes and Tx 1st" — the cluster sits in ROW 2, immediately before
+    // the Tx-cycle group, not tucked in the row-1 corner.
     const { container } = renderBar()
     const rows = container.querySelectorAll('.topbar-row')
     expect(rows.length).toBe(2)
-    // The tail cluster — Help + theme switcher — is INSIDE row 1, its last group.
-    const row1 = rows[0]
-    expect(row1.querySelector('.theme-switcher'), 'chips live in row 1').not.toBeNull()
-    const groups = row1.querySelectorAll(':scope > .topbar-group')
-    expect(
-      groups[groups.length - 1].querySelector('.theme-switcher'),
-      'and they are its LAST group — top-right at every width',
-    ).not.toBeNull()
-    // The pills row holds the tier furniture, not the chips.
     const row2 = rows[1]
     expect(row2.querySelector('.tier-toggle')).not.toBeNull()
-    expect(row2.querySelector('.theme-switcher')).toBeNull()
+    const chips = row2.querySelector(':scope > .topbar-chips')
+    expect(chips, 'chip cluster lives in the pills row').not.toBeNull()
+    expect(
+      chips!.nextElementSibling?.classList.contains('tx-period'),
+      'immediately before the Tx-cycle group — in the gap the operator pointed at',
+    ).toBe(true)
+    // …and NOT in row 1 any more.
+    expect(rows[0].querySelector('.theme-switcher')).toBeNull()
   })
 
   it('CW/Phone (no digital chrome): one row, Field chip still present', () => {

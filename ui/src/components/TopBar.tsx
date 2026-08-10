@@ -235,6 +235,56 @@ export function TopBar({
   // out if they switched tiers mid-over.
   const noTx = isRxOnly(tier)
   const NO_TX_WHY = 'This mode is receive-only in Nexus — it decodes but does not transmit'
+  const chipCluster = (
+    <div className="topbar-group topbar-chips">
+        {/* Help lives in the one group that renders in every section — the
+            cockpits hide the TX cluster, the readout and the digital chrome,
+            but never this one, so the guide is one click away everywhere. */}
+        {/* WHO IS AT THE KEY (#25). Shown ONLY when an operator is set — that is the
+            multi-op case, and for the single-op station that is nearly everyone this costs
+            no width at all. It has to be somewhere always visible rather than in Settings,
+            because a wrong operator is silent: nothing misbehaves, and it is discovered at
+            submission when the log is already wrong. Same group as Help, the one group no
+            cockpit hides. */}
+        {operator && operator.trim() !== '' && (
+          <Menu
+            trigger={
+              <button
+                type="button"
+                className="theme-chip op-chip"
+                title={`Operating as ${operator} — click to change who is at the key`}
+              >
+                OP {operator}
+              </button>
+            }
+            items={[
+              // The roster is the operators this log has already seen, so the second and
+              // every later seat swap is a click. The first one is still typed, in Settings.
+              ...(operatorRoster ?? [])
+                .filter((o) => o.toUpperCase() !== operator.toUpperCase())
+                .map((o) => ({
+                  label: `Switch to ${o}`,
+                  onSelect: () => onSetOperator?.(o),
+                })),
+              {
+                label: 'Single operator (clear)',
+                onSelect: () => onSetOperator?.(''),
+              },
+            ]}
+          />
+        )}
+        <Menu
+          trigger={
+            <button type="button" className="theme-chip" title="Help">
+              Help
+            </button>
+          }
+          items={[{ label: 'Getting started', onSelect: onOpenGuide }]}
+        />
+        <ThemeSwitcher theme={theme} onChange={onThemeChange} field={field} onFieldChange={onFieldChange} />
+      </div>
+  )
+
   return (
     <header className={`topbar${hideFrequencyControl ? ' topbar--no-readout' : ''}`}>
       {/* TWO DELIBERATE ROWS (ultrawide + snapped-window field reports, 2026-08-09): a
@@ -402,53 +452,11 @@ export function TopBar({
         )}
       </div>
 
-      <div className="topbar-group">
-        {/* Help lives in the one group that renders in every section — the
-            cockpits hide the TX cluster, the readout and the digital chrome,
-            but never this one, so the guide is one click away everywhere. */}
-        {/* WHO IS AT THE KEY (#25). Shown ONLY when an operator is set — that is the
-            multi-op case, and for the single-op station that is nearly everyone this costs
-            no width at all. It has to be somewhere always visible rather than in Settings,
-            because a wrong operator is silent: nothing misbehaves, and it is discovered at
-            submission when the log is already wrong. Same group as Help, the one group no
-            cockpit hides. */}
-        {operator && operator.trim() !== '' && (
-          <Menu
-            trigger={
-              <button
-                type="button"
-                className="theme-chip op-chip"
-                title={`Operating as ${operator} — click to change who is at the key`}
-              >
-                OP {operator}
-              </button>
-            }
-            items={[
-              // The roster is the operators this log has already seen, so the second and
-              // every later seat swap is a click. The first one is still typed, in Settings.
-              ...(operatorRoster ?? [])
-                .filter((o) => o.toUpperCase() !== operator.toUpperCase())
-                .map((o) => ({
-                  label: `Switch to ${o}`,
-                  onSelect: () => onSetOperator?.(o),
-                })),
-              {
-                label: 'Single operator (clear)',
-                onSelect: () => onSetOperator?.(''),
-              },
-            ]}
-          />
-        )}
-        <Menu
-          trigger={
-            <button type="button" className="theme-chip" title="Help">
-              Help
-            </button>
-          }
-          items={[{ label: 'Getting started', onSelect: onOpenGuide }]}
-        />
-        <ThemeSwitcher theme={theme} onChange={onThemeChange} field={field} onFieldChange={onFieldChange} />
-      </div>
+      {/* In the digital views the chip cluster lives in the PILLS ROW below —
+          in the operator's words, "use the blank space between the modes and the
+          Tx 1st section" (2026-08-09, after four rounds of me solving the wrong
+          problem). Views without that row keep it here, end of row 1. */}
+      {hideDigitalChrome && chipCluster}
       </div>
 
       {!hideDigitalChrome && (
@@ -470,6 +478,8 @@ export function TopBar({
           </button>
         ))}
       </div>
+
+      {chipCluster}
 
       <div className="topbar-group tier-toggle tx-period" role="group" aria-label="Transmit cycle">
         <button
