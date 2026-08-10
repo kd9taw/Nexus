@@ -10,6 +10,8 @@ vi.mock('../api', () => ({
   detectRigs: vi.fn(() => Promise.resolve([])),
   discoverFlex: vi.fn(() => Promise.resolve([])),
   getAudioDevices: vi.fn(() => Promise.resolve({ input: [], output: [] })),
+  getRigModels: vi.fn(() => Promise.resolve([])),
+  probeCatPorts: vi.fn(() => Promise.resolve({ found: false, detail: 'no rig answered' })),
 }))
 
 const importAdif = api.importAdif as ReturnType<typeof vi.fn>
@@ -74,6 +76,78 @@ describe('SetupWizard ADIF import step', () => {
     clickNext() // 2 log → 3 goals, no file chosen
     expect(screen.getByText(/What do you mostly want to do/)).toBeTruthy()
     expect(importAdif).not.toHaveBeenCalled()
+  })
+})
+
+describe('SetupWizard rig-step pipeline (setup re-envisioning, 2026-08-09)', () => {
+  beforeEach(() => {
+    cleanup()
+    vi.mocked(api.detectRigs).mockClear()
+    vi.mocked(api.probeCatPorts).mockReset()
+    vi.mocked(api.probeCatPorts).mockResolvedValue({
+      found: false,
+      detail: 'no rig answered',
+    } as never)
+  })
+
+  it('scans on entering the rig step — the operator presses nothing', async () => {
+    // "Nothing is working" was the literal output of an empty rig screen whose only
+    // affordance was a button the operator had to know to press.
+    renderWizard()
+    expect(api.detectRigs).not.toHaveBeenCalled()
+    clickNext() // 0 station → 1 rig
+    await waitFor(() => expect(api.detectRigs).toHaveBeenCalledTimes(1))
+  })
+
+  it('a seeded Auto-test hit applies port+baud but DEMANDS the exact model', async () => {
+    // An FT-991A answers the FTDX10 seed: the port and baud are proven, the model is a
+    // guess — persisting the guess silently is what Settings refuses; the wizard asks.
+    vi.mocked(api.probeCatPorts).mockResolvedValue({
+      found: true,
+      portName: 'COM5',
+      baud: 38400,
+      model: 1042,
+      modelName: 'Yaesu FTDX10',
+      freqMhz: 14.074,
+      detail: 'Found the port: COM5 @ 38400 baud',
+      modelSeeded: true,
+    } as never)
+    renderWizard()
+    clickNext()
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-test my ports/ }))
+    await screen.findByText(/the exact model is a guess/)
+    expect(screen.getByText(/Selected: .*COM5 @ 38400 baud/)).toBeTruthy()
+  })
+
+  it('confirming a fixed-rate model sets its one true baud (the Settings rule)', async () => {
+    vi.mocked(api.getRigModels).mockResolvedValue([[3088, 'Xiegu G90']] as never)
+    const { onApply } = renderWizard()
+    clickNext() // → rig step
+    // Probe finds the port with a guessed model; the operator then confirms a G90.
+    vi.mocked(api.probeCatPorts).mockResolvedValue({
+      found: true,
+      portName: 'COM9',
+      baud: 38400,
+      model: 1042,
+      modelName: 'Yaesu FTDX10',
+      freqMhz: 14.074,
+      detail: 'found',
+      modelSeeded: true,
+    } as never)
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-test my ports/ }))
+    const select = (await screen.findByLabelText(/Which radio is this/)) as HTMLSelectElement
+    fireEvent.change(select, { target: { value: '3088' } })
+    expect(screen.getByText(/Selected: .*COM9 @ 19200 baud/)).toBeTruthy()
+    // The draft carries the confirmed model, its fixed baud, and CAT keying — the
+    // silent-VOX default is dead on every wizard-configured rig.
+    clickNext() // → log
+    clickNext() // → goals
+    fireEvent.click(screen.getByRole('button', { name: /Turn everything on/ }))
+    const draft = onApply.mock.calls[0][4]
+    expect(draft.rigModel).toBe(3088)
+    expect(draft.baud).toBe(19200)
+    expect(draft.pttMethod).toBe('cat')
+    expect(draft.serialPort).toBe('COM9')
   })
 })
 

@@ -3,7 +3,15 @@ import { Dialog } from './ui/Dialog'
 import { PROFILE_LIST, PROFILES, type ProfileId } from '../features/profiles'
 import type { FeatureId, View } from '../features/registry'
 import type { AudioDevices, CatTestResult, DetectedRig, ImportStats, Settings } from '../types'
-import { detectRigs, discoverFlex, getAudioDevices, importAdif } from '../api'
+import {
+  detectRigs,
+  discoverFlex,
+  getAudioDevices,
+  getRigModels,
+  importAdif,
+  probeCatPorts,
+} from '../api'
+import { baudForRig } from './SettingsPanel'
 import { isValidGrid } from '../grid'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { STARTER_PACKS, importPack } from '../features/packs'
@@ -20,6 +28,8 @@ export interface WizardDraft {
   rigModel?: number
   rigModelName?: string
   serialPort?: string
+  baud?: number
+  pttMethod?: string
   audioIn?: string
   audioOut?: string
 }
@@ -143,11 +153,88 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip, onOpenGuide 
   const [flexNote, setFlexNote] = useState<string | null>(null)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
   const [catTesting, setCatTesting] = useState(false)
+  // Baud + PTT enter the draft (setup re-envisioning, 2026-08-09): the old wizard had
+  // neither field, so a probed baud was thrown away and every wizard-configured rig
+  // shipped on the silent-VOX default — Test CAT then reported "✗ VOX — no CAT" for a
+  // gap the wizard itself created.
+  const [baud, setBaud] = useState<number>(() => settings?.baud ?? 38400)
+  const [pttMethod, setPttMethod] = useState<string>(() => settings?.pttMethod ?? 'vox')
+  // The Hamlib model catalog for the confirm dropdown ("found the port but not the
+  // exact model" — an FT-991A answers the FTDX10 seed, so the GUESS must be confirmable).
+  const [models, setModels] = useState<[number, string][]>([])
+  // The seeded-probe flag: the port+baud are proven, the model is a guess — the dropdown
+  // below becomes REQUIRED reading until the operator picks (Settings refuses to persist
+  // seeded models; the wizard is finally the control that accepts a real one).
+  const [modelSeeded, setModelSeeded] = useState(false)
+  // Auto-test (the port_prober sweep, seeded with common rigs at their bauds). Honest
+  // elapsed counter, no fake progress and no fake Cancel — the probe cannot be
+  // cancelled, and a dead bar would lie (operator decision 2026-08-09: counter only).
+  const [probing, setProbing] = useState(false)
+  const [probeElapsed, setProbeElapsed] = useState(0)
+  const [probeNote, setProbeNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (!probing) return
+    setProbeElapsed(0)
+    const id = window.setInterval(() => setProbeElapsed((s) => s + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [probing])
+  const runProbe = () => {
+    setProbing(true)
+    setProbeNote(null)
+    probeCatPorts()
+      .then((r) => {
+        if (!r.found) {
+          setProbeNote(r.detail)
+          return
+        }
+        setSerialPort(r.portName)
+        setBaud(r.baud)
+        setRigConn('serial')
+        // A real answer means CAT works — kill the silent-VOX default.
+        setPttMethod('cat')
+        if (r.modelSeeded) {
+          // Port + baud proven; the model is a guess. Keep the guess as the dropdown's
+          // preselection and say plainly that picking the exact model is the next step.
+          setRigModel(r.model)
+          setRigModelName(r.modelName)
+          setModelSeeded(true)
+        } else {
+          setRigModel(r.model)
+          setRigModelName(r.modelName)
+          setModelSeeded(false)
+        }
+        setProbeNote(r.detail)
+      })
+      .catch((e) => setProbeNote(`Auto-test failed: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setProbing(false))
+  }
+  /** Confirm the exact model: fixed-baud rigs get their one true rate (the Settings
+   * rule, same function), and a confirmed model clears the seeded flag. */
+  const pickModel = (num: number, name: string) => {
+    setRigModel(num)
+    setRigModelName(name)
+    setModelSeeded(false)
+    const fixed = baudForRig(num, baud)
+    if (fixed != null) setBaud(fixed)
+    if (pttMethod === 'vox') setPttMethod('cat')
+  }
+  const scannedOnEntry = useRef(false)
   useEffect(() => {
     if (step !== 1) return
     getAudioDevices()
       .then(applyAudio)
       .catch(() => {})
+    getRigModels()
+      .then(setModels)
+      .catch(() => {})
+    // The pipeline runs ON ENTRY (scan first — cheap USB/LAN enumeration): the operator
+    // watches the wizard find things instead of pressing buttons they must know exist
+    // ("nothing is working" was the literal output of the empty screen). Once per open.
+    if (!scannedOnEntry.current) {
+      scannedOnEntry.current = true
+      runDetect()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step])
 
   // --- Step 3: goals / modes / license (the original screen) ---
@@ -210,6 +297,8 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip, onOpenGuide 
       d.rigModelName = rigModelName ?? ''
     }
     if (serialPort !== (settings?.serialPort ?? '')) d.serialPort = serialPort
+    if (baud !== (settings?.baud ?? 38400)) d.baud = baud
+    if (pttMethod !== (settings?.pttMethod ?? 'vox')) d.pttMethod = pttMethod
     if (audioIn !== (settings?.audioIn ?? '')) d.audioIn = audioIn
     if (audioOut !== (settings?.audioOut ?? '')) d.audioOut = audioOut
     return d
@@ -274,15 +363,32 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip, onOpenGuide 
     if (r.suggestedModel != null) {
       setRigModel(r.suggestedModel)
       setRigModelName(r.suggestedModelName ?? '')
+      setModelSeeded(false)
+      // A named rig has one true rate where the table knows it (the Settings rule).
+      const fixed = baudForRig(r.suggestedModel, baud)
+      if (fixed != null) setBaud(fixed)
     }
     setSerialPort(r.portName)
     setRigConn('serial')
+    // PTT: a recognised interface cable names its keying line; a model-named rig
+    // gets CAT keying (killing the silent-VOX default that made the wizard's own
+    // Test CAT report "✗ VOX — no CAT"). An unidentified bridge chip is left
+    // alone — the Auto-test chain below settles it when it finds the rig.
+    if (r.interfacePttMethod) setPttMethod(r.interfacePttMethod)
+    else if (r.suggestedModel != null && pttMethod === 'vox') setPttMethod('cat')
     // RX from the capture list, TX from the OUTPUT list — the rig's CODEC enumerates under
     // different input/output names on Windows, so reusing the input name for audioOut sent TX
     // audio to the PC speakers. Fall back to the input name only if no output paired.
     if (r.suggestedAudio) setAudioIn(r.suggestedAudio)
     if (r.suggestedAudioOut || r.suggestedAudio) {
       setAudioOut(r.suggestedAudioOut ?? r.suggestedAudio ?? '')
+    }
+    // The pipeline's second stage: an unidentified rig (bridge chip, no model) chains
+    // straight into Auto-test — the sweep is seeded with the common rigs at their bauds
+    // (an FTDX10 and an FT-991 are its first two seeds), so the wizard identifies the
+    // radio instead of leaving a blank model that silently disarms Test CAT.
+    if (r.suggestedModel == null && r.interfaceName == null && !probing) {
+      runProbe()
     }
   }
   const applyDetectedFlex = (f: { model: string; nickname: string; ip: string }) => {
@@ -448,9 +554,74 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip, onOpenGuide 
             {rigConn === 'serial' && serialPort && (
               <span className="wizard-field-hint">
                 Selected: {rigModelName ?? 'radio'} on {serialPort}
+                {baud ? ` @ ${baud} baud` : ''}
+              </span>
+            )}
+            {/* Auto-test: the port_prober sweep (seeded with the common rigs at their
+                bauds) — Settings-only until now, and the one thing that could have
+                answered "nothing is working" for a bridge-chip rig with no model. */}
+            {rigConn === 'serial' && (
+              <button
+                type="button"
+                className="wizard-btn"
+                disabled={probing}
+                onClick={runProbe}
+                title="Probes every USB port until a radio answers — read-only, never transmits"
+              >
+                {probing
+                  ? `Testing ports — ${probeElapsed}s (can take up to a minute)…`
+                  : '🔎 Auto-test my ports'}
+              </button>
+            )}
+            {probeNote && (
+              <span className="wizard-field-hint" role="status">
+                {probeNote}
               </span>
             )}
           </div>
+
+          {/* The model CONFIRM — the wizard finally gets the dropdown Settings always had.
+              A seeded probe hit means the PORT is proven and the model is a guess (an
+              FT-991A answers the FTDX10 seed), so the question is asked instead of the
+              guess being silently persisted. Picking a model applies its fixed baud. */}
+          {rigConn === 'serial' && (rigModel != null || serialPort) && (
+            <div className="wizard-fields">
+              <label className="wizard-field">
+                <span>Which radio is this?</span>
+                <select
+                  className={modelSeeded ? 'bad' : ''}
+                  aria-invalid={modelSeeded || undefined}
+                  value={rigModel ?? 0}
+                  onChange={(e) => {
+                    const num = Number(e.target.value)
+                    const name = models.find(([m]) => m === num)?.[1] ?? ''
+                    pickModel(num, name)
+                  }}
+                >
+                  <option value={0} disabled>
+                    Pick your rig model…
+                  </option>
+                  {/* Keep an out-of-catalog preselection visible rather than blanking it. */}
+                  {rigModel != null && !models.some(([m]) => m === rigModel) && (
+                    <option value={rigModel}>{rigModelName ?? `Model ${rigModel}`}</option>
+                  )}
+                  {models.map(([num, name]) => (
+                    <option key={num} value={num}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <span
+                  className={`wizard-field-hint${modelSeeded ? ' bad' : ''}`}
+                  role={modelSeeded ? 'alert' : undefined}
+                >
+                  {modelSeeded
+                    ? `The port answered, but the exact model is a guess (${rigModelName ?? 'unknown'} responded). Pick your radio so its real command set is used.`
+                    : 'Confirm the exact model — fixed-rate rigs get their baud set automatically.'}
+                </span>
+              </label>
+            </div>
+          )}
           <div className="wizard-rigconn">
             <button
               type="button"
