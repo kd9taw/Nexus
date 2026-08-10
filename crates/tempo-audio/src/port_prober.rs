@@ -114,13 +114,25 @@ pub const COMMON_CAT_MODELS: &[(u32, &str, &[u32])] = &[
 /// operator's currently-configured `fallback_model` (the rig is known, only the *port* is in
 /// doubt), or — when no model is configured yet — seed [`COMMON_CAT_MODELS`] so Auto-test isn't
 /// dead before setup. Candidates with no usable model (0) are dropped.
-pub fn candidates_from(ports: &[UsbPort], fallback_model: u32) -> Vec<Candidate> {
+pub fn candidates_from(
+    ports: &[UsbPort],
+    fallback_model: u32,
+    exclude: &[String],
+) -> Vec<Candidate> {
+    // `exclude` = ports already OWNED (the wizard probing for radio 2 passes radio 1's
+    // serial port): probing an owned port cannot succeed — the live daemon holds it —
+    // and each excluded candidate otherwise costs a full no-answer baud sweep before
+    // the sweep ever reaches the port that could answer.
+    //
     // Dual-UART Icoms (IC-7610/9700) enumerate as TWO ports that both resolve to the same
     // model; only the one the driver marks "A (CI-V)" / "Enhanced" ever answers. Probe that
     // one first and the known non-CI-V side last, so the right port isn't stuck waiting
     // behind a full no-answer sweep of its dead twin. Stable sort — everything without a
     // marking keeps the enumeration order.
-    let mut ports: Vec<&UsbPort> = ports.iter().collect();
+    let mut ports: Vec<&UsbPort> = ports
+        .iter()
+        .filter(|p| !exclude.iter().any(|e| e.eq_ignore_ascii_case(&p.port_name)))
+        .collect();
     ports.sort_by_key(|p| match crate::usbrig::civ_port_side(&p.product) {
         Some(true) => 0,
         None => 1,
@@ -184,15 +196,18 @@ pub fn candidates_from(ports: &[UsbPort], fallback_model: u32) -> Vec<Candidate>
 /// above was only true of the CAT traffic. It does NOT read the operator's per-line override:
 /// the sweep runs before a radio is configured (the setup wizard) and probes ports that may
 /// belong to no rig at all, so the safe state is the only defensible one here.
+/// `exclude` — serial ports to SKIP, by name (case-insensitive): the ports other radios
+/// already own. The wizard's second-radio probe passes radio 1's port so the sweep never
+/// wastes a baud ladder on a port a live daemon is holding.
 #[cfg(feature = "serial")]
-pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16) -> Option<ProbeHit> {
+pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -> Option<ProbeHit> {
     use crate::rig::Rig;
     use crate::rigctld_proc::{spawn_rigctld, ControlLines};
     use std::time::Duration;
 
     let ports = crate::ports::available_usb_ports();
     let addr = format!("127.0.0.1:{tcp_port}");
-    for c in candidates_from(&ports, fallback_model) {
+    for c in candidates_from(&ports, fallback_model, exclude) {
         // A seeded (guessed-model) candidate probes only its family baud; a trusted model sweeps.
         let bauds: &[u32] = c
             .baud
@@ -237,7 +252,11 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16) -> Option<ProbeHit> {
 
 /// Without the `serial` feature there is no port enumeration → nothing to probe.
 #[cfg(not(feature = "serial"))]
-pub fn probe_cat_ports(_fallback_model: u32, _tcp_port: u16) -> Option<ProbeHit> {
+pub fn probe_cat_ports(
+    _fallback_model: u32,
+    _tcp_port: u16,
+    _exclude: &[String],
+) -> Option<ProbeHit> {
     None
 }
 
@@ -331,7 +350,7 @@ mod tests {
 
     #[test]
     fn native_usb_rig_resolves_its_own_model_ignoring_the_fallback() {
-        let cands = candidates_from(&[usb("COM5", "IC-705", "Icom Inc.")], 1);
+        let cands = candidates_from(&[usb("COM5", "IC-705", "Icom Inc.")], 1, &[]);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].port_name, "COM5");
         assert!(
@@ -341,11 +360,32 @@ mod tests {
         assert!(cands[0].model_name.contains("705"));
     }
 
+    /// The wizard's second-radio probe: radio 1's port is OWNED (its live daemon holds it),
+    /// so it must produce no candidates at all — every one would burn a full no-answer baud
+    /// ladder before the sweep reached the port that can answer.
+    #[test]
+    fn an_excluded_port_produces_no_candidates() {
+        let ports = [
+            usb("COM5", "FT-991A", "Yaesu"),
+            usb("COM7", "FT-991A", "Yaesu"),
+        ];
+        let cands = candidates_from(&ports, 0, &["COM5".to_string()]);
+        assert!(!cands.is_empty(), "the free port still probes");
+        assert!(
+            cands.iter().all(|c| c.port_name == "COM7"),
+            "no candidate may target the owned port: {cands:?}"
+        );
+        // Case-insensitive: Windows port names arrive in either case.
+        let cands = candidates_from(&ports, 0, &["com5".to_string()]);
+        assert!(cands.iter().all(|c| c.port_name == "COM7"));
+    }
+
     #[test]
     fn bridge_chip_rig_uses_the_fallback_model() {
         let cands = candidates_from(
             &[usb("COM3", "CP2102 USB to UART Bridge", "Silicon Labs")],
             3073,
+            &[],
         );
         assert_eq!(cands.len(), 1);
         assert_eq!(
@@ -365,6 +405,7 @@ mod tests {
                 usb("COM3", "IC-7610 Serial Port A (CI-V)", "Icom Inc."),
             ],
             0,
+            &[],
         );
         assert_eq!(cands.first().map(|c| c.port_name.as_str()), Some("COM3"));
         assert_eq!(cands.last().map(|c| c.port_name.as_str()), Some("COM4"));
@@ -378,6 +419,7 @@ mod tests {
         let cands = candidates_from(
             &[usb("COM3", "CP2102 USB to UART Bridge", "Silicon Labs")],
             0,
+            &[],
         );
         // One candidate per (model, seed-baud) pair — the Icom models carry two bauds each.
         let expected: usize = COMMON_CAT_MODELS.iter().map(|(_, _, b)| b.len()).sum();

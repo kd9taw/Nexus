@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   safeguard applies to them regardless. Upgrading from 1.0.4 or earlier turns sharing on
   automatically; if you installed 1.0.5, flip it on once in Settings ▸ Radio.
 
+- **Two identical radios no longer get pointed at the same sound card.** With two rigs whose
+  USB audio shows up under the same name (two Yaesus both presenting "USB Audio CODEC"),
+  Detect used to suggest the first sound card for both — so radio 2 transmitted into radio 1's
+  audio, silently. Sound cards are now handed out one-per-radio: the worst case is the two
+  swapped (visible, and one question to fix), never shared. Auto-test also skips ports that
+  belong to your other configured radios instead of spending its time probing ports it can
+  never open.
+
 - **The radio-control helpers no longer listen on your whole network.** The `rigctld` and
   `rotctld` servers Nexus starts accepted connections from any machine on your LAN, while the
   share UI promised "this computer only". Both now bind localhost, matching the promise —

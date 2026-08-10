@@ -415,7 +415,7 @@ pub fn detect_rigs(
     audio_out: &[AudioDevice],
     os: HostOs,
 ) -> Vec<DetectedRig> {
-    ports
+    let mut rigs: Vec<DetectedRig> = ports
         .iter()
         .map(|p| {
             let (suggested_model, suggested_model_name) =
@@ -434,13 +434,91 @@ pub fn detect_rigs(
                 suggested_model_name,
                 chip,
                 driver: driver_hint(chip, os),
-                suggested_audio: pair_audio(&p.product, audio_in),
-                suggested_audio_out: pair_audio(&p.product, audio_out),
+                // Product-named pairing only — the generic fallback moved to the
+                // roster-wide assignment pass below, which is what stops two rigs
+                // sharing one codec.
+                suggested_audio: pair_audio_product(&p.product, audio_in),
+                suggested_audio_out: pair_audio_product(&p.product, audio_out),
                 interface: match_interface(p.vid, p.pid, &p.product, &p.manufacturer),
                 civ_side: civ_port_side(&p.product),
             }
         })
-        .collect()
+        .collect();
+    assign_generic_codecs(&mut rigs, audio_in, true);
+    assign_generic_codecs(&mut rigs, audio_out, false);
+    rigs
+}
+
+/// The roster-wide half of codec pairing — generic "USB Audio CODEC"-class devices handed
+/// out **1:1 across physical rigs**, never shared (setup re-envisioning, 2026-08-09).
+///
+/// The per-row fallback broke ties by list order, so a dual-Yaesu station — two identical
+/// codecs — paired BOTH rigs onto the first one, and radio 2 transmitted into radio 1's
+/// sound card with nothing on screen saying so. Handing the pool out 1:1 turns the worst
+/// case into a possible SWAP (visible; one binary question in the wizard fixes it) instead
+/// of a silent share. Three rules:
+///
+/// - A product-named pick (already made in `detect_rigs`) is OWNED: its device leaves the
+///   pool, and its rig consumes nothing further.
+/// - A dual-UART pair (`civ_side` tagged, same VID/PID — two rows describing ONE radio)
+///   consumes ONE device, assigned to both rows: the rows are alternatives, not two rigs.
+/// - When the pool runs dry the surplus rig pairs NOTHING — honest, and the operator picks
+///   by hand; sharing would recreate the bug this pass exists to kill.
+fn assign_generic_codecs(rigs: &mut [DetectedRig], audio: &[AudioDevice], input: bool) {
+    // The pool, best-tier first, original order within a tier (stable, like the old
+    // fallback) — minus every product-owned device.
+    let owned: Vec<String> = rigs
+        .iter()
+        .filter_map(|r| {
+            if input {
+                r.suggested_audio.clone()
+            } else {
+                r.suggested_audio_out.clone()
+            }
+        })
+        .collect();
+    let mut ranked: Vec<(u8, String)> = audio
+        .iter()
+        .filter_map(|a| generic_codec_tier(&a.label).map(|t| (t, a.name.clone())))
+        .filter(|(_, n)| !owned.contains(n))
+        .collect();
+    ranked.sort_by_key(|(t, _)| *t);
+    let mut pool = ranked.into_iter().map(|(_, n)| n);
+    // Hand out per PHYSICAL rig, in roster order. A dual-UART pair shares one grant,
+    // keyed by (vid, pid) — civ_port_side only tags the known dual-UART products, so
+    // two SEPARATE identical Icoms are not conflated (they enumerate as two pairs on
+    // distinct bus addresses but identical VID/PID; the tag + first-come grant keeps
+    // the pair case right and two-full-Icoms degrades to a shared suggestion, which
+    // the wizard's confirm step surfaces rather than hides).
+    let mut pair_grant: Vec<((u16, u16), Option<String>)> = Vec::new();
+    for i in 0..rigs.len() {
+        let already = if input {
+            rigs[i].suggested_audio.is_some()
+        } else {
+            rigs[i].suggested_audio_out.is_some()
+        };
+        if already {
+            continue; // product-owned
+        }
+        let grant = if rigs[i].civ_side.is_some() {
+            let key = (rigs[i].vid, rigs[i].pid);
+            match pair_grant.iter().find(|(k, _)| *k == key) {
+                Some((_, g)) => g.clone(),
+                None => {
+                    let g = pool.next();
+                    pair_grant.push((key, g.clone()));
+                    g
+                }
+            }
+        } else {
+            pool.next()
+        };
+        if input {
+            rigs[i].suggested_audio = grant;
+        } else {
+            rigs[i].suggested_audio_out = grant;
+        }
+    }
 }
 
 /// Pick the sound device most likely to be this rig's USB-Audio CODEC: prefer a
@@ -453,25 +531,33 @@ pub fn detect_rigs(
 /// ever matched, so zero-config rig-audio pairing silently did nothing on every Linux box
 /// until the picker started carrying descriptions alongside names.
 fn pair_audio(product: &str, audio: &[AudioDevice]) -> Option<String> {
-    let pn = normalize(product);
-    if !pn.is_empty() {
-        // Product pass: label AND name. On Linux the ALSA card id is often derived from
-        // the USB product string ("plughw:CARD=FTDX10,DEV=0"), so the name is a second
-        // real signal rather than noise.
-        if let Some(a) = audio
+    pair_audio_product(product, audio).or_else(|| {
+        // Generic fallback: LABEL ONLY, and by TIER. This pass also fills audioOut, where a
+        // false positive is the "TX out the PC speakers" class, so it stays narrow. For a
+        // ROSTER, `assign_generic_codecs` supersedes this (1:1 across rigs); this single-rig
+        // form remains for callers pairing one product in isolation.
+        audio
             .iter()
-            .find(|a| normalize(&format!("{} {}", a.label, a.name)).contains(&pn))
-        {
-            return Some(a.name.clone());
-        }
+            .filter_map(|a| generic_codec_tier(&a.label).map(|t| (t, a)))
+            .min_by_key(|(t, _)| *t)
+            .map(|(_, a)| a.name.clone())
+    })
+}
+
+/// The product-named half of [`pair_audio`]: a device whose label/name references the
+/// rig's product. This is the OWNED case in the roster-wide assignment.
+fn pair_audio_product(product: &str, audio: &[AudioDevice]) -> Option<String> {
+    let pn = normalize(product);
+    if pn.is_empty() {
+        return None;
     }
-    // Generic fallback: LABEL ONLY, and by TIER. This pass also fills audioOut, where a
-    // false positive is the "TX out the PC speakers" class, so it stays narrow.
+    // Product pass: label AND name. On Linux the ALSA card id is often derived from
+    // the USB product string ("plughw:CARD=FTDX10,DEV=0"), so the name is a second
+    // real signal rather than noise.
     audio
         .iter()
-        .filter_map(|a| generic_codec_tier(&a.label).map(|t| (t, a)))
-        .min_by_key(|(t, _)| *t)
-        .map(|(_, a)| a.name.clone())
+        .find(|a| normalize(&format!("{} {}", a.label, a.name)).contains(&pn))
+        .map(|a| a.name.clone())
 }
 
 /// How specifically does this sound-device name look like a rig-audio USB codec? Lower is
@@ -807,7 +893,7 @@ mod tests {
     #[test]
     fn a_digirig_lite_does_not_hijack_the_configured_model_in_the_port_sweep() {
         let ports = [port("COM7", 0x10C4, "Digirig Lite", "Digirig")];
-        let cands = crate::port_prober::candidates_from(&ports, 3073);
+        let cands = crate::port_prober::candidates_from(&ports, 3073, &[]);
         assert_eq!(cands.len(), 1, "one port, one candidate: {cands:?}");
         assert_eq!(cands[0].model, 3073, "the operator's own model: {cands:?}");
         assert!(
@@ -1087,5 +1173,80 @@ mod tests {
             pair_audio("FT-991A", &[wdev("Generic USB Audio")]).as_deref(),
             Some("Generic USB Audio"),
         );
+    }
+
+    /// THE two-codec collision (setup re-envisioning, 2026-08-09): a dual-Yaesu station
+    /// enumerates two identical "USB Audio CODEC" devices, and per-row pairing broke the
+    /// tie by list order BOTH times — radio 2 transmitted into radio 1's sound card,
+    /// silently. Generic codecs are handed out 1:1 across the roster: worst case is now a
+    /// SWAP (a visible, binary question), never a share (an invisible collision).
+    #[test]
+    fn two_identical_rigs_get_two_different_generic_codecs() {
+        let ports = vec![
+            port("COM5", 0x0403, "FT-991A", "Yaesu"),
+            port("COM7", 0x0403, "FT-991A", "Yaesu"),
+        ];
+        let audio = vec![wdev("USB AUDIO CODEC"), wdev("USB AUDIO CODEC (2)")];
+        let rigs = detect_rigs(&ports, &audio, &audio, HostOs::Windows);
+        assert_eq!(rigs.len(), 2);
+        let (a, b) = (&rigs[0].suggested_audio, &rigs[1].suggested_audio);
+        assert!(a.is_some() && b.is_some(), "both rigs pair SOMETHING");
+        assert_ne!(a, b, "two rigs must never share one codec: {a:?} vs {b:?}");
+        // The output direction is assigned independently but under the same 1:1 rule.
+        assert_ne!(rigs[0].suggested_audio_out, rigs[1].suggested_audio_out);
+    }
+
+    /// A dual-UART Icom is TWO rows describing ONE radio (civ_side tags the pair) — the
+    /// pair consumes ONE codec, leaving the second codec for the second physical rig.
+    #[test]
+    fn a_dual_uart_pair_consumes_one_codec_not_two() {
+        let ports = vec![
+            port("COM3", 0x10c4, "IC-9700 Serial Port A", "Icom"),
+            port("COM4", 0x10c4, "IC-9700 Serial Port B", "Icom"),
+            port("COM5", 0x0403, "FT-991A", "Yaesu"),
+        ];
+        let audio = vec![wdev("USB AUDIO CODEC"), wdev("USB AUDIO CODEC (2)")];
+        let rigs = detect_rigs(&ports, &audio, &audio, HostOs::Windows);
+        assert_eq!(rigs.len(), 3);
+        assert!(
+            rigs[0].civ_side.is_some() && rigs[1].civ_side.is_some(),
+            "harness: the Icom rows are recognised as a dual-UART pair"
+        );
+        // Both Icom rows point at the SAME codec (they are one radio; the operator keeps
+        // one row), and the Yaesu gets the OTHER one.
+        assert_eq!(rigs[0].suggested_audio, rigs[1].suggested_audio);
+        assert!(rigs[2].suggested_audio.is_some());
+        assert_ne!(rigs[0].suggested_audio, rigs[2].suggested_audio);
+    }
+
+    /// More rigs than codecs: the surplus rig pairs NOTHING — pairing nothing is honest,
+    /// pairing a device another rig owns is the bug this pass exists to kill.
+    #[test]
+    fn a_rig_beyond_the_codec_supply_pairs_nothing() {
+        let ports = vec![
+            port("COM5", 0x0403, "FT-991A", "Yaesu"),
+            port("COM7", 0x0403, "FT-891", "Yaesu"),
+        ];
+        let audio = vec![wdev("USB AUDIO CODEC")];
+        let rigs = detect_rigs(&ports, &audio, &audio, HostOs::Windows);
+        assert_eq!(rigs[0].suggested_audio.as_deref(), Some("USB AUDIO CODEC"));
+        assert_eq!(
+            rigs[1].suggested_audio, None,
+            "no second codec exists — say so instead of sharing"
+        );
+    }
+
+    /// A product-named device is OWNED by its rig: the generic pool must not hand it out
+    /// again, and the product-matched rig consumes nothing from the pool.
+    #[test]
+    fn a_product_matched_codec_is_removed_from_the_generic_pool() {
+        let ports = vec![
+            port("COM3", 0x10c4, "IC-705", "Icom"),
+            port("COM5", 0x0403, "FT-991A", "Yaesu"),
+        ];
+        let audio = vec![wdev("IC-705 Audio"), wdev("USB AUDIO CODEC")];
+        let rigs = detect_rigs(&ports, &audio, &audio, HostOs::Windows);
+        assert_eq!(rigs[0].suggested_audio.as_deref(), Some("IC-705 Audio"));
+        assert_eq!(rigs[1].suggested_audio.as_deref(), Some("USB AUDIO CODEC"));
     }
 }

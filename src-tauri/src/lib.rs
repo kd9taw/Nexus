@@ -7886,18 +7886,29 @@ async fn probe_cat_ports(
     {
         // Read the configured model, then release the lock for the seconds-long probe so
         // the UI's snapshot polling never blocks on it.
-        let model = {
+        let (model, exclude) = {
             let eng = engine_lock(&state);
             let s = eng.settings();
             // The radio being configured owns the fallback model. Fall back to the flat
             // mirror only when no radio was named (the setup wizard's single-radio path).
-            radio_id
+            let model = radio_id
                 .and_then(|id| s.radios.iter().find(|p| p.id == id).map(|p| p.rig_model))
-                .unwrap_or(s.rig_model)
+                .unwrap_or(s.rig_model);
+            // OTHER radios' serial ports are owned by their live daemons — probing one
+            // cannot succeed and burns a full no-answer baud ladder first (the wizard's
+            // second-radio probe was the reporter). The radio being configured keeps its
+            // own port probeable, so re-testing a misbehaving link still works.
+            let exclude: Vec<String> = s
+                .radios
+                .iter()
+                .filter(|p| Some(p.id) != radio_id && !p.serial_port.trim().is_empty())
+                .map(|p| p.serial_port.clone())
+                .collect();
+            (model, exclude)
         };
         // 4599: a private TCP port for the throwaway rigctld, distinct from the live one.
         let hit = tauri::async_runtime::spawn_blocking(move || {
-            tempo_audio::port_prober::probe_cat_ports(model, 4599)
+            tempo_audio::port_prober::probe_cat_ports(model, 4599, &exclude)
         })
         .await
         .map_err(|e| e.to_string())?;
