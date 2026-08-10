@@ -117,6 +117,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The wizard no longer asks what you want to do — you get everything.** The goals step
+  (pick DX chasing / POTA / contesting…) is gone: every mode and every section starts ON,
+  because Nexus is one program instead of six and there is nothing to unlock. The final step
+  is now just your license class, the optional starter channels, and the walkthrough offer.
+  The goal profiles still exist in Settings ▸ Appearance for anyone who wants a leaner app.
+
+- **The top bar got its space back.** On an ultrawide it used to pile everything against the
+  right edge (with a big dead zone after your callsign); in a snapped window the
+  Help/Light/Dark/Field chips wrapped to a stray row on the left. The bar is now two
+  deliberate rows — your station, frequency and the chip cluster (top-right, always) on the
+  first; the mode pills on their own full-width second row in the digital views — and the
+  pill buttons themselves slimmed down.
+
 - **The setup wizard now finds your radio instead of waiting to be told about it.** Open the
   rig step and the scan is already running — USB radios and FlexRadios on the network appear
   without pressing anything. A radio behind a generic USB cable (no model in its USB name) is

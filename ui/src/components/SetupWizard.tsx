@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
-import { PROFILE_LIST, PROFILES, type ProfileId } from '../features/profiles'
+import type { ProfileId } from '../features/profiles'
 import type { FeatureId, View } from '../features/registry'
 import type { AudioDevices, CatTestResult, DetectedRig, ImportStats, Settings } from '../types'
 import {
@@ -72,18 +72,6 @@ interface Props {
   onOpenGuide?: () => void
 }
 
-// Goal cards are the five goal profiles; "Everything" is its own one-click button.
-const GOALS = PROFILE_LIST.filter((p) => p.id !== 'everything')
-
-// Operating modes are SEPARATE from goals (you can chase DX on any mode). Digital is
-// always on (the FT8/FT4 cockpit is the core spine); Phone/CW/RTTY/SSTV are opt-in sections.
-const MODES: { id: FeatureId; label: string; blurb: string }[] = [
-  { id: 'phone', label: 'Phone (SSB)', blurb: 'Voice — PTT, sideband, panadapter' },
-  { id: 'cw', label: 'CW', blurb: 'Morse — keyboard + macros, any rig' },
-  { id: 'rtty', label: 'RTTY', blurb: 'Baudot — streaming decode, macros, FSK/AFSK' },
-  { id: 'sstv', label: 'SSTV', blurb: 'Slow-scan images — auto-decode into a gallery' },
-]
-
 // License class → sets the transmit-privilege lockout + the licensed-segment band dropdown.
 // "Outside the US" = Open (no transmit limits). Single-select; defaults to Open so the
 // lockout is opt-in (a US op declares their class to turn it on).
@@ -103,8 +91,8 @@ const gridOk = isValidGrid
  * 1. STATION (callsign + grid — the locator every feature computes from),
  * 2. RIG & AUDIO (auto-detect / Serial-vs-Network with Find-my-Flex + DAX / audio),
  * 3. LOG (optional ADIF import — seeds worked-before / needs / awards from your history),
- * 4. GOALS (the original goal-driven preset selector — never asks for
- *    self-rated experience).
+ * 4. FINISH (license class + optional starter packs + the walkthrough offer —
+ *    every feature starts ON; the goal picker is gone, operator 2026-08-09).
  * Everything stays changeable later in Settings; ESC/backdrop = skip-all
  * (marks seen, keeps the current feature set). Prefilled from settings so the
  * Settings ▸ re-open path acts as an editor. Built on the Radix [`Dialog`].
@@ -363,23 +351,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step])
 
-  // --- Step 3: goals / modes / license (the original screen) ---
-  const [selected, setSelected] = useState<Set<ProfileId>>(new Set())
-  const toggle = (id: ProfileId) =>
-    setSelected((s) => {
-      const n = new Set(s)
-      if (n.has(id)) n.delete(id)
-      else n.add(id)
-      return n
-    })
-  const [modes, setModes] = useState<Set<FeatureId>>(new Set())
-  const toggleMode = (id: FeatureId) =>
-    setModes((s) => {
-      const n = new Set(s)
-      if (n.has(id)) n.delete(id)
-      else n.add(id)
-      return n
-    })
+  // --- Step 3: license (goals/modes questions removed — everything starts on) ---
   const [license, setLicense] = useState('open')
 
   // --- Step 3: optional starter-channel packs. First run ONLY: snapshot whether the
@@ -443,15 +415,6 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     onApply(profileIds, view, modeIds, license, draft())
     if (wantGuide) onOpenGuide?.()
   }
-
-  const ids = [...selected]
-  const landing: View = ids.length === 1 ? PROFILES[ids[0]].landing : 'operate'
-  const goLabel =
-    ids.length === 0
-      ? 'Choose a goal'
-      : ids.length === 1
-        ? `Set up ${PROFILES[ids[0]].label}`
-        : `Set up ${ids.length} goals`
 
   const gridState = mygrid.trim() === '' ? 'empty' : gridOk(mygrid) ? 'ok' : 'bad'
   const dax = findDaxDevices(audio.input, audio.output)
@@ -541,7 +504,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       .finally(() => setCatTesting(false))
   }
 
-  const stepTitles = ['Your station', 'Your rig', 'Your log', 'Your goals']
+  const stepTitles = ['Your station', 'Your rig', 'Your log', 'Finish']
 
   return (
     <Dialog
@@ -991,46 +954,16 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
 
       {step === 3 && (
         <>
-          <h2 className="wizard-title">What do you mostly want to do?</h2>
+          <h2 className="wizard-title">You get everything</h2>
           <p className="wizard-sub">
-            Pick one or more — we’ll turn on the right features. You can change everything later in
-            Settings → Features.
+            Every mode and every section starts ON — FT8/FT4, Phone, CW, RTTY, SSTV, APRS,
+            satellites, the maps, the lot. Nexus is one program instead of six; there&rsquo;s
+            nothing to unlock. If you ever want a leaner app, trim sections in Settings.
           </p>
-
-          <div className="wizard-goals">
-            {GOALS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={`wizard-goal${selected.has(p.id) ? ' sel' : ''}`}
-                aria-pressed={selected.has(p.id)}
-                onClick={() => toggle(p.id)}
-              >
-                <span className="wizard-goal-label">{p.label}</span>
-                <span className="wizard-goal-blurb">{p.blurb}</span>
-              </button>
-            ))}
-          </div>
-
-          <h3 className="wizard-modes-title">Which modes do you operate?</h3>
-          <div className="wizard-modes">
-            <button type="button" className="wizard-mode sel locked" aria-pressed disabled>
-              <span className="wizard-mode-label">Digital (FT8/FT4)</span>
-              <span className="wizard-mode-blurb">Always on — the waterfall cockpit</span>
-            </button>
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                className={`wizard-mode${modes.has(m.id) ? ' sel' : ''}`}
-                aria-pressed={modes.has(m.id)}
-                onClick={() => toggleMode(m.id)}
-              >
-                <span className="wizard-mode-label">{m.label}</span>
-                <span className="wizard-mode-blurb">{m.blurb}</span>
-              </button>
-            ))}
-          </div>
+          {/* The goal-profile picker that used to live here is gone (operator, 2026-08-09:
+              "I want it to start with it all") — asking a newcomer to scope the app down
+              before they have seen it was the opposite of easy-and-powerful-defaults. The
+              profiles remain in Settings ▸ Appearance for anyone who wants a lean set. */}
 
           <h3 className="wizard-modes-title">What’s your license?</h3>
           <p className="wizard-license-sub">
@@ -1100,17 +1033,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       )}
 
       <div className="wizard-actions">
-        {step === 3 ? (
-          <button
-            type="button"
-            className="wizard-everything"
-            onClick={() => finish(['everything'], 'operate', [])}
-          >
-            Turn everything on (expert)
-          </button>
-        ) : (
-          <span />
-        )}
+        <span />
         <div className="wizard-actions-right">
           {step > 0 && (
             <button type="button" className="wizard-skip" onClick={() => setStep(step - 1)}>
@@ -1134,10 +1057,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             <button
               type="button"
               className="wizard-go"
-              disabled={ids.length === 0}
-              onClick={() => finish(ids, landing, [...modes])}
+              onClick={() => finish(['everything'], 'operate', [])}
             >
-              {goLabel}
+              Finish — everything on
             </button>
           )}
         </div>

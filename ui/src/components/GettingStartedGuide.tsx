@@ -39,7 +39,7 @@ const STEPS = [
 ]
 
 /** The real wizard's step titles, for the dot row inside the recreated panels. */
-const WIZ = ['Your station', 'Your rig', 'Your log', 'Your goals']
+const WIZ = ['Your station', 'Your rig', 'Your log', 'Finish']
 
 const NEXT_LABEL = [
   'Next — set up the radio →',
@@ -363,7 +363,7 @@ export function GettingStartedGuide({ onClose }: Props) {
                     </div>
                   </div>
 
-                  <WizardShot caption="Setup wizard ▸ step 4 · alongside goals and modes">
+                  <WizardShot caption="Setup wizard ▸ step 4 · everything starts on — this is the one question">
                     <p className="gsg-shot-h3">What&rsquo;s your license?</p>
                     <p className="wizard-license-sub">
                       Sets your transmit privileges — the app parks the dial in your licensed band

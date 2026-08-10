@@ -7,10 +7,8 @@ judgement (that's [Awards](awards-journey.md)), sets no goal (that's Journey),
 and has no controls at all — no filter, no date range, no export. Every figure
 on the page counts your **whole** logbook unless this page says otherwise.
 
-Stats is on out of the box: a fresh install that skips the first-run wizard has
-it, and the wizard's Goals step keeps it under **DX chasing & awards** and
-**Everything (expert)** — **Just getting started**, **Contesting**,
-**POTA / SOTA** and **6m / VHF** leave it off.
+Stats is on out of the box: a fresh install has it whether you finish the
+first-run wizard or skip it — the wizard turns everything on.
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features) turns it on
 or off any time. If Stats is off when you log your first QSO, Nexus offers it
 once as a nudge — it never switches itself on.

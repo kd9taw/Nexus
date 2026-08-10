@@ -8,9 +8,8 @@ deliberately not a tracker: there is no periodic beaconing, no GPS input, and no
 digipeating. The header says the scope in one line: *"AFSK-1200 packet — decode
 positions/messages, send a beacon."*
 
-APRS ships enabled, but no goal profile in the first-run wizard turns it on and
-the wizard's "which modes?" step does not list it — so if you picked a goal
-there, switch APRS on in
+APRS ships enabled — the wizard turns everything on; there is no goal or mode
+picker to miss it in. If you have trimmed sections, switch APRS back on in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the APRS cockpit at 1024×768 or wider: the left rail (beacon form, message compose, station table with mixed RF/net rows) beside the map at its default local zoom with a dozen symbols plotted, header showing "144.390 · N. America", "● Monitoring (auto)" and a green "N decoded" chip -->

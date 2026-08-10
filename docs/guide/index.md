@@ -85,9 +85,9 @@ multi-monitor shack.
 
 ## First run
 
-On first launch a three-step wizard — Station, Rig, Goals — gets you on the air.
-Every step is skippable and everything it sets stays editable later in Settings.
-The Goals step shapes which sections appear by default; you can turn any section
+On first launch a four-step wizard — Station, Rig, Log, Finish — gets you on the
+air. Every step is skippable and everything it sets stays editable later in
+Settings. Every section and mode starts ON; you can turn any section
 on or off in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 If you'd rather set things by hand, the
 [Settings reference](settings-reference.md) covers every field.

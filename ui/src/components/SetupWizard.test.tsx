@@ -77,7 +77,7 @@ describe('SetupWizard ADIF import step', () => {
     renderWizard()
     gotoLogStep()
     clickNext() // 2 log → 3 goals, no file chosen
-    expect(screen.getByText(/What do you mostly want to do/)).toBeTruthy()
+    expect(screen.getByText(/You get everything/)).toBeTruthy()
     expect(importAdif).not.toHaveBeenCalled()
   })
 })
@@ -145,7 +145,7 @@ describe('SetupWizard rig-step pipeline (setup re-envisioning, 2026-08-09)', () 
     // silent-VOX default is dead on every wizard-configured rig.
     clickNext() // → log
     clickNext() // → goals
-    fireEvent.click(screen.getByRole('button', { name: /Turn everything on/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
     const draft = onApply.mock.calls[0][4]
     expect(draft.rigModel).toBe(3088)
     expect(draft.baud).toBe(19200)
@@ -248,7 +248,7 @@ describe('SetupWizard starter-pack offer', () => {
     expect(screen.getByText(/Start with some channels/)).toBeTruthy()
     // "Turn everything on (expert)" completes setup (no goal selection needed) — it must
     // seed the packs checked by default (VHF/UHF Calling + HF Digital).
-    fireEvent.click(screen.getByRole('button', { name: /Turn everything on/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
     expect(onApply).toHaveBeenCalledTimes(1)
     const mems = memoriesStore.get().memories
     expect(mems.some((m) => m.rxMhz === 146.52)).toBe(true) // na-calling: 2m FM Calling
@@ -271,24 +271,20 @@ describe('SetupWizard starter-pack offer', () => {
     clickNext()
     clickNext()
     clickNext()
-    expect(screen.getByText(/What do you mostly want to do/)).toBeTruthy() // on the goals step
+    expect(screen.getByText(/You get everything/)).toBeTruthy() // on the goals step
     expect(screen.queryByText(/Start with some channels/)).toBeNull()
   })
 
-  it('force-enables RTTY and SSTV when checked on the goals step', () => {
+  it('finishes with the everything profile — no goal or mode questions asked', () => {
+    // The goal/mode pickers are gone (operator, 2026-08-09: "start with it all"): the
+    // finish applies the everything profile, so every mode is on without being asked for.
     const { onApply } = renderWizard()
     gotoGoals()
-    // Pick a goal so the completion button enables; modes ride on top of the profile.
-    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-goal')!)
-    // Anchor to the start of the accessible name so these match the mode toggles, not a
-    // starter-pack offer whose name happens to list "RTTY"/"SSTV" (e.g. the digital pack).
-    fireEvent.click(screen.getByRole('button', { name: /^RTTY/ }))
-    fireEvent.click(screen.getByRole('button', { name: /^SSTV/ }))
-    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-go')!)
+    expect(screen.queryByText(/What do you mostly want to do/)).toBeNull()
+    expect(screen.queryByText(/Which modes do you operate/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
     expect(onApply).toHaveBeenCalledTimes(1)
-    const modes = onApply.mock.calls[0][2] as string[]
-    expect(modes).toContain('rtty')
-    expect(modes).toContain('sstv')
+    expect(onApply.mock.calls[0][0]).toEqual(['everything'])
   })
 })
 
@@ -319,10 +315,9 @@ describe('SetupWizard walkthrough offer', () => {
     const { onApply, onOpenGuide } = renderWizard({ guide: true })
     gotoGoals()
     expect(screen.getByText(/Want a walkthrough/)).toBeTruthy()
-    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-goal')!)
     fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ })) // on
     fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ })) // off again
-    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-go')!)
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
     expect(onApply).toHaveBeenCalledTimes(1)
     expect(onOpenGuide).not.toHaveBeenCalled()
   })
@@ -330,9 +325,8 @@ describe('SetupWizard walkthrough offer', () => {
   it('opens the guide after applying, on the goal path', () => {
     const { onApply, onOpenGuide } = renderWizard({ guide: true })
     gotoGoals()
-    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-goal')!)
     fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ }))
-    fireEvent.click(document.querySelector<HTMLButtonElement>('.wizard-go')!)
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
     expect(onApply).toHaveBeenCalledTimes(1)
     expect(onOpenGuide).toHaveBeenCalledTimes(1)
   })
@@ -341,7 +335,7 @@ describe('SetupWizard walkthrough offer', () => {
     const { onApply, onOpenGuide } = renderWizard({ guide: true })
     gotoGoals()
     fireEvent.click(screen.getByRole('button', { name: /^Show me Getting started/ }))
-    fireEvent.click(screen.getByRole('button', { name: /Turn everything on/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
     expect(onApply).toHaveBeenCalledTimes(1)
     expect(onOpenGuide).toHaveBeenCalledTimes(1)
   })
