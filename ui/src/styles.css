@@ -3797,17 +3797,30 @@ body.resizing {
 .topbar {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  /* Distribute slack BETWEEN the groups rather than one margin-left:auto push on the
-     readout (ultrawide field report, 2026-08-09: a huge hole after the brand and the
-     Help/Light/Dark/Field cluster crushed against the window edge — the operator could
-     not find the Field chip). space-between keeps every wrapped row balanced too. */
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: 10px var(--space-4);
+  /* TWO DELIBERATE ROWS (ultrawide + snapped-window field reports, 2026-08-09): a
+     single wrapping bar dropped its Help/Light/Dark/Field tail onto a lone left-aligned
+     second row and the operator lost the Field chip twice in one evening. The bar is a
+     COLUMN of .topbar-row lines; TopBar.rows.test.tsx computes the contract. */
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
+}
+
+.topbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* Wrap stays as the floor-safety (1024 and pinned-zoom): content never clips. */
   flex-wrap: wrap;
+}
+/* The LAST group of a row hugs the right edge — chips top-right at every width, and
+   still right even when a narrow window wraps them onto their own line (auto margins
+   win within a wrapped flex line, where justify-content cannot reach). */
+.topbar-row > .topbar-group:last-child {
+  margin-left: auto;
 }
 
 .topbar-group {

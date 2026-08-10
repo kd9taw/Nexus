@@ -237,6 +237,12 @@ export function TopBar({
   const NO_TX_WHY = 'This mode is receive-only in Nexus — it decodes but does not transmit'
   return (
     <header className={`topbar${hideFrequencyControl ? ' topbar--no-readout' : ''}`}>
+      {/* TWO DELIBERATE ROWS (ultrawide + snapped-window field reports, 2026-08-09): a
+          single flex-wrap bar wrapped its TAIL group (Help/Light/Dark/Field) to a lone
+          left-aligned second row — the Field chip kept vanishing on the operator. Row 1:
+          identity, readout, RX/TX cluster, and the chip cluster pinned top-right at every
+          width. Row 2, digital views only: the mode pills, full-width. */}
+      <div className="topbar-row">
       <div className="topbar-group brand">
         <span className="logo-wrap">
           <span className="logo">Nexus</span>
@@ -396,8 +402,57 @@ export function TopBar({
         )}
       </div>
 
+      <div className="topbar-group">
+        {/* Help lives in the one group that renders in every section — the
+            cockpits hide the TX cluster, the readout and the digital chrome,
+            but never this one, so the guide is one click away everywhere. */}
+        {/* WHO IS AT THE KEY (#25). Shown ONLY when an operator is set — that is the
+            multi-op case, and for the single-op station that is nearly everyone this costs
+            no width at all. It has to be somewhere always visible rather than in Settings,
+            because a wrong operator is silent: nothing misbehaves, and it is discovered at
+            submission when the log is already wrong. Same group as Help, the one group no
+            cockpit hides. */}
+        {operator && operator.trim() !== '' && (
+          <Menu
+            trigger={
+              <button
+                type="button"
+                className="theme-chip op-chip"
+                title={`Operating as ${operator} — click to change who is at the key`}
+              >
+                OP {operator}
+              </button>
+            }
+            items={[
+              // The roster is the operators this log has already seen, so the second and
+              // every later seat swap is a click. The first one is still typed, in Settings.
+              ...(operatorRoster ?? [])
+                .filter((o) => o.toUpperCase() !== operator.toUpperCase())
+                .map((o) => ({
+                  label: `Switch to ${o}`,
+                  onSelect: () => onSetOperator?.(o),
+                })),
+              {
+                label: 'Single operator (clear)',
+                onSelect: () => onSetOperator?.(''),
+              },
+            ]}
+          />
+        )}
+        <Menu
+          trigger={
+            <button type="button" className="theme-chip" title="Help">
+              Help
+            </button>
+          }
+          items={[{ label: 'Getting started', onSelect: onOpenGuide }]}
+        />
+        <ThemeSwitcher theme={theme} onChange={onThemeChange} field={field} onFieldChange={onFieldChange} />
+      </div>
+      </div>
+
       {!hideDigitalChrome && (
-      <>
+      <div className="topbar-row topbar-row-pills">
       <div className="topbar-group tier-toggle" role="group" aria-label="Link tier">
         {TIER_PILLS.map((p) => (
           <button
@@ -451,57 +506,10 @@ export function TopBar({
           Tx 2nd <small>odd</small>
         </button>
       </div>
-
-      </>
+      </div>
       )}
 
-      <div className="topbar-group">
-        {/* Help lives in the one group that renders in every section — the
-            cockpits hide the TX cluster, the readout and the digital chrome,
-            but never this one, so the guide is one click away everywhere. */}
-        {/* WHO IS AT THE KEY (#25). Shown ONLY when an operator is set — that is the
-            multi-op case, and for the single-op station that is nearly everyone this costs
-            no width at all. It has to be somewhere always visible rather than in Settings,
-            because a wrong operator is silent: nothing misbehaves, and it is discovered at
-            submission when the log is already wrong. Same group as Help, the one group no
-            cockpit hides. */}
-        {operator && operator.trim() !== '' && (
-          <Menu
-            trigger={
-              <button
-                type="button"
-                className="theme-chip op-chip"
-                title={`Operating as ${operator} — click to change who is at the key`}
-              >
-                OP {operator}
-              </button>
-            }
-            items={[
-              // The roster is the operators this log has already seen, so the second and
-              // every later seat swap is a click. The first one is still typed, in Settings.
-              ...(operatorRoster ?? [])
-                .filter((o) => o.toUpperCase() !== operator.toUpperCase())
-                .map((o) => ({
-                  label: `Switch to ${o}`,
-                  onSelect: () => onSetOperator?.(o),
-                })),
-              {
-                label: 'Single operator (clear)',
-                onSelect: () => onSetOperator?.(''),
-              },
-            ]}
-          />
-        )}
-        <Menu
-          trigger={
-            <button type="button" className="theme-chip" title="Help">
-              Help
-            </button>
-          }
-          items={[{ label: 'Getting started', onSelect: onOpenGuide }]}
-        />
-        <ThemeSwitcher theme={theme} onChange={onThemeChange} field={field} onFieldChange={onFieldChange} />
-      </div>
+
     </header>
   )
 }
