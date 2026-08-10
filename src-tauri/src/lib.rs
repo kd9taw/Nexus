@@ -9539,6 +9539,24 @@ fn set_frequency(
     Ok(eng.snapshot())
 }
 
+/// An SSTV strip pick / dial commit: claim the Phone section (SSTV rides Phone) and QSY
+/// atomically, so the radio loop never applies the OLD section's mode policy at the new dial
+/// (picking 20 m SSTV from RTTY used to land DATA-L at 14.230). Persists like `set_frequency`.
+#[tauri::command(async)]
+fn sstv_tune(
+    state: State<'_, SharedEngine>,
+    dial_mhz: f64,
+    band: String,
+    mode: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.sstv_tune(dial_mhz, &band, &mode);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist frequency: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Park the dial on one of the APP's OWN fixed channels — the ISS SSTV auto-arm's 145.800 FM.
 /// Identical to `set_frequency` on the radio; it differs only in what the per-(band, mode)
 /// dial memory makes of it. An app-driven auto-tune is not the operator's dial in that mode,
@@ -15422,6 +15440,7 @@ pub fn run() {
             set_license_class,
             get_licensed_band_plan,
             set_frequency,
+            sstv_tune,
             pick_band,
             tune_channel,
             set_operating_mode,
@@ -16100,6 +16119,7 @@ mod tests {
             tier: None,
             grid_rarity: None,
             lotw_user: false,
+            freq_hz: None,
         };
         let spots = |stations: &[tempo_app::dto::Station], clock: &SlotClock, period: f64| {
             roster_local_spots(
@@ -16186,6 +16206,7 @@ mod tests {
             tier: None,
             grid_rarity: None,
             lotw_user: false,
+            freq_hz: None,
         };
         // The renumbering, measured rather than asserted from memory: the FT4 index of
         // 17:00 runs ahead of the FT8 index of 18:00, which is impossible on one clock.

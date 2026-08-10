@@ -72,6 +72,12 @@ pub struct Station {
     /// false when the user-activity file hasn't been fetched (honest default).
     #[serde(default)]
     pub lotw_user: bool,
+    /// Audio offset (Hz) of the station's last decode — where on the waterfall they were
+    /// heard. A roster click passes it so RX/TX move there, exactly like a Band Activity
+    /// double-click (`call_station_ctx` then applies the Hold-Tx rule). `None` when the
+    /// station is known only from free-text attribution.
+    #[serde(default)]
+    pub freq_hz: Option<i32>,
 }
 
 /// A single decoded signal from the most recent RX slot, for the live decode

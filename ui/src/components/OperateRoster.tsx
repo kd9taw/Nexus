@@ -43,7 +43,10 @@ interface Props {
    * be both, and then the working treatment wins. */
   workingCall?: string | null
   onSelect: (call: string) => void
-  onCall: (call: string, grid?: string) => void
+  /** Work the station. Same positional signature as the cockpit's shared handler: the roster
+   * passes the station's LAST-HEARD offset in the `freq` slot so RX/TX move onto them exactly
+   * like a Band Activity double-click (the engine then applies the Hold-Tx rule). */
+  onCall: (call: string, grid?: string, message?: string, snr?: number, freq?: number) => void
   /** Session-only ignore set (Alt-double-click) — ignored calls render dimmed. */
   ignoredCalls?: ReadonlySet<string>
   /** Toggle a call in/out of the session ignore set (Alt-double-click). */
@@ -245,7 +248,7 @@ export function OperateRoster({
     const s = rows[i]?.s
     if (!s) return
     if (mods.alt) onToggleIgnore?.(s.call)
-    else if (mods.shift) onCall(s.call, s.grid ?? undefined)
+    else if (mods.shift) onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
     else onSelect(s.call)
   })
 
@@ -356,7 +359,9 @@ export function OperateRoster({
                 }}
                 onDoubleClick={(e) =>
                   // Alt-double-click toggles the session ignore (stock WSJT-X).
-                  e.altKey && onToggleIgnore ? onToggleIgnore(s.call) : onCall(s.call, s.grid ?? undefined)
+                  e.altKey && onToggleIgnore
+                    ? onToggleIgnore(s.call)
+                    : onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
                 }
                 title={
                   ignoredRow

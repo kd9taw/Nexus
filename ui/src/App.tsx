@@ -21,6 +21,7 @@ import {
   setChatCq as apiSetChatCq,
   resumeChatCq as apiResumeChatCq,
   setFrequency as apiSetFrequency,
+  sstvTune as apiSstvTune,
   tuneChannel as apiTuneChannel,
   aprsTune,
   setMode as apiSetMode,
@@ -1213,6 +1214,22 @@ export default function App() {
     (dialMhz: number, band: string, mode: string) => {
       void withErrorToast(
         () => apiSetFrequency(dialMhz, band, mode),
+        'Could not set frequency',
+      ).then((s) => {
+        if (s) setSnap(s)
+      })
+    },
+    [],
+  )
+
+  // SSTV's tune: same signature, but it also CLAIMS the Phone section (SSTV rides Phone)
+  // atomically with the QSY. Entering the SSTV view deliberately asserts nothing (RX-first),
+  // so without this a strip pick left the previous section's mode policy commanding the rig —
+  // picking 20 m SSTV from RTTY landed DATA-L at 14.230.
+  const handleSstvTune = useCallback(
+    (dialMhz: number, band: string, mode: string) => {
+      void withErrorToast(
+        () => apiSstvTune(dialMhz, band, mode),
         'Could not set frequency',
       ).then((s) => {
         if (s) setSnap(s)
@@ -2650,7 +2667,7 @@ export default function App() {
                 theme={theme}
                 onSnap={setSnap}
                 active={effectiveView === 'sstv'}
-                onSetFrequency={handleSetFrequency}
+                onSetFrequency={handleSstvTune}
                 onSetTxEnabled={handleSetTxEnabled}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={sstvPanels}

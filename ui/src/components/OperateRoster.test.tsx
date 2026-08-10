@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { OperateRoster, freshness } from './OperateRoster'
 import type { NeedAlert, NeedTag, Station } from '../types'
 
@@ -51,6 +51,47 @@ describe('OperateRoster recency window', () => {
     expect(screen.queryByText('FRESH3')).not.toBeNull()
     expect(screen.queryByText('STALE4')).toBeNull()
     expect(screen.queryByText('STALE99')).toBeNull()
+  })
+})
+
+describe('OperateRoster works a station where they were heard', () => {
+  it('passes the last-heard offset in the freq slot on a work double-click', () => {
+    // The field report: a roster click started the QSO but never moved the waterfall
+    // marks, unlike a Band Activity double-click. The roster row carries the station's
+    // last decode offset, and the work gesture must hand it to the shared handler in
+    // the SAME positional slot Band Activity uses (freq is 5th; message/snr stay
+    // undefined — there is no clicked line here).
+    const onCall = vi.fn()
+    render(
+      <OperateRoster
+        stations={[{ ...station('RF9C', 100), freqHz: 1512 }]}
+        myGrid="EN52"
+        currentSlot={100}
+        needByCall={new Map()}
+        selectedCall={null}
+        onSelect={() => {}}
+        onCall={onCall}
+      />,
+    )
+    fireEvent.dblClick(screen.getByText('RF9C'))
+    expect(onCall).toHaveBeenCalledWith('RF9C', 'EN52', undefined, undefined, 1512)
+  })
+
+  it('passes undefined freq for a station heard only by free-text attribution', () => {
+    const onCall = vi.fn()
+    render(
+      <OperateRoster
+        stations={[station('K2DEF', 100)]}
+        myGrid="EN52"
+        currentSlot={100}
+        needByCall={new Map()}
+        selectedCall={null}
+        onSelect={() => {}}
+        onCall={onCall}
+      />,
+    )
+    fireEvent.dblClick(screen.getByText('K2DEF'))
+    expect(onCall).toHaveBeenCalledWith('K2DEF', 'EN52', undefined, undefined, undefined)
   })
 })
 

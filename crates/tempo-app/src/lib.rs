@@ -838,6 +838,7 @@ impl AppState {
             tier: h.mode.map(Tier::from_mode_kind),
             // Stamped by the engine from the grid-rarity resolver; None here.
             grid_rarity: None,
+            freq_hz: h.freq_hz,
         }
     }
 
@@ -1590,6 +1591,7 @@ mod tests {
             "lastHeardSlot",
             "heardCount",
             "presence",
+            "freqHz",
         ] {
             assert!(
                 station.get(key).is_some(),

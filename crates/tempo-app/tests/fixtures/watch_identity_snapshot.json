@@ -121,6 +121,7 @@
     {
       "call": "N7GHI",
       "country": null,
+      "freqHz": 1500,
       "grid": "DM79",
       "gridRarity": null,
       "heardCount": 1,

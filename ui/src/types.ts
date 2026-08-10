@@ -932,6 +932,10 @@ export interface Station {
   gridRarity?: GridRarity | null
   /** Uploads to LoTW within the recency window (see DecodeRow.lotwUser). */
   lotwUser?: boolean
+  /** Audio offset (Hz) of the station's last decode — where they were heard on the
+   * waterfall. A roster click passes it so RX/TX move there like a Band Activity
+   * double-click. Null for stations known only from free-text attribution. */
+  freqHz?: number | null
 }
 
 export interface ContestEvent {

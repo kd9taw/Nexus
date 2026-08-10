@@ -22,6 +22,12 @@ pub struct HeardStation {
     /// `None` for DX1's robust path or an unknown companion mode. Lets the UI show only
     /// Tempo-protocol (FT1) stations in the Tempo roster while Operate shows all.
     pub mode: Option<ModeKind>,
+    /// Audio offset (Hz) of the station's LAST decode — where on the waterfall they were
+    /// heard, so a roster click can move RX/TX there like a Band Activity double-click.
+    /// Whole Hz (`Eq` needs an integer; sub-Hz is meaningless here). `None` for stations
+    /// known only from free-text attribution ([`mark_heard`](Roster::mark_heard) carries
+    /// no frequency).
+    pub freq_hz: Option<i32>,
 }
 
 /// Roster of heard stations, keyed by callsign.
@@ -61,11 +67,13 @@ impl Roster {
                 last_heard_slot: slot,
                 heard_count: 0,
                 mode: d.mode,
+                freq_hz: None,
             });
         entry.snr = d.snr;
         entry.last_heard_slot = slot;
         entry.heard_count += 1;
         entry.mode = d.mode; // last-heard protocol wins (FT8→FT1 re-tags as Tempo)
+        entry.freq_hz = Some(d.freq.round() as i32); // last heard HERE on the waterfall
         if grid.is_some() {
             entry.grid = grid;
         }
@@ -90,11 +98,13 @@ impl Roster {
                 last_heard_slot: slot,
                 heard_count: 0,
                 mode,
+                freq_hz: None,
             });
         entry.snr = snr;
         entry.last_heard_slot = slot;
         entry.heard_count += 1;
         entry.mode = mode;
+        // No freq: free text carries none — keep the offset from the last structured decode.
     }
 
     pub fn get(&self, call: &str) -> Option<&HeardStation> {
@@ -165,6 +175,27 @@ mod tests {
         d2.mode = Some(ModeKind::TempoFast);
         r.observe(&d2, 2);
         assert_eq!(r.get("W9XYZ").unwrap().mode, Some(ModeKind::TempoFast));
+    }
+
+    #[test]
+    fn remembers_where_a_station_was_last_heard() {
+        // The roster carries each station's last decode offset so a roster click can move
+        // RX/TX onto them like a Band Activity double-click (the field report: clicking the
+        // Call Roster didn't move the waterfall marks). Last decode wins — stations QSY.
+        let mut r = Roster::new();
+        let mut d = dec("CQ W9XYZ EN37", -5);
+        d.freq = 1512.4;
+        r.observe(&d, 1);
+        assert_eq!(r.get("W9XYZ").unwrap().freq_hz, Some(1512));
+        d.freq = 655.0;
+        r.observe(&d, 2);
+        assert_eq!(r.get("W9XYZ").unwrap().freq_hz, Some(655));
+        // Free-text attribution carries no frequency — the structured offset stands.
+        r.mark_heard("W9XYZ", 3, -7, None);
+        assert_eq!(r.get("W9XYZ").unwrap().freq_hz, Some(655));
+        // A station never heard structurally has no offset to claim.
+        r.mark_heard("K2DEF", 3, -9, None);
+        assert_eq!(r.get("K2DEF").unwrap().freq_hz, None);
     }
 
     #[test]

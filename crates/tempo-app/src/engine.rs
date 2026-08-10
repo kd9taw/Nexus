@@ -4499,6 +4499,30 @@ impl Engine {
         self.work_call = None; // the command that has the call sets it via note_work_call
     }
 
+    /// Tune to an SSTV calling channel: claim the PHONE section (SSTV rides Phone — idle is
+    /// plain SSB so listening and live voice use the mic/speaker; the DATA submode is
+    /// commanded only while an image is queued or in flight, see `rig_mode_effective`) and
+    /// QSY, both under the caller's one lock — the `work_spot` shape. ENTERING the SSTV view
+    /// deliberately asserts nothing (RX-first: SSTV decodes wherever you're tuned), so
+    /// without this verb a strip pick left the PREVIOUS section's policy commanding the rig
+    /// at the new dial — the field report: picking 20 m SSTV from the RTTY section landed
+    /// DATA-L at 14.230, because RTTY-AFSK's PKTLSB is LSB-side on every band.
+    pub fn sstv_tune(&mut self, dial_mhz: f64, band: &str, mode: &str) {
+        self.set_operating_mode("phone", false);
+        self.set_frequency(dial_mhz, band, mode);
+        // A cockpit sideband override describes the section being LEFT, not this channel
+        // (work_spot's rule) — without this a stale Phone-cockpit FM pick would key FM
+        // onto an SSB image frequency.
+        self.sideband_override = None;
+        // An FM calling channel (145.800 ISS downlink, 144.500 VHF calling) must command
+        // FM whatever the station-wide `phone_mode` says — the same re-arm as the repeater
+        // tune, because `set_frequency` just cleared the hold. Dial-gated ≥ 29 MHz inside
+        // `rig_mode_effective`, so it can never drag FM down to HF.
+        if mode.eq_ignore_ascii_case("fm") {
+            self.fm_channel = true;
+        }
+    }
+
     /// As [`work_spot_split`], optionally switching the FT8/FT4 tier FIRST — under the SAME
     /// lock, so `set_tier`'s WSJT-X-parity retune to the tier's default dial is a transient
     /// the radio loop can never observe: the spot's exact frequency is the only dial that
@@ -14336,6 +14360,67 @@ mod tests {
         // Image done → plain USB restores so the next voice PTT keys the mic, not the codec.
         e.set_sstv_sending(false);
         assert_eq!(e.rig_mode_effective(), "USB", "idle again → plain USB");
+    }
+
+    #[test]
+    fn an_sstv_channel_pick_claims_the_phone_section() {
+        // THE 20 m DATA-L REPORT (operator, 2026-08-10). Entering the SSTV view asserts
+        // nothing on the rig (RX-first, by design) — so a strip pick used to leave the
+        // section being LEFT in charge of the mode: RTTY-AFSK's PKTLSB is LSB-side on
+        // EVERY band, and picking 20 m SSTV from the RTTY section landed DATA-L at 14.230.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_frequency(7.080, "40m", "LSB");
+        e.set_operating_mode("rtty", false);
+        // The leak, pinned as the contrast: a bare QSY changes no section, so the RTTY
+        // policy still commands a DATA-L word at an image frequency.
+        e.set_frequency(14.230, "20m", "USB");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTLSB",
+            "a bare QSY leaves the old section's policy in charge — the leak sstv_tune exists for"
+        );
+        // The fix: the SSTV pick is operating intent — claim Phone + QSY under one lock.
+        e.sstv_tune(14.230, "20m", "USB");
+        assert_eq!(
+            e.settings.operating_mode,
+            crate::settings::OperatingMode::Phone,
+            "SSTV rides Phone"
+        );
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "idle SSTV listens (and voices) in plain USB — DATA is only commanded while an image is in flight"
+        );
+        assert!(
+            (e.settings.dial_mhz - 14.230).abs() < 1e-9,
+            "the pick's dial stands"
+        );
+        // And the DATA half still engages exactly as before once an image is queued.
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTUSB",
+            "image queued → DATA-U on a USB channel"
+        );
+    }
+
+    #[test]
+    fn an_sstv_fm_channel_commands_fm_and_a_later_qsy_releases_it() {
+        // The plan's FM rows (145.800 ISS downlink, 144.500 VHF calling) must command FM
+        // whatever the station-wide phone_mode says — same mechanism as a repeater channel.
+        // And the hold must NOT follow the operator off the channel (the aprs_fm rule).
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("cw", false);
+        e.sstv_tune(145.800, "2m", "FM");
+        assert_eq!(e.rig_mode_effective(), "FM", "ISS SSTV downlink is FM");
+        e.sstv_tune(14.230, "20m", "USB");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "FM never lingers onto an HF image channel"
+        );
     }
 
     #[test]

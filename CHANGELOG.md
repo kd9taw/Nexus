@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Picking an SSTV frequency now puts the rig in the right mode, whatever screen you came
+  from.** The SSTV view deliberately doesn't touch the radio when you open it (it decodes
+  wherever you're tuned) — but that meant picking a frequency from its band strip left the
+  *previous* screen's mode policy in charge, so arriving from RTTY could land 20 m SSTV in
+  DATA-L instead of USB. An SSTV pick now claims the Phone section and tunes in one step:
+  you listen (and talk) in plain USB/LSB, and the DATA mode is only commanded while an image
+  is actually transmitting — then it hands the mic back. The ISS 145.800 downlink and the 2 m
+  FM calling channel now correctly command FM too.
+- **Double-clicking a station in the Call Roster now moves your RX/TX to where they were
+  heard** — exactly like a Band Activity double-click. The roster remembers each station's
+  last decode offset; Hold Tx is respected as always (RX follows, TX stays put when held).
+
 - **Sharing your radio with VarAC, WSJT-X or a logger is now solid — and on by default.**
   The address under Settings ▸ Radio ▸ *Share this radio* is now answered by Nexus itself from
   its live radio state, instantly. Until now it pointed at the underlying `rigctld`: on a busy

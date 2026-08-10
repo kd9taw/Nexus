@@ -947,6 +947,17 @@ export async function setFrequency(
   return invoke<AppSnapshot>('set_frequency', { dialMhz, band, mode })
 }
 
+/** An SSTV strip pick / dial commit: claims the Phone section (SSTV rides Phone) and QSYs
+ * atomically, so the previous section's mode policy can't keep commanding the rig at the new
+ * dial (picking 20 m SSTV from RTTY used to land DATA-L at 14.230). */
+export async function sstvTune(
+  dialMhz: number,
+  band: string,
+  mode: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('sstv_tune', { dialMhz, band, mode })
+}
+
 /** Park the dial on one of the APP's OWN fixed channels (the ISS SSTV auto-arm's 145.800 FM).
  * Identical to setFrequency on the radio; it differs only in what the per-(band, mode) dial
  * memory makes of it — an app-driven auto-tune is not the operator's dial in that mode, so it
