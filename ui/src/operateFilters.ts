@@ -34,6 +34,19 @@ export const DEFAULT_ROSTER_FILTERS: RosterFilters = { neededOnly: false, hideWo
 
 export const ROSTER_FILTER_KEY = 'nexus.roster.filters'
 export const DECODE_FILTER_KEY = 'nexus.decodes.filter'
+export const DECODE_HIDE_B4_KEY = 'nexus.decodes.hideB4'
+
+/** The Band Activity "hide B4" MODIFIER — ANDed with whatever chip is active (the field
+ *  ask: "CQ only, but exclude B4"). A modifier rather than another one-of-N chip, the same
+ *  shape as the country exclude; it deliberately does not apply while the B4 chip itself
+ *  is active (that chip's whole job is showing worked stations). */
+export function loadDecodeHideB4(): boolean {
+  return surfaceGet(DECODE_HIDE_B4_KEY) === '1'
+}
+
+export function saveDecodeHideB4(on: boolean): void {
+  surfaceSet(DECODE_HIDE_B4_KEY, on ? '1' : '0')
+}
 
 /**
  * Read the roster filters. Unparseable JSON, or a field that is not a boolean, falls back

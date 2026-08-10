@@ -89,14 +89,20 @@ export function TxMeters({
   if (radio.txCompDb != null)
     rows.push({ label: 'COMP', title: 'Speech compression', bar: compBar(radio.txCompDb) })
 
-  const live = radio.transmitting && rows.length > 0
+  // ON AIR via the ARBITER, not the FT slot flag (#57): `transmitting` is written only by
+  // the slot/beacon path, so a voice or CW over — the overs Phone/CW actually key — never
+  // lit this pane even though the SWR/ALC/Po poll runs whenever Nexus keys the rig and the
+  // readings were sitting in the snapshot unshown. `txBusyReason` is Some for all seven
+  // TX owners.
+  const onAir = radio.transmitting || radio.txBusyReason != null || radio.rigKeyed === true
+  const live = onAir && rows.length > 0
   if (live) lastRows.current = rows
 
   const pin = pinned || inline
   const variant = `${pin ? ' pinned' : ''}${inline ? ' inline' : ''}`
   if (!pin) {
     // Default (Phone/CW): appear only while keyed, exactly as before.
-    if (!radio.transmitting || rows.length === 0) return null
+    if (!onAir || rows.length === 0) return null
   } else if (!live && lastRows.current.length === 0) {
     // Pinned but no reading has EVER arrived (rig reports no meters, or hasn't keyed yet):
     // a fixed-height hint keeps the panel discoverable without inventing numbers.

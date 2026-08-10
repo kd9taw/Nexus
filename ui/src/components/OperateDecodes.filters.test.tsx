@@ -86,6 +86,35 @@ describe('Band Activity chip initializes from storage', () => {
   })
 })
 
+describe('the −B4 modifier (field ask: "CQ only, but exclude B4")', () => {
+  const rows = [
+    decode({ from: 'W1AW', message: 'CQ W1AW FN31', worked: false }),
+    decode({ from: 'PD2BS', message: 'CQ PD2BS JO21', freqHz: 900, worked: true }),
+  ]
+
+  it('ANDs with the active chip: CQ minus worked-before', () => {
+    mount({ decodes: rows })
+    fireEvent.click(chip('CQ'))
+    expect(screen.queryByText(/PD2BS/)).not.toBeNull() // both CQs show
+    fireEvent.click(chip('−B4'))
+    expect(screen.queryByText(/W1AW/)).not.toBeNull()
+    expect(screen.queryByText(/PD2BS/)).toBeNull() // the worked CQ is gone
+  })
+
+  it('persists like the chip, and never applies to the B4 chip itself', () => {
+    mount({ decodes: rows })
+    fireEvent.click(chip('−B4'))
+    cleanup()
+    mount({ decodes: rows }) // fresh mount, as after a restart
+    expect(pressed('−B4')).toBe('true')
+    // Switching TO the B4 chip: the modifier goes idle (disabled), and the pane
+    // still shows the worked stations that chip exists to show.
+    fireEvent.click(chip('B4'))
+    expect((chip('−B4') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText(/PD2BS/)).not.toBeNull()
+  })
+})
+
 describe('the locked Rx Frequency pane cannot clobber the Band Activity chip', () => {
   it('renders no filter bar and leaves the stored chip untouched', () => {
     localStorage.setItem(DECODE_FILTER_KEY, 'cq')

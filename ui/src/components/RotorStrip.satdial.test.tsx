@@ -25,6 +25,10 @@ const api = vi.hoisted(() => ({
   ),
   getSatTrackStatus: vi.fn((): Promise<SatTrackStatus | null> => Promise.resolve(null)),
   stopSatTrack: vi.fn(() => Promise.resolve()),
+  getSatTransponder: vi.fn(
+    (): Promise<import('../types').SatTransponderHeld | null> => Promise.resolve(null),
+  ),
+  setSatTransponder: vi.fn(() => Promise.resolve()),
 }))
 vi.mock('../api', () => api)
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
@@ -70,6 +74,9 @@ beforeEach(() => {
   api.readRotator.mockImplementation(() => Promise.reject(new Error('no rotor')))
   api.getSatTrackStatus.mockReset()
   api.getSatTrackStatus.mockImplementation(() => Promise.resolve(null))
+  api.getSatTransponder.mockReset()
+  api.getSatTransponder.mockImplementation(() => Promise.resolve(null))
+  api.setSatTransponder.mockClear()
   // Rotor-less by default; the "configured but silent" cases opt in.
   api.getSettings.mockReset()
   api.getSettings.mockImplementation(() =>
@@ -110,6 +117,34 @@ describe('the dial-ownership marker (no rotor configured)', () => {
     const { container } = render(<RotorStrip />)
     await waitFor(() => expect(api.getSatTrackStatus).toHaveBeenCalled())
     expect(container.textContent).toBe('')
+  })
+
+  it('a HELD transponder with no armed track shows the bird holding the dial (sat-FT batch)', async () => {
+    // The QO-100/pre-AOS case: the pick parked the dial on the downlink and —
+    // since the sat-FT batch — section entry and tier flips stand down for it.
+    // A dial that will not re-home with no visible owner is the same trust
+    // failure the track chip exists for, so the hold gets its own chip, and
+    // its ■ releases the HOLD (there is no track to stop).
+    api.getSatTransponder.mockImplementation(() =>
+      Promise.resolve({ name: 'QO-100', index: 0, description: 'NB transponder', binding: null }),
+    )
+    render(<RotorStrip />)
+    const chip = await screen.findByRole('group', { name: /transponder holds the dial/i })
+    expect(chip.textContent).toMatch(/QO-100/)
+    expect(chip.textContent).toMatch(/holds the dial/i)
+    fireEvent.click(screen.getByRole('button', { name: /release/i }))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('QO-100', null))
+    expect(api.stopSatTrack).not.toHaveBeenCalled()
+  })
+
+  it('a live Doppler track outranks the held chip — one owner named at a time', async () => {
+    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(track()))
+    api.getSatTransponder.mockImplementation(() =>
+      Promise.resolve({ name: 'RS-44', index: 2, description: 'linear', binding: null }),
+    )
+    render(<RotorStrip />)
+    await screen.findByRole('group', { name: /doppler owns the dial/i })
+    expect(screen.queryByRole('group', { name: /transponder holds the dial/i })).toBeNull()
   })
 
   it('never claims the dial for an uplink-only track — it names the TX VFO (round 3)', async () => {

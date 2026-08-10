@@ -92,6 +92,8 @@ vi.mock('../api', () => ({
   stopRotator: vi.fn(async () => {}),
   getDeclination: vi.fn(async () => 0),
   getSatTrackStatus: vi.fn(async () => null),
+  getSatTransponder: vi.fn(async () => null),
+  setSatTransponder: vi.fn(async () => {}),
   stopSatTrack: vi.fn(async () => {}),
 }))
 

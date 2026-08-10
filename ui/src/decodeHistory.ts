@@ -145,7 +145,20 @@ export class DecodeHistory {
       // Keep the first-heard timestamp (chronological position is stable);
       // own-TX rows timestamp by their transmit cycle, not the ingest clock.
       const at = d.mine && d.txAt ? d.txAt * 1000 : (prev?.at ?? now)
-      m.set(id, { ...d, slot: prev?.slot ?? slot, at, id })
+      // #15: an own-TX row EVICTED by the row cap and re-served from the engine's
+      // 30-deep TX ring must not land in the CURRENT period. It keeps its transmit
+      // time (`at` above), but with no surviving entry to inherit a slot from it
+      // used the INGEST slot — so a busy band resurrected old CQ calls under the
+      // live period separator with stale clock times ("old calls duplicated in
+      // the timeline"). Pin it to the period its own transmit time names.
+      // (SLOT_MS is the FT8 period; on FT4 the estimate lands an older period —
+      // never the live one, which is the failure that matters.)
+      const slotFor =
+        prev?.slot ??
+        (d.mine && d.txAt != null
+          ? slot - Math.max(0, Math.round((now - d.txAt * 1000) / SLOT_MS))
+          : slot)
+      m.set(id, { ...d, slot: slotFor, at, id })
     }
     if (m.size > MAX_HISTORY) {
       const drop = m.size - MAX_HISTORY

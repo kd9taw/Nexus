@@ -712,6 +712,22 @@ impl Rig {
         parse_smeter_db(&reply)
     }
 
+    /// Read the rig's OWN PTT state via rigctld `t` — is the transmitter keyed, by anyone?
+    /// This is how radio-side keying (mic PTT, a straight key) becomes visible at all: every
+    /// other TX indication in the app reports what NEXUS keyed (#57 — an FTdx10 keyed from
+    /// the mic showed RX and no meters, because nothing ever asked the rig). CAT-only;
+    /// `None` on VOX/serial, a link hiccup, or a non-numeric reply — the caller keeps the
+    /// last known state rather than flapping the indicator on one lost poll. Read-only:
+    /// this path never writes `T`, so it cannot key or unkey anything.
+    pub fn read_ptt(&mut self) -> Option<bool> {
+        self.control.as_ref()?;
+        let reply = self.command("t\n").ok()?;
+        reply
+            .lines()
+            .find_map(|l| l.trim().parse::<u8>().ok())
+            .map(|v| v != 0)
+    }
+
     /// Read a transmit METER as a raw float via rigctld `l NAME` — unlike [`Rig::read_level`]
     /// this does NOT clamp to 0..1, so it works for SWR (1.0–6.0), Po watts, and COMP dB.
     /// CAT-only; `None` on VOX/serial or no finite numeric reply (e.g. the rig ignores the

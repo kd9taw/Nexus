@@ -1002,6 +1002,13 @@ export interface RadioStatus {
   dialMhz: number
   band: string
   sideband: string
+  /** The active operating SECTION ('digital' | 'phone' | 'cw' | 'rtty') — live engine
+   * state, so section-dependent surfaces (the Satellites log strip's mode fold) don't
+   * need a settings round-trip. */
+  operatingMode?: string
+  /** The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
+   * over CAT (#57). Display-only — the TX badge and meter pane light for it. */
+  rigKeyed?: boolean
   transmitting: boolean
   slot: number
   nextSlotMs: number

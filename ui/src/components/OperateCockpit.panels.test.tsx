@@ -28,6 +28,8 @@ vi.mock('../api', () => {
     setSkipTx1: vi.fn(nothing),
     getDeclination: vi.fn(nothing),
     getSatTrackStatus: vi.fn(nothing),
+    getSatTransponder: vi.fn(nothing),
+    setSatTransponder: vi.fn(nothing),
     readRotator: vi.fn(nothing),
     stopRotator: vi.fn(nothing),
     stopSatTrack: vi.fn(nothing),

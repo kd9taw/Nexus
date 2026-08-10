@@ -32,6 +32,7 @@ export const PER_SURFACE = [
   'nexus.connect.map3d',
   'nexus.connect.projection',
   'nexus.decodes.filter',
+  'nexus.decodes.hideB4',
   'nexus.logbook.globespin',
   'nexus.operate.layout',
   'nexus.operateLayout',

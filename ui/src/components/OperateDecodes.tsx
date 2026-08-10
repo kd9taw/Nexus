@@ -14,7 +14,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
-import { loadDecodeFilter, saveDecodeFilter } from '../operateFilters'
+import { loadDecodeFilter, loadDecodeHideB4, saveDecodeFilter, saveDecodeHideB4 } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
 import { gridFromMessage, isIgnored } from '../txMessages'
@@ -197,6 +197,15 @@ export function OperateDecodes({
     setFilterState(f)
   }
   const [sort, setSort] = useState<DecodeSort>('time')
+  // The "hide B4" MODIFIER (field ask: "CQ only, but exclude B4") — ANDed with whichever
+  // chip is lit, persisted like the chip itself. Inert while the B4 chip is active: that
+  // chip's whole job is showing worked stations, and a modifier that blanked it would
+  // read as a broken pane.
+  const [hideB4, setHideB4] = useState<boolean>(loadDecodeHideB4)
+  const pickHideB4 = (on: boolean) => {
+    saveDecodeHideB4(on)
+    setHideB4(on)
+  }
 
   // The operator's country exclusion — app-global (every window agrees) and RX-display
   // only. See features/countryExclude.ts for why it is not a Rust setting.
@@ -239,6 +248,19 @@ export function OperateDecodes({
     histRef.current
       .entries()
       .filter((d) => passesFilter(d, filter, rxOffsetHz))
+      // "Hide B4" ANDs with the chip (never with the B4 chip itself). Own rows and the
+      // station mid-QSO stay — hiding your own echo or your current partner as "worked"
+      // would be the same class of self-own the country exclude guards against.
+      .filter(
+        (d) =>
+          !(
+            hideB4 &&
+            filter !== 'b4' &&
+            d.worked &&
+            !d.mine &&
+            (selectedCall == null || d.from !== selectedCall)
+          ),
+      )
       // The country exclusion is ANDed with the chip, and it is the last word on what the
       // pane shows — so `list.length` (the "N heard" readout) counts what is on screen.
       .filter(
@@ -328,6 +350,20 @@ export function OperateDecodes({
             </div>
             {/* Outside the chip group on purpose: those chips are one-of-N (aria-pressed),
                 this is an independent set that ANDs with whichever one is lit. */}
+            <button
+              type="button"
+              className={`od-chip od-b4${hideB4 ? ' active' : ''}`}
+              aria-pressed={hideB4}
+              disabled={filter === 'b4'}
+              onClick={() => pickHideB4(!hideB4)}
+              title={
+                filter === 'b4'
+                  ? 'The B4 chip shows worked stations — the hide switch is idle there'
+                  : 'Hide stations you have already worked (B4) from whichever filter is active — CQ-only minus B4, and friends'
+              }
+            >
+              −B4
+            </button>
             <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} />
             <label className="od-sort">
               <span className="od-sort-label">sort</span>

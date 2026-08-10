@@ -5,6 +5,45 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **FT8, FT4 and CW work through satellites now.** Hold a transponder and switch to the FT
+  console or the CW cockpit: the dial stays on the bird (section entry and FT8↔FT4 tier
+  flips no longer re-home it), the rig lands in the right form on the bird's sideband —
+  DATA for the digital tiers, CW/CWR for the keyer — and Doppler keeps correcting. For the
+  slot modes, corrections now land only in the quiet part of each slot, so a receive period
+  is never smeared mid-decode; CW keeps continuous correction, the way dedicated satellite
+  programs run it. A QSO logged on a digital tier records the tier's own mode (FT4, not
+  SSB) alongside the automatic PROP_MODE=SAT tag, and a held bird now shows a SAT chip in
+  the operating cockpits with a release button — the dial never moves with an invisible
+  owner.
+- **Hide worked-before stations from Band Activity.** A new −B4 switch beside the filter
+  chips ANDs with whichever filter is active — CQ-only minus B4, as requested from the
+  field. It leaves your own lines and your current QSO partner alone, and goes idle on the
+  B4 chip (whose whole job is showing worked stations).
+
+### Fixed
+
+- **Phone and CW now show TX and live meters whenever the transmitter is actually keyed.**
+  The TX badge and the SWR/ALC/power pane watched a flag only the FT8/FT4 transmitter set,
+  so voice and CW overs never lit them — the readings were being polled and shown to
+  no-one. Both now follow the real transmit arbiter. And Nexus now asks the rig for its own
+  PTT once a second while idle, so keying the radio from the radio — mic PTT, a straight
+  key — finally shows as TX with live meters too. (#57)
+- **WSPR spots resolve their country from the callsign again.** A WSPR line reads
+  CALL GRID POWER, but the decode feed parsed it with the FT8 grammar — the trailing power
+  figure looked like a signal report, the grid slid into the callsign slot, and TI4JWC's
+  Costa Rica became "Armenia" off the EK70 grid. (#55)
+- **Old transmitted calls no longer resurface under the live period.** On a busy band the
+  decode pane's history cap could evict your own older TX lines, and the next poll re-added
+  them stamped into the current period with their original clock time. They now pin to the
+  period their transmit time names. (#15)
+- **Switching FT8→FT4 on a band with no FT4 calling channel stays put** instead of falling
+  back to the top of the plan — which used to drag a 70 cm station to 80 m. The specialty
+  modes (MSK144, Q65, FST4) keep their jump to their own calling channel.
+
 ## [1.1.0] — 2026-08-10
 
 ### Fixed

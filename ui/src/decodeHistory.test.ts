@@ -58,6 +58,30 @@ describe('decode history — WSJT-X chronological flow', () => {
     h.ingest([{ ...tx, txAt: 90 }], 102, 91_000) // next cycle → new row
     expect(h.entries()).toHaveLength(2)
   })
+
+  it('an evicted own-TX row re-served later pins to ITS period, not the live one (#15)', () => {
+    // The engine re-serves the whole own-TX ring every poll; on a busy band the
+    // 300-row cap evicts the oldest own-TX rows, and the next poll re-added them
+    // with the CURRENT ingest slot while keeping the original clock time — old
+    // CQ calls rendering under the live period separator (m7jyfradio's PD2BS
+    // calls). With no surviving entry, the slot now derives from the row's own
+    // transmit time.
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    const tx = row({ message: 'PD2BS KD9TAW EN52', freqHz: 1500, mine: true, txAt: 60 })
+    h.ingest([tx], 100, 61_000)
+    expect(h.entries()[0].slot).toBe(100)
+    // Fill past the cap so the own-TX row is evicted (insertion-oldest first).
+    for (let i = 0; i < 320; i++) {
+      h.ingest([row({ message: `CQ T${i}ABC EN${i % 90} X`, freqHz: 400 + i * 5 })], 101, 75_000)
+    }
+    expect(h.entries().some((d) => d.mine)).toBe(false) // premise: evicted
+    // Twenty periods later the engine's ring re-serves it: same txAt, live slot 120.
+    h.ingest([tx], 120, 361_000)
+    const mine = h.entries().find((d) => d.mine)!
+    expect(mine.at).toBe(60_000) // original transmit time kept
+    expect(mine.slot).toBe(100) // …and the PERIOD it names, never 120
+  })
 })
 
 describe('Rx Frequency filter (rx)', () => {

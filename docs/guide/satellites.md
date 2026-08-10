@@ -192,12 +192,15 @@ designator Nexus can safely derive, and a `SAT_NAME` LoTW does not recognise
 gets the whole record rejected — so ISS contacts are logged untagged, and if
 you want credit for one, add both fields yourself before you sign.
 
-#### Two things this strip does not do yet
+#### One thing this strip does not do yet
 
-Neither is a decision that satellite work should stay this way. They are the
-price of dropping the Phone/CW log strip in unchanged rather than building a
-satellite-aware one, and each is meant to be closed. (A third — satellite
-tagging itself — closed 2026-08-10: Nexus now stamps the pair automatically.)
+Not a decision that satellite work should stay this way — it is the price of
+dropping the Phone/CW log strip in unchanged rather than building a
+satellite-aware one, and it is meant to be closed. (Two earlier entries here
+have since closed: satellite tagging, 2026-08-10 — Nexus stamps the pair
+automatically — and the mode fold on data tiers, same date: on a digital
+section the strip now records your tier's own mode, `FT4` on an FT4 pass,
+never `SSB`.)
 
 **Your satellite grids land where they belong.** A tagged pass contact counts
 toward the **Satellite VUCC** totals on the Awards screen and the satellite
@@ -215,25 +218,6 @@ are still on the bird*. Catching up afterwards does not work cleanly: the FD log
 stamps every contact with the band the radio is on at the moment you type it, so
 a 70 cm pass entered later goes into the contest log — and out to N1MM or
 N3FJP — on whatever band you have since moved to.
-
-**The recorded MODE comes from your sideband, so it is wrong on a data mode.**
-The strip writes `FM`, `CW`, `AM` or `SSB`, chosen from the mode the rig is
-commanded to. That is right for voice and CW work. But the Satellites section is
-also reachable on the digital tiers, and there the sideband is not the mode: on
-FT8, FT4, Q65, JT65, MSK144, WSPR and FST4 every channel commands USB, so the
-contact records `MODE=SSB`; on Tempo's three FM simplex channels (2 m, 1.25 m,
-70 cm) it records `MODE=FM`. Either way the record names a voice mode for a
-contact you made on a data mode.
-
-Until the strip is tier-aware there are two fixes, and only one of them covers
-your tier:
-
-- **On FT8 or FT4**, open **Log a contact from another radio** in the strip and
-  pick the mode there before you log.
-- **On Q65, JT65, MSK144, WSPR, FST4 or Tempo**, that picker has no entry for
-  your mode — it offers SSB, FM, AM, CW, RTTY, FT8 and FT4 and nothing else. Log
-  the contact, then open the **Logbook**, edit the record and type the mode into
-  its **Mode** field, which takes any text.
 
 **If you ran 0.24.0 through 0.27.x, check your log.** In those versions a
 contact logged while a transponder was held picked up `PROP_MODE=SAT` and a

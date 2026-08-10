@@ -415,8 +415,41 @@ pub enum TxPolicy {
     /// Steer continuously, including while keyed — SSB, CW, FM.
     Continuous,
     /// Hold the dial still for the length of a keyed over; correct between
-    /// overs — the slot-timed digital modes.
+    /// overs — the slot-timed digital modes. Superseded for the satellite tick
+    /// by [`TxPolicy::SlotAligned`], which also protects the RECEIVE slots;
+    /// kept as the plain "never mid-over" policy.
     FreezeDuringOver,
+    /// Slot modes, both directions: hold the dial still while ANY station's
+    /// signal is on the air — ours (keyed) or theirs (the receive capture) —
+    /// and land accumulated corrections in the quiet part of the slot.
+    ///
+    /// [`FreezeDuringOver`](TxPolicy::FreezeDuringOver) protected only our own
+    /// transmission; during a 15 s FT8 receive slot the tick still stepped the
+    /// dial up to five times at ≥20 Hz with the tone spacing at 6.25 Hz —
+    /// every station moved >3 bins mid-symbol and the decoder was never told.
+    ///
+    /// The quiet window is a property of the WAVEFORM inside the UTC-aligned
+    /// slot: signals start `quiet_from_ms` into the slot (WSJT-X keys ~0.5 s
+    /// in) and are over by `quiet_until_ms` (signal length + late-DT margin).
+    /// Steering is allowed at a slot phase BEFORE `quiet_from_ms` (the boundary
+    /// head — no tone is on the air yet) or at/after `quiet_until_ms` (the
+    /// tail — the capture that matters is already complete). ⚠️ The boundary
+    /// head is load-bearing, not a nicety: the caller ticks on a coarse cadence
+    /// (3 s against a 15 s FT8 slot → phases {0,3,6,9,12} s only), so a
+    /// tail-only window would NEVER be hit for FT8 and steering would silently
+    /// stop for the whole pass. Phase 0 always qualifies.
+    ///
+    /// `keyed` still freezes outright — our own over is the one signal whose
+    /// timing we cannot phase-argue with.
+    SlotAligned {
+        /// Slot length in ms (FT8 15 000, FT4 7 500), UTC-aligned like the
+        /// slot clock itself, so `now_ms % period_ms` IS the slot phase.
+        period_ms: u32,
+        /// Slot phase below which no signal has started yet (ms).
+        quiet_from_ms: u32,
+        /// Slot phase at which every signal (late DT included) has ended (ms).
+        quiet_until_ms: u32,
+    },
 }
 
 impl TxPolicy {
@@ -430,6 +463,31 @@ impl TxPolicy {
         }
     }
 
+    /// [`TxPolicy::SlotAligned`] for a slot length in seconds — the engine's
+    /// tier knowledge reduced to the one number it already has. The quiet
+    /// window derives from the WSJT-X timing contract: signals key ~0.5 s into
+    /// the slot (we guard at 0.4 s) and run to `period − gap`, where the
+    /// decode gap is what the protocol leaves (FT8: 12.64 s signal in a 15 s
+    /// slot; FT4: 4.48 s in 7.5 s). A +0.6 s late-DT margin covers real-world
+    /// starts. Unknown/odd periods still produce a usable window because the
+    /// signal fraction is taken proportionally (≥60 % of slot modes' airtime),
+    /// erring toward steering less, never mid-signal.
+    pub fn slot_aligned(period_secs: f64) -> Self {
+        let period_ms = (period_secs * 1000.0).round() as u32;
+        // Signal share of the slot: FT8 12.64/15, FT4 4.48/7.5 — both ≈ 0.6-0.85.
+        // Take the conservative 0.85 for periods we don't know exactly.
+        let signal_ms = match period_ms {
+            15_000 => 13_140, // 0.5 s start + 12.64 s FT8 waveform
+            7_500 => 5_060,   // 0.58 s start + 4.48 s FT4 waveform
+            p => (p as f64 * 0.85) as u32,
+        };
+        TxPolicy::SlotAligned {
+            period_ms,
+            quiet_from_ms: 400,
+            quiet_until_ms: (signal_ms + 600).min(period_ms),
+        }
+    }
+
     /// May the engine move the dial right now?
     ///
     /// `keyed` is "a transmission is physically in flight". Note the asymmetry
@@ -437,10 +495,24 @@ impl TxPolicy {
     /// in-passband move, not an operator QSY — the two must never be conflated,
     /// which is why the engine reports its authority explicitly rather than
     /// letting the dial value speak for itself.
-    pub fn may_steer(self, keyed: bool) -> bool {
+    ///
+    /// `now_ms` is wall-clock ms (the slot clock's own timebase); only
+    /// [`TxPolicy::SlotAligned`] reads it.
+    pub fn may_steer(self, keyed: bool, now_ms: u64) -> bool {
         match self {
             TxPolicy::Continuous => true,
             TxPolicy::FreezeDuringOver => !keyed,
+            TxPolicy::SlotAligned {
+                period_ms,
+                quiet_from_ms,
+                quiet_until_ms,
+            } => {
+                if keyed || period_ms == 0 {
+                    return !keyed;
+                }
+                let phase = (now_ms % period_ms as u64) as u32;
+                phase < quiet_from_ms || phase >= quiet_until_ms
+            }
         }
     }
 }
@@ -822,15 +894,64 @@ mod tests {
         assert_eq!(manual, TxPolicy::Continuous);
 
         assert!(
-            slot.may_steer(false),
+            slot.may_steer(false, 0),
             "between overs the slot mode re-corrects"
         );
-        assert!(!slot.may_steer(true), "never mid-over on a slot mode");
+        assert!(!slot.may_steer(true, 0), "never mid-over on a slot mode");
         assert!(
-            manual.may_steer(true),
+            manual.may_steer(true, 0),
             "SSB/CW/FM steer while keyed — by design"
         );
-        assert!(manual.may_steer(false));
+        assert!(manual.may_steer(false, 0));
+    }
+
+    #[test]
+    fn slot_aligned_steers_only_in_the_quiet_window_and_the_tick_cadence_can_reach_it() {
+        // The RX half of the freeze: a 15 s FT8 receive slot must not eat
+        // ≥20 Hz dial steps mid-symbol (6.25 Hz tone spacing). Steering is
+        // allowed only at the slot-boundary head (no tone on the air yet) and
+        // in the post-signal tail.
+        let p = TxPolicy::slot_aligned(15.0);
+        assert!(
+            p.may_steer(false, 0),
+            "slot boundary head — nothing keyed yet"
+        );
+        assert!(p.may_steer(false, 15_000), "every boundary, any slot");
+        assert!(!p.may_steer(false, 1_000), "1 s in: signals are on the air");
+        assert!(!p.may_steer(false, 7_000), "mid-slot: never");
+        assert!(
+            !p.may_steer(false, 13_000),
+            "12.64 s waveform + margin still runs"
+        );
+        assert!(
+            p.may_steer(false, 13_800),
+            "tail: the capture that matters is complete"
+        );
+        assert!(
+            !p.may_steer(true, 0),
+            "our own over freezes outright, phase or not"
+        );
+
+        // ⚠️ THE CADENCE PIN — why the boundary head exists at all. The sat
+        // track loop ticks every 3 s, so against a 15 s slot it only ever
+        // lands on phases {0, 3, 6, 9, 12} s. A tail-only window would never
+        // be reached and steering would silently stop for the whole pass.
+        let reachable = (0u64..5)
+            .map(|k| k * 3_000)
+            .filter(|ph| p.may_steer(false, *ph))
+            .count();
+        assert!(
+            reachable >= 1,
+            "the 3 s cadence must reach the window at least once per slot"
+        );
+
+        // FT4: shorter waveform, wider tail — the cadence lands more often.
+        let ft4 = TxPolicy::slot_aligned(7.5);
+        assert!(
+            ft4.may_steer(false, 6_000),
+            "FT4 tail (signal over by ~5.7 s)"
+        );
+        assert!(!ft4.may_steer(false, 3_000), "FT4 mid-signal");
     }
 
     #[test]
@@ -896,7 +1017,7 @@ mod tests {
             0,
             lim(20, 1_000),
             BOTH,
-            TxPolicy::FreezeDuringOver.may_steer(true),
+            TxPolicy::FreezeDuringOver.may_steer(true, 0),
         );
         assert!(
             c.is_empty(),

@@ -1492,6 +1492,9 @@ pub struct Engine {
     /// Rig CAT transmit meters from the radio-loop poll — the mirror image of the S-meter:
     /// read ONLY while keyed, `None` while receiving or when the rig doesn't report them.
     /// SWR ratio (1.0–6.0), ALC 0.0–1.0, Po in watts, COMP in dB. Observed-only.
+    /// The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
+    /// over CAT — see [`Self::observe_rig_ptt`]. Display-only.
+    rig_keyed: bool,
     rig_tx_swr: Option<f32>,
     rig_tx_alc: Option<f32>,
     rig_tx_po_w: Option<f32>,
@@ -2965,6 +2968,7 @@ impl Engine {
             agc: None,
             rig_agc: None,
             rig_smeter_db: None,
+            rig_keyed: false,
             rig_tx_swr: None,
             rig_tx_alc: None,
             rig_tx_po_w: None,
@@ -4430,7 +4434,17 @@ impl Engine {
         // on 20 m phone, 60 m, a band with no FT8 channel) and lets the TX lockout guard
         // the air. The restore is an ordinary `set_frequency`, so every existing guard —
         // routing, TX halt semantics, split clear, privilege lockout — applies unchanged.
-        if follow_freq {
+        // A HELD PASS OWNS THE DIAL — the section-entry QSY stands down (operator, the
+        // sat-FT plan 2026-08-10: "on a bird, switching to the FT console switches the
+        // frequency on me"). Without this gate the re-home lands ONCE, the next Doppler
+        // tick writes the bird's downlink back (sat_dial_owner survives a section change
+        // by design, see the ⚠️ above), and — worse — the QSY's tune_dial cleared
+        // `sat_mode`, so the bird kept its frequency under the TERRESTRIAL mode policy.
+        // Skipping the QSY keeps the dial AND the bird's mode answer: the bird names the
+        // side, the new section names the form (Digital → PKTUSB/PKTLSB, CW → CW/CWR,
+        // Phone → the bird's sideband) via `rig_mode_effective`'s existing arms. This is
+        // exactly the behavior the same-mode re-entry (`follow_freq = false`) always had.
+        if follow_freq && self.sat_dial_owner.is_none() {
             let band = self.settings.band.clone();
             if let Some((dial, sideband)) = self
                 .recall_dial_memory(&band, om)
@@ -5356,6 +5370,14 @@ impl Engine {
     /// Adopt the rig's transmit meters (from the keyed-only poll): SWR ratio, ALC 0..1, Po
     /// watts, COMP dB. Each is independently `Some`/`None` so a rig that reports only some of
     /// them still shows those. The poll reads these ONLY while keyed, mirroring the S-meter.
+    /// The rig's OWN PTT, as read back over CAT (#57): TRUE means the transmitter is keyed
+    /// by something that is not Nexus — mic PTT, a straight key at the radio. Display-only
+    /// state: it feeds the cockpit TX badge and lets the TX-meter pane show a mic-keyed
+    /// over; it gates nothing and keys nothing (the radio loop's read is `t`, never `T`).
+    pub fn observe_rig_ptt(&mut self, on: bool) {
+        self.rig_keyed = on;
+    }
+
     pub fn observe_rig_tx_meters(
         &mut self,
         swr: Option<f32>,
@@ -7110,7 +7132,13 @@ impl Engine {
         // instead of being left on the old tier's frequency. In-band QSY (band unchanged),
         // so the decode context is preserved. Companion mode tracks the upstream rig, so
         // skip it there. (`band_plan()` is tier-aware off the just-set tier.)
-        if self.source_kind == SourceKind::Native {
+        //
+        // A HELD PASS OWNS THE DIAL (sat-FT plan, 2026-08-10): a tier flip mid-pass is a
+        // TIMING/codec change — the bird's downlink is the only correct dial, and the
+        // watering-hole QSY here was the second door (after section entry) that yanked the
+        // rig off a bird the moment the operator reached for FT4. Skip the QSY outright;
+        // decoder, slot clock and TX periods still switch above.
+        if self.source_kind == SourceKind::Native && self.sat_dial_owner.is_none() {
             let band = self.settings.band.clone();
             let plan = self.band_plan();
             // ⭐ FALL BACK TO THE MODE'S PRIMARY CHANNEL when the current band has
@@ -7124,12 +7152,20 @@ impl Engine {
             // mode's own frequency in exactly this situation; the first plan entry
             // is that mode's calling channel (MSK144 → 6 m 50.260, FST4 → 2200 m).
             //
+            // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4 twins a flip
+            // is a timing change and the operator expects to STAY on band — the
+            // fallback used to land 70 cm FT4 (no plan row) on plan.first() =
+            // 80 m 3.575, dragging a UHF station to HF with no warning. On a
+            // missing row the twins now leave the dial put (mode_home's None
+            // semantics; the TX lockout still guards the air).
+            //
             // This is a BAND CHANGE, not an in-band nudge — `clear_decode_context`
             // at the top of this function has already flushed the stale context.
+            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4);
             let target = plan
                 .iter()
                 .find(|c| c.band.eq_ignore_ascii_case(&band))
-                .or_else(|| plan.first())
+                .or_else(|| if stay_on_miss { None } else { plan.first() })
                 .cloned();
             if let Some(ch) = target {
                 if (ch.dial_mhz - self.settings.dial_mhz).abs() > 0.0005 {
@@ -8688,14 +8724,27 @@ impl Engine {
             min_shift_hz: self.settings.sat_min_shift_hz,
             min_interval_ms: self.settings.sat_update_ms,
         };
+        // Slot-timed modes hold the dial still while ANY signal is on the air —
+        // ours (keyed) or the receive slot's capture — and land corrections in
+        // the slot's quiet window (SlotAligned; the RX half is what keeps a
+        // 6.25 Hz-spaced FT8 slot from eating ≥20 Hz steps mid-symbol). The
+        // manual modes (SSB/CW/FM) steer continuously, which is how every
+        // dedicated satellite controller runs them. See doppler::TxPolicy.
+        let policy = if self.settings.operating_mode == crate::settings::OperatingMode::Digital {
+            dop::TxPolicy::slot_aligned(self.active_slot_secs())
+        } else {
+            dop::TxPolicy::Continuous
+        };
         let st = self.sat_tune.as_ref()?;
-        // Slot-timed modes hold the dial still for the length of an over; the
-        // manual modes steer through it. See doppler::TxPolicy.
-        let policy = dop::TxPolicy::for_slot_mode(
-            self.settings.operating_mode == crate::settings::OperatingMode::Digital,
-        );
         let want = dop::tuning(&st.transponder, st.state, range_rate_km_s);
-        let c = dop::correction(want, st.sent, now_ms, limits, legs, policy.may_steer(keyed));
+        let c = dop::correction(
+            want,
+            st.sent,
+            now_ms,
+            limits,
+            legs,
+            policy.may_steer(keyed, now_ms),
+        );
         if c.is_empty() {
             return None;
         }
@@ -10989,6 +11038,7 @@ impl Engine {
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
+        s.radio.rig_keyed = self.rig_keyed;
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
@@ -11007,6 +11057,13 @@ impl Engine {
             })
             .unwrap_or_default();
         s.radio.refused_dial_mhz = self.rig_refused_dial_mhz;
+        s.radio.operating_mode = match self.settings.operating_mode {
+            crate::settings::OperatingMode::Digital => "digital",
+            crate::settings::OperatingMode::Phone => "phone",
+            crate::settings::OperatingMode::Cw => "cw",
+            crate::settings::OperatingMode::Rtty => "rtty",
+        }
+        .to_string();
         s.radio.cw_wpm = self.settings.cw_wpm;
         s.radio.split_tx_mhz = self.split_tx_mhz;
         s.radio.cw_keyer = match self.settings.cw_keyer {
@@ -11208,12 +11265,26 @@ impl Engine {
             .iter()
             .map(|d| {
                 let parsed = Msg::parse(&d.message);
-                let is_cq = matches!(parsed, Msg::Cq { .. });
-                let from = parsed.sender().map(|c| c.to_string());
-                let directed_to_me = parsed
-                    .addressee()
-                    .map(|a| a.eq_ignore_ascii_case(mycall))
-                    .unwrap_or(false);
+                // #55: a WSPR spot is "CALL GRID DBM" — a different grammar entirely.
+                // Run through the FT8 parser, the trailing dBm (typ. 23–47, inside the
+                // −50..=49 report range) reads as a signal report and the GRID lands in
+                // the sender slot: "TI4JWC EK70 30" filed its country under EK →
+                // Armenia, and TI4JWC (Costa Rica) was never looked up. WSPR rows parse
+                // by the WSPR field order; they are never CQs and address nobody.
+                let wspr_fields = (d.mode == Some(modes::ModeKind::Wspr)).then(|| {
+                    let mut t = d.message.split_whitespace();
+                    (t.next().map(str::to_string), t.next())
+                });
+                let is_cq = wspr_fields.is_none() && matches!(parsed, Msg::Cq { .. });
+                let from = match &wspr_fields {
+                    Some((call, _)) => call.clone(),
+                    None => parsed.sender().map(|c| c.to_string()),
+                };
+                let directed_to_me = wspr_fields.is_none()
+                    && parsed
+                        .addressee()
+                        .map(|a| a.eq_ignore_ascii_case(mycall))
+                        .unwrap_or(false);
                 // Worked-before (B4): the decode's sender is in the logbook —
                 // via the SAME prebuilt set as the roster above. The per-row
                 // `worked_before()` this replaces was the exact O(rows × log)
@@ -11227,9 +11298,12 @@ impl Engine {
                 // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
                 // because that is how grids are awarded (VUCC) — a grid worked on
                 // 20 m is a genuinely new one on 2 m.
-                let grid = match &parsed {
-                    Msg::Cq { grid, .. } | Msg::Grid { grid, .. } => Some(grid.as_str()),
-                    _ => None,
+                let grid = match &wspr_fields {
+                    Some((_, g)) => *g,
+                    None => match &parsed {
+                        Msg::Cq { grid, .. } | Msg::Grid { grid, .. } => Some(grid.as_str()),
+                        _ => None,
+                    },
                 };
                 let new_grid = grid
                     .map(|g| !g.is_empty() && !self.station.grid_worked_on(g, cur_band))
@@ -16520,6 +16594,47 @@ mod tests {
             rv: None,
             mode: None,
         }
+    }
+
+    #[test]
+    fn a_wspr_row_files_under_the_callsign_not_the_grid() {
+        // #55 (graafpeter-web): a WSPR spot is "CALL GRID DBM". The FT8 grammar reads
+        // the trailing 30 (dBm) as a signal report, which shifts the GRID into the
+        // sender slot — "TI4JWC EK70 30" resolved its DXCC from EK70 (EK = Armenia)
+        // and TI4JWC (Costa Rica) was never looked up.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let wspr = modes::Decode {
+            message: "TI4JWC EK70 30".into(),
+            sync: 1.0,
+            snr: -19,
+            dt: 0.2,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            mode: Some(modes::ModeKind::Wspr),
+        };
+        e.last_decodes = vec![wspr.clone()];
+        let row = &e.snapshot().recent_decodes[0];
+        assert_eq!(
+            row.from.as_deref(),
+            Some("TI4JWC"),
+            "sender = the CALL field"
+        );
+        assert_eq!(row.grid.as_deref(), Some("EK70"), "grid = the GRID field");
+        assert!(!row.is_cq, "a WSPR beacon is not a CQ");
+        assert!(!row.directed_to_me, "…and addresses nobody");
+
+        // Positive control — the misparse is real and the MODE TAG is what gates the
+        // fix: the same text without the WSPR tag still goes through the FT8 grammar
+        // and files the grid as the sender.
+        e.last_decodes = vec![modes::Decode { mode: None, ..wspr }];
+        let row = &e.snapshot().recent_decodes[0];
+        assert_eq!(
+            row.from.as_deref(),
+            Some("EK70"),
+            "control: the FT8 grammar misparse this fix exists for"
+        );
     }
 
     #[test]
@@ -23570,7 +23685,7 @@ mod tests {
 
         // DEFAULT settings — nothing configured, nothing confirmed.
         let c = e
-            .sat_doppler_tick(5.0, 1_000, false)
+            .sat_doppler_tick(5.0, 15_000, false)
             .expect("a held transponder is the whole ask for the downlink");
         assert!(c.downlink_hz.is_some(), "the dial follows the bird");
         assert_eq!(c.uplink_hz, None, "the transmit VFO is not ours yet");
@@ -23581,7 +23696,7 @@ mod tests {
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, tp)));
         let c = e
-            .sat_doppler_tick(5.0, 3_000, false)
+            .sat_doppler_tick(5.0, 30_000, false)
             .expect("the first correction always goes out");
         assert!(c.downlink_hz.is_some() && c.uplink_hz.is_some());
         // Receding: hear low, transmit high.
@@ -23592,7 +23707,7 @@ mod tests {
         assert!((e.settings().dial_mhz - 435.640).abs() > 1e-6);
 
         // Immediately after, the interval brake holds the next tick off.
-        assert!(e.sat_doppler_tick(5.1, 3_200, false).is_none());
+        assert!(e.sat_doppler_tick(5.1, 30_200, false).is_none());
 
         // A slot-mode over in flight freezes the dial entirely.
         {
@@ -23605,13 +23720,16 @@ mod tests {
             e.sat_doppler_tick(6.0, 60_000, true).is_none(),
             "no dial steps under a slot-mode waveform in flight"
         );
-        // …and it resumes between overs.
-        assert!(e.sat_doppler_tick(6.0, 61_000, false).is_some());
+        // …and it resumes in the slot's quiet window (SlotAligned: the RX freeze
+        // holds mid-slot too; 75 000 is a boundary phase).
+        assert!(e.sat_doppler_tick(6.0, 75_000, false).is_some());
 
         // Clearing the transponder hands the dial back to the operator.
         e.set_sat_transponder(None);
         assert!(e.sat_dial_owner().is_none());
-        assert!(e.sat_doppler_tick(6.0, 70_000, false).is_none());
+        // Boundary phase on purpose: the None must come from the RELEASED hold,
+        // not from the slot window.
+        assert!(e.sat_doppler_tick(6.0, 90_000, false).is_none());
     }
 
     #[test]
@@ -23648,7 +23766,7 @@ mod tests {
         // A pass tick supplies the rate. Overhead-ish, so the shift is small
         // and the arithmetic below stays readable.
         let rate = 0.0;
-        e.sat_doppler_tick(rate, 1_000, false);
+        e.sat_doppler_tick(rate, 15_000, false);
 
         // The operator tunes UP 5 kHz to chase somebody.
         assert!(
@@ -23692,7 +23810,7 @@ mod tests {
         // operator move — otherwise every correction would bump the TX-gate
         // identity and nudge the offset for the whole pass.
         let sent = e.sat_tuning_now(rate).unwrap().downlink_hz.unwrap();
-        e.sat_doppler_tick(rate, 20_000, false);
+        e.sat_doppler_tick(rate, 30_000, false);
         assert!(
             !e.sat_observe_operator_tune(sent),
             "the dial we just wrote is ours, not theirs"
@@ -23981,6 +24099,121 @@ mod tests {
         e.set_operating_mode("phone", false);
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         (e, ic9700, ft991a)
+    }
+
+    #[test]
+    fn entering_a_section_mid_pass_leaves_the_bird_the_dial_and_names_the_form() {
+        // THE OPERATOR REPRO (sat-FT plan, 2026-08-10): "on a bird, switching to the
+        // FT console switches the frequency on me." Section entry used to fire the
+        // follow_freq re-home: the dial bounced to the watering hole for one Doppler
+        // tick, and — the lasting damage — the QSY's tune_dial cleared `sat_mode`, so
+        // the bird kept its frequency under the TERRESTRIAL mode policy. A held pass
+        // owns the dial: entry keeps it, the bird names the SIDE and the new section
+        // names the FORM (Digital → DATA, CW → the keyer's CW word).
+        let (mut e, _, _) = sat_station();
+        let linear = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: false,
+            half_width_hz: 30_000,
+        };
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, linear)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        let dial = e.settings.dial_mhz;
+        assert!(
+            (dial - 435.640).abs() < 1e-6,
+            "precondition: parked on the downlink"
+        );
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "phone section: the bird's own sideband"
+        );
+
+        // The FT console — a genuine section change, follow_freq = true (the exact
+        // path that used to re-home).
+        e.set_operating_mode("digital", true);
+        assert!(
+            (e.settings.dial_mhz - dial).abs() < 1e-9,
+            "the pass keeps the dial through FT-console entry"
+        );
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTUSB",
+            "bird names the side, Digital names the form — FT4/FT8 through the bird"
+        );
+
+        // CW, same rule — the AI-CW-decoders-over-birds half of the plan.
+        e.set_operating_mode("cw", true);
+        assert!(
+            (e.settings.dial_mhz - dial).abs() < 1e-9,
+            "…and through CW entry"
+        );
+        assert_eq!(
+            e.rig_mode_effective(),
+            "CW",
+            "CAT keyer on a USB bird: the rig's CW mode, on the bird's dial"
+        );
+
+        // Positive control: release the bird and the SAME entry re-homes again —
+        // terrestrial section-entry behavior is untouched.
+        e.set_sat_transponder(None);
+        e.set_operating_mode("digital", true);
+        assert!(
+            (e.settings.dial_mhz - dial).abs() > 1e-6,
+            "no pass → the section QSY re-homes exactly as before"
+        );
+    }
+
+    #[test]
+    fn a_tier_flip_mid_pass_is_a_timing_change_not_a_qsy() {
+        // The second door off the bird: `set_tier` QSYs to the new tier's watering
+        // hole, and with FT4 carrying no 70 cm plan row its fallback used to be
+        // `plan.first()` — 80 m 3.575, dragging a UHF pass to HF. Mid-pass the tier
+        // flip must move ONLY the decoder/slot clock; terrestrially a missing row
+        // for the FT8/FT4 twins now leaves the dial put, while the specialty modes
+        // keep their jump-to-calling-channel fix (MSK144 from HF must still move).
+        let (mut e, _, _) = sat_station();
+        let linear = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: false,
+            half_width_hz: 30_000,
+        };
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, linear)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        e.set_operating_mode("digital", true);
+        let dial = e.settings.dial_mhz;
+
+        e.set_tier(Tier::Ft4);
+        assert!(
+            (e.settings.dial_mhz - dial).abs() < 1e-9,
+            "FT8→FT4 mid-pass: slot clock changes, the bird keeps the dial"
+        );
+
+        // Terrestrial half of the same fix: 70 cm FT4 has no plan row — stay put,
+        // never 80 m.
+        e.set_sat_transponder(None);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(432.065, "70cm", "USB");
+        e.set_tier(Tier::Ft4);
+        assert!(
+            (e.settings.dial_mhz - 432.065).abs() < 1e-6,
+            "a missing FT4 row leaves the dial put — plan.first() used to land 3.575 MHz, got {}",
+            e.settings.dial_mhz
+        );
+
+        // Positive control: the specialty-mode fallback is intact — MSK144 from a
+        // 20 m dial still jumps to its own calling channel (the 2026-07 silent-no-op
+        // fix this carve-out must not regress).
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Msk144);
+        assert!(
+            e.settings.dial_mhz > 30.0,
+            "MSK144 from HF still moves to its VHF calling channel, got {}",
+            e.settings.dial_mhz
+        );
     }
 
     #[test]
@@ -25028,7 +25261,7 @@ mod tests {
 
         // And in the pass, the correction follows the bird down the band.
         let c = e
-            .sat_doppler_tick(5.0, 2_000_000, false)
+            .sat_doppler_tick(5.0, 2_010_000, false)
             .expect("a held transponder in a pass corrects the downlink");
         assert!(
             c.downlink_hz.is_some_and(|hz| hz < 435_640_000),
@@ -25057,7 +25290,7 @@ mod tests {
             "no sideband onto a VFO we never tuned"
         );
 
-        let c = e.sat_doppler_tick(5.0, 2_000_000, false).expect("downlink");
+        let c = e.sat_doppler_tick(5.0, 2_010_000, false).expect("downlink");
         assert_eq!(c.uplink_hz, None, "the transmit leg is not ours yet");
         assert_eq!(e.split_tx_mhz(), None, "and nothing was queued for the rig");
     }
@@ -25084,7 +25317,7 @@ mod tests {
             Some(145_965_000)
         );
         let c = e
-            .sat_doppler_tick(5.0, 2_000_000, false)
+            .sat_doppler_tick(5.0, 2_010_000, false)
             .expect("both legs");
         assert!(c.uplink_hz.is_some_and(|hz| hz > 145_965_000));
     }
@@ -25125,7 +25358,7 @@ mod tests {
 
         e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
         let c = e
-            .sat_doppler_tick(5.0, 2_000_000, false)
+            .sat_doppler_tick(5.0, 2_010_000, false)
             .expect("both legs");
         assert!(c.uplink_hz.is_some(), "their uplink still follows the bird");
     }
@@ -25432,7 +25665,7 @@ mod tests {
         e.set_sat_transponder(Some(("RS-44|CW beacon".into(), 1, beacon)));
 
         let c = e
-            .sat_doppler_tick(5.0, 1_000, false)
+            .sat_doppler_tick(5.0, 15_000, false)
             .expect("the downlink still corrects — that is the bird's one leg");
         assert!(c.downlink_hz.is_some());
         assert_eq!(

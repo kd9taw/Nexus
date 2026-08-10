@@ -147,6 +147,7 @@ export function CockpitHeader({
       catOk &&
       !radio.txBusyReason &&
       !radio.transmitting &&
+      !radio.rigKeyed && // radio-side keying (mic/straight key, #57) — same live-over rule
       !radio.tuning,
     stepHz: wheelStepHz,
     sensitivity: wheelSensitivity,
@@ -170,7 +171,13 @@ export function CockpitHeader({
     onSnap,
   })
 
-  const txPill = radio.transmitting ? txActiveLabel : radio.txEnabled ? '▼ RX' : '■ TX off'
+  // ON AIR is the ARBITER's answer, not the FT slot flag: `transmitting` is written only
+  // by the slot/beacon TX path, so a voice over, CW sending, the tune carrier, a held mic
+  // key and SSTV all read as "RX" through it — the #57 report (FTdx10, Phone/CW showed no
+  // TX). `txBusyReason` ships whenever ANY of the seven owners holds the transmitter; the
+  // same rule the wheel-tune gate above already follows.
+  const onAir = radio.transmitting || radio.txBusyReason != null || radio.rigKeyed === true
+  const txPill = onAir ? txActiveLabel : radio.txEnabled ? '▼ RX' : '■ TX off'
 
   return (
     <div className="cockpit-header">
@@ -244,6 +251,13 @@ export function CockpitHeader({
           </label>
         )}
 
+        {/* ⚠️ THE BRANCH CONDITION IS THE SLOT FLAG ON PURPOSE — stop line. In RTTY/SSTV
+            the TX-enable latch is a STOP control and must stay a BUTTON through an over
+            (`radio.transmitting` is the slot-TX indicator alone, so a soundcard over never
+            flips this branch). Gating it on the arbiter's `onAir` would replace the latch
+            with a passive pill exactly while an over is keying — removing a stop control.
+            Only the PASSIVE pill below (Phone/CW, which pass no onSetTxEnabled) reads the
+            arbiter. */}
         {txState &&
           (onSetTxEnabled && !radio.transmitting ? (
             <button
@@ -260,7 +274,12 @@ export function CockpitHeader({
               {radio.txEnabled ? '▼ TX On' : '■ TX Off'}
             </button>
           ) : (
-            <span className={`cockpit-txstate${radio.transmitting ? ' on' : ''}`}>{txPill}</span>
+            <span
+              className={`cockpit-txstate${onAir ? ' on' : ''}`}
+              title={!radio.transmitting && radio.txBusyReason ? radio.txBusyReason : undefined}
+            >
+              {txPill}
+            </span>
           ))}
 
         {onTune && (

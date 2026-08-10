@@ -547,35 +547,42 @@ describe('Satellites — logging the contact you just made', () => {
   // either one is handed the paragraphs to delete — these tests go red on the
   // fix, which is the coupling.
 
-  it('records SSB on a digital tier — the disclosed mode fold, NOT YET fixed', async () => {
-    // The Satellites section, unlike the Phone and CW cockpits, is reachable on
-    // a digital tier, and every WSJT-X-tier channel the band plan ships commands
-    // "USB" — the sideband a data mode is generated on, not the mode. The fold
-    // has only the sideband to go on, so it answers SSB.
-    //
-    // Wrong on a permanent record, and documented in docs/guide/satellites.md
-    // rather than guessed at (the honest value is the TIER's ADIF mode, which
-    // this function is not given).
+  it("records the tier's mode on a digital section — the old SSB fold is dead", async () => {
+    // The sat-FT batch (2026-08-10) made this strip tier-aware: on a DIGITAL
+    // operating section the record carries the tier's own registered name (the
+    // engine's log-mode strings, used verbatim), never the sideband the data
+    // mode was generated on. This flips the old disclosed defect
+    // ("records SSB on a digital tier"); the guide's "does not do yet" note
+    // and the CHANGELOG disclosure went with it.
     render(
-      <SatellitesView focusSat="RS-44" snap={snap({ sideband: 'USB' }, { link: { tier: 'Q65' } })} />,
+      <SatellitesView
+        focusSat="RS-44"
+        snap={snap({ sideband: 'USB', operatingMode: 'digital' }, { link: { tier: 'Q65' } })}
+      />,
     )
-    const rec = await logCall('W1AW')
-    expect(
-      rec.mode,
-      'the tier-aware mode landed — delete the "not yet" note in the guide and the CHANGELOG',
-    ).toBe('SSB')
+    expect((await logCall('W1AW')).mode).toBe('Q65')
     cleanup()
 
-    // The Tempo plan is the exception to "commands USB": it ships three FM
-    // simplex channels (2 m / 1.25 m / 70 cm), so a TempoFast contact worked on
-    // one records FM. Still an analogue voice mode standing in for a data mode —
-    // the same defect, not a second one — but the CHANGELOG and the guide may
-    // not say "it records SSB" without this qualifier.
+    // The SECTION gate is load-bearing: link.tier always names a tier (the
+    // decoder is always set to something), so a voice pass worked from the
+    // Phone section must still fold by SIDEBAND — labelling it FT8 would be
+    // the same defect pointing the other way.
     api.logQso.mockClear()
     render(
       <SatellitesView
         focusSat="RS-44"
-        snap={snap({ sideband: 'FM' }, { link: { tier: 'TempoFast' } })}
+        snap={snap({ sideband: 'USB', operatingMode: 'phone' }, { link: { tier: 'FT8' } })}
+      />,
+    )
+    expect((await logCall('W1AW')).mode).toBe('SSB')
+    cleanup()
+
+    // And an FM bird worked from a non-digital section still records FM.
+    api.logQso.mockClear()
+    render(
+      <SatellitesView
+        focusSat="RS-44"
+        snap={snap({ sideband: 'FM', operatingMode: 'phone' }, { link: { tier: 'TempoFast' } })}
       />,
     )
     expect((await logCall('W1AW')).mode).toBe('FM')

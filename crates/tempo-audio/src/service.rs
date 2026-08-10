@@ -506,6 +506,12 @@ const AUDIO_RETRY_MS: f64 = 2_000.0;
 /// more than one blocking CAT read lands per loop tick. RX health polling is suspended while
 /// keyed, so this reuses that bus headroom.
 const TX_METER_POLL_MS: f64 = 150.0;
+/// How often to ask the rig for its OWN PTT state (`t`) while Nexus is NOT keying (#57 —
+/// radio-side keying was invisible: mic PTT / a straight key showed RX and no meters).
+/// One short read-only round-trip per second on an otherwise idle link; the answer gates
+/// the TX-meter poll too, so the operator gets SWR/Po for a mic-keyed over. NEEDS-BENCH:
+/// class-wide serial change — verified on real rigs before release.
+const RIG_PTT_POLL_MS: f64 = 1_000.0;
 /// How often to run the FAST dial-only read-back. The dial is the one value that must track a
 /// manual VFO knob in real time, so it's polled ~4× faster than the heavy set — matching HRD's
 /// Yaesu responsiveness (which is pure fast polling; the earlier 1–2 s lag was self-inflicted by
@@ -1940,6 +1946,12 @@ struct RadioLoop {
     /// Round-robin index over the four TX meters (SWR/ALC/Po/COMP) — one read per throttled
     /// cycle, so a slow rig can never block the loop with four back-to-back reads.
     tx_meter_idx: usize,
+    /// The rig's own PTT as last read via `t` — TRUE means the transmitter is keyed by
+    /// something that is not Nexus (mic PTT, straight key). Polled only while Nexus is
+    /// idle; gates the TX-meter poll and mirrors into the engine (`observe_rig_ptt`).
+    rig_keyed: bool,
+    /// Last `t` poll (ms); 0.0 forces an immediate first read on going idle.
+    last_ptt_poll: f64,
     /// Last time we ran the FAST dial-only read-back (ms). The dial is mirrored on a much shorter
     /// cadence than the heavy reads so a manual VFO-knob turn tracks like HRD (~⅕ s), not the
     /// 750 ms health poll — the heavy reads (S-meter/mode/funcs) stay slow to bound CAT traffic.
@@ -2136,6 +2148,8 @@ impl RadioLoop {
             audio_rig_split: false,
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
+            rig_keyed: false,
+            last_ptt_poll: 0.0,
             tx_meter_idx: 0,
             last_freq_poll: now_unix_ms(),
             last_smeter_poll: 0.0,
@@ -4857,7 +4871,28 @@ impl RadioLoop {
         {
             let keyed_now =
                 self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
-            if keyed_now && self.cat_ok != Some(false) {
+            // RADIO-SIDE keying (#57): while Nexus is idle, ask the rig for its own PTT —
+            // a mic key or straight key at the radio is otherwise invisible to every TX
+            // indicator in the app. Read-only (`t`, never `T`), once a second, and only
+            // when Nexus holds nothing itself: while WE key, the rig would answer 1 and
+            // say nothing new. A lost poll keeps the last belief (no flapping); a CAT
+            // trip clears it below with the meters.
+            if !keyed_now && self.cat_ok != Some(false) {
+                if now - self.last_ptt_poll >= RIG_PTT_POLL_MS {
+                    self.last_ptt_poll = now;
+                    if let Some(on) = rig.read_ptt() {
+                        if on != self.rig_keyed {
+                            self.rig_keyed = on;
+                            engine_lock(engine).observe_rig_ptt(on);
+                        }
+                    }
+                }
+            } else if keyed_now && self.rig_keyed {
+                // Nexus took the transmitter — the radio-side claim is stale by definition.
+                self.rig_keyed = false;
+                engine_lock(engine).observe_rig_ptt(false);
+            }
+            if (keyed_now || self.rig_keyed) && self.cat_ok != Some(false) {
                 if now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
                     // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
                     // normalized 0..1, only the _WATTS variant is true watts — and the native
@@ -4883,6 +4918,12 @@ impl RadioLoop {
                     let mut eng = engine_lock(engine);
                     eng.clear_rig_tx_meters();
                 }
+            }
+            // A CAT trip invalidates the radio-side PTT belief too — a dead link must
+            // never leave a stale "the rig is keyed" claim standing.
+            if self.cat_ok == Some(false) && self.rig_keyed {
+                self.rig_keyed = false;
+                engine_lock(engine).observe_rig_ptt(false);
             }
         }
 
@@ -13191,11 +13232,14 @@ mod tests {
         let freqs_after_pick = commanded_freqs(&log).len();
 
         // Now DOPPLER, the same way the track loop drives it: corrections only.
+        // Tick times sit on SLOT-BOUNDARY phases (1_005_000 % 15_000 == 0): the engine
+        // fixture is in the default Digital section, where SlotAligned steering refuses
+        // mid-slot writes by design — this scene's subject is the WIRE, not the window.
         for n in 1..=4u64 {
             {
                 let mut e = engine.lock().unwrap();
                 // A real range rate, stepped so each tick is a fresh frequency.
-                e.sat_doppler_tick(-5.0 + n as f64, 1_000_000 + n * 3_000, false);
+                e.sat_doppler_tick(-5.0 + n as f64, 1_005_000 + n * 15_000, false);
             }
             run(&mut state, &mut rig, &mut backend, 2, &mut tick);
         }

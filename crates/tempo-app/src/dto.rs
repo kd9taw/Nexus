@@ -507,6 +507,16 @@ pub struct RadioStatus {
     pub dial_mhz: f64,
     pub band: String,
     pub sideband: String,
+    /// The active operating SECTION ("digital" | "phone" | "cw" | "rtty") — live engine
+    /// state, mirrored so surfaces reachable from any section (the Satellites log strip)
+    /// can answer section-dependent questions (a digital-tier contact logs the TIER's
+    /// mode, not the sideband it was generated on) without a settings round-trip.
+    #[serde(default)]
+    pub operating_mode: String,
+    /// The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
+    /// over CAT (#57). Display-only — feeds the TX badge and the meter pane.
+    #[serde(default)]
+    pub rig_keyed: bool,
     pub transmitting: bool,
     pub slot: u64,
     pub next_slot_ms: u64,

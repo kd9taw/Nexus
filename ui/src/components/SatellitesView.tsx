@@ -117,32 +117,32 @@ const TP_ALIVE_CAP = 4
  * trap LogEntry's LOG_MODES table documents. Nothing about the satellite feeds
  * this: not the bird, not the transponder, not the downlink.
  *
- * ⚠️ KNOWN WRONG ON A DIGITAL TIER — NOT YET FIXED. The four arms above are the
- * complete set only where the Phone and CW cockpits are: those sections are
- * reachable only in their own operating mode. This section is not — it is
- * reachable on FT8/FT4/Q65/JT65/MSK144/WSPR/FST4/Tempo too, and this function
- * is handed the SIDEBAND those tiers are generated on, never the tier. Every
- * WSJT-X-tier channel `tempo_app::bandplan` ships commands "USB", so those
- * record `MODE=SSB`; the Tempo plan additionally ships three FM simplex
- * channels (2 m / 1.25 m / 70 cm), which record `MODE=FM`. Either way the
- * record names an analogue voice mode for a contact worked on a data mode —
- * wrong, and permanent.
+ * ⭐ TIER-AWARE ON A DIGITAL SECTION (the sat-FT batch, 2026-08-10 — this used
+ * to be the disclosed "records SSB on a digital tier" defect). The section is
+ * reachable on FT8/FT4/Q65/JT65/MSK144/WSPR/FST4/Tempo, and the sideband those
+ * tiers are generated on says "USB" — an analogue voice mode standing in for a
+ * data mode on a permanent record. When the active operating SECTION is
+ * digital, the honest value is the TIER's own registered name, and the
+ * snapshot's tier strings are exactly the engine's own log-mode mapping (FT8,
+ * FT4, Q65 without the display submode, FST4W as itself, TempoFast/TempoDeep)
+ * — so the tier string is used verbatim rather than re-mapped here where the
+ * two tables could drift.
  *
- * It is disclosed rather than guessed at: the honest value is the TIER's own
- * ADIF mode, and a wrong MODE is exactly the class of error this whole strip is
- * being careful about.
+ * The SECTION gate matters: `link.tier` always names a tier (the decoder is
+ * always set to something), so folding by tier unconditionally would label a
+ * voice pass worked from the Phone cockpit as FT8. Only the digital section
+ * says the operator is actually working the tier.
  *
- * ⚠️ THE WORKAROUND IS PARTIAL — say so rather than over-promise. The strip's
- * own "Log a contact from another radio" override has a mode picker, but it
- * offers LogEntry's `LOG_MODES` list and no more: SSB / FM / AM / CW / RTTY /
- * FT8 / FT4. So it covers the FT8 and FT4 tiers and NOT Q65, JT65, MSK144,
- * WSPR, FST4, FST4W or Tempo. On those the only route today is the Logbook's
- * edit form, whose Mode field is free text. Stated the same way in
- * docs/guide/satellites.md and the CHANGELOG; pinned by
- * `records SSB on a digital tier` and
- * `the override's mode picker covers FT8/FT4 and no other digital tier` in
+ * Pinned by `records the tier's mode on a digital section` in
  * SatellitesView.logentry.test.tsx. */
-function adifModeFromStation(sideband: string | null | undefined): string {
+function adifModeFromStation(
+  sideband: string | null | undefined,
+  tier?: string | null,
+  operatingMode?: string | null,
+): string {
+  if ((operatingMode ?? '') === 'digital' && tier && tier.trim() !== '') {
+    return tier.trim()
+  }
   const m = (sideband ?? '').trim().toUpperCase()
   if (m === 'FM') return 'FM'
   if (m === 'CW') return 'CW'
@@ -2457,7 +2457,11 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
   const heldSimplex = !!(detail != null && binding?.simplex && tuned?.name === detail.name)
   // The ADIF mode the section's log strip records a contact as, and the report
   // format that follows from it. Station state only — see adifModeFromStation.
-  const logMode = adifModeFromStation(snap?.radio.sideband)
+  const logMode = adifModeFromStation(
+    snap?.radio.sideband,
+    snap?.link.tier,
+    snap?.radio.operatingMode,
+  )
   // The RECORD's per-leg sidebands differing (SatNOGS data) — used only to
   // decide whether the chooser's TX-sideband note renders at all, and for the
   // pre-arm FORECAST wording. What the engine actually commands is the DTO's

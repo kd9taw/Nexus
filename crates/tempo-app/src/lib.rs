@@ -238,6 +238,8 @@ impl AppState {
                 dial_mhz: 14.074, // FT8 20m (default mode)
                 band: "20m".to_string(),
                 sideband: "USB".to_string(),
+                operating_mode: "digital".to_string(),
+                rig_keyed: false,
                 transmitting: false,
                 // Nobody holds the transmitter at construction — the engine recomputes this
                 // from `tx_owner()` every snapshot.

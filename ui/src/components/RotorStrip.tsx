@@ -5,8 +5,17 @@
 // needle with no daemon behind it would be an ornament. Optional targetCall +
 // onPointAt adds a "→ CALL" one-click slew for the cockpit's selected station.
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { getDeclination, getSatTrackStatus, getSettings, readRotator, stopRotator, stopSatTrack } from '../api'
-import type { SatTrackStatus } from '../types'
+import {
+  getDeclination,
+  getSatTrackStatus,
+  getSatTransponder,
+  getSettings,
+  readRotator,
+  setSatTransponder,
+  stopRotator,
+  stopSatTrack,
+} from '../api'
+import type { SatTrackStatus, SatTransponderHeld } from '../types'
 import { magneticDeg } from '../grid'
 import { pushToast } from '../toast'
 
@@ -46,6 +55,13 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
   // Shown so the operator knows WHY the needle is moving on its own — and so
   // the ■ button stops the LOOP, not just one slew it would immediately redo.
   const [satTrack, setSatTrack] = useState<SatTrackStatus | null>(null)
+  // A transponder HELD with no armed track (the QO-100/park case, and any pick
+  // made before AOS). The hold owns the dial — section entry and tier flips
+  // now stand down for it (the sat-FT batch) — so it must be visible from the
+  // operating cockpits, not only inside the Satellites section: a dial that
+  // won't re-home with no visible owner is the same trust failure the track
+  // chip exists for.
+  const [held, setHeld] = useState<SatTransponderHeld | null>(null)
   // Rotor CONFIGURED in settings (model-launched rotctld or external host) —
   // splits "no rotor in this station" (render nothing) from "configured but
   // not answering" (render a dim, honest placeholder: a configured rotor that
@@ -68,6 +84,9 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
         .catch(() => alive.current && setAz(null))
       getSatTrackStatus()
         .then((t) => alive.current && setSatTrack(t))
+        .catch(() => {})
+      getSatTransponder()
+        .then((h) => alive.current && setHeld(h))
         .catch(() => {})
     }
     load()
@@ -109,8 +128,49 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
   // section that could stop it.
   if (az == null) {
     const steering = satTrack != null && (satTrack.downlinkHz != null || satTrack.uplinkHz != null)
+    // A transponder held with NO armed track still owns the dial (the pick
+    // parked it on the downlink, and section entry / tier flips now stand down
+    // for it) — QO-100-class operating and any pre-AOS pick. Same visibility
+    // rule as the track chip: a dial with an invisible owner is the failure.
+    const heldChip =
+      held == null ? null : (
+        <span
+          role="group"
+          aria-label="A satellite transponder holds the dial"
+          title={`${held.name} holds the dial — picked in Satellites; the dial stays on the bird through section changes. ■ releases the hold and hands the dial back`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
+        >
+          <span
+            style={{ fontSize: '0.65em', letterSpacing: '0.08em', opacity: 0.55, fontWeight: 600 }}
+            aria-hidden
+          >
+            SAT
+          </span>
+          <span
+            className="mono"
+            style={{ fontSize: '0.9em', fontWeight: 600, whiteSpace: 'nowrap' }}
+          >
+            ⟳ {held.name} · bird holds the dial
+          </span>
+          <button
+            type="button"
+            style={chipStyle}
+            aria-label="Release the transponder hold"
+            onClick={() => {
+              setSatTransponder(held.name, null)
+                .then(() => setHeld(null))
+                .catch((e) =>
+                  pushToast(`Release: ${e instanceof Error ? e.message : e}`, 'error'),
+                )
+            }}
+            title="Release the transponder NOW — the dial is yours again"
+          >
+            ■
+          </button>
+        </span>
+      )
     const satChip =
-      satTrack == null || !dopplerInTrack ? null : (
+      satTrack == null || !dopplerInTrack ? heldChip : (
         <span
           role="group"
           aria-label={
@@ -231,6 +291,15 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
         >
           ⟳ {satTrack.name}
           {dopplerOwnsDial ? ' +dial' : dopplerInTrack ? ' +uplink' : ''}
+        </span>
+      )}
+      {!satTrack && held && (
+        <span
+          className="mono"
+          style={{ fontSize: '0.75em', opacity: 0.8, whiteSpace: 'nowrap' }}
+          title={`${held.name} holds the dial — picked in Satellites; the dial stays on the bird through section changes. Release it there or with the strip's ■`}
+        >
+          ⟳ {held.name} +dial
         </span>
       )}
       {targetCall && onPointAt && (
