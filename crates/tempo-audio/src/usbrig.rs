@@ -317,6 +317,38 @@ pub struct KnownInterface {
     pub note: &'static str,
 }
 
+/// Is the serial port at `port_name` a recognised KEYING-interface cable — one that wires a
+/// serial control line (RTS/DTR) to PTT by construction (Digirig class)? Pure core, fed by
+/// enumeration, so it is testable; [`port_is_keying_interface`] is the live wrapper.
+///
+/// This is [`resolve_lines`](crate::rigctld_proc)'s `rts_deliberate` answer: only a port
+/// where RTS is POSITIVELY known to key something may cost a rig its declared hardware
+/// handshake (the KD9TAW bench regression, 2026-08-09 — an FTDX10 on its own USB port lost
+/// CAT to a handshake-drop meant for Digirig cables). Case-insensitive on the port name
+/// (Windows COM names arrive in either case). Unknown port / no match = `false`, which
+/// keeps pre-#44 behaviour — the safe side for CAT.
+pub fn keying_interface_in(ports: &[crate::ports::UsbPort], port_name: &str) -> bool {
+    ports
+        .iter()
+        .filter(|p| p.port_name.eq_ignore_ascii_case(port_name))
+        .any(|p| {
+            match_interface(p.vid, p.pid, &p.product, &p.manufacturer)
+                .is_some_and(|i| matches!(i.ptt_method, "rts" | "dtr"))
+        })
+}
+
+/// Live wrapper over [`keying_interface_in`]: enumerate now, answer for `port_name`.
+#[cfg(feature = "serial")]
+pub fn port_is_keying_interface(port_name: &str) -> bool {
+    keying_interface_in(&crate::ports::available_usb_ports(), port_name)
+}
+
+/// Without `serial` there is no enumeration — claim nothing (= keep the handshake).
+#[cfg(not(feature = "serial"))]
+pub fn port_is_keying_interface(_port_name: &str) -> bool {
+    false
+}
+
 /// Recognise a known interface cable from its USB identity.
 ///
 /// ⚠️ **MATCHES ON THE PRODUCT/MANUFACTURER STRING ONLY — never on VID/PID.** A stock Digirig

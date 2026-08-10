@@ -50,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with nothing on screen saying why. The sync now records its progress without touching the
   operating state.
 
+### Fixed (CAT — tester-build regression, never released)
+
+- **Yaesu CAT came back.** The 1.0.6 tester build killed CAT on every rig whose Hamlib
+  backend declares hardware flow control — FTdx10, FT-991, FT-891, TS-2000, TS-590 and about
+  fifty more — while native-CI-V Icoms kept working. The keyed-on-connect fix had started
+  telling the radio link to drop RTS/CTS flow control so RTS could be held low, and a Yaesu
+  at its factory default (CAT RTS = ENABLE) waits for the PC's RTS before it will answer:
+  CAT went completely silent. The handshake is now dropped **only** when RTS at that port is
+  genuinely wired to something — a recognised keying interface (Digirig class, the setup the
+  original fix protects, which stays protected) or a serial keying line on that port. A rig
+  on its own USB cable keeps its flow control, exactly as it did through 1.0.5.
+
 ### Fixed (awards — a tester put his 31,000-QSO log next to his official ARRL account)
 
 - **5-Band DXCC now computes the award ARRL actually grants.** It used to count entities

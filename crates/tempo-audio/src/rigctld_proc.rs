@@ -112,11 +112,19 @@ pub struct ControlLines {
     /// set through `-C` before open genuinely frees the line rather than merely disagreeing
     /// with the backend.
     ///
-    /// ⚠️ The cost, stated: a station that genuinely runs RTS/CTS flow control loses it.
-    /// Judged the better trade (operator, 2026-08-08) because an unattended keyed transmitter
-    /// is the worse failure, ham CAT is short messages where flow control is near-vestigial,
-    /// and WSJT-X drives these same rigs with handshake None. Untested on hardware — there is
-    /// no serial rig on the dev box.
+    /// ⚠️ THE TRADE, RE-SCOPED AFTER A FIELD REGRESSION (KD9TAW bench, 2026-08-09): the
+    /// 2026-08-08 version dropped the handshake for EVERY hardware-handshake backend,
+    /// because `cat_rts_state` defaults to "low" — and an FTDX10 / FT-991 at its factory
+    /// default (CAT RTS = ENABLE) gates its CAT replies on the PC asserting RTS, so
+    /// handshake=None + RTS held low made both bench Yaesus completely CAT-dead while the
+    /// native-CI-V Icoms sailed on. The override is therefore gated on `rts_deliberate`
+    /// ([`resolve_lines`]): RTS at this port must be POSITIVELY known to be wired to
+    /// something — a recognised keying-interface cable (the Digirig class that keyed
+    /// vk6mo's TS-2000, which stays protected) or a serial keying line declared on this
+    /// port. The blanket safety default alone never costs a rig its handshake again.
+    /// Residual, stated: an UNRECOGNISED RTS-wired cable on a hardware-handshake rig with
+    /// non-serial PTT keeps the 1.0.5 keyed-on-connect hazard — the narrow price of not
+    /// killing factory-default CAT on ~50 backends.
     pub handshake_none: bool,
 }
 
@@ -180,13 +188,26 @@ pub struct SettableLines {
 
 /// Narrow the operator's wishes to what this rig's Hamlib will actually accept. A line we
 /// cannot positively prove settable is left [`Untouched`](LineState::Untouched) — 1.0.1.
-fn resolve_lines(settable: SettableLines, want: ControlLines) -> ControlLines {
+///
+/// `rts_deliberate` — is RTS at this port KNOWN to be wired to something (a recognised
+/// keying-interface cable, or a serial keying line declared on this very port)? The
+/// handshake override is gated on it: see the ⚠️ in [`ControlLines::handshake_none`].
+fn resolve_lines(
+    settable: SettableLines,
+    want: ControlLines,
+    rts_deliberate: bool,
+) -> ControlLines {
     // Refusal #2 is the one refusal we can lift: drop the rig's declared hardware handshake so
     // RTS stops being flow control, and the line we could not hold becomes holdable. Only when
     // the operator actually wants it held — an `Untouched` wish buys nothing and would trade
-    // away someone's flow control for no gain. See [`ControlLines::handshake_none`].
-    let free_rts =
-        !settable.rts && settable.rts_taken_by_handshake && want.rts != LineState::Untouched;
+    // away someone's flow control for no gain — AND only when RTS at this port is a
+    // DELIBERATE thing (`rts_deliberate`): the blanket hold-low safety default must never be
+    // the reason a rig loses its declared handshake. See [`ControlLines::handshake_none`] —
+    // the KD9TAW bench regression (2026-08-09) is why this gate exists.
+    let free_rts = !settable.rts
+        && settable.rts_taken_by_handshake
+        && want.rts != LineState::Untouched
+        && rts_deliberate;
     ControlLines {
         rts: if settable.rts || free_rts {
             want.rts
@@ -1007,7 +1028,10 @@ pub fn spawn_rigctld(
     let lines = if network || addr.is_empty() {
         ControlLines::default()
     } else {
-        resolve_lines(settable_lines_for(model, ptt_line), want)
+        // Is RTS at this port a deliberate thing? A serial keying line declared here, or
+        // the port enumerating as a recognised keying-interface cable (Digirig class).
+        let deliberate = ptt_line.is_some() || crate::usbrig::port_is_keying_interface(addr);
+        resolve_lines(settable_lines_for(model, ptt_line), want, deliberate)
     };
     let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, lines);
     let mut cmd = Command::new(resolve_rigctld());
@@ -1666,9 +1690,12 @@ mod tests {
     /// drop the declared handshake so the line can be held low. The rest of the old assertion
     /// stands — DTR was never the problem.
     fn a_hardware_handshake_backend_gives_up_its_handshake_so_rts_can_be_held() {
+        // deliberate=true: the port enumerates as a Digirig-class keying cable — the #44
+        // wiring, where RTS IS the PTT and flow control is fiction.
         let lines = resolve_lines(
             parse_settable_lines(&show_conf("RIG", Some("Hardware"))),
             ControlLines::hold_low(),
+            true,
         );
         let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
         assert!(
@@ -1683,6 +1710,73 @@ mod tests {
         assert!(holds(&args, "dtr", "OFF"), "DTR is still free: {args:?}");
     }
 
+    /// ⛔ THE KD9TAW BENCH REGRESSION (2026-08-09), pinned. An FTDX10 / FT-991 on its OWN
+    /// USB port — no interface cable, no serial keying line — with nothing but the shipped
+    /// hold-low default: the rig's declared hardware handshake must SURVIVE. These rigs at
+    /// their factory default (CAT RTS = ENABLE) gate CAT replies on the PC asserting RTS;
+    /// the 2026-08-08 blanket override (handshake=None + rts_state=OFF) made both bench
+    /// Yaesus completely CAT-dead while the native-CI-V Icoms kept working. Written to fail
+    /// against that build.
+    #[test]
+    fn a_bare_rig_on_the_default_hold_keeps_its_hardware_handshake() {
+        let lines = resolve_lines(
+            parse_settable_lines(&show_conf("RIG", Some("Hardware"))),
+            ControlLines::hold_low(),
+            false, // not a keying cable, no serial keying line — the default, undelibrate case
+        );
+        assert!(
+            !lines.handshake_none,
+            "the blanket safety default must never cost a rig its handshake"
+        );
+        let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
+        assert!(
+            !args.iter().any(|a| a.starts_with("serial_handshake")),
+            "an FTDX10 with CAT RTS = ENABLE goes CAT-dead the moment this flag appears: {args:?}"
+        );
+        assert!(
+            says_nothing_about(&args, "rts"),
+            "and RTS stays untouched — flow control keeps working: {args:?}"
+        );
+        // DTR is not flow control: the safety hold still applies there.
+        assert!(holds(&args, "dtr", "OFF"), "{args:?}");
+    }
+
+    /// The `rts_deliberate` answer itself: a Digirig enumerates as a keying interface, a
+    /// rig's own USB port does not, and an unknown port claims nothing.
+    #[test]
+    fn keying_interface_recognition_separates_cables_from_rigs() {
+        use crate::ports::UsbPort;
+        let ports = vec![
+            UsbPort {
+                port_name: "COM7".into(),
+                vid: 0x10C4,
+                pid: 0xEA60,
+                product: "Digirig Mobile".into(),
+                manufacturer: "Silicon Labs".into(),
+            },
+            UsbPort {
+                port_name: "COM5".into(),
+                vid: 0x10C4,
+                pid: 0xEA60,
+                product: "FTDX10".into(),
+                manufacturer: "Yaesu".into(),
+            },
+        ];
+        assert!(crate::usbrig::keying_interface_in(&ports, "COM7"));
+        assert!(
+            crate::usbrig::keying_interface_in(&ports, "com7"),
+            "case-insensitive"
+        );
+        assert!(
+            !crate::usbrig::keying_interface_in(&ports, "COM5"),
+            "same VID/PID as the Digirig — the PRODUCT string is what separates them"
+        );
+        assert!(
+            !crate::usbrig::keying_interface_in(&ports, "COM9"),
+            "unknown port claims nothing"
+        );
+    }
+
     /// The override is not a blanket one. A backend that already leaves RTS free gets no
     /// handshake flag — without this, the test above passes just as well for a hook that
     /// emits it unconditionally, and every operator loses their flow control for nothing.
@@ -1691,6 +1785,7 @@ mod tests {
         let lines = resolve_lines(
             parse_settable_lines(&show_conf("RIG", Some("None"))),
             ControlLines::hold_low(),
+            false,
         );
         let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
         assert!(
@@ -1713,7 +1808,7 @@ mod tests {
             !settable.rts_taken_by_handshake,
             "the handshake is not why this line is unavailable — the keying is"
         );
-        let lines = resolve_lines(settable, ControlLines::hold_low());
+        let lines = resolve_lines(settable, ControlLines::hold_low(), true);
         let args = rigctld_args(
             1042,
             "COM5",
@@ -1741,6 +1836,7 @@ mod tests {
                 dtr: LineState::Low,
                 handshake_none: false,
             },
+            true,
         );
         assert!(!lines.handshake_none, "nothing was asked for on RTS");
         let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
@@ -1827,6 +1923,7 @@ mod tests {
             resolve_lines(
                 parse_settable_lines(SHOW_CONF_FT757GXII),
                 ControlLines::hold_low(),
+                false,
             ),
         );
         assert!(
@@ -1964,10 +2061,10 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            resolve_lines(free, ControlLines::hold_low()),
+            resolve_lines(free, ControlLines::hold_low(), false),
             ControlLines::hold_low()
         );
-        assert_eq!(resolve_lines(free, high_both()), high_both());
+        assert_eq!(resolve_lines(free, high_both(), false), high_both());
         // Untouched is 1.0.1: nothing is emitted even where everything is settable.
         let untouched = rigctld_args(
             3073,
@@ -1976,7 +2073,7 @@ mod tests {
             4532,
             false,
             None,
-            resolve_lines(free, ControlLines::default()),
+            resolve_lines(free, ControlLines::default(), false),
         );
         assert!(!untouched.iter().any(|a| a == "-C"), "{untouched:?}");
         // High reaches the wire as Hamlib's own `ON`.
@@ -1987,7 +2084,7 @@ mod tests {
             4532,
             false,
             None,
-            resolve_lines(free, high_both()),
+            resolve_lines(free, high_both(), false),
         );
         assert!(
             holds(&high, "rts", "ON") && holds(&high, "dtr", "ON"),
@@ -2000,7 +2097,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            resolve_lines(taken, high_both()),
+            resolve_lines(taken, high_both(), false),
             ControlLines {
                 rts: LineState::Untouched,
                 dtr: LineState::High,
@@ -2213,7 +2310,7 @@ mod tests {
                 continue;
             }
             keyed_by_a_line.push((m, ptt.to_string()));
-            let lines = resolve_lines(parse_settable_lines(&dump), ControlLines::hold_low());
+            let lines = resolve_lines(parse_settable_lines(&dump), ControlLines::hold_low(), false);
             let args = rigctld_args(m, "COM5", 9600, 4532, false, None, lines);
             let line = if ptt == "RTS" { "rts" } else { "dtr" };
             assert!(
