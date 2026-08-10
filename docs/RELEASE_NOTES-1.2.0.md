@@ -47,6 +47,13 @@ bench-verified on an FTdx10 and an FT-991.
 
 ## Also fixed
 
+- **Leaving the FT screen and coming back no longer wipes your roster and decodes.**
+  Checking the Logbook and returning froze the app briefly, cleared the Call Roster and
+  Band Activity, and started them over — the return path re-issued the mode switch, and
+  the stale-cycle protection that rightly clears everything on a real FT8↔FT4 change
+  fired when nothing had changed. Navigate anywhere and back; your decodes stay put.
+  Reported with a clean repro by kr4fqg. Band Activity's empty message also now says
+  *which* kind of empty — "nothing matches the To-me filter" is not "no decodes yet".
 - **WSPR spots name the right country.** A WSPR line reads CALL GRID POWER, and the
   decode feed was parsing it with the FT8 grammar — the power figure looked like a
   signal report and the grid slid into the callsign slot, so TI4JWC's Costa Rica showed

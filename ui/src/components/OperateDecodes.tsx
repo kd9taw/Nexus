@@ -407,13 +407,26 @@ export function OperateDecodes({
         onScroll={onScroll}
         onKeyDown={roving.containerProps.onKeyDown}
       >
-        {list.length === 0 && (
-          <StateBlock
-            kind="empty"
-            title="No decodes yet"
-            detail="Waiting for the next slot — decoded signals will appear here as they arrive."
-          />
-        )}
+        {list.length === 0 &&
+          // TWO different empty states, and conflating them cost a field report its
+          // diagnosis: with the "To me" chip lit on a busy band this pane said
+          // "No decodes yet — waiting for the next slot" while its history held
+          // hundreds of rows the FILTER was hiding — which read as "decoder dead" and
+          // blinded the one pane that could have answered whether decodes were
+          // arriving. Say which it is.
+          (histRef.current.entries().length === 0 ? (
+            <StateBlock
+              kind="empty"
+              title="No decodes yet"
+              detail="Waiting for the next slot — decoded signals will appear here as they arrive."
+            />
+          ) : (
+            <StateBlock
+              kind="empty"
+              title={`Nothing matches “${FILTER_LABEL[filter] ?? filter}”`}
+              detail={`${histRef.current.entries().length} decodes in history are hidden by the current filter — pick another chip to see them.`}
+            />
+          ))}
         {list.map((d, i) => {
           const ignoredRow = isIgnored(ignores, d.from)
           const selectedRow = !!d.from && !!selectedUp && d.from.toUpperCase() === selectedUp

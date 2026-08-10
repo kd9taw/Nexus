@@ -115,6 +115,24 @@ describe('the −B4 modifier (field ask: "CQ only, but exclude B4")', () => {
   })
 })
 
+describe('the empty state says WHICH kind of empty (the field-report blinder)', () => {
+  it('a filter hiding a non-empty history names the filter, never "No decodes yet"', () => {
+    // Rows exist but none are directed to me: with "To me" lit the old copy claimed
+    // "No decodes yet — waiting for the next slot", which read as a dead decoder.
+    mount({ decodes: [decode({ directedToMe: false })] })
+    fireEvent.click(chip('To me'))
+    expect(screen.queryByText('No decodes yet')).toBeNull()
+    expect(screen.queryByText(/Nothing matches/)).not.toBeNull()
+    expect(screen.queryByText(/hidden by the current filter/)).not.toBeNull()
+  })
+
+  it('a genuinely empty history keeps the original first-run copy', () => {
+    mount({ decodes: [] })
+    expect(screen.queryByText('No decodes yet')).not.toBeNull()
+    expect(screen.queryByText(/Nothing matches/)).toBeNull()
+  })
+})
+
 describe('the locked Rx Frequency pane cannot clobber the Band Activity chip', () => {
   it('renders no filter bar and leaves the stored chip untouched', () => {
     localStorage.setItem(DECODE_FILTER_KEY, 'cq')

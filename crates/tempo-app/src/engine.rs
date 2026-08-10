@@ -7062,6 +7062,19 @@ impl Engine {
         self.app.clear_peer();
     }
     pub fn set_tier(&mut self, tier: Tier) {
+        // SAME TIER ⇒ COMPLETE NO-OP (the 1.1.0 empty-roster report). The rail's FT
+        // button re-issues the tier on every return to the FT view, and without this
+        // guard the stale-cycle clears below fired on a plain Logbook→FT round trip —
+        // roster wiped, decode context flushed (in-flight results discarded by the
+        // epoch bump), and the decoder swap below parked the ENGINE MUTEX on the
+        // source serialization lock until the in-flight decode finished: the reported
+        // freeze-then-clear. Nothing below is load-bearing when nothing changed — the
+        // slot period, parity numbering and watering hole are all properties of the
+        // tier, and it didn't move. (work_spot_tiered carries its own same-tier guard
+        // for the same reason; this one protects every caller.)
+        if tier == self.app.tier() {
+            return;
+        }
         // Tier switch changes the slot period (FT8 15 s / FT4 7.5 s) — slot indices
         // from the old tier are meaningless for answer parity. Flush the context.
         self.clear_decode_context();
@@ -16594,6 +16607,46 @@ mod tests {
             rv: None,
             mode: None,
         }
+    }
+
+    #[test]
+    fn a_same_tier_set_tier_is_a_complete_no_op() {
+        // THE 1.1.0 EMPTY-ROSTER REPORT (field repro: FT view → Logbook → back to FT ⇒
+        // waterfall freezes, panels clear, "starts over"). The rail's FT button re-issues
+        // the tier on every return, and set_tier had no same-tier guard — so the
+        // 74a662a6 stale-cycle clears (context + roster), correct and load-bearing for a
+        // GENUINE FT8↔FT4 switch, fired on a plain navigation round trip and violated
+        // the keep-alive contract ("a Logbook glance touches nothing").
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.ingest_decodes_for_test(&[cq_decode_from("W9XYZ"), cq_decode_from("K2DEF")], 10);
+        assert_eq!(
+            e.snapshot().stations.len(),
+            2,
+            "precondition: a populated roster"
+        );
+        let epoch = e.decode_epoch;
+
+        e.set_tier(Tier::Ft8); // the tier we are already on — the rail re-entry path
+        assert_eq!(
+            e.snapshot().stations.len(),
+            2,
+            "same-tier set_tier must not clear the roster"
+        );
+        assert_eq!(
+            e.decode_epoch, epoch,
+            "…and must not flush the decode context (an epoch bump discards in-flight results)"
+        );
+
+        // Positive control: a GENUINE switch still runs the stale-cycle clears — the
+        // POTA fix this guard must not weaken (old-tier heard-slots are answerable on
+        // the wrong cycle; that is an on-air hazard, not a display preference).
+        e.set_tier(Tier::Ft4);
+        assert_eq!(
+            e.snapshot().stations.len(),
+            0,
+            "control: a real tier change clears the roster exactly as 74a662a6 shipped"
+        );
+        assert!(e.decode_epoch != epoch, "control: and flushes the context");
     }
 
     #[test]

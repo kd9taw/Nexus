@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Leaving the FT screen and coming back no longer wipes your roster and decodes.**
+  Checking the Logbook mid-session and returning froze the app for a couple of seconds,
+  cleared the Call Roster and Band Activity, and started them over — the return path was
+  re-issuing the tier, and the 1.1.0 stale-cycle protection (which rightly clears
+  everything on a *real* FT8↔FT4 switch) fired when nothing had changed. A same-tier
+  switch is now a complete no-op: navigate anywhere and back, and your decodes are
+  exactly where you left them. Reported with a clean repro by kr4fqg.
+- **Band Activity's empty message now says which kind of empty.** With a filter chip lit
+  (say, "To me") on a busy band, the pane claimed "No decodes yet — waiting for the next
+  slot" while hundreds of rows sat hidden by the filter — which read as a dead decoder.
+  It now names the filter and the hidden count.
+
 - **Phone and CW now show TX and live meters whenever the transmitter is actually keyed.**
   The TX badge and the SWR/ALC/power pane watched a flag only the FT8/FT4 transmitter set,
   so voice and CW overs never lit them — the readings were being polled and shown to
