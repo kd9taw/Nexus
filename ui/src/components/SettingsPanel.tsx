@@ -2260,6 +2260,21 @@ export function SettingsPanel({
           {tab === 'radio' && (
           <>
           <SetupHealth radio={radio} catResult={catResult} onProveTx={onProveTx} />
+          {/* The wizard re-entry, ON THE RADIO TAB — its only home used to be a text link
+              buried in a hint on the Appearance tab (operator, 2026-08-09: "there is no
+              features tab"), which is not where anyone looks to redo setup. The Appearance
+              link stays for the profile-chip context; this button is the discoverable one. */}
+          {onRerunWizard && (
+            <div className="settings-field">
+              <button type="button" className="settings-linkbtn" onClick={onRerunWizard}>
+                Re-run setup wizard…
+              </button>
+              <span className="settings-hint">
+                The guided setup — detect the radio, test CAT, pair audio. It edits in place;
+                nothing is lost by re-running it.
+              </span>
+            </div>
+          )}
           {/* Dual-radio roster (P2). Always shown — the "+ Add radio" button is the discovery
               affordance a single-radio operator sees; the per-radio list + band coverage only
               matter once there's a 2nd radio. */}

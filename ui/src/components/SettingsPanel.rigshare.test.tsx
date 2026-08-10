@@ -232,3 +232,30 @@ describe('sharing the rig over Hamlib NET rigctl', () => {
     expect(hint.textContent).toMatch(/argue|conflict/i)
   })
 })
+
+describe('wizard re-entry lives on the Radio tab', () => {
+  // The only way back into setup used to be a text link inside a hint on the
+  // APPEARANCE tab (operator, 2026-08-09: "there is no features tab") — setup
+  // must be findable where an operator actually looks for it.
+  it('shows Re-run setup wizard on the Radio tab when the host wires it', async () => {
+    const onRerunWizard = vi.fn()
+    render(
+      <SettingsPanel
+        activeRadioId={0}
+        onRerunWizard={onRerunWizard}
+        scale={1 as never}
+        scaleMode={'auto' as never}
+        scaleCap={1 as never}
+        onScaleModeChange={() => {}}
+        onScaleCapChange={() => {}}
+        density={'comfortable' as never}
+        onDensityChange={() => {}}
+        onResetLayout={() => {}}
+        features={features}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Re-run setup wizard/ }))
+    expect(onRerunWizard).toHaveBeenCalledTimes(1)
+  })
+})
