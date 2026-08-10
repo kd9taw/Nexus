@@ -491,17 +491,17 @@ fn assign_generic_codecs(rigs: &mut [DetectedRig], audio: &[AudioDevice], input:
     // the pair case right and two-full-Icoms degrades to a shared suggestion, which
     // the wizard's confirm step surfaces rather than hides).
     let mut pair_grant: Vec<((u16, u16), Option<String>)> = Vec::new();
-    for i in 0..rigs.len() {
+    for rig in rigs.iter_mut() {
         let already = if input {
-            rigs[i].suggested_audio.is_some()
+            rig.suggested_audio.is_some()
         } else {
-            rigs[i].suggested_audio_out.is_some()
+            rig.suggested_audio_out.is_some()
         };
         if already {
             continue; // product-owned
         }
-        let grant = if rigs[i].civ_side.is_some() {
-            let key = (rigs[i].vid, rigs[i].pid);
+        let grant = if rig.civ_side.is_some() {
+            let key = (rig.vid, rig.pid);
             match pair_grant.iter().find(|(k, _)| *k == key) {
                 Some((_, g)) => g.clone(),
                 None => {
@@ -514,9 +514,9 @@ fn assign_generic_codecs(rigs: &mut [DetectedRig], audio: &[AudioDevice], input:
             pool.next()
         };
         if input {
-            rigs[i].suggested_audio = grant;
+            rig.suggested_audio = grant;
         } else {
-            rigs[i].suggested_audio_out = grant;
+            rig.suggested_audio_out = grant;
         }
     }
 }
@@ -530,6 +530,8 @@ fn assign_generic_codecs(rigs: &mut [DetectedRig], audio: &[AudioDevice], input:
 /// at all: cpal names an ALSA device `plughw:CARD=CODEC,DEV=0`, which no pattern here has
 /// ever matched, so zero-config rig-audio pairing silently did nothing on every Linux box
 /// until the picker started carrying descriptions alongside names.
+#[cfg(test)] // production pairing = pair_audio_product + assign_generic_codecs; this
+             // single-rig composition survives as the tests' reference oracle
 fn pair_audio(product: &str, audio: &[AudioDevice]) -> Option<String> {
     pair_audio_product(product, audio).or_else(|| {
         // Generic fallback: LABEL ONLY, and by TIER. This pass also fills audioOut, where a
