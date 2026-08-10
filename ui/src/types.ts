@@ -1856,30 +1856,45 @@ export interface WasProgress {
   confirmed: number
   /** States still to confirm (postal codes, sorted) — the WAS chase. */
   needed: string[]
-  /** 5-Band WAS: states worked / confirmed on all of 80/40/20/15/10m. */
+  /** 5-Band WAS standing: the WEAKEST award band's state count (50 = 5BWAS). */
   fiveBandWorked: number
   fiveBandConfirmed: number
 }
 
-/** VUCC (grid-square) progress — distinct Maidenhead grids worked / confirmed,
- * overall and per band (VUCC proper = 100 grids on 6m/2m). */
+/** Grid-square progress. `worked`/`confirmed` are an ALL-BAND tracker (HF
+ * included); the real ARRL VUCC standings (50 MHz-up, per-band thresholds)
+ * are in `awards`. */
 export interface VuccProgress {
   /** Terrestrial counts — satellite QSOs live in satWorked/satConfirmed only. */
   worked: number
   confirmed: number
-  /** Per-band grid-square counts, 160m → 2m. */
+  /** Per-band grid-square counts (160m → 23cm; label-keyed). */
   bands: BandAward[]
   /** Satellite VUCC — grids worked/confirmed via satellite (PROP_MODE=SAT),
    * band-independent (ARRL counts sat QSOs toward this category only). */
   satWorked: number
   satConfirmed: number
+  /** Real per-band VUCC standings: 6m/4m/2m need 100, 1.25m/70cm 50, 33cm/23cm 25. */
+  awards: VuccBandStanding[]
+}
+
+/** One band's standing against its ARRL VUCC threshold. */
+export interface VuccBandStanding {
+  band: string
+  worked: number
+  confirmed: number
+  threshold: number
+  achieved: boolean
 }
 
 /** IOTA (Islands On The Air) progress — distinct island groups worked / confirmed
  * (basic IOTA = 100 confirmed). */
 export interface IotaProgress {
   worked: number
+  /** Confirmed in the log sense (LoTW or card). */
   confirmed: number
+  /** Card-confirmed — the only channel the IOTA program accepts (never LoTW). */
+  cardConfirmed: number
 }
 
 /** DXCC Honor Roll standing — current-entity, confirmed. (ARRL: confirmed ≥
@@ -1972,9 +1987,14 @@ export interface AwardSummary {
   slotNeeded: EntityNeed[]
   /** Gamification milestones (unlocked + locked-with-progress). */
   achievements: Achievement[]
-  /** 5-Band DXCC: entities worked / confirmed on all of 80/40/20/15/10m. */
+  /** 5-Band DXCC standing: the WEAKEST award band's entity count (ARRL: 100 on
+   * EACH of 80/40/20/15/10m independently). */
   fiveBandWorked: number
   fiveBandConfirmed: number
+  /** Satellite DXCC — entities via satellite (excluded from Mixed/band/mode DXCC,
+   * like LoTW's Satellite column). */
+  satDxccWorked: number
+  satDxccConfirmed: number
   /** Worked All Zones (CQ WAZ): distinct CQ zones worked / confirmed, out of 40. */
   wazWorked: number
   wazConfirmed: number

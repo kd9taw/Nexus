@@ -10687,7 +10687,7 @@ fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
 /// docs/guide/satellites.md. Pinned by
 /// `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`,
 /// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc` and
-/// `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`.
+/// `the_untagged_satellite_grid_lands_in_the_terrestrial_tracker_on_every_band`.
 fn qso_is_sat(prop_mode: Option<&str>) -> bool {
     prop_mode.is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
 }
@@ -10713,6 +10713,9 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
             &q.mode,
             q.award_confirmed,
             credited,
+            // The paper-card channel alone — IOTA's award gate (the IOTA program
+            // accepts cards and Club Log matching, never LoTW).
+            q.qsl_rcvd.card,
             q.state.as_deref(),
             q.grid.as_deref(),
             q.ota.iota.as_deref(),
@@ -16763,6 +16766,7 @@ mod tests {
             &rec.mode,
             rec.award_confirmed,
             false,
+            rec.qsl_rcvd.card,
             rec.state.as_deref(),
             rec.grid.as_deref(),
             rec.ota.iota.as_deref(),
@@ -16788,7 +16792,7 @@ mod tests {
     /// `Band::from_label` variant (1.25 m, 70 cm, 23 cm). On 160 m … 2 m the
     /// same absence puts the grid in the WRONG bucket instead of none — see
     /// `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc`, and
-    /// `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`
+    /// `the_untagged_satellite_grid_lands_in_the_terrestrial_tracker_on_every_band`
     /// for the whole partition.
     ///
     /// Written as an assertion on the CURRENT, DEFERRED behaviour. When
@@ -16814,21 +16818,25 @@ mod tests {
             s.vucc.sat_worked, 0,
             "the Satellite-VUCC total counted a contact Nexus never tagged"
         );
-        // And no per-band grid slot absorbed it either: `Band::from_label` has
-        // no centimetre variant, so 70 cm falls out of the terrestrial fold.
+        // Since the label-keyed grid fold (N9UM audit, 2026-08-09) the untagged
+        // grid is WRONG credit on every band, no longer absent credit on the
+        // centimetre ones: the record claims a terrestrial 70 cm QSO, and the
+        // tracker takes the record at its word. The absent-credit half of the
+        // old partition is dead — the guide's bullets were rewritten with it.
         assert_eq!(
-            s.vucc.worked, 0,
-            "70 cm has no per-band grid slot — the grid is credited nowhere"
+            s.vucc.worked, 1,
+            "the untagged grid lands in the terrestrial tracker (wrong credit, stated)"
         );
-        // The mechanism, for every centimetre band and not just the one logged
-        // above. NOTE this is the centimetre half only — 1.25 m has no variant
-        // either, which is why the guide names three bands and not two; the
-        // full partition is
-        // `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`.
+        assert!(
+            s.vucc.bands.iter().any(|b| b.band == "70cm" && b.worked == 1),
+            "…in the 70 cm per-band bucket the label-keyed fold now has"
+        );
+        // `Band::from_label` still has no centimetre variants — that keeps the
+        // centimetre bands out of the DXCC fold, which is a separate ledger.
         for cm in ["70cm", "33cm", "23cm", "13cm", "9cm", "5cm", "3cm", "1.2cm"] {
             assert!(
                 propagation::model::Band::from_label(cm).is_none(),
-                "{cm} gained a per-band grid slot — the guide's claim needs revisiting"
+                "{cm} gained a DXCC Band variant — re-audit the DXCC fold"
             );
         }
     }
@@ -16882,24 +16890,23 @@ mod tests {
         assert_eq!(two_m.worked, 1, "terrestrial 2 m VUCC gained the grid");
     }
 
-    /// ⚠️ THE LINE IS NOT METRES-VS-CENTIMETRES — `1.25m` is a metre label on
-    /// the falls-out side, and the guide said "on a metre band it lands in the
-    /// wrong bucket" until this test named the real set.
-    ///
-    /// The fold's only gate is `Band::from_label`, whose variants stop at 2 m.
-    /// Of the sixteen labels `tempo_app::bandplan::band_for_dial` can put on a
-    /// record, thirteen (160 m … 2 m) have a per-band grid slot and take an
-    /// untagged satellite grid as TERRESTRIAL VUCC — wrong credit — while
-    /// **1.25 m, 70 cm and 23 cm** have no variant and fall out of the fold —
-    /// absent credit. A metre label proves nothing on its own; membership of
-    /// that list is the whole rule.
+    /// ⚠️ WRONG CREDIT, UNIFORMLY — since the label-keyed grid fold (N9UM
+    /// audit, 2026-08-09) there is no falls-out side any more: every label
+    /// `tempo_app::bandplan::band_for_dial` can put on a record has a per-band
+    /// tracker slot, so an untagged satellite grid lands in the TERRESTRIAL
+    /// tracker on every band, 1.25 m / 70 cm / 23 cm included. The old
+    /// partition (thirteen bands wrong-credit, three absent-credit, gated on
+    /// `Band::from_label`) is dead, and the guide's bullets were rewritten
+    /// with it. The fix for the wrong credit remains satellite tagging at log
+    /// time — this census goes red the day that lands, which is the cue to
+    /// rewrite the "not yet" prose.
     ///
     /// The census is closed against `band_for_dial` itself, so a new band
     /// reaches this test the day it reaches the app, and it goes red the day
     /// `Band::from_label` gains a variant — which is the cue to rewrite the
     /// guide's two bullets rather than let them drift.
     #[test]
-    fn the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres() {
+    fn the_untagged_satellite_grid_lands_in_the_terrestrial_tracker_on_every_band() {
         // (label, a dial inside it, does the TERRESTRIAL per-band slot take it?)
         const CENSUS: &[(&str, f64, bool)] = &[
             ("160m", 1.840, true),
@@ -16966,15 +16973,18 @@ mod tests {
                 s.vucc.sat_worked, 0,
                 "{band}: the Satellite-VUCC total counted a contact Nexus never tagged"
             );
+            // Label-keyed grid fold (N9UM audit): EVERY band takes the untagged
+            // grid into the terrestrial tracker now — `terrestrial` in the census
+            // still records which bands the DXCC Band enum carries, but the grid
+            // fold no longer splits on it. Wrong credit uniformly, absent credit
+            // nowhere; the fix for both remains satellite tagging at log time.
             assert_eq!(
-                s.vucc.worked,
-                usize::from(terrestrial),
-                "{band}: the grid landed on the wrong side of the fold"
+                s.vucc.worked, 1,
+                "{band}: the untagged grid must land in the terrestrial tracker"
             );
-            assert_eq!(
+            assert!(
                 s.vucc.bands.iter().any(|b| b.band == band && b.worked == 1),
-                terrestrial,
-                "{band}: the per-band terrestrial VUCC slot disagrees with the total"
+                "{band}: the per-band tracker slot disagrees with the total"
             );
         }
     }
@@ -18903,6 +18913,7 @@ mod tests {
                 &q.mode,
                 q.award_confirmed,
                 credited,
+                q.qsl_rcvd.card,
                 q.state.as_deref(),
                 q.grid.as_deref(),
                 q.ota.iota.as_deref(),

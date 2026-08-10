@@ -209,23 +209,14 @@ name.) With nothing writing it, a contact logged here counts toward neither the
 **Satellite VUCC** totals on the Awards screen nor the satellite needs board
 that ranks which pass is worth chasing.
 
-Where the grid goes instead depends on the band you were listening on, and
-neither answer is right:
-
-- **Outside 160 m – 2 m it lands nowhere.** Nexus keeps per-band grid counts for
-  160 m through 2 m only — so 2200 m and 630 m below that range, and 1.25 m,
-  70 cm, 23 cm, 13 cm, 9 cm, 5 cm, 3 cm and 1.2 cm above it, have no slot of
-  their own, and the satellite bucket was the only home they had.
-- **On 160 m through 2 m it lands in the wrong bucket.** For satellite work that
-  means **2 m** — the downlink of every U/V bird, the Fox-1 satellites (AO-85,
-  AO-91, AO-92) and AO-7 on mode B — and **10 m**, where AO-7's mode A comes
-  down. So this is the ordinary case, not a corner. The grid is counted toward
-  your **terrestrial** VUCC for that band, which is a grid ARRL's rules say a
-  satellite contact does not earn, and LoTW files the untagged upload the same
-  way. If you chase VUCC, this one matters: add both fields before you sign.
-
-The split is by band, not by whether the band is named in metres: 1.25 m is a
-metre band and it falls out with the centimetre ones.
+Where the grid goes instead: **the terrestrial grid tracker for whatever band
+the record names — on every band, 70 cm and 1.25 m included.** For satellite
+work that means **2 m** (the downlink of every U/V bird, the Fox-1 satellites
+and AO-7 on mode B), **10 m** (AO-7 mode A) and **70 cm** (V/U birds like
+SO-50). The grid is counted toward your **terrestrial** grid totals for that
+band, which is credit ARRL's rules say a satellite contact does not earn, and
+LoTW files the untagged upload the same way. If you chase VUCC, this one
+matters: add both fields before you sign.
 
 Adding the two fields by hand puts the contact where it belongs in both counts:
 edit the ADIF with Nexus closed, exactly as below, and the totals pick it up the

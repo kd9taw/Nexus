@@ -50,6 +50,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with nothing on screen saying why. The sync now records its progress without touching the
   operating state.
 
+### Fixed (awards — a tester put his 31,000-QSO log next to his official ARRL account)
+
+- **5-Band DXCC now computes the award ARRL actually grants.** It used to count entities
+  confirmed on *all five* classic bands at once; ARRL wants 100 on *each* band, and they don't
+  have to be the same 100. The tile now shows your weakest band — the number that decides the
+  award — and says so. 5-Band WAS follows the same per-band rule.
+
+- **Satellite contacts no longer inflate your band DXCC.** A QSO tagged as satellite counted
+  toward 2 m DXCC and Mixed, which ARRL restricts to the satellite awards — one bird QSO was
+  enough to make Nexus disagree with your LoTW account by one on 2 m. Satellite entities now
+  stand in their own Satellite DXCC count, shown on the Sat VUCC card, matching LoTW's
+  Satellite column.
+
+- **VUCC is now the real award, not a grand total.** The old tile divided your all-band grid
+  count (mostly HF FT8 grid exchange) by 100 and called it VUCC. The award is 50 MHz and up,
+  judged per band with per-band thresholds — 100 on 6 m or 2 m, 50 on 222/432 MHz, 25 above.
+  The tile now shows your best real standing ("VUCC ✓ 6m") and keeps the all-band count
+  visible as the grid tracker it is. Terrestrial 70 cm and 1.25 m grids — real VUCC bands that
+  previously counted for nothing — now count.
+
+- **IOTA's checkmark now follows IOTA's own rules.** The programme credits QSL cards and
+  Club Log matching, never LoTW — so a LoTW-only confirmation still tracks your progress but
+  no longer lights the award. The card shows your card-confirmed count beside it.
+
+- Clearer sentences where the numbers were right but the words weren't: Honor Roll now says
+  "1 more confirmed needed — entry at 331" instead of the ambiguous "1 confirmed to Honor
+  Roll"; the Confirmed tile says it counts LoTW-or-card only; the Sat VUCC card now states on
+  screen that it counts PROP_MODE=SAT-tagged contacts (and that Nexus doesn't write that tag
+  at logging yet).
+
+- What is *not* changed, on purpose: Nexus computes from your log, so it will honestly differ
+  from an ARRL account that includes decades of paper-card credits applied at ARRL or QSOs
+  from merged callsigns that aren't in the imported file. Import your full history and your
+  LoTW report to close most of that gap.
+
 ### Fixed (installing)
 
 - **The installer no longer looks frozen, and the docs no longer send you to install

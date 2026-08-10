@@ -191,9 +191,10 @@ fn valid_grid4(grid: &str) -> Option<String> {
     ok.then(|| g[..4].to_string())
 }
 
-/// VUCC (grid-square) progress — distinct Maidenhead grid squares worked / confirmed,
-/// overall and per band. VUCC proper is a VHF award (100 grids on 6m/2m), but grids are
-/// tracked on every band so an HF grid chaser sees progress too.
+/// Grid-square progress — distinct Maidenhead grid squares worked / confirmed, overall
+/// and per band. The overall counts are an ALL-BAND tracker (HF included, for the grid
+/// chaser); the actual ARRL VUCC award is 50 MHz-and-up with per-band thresholds and
+/// lives in [`VuccProgress::awards`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct VuccProgress {
@@ -212,6 +213,49 @@ pub struct VuccProgress {
     pub sat_worked: usize,
     #[serde(default)]
     pub sat_confirmed: usize,
+    /// The REAL per-band VUCC standings — 50 MHz and up only, each band against its
+    /// own ARRL threshold (6m/4m/2m 100; 1.25m/70cm 50; 33cm/23cm 25). The overall
+    /// `worked`/`confirmed` above are an ALL-BAND grid tracker (HF included) and are
+    /// not a VUCC claim; these are (N9UM audit, 2026-08-09).
+    #[serde(default)]
+    pub awards: Vec<VuccBandStanding>,
+}
+
+/// One band's standing against the ARRL VUCC threshold for that band.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VuccBandStanding {
+    pub band: String,
+    pub worked: usize,
+    pub confirmed: usize,
+    pub threshold: usize,
+    pub achieved: bool,
+}
+
+/// ARRL VUCC bands + thresholds (50 MHz and up; grids on other bands are tracker-only).
+const VUCC_THRESHOLDS: &[(&str, usize)] = &[
+    ("6m", 100),
+    ("4m", 100),
+    ("2m", 100),
+    ("1.25m", 50),
+    ("70cm", 50),
+    ("33cm", 25),
+    ("23cm", 25),
+];
+
+/// Canonical listing order for the per-band grid table (HF tracker bands first,
+/// then the VUCC bands the DXCC [`Band`] enum does not carry).
+const GRID_BAND_ORDER: &[&str] = &[
+    "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m",
+    "1.25m", "70cm", "33cm", "23cm",
+];
+
+/// Normalise a band label for grid keying: lowercase, trimmed. Grids key on the LABEL,
+/// not the DXCC [`Band`] enum — the enum tops out at 2 m, which silently dropped every
+/// terrestrial 70 cm grid from a page whose caption said "all bands" (N9UM audit).
+fn grid_band(label: &str) -> Option<String> {
+    let l = label.trim().to_ascii_lowercase();
+    (!l.is_empty()).then_some(l)
 }
 
 /// IOTA (Islands On The Air) progress — distinct island-group references worked /
@@ -220,7 +264,13 @@ pub struct VuccProgress {
 #[serde(rename_all = "camelCase")]
 pub struct IotaProgress {
     pub worked: usize,
+    /// Confirmed in the LOG sense (LoTW or card — `award_confirmed`).
     pub confirmed: usize,
+    /// Confirmed by QSL CARD — the only confirmation channel here that the IOTA
+    /// program itself accepts (IOTA credits run via cards and Club Log matching,
+    /// never LoTW), so the award checkmark gates on this count.
+    #[serde(default)]
+    pub card_confirmed: usize,
 }
 
 /// Worked All States progress (50 US states; LoTW/paper confirmed, eQSL excluded).
@@ -232,7 +282,8 @@ pub struct WasProgress {
     pub confirmed: usize,
     /// The states still to confirm (postal codes, sorted) — the WAS chase.
     pub needed: Vec<String>,
-    /// 5-Band WAS: states worked / confirmed on ALL of 80/40/20/15/10m.
+    /// 5-Band WAS standing: the WEAKEST award band's state count (the award needs
+    /// all 50 on each of 80/40/20/15/10m, judged per band — 50 here = 5BWAS).
     pub five_band_worked: usize,
     pub five_band_confirmed: usize,
 }
@@ -269,10 +320,20 @@ pub struct AwardSummary {
     /// Gamification milestones (unlocked + locked-with-progress), evaluated from
     /// the tallies above.
     pub achievements: Vec<Achievement>,
-    /// 5-Band DXCC progress: distinct entities worked / confirmed on ALL of the
-    /// classic 5 bands (80/40/20/15/10m). 100 confirmed = 5BDXCC.
+    /// 5-Band DXCC standing: the WEAKEST award band's entity count. ARRL grants
+    /// 5BDXCC for 100 entities confirmed on EACH of 80/40/20/15/10m independently
+    /// (different entities allowed per band), so the qualifying statistic is the
+    /// minimum per-band count — an intersection across bands understates it
+    /// (N9UM audit, 2026-08-09).
     pub five_band_worked: usize,
     pub five_band_confirmed: usize,
+    /// Satellite DXCC — entities worked / confirmed via satellite. ARRL restricts
+    /// satellite contacts to the satellite awards, so these never appear in the
+    /// Mixed / band / mode DXCC counts above (LoTW's "Satellite" account column).
+    #[serde(default)]
+    pub sat_dxcc_worked: usize,
+    #[serde(default)]
+    pub sat_dxcc_confirmed: usize,
     /// Worked All Zones (CQ WAZ): distinct CQ zones worked / confirmed, out of 40.
     pub waz_worked: usize,
     pub waz_confirmed: usize,
@@ -316,16 +377,22 @@ pub struct Awards {
     worked_state_band: HashSet<(&'static str, Band)>,
     confirmed_state_band: HashSet<(&'static str, Band)>,
     /// VUCC — distinct Maidenhead grid squares (4-char field) worked / confirmed per band.
-    worked_grid_band: HashSet<(String, Band)>,
-    confirmed_grid_band: HashSet<(String, Band)>,
+    /// Keyed on the normalised band LABEL (not the DXCC [`Band`] enum): VUCC's real bands
+    /// run past 2 m, and the enum key silently dropped terrestrial 70 cm grids.
+    worked_grid_band: HashSet<(String, String)>,
+    confirmed_grid_band: HashSet<(String, String)>,
     /// Satellite VUCC — grids worked / confirmed via satellite (`PROP_MODE=SAT`),
     /// band-independent. Disjoint from the per-band sets by construction (see
     /// [`add_qso`](Self::add_qso)).
     worked_grid_sat: HashSet<String>,
     confirmed_grid_sat: HashSet<String>,
-    /// IOTA — distinct island-group references ("NA-001") worked / confirmed.
+    /// IOTA — distinct island-group references ("NA-001") worked / confirmed / card-confirmed.
     worked_iota: HashSet<String>,
     confirmed_iota: HashSet<String>,
+    card_iota: HashSet<String>,
+    /// Satellite DXCC — entities via satellite (excluded from every terrestrial DXCC fold).
+    worked_entity_sat: HashSet<&'static str>,
+    confirmed_entity_sat: HashSet<&'static str>,
     /// The operator's own DXCC entity (resolved from mycall), so DX-oriented
     /// achievements can count entities OTHER than home. None until set.
     home_entity: Option<&'static str>,
@@ -371,7 +438,7 @@ impl Awards {
         iota: Option<&str>,
     ) {
         self.add_qso(
-            call, band, mode, confirmed, credited, state, grid, iota, false,
+            call, band, mode, confirmed, credited, false, state, grid, iota, false,
         )
     }
 
@@ -387,6 +454,7 @@ impl Awards {
         mode: &str,
         confirmed: bool,
         credited: bool,
+        card_confirmed: bool,
         state: Option<&str>,
         grid: Option<&str>,
         iota: Option<&str>,
@@ -408,8 +476,8 @@ impl Awards {
                 if confirmed {
                     self.confirmed_grid_sat.insert(g);
                 }
-            } else if let Some(b) = Band::from_label(band) {
-                self.worked_grid_band.insert((g.clone(), b));
+            } else if let Some(b) = grid_band(band) {
+                self.worked_grid_band.insert((g.clone(), b.clone()));
                 if confirmed {
                     self.confirmed_grid_band.insert((g, b));
                 }
@@ -423,7 +491,10 @@ impl Awards {
         {
             self.worked_iota.insert(i.clone());
             if confirmed {
-                self.confirmed_iota.insert(i);
+                self.confirmed_iota.insert(i.clone());
+            }
+            if card_confirmed {
+                self.card_iota.insert(i);
             }
         }
         let resolved = dxcc::resolve(call);
@@ -466,6 +537,19 @@ impl Awards {
         // are NOT DXCC, so they earn no entity / slot / band / mode credit. (They
         // still counted for the QSO total + WAZ above.)
         if !info.is_dxcc {
+            return;
+        }
+        // ARRL restricts satellite contacts to the SATELLITE awards: a bird QSO earns
+        // Satellite DXCC here and never a Mixed / band / mode entity — counting a
+        // SAT-tagged 2 m QSO in 2 m band-DXCC is exactly the overcount LoTW's own
+        // 2M column refuses (N9UM audit, 2026-08-09). QSO totals, WAZ, WAS, IOTA and
+        // the grid fold above all follow their own programs' rules and are untouched.
+        if sat {
+            let entity = info.entity;
+            self.worked_entity_sat.insert(entity);
+            if confirmed {
+                self.confirmed_entity_sat.insert(entity);
+            }
             return;
         }
         // …and neither does a contact on a band ARRL does not credit. Placed HERE, after the QSO
@@ -602,33 +686,61 @@ impl Awards {
             .iter()
             .map(|(g, _)| g.as_str())
             .collect();
-        let mut vucc_wb: HashMap<Band, HashSet<&str>> = HashMap::new();
-        let mut vucc_cb: HashMap<Band, HashSet<&str>> = HashMap::new();
+        let mut vucc_wb: HashMap<&str, HashSet<&str>> = HashMap::new();
+        let mut vucc_cb: HashMap<&str, HashSet<&str>> = HashMap::new();
         for (g, b) in &self.worked_grid_band {
-            vucc_wb.entry(*b).or_default().insert(g.as_str());
+            vucc_wb.entry(b.as_str()).or_default().insert(g.as_str());
         }
         for (g, b) in &self.confirmed_grid_band {
-            vucc_cb.entry(*b).or_default().insert(g.as_str());
+            vucc_cb.entry(b.as_str()).or_default().insert(g.as_str());
         }
+        // Canonical order first, then any label the order table doesn't know
+        // (sorted) — a log's odd band string still shows rather than vanishing.
+        let mut band_labels: Vec<&str> = GRID_BAND_ORDER
+            .iter()
+            .copied()
+            .filter(|b| vucc_wb.contains_key(b))
+            .collect();
+        let mut extras: Vec<&str> = vucc_wb
+            .keys()
+            .copied()
+            .filter(|b| !GRID_BAND_ORDER.contains(b))
+            .collect();
+        extras.sort_unstable();
+        band_labels.extend(extras);
         let vucc = VuccProgress {
             worked: vucc_worked.len(),
             confirmed: vucc_confirmed.len(),
-            bands: Band::ALL
+            bands: band_labels
                 .iter()
-                .filter_map(|b| {
-                    vucc_wb.get(b).map(|w| BandAward {
-                        band: b.label().to_string(),
-                        worked: w.len(),
-                        confirmed: vucc_cb.get(b).map_or(0, |c| c.len()),
-                    })
+                .map(|b| BandAward {
+                    band: (*b).to_string(),
+                    worked: vucc_wb.get(b).map_or(0, |w| w.len()),
+                    confirmed: vucc_cb.get(b).map_or(0, |c| c.len()),
                 })
                 .collect(),
             sat_worked: self.worked_grid_sat.len(),
             sat_confirmed: self.confirmed_grid_sat.len(),
+            // The REAL award standings: VUCC bands only, each against its own threshold.
+            awards: VUCC_THRESHOLDS
+                .iter()
+                .filter(|(b, _)| vucc_wb.contains_key(b))
+                .map(|(b, threshold)| {
+                    let confirmed = vucc_cb.get(b).map_or(0, |c| c.len());
+                    VuccBandStanding {
+                        band: (*b).to_string(),
+                        worked: vucc_wb.get(b).map_or(0, |w| w.len()),
+                        confirmed,
+                        threshold: *threshold,
+                        achieved: confirmed >= *threshold,
+                    }
+                })
+                .collect(),
         };
         let iota = IotaProgress {
             worked: self.worked_iota.len(),
             confirmed: self.confirmed_iota.len(),
+            card_confirmed: self.card_iota.len(),
         };
 
         // 5-Band DXCC + the WORK chase: per-entity award-band completeness.
@@ -645,14 +757,20 @@ impl Awards {
                 conf_aw.entry(e).or_default().insert(*b);
             }
         }
-        let five_band_worked = worked_aw
-            .values()
-            .filter(|s| s.len() == AWARD_BANDS.len())
-            .count();
-        let five_band_confirmed = conf_aw
-            .values()
-            .filter(|s| s.len() == AWARD_BANDS.len())
-            .count();
+        // 5BDXCC standing = the WEAKEST award band (100 entities on EACH band
+        // independently — different entities allowed per band). The intersection
+        // across bands, which this used to compute, understates the award for
+        // every real log (N9UM audit, 2026-08-09).
+        let five_band_worked = AWARD_BANDS
+            .iter()
+            .map(|b| self.per_band.get(b).map_or(0, |(w, _)| w.len()))
+            .min()
+            .unwrap_or(0);
+        let five_band_confirmed = AWARD_BANDS
+            .iter()
+            .map(|b| self.per_band.get(b).map_or(0, |(_, c)| c.len()))
+            .min()
+            .unwrap_or(0);
         // WORK chase: entities worked on >= MIN but not all award bands; list the
         // award bands NOT yet worked (in canonical order), closest-first.
         let mut band_targets: Vec<EntityNeed> = worked_aw
@@ -724,28 +842,25 @@ impl Awards {
             .filter(|s| !self.confirmed_states.contains(*s))
             .map(|s| s.to_string())
             .collect();
-        let mut was_worked_aw: HashMap<&'static str, std::collections::HashSet<Band>> =
-            HashMap::new();
-        let mut was_conf_aw: HashMap<&'static str, std::collections::HashSet<Band>> =
-            HashMap::new();
-        for (st, b) in &self.worked_state_band {
-            was_worked_aw.entry(st).or_default().insert(*b);
-        }
-        for (st, b) in &self.confirmed_state_band {
-            was_conf_aw.entry(st).or_default().insert(*b);
-        }
+        // 5BWAS, same per-band rule as 5BDXCC: the standing is the weakest award
+        // band's state count (all 50 on each band = the award; 50 here means it).
+        let states_on = |set: &HashSet<(&'static str, Band)>, b: Band| {
+            set.iter().filter(|(_, sb)| *sb == b).count()
+        };
         let was = WasProgress {
             worked: self.worked_states.len(),
             confirmed: self.confirmed_states.len(),
             needed: was_needed,
-            five_band_worked: was_worked_aw
-                .values()
-                .filter(|s| s.len() == AWARD_BANDS.len())
-                .count(),
-            five_band_confirmed: was_conf_aw
-                .values()
-                .filter(|s| s.len() == AWARD_BANDS.len())
-                .count(),
+            five_band_worked: AWARD_BANDS
+                .iter()
+                .map(|b| states_on(&self.worked_state_band, *b))
+                .min()
+                .unwrap_or(0),
+            five_band_confirmed: AWARD_BANDS
+                .iter()
+                .map(|b| states_on(&self.confirmed_state_band, *b))
+                .min()
+                .unwrap_or(0),
         };
 
         // Credited (granted) entities + the confirmed-but-not-credited gap.
@@ -782,6 +897,8 @@ impl Awards {
             achievements,
             five_band_worked,
             five_band_confirmed,
+            sat_dxcc_worked: self.worked_entity_sat.len(),
+            sat_dxcc_confirmed: self.confirmed_entity_sat.len(),
             waz_worked: self.worked_zones.len(),
             waz_confirmed: self.confirmed_zones.len(),
             honor_roll,
@@ -1058,6 +1175,187 @@ mod tests {
         assert_eq!(two.worked, 1, "2m: FN31 only");
     }
 
+    /// ARRL 5BDXCC (N9UM audit, 2026-08-09): the award is 100 entities confirmed on EACH
+    /// of the five bands INDEPENDENTLY — different entities allowed per band — so the
+    /// standing is the WEAKEST band's count, not the intersection across bands. Five
+    /// different entities, one per band: the old intersection said 0; ARRL says 1.
+    #[test]
+    fn five_band_standing_is_the_weakest_band_not_the_intersection() {
+        let mut a = Awards::new();
+        for (call, b) in [
+            ("W1AW", "80m"),
+            ("JA1XYZ", "40m"),
+            ("G4ABC", "20m"),
+            ("VK2DEF", "15m"),
+            ("PY2GHI", "10m"),
+        ] {
+            a.add(call, b, "FT8", true);
+        }
+        let s = a.summary();
+        assert_eq!(
+            s.five_band_confirmed, 1,
+            "one entity confirmed on every band independently = standing 1"
+        );
+        assert_eq!(s.five_band_worked, 1);
+        // A band with nothing at all pins the standing to zero.
+        let mut b = Awards::new();
+        b.add("W1AW", "80m", "FT8", true);
+        b.add("W1AW", "40m", "FT8", true);
+        assert_eq!(b.summary().five_band_confirmed, 0, "three empty bands → 0");
+    }
+
+    /// Same rule for 5-Band WAS: the standing is the weakest award band's state count.
+    #[test]
+    fn five_band_was_standing_is_the_weakest_band() {
+        let mut a = Awards::new();
+        // One state per band, five different states — intersection 0, ARRL standing 1.
+        for (call, st, b) in [
+            ("W1AW", "CT", "80m"),
+            ("W2XYZ", "NY", "40m"),
+            ("W3ABC", "PA", "20m"),
+            ("W4DEF", "GA", "15m"),
+            ("W5GHI", "TX", "10m"),
+        ] {
+            a.add_with_credit(call, b, "FT8", true, false, Some(st), None, None);
+        }
+        assert_eq!(a.summary().was.five_band_confirmed, 1);
+    }
+
+    /// ARRL restricts satellite contacts to the SATELLITE awards: a SAT-tagged QSO must
+    /// not enter Mixed/band/mode DXCC (the tester's 2m band-DXCC counted a bird QSO LoTW
+    /// itself refuses there) — it feeds the Satellite DXCC bucket instead.
+    #[test]
+    fn satellite_qsos_feed_satellite_dxcc_not_band_dxcc() {
+        let mut a = Awards::new();
+        a.add_qso(
+            "JA1XYZ",
+            "2m",
+            "FT8",
+            true,
+            false,
+            false,
+            None,
+            Some("PM95"),
+            None,
+            true,
+        );
+        let s = a.summary();
+        assert_eq!(s.dxcc_worked, 0, "a sat QSO earns no Mixed-DXCC entity");
+        assert!(
+            !s.bands.iter().any(|b| b.band == "2m"),
+            "…and no 2m band-DXCC slot: {:?}",
+            s.bands
+        );
+        assert!(s.modes.is_empty(), "…and no mode-DXCC entity");
+        assert_eq!(
+            (s.sat_dxcc_worked, s.sat_dxcc_confirmed),
+            (1, 1),
+            "it stands in the Satellite DXCC bucket, like LoTW's Satellite column"
+        );
+    }
+
+    /// A terrestrial 70cm grid is a real ARRL VUCC band (threshold 50) — it must count
+    /// in the per-band listing and the all-band total, even though the DXCC Band enum
+    /// has no 70cm. (It still earns no DXCC slot; DXCC doesn't credit 70cm hunting the
+    /// same way, and that fold is separate.)
+    #[test]
+    fn terrestrial_uhf_grids_count_for_vucc() {
+        let mut a = Awards::new();
+        a.add_qso(
+            "K1ABC",
+            "70cm",
+            "FT8",
+            true,
+            false,
+            false,
+            None,
+            Some("FN31"),
+            None,
+            false,
+        );
+        let s = a.summary();
+        assert_eq!(s.vucc.worked, 1, "the all-band total sees the 70cm grid");
+        let row = s.vucc.bands.iter().find(|b| b.band == "70cm");
+        assert_eq!(
+            row.map(|b| (b.worked, b.confirmed)),
+            Some((1, 1)),
+            "70cm appears in the per-band grid listing"
+        );
+    }
+
+    /// The real per-band VUCC standing: 6m needs 100, 70cm needs 50; an achieved band
+    /// reports achieved with its own threshold.
+    #[test]
+    fn vucc_standing_is_per_band_with_arrl_thresholds() {
+        let mut a = Awards::new();
+        // 100 distinct confirmed 6m grids → 6m VUCC achieved.
+        for i in 0..100 {
+            let g = format!("EN{}{}", i / 10, i % 10);
+            a.add_qso(
+                "K1ABC",
+                "6m",
+                "FT8",
+                true,
+                false,
+                false,
+                None,
+                Some(&g),
+                None,
+                false,
+            );
+        }
+        let s = a.summary();
+        let six = s.vucc.awards.iter().find(|x| x.band == "6m").unwrap();
+        assert_eq!(
+            (six.threshold, six.confirmed, six.achieved),
+            (100, 100, true)
+        );
+        // HF grids never appear in the standings list (VUCC is 50 MHz and up).
+        assert!(
+            !s.vucc.awards.iter().any(|x| x.band == "20m"),
+            "20m is not a VUCC band"
+        );
+    }
+
+    /// IOTA accepts QSL cards and Club Log matching — NOT LoTW. A LoTW-only confirmation
+    /// counts as "confirmed" in the log sense but must not satisfy the award gate.
+    #[test]
+    fn iota_award_gate_needs_a_card_not_lotw() {
+        let mut a = Awards::new();
+        // LoTW-confirmed (card_confirmed = false).
+        a.add_qso(
+            "K1ABC",
+            "20m",
+            "FT8",
+            true,
+            false,
+            false,
+            None,
+            None,
+            Some("NA-001"),
+            false,
+        );
+        // Card-confirmed.
+        a.add_qso(
+            "W2DEF",
+            "40m",
+            "CW",
+            true,
+            false,
+            true,
+            None,
+            None,
+            Some("EU-005"),
+            false,
+        );
+        let s = a.summary();
+        assert_eq!(s.iota.confirmed, 2, "both are confirmed in the log sense");
+        assert_eq!(
+            s.iota.card_confirmed, 1,
+            "only the card counts toward the IOTA award itself"
+        );
+    }
+
     #[test]
     fn satellite_qsos_feed_satellite_vucc_only() {
         let mut a = Awards::new();
@@ -1071,6 +1369,7 @@ mod tests {
             "FM",
             true,
             false,
+            false,
             None,
             Some("FN31"),
             None,
@@ -1080,6 +1379,7 @@ mod tests {
             "W2DEF",
             "70cm",
             "SSB",
+            false,
             false,
             false,
             None,
@@ -1092,6 +1392,7 @@ mod tests {
             "W3GHI",
             "2m",
             "FT8",
+            false,
             false,
             false,
             None,

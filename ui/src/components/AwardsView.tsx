@@ -337,7 +337,7 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
     ? `#1 Honor Roll ✓ — all ${hr.currentTotal} entities`
     : hr.achieved
       ? `Honor Roll ✓ · ${hr.numberOneNeeded} to #1`
-      : `${hr.needed} confirmed to Honor Roll (${hr.threshold})`
+      : `${hr.needed} more confirmed needed — Honor Roll entry at ${hr.threshold}`
   const dxccPct = Math.min(100, Math.round((aw.dxccConfirmed / DXCC_BASIC) * 100))
   const challengePct = Math.min(100, Math.round((aw.slotsConfirmed / CHALLENGE_AWARD) * 100))
   const bandMax = Math.max(1, ...aw.bands.map((b) => b.worked))
@@ -411,7 +411,8 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
             <span className="aw-of">%</span>
           </span>
           <span className="aw-note">
-            {aw.confirmedQsos} of {aw.qsos} QSOs confirmed
+            {aw.confirmedQsos} of {aw.qsos} QSOs confirmed via LoTW or card (eQSL / QRZ
+            matches don&rsquo;t count toward ARRL awards)
           </span>
         </div>
 
@@ -426,7 +427,10 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
           <div className="aw-bar">
             <div className="aw-fill good" style={{ width: `${Math.min(100, aw.fiveBandConfirmed)}%` }} />
           </div>
-          <span className="aw-note">{aw.fiveBandWorked} worked on all 5 bands</span>
+          <span className="aw-note">
+            weakest of the 5 classic bands (ARRL counts each band on its own) ·{' '}
+            {aw.fiveBandWorked} worked
+          </span>
         </div>
 
         <div className="aw-card">
@@ -469,31 +473,63 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
             {aw.was.confirmed >= WAS_STATES
               ? 'Worked All States ✓'
               : `${WAS_STATES - aw.was.confirmed} states to go`}{' '}
-            · {aw.was.worked} worked · {aw.was.fiveBandConfirmed} on 5 bands (5BWAS)
+            · {aw.was.worked} worked · 5BWAS weakest band {aw.was.fiveBandConfirmed}/50
           </span>
         </div>
 
-        <div className={`aw-card${aw.vucc.confirmed >= VUCC_GRIDS ? ' aw-card-elite' : ''}`}>
-          <span className="aw-k">
-            <Grid3x3 size={13} aria-hidden="true" /> VUCC
-          </span>
-          <span className="aw-v">
-            {aw.vucc.confirmed}
-            <span className="aw-of"> / {VUCC_GRIDS}</span>
-          </span>
-          <div className="aw-bar">
-            <div
-              className="aw-fill good"
-              style={{ width: `${Math.min(100, (aw.vucc.confirmed / VUCC_GRIDS) * 100)}%` }}
-            />
-          </div>
-          <span className="aw-note">
-            {aw.vucc.confirmed >= VUCC_GRIDS
-              ? 'VUCC ✓'
-              : `${VUCC_GRIDS - aw.vucc.confirmed} grids to go`}{' '}
-            · {aw.vucc.worked} worked (terrestrial, all bands)
-          </span>
-        </div>
+        {/* The REAL VUCC standing (N9UM audit): 50 MHz-and-up, per band, each against
+            its own ARRL threshold — never the all-band grid total, which is mostly HF
+            FT8 grid exchange and corresponds to no ARRL award. Headline = the band
+            closest to (or past) its threshold; the all-band count stays visible below
+            as the tracker stat it is. */}
+        {(() => {
+          const best = [...(aw.vucc.awards ?? [])].sort(
+            (a, b) => b.confirmed / b.threshold - a.confirmed / a.threshold,
+          )[0]
+          const achieved = (aw.vucc.awards ?? []).filter((x) => x.achieved)
+          return (
+            <div className={`aw-card${achieved.length > 0 ? ' aw-card-elite' : ''}`}>
+              <span className="aw-k">
+                <Grid3x3 size={13} aria-hidden="true" /> VUCC
+              </span>
+              {best ? (
+                <>
+                  <span className="aw-v">
+                    {best.confirmed}
+                    <span className="aw-of">
+                      {' '}
+                      / {best.threshold} · {best.band}
+                    </span>
+                  </span>
+                  <div className="aw-bar">
+                    <div
+                      className="aw-fill good"
+                      style={{
+                        width: `${Math.min(100, (best.confirmed / best.threshold) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="aw-note">
+                    {achieved.length > 0
+                      ? `VUCC ✓ ${achieved.map((x) => x.band).join(' · ')}`
+                      : `${best.threshold - best.confirmed} grids to go on ${best.band}`}{' '}
+                    · {aw.vucc.confirmed} grids confirmed on all bands (tracker)
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="aw-v">
+                    0<span className="aw-of"> / {VUCC_GRIDS}</span>
+                  </span>
+                  <span className="aw-note">
+                    No 6 m-and-up grids yet · {aw.vucc.confirmed} grids confirmed on all
+                    bands (tracker — VUCC itself is 50 MHz and up)
+                  </span>
+                </>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Satellite VUCC — its own ARRL category, and the ONLY place a grid
             worked through a bird is ALLOWED to count, so the bucket must be
@@ -529,12 +565,25 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
           <span className="aw-note">
             {aw.vucc.satConfirmed >= VUCC_GRIDS
               ? 'Satellite VUCC ✓'
-              : `${VUCC_GRIDS - aw.vucc.satConfirmed} grids to go`}{' '}
-            · {aw.vucc.satWorked} worked (via satellite, any band)
+              : `${VUCC_GRIDS - aw.vucc.satConfirmed} more to confirm`}{' '}
+            · {aw.vucc.satWorked} grids worked · Sat DXCC {aw.satDxccConfirmed ?? 0} confirmed
+          </span>
+          {/* The disclosed limitation (see get_awards / the satellites guide): the sat
+              buckets key on PROP_MODE=SAT, which only imported/hand-tagged records
+              carry today — the open item this line closes is the operator wondering
+              why a pass they just logged didn't move the card. */}
+          <span className="aw-note">
+            Counts contacts tagged as satellite (PROP_MODE=SAT) — contacts logged in
+            Nexus aren&rsquo;t tagged yet; tag the ADIF by hand for now
           </span>
         </div>
 
-        <div className={`aw-card${aw.iota.confirmed >= IOTA_ISLANDS ? ' aw-card-elite' : ''}`}>
+        {/* The ✓ gates on CARD-confirmed groups: the IOTA programme credits QSL cards
+            and Club Log matching — never LoTW — so a LoTW-only confirmation tracks
+            here but cannot earn the award (N9UM audit). */}
+        <div
+          className={`aw-card${(aw.iota.cardConfirmed ?? 0) >= IOTA_ISLANDS ? ' aw-card-elite' : ''}`}
+        >
           <span className="aw-k">
             <Globe2 size={13} aria-hidden="true" /> IOTA
           </span>
@@ -549,10 +598,11 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
             />
           </div>
           <span className="aw-note">
-            {aw.iota.confirmed >= IOTA_ISLANDS
-              ? 'IOTA ✓'
-              : `${IOTA_ISLANDS - aw.iota.confirmed} islands to go`}{' '}
-            · {aw.iota.worked} worked
+            {(aw.iota.cardConfirmed ?? 0) >= IOTA_ISLANDS
+              ? 'IOTA ✓ (card-confirmed)'
+              : `${aw.iota.worked} worked`}{' '}
+            · {aw.iota.cardConfirmed ?? 0} on cards — IOTA credits cards / Club Log, not
+            LoTW
           </span>
         </div>
       </div>

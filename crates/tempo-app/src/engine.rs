@@ -6013,7 +6013,7 @@ impl Engine {
         // here, and end-to-end by src-tauri's
         // `a_contact_logged_during_a_pass_earns_no_in_app_satellite_credit`,
         // `a_two_metre_satellite_contact_is_credited_to_terrestrial_vucc` and
-        // `the_untagged_satellite_grid_fold_splits_on_band_from_label_not_on_metres`
+        // `the_untagged_satellite_grid_lands_in_the_terrestrial_tracker_on_every_band`
         // (which walks every band label the app can produce).
 
         // Duplicate-contact guard — the LAST line of defense against logging the same
