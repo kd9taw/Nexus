@@ -2692,8 +2692,10 @@ export default function App() {
         // "fields the operator cleared" at draft time (review catch).
         <SetupWizard
           settings={settings}
+          radio={snap.radio}
           onApply={handleWizardApply}
           onTestCat={handleWizardTestCat}
+          onProveTx={handleProveTx}
           onSkip={handleWizardSkip}
           onOpenGuide={() => setShowGuide(true)}
         />

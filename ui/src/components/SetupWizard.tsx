@@ -12,6 +12,7 @@ import {
   probeCatPorts,
 } from '../api'
 import { baudForRig } from './SettingsPanel'
+import { SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { STARTER_PACKS, importPack } from '../features/packs'
@@ -37,6 +38,18 @@ export interface WizardDraft {
 interface Props {
   /** Current settings — prefills so the Settings ▸ re-open path edits in place. */
   settings: Settings | null
+  /** LIVE radio state for the Setup-health strip (the verify stage) — the same
+   * snapshot slice Settings hands its copy of the strip. Optional: tests and any
+   * host without a snapshot render the strip in its untested state. */
+  radio?: {
+    catOk?: boolean | null
+    catDetail?: string
+    rxLevel: number
+    audioError?: string | null
+    txEnabled: boolean
+    tuning?: boolean
+    txPower?: number | null
+  }
   /** Apply goal profile(s) + modes + license + the station/rig draft, then navigate. */
   onApply: (
     ids: ProfileId[],
@@ -47,6 +60,8 @@ interface Props {
   ) => void
   /** Save the draft so far and probe CAT against it (Settings' test, wizard-reachable). */
   onTestCat: (draft: WizardDraft) => Promise<CatTestResult>
+  /** Key a bounded tune carrier to prove CAT→PTT→RF (the strip's Prove TX; confirm-gated). */
+  onProveTx?: () => void
   /** Close without changing the current feature set (also ESC / backdrop). */
   onSkip: () => void
   /** Open the Getting started guide once the wizard finishes, if the operator
@@ -92,7 +107,7 @@ const gridOk = isValidGrid
  * Settings ▸ re-open path acts as an editor. Built on the Radix [`Dialog`].
  * See feature-modularity.md §4.6.
  */
-export function SetupWizard({ settings, onApply, onTestCat, onSkip, onOpenGuide }: Props) {
+export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, onSkip, onOpenGuide }: Props) {
   const [step, setStep] = useState(0) // 0 station · 1 rig · 2 log · 3 goals
 
   // --- Step 3: optional ADIF log import (seeds worked-before / needs / awards) ---
@@ -722,6 +737,11 @@ export function SetupWizard({ settings, onApply, onTestCat, onSkip, onOpenGuide 
               </span>
             )}
           </div>
+
+          {/* The VERIFY stage — the same Setup-health strip Settings renders (extracted
+              shared component), so the wizard ends on evidence, not faith: Rig / RX dB /
+              TX, with Prove TX keying a bounded carrier behind its confirm. */}
+          <SetupHealth radio={radio} catResult={catResult} onProveTx={onProveTx} />
         </>
       )}
 
