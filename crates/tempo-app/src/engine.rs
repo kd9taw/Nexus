@@ -3239,6 +3239,13 @@ impl Engine {
             self.settings.band.clone(),
             self.settings.sideband.clone(),
         );
+        // The OPERATING MODE is live section state owned by set_operating_mode (the [view]
+        // effect on every section entry) — exactly like the dial/band above. A Settings form
+        // is a snapshot from whenever the panel loaded; adopting its operating_mode let any
+        // whole-struct save made after a section switch silently revert the section's mode,
+        // and the radio loop then re-commanded the STALE mode on the next tick (mode-matrix
+        // audit, 2026-08-10). Same pattern as source/radios/rules/sat-consent.
+        let live_op_mode = self.settings.operating_mode;
         // Which radio the incoming flat fields describe. A P2-aware Settings form carries the roster
         // + its edited radio in `active_radio`. A LEGACY payload with no `radios` (an old settings.json
         // or a pre-P2 saved config profile) describes the LIVE active radio — fold its flat CAT there,
@@ -3258,6 +3265,7 @@ impl Engine {
         self.settings.default_radio = live_default_radio;
         self.settings.sat_vfo_map = live_sat_vfo_map;
         self.settings.sat_uplink_radios = live_sat_uplink_radios;
+        self.settings.operating_mode = live_op_mode;
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
         // describe the radio SHOWN in the form, which may differ from the live active radio if a
@@ -17357,6 +17365,28 @@ mod tests {
         );
     }
 
+    /// Mode-matrix audit (2026-08-10): apply_settings adopted the form's operating_mode
+    /// verbatim, so any whole-struct save carrying a snapshot loaded BEFORE a section
+    /// switch silently reverted the section's mode — and the radio loop re-commanded the
+    /// stale mode on the next tick. The operating mode is LIVE section state, captured and
+    /// restored like source/radios/rules/sat-consent.
+    #[test]
+    fn a_stale_settings_save_cannot_revert_the_section_mode() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("cw", false);
+        let stale_form = {
+            let mut s = e.settings().clone();
+            s.operating_mode = crate::settings::OperatingMode::Digital; // a pre-switch snapshot
+            s
+        };
+        e.apply_settings(stale_form);
+        assert_eq!(
+            e.settings().operating_mode,
+            crate::settings::OperatingMode::Cw,
+            "a whole-struct save must not revert the live section mode"
+        );
+    }
+
     #[test]
     fn roster_click_on_a_cqing_station_picks_the_opposite_cycle() {
         // THE same-cycle bug (operator report, 6m): the DX is calling CQ (so
@@ -23594,11 +23624,8 @@ mod tests {
         };
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_frequency(435.640, "70cm", "USB");
-        {
-            let mut s = e.settings().clone();
-            s.operating_mode = crate::settings::OperatingMode::Phone;
-            e.apply_settings(s);
-        }
+        // Through THE verb — apply_settings no longer adopts operating_mode.
+        e.set_operating_mode("phone", false);
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         (e, tp)
     }
@@ -23864,9 +23891,9 @@ mod tests {
             },
         );
         e.set_routing_rules(rules);
-        let mut s = e.settings().clone();
-        s.operating_mode = crate::settings::OperatingMode::Phone;
-        e.apply_settings(s);
+        // Through THE verb — apply_settings no longer adopts operating_mode from a
+        // payload (it is live section state, captured like source/radios/rules).
+        e.set_operating_mode("phone", false);
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
         (e, ic9700, ft991a)
     }
@@ -25874,9 +25901,14 @@ mod tests {
         ] {
             for (class, want) in [(SSB_BIRD, usb_bird), (LSB_BIRD, lsb_bird)] {
                 let (mut e, _, _) = sat_station();
-                let mut s = e.settings().clone();
-                s.operating_mode = om;
-                e.apply_settings(s);
+                // Through THE verb — apply_settings no longer adopts operating_mode.
+                let om_str = match om {
+                    OperatingMode::Phone => "phone",
+                    OperatingMode::Cw => "cw",
+                    OperatingMode::Rtty => "rtty",
+                    OperatingMode::Digital => "digital",
+                };
+                e.set_operating_mode(om_str, false);
                 e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
                 e.sat_tune_nominal(class, 1_000_000);
                 assert_eq!(e.rig_mode_effective(), want, "{om:?} on a {class:?} bird");

@@ -50,6 +50,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with nothing on screen saying why. The sync now records its progress without touching the
   operating state.
 
+### Fixed
+
+- **Band changes no longer let the radio pick the wrong mode.** The big one from the bench:
+  selecting 12 m or 30 m in the CW section landed the rig in DATA-U; picking 20 m back in the
+  FT8 section landed it in CW-U. The radio itself was doing it — modern rigs keep a per-band
+  last-used-mode memory, and when Nexus commands the mode before the dial (required since
+  1.0.1 to stop the FTdx10's 650 Hz CW-pitch walk), a band-crossing dial write let the rig's
+  own memory override the mode Nexus had just set — and Nexus, believing its command stood,
+  never checked. Now every band-crossing retune reads the rig's real mode back and re-asserts
+  once if the rig overrode it, then re-seats the dial. Your click wins, on every band, in
+  every section — and the pitch-walk fix stays intact. (This was in 1.0.1 through 1.0.5 too:
+  it is the "intermittent wrong mode" some operators reported, deterministic per band.)
+
+- **A Settings save can no longer flip you out of your operating section's mode.** The
+  operating mode is live section state now, like the dial: a Settings form saved after you
+  switched sections carried the old mode and silently reverted the rig. Every stale-save
+  door is closed at once.
+
 ### Added
 
 - **Satellite contacts tag themselves now.** Log a QSO while a transponder is held and your

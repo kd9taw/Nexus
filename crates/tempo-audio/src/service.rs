@@ -2427,6 +2427,61 @@ impl RadioLoop {
         !self.handoff_deferred && !self.cat_hold_active
     }
 
+    /// After a dial push that CROSSED a band boundary, make the app the last word on the
+    /// mode (field report 2026-08-10, FTDX10): band-stacking rigs recall the destination
+    /// band's last-used mode when a CAT frequency write crosses bands, silently overriding
+    /// the mode commanded a moment earlier (the a85f39ac mode-BEFORE-dial order is correct
+    /// — it fixes the ±650 Hz pitch walk — but it opens exactly this window). Read the
+    /// rig's REAL mode back; if the stack overrode us, re-assert once and re-push the dial
+    /// (the corrective mode-set can pitch-shift it). One extra round-trip, only on
+    /// band-crossing retunes, idempotent on rigs that don't do this. Deliberately does NOT
+    /// touch the periodic display-only mode read-back: a front-panel mode change by the
+    /// operator still stands — this correction lives inside the app's own retune event.
+    fn reassert_mode_after_band_cross(
+        &mut self,
+        rig: &mut Rig,
+        md: &str,
+        prev_dial: u64,
+        dial: u64,
+        engine: &Arc<Mutex<Engine>>,
+    ) {
+        if md.trim().is_empty() {
+            return;
+        }
+        let band_of = |hz: u64| tempo_app::bandplan::band_for_dial(hz as f64 / 1e6);
+        if prev_dial == 0 || band_of(prev_dial) == band_of(dial) {
+            return; // in-band: the a85f39ac order alone is complete
+        }
+        let Some(reported) = rig.read_mode() else {
+            return; // no read path (VOX/serial) — nothing to verify against
+        };
+        let reported = reported.trim();
+        // Only a PLAUSIBLE mode word counts as evidence of an override: an error reply
+        // ("RPRT -1"), an empty line, or line noise must never trigger a re-assert —
+        // sending commands on garbage evidence is worse than trusting our own state.
+        if reported.is_empty()
+            || reported.starts_with("RPRT")
+            || !reported
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return;
+        }
+        if reported.eq_ignore_ascii_case(md.trim()) {
+            return; // the rig kept our mode — most rigs, most of the time
+        }
+        crate::civ::diag::note(&format!(
+            "band-stack override: rig reports {reported:?} after the band change, re-asserting {md:?}"
+        ));
+        if rig.set_mode(md, passband_for(md)).is_ok() {
+            self.last_mode = md.to_string();
+            // The corrective mode-set can shift a pitch-offset rig — re-push the dial so
+            // the number stands in the DESTINATION mode's convention (same rule as the
+            // `|| mode_changed` dial re-push in the force path).
+            let _ = self.push_dial(rig, dial, engine);
+        }
+    }
+
     /// Push a dial frequency to the rig, honouring a REFUSAL.
     ///
     /// Returns `None` when the rig accepted it (the caller counts that as a retune), or
@@ -3148,13 +3203,21 @@ impl RadioLoop {
                     // hand-tuned): that protects a dial-only re-entry with the SAME mode, and
                     // `mode_changed` is false there.
                     if dial != self.last_dial || mode_changed {
+                        let prev_dial = self.last_dial;
                         match self.push_dial(rig, dial, engine) {
                             // A refused DIAL outranks any mode note produced above: "the radio
                             // refused 144.390 MHz" is the answer to the operator's question, and a
                             // cheerful "rig set to FM" beside a dial that never moved is how this
                             // bug stayed invisible in the first place.
                             Some(note) => dial_note = Some(note),
-                            None => retuned = true,
+                            None => {
+                                retuned = true;
+                                // Band-crossing pick: the rig's band-stack may have just
+                                // overridden the mode commanded above — verify and win.
+                                self.reassert_mode_after_band_cross(
+                                    rig, &md, prev_dial, dial, engine,
+                                );
+                            }
                         }
                     }
                 } else {
@@ -3227,10 +3290,17 @@ impl RadioLoop {
                     // `dial_giveup` still stops a frequency the radio has REFUSED from being
                     // re-sent every tick — the HF-only-rig-on-2 m storm.
                     if (dial != self.last_dial || mode_changed) && self.dial_giveup != Some(dial) {
+                        let prev_dial = self.last_dial;
                         match self.push_dial(rig, dial, engine) {
                             // A refused DIAL outranks any mode note produced above.
                             Some(note) => dial_note = Some(note),
-                            None => retuned = true,
+                            None => {
+                                retuned = true;
+                                // Same band-stack window as the force path.
+                                self.reassert_mode_after_band_cross(
+                                    rig, &md, prev_dial, dial, engine,
+                                );
+                            }
                         }
                     }
                 }
@@ -8423,6 +8493,80 @@ mod tests {
         (addr, seen)
     }
 
+    /// A rigctld that models a BAND-STACKING rig (FTDX10/991-class, and most modern rigs):
+    /// it keeps a per-band last-used-mode register, and a frequency write that CROSSES a
+    /// band boundary recalls the destination band's stored mode — exactly what the radio
+    /// itself does, and the mechanism behind the 2026-08-10 field report (CW section
+    /// landing DATA-U on the operator's FT8-only bands). `registers` preloads the per-band
+    /// memory; `M` stores the current mode against the CURRENT band; `m` answers the
+    /// rig's actual mode so a read-back can catch the flip.
+    #[allow(clippy::type_complexity)] // (addr, wire log, live mode) — a test-only triple
+    fn band_stacking_rigctld_stub(
+        start_hz: u64,
+        registers: &[(&str, &str)],
+    ) -> (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<String>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let live_mode: Arc<Mutex<String>> = Arc::new(Mutex::new("USB".to_string()));
+        let rec = seen.clone();
+        let lm = live_mode.clone();
+        let mut regs: std::collections::HashMap<String, String> = registers
+            .iter()
+            .map(|(b, m)| (b.to_string(), m.to_string()))
+            .collect();
+        std::thread::spawn(move || {
+            let band_of = |hz: u64| {
+                tempo_app::bandplan::band_for_dial(hz as f64 / 1e6)
+                    .unwrap_or("?")
+                    .to_string()
+            };
+            let mut cur_hz = start_hz;
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut out = match stream.try_clone() {
+                    Ok(o) => o,
+                    Err(_) => return,
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let mut p = line.split_whitespace();
+                    let reply: String = match p.next() {
+                        Some("M") => {
+                            let m = p.next().unwrap_or("USB").to_string();
+                            *lm.lock().unwrap() = m.clone();
+                            regs.insert(band_of(cur_hz), m);
+                            "RPRT 0\n".into()
+                        }
+                        Some("F") => {
+                            let hz: u64 =
+                                p.next().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0) as u64;
+                            let (from, to) = (band_of(cur_hz), band_of(hz));
+                            if from != to {
+                                // THE BAND STACK: the rig recalls the destination band's
+                                // last-used mode, overriding whatever was just commanded.
+                                if let Some(stored) = regs.get(&to) {
+                                    *lm.lock().unwrap() = stored.clone();
+                                }
+                            }
+                            cur_hz = hz;
+                            "RPRT 0\n".into()
+                        }
+                        Some("f") => format!("{cur_hz}\n"),
+                        Some("m") => format!("{}\n2400\n", lm.lock().unwrap()),
+                        _ => "RPRT 0\n".into(),
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen, live_mode)
+    }
+
     /// A rigctld that behaves like a REAL rig: it remembers the frequency it was set to and
     /// answers a dial READ with it — but reports the PREVIOUS value for `lag` reads after a
     /// change, modelling Hamlib's get-cache / a slow serial chain. That lag is the documented
@@ -9624,6 +9768,80 @@ mod tests {
             outgoing_log: yaesu_log,
             incoming_log: icom_log,
         }
+    }
+
+    /// ⭐ FIELD REPORT 2026-08-10 (KD9TAW, FTDX10): CW section → pick 12 m → rig lands in
+    /// DATA-U; FT8 section → pick 20 m → rig lands in CW-U. Deterministic, band-dependent.
+    /// The a85f39ac ordering (mode BEFORE dial — itself the fix for the ±650 Hz pitch walk)
+    /// opened this window: on a cross-band pick the mode command lands while the rig is on
+    /// the OLD band, then the dial write crosses the band and the rig's own BAND-STACKING
+    /// register recalls that band's last-used mode — and nothing re-asserts, because
+    /// Nexus's dedupe compares against its own belief (`last_mode`, already correct) and
+    /// the periodic mode read-back is display-only by design. The fix: after a dial push
+    /// that crossed a band, read the rig's REAL mode back and re-assert once if the stack
+    /// overrode us (then re-push the dial — the corrective mode-set can pitch-shift it).
+    #[test]
+    fn a_cross_band_pick_survives_the_rigs_band_stacking_memory() {
+        // The operator's exact scenario: 12 m register holds DATA (his FT8-only band).
+        let (addr, _seen, live_mode) =
+            band_stacking_rigctld_stub(14_250_000, &[("12m", "PKTUSB"), ("20m", "USB")]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, &mut backend, 0.0); // settle Phone/20m
+
+        // The switch + cross-band pick: CW section, then 12 m from its band dropdown.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("cw", true);
+            e.pick_band("12m", Some("cw"));
+        }
+        run(&mut state, &mut rig, &mut backend, 20.0);
+
+        assert_eq!(
+            live_mode.lock().unwrap().as_str(),
+            "CW",
+            "the rig's band-stack recalled DATA on the 12 m crossing and Nexus must win: \
+             the operator clicked CW, the radio must END in CW"
+        );
+
+        // The mirror half (his S4): back to digital, pick 20 m — whose register his CW
+        // work just wrote — and the rig must end in the DATA mode, not CW.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("digital", true);
+            e.pick_band("20m", None);
+        }
+        run(&mut state, &mut rig, &mut backend, 40.0);
+        let m = live_mode.lock().unwrap().clone();
+        assert!(
+            m.starts_with("PKT") || m.contains("USB"),
+            "back on 20 m in the FT8 section the rig must carry the DATA policy mode, \
+             not the CW its stack stored — got {m}"
+        );
     }
 
     #[test]
@@ -13038,8 +13256,9 @@ mod tests {
         // earlier in the day is enough.
         {
             let mut e = engine.lock().unwrap();
+            // Through THE verb — apply_settings no longer adopts operating_mode.
+            e.set_operating_mode("phone", false);
             let mut s = e.settings().clone();
-            s.operating_mode = tempo_app::settings::OperatingMode::Phone;
             s.phone_mode = "fm".into();
             e.apply_settings(s);
         }
@@ -13122,9 +13341,8 @@ mod tests {
 
         {
             let mut e = engine.lock().unwrap();
-            let mut s = e.settings().clone();
-            s.operating_mode = tempo_app::settings::OperatingMode::Phone;
-            e.apply_settings(s);
+            // Through THE verb — apply_settings no longer adopts operating_mode.
+            e.set_operating_mode("phone", false);
             e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, SO50)));
             e.sat_tune_nominal(FM_BIRD, 1_000_000);
             // The operator reaches for the cockpit's mode button during the
