@@ -115,6 +115,11 @@ pub trait RigBackend: Send + Sync {
     fn set_ctcss(&self, _tenths: u32) -> Option<bool> {
         None
     }
+    /// A client connected (`true`) / disconnected (`false`), with its peer address —
+    /// the broker's connection-log hook (#53: with the broker as the advertised share
+    /// endpoint, "is VarAC actually connected?" must be answerable from the app's own
+    /// connection log rather than by guesswork). Default: no-op.
+    fn client_event(&self, _peer: &str, _connected: bool) {}
 }
 
 /// The classic protocol-0 `\dump_state` capability dump. Wide HF–UHF ranges, all
@@ -211,15 +216,67 @@ pub enum Handled {
     Close,
 }
 
+/// Canonicalise a request line: rewrite a leading `\long_name` verb to its short letter, so
+/// ONE dispatch table serves both spellings. Real rigctld accepts every verb both ways
+/// (`rigctl(1)`: "Commands can be sent … as a single char, or as a long command name") and
+/// real clients mix them — VarAC sends long forms (#53). Before this existed the dispatcher
+/// knew only the letters while [`parse_ptt_set`] ALSO matched `\set_ptt`, so a long-form key
+/// request answered "not implemented" yet still recorded `asserted_ptt` — and the disconnect
+/// fail-safe then acted on a key-down that never happened. Both callers now canonicalise
+/// first, so the two can never disagree again.
+///
+/// Long names not in this table pass through untouched (→ `RPRT -11`, unknown, exactly as a
+/// real daemon refuses a verb it lacks). `\dump_state`, `\chk_vfo`, `\get_powerstat` and
+/// `\stop_morse` have no single-letter form and keep their spelled dispatch.
+fn canonical_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let Some(rest) = line.strip_prefix('\\') else {
+        return std::borrow::Cow::Borrowed(line);
+    };
+    let (verb, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    // The Hamlib 4.7.x short↔long table for every verb this server dispatches.
+    let short = match verb {
+        "get_freq" => "f",
+        "set_freq" => "F",
+        "get_mode" => "m",
+        "set_mode" => "M",
+        "get_vfo" => "v",
+        "set_vfo" => "V",
+        "get_ptt" => "t",
+        "set_ptt" => "T",
+        "get_split_vfo" => "s",
+        "set_split_vfo" => "S",
+        "set_split_freq" => "I",
+        "set_split_mode" => "X",
+        "set_rit" => "J",
+        "set_xit" => "Z",
+        "get_level" => "l",
+        "set_level" => "L",
+        "get_func" => "u",
+        "set_func" => "U",
+        "set_rptr_shift" => "R",
+        "set_rptr_offs" => "O",
+        "set_ctcss_tone" => "C",
+        "send_morse" => "b",
+        _ => return std::borrow::Cow::Borrowed(line),
+    };
+    if tail.is_empty() {
+        std::borrow::Cow::Owned(short.to_string())
+    } else {
+        std::borrow::Cow::Owned(format!("{short} {tail}"))
+    }
+}
+
 /// Handle one rigctld request line against `backend`. Pure (apart from the backend
 /// calls) so the protocol is unit-testable. Implements the subset a NET-rigctl
 /// client (WSJT-X) uses — get/set freq (`f`/`F`), mode (`m`/`M`), PTT (`t`/`T`),
 /// VFO (`v`/`V`), split (`s`), `\dump_state`, `\chk_vfo`, `\get_powerstat`, `q` —
-/// plus the extended verbs Nexus's own `Rig` client sends (levels `l`/`L`, funcs
+/// each in both its short and `\long_name` spelling ([`canonical_line`]) — plus the
+/// extended verbs Nexus's own `Rig` client sends (levels `l`/`L`, funcs
 /// `u`/`U`, morse `b`/`\stop_morse`, split `S`/`I`/`X`, RIT/XIT `J`/`Z`, FM
 /// repeater `R`/`O`/`C`), which answer `RPRT -11` unless the backend implements them.
 pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
-    let line = line.trim();
+    let line = canonical_line(line.trim());
+    let line: &str = &line;
     // `b` (send_morse) takes the REST OF THE LINE as text — CW messages contain spaces, so
     // dispatch it before the whitespace tokenizer below would split them.
     if let Some(text) = line.strip_prefix("b ") {
@@ -350,15 +407,16 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
     }
 }
 
-/// Detect a rigctld PTT-set request — `T <n>` (short) or `\set_ptt <n>` (long) —
-/// and return the requested key state (`n != 0` is key-down; only 0 is key-up),
-/// so a connection can fail-safe unkey on drop. `None` = not a PTT-set line.
+/// Detect a rigctld PTT-set request — `T <n>` in either spelling, via THE canonicaliser
+/// ([`canonical_line`], same one the dispatcher uses, so the two can never again disagree
+/// about whether a line keyed the rig) — and return the requested key state (`n != 0` is
+/// key-down; only 0 is key-up), so a connection can fail-safe unkey on drop. `None` = not
+/// a PTT-set line.
 fn parse_ptt_set(line: &str) -> Option<bool> {
+    let line = canonical_line(line.trim());
     let mut t = line.split_whitespace();
     match t.next() {
-        Some("T") | Some("\\set_ptt") => {
-            t.next().and_then(|s| s.parse::<i32>().ok()).map(|v| v != 0)
-        }
+        Some("T") => t.next().and_then(|s| s.parse::<i32>().ok()).map(|v| v != 0),
         _ => None,
     }
 }
@@ -369,6 +427,11 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
         Ok(w) => w,
         Err(_) => return,
     };
+    let peer = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "?".into());
+    backend.client_event(&peer, true);
     let reader = BufReader::new(stream);
     // Track this connection's PTT so a dropped/EOF'd broker client (WSJT-X or N1MM
     // crashing / closing mid-transmit) can't leave the rig keyed forever — the
@@ -407,6 +470,7 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
             backend.set_ptt(false);
         }
     }
+    backend.client_event(&peer, false);
 }
 
 /// Run the broker accept loop, a thread per client. Blocks; spawn it on its own
@@ -616,6 +680,73 @@ mod tests {
         }
     }
 
+    /// #53 conformance: real rigctld accepts every verb in BOTH spellings — the short letter
+    /// and the `\long_name` — and real clients mix them freely (VarAC sends long forms).
+    /// The broker only knew the letters, so `\get_freq` answered RPRT -11: to the client,
+    /// a rig that refuses to say its frequency. Worse, `parse_ptt_set` recognised
+    /// `\set_ptt` while the dispatcher did not — the connection recorded a key-down that
+    /// was never keyed, and the disconnect fail-safe then "un-keyed" a transmission that
+    /// never happened (it fails SAFE, but it acts on a fiction). One canonicaliser, used
+    /// by both, is the root fix.
+    #[test]
+    fn long_form_verbs_answer_exactly_like_their_short_letters() {
+        let b = MockRig::default();
+        assert_eq!(reply("\\get_freq", &b), "14074000\n");
+        assert_eq!(reply("\\set_freq 7035000", &b), "RPRT 0\n");
+        assert_eq!(*b.freq.lock().unwrap(), 7_035_000);
+        assert_eq!(reply("\\get_mode", &b), "USB\n2700\n");
+        assert_eq!(reply("\\set_mode FT8 3000", &b), "RPRT 0\n");
+        assert_eq!(reply("\\get_ptt", &b), "0\n");
+        assert_eq!(reply("\\set_ptt 1", &b), "RPRT 0\n");
+        assert!(
+            *b.ptt.lock().unwrap(),
+            "\\set_ptt must actually key the backend"
+        );
+        assert_eq!(reply("\\set_ptt 0", &b), "RPRT 0\n");
+        assert_eq!(reply("\\get_vfo", &b), "VFOA\n");
+        assert_eq!(reply("\\get_split_vfo", &b), "0\nVFOA\n");
+        // Hamlib's own long spellings for the extended verbs map too — unimplemented on this
+        // mock, so they answer RPRT -11 exactly like their letters (NOT like unknown verbs
+        // answering from half a parse).
+        assert_eq!(reply("\\set_level RFPOWER 0.5", &b), "RPRT -11\n");
+        assert_eq!(reply("\\get_level RFPOWER", &b), "RPRT -11\n");
+        // An unknown long verb is still unknown.
+        assert_eq!(reply("\\warble", &b), "RPRT -11\n");
+    }
+
+    /// The morse long form takes the rest of the line as text, exactly like `b`.
+    #[test]
+    fn long_form_send_morse_keeps_its_spaces() {
+        struct MorseRig(Mutex<String>);
+        impl RigBackend for MorseRig {
+            fn freq_hz(&self) -> u64 {
+                0
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 2700)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _: &str, _: u32) -> bool {
+                true
+            }
+            fn set_ptt(&self, _: bool) -> bool {
+                true
+            }
+            fn send_morse(&self, text: &str) -> Option<bool> {
+                *self.0.lock().unwrap() = text.to_string();
+                Some(true)
+            }
+        }
+        let b = MorseRig(Mutex::new(String::new()));
+        assert_eq!(reply("\\send_morse CQ CQ DE KD9TAW", &b), "RPRT 0\n");
+        assert_eq!(*b.0.lock().unwrap(), "CQ CQ DE KD9TAW");
+    }
+
     #[test]
     fn protocol_get_set_commands() {
         let b = MockRig::default();
@@ -753,6 +884,164 @@ mod tests {
                 if keyed_after { "" } else { "un" }
             );
         }
+    }
+
+    /// The connection-log hook: one connected + one disconnected event per client, with the
+    /// peer, so the operator can SEE their logger attach to the share address (#53).
+    #[test]
+    fn a_client_lifetime_is_two_logged_events() {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        struct EventRig(Mutex<Vec<(String, bool)>>);
+        impl RigBackend for EventRig {
+            fn freq_hz(&self) -> u64 {
+                0
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 2700)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _: &str, _: u32) -> bool {
+                true
+            }
+            fn set_ptt(&self, _: bool) -> bool {
+                true
+            }
+            fn client_event(&self, peer: &str, connected: bool) {
+                self.0.lock().unwrap().push((peer.to_string(), connected));
+            }
+        }
+        let backend = Arc::new(EventRig(Mutex::new(Vec::new())));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let b: Arc<dyn RigBackend> = backend.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve_connection(stream, b);
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(b"f\nq\n").unwrap();
+        client.flush().unwrap();
+        server.join().unwrap();
+        let events = backend.0.lock().unwrap().clone();
+        assert_eq!(events.len(), 2, "one connect + one disconnect: {events:?}");
+        assert!(events[0].1 && !events[1].1, "connected then disconnected");
+        assert_eq!(events[0].0, events[1].0, "same peer on both events");
+        assert!(
+            events[0].0.starts_with("127.0.0.1:"),
+            "the peer address is real: {}",
+            events[0].0
+        );
+    }
+
+    /// The other half of the canonicaliser fix, at the CONNECTION level: a long-form key
+    /// really keys, so the drop fail-safe acts on a key-down that actually happened. Before,
+    /// `\set_ptt 1` answered RPRT -11 (never keyed) while still setting `asserted_ptt`.
+    #[test]
+    fn a_long_form_key_is_real_so_the_drop_failsafe_unkeys_it() {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        let backend: Arc<dyn RigBackend> = Arc::new(MockRig::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let b = backend.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve_connection(stream, b);
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(b"\\set_ptt 1\n").unwrap();
+        client.flush().unwrap();
+        // Wait for the key to land before dropping, else the drop can race the write.
+        for _ in 0..200 {
+            if backend.ptt() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(backend.ptt(), "the long-form key must reach the backend");
+        drop(client);
+        server.join().unwrap();
+        assert!(
+            !backend.ptt(),
+            "fail-safe unkeys the drop-while-keyed client"
+        );
+    }
+
+    /// #53's mechanism, demonstrated and then pinned out of our broker.
+    ///
+    /// rogerloxton's VarAC log shows `Convert.ToInt64("14105000\n14105000\n")`: his read
+    /// TIMED OUT behind the shared Hamlib daemon's serial round-trip, he re-asked, the late
+    /// reply arrived alongside the second, and VarAC — which never drains — stayed one reply
+    /// behind forever. FIRST a fake slow server reproduces those exact bytes (the positive
+    /// control: the diagnosis, made mechanical); THEN the same impatient client against OUR
+    /// broker gets clean one-reply-per-read framing, because the broker answers from cached
+    /// state in microseconds — there is no stall to time out on.
+    #[test]
+    fn a_timed_out_reask_doubles_replies_on_a_slow_server_but_not_on_the_broker() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Duration;
+
+        // -- the impatient, never-draining client (VarAC-shaped) --------------------------
+        // ask `f`; read once with a short timeout; on timeout ask again; then read once.
+        fn varac_shaped_read(addr: std::net::SocketAddr, patience: Duration) -> String {
+            let mut c = TcpStream::connect(addr).unwrap();
+            c.set_read_timeout(Some(patience)).unwrap();
+            c.write_all(b"f\n").unwrap();
+            let mut buf = [0u8; 256];
+            let n = match c.read(&mut buf) {
+                Ok(n) => n,
+                Err(_) => {
+                    // timed out → re-ask, then read whatever has arrived by now
+                    c.write_all(b"f\n").unwrap();
+                    c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    std::thread::sleep(Duration::from_millis(300)); // let BOTH replies land
+                    c.read(&mut buf).unwrap_or(0)
+                }
+            };
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        }
+
+        // -- control: a rigctld whose serial round-trip outlives the client's patience ----
+        let slow = TcpListener::bind("127.0.0.1:0").unwrap();
+        let slow_addr = slow.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = slow.accept().unwrap();
+            let mut w = stream.try_clone().unwrap();
+            let r = std::io::BufReader::new(stream);
+            for line in r.lines() {
+                let Ok(line) = line else { break };
+                if line.trim() == "f" {
+                    std::thread::sleep(Duration::from_millis(150)); // the serial stall
+                    let _ = w.write_all(b"14105000\n");
+                }
+            }
+        });
+        let doubled = varac_shaped_read(slow_addr, Duration::from_millis(30));
+        assert_eq!(
+            doubled, "14105000\n14105000\n",
+            "control: the slow-daemon path must reproduce the exact bytes from the issue's log"
+        );
+
+        // -- our broker under the same client: no stall, so the timeout never fires -------
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let backend: Arc<dyn RigBackend> = Arc::new(MockRig::default());
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve_connection(stream, backend);
+        });
+        let clean = varac_shaped_read(addr, Duration::from_millis(1000));
+        assert_eq!(
+            clean, "14074000\n",
+            "the broker answers within the client's patience — one ask, one reply"
+        );
     }
 
     #[test]

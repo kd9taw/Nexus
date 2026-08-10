@@ -184,23 +184,33 @@ describe('sharing the rig over Hamlib NET rigctl', () => {
     return { addr, hint }
   }
 
-  it("shows the active radio's own rigctld address, not a hardcoded default", async () => {
+  it('advertises the CAT broker, and it arrives switched on', async () => {
+    // #53: the advertised share address is the BROKER — Nexus itself answering from live
+    // state — never the Hamlib daemon's port, which Test CAT and every CAT-config save tear
+    // down under a connected client (rogerloxton's VarAC log: empty reads and doubled
+    // replies from exactly those windows). Default port 4532 is deliberate: it is Hamlib's
+    // own NET rigctl number, so a logger already pointed there lands on the broker.
     const { container } = renderPanel()
     const { addr } = await shareRow(container)
-    // The FTDX10 is active and its port is 4532.
     expect(addr.textContent).toBe('127.0.0.1:4532')
+    const toggle = addr
+      .closest('.settings-field')!
+      .querySelector('[role="switch"]') as HTMLElement
+    expect(toggle.getAttribute('aria-checked'), 'sharing is on by default').toBe('true')
   })
 
-  it('follows the radio being edited, so a second rig is not sent the first one\'s address', async () => {
+  it("the broker address stays put across Edit; the per-radio DIRECT address follows the edited radio", async () => {
+    // Dual-radio: the broker follows the ACTIVE radio, so its address never changes — but an
+    // operator driving the second rig from another program needs that rig's own daemon
+    // address, and sending them radio 1's would have another program controlling the WRONG
+    // radio. The direct line carries the edited radio's port.
     const { container } = renderPanel()
     await shareRow(container)
-    // Only the NON-active radio offers Edit; the IC-9700 is on 4534 in this fixture. This is
-    // the case a hardcoded 4532 would pass a single-radio check and still get wrong — and the
-    // failure would be another program controlling the WRONG radio.
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
     await waitFor(() => {
-      expect(container.querySelector('.rig-share-addr')!.textContent).toBe('127.0.0.1:4534')
+      expect(container.querySelector('.rig-share-direct')!.textContent).toBe('127.0.0.1:4534')
     })
+    expect(container.querySelector('.rig-share-addr')!.textContent).toBe('127.0.0.1:4532')
   })
 
   it('names the protocol the other programs actually ask for', async () => {

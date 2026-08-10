@@ -64,10 +64,12 @@ impl CatDaemon {
 /// `127.0.0.1:<port>`; connecting to port 0 fails on Windows with WSAEADDRNOTAVAIL ("the requested
 /// address is not valid in its context", os error 10049). Settings repair (`ensure_distinct_radio_ports`)
 /// keeps a persisted 0 from surviving a load, but this is the runtime backstop for a just-detected,
-/// not-yet-saved profile. 4532 is Hamlib's default rigctld port.
+/// not-yet-saved profile. 4534, not Hamlib's 4532: the CAT broker owns 4532 by default (#53)
+/// — open_cat refuses a daemon that collides with our own broker (dead CAT) — and 4533 is
+/// the rotctld default.
 fn safe_rigctld_port(port: u16) -> u16 {
     if port == 0 {
-        4532
+        4534
     } else {
         port
     }
@@ -673,9 +675,14 @@ impl Default for RadioConfig {
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
-            rigctld_port: 4532,
+            // Mirror Settings::default() (#53): the CAT broker is ON at 4532 and the daemon
+            // sits one off it. This Default is the doc-example/test-harness config; a scene
+            // whose applied transport diverged from the engine's real defaults would see
+            // rig_differs on the first step and tear the stub rig down (the loop_state_for
+            // trap, broker axis) — 27 scenes failed exactly that way when these two drifted.
+            rigctld_port: 4534,
             icom_native_cat: false,
-            broker_self_port: None,
+            broker_self_port: Some(4532),
             dial_hz: 14_090_500,
             mode: "USB".to_string(),
             wsjtx_udp: false,

@@ -14314,6 +14314,18 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         // in exactly the panic case the recovering accessor exists for.
         engine_lock(&self.0).broker_ptt(on)
     }
+    fn client_event(&self, peer: &str, connected: bool) {
+        // #53: the broker is the advertised share endpoint, so "is VarAC actually
+        // connected?" must be answerable from Settings ▸ connection log.
+        conn_log(
+            "CAT broker",
+            "info",
+            format!(
+                "client {} {peer}",
+                if connected { "connected:" } else { "disconnected:" }
+            ),
+        );
+    }
 }
 
 // ---- Self-update check (Phase 1: notify + open the download page) ---------------------------
@@ -16649,6 +16661,23 @@ mod tests {
             "downlink-only is an answer, not an absence"
         );
         assert_eq!(con.offer_map, None);
+    }
+
+    /// #53's load-bearing property, pinned where the backend lives: the broker's `f` answer
+    /// comes from CACHED engine state — no radio loop is running in this test, no daemon, no
+    /// serial port exists at all, and the answer is still immediate and correct. This is why
+    /// the broker (unlike the shared Hamlib daemon) can never stall a VarAC read behind a
+    /// serial round-trip, which is the mechanism the issue's log recorded.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_broker_answers_frequency_from_cached_state_with_no_radio_attached() {
+        use tempo_audio::rigctld_server::RigBackend;
+        let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        engine_lock(&shared).set_frequency(14.105, "20m", "USB");
+        let rig = super::EngineRig(shared);
+        assert_eq!(rig.freq_hz(), 14_105_000);
     }
 
     /// The engine mid-pass with a transponder HELD — the exact state the removed

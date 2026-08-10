@@ -3509,29 +3509,12 @@ export function SettingsPanel({
                 </label>
               )}
 
-              <div className="settings-field">
-                <label className="settings-toggle">
-                  <span className="settings-label">Share my radio (CAT broker)</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={form.catBroker}
-                    className={`toggle${form.catBroker ? ' on' : ''}`}
-                    onClick={() => updateBool('catBroker', !form.catBroker)}
-                  >
-                    <span className="toggle-knob" />
-                  </button>
-                </label>
-                <span className="settings-hint">
-                  Run a rigctld-compatible server so WSJT-X / N1MM / loggers share this radio THROUGH Nexus
-                  (point them at Hamlib NET rigctl, localhost:{form.catBrokerPort}). Takes effect right away
-                  — no restart. Works even when Nexus is sharing an external rigctld.
-                </span>
-              </div>
-
+              {/* The CAT-broker toggle/port/PTT that lived here moved into the "Share this
+                  radio with other programs" block below (#53) — ONE share affordance. The
+                  port stays editable here for the rare collision, nothing else. */}
               {form.catBroker && (
                 <label className="settings-field">
-                  <span className="settings-label">CAT broker port</span>
+                  <span className="settings-label">Sharing port</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -3541,26 +3524,12 @@ export function SettingsPanel({
                     onChange={(e) => update('catBrokerPort', e.target.value)}
                     autoComplete="off"
                   />
-                  <span className="settings-hint">Other apps connect here (Hamlib NET rigctl default 4532).</span>
-                </label>
-              )}
-              {form.catBroker && (
-                <div className="settings-field">
-                  <span className="settings-label">Broker PTT</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={form.catBrokerPtt ?? false}
-                    className={`toggle${form.catBrokerPtt ? ' on' : ''}`}
-                    onClick={() => updateBool('catBrokerPtt', !form.catBrokerPtt)}
-                  >
-                    <span className="knob" />
-                  </button>
                   <span className="settings-hint">
-                    Let the connected app key transmit when Nexus is idle. Off = other apps
-                    control the rig but never key it (Nexus owns TX).
+                    The &quot;Share this radio&quot; address other programs connect to (Hamlib NET
+                    rigctl default 4532). Change it only if something else on this computer
+                    already owns the port.
                   </span>
-                </div>
+                </label>
               )}
             </SettingsGroup>
             <div className="settings-cat-test">
@@ -3709,34 +3678,90 @@ export function SettingsPanel({
               </span>
             </div>
 
+            {/* THE share affordance (#53) — one block, and it advertises the CAT BROKER, not the
+                Hamlib daemon's port. The daemon is torn down by Test CAT and every CAT-config
+                save (eleven trigger fields), and rogerloxton's VarAC log shows what a shared
+                client sees when its server restarts or stalls behind our serial polling: empty
+                reads and doubled replies. The broker is Nexus itself answering from live state —
+                microseconds, and it survives every reconfiguration. The Advanced broker toggle
+                that used to live separately is merged here: two share affordances meant neither
+                told the whole story. */}
             <div className="settings-field">
               <span className="settings-label">Share this radio with other programs</span>
               <div className="rig-share-row">
-                <code className="rig-share-addr mono">127.0.0.1:{form.rigctldPort || 4532}</code>
                 <button
                   type="button"
-                  className="settings-linkbtn"
-                  onClick={() => {
-                    void navigator.clipboard
-                      ?.writeText(`127.0.0.1:${form.rigctldPort || 4532}`)
-                      .catch(() => {})
-                  }}
-                  title="Copy the address to paste into the other program"
+                  role="switch"
+                  aria-checked={form.catBroker}
+                  className={`toggle${form.catBroker ? ' on' : ''}`}
+                  onClick={() => updateBool('catBroker', !form.catBroker)}
                 >
-                  Copy
+                  <span className="toggle-knob" />
                 </button>
+                {form.catBroker && (
+                  <>
+                    <code className="rig-share-addr mono">
+                      127.0.0.1:{form.catBrokerPort || 4532}
+                    </code>
+                    <button
+                      type="button"
+                      className="settings-linkbtn"
+                      onClick={() => {
+                        void navigator.clipboard
+                          ?.writeText(`127.0.0.1:${form.catBrokerPort || 4532}`)
+                          .catch(() => {})
+                      }}
+                      title="Copy the address to paste into the other program"
+                    >
+                      Copy
+                    </button>
+                  </>
+                )}
               </div>
-              <span className="settings-hint">
-                Nexus drives your radio through <code>rigctld</code>, and that is a server — so
-                other software can use the same rig at the same time instead of fighting over the
-                serial port. In <strong>VarAC</strong>, <strong>FreeDV</strong>,{' '}
-                <strong>WSJT-X</strong>, <strong>JS8Call</strong> or <strong>fldigi</strong>, pick
-                the rig <em>Hamlib NET rigctl</em> (VarAC and FreeDV call it a network or rigctld
-                connection) and give it the address above. Leave their serial port blank — they
-                talk to Nexus, not to the radio. Each radio you have configured has its own
-                address. Both programs can command the rig, so expect them to argue if you tune in
-                both at once.
-              </span>
+              {form.catBroker ? (
+                <span className="settings-hint">
+                  Nexus itself answers at this address, so <strong>VarAC</strong>,{' '}
+                  <strong>FreeDV</strong>, <strong>WSJT-X</strong>, <strong>JS8Call</strong> and{' '}
+                  <strong>fldigi</strong> can use the radio while Nexus runs — pick the rig{' '}
+                  <em>Hamlib NET rigctl</em> (VarAC and FreeDV call it a network or rigctld
+                  connection), give it the address above, and leave their serial port blank. They
+                  stay connected even while Nexus tests or reconfigures the radio link, and they
+                  follow whichever radio is active. Only for this computer — the address is not
+                  reachable from the network. Takes effect right away. Both programs can command
+                  the rig, so expect them to argue if you tune in both at once.
+                </span>
+              ) : (
+                <span className="settings-hint">
+                  Off — other programs cannot use the radio while Nexus runs. Turn it on and
+                  point them at the address that appears here (<em>Hamlib NET rigctl</em>).
+                </span>
+              )}
+              {form.catBroker && (form.radios?.length ?? 0) > 1 && (
+                <span className="settings-hint">
+                  Driving a specific radio that is <em>not</em> the active one: use its direct
+                  address <code className="rig-share-direct mono">127.0.0.1:{form.rigctldPort || 4532}</code>{' '}
+                  (per-radio; this link drops briefly whenever Nexus reconfigures that radio).
+                </span>
+              )}
+              {form.catBroker && (
+                <div className="settings-field">
+                  <span className="settings-label">Other programs may key transmit</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.catBrokerPtt ?? false}
+                    className={`toggle${form.catBrokerPtt ? ' on' : ''}`}
+                    onClick={() => updateBool('catBrokerPtt', !form.catBrokerPtt)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">
+                    On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when
+                    it owned the CAT cable — every Nexus transmit safeguard still applies. Off:
+                    shared programs tune and read but never transmit.
+                  </span>
+                </div>
+              )}
             </div>
           </fieldset>
 

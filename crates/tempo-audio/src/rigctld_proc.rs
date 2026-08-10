@@ -305,6 +305,13 @@ pub fn rigctld_args(
             }
         }
     }
+    // Bind LOOPBACK ONLY (#53). rigctld's default listen address is the wildcard, so every
+    // install was exposing raw rig control to the LAN while the share UI promised "on this
+    // computer". The test harness always passed `-T 127.0.0.1`; production now matches it.
+    // Everything that talks to this daemon — Nexus itself, a shared local logger — is local
+    // by design, and the CAT broker is the advertised share endpoint.
+    args.push("-T".to_string());
+    args.push("127.0.0.1".to_string());
     args.push("-t".to_string());
     args.push(tcp_port.to_string());
     args
@@ -699,6 +706,10 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
         args.push("-s".to_string());
         args.push(baud.to_string());
     }
+    // Loopback-only, same defect class as rigctld_args: the wildcard default exposed
+    // rotator control to the LAN. Every consumer of this daemon is on this machine.
+    args.push("-T".to_string());
+    args.push("127.0.0.1".to_string());
     args.push("-t".to_string());
     args.push(tcp_port.to_string());
     args
@@ -1271,12 +1282,23 @@ mod tests {
     fn rotctld_args_mirror_the_rig_shape() {
         assert_eq!(
             rotctld_args(601, "COM7", 9600, 4533),
-            vec!["-m", "601", "-r", "COM7", "-s", "9600", "-t", "4533"]
+            vec![
+                "-m",
+                "601",
+                "-r",
+                "COM7",
+                "-s",
+                "9600",
+                "-T",
+                "127.0.0.1",
+                "-t",
+                "4533"
+            ]
         );
         // No port (Dummy rotator for testing) → no -r/-s.
         assert_eq!(
             rotctld_args(1, "", 9600, 4533),
-            vec!["-m", "1", "-t", "4533"]
+            vec!["-m", "1", "-T", "127.0.0.1", "-t", "4533"]
         );
     }
 
@@ -1293,7 +1315,19 @@ mod tests {
         );
         assert_eq!(
             args,
-            vec!["-vvv", "-m", "3073", "-r", "COM5", "-s", "38400", "-t", "4532"]
+            vec![
+                "-vvv",
+                "-m",
+                "3073",
+                "-r",
+                "COM5",
+                "-s",
+                "38400",
+                "-T",
+                "127.0.0.1",
+                "-t",
+                "4532"
+            ]
         );
     }
 
@@ -1317,6 +1351,8 @@ mod tests {
                 "23005",
                 "-r",
                 "192.168.1.50:4992",
+                "-T",
+                "127.0.0.1",
                 "-t",
                 "4532"
             ]
@@ -1344,6 +1380,8 @@ mod tests {
                 "/dev/ttyUSB0",
                 "-s",
                 "19200",
+                "-T",
+                "127.0.0.1",
                 "-t",
                 "4533"
             ]
@@ -1354,7 +1392,10 @@ mod tests {
     fn args_without_serial_port_omit_port_and_baud() {
         // Dummy / NET rigs need no serial device.
         let args = rigctld_args(1, "", 38400, 4532, false, None, ControlLines::default());
-        assert_eq!(args, vec!["-vvv", "-m", "1", "-t", "4532"]);
+        assert_eq!(
+            args,
+            vec!["-vvv", "-m", "1", "-T", "127.0.0.1", "-t", "4532"]
+        );
     }
 
     /// The single-cable interface (Digirig Mobile): ONE port carries CAT and the RTS keying
@@ -1374,7 +1415,20 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "-vvv", "-m", "3073", "-r", "COM5", "-s", "38400", "-P", "RTS", "-p", "COM5", "-t",
+                "-vvv",
+                "-m",
+                "3073",
+                "-r",
+                "COM5",
+                "-s",
+                "38400",
+                "-P",
+                "RTS",
+                "-p",
+                "COM5",
+                "-T",
+                "127.0.0.1",
+                "-t",
                 "4532"
             ],
             "-P/-p must name the SAME device as -r; a mismatch opens a second port"
@@ -1432,7 +1486,10 @@ mod tests {
             Some(crate::rig::SerialLine::Rts),
             ControlLines::default(),
         );
-        assert_eq!(no_dev, vec!["-vvv", "-m", "1", "-t", "4532"]);
+        assert_eq!(
+            no_dev,
+            vec!["-vvv", "-m", "1", "-T", "127.0.0.1", "-t", "4532"]
+        );
     }
 
     /// Every arg-shape test below reads the flag pairs rather than a whole vector, so adding an
@@ -1726,7 +1783,10 @@ mod tests {
         );
 
         let no_dev = rigctld_args(1, "", 38400, 4532, false, None, ControlLines::hold_low());
-        assert_eq!(no_dev, vec!["-vvv", "-m", "1", "-t", "4532"]);
+        assert_eq!(
+            no_dev,
+            vec!["-vvv", "-m", "1", "-T", "127.0.0.1", "-t", "4532"]
+        );
     }
 
     /// ⚠️ THE P1 REGRESSION, by name. Both dumps are real `rigctld 4.7.1 -m <model> -L` output

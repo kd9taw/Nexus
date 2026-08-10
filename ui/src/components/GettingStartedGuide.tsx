@@ -254,8 +254,9 @@ export function GettingStartedGuide({ onClose }: Props) {
                       </li>
                       <li>
                         <strong>Then press Test CAT.</strong> Nexus saves what you entered, starts{' '}
-                        <code>rigctld</code> on port 4532, and reports the dial frequency it read
-                        back — or the specific error.
+                        <code>rigctld</code> for the radio, and reports the dial frequency it read
+                        back — or the specific error. Other programs share the radio through the
+                        address in Settings ▸ Radio ▸ <em>Share this radio</em>.
                       </li>
                     </ul>
                     <div className="gsg-callout neutral">

@@ -17093,11 +17093,21 @@ mod tests {
     fn broker_ptt_is_arbitrated() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_tx_enabled(true);
-        // Default OFF: a foreign app may never key without the opt-in.
-        assert!(!e.broker_ptt(true));
+        // Default ON since #53 (operator sign-off 2026-08-09): the broker is the advertised
+        // share endpoint, and a shared client keeps the keying it had via the Hamlib port.
+        // The OPT-OUT must hold — read-only sharing refuses every key.
+        e.settings.cat_broker_ptt = false; // same-module test access
+        assert!(
+            !e.broker_ptt(true),
+            "opted out: a foreign app may never key"
+        );
         assert!(!e.manual_ptt());
-        // Opted in + idle → allowed; the radio loop sees the key via manual_ptt().
-        e.settings.cat_broker_ptt = true; // same-module test access
+        // The default + idle → allowed; the radio loop sees the key via manual_ptt().
+        e.settings.cat_broker_ptt = crate::settings::Settings::default().cat_broker_ptt;
+        assert!(
+            e.settings.cat_broker_ptt,
+            "the shipped default allows shared keying (behind every other TX gate)"
+        );
         assert!(e.broker_ptt(true));
         assert!(e.manual_ptt());
         // Un-key always lands.

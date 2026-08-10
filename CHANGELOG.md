@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sharing your radio with VarAC, WSJT-X or a logger is now solid — and on by default.**
+  The address under Settings ▸ Radio ▸ *Share this radio* is now answered by Nexus itself from
+  its live radio state, instantly. Until now it pointed at the underlying `rigctld`: on a busy
+  serial link its reply could arrive late enough that the other program asked again and then
+  read two answers stuck together — VarAC's "Input string was not in a correct format" — and
+  the link dropped whenever Nexus tested or reconfigured CAT. None of that can happen against
+  the new address: shared programs stay connected through Test CAT and every settings save, and
+  their connections show in the connection log. Long command spellings (`\get_freq` and
+  friends, which VarAC sends) are now understood too. Shared programs can still key the radio —
+  turn that off in the same block if you want them read-only — and every Nexus transmit
+  safeguard applies to them regardless. Upgrading from 1.0.4 or earlier turns sharing on
+  automatically; if you installed 1.0.5, flip it on once in Settings ▸ Radio.
+
+- **The radio-control helpers no longer listen on your whole network.** The `rigctld` and
+  `rotctld` servers Nexus starts accepted connections from any machine on your LAN, while the
+  share UI promised "this computer only". Both now bind localhost, matching the promise —
+  sharing between computers was never a supported path, and rig control is not something to
+  leave open on hotel Wi-Fi.
+
 - **Clicking a spot no longer bounces the rig off a default frequency on the way.** Working an
   FT4 spot while on FT8 (or the other way round) used to switch the mode first — briefly
   commanding the mode's standard calling frequency — and then jump to the spot. On a slow CAT

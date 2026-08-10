@@ -495,8 +495,12 @@ pub struct Settings {
     #[serde(default)]
     pub op_state: String,
     /// Allow a foreign app on the CAT broker (WSJT-X/N1MM) to key PTT when Nexus
-    /// is idle. OFF by default — Nexus owns TX unless the operator opts in.
-    #[serde(default)]
+    /// is idle. ON by default (operator sign-off 2026-08-09): the broker is the
+    /// advertised share endpoint, and a shared client keeps the keying it had via
+    /// the Hamlib port. Every engine-side TX gate still applies. The serde default
+    /// must MATCH the struct default (`default_true`) — a bare `#[serde(default)]`
+    /// would hand older files `false` and silently split the two defaults.
+    #[serde(default = "default_true")]
     pub cat_broker_ptt: bool,
     pub band: String,
     pub dial_mhz: f64,
@@ -928,7 +932,12 @@ pub struct Settings {
     pub sat_pass_alert_sound_off: bool,
 
     /// Run the rigctld-compatible CAT **broker** so other apps (WSJT-X / N1MM /
-    /// loggers) share the radio THROUGH Nexus, on `cat_broker_port`. Off by default.
+    /// loggers) share the radio THROUGH Nexus, on `cat_broker_port`. ON by default
+    /// (#53): the broker answers from cached engine state and survives every
+    /// Hamlib-daemon teardown, so it — not the daemon's port — is what the share
+    /// block advertises. No field-level serde default: the container default
+    /// applies, so pre-1.0.5 files (no field) come up ON; a 1.0.5 file's explicit
+    /// `false` is kept.
     pub cat_broker: bool,
     /// TCP port the CAT broker listens on (Hamlib NET rigctl default 4532).
     pub cat_broker_port: u16,
@@ -2100,7 +2109,12 @@ impl Default for RadioProfile {
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
-            rigctld_port: 4532,
+            // 4534, not 4532: the CAT broker owns 4532 by default (#53) — a default that
+            // collided with it would rely on load-time port repair everywhere, and open_cat
+            // refuses a self-collision with dead CAT. 4533 is out too: it is the rotctld
+            // default in this very profile (and Hamlib's rotctld convention). Hamlib's
+            // rigctld number stays the BROKER's, so external loggers land on the broker.
+            rigctld_port: 4534,
             icom_native_cat: false,
             data_modes_plain_ssb: false,
             audio_in: String::new(),
@@ -2285,7 +2299,11 @@ impl Default for Settings {
             dxkeeper_uploads: false, // Nexus owns the upload connectors
             op_name: String::new(),
             op_state: String::new(),
-            cat_broker_ptt: false,
+            // ON by default — the operator's explicit sign-off (2026-08-09): with the broker
+            // as the advertised share endpoint, a shared WSJT-X/VarAC keeps the keying it has
+            // via the Hamlib port today. NOT a TX gate bypass: a broker key request still
+            // passes every engine-side gate (TX-enable latch, privilege lockout, watchdog).
+            cat_broker_ptt: true,
             band: "20m".to_string(),
             dial_mhz: 14.074, // FT8 20m — the default mode/band
             sideband: "USB".to_string(),
@@ -2357,7 +2375,8 @@ impl Default for Settings {
             // Assistance is a normal, legal way to operate; only the operator's explicit
             // toggle declares an unassisted entry. Never auto-enabled, never date-driven.
             unassisted_mode: false,
-            rigctld_port: 4532,
+            // Matches the profile default above: 4534 (broker owns 4532, rotctld 4533; #53).
+            rigctld_port: 4534,
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: default_rotator_baud(),
@@ -2380,7 +2399,16 @@ impl Default for Settings {
             sat_min_shift_hz: default_sat_min_shift_hz(),
             sat_update_ms: default_sat_update_ms(),
             sat_pass_alert_sound_off: false,
-            cat_broker: false,
+            // ON by default (operator decision, 2026-08-09, with catBrokerPtt): the broker is
+            // the ADVERTISED share endpoint as of #53 — it answers from cached engine state in
+            // microseconds and survives every daemon teardown (Test CAT, config saves), which
+            // the Hamlib daemon's port does not. Default 4532 (Hamlib's own NET rigctl port) is
+            // deliberate: `ensure_distinct_radio_ports` seeds the broker FIRST and bumps the
+            // per-radio daemons off it, so an external logger already pointed at 4532 lands on
+            // the broker after upgrade with no reconfiguration. Note: a settings file written
+            // by 1.0.5 carries an explicit `false` (the struct persists whole) — those
+            // operators flip it in the share block; pre-1.0.5 files lack the field and get ON.
+            cat_broker: true,
             cat_broker_port: 4532,
             flex_radio_ip: String::new(),
             flex_native_pan: false,
@@ -4343,6 +4371,35 @@ mod tests {
         }
     }
 
+    /// #53: the CAT broker is the advertised share endpoint, so it must arrive ON — including
+    /// for an upgrade from a pre-1.0.5 file that has never heard of the field. The seed order
+    /// in `ensure_distinct_radio_ports` puts the broker on 4532 and bumps the per-radio
+    /// daemons off it, so an external logger already pointed at 4532 lands on the broker.
+    /// A file that RECORDS false (every 1.0.5 save wrote the whole struct) keeps false — the
+    /// share block is the affordance for those installs, not a forced migration.
+    #[test]
+    fn the_cat_broker_arrives_on_and_a_recorded_choice_is_kept() {
+        let s = Settings::default();
+        assert!(s.cat_broker, "fresh install: broker on");
+        assert!(
+            s.cat_broker_ptt,
+            "shared clients keep keying (operator sign-off 2026-08-09); every TX gate still applies"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"KD9TAW","mygrid":"EN51"}"#).unwrap();
+        assert!(old.cat_broker, "pre-1.0.5 upgrade: broker on");
+        assert!(old.cat_broker_ptt, "pre-1.0.5 upgrade: keying on");
+        let recorded: Settings =
+            serde_json::from_str(r#"{"catBroker":false,"catBrokerPtt":false}"#).unwrap();
+        assert!(
+            !recorded.cat_broker,
+            "an explicit false in the file is kept"
+        );
+        assert!(
+            !recorded.cat_broker_ptt,
+            "an explicit false in the file is kept"
+        );
+    }
+
     #[test]
     fn aprs_is_is_off_until_the_operator_asks_and_the_uplink_is_a_second_choice() {
         // Both are outbound connections to a public amateur service under the operator's own
@@ -4453,7 +4510,7 @@ mod tests {
         let s: Settings = serde_json::from_str(partial).unwrap();
         assert_eq!(s.mycall, "W9XYZ");
         assert_eq!(s.ptt_method, "vox"); // default
-        assert_eq!(s.rigctld_port, 4532); // default
+        assert_eq!(s.rigctld_port, 4534); // default — broker owns 4532, rotctld 4533 (#53)
         assert_eq!(s.wsjtx_udp_addr, "127.0.0.1:2237"); // default
     }
 
@@ -5128,17 +5185,24 @@ mod tests {
         // Adding a 2nd radio must never collide daemon ports with radio 1 (or the CAT broker) — two
         // rigctld/rotctld instances can't bind the same TCP port.
         let mut s = Settings::default();
-        s.ensure_radio_profiles(); // radio 0 on the default 4532/4533
+        s.ensure_radio_profiles(); // radio 0 on the shipped defaults
+        let r0 = s.radios[0].clone();
+        // Point the broker somewhere unusual so "dodges the broker" is a real assertion,
+        // not a coincidence of the defaults.
         s.cat_broker = true;
-        s.cat_broker_port = 4534;
+        s.cat_broker_port = r0.rigctld_port + 7;
         let id = s.add_radio_profile();
         assert_eq!(s.radios.len(), 2);
         assert_eq!(id, 1, "fresh, non-reused id");
         let new = s.radios.iter().find(|p| p.id == id).unwrap();
         assert_eq!(new.name, "Radio 2");
-        // Distinct from radio 0 (4532/4533) AND the broker (4534).
-        assert_ne!(new.rigctld_port, 4532);
-        assert_ne!(new.rigctld_port, 4534, "dodges the CAT broker port too");
+        // Distinct from radio 0's pair AND the broker.
+        assert_ne!(new.rigctld_port, r0.rigctld_port);
+        assert_ne!(new.rigctld_port, r0.rotctld_port);
+        assert_ne!(
+            new.rigctld_port, s.cat_broker_port,
+            "dodges the CAT broker port too"
+        );
         assert_ne!(new.rigctld_port, new.rotctld_port);
         // The whole roster must pass the port validator (broker included).
         assert!(validate_radio_ports(&s.radios, Some(s.cat_broker_port)).is_ok());
@@ -5147,30 +5211,59 @@ mod tests {
     #[test]
     fn ensure_distinct_radio_ports_repairs_collisions() {
         // Two live daemons (true dual-radio) need distinct ports; an old/hand-edited config that
-        // shares one is auto-repaired on load (first radio wins its port, the other moves off it).
+        // shares one is auto-repaired on load. The CAT broker (ON by default since #53) is
+        // seeded FIRST and owns its port — 4532, Hamlib's own NET rigctl number, deliberately:
+        // an external logger already pointed at 4532 lands on the broker after upgrade. Every
+        // per-radio daemon is therefore bumped off it.
         let mut s = Settings::default();
-        s.ensure_radio_profiles(); // radio 0 @ 4532
+        s.ensure_radio_profiles();
+        let r0_port = s.radios[0].rigctld_port;
         let r1 = s.add_radio_profile();
         s.radios
             .iter_mut()
             .find(|p| p.id == r1)
             .unwrap()
-            .rigctld_port = 4532; // force a collision
+            .rigctld_port = r0_port; // force a collision with radio 0
         assert!(validate_radio_ports(&s.radios, None).is_err());
         s.ensure_distinct_radio_ports();
         assert!(
             validate_radio_ports(&s.radios, None).is_ok(),
             "collision repaired"
         );
-        assert_eq!(
+        for p in &s.radios {
+            assert_ne!(
+                p.rigctld_port, s.cat_broker_port,
+                "no daemon may sit on the broker's port (radio {})",
+                p.id
+            );
+        }
+        let (p0, p1) = (
             s.radios.iter().find(|p| p.id == 0).unwrap().rigctld_port,
-            4532,
-            "first radio keeps its port"
-        );
-        assert_ne!(
             s.radios.iter().find(|p| p.id == r1).unwrap().rigctld_port,
-            4532,
-            "the colliding radio was moved to a free port"
+        );
+        assert_ne!(p0, p1, "the colliding radios ended up distinct");
+        // With the broker OFF, the old contract stands: the first radio keeps its own port.
+        let mut s2 = Settings {
+            cat_broker: false,
+            ..Settings::default()
+        };
+        s2.ensure_radio_profiles();
+        let before = s2.radios[0].rigctld_port;
+        s2.ensure_distinct_radio_ports();
+        assert_eq!(
+            s2.radios.iter().find(|p| p.id == 0).unwrap().rigctld_port,
+            before,
+            "broker off: first radio keeps its port"
+        );
+        // And an operator file that predates the broker default — daemon EXPLICITLY on 4532 —
+        // is bumped off it on load, which is what hands 4532 to the broker for their logger.
+        let mut s3 = Settings::default();
+        s3.ensure_radio_profiles();
+        s3.radios[0].rigctld_port = 4532;
+        s3.ensure_distinct_radio_ports();
+        assert_ne!(
+            s3.radios[0].rigctld_port, 4532,
+            "a pre-broker file's daemon moves off 4532 so the broker can own it"
         );
     }
 
