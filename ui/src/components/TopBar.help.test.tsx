@@ -62,8 +62,6 @@ function renderBar(onOpenGuide: () => void, over: Record<string, unknown> = {}) 
       onSetHoldTxFreq={noop}
       tier="FT8"
       onTierChange={noop}
-      theme="dark"
-      onThemeChange={noop}
       onOpenGuide={onOpenGuide}
       {...over}
     />,

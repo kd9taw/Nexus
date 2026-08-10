@@ -1,16 +1,12 @@
 // @vitest-environment jsdom
 //
-// THE TOP BAR'S TWO-ROW CONTRACT (ultrawide + snapped-window field reports,
-// 2026-08-09). A single flex-wrap bar wrapped its TAIL group — Help/Light/Dark/
-// Field — onto a lone, left-aligned second row, and the operator could not find
-// the Field chip twice in one evening. The contract, computed from the RENDERED
-// structure (the ui-layout rule — a regex on the stylesheet cannot see where a
-// group landed):
-//   · Row 1 always exists and ends with the chip cluster (theme switcher), so
-//     Help/Light/Dark/Field sit top-right at every width, in every section.
-//   · Row 2 exists ONLY in the digital views (the mode pills are slot-sync
-//     furniture); CW/Phone/RTTY/SSTV/APRS get a single clean row — the Field
-//     chip must be present there too, which is the operator's exact question.
+// THE TOP-BAR FORMAT CONTRACT (operator rulings, 2026-08-10, after seven layout
+// rounds): the bar is the RELEASE organization — one flat flex-wrap header, no
+// row wrappers — with the tier row left-packed in flow: mode pills, then the
+// Help/OP/Field cluster ("option 1": in the space before the Tx-cycle group),
+// then Auto/Tx 1st/Tx 2nd, slack collecting at the right edge. Light/Dark moved
+// to Settings \u25b8 Appearance; the bar keeps only the FIELD quick toggle, which
+// must exist in every view (outdoors is when Settings cannot be read).
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { TopBar } from './TopBar'
@@ -55,8 +51,6 @@ function renderBar(over: Record<string, unknown> = {}) {
       onSetHoldTxFreq={noop}
       tier="FT8"
       onTierChange={noop}
-      theme="dark"
-      onThemeChange={noop}
       onOpenGuide={noop}
       field={false}
       onFieldChange={noop}
@@ -65,39 +59,32 @@ function renderBar(over: Record<string, unknown> = {}) {
   )
 }
 
-describe('the top bar rows', () => {
-  it('digital: the chips fill the pills-row gap, beside the Tx-cycle group', () => {
-    // The operator's own placement (2026-08-09, screenshot 4): "use the blank space
-    // between the modes and Tx 1st" — the cluster sits in ROW 2, immediately before
-    // the Tx-cycle group, not tucked in the row-1 corner.
+describe('the top-bar release format', () => {
+  it('is one flat header — no row wrappers — with pills \u2192 cluster \u2192 Tx cycle in flow', () => {
     const { container } = renderBar()
-    const rows = container.querySelectorAll('.topbar-row')
-    expect(rows.length).toBe(2)
-    const row2 = rows[1]
-    expect(row2.querySelector('.tier-toggle')).not.toBeNull()
-    // ONE right-packed block: chips + Tx-cycle inside a single .topbar-right container,
-    // which is what makes a second auto margin (the slack-splitting centering bug of
-    // chip4.png) structurally impossible.
-    const right = row2.querySelector(':scope > .topbar-right')
-    expect(right, 'the right block exists as one flex child').not.toBeNull()
-    const chips = right!.querySelector('.topbar-chips')
-    expect(chips, 'chip cluster lives in the right block').not.toBeNull()
-    expect(
-      chips!.nextElementSibling?.classList.contains('tx-period'),
-      'immediately before the Tx-cycle group — one contiguous control run',
-    ).toBe(true)
-    // …and NOT in row 1 any more.
-    expect(rows[0].querySelector('.theme-switcher')).toBeNull()
+    expect(container.querySelector('.topbar-row'), 'the row experiment stays dead').toBeNull()
+    expect(container.querySelector('.topbar-right'), 'and so does the right block').toBeNull()
+    const header = container.querySelector('header.topbar')!
+    const kids = [...header.children].map((el) => el.className)
+    const iPills = kids.findIndex((c) => c.includes('tier-toggle') && !c.includes('tx-period'))
+    const iChips = kids.findIndex((c) => c.includes('topbar-chips'))
+    const iTx = kids.findIndex((c) => c.includes('tx-period'))
+    expect(iPills, 'pills present').toBeGreaterThanOrEqual(0)
+    expect(iChips, 'cluster present').toBeGreaterThan(iPills)
+    expect(iTx, 'Tx cycle after the cluster (option 1)').toBeGreaterThan(iChips)
   })
 
-  it('CW/Phone (no digital chrome): one row, Field chip still present', () => {
+  it('Light/Dark are OUT of the bar; Field remains', () => {
+    renderBar()
+    expect(screen.queryByRole('button', { name: 'Light' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Dark' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Field' })).toBeTruthy()
+  })
+
+  it('CW/Phone (no digital chrome): Field is still one tap away', () => {
     const { container } = renderBar({ hideDigitalChrome: true, hideTxControls: true })
-    const rows = container.querySelectorAll('.topbar-row')
-    expect(rows.length, 'the pills row must not render empty').toBe(1)
-    // The operator's question, answered by the DOM: the Field chip exists in the
-    // non-digital cockpits too, in the same top-right cluster.
-    const chip = screen.getByRole('button', { name: 'Field' })
-    expect(rows[0].contains(chip)).toBe(true)
+    expect(container.querySelector('.tier-toggle')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Field' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Help' })).toBeTruthy()
   })
 

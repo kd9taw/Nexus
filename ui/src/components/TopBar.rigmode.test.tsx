@@ -53,8 +53,6 @@ function renderBar(r: RadioStatus) {
       onSetHoldTxFreq={noop}
       tier="FT8"
       onTierChange={noop}
-      theme="dark"
-      onThemeChange={noop}
       onOpenGuide={noop}
     />,
   )

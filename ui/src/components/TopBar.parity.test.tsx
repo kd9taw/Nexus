@@ -32,7 +32,8 @@ function bar(r: RadioStatus) {
       mycall="KD9TAW" mygrid="EN52xa" radio={r} link={{ tier: 'FT8' } as never} bandPlan={[]}
       onSetFrequency={noop} onSetTxEnabled={noop} onSetTune={noop} onHaltTx={noop}
       onSetTxEven={noop} onSetTxCycleAuto={noop} onSetHoldTxFreq={noop}
-      tier="FT8" onTierChange={noop} theme="dark" onThemeChange={noop} onOpenGuide={noop}
+      tier="FT8" onTierChange={noop}
+ onOpenGuide={noop}
     />,
   )
 }

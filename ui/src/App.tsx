@@ -2254,6 +2254,8 @@ export default function App() {
             onResetLayout={resetWidths}
             features={features}
             onRerunWizard={() => setShowWizard(true)}
+            theme={theme}
+            onThemeChange={setTheme}
           />
         </main>
       )
@@ -2491,8 +2493,6 @@ export default function App() {
         }
         tier={tier}
         onTierChange={handleTier}
-        theme={theme}
-        onThemeChange={setTheme}
         onOpenGuide={() => setShowGuide(true)}
         field={fieldMode}
         onFieldChange={setFieldMode}

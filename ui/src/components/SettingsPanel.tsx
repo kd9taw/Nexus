@@ -83,6 +83,7 @@ import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
 import { FrequencyControl } from './FrequencyControl'
 import { SetupHealth } from './SetupHealth'
+import { ThemeSwitcher } from './ThemeSwitcher'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
@@ -120,6 +121,10 @@ interface Props {
   features: FeaturesApi
   /** Re-open the first-run setup wizard. */
   onRerunWizard?: () => void
+  /** Theme (Light/Dark) — moved here from the top bar (operator, 2026-08-10);
+   * optional so hosts/tests without theme wiring render the tab unchanged. */
+  theme?: 'light' | 'dark'
+  onThemeChange?: (t: 'light' | 'dark') => void
 }
 
 /** Display order for the Features section's category groups. */
@@ -460,6 +465,8 @@ export function SettingsPanel({
   onResetLayout,
   features,
   onRerunWizard,
+  theme,
+  onThemeChange,
 }: Props) {
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
   // import uses — Tauri has no native picker wired here and this needs none.
@@ -1976,6 +1983,18 @@ export function SettingsPanel({
           <fieldset className="settings-section">
             <legend>Workspace</legend>
             <div className="settings-grid">
+              {/* Theme lives HERE now, not the top bar (operator, 2026-08-10): Light/Dark
+                  is a set-once preference, and the bar keeps only the Field quick toggle. */}
+              {theme && onThemeChange && (
+                <div className="settings-field">
+                  <span className="settings-label">Theme</span>
+                  <ThemeSwitcher theme={theme} onChange={onThemeChange} />
+                  <span className="settings-hint">
+                    Light reads best outdoors in daylight; the top bar&rsquo;s Field chip
+                    boosts contrast and size in whichever theme you use.
+                  </span>
+                </div>
+              )}
               <div className="settings-field">
                 <span className="settings-label">UI scale</span>
                 <div className="theme-switcher" role="group" aria-label="UI scale mode">

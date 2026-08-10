@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '../types'
 import { isRxOnly } from '../types'
-import type { Theme } from '../useTheme'
-import { ThemeSwitcher } from './ThemeSwitcher'
 import { Menu } from './ui/Menu'
 import { FrequencyControl } from './FrequencyControl'
 import { StatusLane } from './StatusLane'
@@ -106,8 +104,6 @@ interface Props {
   onStopRecording?: () => void
   tier: Tier
   onTierChange: (t: Tier) => void
-  theme: Theme
-  onThemeChange: (t: Theme) => void
   /** Open the Getting started guide (Help ▸ Getting started). */
   onOpenGuide: () => void
   /** Field mode (outdoor/POTA) — see useFieldMode. Optional: absent hides the chip. */
@@ -208,8 +204,6 @@ export function TopBar({
   onStopRecording,
   tier,
   onTierChange,
-  theme,
-  onThemeChange,
   onOpenGuide,
   field,
   onFieldChange,
@@ -281,18 +275,29 @@ export function TopBar({
           }
           items={[{ label: 'Getting started', onSelect: onOpenGuide }]}
         />
-        <ThemeSwitcher theme={theme} onChange={onThemeChange} field={field} onFieldChange={onFieldChange} />
+        {/* Light/Dark moved to Settings ▸ Appearance (operator, 2026-08-10) — the bar
+            keeps only the outdoor quick toggle: Field must stay one tap away, because
+            the operator who needs it is the one who cannot read Settings to find it. */}
+        {onFieldChange && (
+          <button
+            type="button"
+            title={
+              field
+                ? 'Field mode is on: larger type, maximum contrast. Click to turn off.'
+                : 'Field mode for operating outdoors: larger type, maximum contrast'
+            }
+            aria-pressed={field === true}
+            className={`theme-chip field-chip${field ? ' active' : ''}`}
+            onClick={() => onFieldChange(!field)}
+          >
+            Field
+          </button>
+        )}
       </div>
   )
 
   return (
     <header className={`topbar${hideFrequencyControl ? ' topbar--no-readout' : ''}`}>
-      {/* TWO DELIBERATE ROWS (ultrawide + snapped-window field reports, 2026-08-09): a
-          single flex-wrap bar wrapped its TAIL group (Help/Light/Dark/Field) to a lone
-          left-aligned second row — the Field chip kept vanishing on the operator. Row 1:
-          identity, readout, RX/TX cluster, and the chip cluster pinned top-right at every
-          width. Row 2, digital views only: the mode pills, full-width. */}
-      <div className="topbar-row">
       <div className="topbar-group brand">
         <span className="logo-wrap">
           <span className="logo">Nexus</span>
@@ -452,15 +457,8 @@ export function TopBar({
         )}
       </div>
 
-      {/* In the digital views the chip cluster lives in the PILLS ROW below —
-          in the operator's words, "use the blank space between the modes and the
-          Tx 1st section" (2026-08-09, after four rounds of me solving the wrong
-          problem). Views without that row keep it here, end of row 1. */}
-      {hideDigitalChrome && chipCluster}
-      </div>
-
       {!hideDigitalChrome && (
-      <div className="topbar-row topbar-row-pills">
+      <>
       <div className="topbar-group tier-toggle" role="group" aria-label="Link tier">
         {TIER_PILLS.map((p) => (
           <button
@@ -479,12 +477,9 @@ export function TopBar({
         ))}
       </div>
 
-      {/* ONE right-packed block, chips + Tx cycle together (adversarial-review verdict,
-          2026-08-10, after six failed rounds): a single flex child carries the ONLY auto
-          margin on this row — the double-auto-margin bug that centered the chips is now
-          structurally impossible — and at the 1024 floor the pair wraps as one unit,
-          still right-aligned. Geometry verified in a real layout engine (topbar harness). */}
-      <div className="topbar-right">
+      {/* Option 1 (operator, 2026-08-10): the Help/OP/Field cluster sits between the mode
+          pills and the Tx-cycle group, everything left-packed with the slack on the right
+          — the release-format flow. */}
       {chipCluster}
 
       <div className="topbar-group tier-toggle tx-period" role="group" aria-label="Transmit cycle">
@@ -522,11 +517,12 @@ export function TopBar({
           Tx 2nd <small>odd</small>
         </button>
       </div>
-      </div>
-
-      </div>
+      </>
       )}
 
+      {/* Views without the tier row (CW/Phone/RTTY/SSTV/APRS/Sats) keep the cluster at
+          the bar's end — the release position. */}
+      {hideDigitalChrome && chipCluster}
 
     </header>
   )
