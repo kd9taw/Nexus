@@ -17,12 +17,16 @@ Work top-to-bottom; most problems are CAT/driver, audio device, time sync, or cr
 
 Expected — the published binaries are cross-compiled and unsigned. Click **More info → Run anyway**. If you prefer to build from source, see [Building from Source](Building-from-Source.md).
 
+### Installer sits quiet for a few minutes
+
+Normal. The installer carries the complete WebView2 runtime (~209 MB) and installs it for you —
+there is **nothing to download or install by hand**. Let it finish.
+
 ### Blank window / "page cannot be displayed"
 
-Seen on early builds where the embedded WebView2 runtime was missing.
-
-- Install the Microsoft Evergreen WebView2 runtime (or run the offline installer, which ships it).
-- If the window loads but shows only the demo, update to the current release — current builds always connect to the real engine.
+Rare. The WebView2 runtime ships inside the installer, so a missing runtime means the install
+itself was interrupted — run the installer again and let it complete. If the window loads but
+shows only the demo, update to the current release.
 
 ---
 

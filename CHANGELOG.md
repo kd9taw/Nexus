@@ -42,6 +42,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with nothing on screen saying why. The sync now records its progress without touching the
   operating state.
 
+### Fixed (installing)
+
+- **The installer no longer looks frozen, and the docs no longer send you to install
+  WebView2 by hand.** Everything Nexus needs ships inside the installer — WebView2, Hamlib,
+  the DSP stack — and always has. But the 209 MB WebView2 step ran silently (minutes of
+  apparent hang), and an old troubleshooting page still said to go download the runtime
+  yourself, which is exactly what a new operator did (IK6HQL's report). The WebView2 step now
+  shows its progress, both troubleshooting pages say plainly that nothing needs installing by
+  hand, and the release pipeline now proves the WebView2 payload is inside every installer it
+  publishes.
+
+- **The installer speaks Italian** (and German, French, Spanish, Portuguese, Dutch and
+  Japanese) — it asks your language up front instead of assuming English.
+
+- Download docs corrected: GitHub Releases listed alongside SourceForge (a generator slip
+  had listed SourceForge twice and GitHub never), the documented size matches the real
+  ~250 MB, and the README's file table no longer hardcodes an old version number.
+
 ### Added
 
 - **Field mode — one tap for operating outdoors.** A POTA activator reported the screen was

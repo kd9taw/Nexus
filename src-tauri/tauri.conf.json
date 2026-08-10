@@ -72,10 +72,22 @@
     },
     "windows": {
       "webviewInstallMode": {
-        "type": "offlineInstaller"
+        "type": "offlineInstaller",
+        "silent": false
       },
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "displayLanguageSelector": true,
+        "languages": [
+          "English",
+          "Italian",
+          "German",
+          "French",
+          "Spanish",
+          "Portuguese",
+          "Dutch",
+          "Japanese"
+        ]
       }
     },
     "linux": {

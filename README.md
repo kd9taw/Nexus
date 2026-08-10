@@ -273,13 +273,13 @@ logs, and never shown back to the UI beyond "configured."
 
    | File | Platform |
    |---|---|
-   | `Nexus_1.0.0_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
-   | `Nexus_1.0.0_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place |
-   | `Nexus_1.0.0_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed, pulls `libhamlib-utils` in for CAT |
-   | `Nexus_1.0.0_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
-   | `Nexus_1.0.0_pi_arm64_trixie.deb` | **Raspberry Pi OS trixie**, 64-bit (Pi 3/4/5) |
+   | `Nexus_<version>_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
+   | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place |
+   | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed, pulls `libhamlib-utils` in for CAT |
+   | `Nexus_<version>_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
+   | `Nexus_<version>_pi_arm64_trixie.deb` | **Raspberry Pi OS trixie**, 64-bit (Pi 3/4/5) |
 
-   The `.deb` names are new in 1.0.0. The PC and Pi packages used to be told apart only by `amd64`
+   The `.deb` names date from 1.0.0. The PC and Pi packages used to be told apart only by `amd64`
    versus `arm64`, so picking the right one meant already knowing that `amd64` means "PC" here —
    the names say `pc` and `pi` now, and the Pi files name their OS base.
 

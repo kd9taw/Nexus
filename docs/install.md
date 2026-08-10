@@ -34,8 +34,9 @@ come here for the complete picture.
   `libhamlib-utils` in automatically, and AppImage users run
   `sudo apt install libhamlib-utils` once.
 
-The installer is roughly **210 MB** because it carries the WebView2 runtime,
-Hamlib, and the DSP stack so a bare PC works with no internet.
+The installer is roughly **250 MB** because it carries the WebView2 runtime,
+Hamlib, and the DSP stack so a bare PC works with no internet. Expect the
+WebView2 step to take a few quiet minutes — that is normal, let it finish.
 
 ---
 
@@ -58,8 +59,8 @@ OS base they are built against — match yours (`cat /etc/os-release`).
 
 Get them from:
 
-- **SourceForge (primary):** <https://sourceforge.net/projects/nexus-ham-radio/files/latest/download>
-- **SourceForge (mirror):** the Nexus project files section
+- **GitHub Releases:** <https://github.com/kd9taw/Nexus/releases/latest>
+- **SourceForge:** <https://sourceforge.net/projects/nexus-ham-radio/files/latest/download>
 
 Both host the identical binary and its SHA-256 checksum. Use whichever is faster
 for you.

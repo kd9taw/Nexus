@@ -15,6 +15,25 @@ and [Integrations](manual/Integrations.md) guides go deeper on their own areas.
 
 ---
 
+## Installing
+
+### The installer sits quiet for a few minutes
+
+Normal — it carries the complete WebView2 runtime (~209 MB) and installs it for you. There is
+**nothing to download or install by hand**: no WebView2, no Hamlib, no drivers for most rigs.
+Let it finish.
+
+### Windows says "Windows protected your PC" (SmartScreen)
+
+Expected — the installers are unsigned. Click **More info → Run anyway**.
+
+### The window comes up blank
+
+Rare; it means the install itself was interrupted (the WebView2 runtime ships inside the
+installer). Run the installer again and let it complete.
+
+---
+
 ## CAT / rig control
 
 ### The radio isn't found by Detect

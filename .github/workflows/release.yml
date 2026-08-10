@@ -238,6 +238,17 @@ jobs:
           # runt file means a bundling step silently no-op'd.
           sz=$(stat -c%s "$exe")
           [ "$sz" -gt 50000000 ] || { echo "installer only $sz bytes — bundling likely failed"; exit 1; }
+          # The WebView2 payload SPECIFICALLY (IK6HQL: a runtime missing at first launch sent
+          # him to install it by hand). The runner has WebView2 preinstalled, so only the
+          # artifact itself can prove the offline runtime is inside. A bare size floor can't:
+          # Hamlib+DSP alone clear 50 MB. The offline runtime is ~150 MB of the total, so
+          # assert BOTH the 7z listing names it AND the size clears a floor only the runtime
+          # explains. If Tauri renames the payload, the listing check fails loudly here — fix
+          # the pattern with the new name, don't drop to size-only.
+          sudo apt-get install -y --no-install-recommends p7zip-full >/dev/null
+          7z l "$exe" | grep -qi 'WebView2.*\.exe' \
+            || { echo "NSIS listing has no WebView2 payload — webviewInstallMode broke"; 7z l "$exe" | tail -40; exit 1; }
+          [ "$sz" -gt 190000000 ] || { echo "installer only $sz bytes — too small to contain the ~150 MB offline WebView2 runtime"; exit 1; }
           mkdir -p out && cp "$exe" out/
           # The updater signature, when the signing secrets were present.
           [ -f "$exe.sig" ] && cp "$exe.sig" out/ || echo "note: unsigned build (no signing secrets)"
