@@ -479,6 +479,12 @@ export function TopBar({
         ))}
       </div>
 
+      {/* ONE right-packed block, chips + Tx cycle together (adversarial-review verdict,
+          2026-08-10, after six failed rounds): a single flex child carries the ONLY auto
+          margin on this row — the double-auto-margin bug that centered the chips is now
+          structurally impossible — and at the 1024 floor the pair wraps as one unit,
+          still right-aligned. Geometry verified in a real layout engine (topbar harness). */}
+      <div className="topbar-right">
       {chipCluster}
 
       <div className="topbar-group tier-toggle tx-period" role="group" aria-label="Transmit cycle">
@@ -516,6 +522,8 @@ export function TopBar({
           Tx 2nd <small>odd</small>
         </button>
       </div>
+      </div>
+
       </div>
       )}
 

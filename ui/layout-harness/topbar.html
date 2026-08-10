@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"><title>topbar harness</title>
+<link rel="stylesheet" href="styles.css">
+<style>body{margin:0;background:#0b0e14}</style></head>
+<body><div class="app" style="display:block">
+<header class="topbar">
+  <div class="topbar-row">
+    <div class="topbar-group brand"><span class="logo-wrap"><span class="logo">Nexus</span><span class="app-version">v1.0.12</span></span><span class="mycall">KD9TAW<span class="mygrid">EN52</span></span></div>
+    <div class="topbar-group txrx"><span class="txrx-indicator rx">RX</span><div class="rx-level"><span class="rx-level-label">RX</span></div><div class="slot-clock"><span class="slot-count">3.8s</span><span class="slot-label">next slot</span></div><span class="timesync ok"><span class="dot"></span>clock +0.01s</span></div>
+  </div>
+  <div class="topbar-row topbar-row-pills">
+    <div class="topbar-group tier-toggle">
+      <button class="tier-btn"><small>Tempo</small>Fast</button><button class="tier-btn"><small>Tempo</small>Deep</button><button class="tier-btn">FT4</button><button class="tier-btn active">FT8</button><button class="tier-btn"><small>BCN</small>WSPR</button><button class="tier-btn">Q65</button><button class="tier-btn">MSK144</button><button class="tier-btn"><small>RX</small>JT65</button><button class="tier-btn">FST4</button><button class="tier-btn"><small>BCN</small>FST4W</button>
+    </div>
+    <div class="topbar-right">
+    <div class="topbar-group topbar-chips">
+      <button class="theme-chip" title="Help">Help</button>
+      <div class="theme-switcher"><button class="theme-chip">Light</button><button class="theme-chip active">Dark</button><button class="theme-chip field-chip">Field</button></div>
+    </div>
+    <div class="topbar-group tier-toggle tx-period">
+      <button class="tier-btn active">Auto <small>2nd</small></button><button class="tier-btn">Tx 1st <small>even</small></button><button class="tier-btn derived">Tx 2nd <small>odd</small></button>
+    </div>
+    </div>
+  </div>
+</header>
+</div>
+<script>
+function measure(){
+  const row=document.querySelector('.topbar-row-pills');
+  const pills=row.querySelector('.tier-toggle:not(.tx-period)');
+  const chips=row.querySelector('.topbar-chips');
+  const tx=row.querySelector('.tx-period');
+  const r=e=>e.getBoundingClientRect();
+  const rowR=r(row),pillsR=r(pills),chipsR=r(chips),txR=r(tx);
+  const rowStyle=getComputedStyle(row);
+  const pad=parseFloat(rowStyle.paddingRight)||0;
+  return {
+    width: window.innerWidth,
+    sameLine: Math.abs(chipsR.top - txR.top) < 4 && Math.abs(chipsR.top - pillsR.top) < 4,
+    chipsToTxGap: +(txR.left - chipsR.right).toFixed(1),
+    txFlushRight: +((rowR.right - pad) - txR.right).toFixed(1),
+    slackBeforeChips: +(chipsR.left - pillsR.right).toFixed(1),
+  };
+}
+</script></body></html>

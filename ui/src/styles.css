@@ -3830,10 +3830,17 @@ body.resizing {
   justify-content: center;
   min-width: 0;
 }
-/* The chip cluster in the pills row fills the gap FROM THE RIGHT, sitting beside the
-   Tx-cycle group — the operator's own placement ("use the blank space between the
-   modes and Tx 1st"). Bigger targets here than the old corner: match the tier pills. */
-.topbar-row-pills > .topbar-chips {
+/* ONE right-packed control block on the pills row: [Help][Light|Dark|Field] · gap ·
+   [Auto][Tx 1st][Tx 2nd], flush right — the operator's own placement, restored to his
+   v1.0.2 anchor (the chips are the tail of the Tx-cycle cluster, never a window-corner
+   ornament). The container carries the row's ONLY auto margin, so the double-auto-margin
+   slack split that centered the chips (chip4.png, "complete fail") cannot recur, and at
+   the 1024 floor the pair wraps together, still right-aligned. Geometry verified in a
+   real layout engine at 1024/1366/1758/1920/3436 (adversarial-review round, 2026-08-10). */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   margin-left: auto;
 }
 .topbar-row-pills .theme-chip {

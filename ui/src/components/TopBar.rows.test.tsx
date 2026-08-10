@@ -75,11 +75,16 @@ describe('the top bar rows', () => {
     expect(rows.length).toBe(2)
     const row2 = rows[1]
     expect(row2.querySelector('.tier-toggle')).not.toBeNull()
-    const chips = row2.querySelector(':scope > .topbar-chips')
-    expect(chips, 'chip cluster lives in the pills row').not.toBeNull()
+    // ONE right-packed block: chips + Tx-cycle inside a single .topbar-right container,
+    // which is what makes a second auto margin (the slack-splitting centering bug of
+    // chip4.png) structurally impossible.
+    const right = row2.querySelector(':scope > .topbar-right')
+    expect(right, 'the right block exists as one flex child').not.toBeNull()
+    const chips = right!.querySelector('.topbar-chips')
+    expect(chips, 'chip cluster lives in the right block').not.toBeNull()
     expect(
       chips!.nextElementSibling?.classList.contains('tx-period'),
-      'immediately before the Tx-cycle group — in the gap the operator pointed at',
+      'immediately before the Tx-cycle group — one contiguous control run',
     ).toBe(true)
     // …and NOT in row 1 any more.
     expect(rows[0].querySelector('.theme-switcher')).toBeNull()
