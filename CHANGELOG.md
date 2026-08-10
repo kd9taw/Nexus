@@ -70,6 +70,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The setup wizard now finds your radio instead of waiting to be told about it.** Open the
+  rig step and the scan is already running — USB radios and FlexRadios on the network appear
+  without pressing anything. A radio behind a generic USB cable (no model in its USB name) is
+  identified by probing the common rigs at their real baud rates, with a plain elapsed counter
+  while it works. When the probe finds the port but has to guess the model — an FT-991A
+  answers the same probe as an FTdx10 — the wizard says so and asks *which radio is this?*
+  instead of quietly saving the guess; picking a fixed-rate rig sets its one true baud
+  automatically. Radios configured here now key via CAT instead of the old silent VOX default
+  that made the wizard's own Test CAT report failure. And the step ends with the same live
+  Setup-health strip Settings has — Rig / RX audio / TX, with Prove TX — so you leave the
+  wizard on evidence, not hope.
+
+- **A second radio is one button in the same step.** "I have a second radio" adds it, probes
+  the remaining ports (your first radio's port is skipped — it's busy being your first radio),
+  and saves the port, speed and its own sound card to the new radio's profile. If both rigs
+  use identical USB sound cards, they are shared out one each and the wizard tells you the
+  one thing to check — and gives you a single *swap them* button if the wrong rig's meters
+  move. It also finally says out loud: run both radios at once by opening Nexus twice.
+
 - **Field mode — one tap for operating outdoors.** A POTA activator reported the screen was
   very difficult to read outdoors even shaded, in either theme, and he is right about "either":
   daylight on the panel washes out low-contrast text first, and about two-thirds of the text in
