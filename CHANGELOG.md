@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] — 2026-08-10
 
 ### Fixed
 
@@ -62,8 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with nothing on screen saying why. The sync now records its progress without touching the
   operating state.
 
-### Fixed
-
 - **Band changes no longer let the radio pick the wrong mode.** The big one from the bench:
   selecting 12 m or 30 m in the CW section landed the rig in DATA-U; picking 20 m back in the
   FT8 section landed it in CW-U. The radio itself was doing it — modern rigs keep a per-band
@@ -80,31 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switched sections carried the old mode and silently reverted the rig. Every stale-save
   door is closed at once.
 
-### Added
-
-- **Satellite contacts tag themselves now.** Log a QSO while a transponder is held and your
-  dial is on that bird's downlink, and the record gets `PROP_MODE=SAT` plus the satellite's
-  LoTW designator (`SO-50`, not the catalog name) — written as a pair, which is what TQSL
-  demands. Your pass QSOs now count toward Satellite VUCC and the new Satellite DXCC figure
-  in the app, and upload to LoTW as creditable satellite contacts, with nothing to edit by
-  hand. The passband check means an HF contact made while a bird is still held from an
-  earlier pass is never mistagged. One honest exception: ISS contacts stay untagged (there
-  is no LoTW designator Nexus can safely derive from the catalog name) — add the two fields
-  yourself for those.
-
-### Fixed (CAT — tester-build regression, never released)
-
-- **Yaesu CAT came back.** The 1.0.6 tester build killed CAT on every rig whose Hamlib
-  backend declares hardware flow control — FTdx10, FT-991, FT-891, TS-2000, TS-590 and about
-  fifty more — while native-CI-V Icoms kept working. The keyed-on-connect fix had started
-  telling the radio link to drop RTS/CTS flow control so RTS could be held low, and a Yaesu
-  at its factory default (CAT RTS = ENABLE) waits for the PC's RTS before it will answer:
-  CAT went completely silent. The handshake is now dropped **only** when RTS at that port is
-  genuinely wired to something — a recognised keying interface (Digirig class, the setup the
-  original fix protects, which stays protected) or a serial keying line on that port. A rig
-  on its own USB cable keeps its flow control, exactly as it did through 1.0.5.
-
-### Fixed (awards — a tester put his 31,000-QSO log next to his official ARRL account)
+**Awards — a tester put their 31,000-QSO log next to their official ARRL account, and every
+difference below is chased to the award's actual rules:**
 
 - **5-Band DXCC now computes the award ARRL actually grants.** It used to count entities
   confirmed on *all five* classic bands at once; ARRL wants 100 on *each* band, and they don't
@@ -131,15 +106,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clearer sentences where the numbers were right but the words weren't: Honor Roll now says
   "1 more confirmed needed — entry at 331" instead of the ambiguous "1 confirmed to Honor
   Roll"; the Confirmed tile says it counts LoTW-or-card only; the Sat VUCC card now states on
-  screen that it counts PROP_MODE=SAT-tagged contacts (and that Nexus doesn't write that tag
-  at logging yet).
+  screen that it counts PROP_MODE=SAT-tagged contacts — which Nexus now writes automatically
+  when you log on a bird's downlink (see below).
 
 - What is *not* changed, on purpose: Nexus computes from your log, so it will honestly differ
   from an ARRL account that includes decades of paper-card credits applied at ARRL or QSOs
   from merged callsigns that aren't in the imported file. Import your full history and your
   LoTW report to close most of that gap.
 
-### Fixed (installing)
+**Installing:**
 
 - **The installer no longer looks frozen, and the docs no longer send you to install
   WebView2 by hand.** Everything Nexus needs ships inside the installer — WebView2, Hamlib,
@@ -156,116 +131,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Download docs corrected: GitHub Releases listed alongside SourceForge (a generator slip
   had listed SourceForge twice and GitHub never), the documented size matches the real
   ~250 MB, and the README's file table no longer hardcodes an old version number.
-
-### Added
-
-- **The wizard no longer asks what you want to do — you get everything.** The goals step
-  (pick DX chasing / POTA / contesting…) is gone: every mode and every section starts ON,
-  because Nexus is one program instead of six and there is nothing to unlock. The final step
-  is now just your license class, the optional starter channels, and the walkthrough offer.
-  The goal profiles still exist in Settings ▸ Appearance for anyone who wants a leaner app.
-
-- **The top bar got its space back.** On an ultrawide it used to pile everything against the
-  right edge (with a big dead zone after your callsign); in a snapped window the
-  Help/Light/Dark/Field chips wrapped to a stray row on the left. The bar is now two
-  deliberate rows — your station, frequency and the chip cluster (top-right, always) on the
-  first; the mode pills on their own full-width second row in the digital views — and the
-  pill buttons themselves slimmed down.
-
-- **The setup wizard now finds your radio instead of waiting to be told about it.** Open the
-  rig step and the scan is already running — USB radios and FlexRadios on the network appear
-  without pressing anything. A radio behind a generic USB cable (no model in its USB name) is
-  identified by probing the common rigs at their real baud rates, with a plain elapsed counter
-  while it works. When the probe finds the port but has to guess the model — an FT-991A
-  answers the same probe as an FTdx10 — the wizard says so and asks *which radio is this?*
-  instead of quietly saving the guess; picking a fixed-rate rig sets its one true baud
-  automatically. Radios configured here now key via CAT instead of the old silent VOX default
-  that made the wizard's own Test CAT report failure. And the step ends with the same live
-  Setup-health strip Settings has — Rig / RX audio / TX, with Prove TX — so you leave the
-  wizard on evidence, not hope.
-
-- **A second radio is one button in the same step.** "I have a second radio" adds it, probes
-  the remaining ports (your first radio's port is skipped — it's busy being your first radio),
-  and saves the port, speed and its own sound card to the new radio's profile. If both rigs
-  use identical USB sound cards, they are shared out one each and the wizard tells you the
-  one thing to check — and gives you a single *swap them* button if the wrong rig's meters
-  move. It also finally says out loud: run both radios at once by opening Nexus twice.
-
-- **Field mode — one tap for operating outdoors.** A POTA activator reported the screen was
-  very difficult to read outdoors even shaded, in either theme, and he is right about "either":
-  daylight on the panel washes out low-contrast text first, and about two-thirds of the text in
-  Nexus is deliberately de-emphasised grey — that, not the type size, is what disappears in the
-  sun. The new **Field** chip beside Light/Dark turns the de-emphasised text near-solid, pushes
-  the surfaces to full black-and-white (in whichever theme you are in), and steps the whole
-  interface up a size or two to match what your window can hold. Tap it again and you are back
-  exactly where you were — it never touches your theme or your saved scale. Pop-out windows
-  follow it. The tooltip will tell you the Light theme reads best in daylight, but the choice
-  stays yours.
-
-- **You can skip the burned-in callsign for a picture that already shows it.** A pre-made QSO
-  card carries your call as part of the artwork, and the burn-in was covering it to repeat it.
-  Tick *My picture already shows my callsign* under the transmit preview and the plate is left
-  off — for that picture only. The tick clears every time you load a new image, on purpose: it is
-  a statement about one picture, and identification is your responsibility when you make it —
-  Nexus cannot read your artwork. With the box unticked nothing changes, and a station with no
-  callsign set still cannot transmit at all. Asked for by akhepcat.
-
-- **Back up your whole setup to a file, and restore it on another computer.** Settings ▸ Radio
-  now has Back up and Restore. One file holds your radios, operating preferences, memory
-  channels, watchlist and chase sets — for a new laptop before a contest, a rebuild after a disk
-  failure, or a second machine that should match the first. Until now there was no way to keep a
-  copy of any of it: it lives in a configuration folder most operators never open.
-
-  **It holds no passwords or API keys.** Those stay in your operating system's keychain, so a
-  restore asks for them again and the file is safe to carry on a USB stick or email to yourself.
-  Your contact log is separate and is not included — export that from the Logbook. Restoring
-  replaces your current setup and says so before it does anything.
-
-- **The operator at the key is shown in the top bar, and swaps in one click.** Set an operator and
-  it appears beside Help, in the one group no cockpit hides — because a wrong operator is silent:
-  nothing misbehaves and you find out at submission, when the log is already wrong. Click it to
-  hand over to anyone already in the log, or to go back to single-operator when the activation
-  ends. Nothing shows at all if you have not set one, which is the normal single-op case.
-
-- **Export one ADIF per operator.** With more than one operator in your log, the Logbook grows an
-  *Export per operator* button: one file per operator, named with their callsign, plus the
-  combined log — which is still the one carrying any contacts logged with no operator set. POTA
-  and Field Day both want each operator to submit their own, and these get uploaded from a phone
-  in a car park, so the filenames say who they belong to at a glance. A single-op station never
-  sees the button, because the file it produced would be a copy of the one beside it.
-
-- **Two of you on one radio? Your contacts can now say who made them.** Set *Operator at the key*
-  in Settings ▸ Station and every contact you log carries it, so a shared POTA activation or a
-  Field Day shift can be split by operator afterwards instead of hand-edited — both programs want
-  each operator to submit their own log. It is the ADIF `OPERATOR` field, which is a different
-  question from your station callsign: one is who was operating, the other is whose station it
-  was, and that distinction is exactly what the two fields exist for.
-
-  Leave it blank if it is just you and nothing is stamped — an operator equal to the station call
-  in every record says nothing. This setting existed before but only inside Field Day, where a
-  POTA pair would never have found it, and it only ever reached an N3FJP feed rather than your own
-  log. Asked for by a POTA operator running two ops on one laptop.
-
-- **You can run VarAC, FreeDV or WSJT-X against the same radio, without closing Nexus.** A serial
-  port can only be opened by one program at a time, so while Nexus has your rig nothing else can
-  reach it — which made "quit Nexus first" look like the only answer. It was not. Nexus does not
-  hold the radio directly: it drives it through Hamlib's `rigctld`, and that is a server. Settings
-  ▸ Radio now shows the address it is listening on, with a Copy button. Point the other program at
-  it as a **Hamlib NET rigctl** rig, leave its own serial port blank, and both run at once. Each
-  radio you have configured has its own address. Fair warning: both programs really can command
-  the rig, so they will argue if you tune in both. Asked for by rogerloxton.
-
-- **The band map tunes now — click it, or scroll on it.** It has always been a frequency scale
-  with your dial marked on it, but it was the one place showing frequencies that you could not
-  act on: the readout digits and the waterfall both tune by wheel, so the map staying inert read
-  as something broken rather than something missing. Click anywhere on the track to go there, or
-  scroll to tune the way every other dial in Nexus does — same step, same sensitivity setting.
-  Clicking a spot still works that station rather than tuning to it, because a spot's label is
-  nudged aside from its true frequency to keep a crowded band readable, so the label is not where
-  the signal is. The map stays read-only while CAT is down or you are transmitting. Asked for by
-  kr4fqg.
-
-### Fixed
 
 - **Answering a station right after a mode switch could transmit on their own cycle.** Switching
   FT8 to FT4 (or back) changes the length of the transmit periods, so everything Nexus knew about
@@ -346,11 +211,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the radio went into transmit as the port opened and stayed there, which is also why changing the
   PTT setting made no difference: flow control is not keying, so no PTT choice ever touched it.
 
-  Nexus now turns that flow control off on those rigs, but only when it is the one thing preventing
-  it from holding the line down, and never when you are deliberately keying with RTS. Hardware flow
-  control is close to meaningless for the short messages CAT exchanges — WSJT-X drives these same
-  radios without it — and a radio that transmits unattended is the worse outcome by a distance.
-  Reported by vk6mo.
+  Nexus now turns that flow control off — but only when RTS on that port is genuinely wired to
+  keying: a recognised keying interface (the Digirig class) or a serial PTT/CW line you have
+  configured there. A rig on its own plain USB CAT cable keeps its hardware handshake untouched.
+  Hardware flow control is close to meaningless for the short messages CAT exchanges — WSJT-X
+  drives these same radios without it — and a radio that transmits unattended is the worse
+  outcome by a distance. Reported by vk6mo.
 
 - **The Linux .deb installed cleanly and then would not start.** The package named Hamlib, WebKit
   and GTK as its dependencies but never mentioned the Fortran runtime or single-precision FFTW
@@ -372,6 +238,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on an existing install also needs `tccutil reset Microphone com.kd9taw.tempo` once to clear the
   stuck denial before the next launch will prompt again. Reported and fixed by g0fqb. Applies to a
   build from source — macOS is not a shipped platform.
+
+### Added
+
+- **Satellite contacts tag themselves now.** Log a QSO while a transponder is held and your
+  dial is on that bird's downlink, and the record gets `PROP_MODE=SAT` plus the satellite's
+  LoTW designator (`SO-50`, not the catalog name) — written as a pair, which is what TQSL
+  demands. Your pass QSOs now count toward Satellite VUCC and the new Satellite DXCC figure
+  in the app, and upload to LoTW as creditable satellite contacts, with nothing to edit by
+  hand. The passband check means an HF contact made while a bird is still held from an
+  earlier pass is never mistagged. One honest exception: ISS contacts stay untagged (there
+  is no LoTW designator Nexus can safely derive from the catalog name) — add the two fields
+  yourself for those.
+
+- **The wizard no longer asks what you want to do — you get everything.** The goals step
+  (pick DX chasing / POTA / contesting…) is gone: every mode and every section starts ON,
+  because Nexus is one program instead of six and there is nothing to unlock. The final step
+  is now just your license class, the optional starter channels, and the walkthrough offer.
+  The goal profiles still exist in Settings ▸ Appearance for anyone who wants a leaner app.
+
+- **The top bar got its space back, and Light/Dark moved home to Settings.** On an ultrawide
+  the chips used to pile against the right edge with a dead zone after your callsign; in a
+  snapped window they wrapped to a stray row. The chip cluster (operator, Help, Field) now
+  sits with the mode pills on the left, ahead of the TX clock, so the slack lands at the end
+  of the bar instead of inside it — and the buttons themselves slimmed down. The Light/Dark
+  theme switch is a set-once preference, not an operating control, so it now lives in
+  Settings ▸ Appearance instead of spending top-bar space on every screen.
+
+- **The setup wizard now finds your radio instead of waiting to be told about it.** Open the
+  rig step and the scan is already running — USB radios and FlexRadios on the network appear
+  without pressing anything. A radio behind a generic USB cable (no model in its USB name) is
+  identified by probing the common rigs at their real baud rates, with a plain elapsed counter
+  while it works. When the probe finds the port but has to guess the model — an FT-991A
+  answers the same probe as an FTdx10 — the wizard says so and asks *which radio is this?*
+  instead of quietly saving the guess; picking a fixed-rate rig sets its one true baud
+  automatically. Radios configured here now key via CAT instead of the old silent VOX default
+  that made the wizard's own Test CAT report failure. And the step ends with the same live
+  Setup-health strip Settings has — Rig / RX audio / TX, with Prove TX — so you leave the
+  wizard on evidence, not hope.
+
+- **A second radio is one button in the same step.** "I have a second radio" adds it, probes
+  the remaining ports (your first radio's port is skipped — it's busy being your first radio),
+  and saves the port, speed and its own sound card to the new radio's profile. If both rigs
+  use identical USB sound cards, they are shared out one each and the wizard tells you the
+  one thing to check — and gives you a single *swap them* button if the wrong rig's meters
+  move. It also finally says out loud: run both radios at once by opening Nexus twice.
+
+- **Field mode — one tap for operating outdoors.** A POTA activator reported the screen was
+  very difficult to read outdoors even shaded, in either theme, and he is right about "either":
+  daylight on the panel washes out low-contrast text first, and about two-thirds of the text in
+  Nexus is deliberately de-emphasised grey — that, not the type size, is what disappears in the
+  sun. The new **Field** chip in the top bar turns the de-emphasised text near-solid, pushes
+  the surfaces to full black-and-white (in whichever theme you are in), and steps the whole
+  interface up a size or two to match what your window can hold. Tap it again and you are back
+  exactly where you were — it never touches your theme or your saved scale. Pop-out windows
+  follow it. The tooltip will tell you the Light theme reads best in daylight, but the choice
+  stays yours.
+
+- **You can skip the burned-in callsign for a picture that already shows it.** A pre-made QSO
+  card carries your call as part of the artwork, and the burn-in was covering it to repeat it.
+  Tick *My picture already shows my callsign* under the transmit preview and the plate is left
+  off — for that picture only. The tick clears every time you load a new image, on purpose: it is
+  a statement about one picture, and identification is your responsibility when you make it —
+  Nexus cannot read your artwork. With the box unticked nothing changes, and a station with no
+  callsign set still cannot transmit at all. Asked for by akhepcat.
+
+- **Back up your whole setup to a file, and restore it on another computer.** Settings ▸ Radio
+  now has Back up and Restore. One file holds your radios, operating preferences, memory
+  channels, watchlist and chase sets — for a new laptop before a contest, a rebuild after a disk
+  failure, or a second machine that should match the first. Until now there was no way to keep a
+  copy of any of it: it lives in a configuration folder most operators never open.
+
+  **It holds no passwords or API keys.** Those stay in your operating system's keychain, so a
+  restore asks for them again and the file is safe to carry on a USB stick or email to yourself.
+  Your contact log is separate and is not included — export that from the Logbook. Restoring
+  replaces your current setup and says so before it does anything.
+
+- **The operator at the key is shown in the top bar, and swaps in one click.** Set an operator and
+  it appears beside Help, in the one group no cockpit hides — because a wrong operator is silent:
+  nothing misbehaves and you find out at submission, when the log is already wrong. Click it to
+  hand over to anyone already in the log, or to go back to single-operator when the activation
+  ends. Nothing shows at all if you have not set one, which is the normal single-op case.
+
+- **Export one ADIF per operator.** With more than one operator in your log, the Logbook grows an
+  *Export per operator* button: one file per operator, named with their callsign, plus the
+  combined log — which is still the one carrying any contacts logged with no operator set. POTA
+  and Field Day both want each operator to submit their own, and these get uploaded from a phone
+  in a car park, so the filenames say who they belong to at a glance. A single-op station never
+  sees the button, because the file it produced would be a copy of the one beside it.
+
+- **Two of you on one radio? Your contacts can now say who made them.** Set *Operator at the key*
+  in Settings ▸ Station and every contact you log carries it, so a shared POTA activation or a
+  Field Day shift can be split by operator afterwards instead of hand-edited — both programs want
+  each operator to submit their own log. It is the ADIF `OPERATOR` field, which is a different
+  question from your station callsign: one is who was operating, the other is whose station it
+  was, and that distinction is exactly what the two fields exist for.
+
+  Leave it blank if it is just you and nothing is stamped — an operator equal to the station call
+  in every record says nothing. This setting existed before but only inside Field Day, where a
+  POTA pair would never have found it, and it only ever reached an N3FJP feed rather than your own
+  log. Asked for by a POTA operator running two ops on one laptop.
+
+- **The band map tunes now — click it, or scroll on it.** It has always been a frequency scale
+  with your dial marked on it, but it was the one place showing frequencies that you could not
+  act on: the readout digits and the waterfall both tune by wheel, so the map staying inert read
+  as something broken rather than something missing. Click anywhere on the track to go there, or
+  scroll to tune the way every other dial in Nexus does — same step, same sensitivity setting.
+  Clicking a spot still works that station rather than tuning to it, because a spot's label is
+  nudged aside from its true frequency to keep a crowded band readable, so the label is not where
+  the signal is. The map stays read-only while CAT is down or you are transmitting. Asked for by
+  kr4fqg.
 
 ## [1.0.5] — 2026-08-08
 
