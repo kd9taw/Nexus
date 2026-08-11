@@ -2390,6 +2390,13 @@ impl RadioLoop {
         // `|| mode_changed`: `set_mode` alone shifts a pitch-offset rig, so the dial must be
         // re-asserted in the destination convention even when the number itself has not changed.
         if dial != 0 && (dial != self.last_dial || mode_changed) && rig.set_freq(dial).is_ok() {
+            // #35 instrumentation: every dial that reaches the RIG, with its path — the
+            // wrong-dial-flash repro reads these lines back from the Connections log.
+            crate::civ::diag::note(&format!(
+                "dial→rig {:.4} MHz (force path{})",
+                dial as f64 / 1e6,
+                if mode_changed { ", mode changed" } else { "" }
+            ));
             self.last_dial = dial;
         }
         // (No mode policy yet on the first tick — `md` is empty and nothing is asserted; the
@@ -2530,6 +2537,11 @@ impl RadioLoop {
     ) -> Option<String> {
         match rig.set_freq(dial) {
             Ok(()) => {
+                // #35 instrumentation — see the force path's note.
+                crate::civ::diag::note(&format!(
+                    "dial→rig {:.4} MHz (steady path)",
+                    dial as f64 / 1e6
+                ));
                 self.last_dial = dial;
                 self.dial_fail_count = 0;
                 // ⚠️ CLEAR THE GIVE-UP ONLY FOR THE DIAL THAT WAS GIVEN UP ON. This used to clear

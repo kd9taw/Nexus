@@ -3636,6 +3636,11 @@ impl Engine {
             self.settings.band = band.clone();
             self.settings.sideband = sb.clone();
             self.app.set_radio(dial, &band, &sb);
+            // #35 instrumentation: the handoff restore is the unproven second contributor
+            // to the wrong-dial flash. The operator-visible instrument is the service
+            // loop's dial→rig notes (Connections log); this stderr line adds attribution
+            // in dev runs.
+            eprintln!("tempo: dial request: handoff restore -> {dial:.4} MHz ({band})");
         }
         self.immediate_retune = true;
         self.sync_fd_band();
@@ -3773,6 +3778,9 @@ impl Engine {
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
+        // #35 instrumentation: every dial REQUEST with its provenance (stderr; the
+        // operator-visible half is the service loop's dial→rig Connections-log notes).
+        eprintln!("tempo: dial request: {dial_mhz:.4} MHz ({band} {mode}, {origin:?})");
         // Canonicalise the band ONCE, at the boundary where it enters state: a
         // band-plan CHANNEL token ("2m-fm", "6m-2") must never become the stored
         // band — `settings.band` feeds `QsoRecord.band`, the ADIF file and the
