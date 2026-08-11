@@ -60,6 +60,12 @@ interface Props {
   onTune: (freqHz: number, target: 'tx' | 'rx' | 'both') => void
   /** Work / answer a decoded station (double-click a decode or roster row). */
   onCall: (call: string, grid?: string, message?: string, snr?: number, freq?: number) => void
+  /** The persistent blocked-callsigns list (settings.blockedCalls). When provided, the
+   * cockpit's ignore surfaces read it instead of the session-only set. */
+  blockedCalls?: string[]
+  /** Toggle a call on the persistent blocklist (api.setBlockedCalls — the narrow write).
+   * When absent, Alt-double-click falls back to the session-only dimming set. */
+  onToggleBlocked?: (call: string) => void
   /** Set the TX audio drive level (0.0–1.0) — the Pwr slider. */
   onSetTxLevel: (level: number) => void
   /** Band plan (channel select) shown in the header — FT8/FT4 freq+band moved
@@ -215,6 +221,8 @@ export function OperateCockpit({
   onSourceChange,
   onTune,
   onCall,
+  blockedCalls,
+  onToggleBlocked,
   onSetTxLevel,
   onSetMode,
   onSetTxEven,
@@ -407,8 +415,18 @@ export function OperateCockpit({
   const tx6Edited = useRef(false)
   // Locally picked "next" row (0-based) until qso.txNow confirms one.
   const [localNext, setLocalNext] = useState<number | null>(null)
-  // Session-only ignore set (Alt-double-click a decode/roster row).
-  const [ignored, setIgnored] = useState<ReadonlySet<string>>(() => new Set())
+  // The blocked-callsigns set (Alt-double-click a decode/roster row). PERSISTED and
+  // engine-honored when App wires `blockedCalls`/`onToggleBlocked` (the auto-responder
+  // never answers a listed call); the session-only useState survives as the fallback for
+  // hosts that don't (detached panels, tests) — there it remains display-only dimming.
+  const [sessionIgnored, setSessionIgnored] = useState<ReadonlySet<string>>(() => new Set())
+  const ignored: ReadonlySet<string> = useMemo(
+    () =>
+      blockedCalls != null
+        ? new Set(blockedCalls.map((c) => c.trim().toUpperCase()))
+        : sessionIgnored,
+    [blockedCalls, sessionIgnored],
+  )
 
   // --- Panel visibility (⊞ Panels). The record is per-SURFACE and host-owned; here we
   // only read it and render accordingly. A panel with no stored state is docked. The
@@ -580,7 +598,10 @@ export function OperateCockpit({
     setDxCall(up)
   }
 
-  const handleToggleIgnore = (call: string) => setIgnored((prev) => toggleIgnored(prev, call))
+  const handleToggleIgnore = (call: string) => {
+    if (onToggleBlocked) onToggleBlocked(call)
+    else setSessionIgnored((prev) => toggleIgnored(prev, call))
+  }
   const handleSetRx = (hz: number) => onTune(hz, 'rx')
 
   // Cockpit keyboard (stock WSJT-X): Esc = halt TX, F4 = clear DX, F6 = re-decode,

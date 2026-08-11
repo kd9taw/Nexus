@@ -1399,6 +1399,14 @@ pub struct Settings {
     /// (dB). `None` = no floor. Guards against chasing an uncopyable caller.
     #[serde(default)]
     pub best_caller_min_snr: Option<i32>,
+    /// Blocked callsigns (field ask): stations the AUTO-RESPONDER must never answer when
+    /// they reply to my CQ, and the display's hide/dim list. Base-call matched
+    /// (`same_call`), stored normalized (trim/uppercase, deduped). Empty = feature off.
+    /// The one deliberate divergence from stock WSJT-X caller selection, alongside the
+    /// W1.4 strategies — a listed caller is passed over for the next eligible one, and
+    /// with every caller listed the run keeps calling CQ.
+    #[serde(default)]
+    pub blocked_calls: Vec<String>,
 
     // --- Wanted watch list / alert filters (W1.5) ---
     /// Operator "wanted" watch list: entries raise a LOUD need-alert when heard.
@@ -2517,6 +2525,7 @@ impl Default for Settings {
             alert_my_call: true,
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
+            blocked_calls: Vec::new(),
             wanted_calls: Vec::new(),
             pounce_threshold: PounceThreshold::default(),
             alert_cq: false,

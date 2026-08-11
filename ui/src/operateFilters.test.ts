@@ -36,8 +36,8 @@ afterEach(() => {
 
 describe('roster filters: default = current behaviour', () => {
   it('reads both checkboxes off when nothing has ever been stored', () => {
-    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: false })
-    expect(DEFAULT_ROSTER_FILTERS).toEqual({ neededOnly: false, hideWorked: false })
+    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: false, hideBlocked: false })
+    expect(DEFAULT_ROSTER_FILTERS).toEqual({ neededOnly: false, hideWorked: false, hideBlocked: false })
   })
 
   it('does not mutate the exported default when a caller edits what it got back', () => {
@@ -49,18 +49,18 @@ describe('roster filters: default = current behaviour', () => {
 
 describe('roster filters: round trip', () => {
   it.each([
-    { neededOnly: true, hideWorked: false },
-    { neededOnly: false, hideWorked: true },
-    { neededOnly: true, hideWorked: true },
-    { neededOnly: false, hideWorked: false },
+    { neededOnly: true, hideWorked: false, hideBlocked: false },
+    { neededOnly: false, hideWorked: true, hideBlocked: false },
+    { neededOnly: true, hideWorked: true, hideBlocked: false },
+    { neededOnly: false, hideWorked: false, hideBlocked: false },
   ])('saves and reloads %o unchanged', (f) => {
     saveRosterFilters(f)
     expect(loadRosterFilters()).toEqual(f)
   })
 
   it('writes the BARE key from the main window — nothing on disk to migrate', () => {
-    saveRosterFilters({ neededOnly: true, hideWorked: false })
-    expect(localStorage.getItem('nexus.roster.filters')).toBe('{"neededOnly":true,"hideWorked":false}')
+    saveRosterFilters({ neededOnly: true, hideWorked: false, hideBlocked: false })
+    expect(localStorage.getItem('nexus.roster.filters')).toBe('{"neededOnly":true,"hideWorked":false,"hideBlocked":false}')
   })
 })
 
@@ -83,14 +83,14 @@ describe('roster filters: a corrupt stored value never hides rows silently', () 
     ['keys from some other build', '{"onlyNeeded":true,"showWorked":false}'],
   ])('falls back to both-off for %s', (_label, raw) => {
     localStorage.setItem(ROSTER_FILTER_KEY, raw)
-    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: false })
+    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: false, hideBlocked: false })
   })
 
   it('keeps the GOOD field when only one of the two is corrupt', () => {
     // Per-field narrowing, not per-object: a half-written value should not throw away the
     // checkbox that did survive.
     localStorage.setItem(ROSTER_FILTER_KEY, '{"neededOnly":true,"hideWorked":"nope"}')
-    expect(loadRosterFilters()).toEqual({ neededOnly: true, hideWorked: false })
+    expect(loadRosterFilters()).toEqual({ neededOnly: true, hideWorked: false, hideBlocked: false })
   })
 })
 
@@ -122,25 +122,25 @@ describe('decode filter: round trip and sanitizing', () => {
 
 describe('per-surface: a torn-off Operate window keeps its own filters', () => {
   it('inherits the main window until it writes, then diverges', () => {
-    saveRosterFilters({ neededOnly: true, hideWorked: false })
+    saveRosterFilters({ neededOnly: true, hideWorked: false, hideBlocked: false })
     saveDecodeFilter('cq')
 
     // Never written its own → inherits what the operator is already using, rather than
     // dropping back to first-run defaults.
-    expect(asPopOut(loadRosterFilters)).toEqual({ neededOnly: true, hideWorked: false })
+    expect(asPopOut(loadRosterFilters)).toEqual({ neededOnly: true, hideWorked: false, hideBlocked: false })
     expect(asPopOut(loadDecodeFilter)).toBe('cq')
 
     asPopOut(() => {
-      saveRosterFilters({ neededOnly: false, hideWorked: true })
+      saveRosterFilters({ neededOnly: false, hideWorked: true, hideBlocked: false })
       saveDecodeFilter('b4')
     })
 
     // The pop-out moved; the main window did NOT.
-    expect(asPopOut(loadRosterFilters)).toEqual({ neededOnly: false, hideWorked: true })
+    expect(asPopOut(loadRosterFilters)).toEqual({ neededOnly: false, hideWorked: true, hideBlocked: false })
     expect(asPopOut(loadDecodeFilter)).toBe('b4')
-    expect(loadRosterFilters()).toEqual({ neededOnly: true, hideWorked: false })
+    expect(loadRosterFilters()).toEqual({ neededOnly: true, hideWorked: false, hideBlocked: false })
     expect(loadDecodeFilter()).toBe('cq')
-    expect(localStorage.getItem('nexus.roster.filters.operate')).toBe('{"neededOnly":false,"hideWorked":true}')
+    expect(localStorage.getItem('nexus.roster.filters.operate')).toBe('{"neededOnly":false,"hideWorked":true,"hideBlocked":false}')
     expect(localStorage.getItem('nexus.decodes.filter.operate')).toBe('b4')
   })
 })
@@ -150,7 +150,7 @@ describe('blocked storage is not fatal', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage blocked')
     })
-    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: false })
+    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: false, hideBlocked: false })
     expect(loadDecodeFilter()).toBe('all')
   })
 
@@ -158,7 +158,7 @@ describe('blocked storage is not fatal', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('quota exceeded')
     })
-    expect(() => saveRosterFilters({ neededOnly: true, hideWorked: true })).not.toThrow()
+    expect(() => saveRosterFilters({ neededOnly: true, hideWorked: true, hideBlocked: false })).not.toThrow()
     expect(() => saveDecodeFilter('new')).not.toThrow()
   })
 })

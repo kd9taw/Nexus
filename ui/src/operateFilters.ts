@@ -26,15 +26,18 @@ export interface RosterFilters {
   neededOnly: boolean
   /** Drop already-worked stations (unless still needed). */
   hideWorked: boolean
+  /** Drop blocked callsigns from the roster entirely (default: they render dimmed). */
+  hideBlocked?: boolean
 }
 
 /** Both off — the behaviour every build so far has started with, so an operator who never
  *  touches a checkbox sees no change. */
-export const DEFAULT_ROSTER_FILTERS: RosterFilters = { neededOnly: false, hideWorked: false }
+export const DEFAULT_ROSTER_FILTERS: RosterFilters = { neededOnly: false, hideWorked: false, hideBlocked: false }
 
 export const ROSTER_FILTER_KEY = 'nexus.roster.filters'
 export const DECODE_FILTER_KEY = 'nexus.decodes.filter'
 export const DECODE_HIDE_B4_KEY = 'nexus.decodes.hideB4'
+export const DECODE_HIDE_BLOCKED_KEY = 'nexus.decodes.hideBlocked'
 
 /** The Band Activity "hide B4" MODIFIER — ANDed with whatever chip is active (the field
  *  ask: "CQ only, but exclude B4"). A modifier rather than another one-of-N chip, the same
@@ -46,6 +49,16 @@ export function loadDecodeHideB4(): boolean {
 
 export function saveDecodeHideB4(on: boolean): void {
   surfaceSet(DECODE_HIDE_B4_KEY, on ? '1' : '0')
+}
+
+/** Band Activity's "hide blocked calls" modifier — same shape as hide-B4. Off = blocked
+ *  calls render dimmed (the long-standing look); on = they are gone from the pane. */
+export function loadDecodeHideBlocked(): boolean {
+  return surfaceGet(DECODE_HIDE_BLOCKED_KEY) === '1'
+}
+
+export function saveDecodeHideBlocked(on: boolean): void {
+  surfaceSet(DECODE_HIDE_BLOCKED_KEY, on ? '1' : '0')
 }
 
 /**
@@ -63,6 +76,7 @@ export function loadRosterFilters(): RosterFilters {
     return {
       neededOnly: typeof o.neededOnly === 'boolean' ? o.neededOnly : DEFAULT_ROSTER_FILTERS.neededOnly,
       hideWorked: typeof o.hideWorked === 'boolean' ? o.hideWorked : DEFAULT_ROSTER_FILTERS.hideWorked,
+      hideBlocked: typeof o.hideBlocked === 'boolean' ? o.hideBlocked : false,
     }
   } catch {
     return { ...DEFAULT_ROSTER_FILTERS }

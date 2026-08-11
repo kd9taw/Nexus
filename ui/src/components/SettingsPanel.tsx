@@ -5,6 +5,7 @@ import {
   exportSettingsBundle,
   importSettingsBundle,
   saveTextToDownloads,
+  setBlockedCalls as apiSetBlockedCalls,
 } from '../api'
 import type {
   AudioDevices,
@@ -492,6 +493,11 @@ export function SettingsPanel({
     }, 'Restore failed')
   }
   const [form, setForm] = useState<Settings | null>(null)
+  // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
+  // verb), never the form save: the engine deliberately ignores blockedCalls in a
+  // whole-struct save so a stale form can't revert a mid-QSO Alt-click. Seeded from the
+  // loaded settings; "unsaved" only relative to its own Apply.
+  const [blockedText, setBlockedText] = useState<string | null>(null)
   // Highest scale the CURRENT window can auto-fit (Auto never upscales past what
   // fits). Cap chips above this are dead — they all yield this same scale — so we
   // disable them and say why (operator report: "150 isn't bigger than 175"). Tracks
@@ -4474,6 +4480,39 @@ export function SettingsPanel({
                     backstop). Set a number to auto-stop an unanswered CQ run after that many calls.
                     The Tempo chat CQ run always stops (default 10 unanswered) — this number
                     overrides that budget too.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label>
+                    <span className="settings-label">Blocked callsigns</span>
+                    <input
+                      className="settings-input"
+                      type="text"
+                      value={blockedText ?? (form.blockedCalls ?? []).join(' ')}
+                      placeholder="none — e.g. PD2BS K1ABC"
+                      onChange={(e) => setBlockedText(e.target.value)}
+                      onBlur={() => {
+                        if (blockedText == null) return
+                        const calls = blockedText
+                          .split(/[\s,;]+/)
+                          .map((c) => c.trim().toUpperCase())
+                          .filter((c) => c.length > 0)
+                        void apiSetBlockedCalls(calls)
+                          .then(() => {
+                            setForm((prev) => (prev ? { ...prev, blockedCalls: calls } : prev))
+                            setBlockedText(null)
+                          })
+                          .catch(() => {})
+                      }}
+                    />
+                  </label>
+                  <span className="settings-hint">
+                    Stations your auto-responder must never answer when they reply to your CQ —
+                    they are passed over for the next caller, and shown dimmed (or hidden) in the
+                    roster and Band Activity. Base call matched, so PD2BS also blocks PD2BS/P.
+                    Alt-double-click any decode or roster row does the same thing. Saved as you
+                    leave the field.
                   </span>
                 </div>
 

@@ -14,7 +14,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
-import { loadDecodeFilter, loadDecodeHideB4, saveDecodeFilter, saveDecodeHideB4 } from '../operateFilters'
+import { loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
 import { gridFromMessage, isIgnored } from '../txMessages'
@@ -206,6 +206,14 @@ export function OperateDecodes({
     saveDecodeHideB4(on)
     setHideB4(on)
   }
+  // "Hide blocked" — same modifier shape. Off (default): blocked calls keep their dimmed
+  // look; on: gone from the pane. The auto-responder never answers them either way — that
+  // guarantee is engine-side and does not depend on a display toggle.
+  const [hideBlocked, setHideBlocked] = useState<boolean>(loadDecodeHideBlocked)
+  const pickHideBlocked = (on: boolean) => {
+    saveDecodeHideBlocked(on)
+    setHideBlocked(on)
+  }
 
   // The operator's country exclusion — app-global (every window agrees) and RX-display
   // only. See features/countryExclude.ts for why it is not a Rust setting.
@@ -244,6 +252,7 @@ export function OperateDecodes({
     }
   }, [clearTick, repin])
 
+  const ignores = ignoredCalls ?? NO_IGNORES
   const list = orderEntries(
     histRef.current
       .entries()
@@ -257,6 +266,16 @@ export function OperateDecodes({
             hideB4 &&
             filter !== 'b4' &&
             d.worked &&
+            !d.mine &&
+            (selectedCall == null || d.from !== selectedCall)
+          ),
+      )
+      // "Hide blocked" ANDs the same way; own rows and the station mid-QSO always stay.
+      .filter(
+        (d) =>
+          !(
+            hideBlocked &&
+            isIgnored(ignores, d.from) &&
             !d.mine &&
             (selectedCall == null || d.from !== selectedCall)
           ),
@@ -291,7 +310,6 @@ export function OperateDecodes({
     onErase?.()
   }
 
-  const ignores = ignoredCalls ?? NO_IGNORES
   const selectedUp = selectedCall?.trim().toUpperCase() || null
 
   // WSJT-X double-click dispatch: Alt = toggle session ignore; Ctrl = populate
@@ -350,6 +368,15 @@ export function OperateDecodes({
             </div>
             {/* Outside the chip group on purpose: those chips are one-of-N (aria-pressed),
                 this is an independent set that ANDs with whichever one is lit. */}
+            <button
+              type="button"
+              className={`od-chip od-blocked${hideBlocked ? ' active' : ''}`}
+              aria-pressed={hideBlocked}
+              onClick={() => pickHideBlocked(!hideBlocked)}
+              title="Hide blocked callsigns from this pane (they render dimmed when off). The auto-responder never answers blocked calls regardless — Alt-double-click a row to block or unblock."
+            >
+              −Blk
+            </button>
             <button
               type="button"
               className={`od-chip od-b4${hideB4 ? ' active' : ''}`}

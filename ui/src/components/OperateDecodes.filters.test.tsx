@@ -115,6 +115,27 @@ describe('the −B4 modifier (field ask: "CQ only, but exclude B4")', () => {
   })
 })
 
+describe('the −Blk modifier (blocklist display half)', () => {
+  const rows = [
+    decode({ from: 'W1AW', message: 'CQ W1AW FN31' }),
+    decode({ from: 'PD2BS', message: 'CQ PD2BS JO21', freqHz: 900 }),
+  ]
+
+  it('hides blocked calls only when toggled; dims them otherwise', () => {
+    mount({ decodes: rows, ignoredCalls: new Set(['PD2BS']) })
+    expect(screen.queryByText(/PD2BS/)).not.toBeNull() // default: dimmed, still visible
+    fireEvent.click(chip('−Blk'))
+    expect(screen.queryByText(/PD2BS/)).toBeNull()
+    expect(screen.queryByText(/W1AW/)).not.toBeNull()
+  })
+
+  it('never hides the station mid-QSO, blocked or not', () => {
+    mount({ decodes: rows, ignoredCalls: new Set(['PD2BS']), selectedCall: 'PD2BS' })
+    fireEvent.click(chip('−Blk'))
+    expect(screen.queryByText(/PD2BS/)).not.toBeNull()
+  })
+})
+
 describe('the empty state says WHICH kind of empty (the field-report blinder)', () => {
   it('a filter hiding a non-empty history names the filter, never "No decodes yet"', () => {
     // Rows exist but none are directed to me: with "To me" lit the old copy claimed

@@ -10281,6 +10281,23 @@ fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnaps
     Ok(eng.snapshot())
 }
 
+/// Replace the blocked-callsigns list (the Alt-double-click gesture + the Settings
+/// editor's one write path). A NARROW write — never `apply_settings` (#54: the heavyweight
+/// path resets the mode and clears the TX queue, and this gets clicked mid-QSO). Persists;
+/// the auto-responder reads the list on the next slot.
+#[tauri::command(async)]
+fn set_blocked_calls(
+    state: State<'_, SharedEngine>,
+    calls: Vec<String>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_blocked_calls(calls);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist blocked calls: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Default inner size (CSS px) a pop-out OPENS at, per panel slug — "give this panel
 /// plenty of room", not a content minimum. The Operate cockpit (waterfall + Band
 /// Activity + roster) needs more room than the narrower insight panels; the band map is
@@ -15519,6 +15536,7 @@ pub fn run() {
             fd_log_manual,
             n3fjp_test_connection,
             set_hold_tx_freq,
+            set_blocked_calls,
             call_station,
             open_panel_window,
             dock_bandmap_window,

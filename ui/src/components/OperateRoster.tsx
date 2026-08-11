@@ -190,6 +190,16 @@ export function OperateRoster({
     )
     if (neededOnly) f = f.filter((x) => x.need != null)
     if (hideWorked) f = f.filter((x) => !x.s.worked || x.need != null)
+    // Hide blocked (opt-in; default they render dimmed). The station being WORKED or
+    // selected always stays — hiding your live QSO partner mid-exchange is the same
+    // self-own the country exclusion guards against.
+    if (filters.hideBlocked)
+      f = f.filter(
+        (x) =>
+          !isIgnored(ignoredCalls ?? EMPTY_IGNORES, x.s.call) ||
+          x.s.call === selectedCall ||
+          x.s.call === workingCall,
+      )
     const dir = sort.dir === 'asc' ? 1 : -1
     f.sort((a, b) => {
       let c = 0
@@ -239,6 +249,9 @@ export function OperateRoster({
     sort,
     neededOnly,
     hideWorked,
+    filters.hideBlocked,
+    ignoredCalls,
+    workingCall,
     countries.hidden,
     selectedCall,
   ])
@@ -289,6 +302,13 @@ export function OperateRoster({
             onChange={(e) => setFilter({ hideWorked: e.target.checked })}
           /> Hide worked
         </label>
+          <label className="or-filter" title="Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.">
+            <input
+              type="checkbox"
+              checked={filters.hideBlocked === true}
+              onChange={(e) => setFilter({ hideBlocked: e.target.checked })}
+            /> Hide blocked
+          </label>
         {/* Beside the row count, so a thinned roster always says why. The picker itself
             lives in the Band Activity chip bar — one control for one shared list. */}
         <CountryHiddenChip

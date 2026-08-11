@@ -22,6 +22,7 @@ import {
   resumeChatCq as apiResumeChatCq,
   setFrequency as apiSetFrequency,
   sstvTune as apiSstvTune,
+  setBlockedCalls as apiSetBlockedCalls,
   tuneChannel as apiTuneChannel,
   aprsTune,
   setMode as apiSetMode,
@@ -1226,6 +1227,25 @@ export default function App() {
   // atomically with the QSY. Entering the SSTV view deliberately asserts nothing (RX-first),
   // so without this a strip pick left the previous section's mode policy commanding the rig —
   // picking 20 m SSTV from RTTY landed DATA-L at 14.230.
+  // Toggle a call on the PERSISTENT blocklist (the narrow write — never the heavyweight
+  // settings save; the #54 lesson). The engine's auto-responder honors the list on the
+  // next slot; the local settings mirror updates so every pane re-derives immediately.
+  const handleToggleBlocked = useCallback(
+    (call: string) => {
+      const k = call.trim().toUpperCase()
+      if (!k) return
+      const cur = settingsRef.current?.blockedCalls ?? []
+      const next = cur.includes(k) ? cur.filter((c) => c !== k) : [...cur, k]
+      void withErrorToast(() => apiSetBlockedCalls(next), 'Could not update the blocklist').then(
+        (s2) => {
+          if (s2) setSnap(s2)
+          setSettings((prev) => (prev ? { ...prev, blockedCalls: next } : prev))
+        },
+      )
+    },
+    [],
+  )
+
   const handleSstvTune = useCallback(
     (dialMhz: number, band: string, mode: string) => {
       void withErrorToast(
@@ -2601,6 +2621,8 @@ export default function App() {
           <div className="operate-host" hidden={effectiveView !== 'operate'}>
             <OperateCockpit
               companionAddr={settings?.companionAddr}
+              blockedCalls={settings?.blockedCalls ?? []}
+              onToggleBlocked={handleToggleBlocked}
               snap={snap}
               theme={theme}
               tier={tier}

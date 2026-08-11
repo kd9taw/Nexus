@@ -266,29 +266,50 @@ pub(crate) fn resolve_configured<D: NamedDevice>(
     match name.map(str::trim).filter(|n| !n.is_empty()) {
         None => default.ok_or_else(|| format!("this system has no default {what} device")),
         Some(wanted) => {
-            // Collected first so a FAILURE can name what the open path could actually see.
-            // The old message guessed at a cause ("missing, or in use by another application")
-            // and named neither, which is how #2 (akhepcat) stayed unexplained across two
-            // releases: the operator picks from OUR ALSA-hint enumeration, which opens nothing,
-            // while resolution happens against CPAL's, which probe-opens every hint and drops
-            // whatever will not open. A name that is legitimately on the menu can therefore be
-            // absent HERE — and be reported as in use when nothing of the sort was established.
-            let all: Vec<D> = devices.map(|it| it.collect()).unwrap_or_default();
-            let seen: Vec<String> = all.iter().filter_map(|d| d.device_name()).collect();
-            pick_device(Some(all.into_iter()), Some(wanted), None).ok_or_else(|| {
-                format!(
-                    "audio {what} device {wanted:?} is not available. The audio backend offered \
-                     {n} {what} device(s) when opening{list} If it is on the menu but not in \
-                     that list, the backend dropped it while probing — commonly because it is \
-                     already open, which selecting one card for BOTH input and output can do.",
-                    n = seen.len(),
-                    list = if seen.is_empty() {
-                        ".".to_string()
-                    } else {
-                        format!(": {}.", seen.join(", "))
-                    },
-                )
-            })
+            // ⭐ LAZY, ONE DEVICE AT A TIME — the #2/#8 fix. This used to `collect()` the
+            // whole iterator first (so a failure could name what it saw), and on Linux
+            // that collect IS the failure: cpal's ALSA enumerator probe-opens every hint
+            // as it yields, and each yielded Device RETAINS its opened handles — so
+            // collecting held every card's handles simultaneously, and a card's `plughw:`
+            // hint probed while its own `hw:` hint (yielded moments earlier, still held
+            // in the Vec) had the card open. BUSY → cpal silently skips the hint → the
+            // operator's saved plughw pick was never in the list, the resolve failed,
+            // and the loop fell back to the default device forever. Iterating lazily and
+            // DROPPING each non-match before the next probe releases the handles between
+            // hints, so a card's later alias probes against a free card.
+            //
+            // The ordinal handling (" #N" for identically-named codecs) mirrors
+            // `pick_device`; the dropped devices' names still feed the failure message.
+            let (base, ordinal) = split_device_ordinal(wanted);
+            let mut seen: Vec<String> = Vec::new();
+            let mut matched = 0usize;
+            if let Some(devs) = devices {
+                for d in devs {
+                    let n = d.device_name();
+                    if n.as_deref() == Some(base) {
+                        matched += 1;
+                        if matched == ordinal {
+                            return Ok(d);
+                        }
+                    }
+                    if let Some(n) = n {
+                        seen.push(n);
+                    }
+                    // `d` drops HERE, before the next probe — load-bearing, see above.
+                }
+            }
+            Err(format!(
+                "audio {what} device {wanted:?} is not available. The audio backend offered \
+                 {n} {what} device(s) when opening{list} If it is on the menu but not in \
+                 that list, the backend dropped it while probing — commonly because it is \
+                 already open in another application.",
+                n = seen.len(),
+                list = if seen.is_empty() {
+                    ".".to_string()
+                } else {
+                    format!(": {}.", seen.join(", "))
+                },
+            ))
         }
     }
 }
@@ -490,12 +511,28 @@ impl CpalBackend {
             host.default_input_device(),
             "input",
         )?;
-        let out_dev = resolve_configured(
-            host.output_devices().ok(),
-            out_name,
-            host.default_output_device(),
-            "output",
-        )?;
+        // ONE CARD FOR BOTH DIRECTIONS (#2 "either alone works, both fails"; #8's CM108):
+        // the resolved input device holds the card's handle pair, so re-enumerating for
+        // the output would probe the SAME card, find it busy, and drop it — the output
+        // name could never resolve. cpal's ALSA Device is Clone with Arc-shared handles:
+        // the clone hands the output stream the PLAYBACK half of the pair already opened
+        // at probe time, no re-probe at all. (Names compare on the base — the " #N"
+        // ordinal names the same physical card.)
+        let same_card = out_name
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .zip(in_dev.name().ok())
+            .is_some_and(|(want, have)| split_device_ordinal(want).0 == have);
+        let out_dev = if same_card {
+            in_dev.clone()
+        } else {
+            resolve_configured(
+                host.output_devices().ok(),
+                out_name,
+                host.default_output_device(),
+                "output",
+            )?
+        };
 
         let in_cfg = in_dev.default_input_config().map_err(|e| e.to_string())?;
         let out_cfg = out_dev.default_output_config().map_err(|e| e.to_string())?;
@@ -974,7 +1011,82 @@ mod tx_level_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_device, resolve_configured};
+    use super::{pick_device, resolve_configured, NamedDevice};
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+    use std::rc::Rc;
+
+    /// A stand-in with REAL ALSA busy semantics: each device holds its CARD while alive
+    /// (registered in `held`, released on Drop), and the iterator refuses to yield a hint
+    /// whose card is currently held — exactly cpal's probe-open behavior, where a busy
+    /// hint is silently skipped. This is the mechanism of #2: `hw:CARD=X` is yielded
+    /// (card held), then `plughw:CARD=X` probes BUSY unless the hw device was dropped
+    /// first. A resolver that collects the iterator can never see the plughw hint; a
+    /// lazy resolver that drops between probes can.
+    struct BusyDev {
+        name: String,
+        card: String,
+        held: Rc<RefCell<HashSet<String>>>,
+    }
+    impl NamedDevice for BusyDev {
+        fn device_name(&self) -> Option<String> {
+            Some(self.name.clone())
+        }
+    }
+    impl Drop for BusyDev {
+        fn drop(&mut self) {
+            self.held.borrow_mut().remove(&self.card);
+        }
+    }
+
+    fn busy_host(
+        hints: &[(&str, &str)],
+        held: &Rc<RefCell<HashSet<String>>>,
+    ) -> impl Iterator<Item = BusyDev> {
+        let held = held.clone();
+        hints
+            .iter()
+            .map(|(n, c)| (n.to_string(), c.to_string()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(move |(name, card)| {
+                if held.borrow().contains(&card) {
+                    return None; // BUSY — cpal silently skips the hint
+                }
+                held.borrow_mut().insert(card.clone());
+                Some(BusyDev {
+                    name,
+                    card,
+                    held: held.clone(),
+                })
+            })
+    }
+
+    /// THE #2 MECHANISM, pinned. The menu's saved pick is the card's `plughw:` hint; the
+    /// same card's `hw:` hint enumerates FIRST. Resolution must drop each probed device
+    /// before the next hint probes, or the card is busy against itself and the operator's
+    /// explicit pick is unresolvable forever (the fallback-to-default loop akhepcat
+    /// captured). The `held` registry is the positive control: a collecting resolver
+    /// leaves `hw` held when `plughw` probes and this test goes red.
+    #[test]
+    fn a_cards_later_alias_resolves_because_the_earlier_probe_was_dropped() {
+        let held = Rc::new(RefCell::new(HashSet::new()));
+        let dev = resolve_configured(
+            Some(busy_host(
+                &[
+                    ("hw:CARD=CODEC,DEV=0", "CODEC"),
+                    ("plughw:CARD=CODEC,DEV=0", "CODEC"),
+                    ("plughw:CARD=Realtek,DEV=0", "Realtek"),
+                ],
+                &held,
+            )),
+            Some("plughw:CARD=CODEC,DEV=0"),
+            None,
+            "input",
+        )
+        .expect("the saved plughw pick must resolve once probes are dropped between hints");
+        assert_eq!(dev.name, "plughw:CARD=CODEC,DEV=0");
+    }
 
     /// A stand-in host — cpal exposes no `Device` constructor, so this is the only way to
     /// exercise the policy on a machine with no sound card.

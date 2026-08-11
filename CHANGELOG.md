@@ -5,6 +5,31 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A real blocklist — and your auto-responder honors it.** Alt-double-click a decode or
+  roster row and the call goes on a persistent blocked list (it survives restarts; the
+  same list is editable under Settings ▸ Modes ▸ Auto-CQ & Caller Selection). While you
+  run CQ, a blocked station answering you is passed over for the next caller — with every
+  caller blocked, the run keeps calling. Base-call matched, so blocking PD2BS also covers
+  PD2BS/P. On screen, blocked calls render dimmed as before; a new "Hide blocked"
+  checkbox on the roster and a −Blk switch on Band Activity remove them entirely — except
+  the station you are actually working, which no filter ever hides. Asked for from the
+  field ("make sure that list is referenced when auto responding to my CQs").
+
+### Fixed
+
+- **Linux: the sound card you picked actually opens now.** Since 1.0.1 the device menu
+  listed cards correctly, but the code that opened your pick checked it against the audio
+  library's probe list — and the probing held each card open, so a card's `plughw` entry
+  was "busy" against its own `hw` entry, your saved pick never matched, and Nexus silently
+  fell back to the default device (the capture loop akhepcat documented; the tune tone on
+  the PC headphones instead of the CM108 on mw0cqu's FT-847). Devices are now probed one
+  at a time and released between probes, and picking one card for both input and output
+  shares a single open instead of fighting itself. (#2, #8)
+
 ## [1.2.0] — 2026-08-10
 
 ### Added

@@ -1792,6 +1792,13 @@ export async function setHoldTxFreq(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_hold_tx_freq', { on })
 }
 
+/** Replace the blocked-callsigns list — the ONE write path (Alt-double-click gesture and
+ * the Settings editor). Narrow write: never routes through the heavyweight settings save,
+ * so it is safe mid-QSO. The auto-responder honors the list on the next slot. */
+export async function setBlockedCalls(calls: string[]): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_blocked_calls', { calls })
+}
+
 /** Load persisted operator + radio settings. */
 export async function getSettings(): Promise<Settings> {
   return invoke<Settings>('get_settings')

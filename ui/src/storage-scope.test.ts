@@ -33,6 +33,7 @@ export const PER_SURFACE = [
   'nexus.connect.projection',
   'nexus.decodes.filter',
   'nexus.decodes.hideB4',
+  'nexus.decodes.hideBlocked',
   'nexus.logbook.globespin',
   'nexus.operate.layout',
   'nexus.operateLayout',

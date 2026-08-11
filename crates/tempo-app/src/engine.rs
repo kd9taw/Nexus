@@ -3250,6 +3250,10 @@ impl Engine {
         // and the radio loop then re-commanded the STALE mode on the next tick (mode-matrix
         // audit, 2026-08-10). Same pattern as source/radios/rules/sat-consent.
         let live_op_mode = self.settings.operating_mode;
+        // Blocked calls are LIVE state with ONE writer (`set_blocked_calls` — the
+        // Alt-double-click gesture and the Settings editor both go through it), so a
+        // stale form save can't silently un-block or re-block a call mid-QSO.
+        let live_blocked = std::mem::take(&mut self.settings.blocked_calls);
         // Which radio the incoming flat fields describe. A P2-aware Settings form carries the roster
         // + its edited radio in `active_radio`. A LEGACY payload with no `radios` (an old settings.json
         // or a pre-P2 saved config profile) describes the LIVE active radio — fold its flat CAT there,
@@ -3270,6 +3274,7 @@ impl Engine {
         self.settings.sat_vfo_map = live_sat_vfo_map;
         self.settings.sat_uplink_radios = live_sat_uplink_radios;
         self.settings.operating_mode = live_op_mode;
+        self.settings.blocked_calls = live_blocked;
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
         // describe the radio SHOWN in the form, which may differ from the live active radio if a
@@ -3497,6 +3502,21 @@ impl Engine {
     /// 1.0.5 "intermittent mode drift" field report).
     pub fn set_qrz_sync_cursor(&mut self, unix: u64) {
         self.settings.qrz_last_sync_unix = unix;
+    }
+
+    /// Replace the blocked-callsigns list — a NARROW write for the Alt-double-click
+    /// gesture and the Settings editor, deliberately NOT `apply_settings` (the #54
+    /// lesson: the heavyweight path resets the mode and clears the TX queue, and this
+    /// gets clicked mid-QSO). Normalizes: trim, uppercase, drop empties, dedupe
+    /// preserving first-seen order. The auto-responder reads the list live on the next
+    /// slot; nothing else is touched.
+    pub fn set_blocked_calls(&mut self, calls: Vec<String>) {
+        let mut seen = std::collections::HashSet::new();
+        self.settings.blocked_calls = calls
+            .into_iter()
+            .map(|c| c.trim().to_ascii_uppercase())
+            .filter(|c| !c.is_empty() && seen.insert(c.clone()))
+            .collect();
     }
 
     /// Change band / dial frequency / mode **live** — without resetting the
@@ -12651,7 +12671,12 @@ impl Engine {
                 let observed: &[modes::Decode] = if self.cq_running
                     && state_before == QsoState::CallingCq
                     && (self.settings.best_caller != "first"
-                        || self.settings.best_caller_min_snr.is_some())
+                        || self.settings.best_caller_min_snr.is_some()
+                        // The blocklist engages the filter REGARDLESS of strategy:
+                        // at stock defaults the slice used to go to the sequencer
+                        // untouched, and its first-heard lock would seize a blocked
+                        // caller's answer.
+                        || !self.settings.blocked_calls.is_empty())
                 {
                     picked = best_caller_decodes(
                         decodes,
@@ -12659,6 +12684,7 @@ impl Engine {
                         &self.settings.best_caller,
                         self.settings.best_caller_min_snr,
                         &self.settings.mygrid,
+                        &self.settings.blocked_calls,
                     );
                     &picked
                 } else {
@@ -13695,6 +13721,7 @@ fn best_caller_decodes(
     strategy: &str,
     min_snr: Option<i32>,
     mygrid: &str,
+    blocked: &[String],
 ) -> Vec<modes::Decode> {
     // Calls heard calling CQ this slot — input for the `cq_first` strategy.
     let cq_callers: Vec<String> = decodes
@@ -13706,8 +13733,11 @@ fn best_caller_decodes(
         .collect();
     // Distill the stations answering MY CQ this slot: a grid reply or a bare
     // report addressed to me — the two forms the sequencer auto-answers from
-    // CallingCq.
+    // CallingCq. A BLOCKED caller's answer is still an ANSWER (it must be
+    // dropped from the slice so the sequencer's first-heard lock can't seize
+    // it) but never a CANDIDATE — the operator said never to work them.
     let mut callers = Vec::new();
+    let mut answers: Vec<usize> = Vec::new();
     for (idx, d) in decodes.iter().enumerate() {
         let (de, grid) = match Msg::parse(&d.message) {
             Msg::Grid { to, de, grid } if same_call(&to, mycall) => {
@@ -13716,6 +13746,10 @@ fn best_caller_decodes(
             Msg::Report { to, de, .. } if same_call(&to, mycall) => (de, None),
             _ => continue,
         };
+        answers.push(idx);
+        if blocked.iter().any(|b| same_call(b, &de)) {
+            continue;
+        }
         callers.push(CqCaller {
             decode_idx: idx,
             snr: d.snr,
@@ -13724,11 +13758,12 @@ fn best_caller_decodes(
         });
     }
     // No one answered → nothing to arbitrate; hand the slice back unchanged.
-    if callers.is_empty() {
+    if answers.is_empty() {
         return decodes.to_vec();
     }
+    // `keep` is None when every answer is blocked or below the SNR floor — all
+    // answers are then dropped and the run keeps calling CQ.
     let keep = pick_caller(&callers, strategy, min_snr, mygrid).map(|i| callers[i].decode_idx);
-    let answers: Vec<usize> = callers.iter().map(|c| c.decode_idx).collect();
     decodes
         .iter()
         .enumerate()
@@ -21349,6 +21384,87 @@ mod tests {
             e.snapshot().qso.unwrap().dxcall.as_deref(),
             Some("W5LOUD"),
             "best_caller=strongest works the loudest answerer, not the first"
+        );
+    }
+
+    #[test]
+    fn a_blocked_caller_is_passed_over_for_the_next_eligible_one() {
+        // The blocklist's transmit half (operator-approved, Batch 2): a listed call
+        // answering my CQ must never be worked — even at STOCK defaults
+        // (best_caller="first", no SNR floor), where the selection filter used to be
+        // bypassed entirely and the sequencer's first-heard lock would seize the
+        // first answer in the slot.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_blocked_calls(vec!["pd2bs".into()]); // normalizes: case-insensitive entry
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0);
+        e.ingest_decodes_for_test(
+            &[
+                dec_snr("W9XYZ PD2BS JO21", -3), // blocked, first-heard AND loudest
+                dec_snr("W9XYZ K1ABC FN42", -18),
+            ],
+            1,
+        );
+        assert_eq!(
+            e.snapshot().qso.unwrap().dxcall.as_deref(),
+            Some("K1ABC"),
+            "the blocked caller is skipped; the next eligible answer is worked"
+        );
+    }
+
+    #[test]
+    fn every_caller_blocked_keeps_the_run_calling_cq() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_blocked_calls(vec!["PD2BS".into(), "K1ABC/P".into()]); // base-call matched
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0);
+        e.ingest_decodes_for_test(
+            &[
+                dec_snr("W9XYZ PD2BS JO21", -3),
+                dec_snr("W9XYZ K1ABC FN42", -5), // blocked via the /P entry's base call
+            ],
+            1,
+        );
+        let qso = e.snapshot().qso.expect("still running");
+        assert_eq!(qso.state, "CallingCq", "no eligible caller — keep calling");
+        assert!(qso.dxcall.is_none(), "neither blocked answer was locked");
+    }
+
+    #[test]
+    fn an_empty_blocklist_leaves_stock_selection_byte_identical() {
+        // The pinning control: with the list empty and stock defaults, the filter
+        // does not engage and first-heard wins exactly as before.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        assert!(e.settings.blocked_calls.is_empty());
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0);
+        e.ingest_decodes_for_test(
+            &[
+                dec_snr("W9XYZ K1ABC FN42", -18),
+                dec_snr("W9XYZ W5LOUD EM12", -3),
+            ],
+            1,
+        );
+        assert_eq!(
+            e.snapshot().qso.unwrap().dxcall.as_deref(),
+            Some("K1ABC"),
+            "stock first-heard selection, untouched"
+        );
+    }
+
+    #[test]
+    fn a_stale_settings_save_cannot_revert_the_blocklist() {
+        // Same hazard class as #54's operating-mode revert: the narrow verb is the ONE
+        // writer, and a whole-struct save from a form loaded before an Alt-click must
+        // not un-block the call.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let stale = e.settings().clone(); // form loads (blocklist empty)
+        e.set_blocked_calls(vec!["PD2BS".into()]); // operator Alt-clicks mid-session
+        e.apply_settings(stale); // the stale form saves
+        assert_eq!(
+            e.settings.blocked_calls,
+            vec!["PD2BS".to_string()],
+            "the live blocklist survives a stale whole-struct save"
         );
     }
 

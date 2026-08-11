@@ -66,7 +66,7 @@ describe('Call Roster filters initialize from storage', () => {
   })
 
   it('comes up with Needed-only ticked AND applied', () => {
-    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ neededOnly: true, hideWorked: false }))
+    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ neededOnly: true, hideWorked: false, hideBlocked: false }))
     mount()
     expect(neededBox().checked).toBe(true)
     // The checkbox and the rows must agree — a ticked box over an unfiltered list would be
@@ -77,7 +77,7 @@ describe('Call Roster filters initialize from storage', () => {
   })
 
   it('comes up with Hide-worked ticked AND applied', () => {
-    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ neededOnly: false, hideWorked: true }))
+    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ neededOnly: false, hideWorked: true, hideBlocked: false }))
     mount()
     expect(workedBox().checked).toBe(true)
     expect(screen.queryByText('WORKED1')).toBeNull()
@@ -95,18 +95,18 @@ describe('Call Roster filters initialize from storage', () => {
 
 describe('Call Roster filters are written when ticked', () => {
   it('persists Needed-only, and does so without disturbing Hide-worked', () => {
-    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ neededOnly: false, hideWorked: true }))
+    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ neededOnly: false, hideWorked: true, hideBlocked: false }))
     mount()
     fireEvent.click(neededBox())
-    expect(loadRosterFilters()).toEqual({ neededOnly: true, hideWorked: true })
+    expect(loadRosterFilters()).toEqual({ neededOnly: true, hideWorked: true, hideBlocked: false })
   })
 
   it('persists Hide-worked, and unticking persists the OFF state too', () => {
     mount()
     fireEvent.click(workedBox())
-    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: true })
+    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: true, hideBlocked: false })
     fireEvent.click(workedBox())
-    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: false })
+    expect(loadRosterFilters()).toEqual({ neededOnly: false, hideWorked: false, hideBlocked: false })
   })
 
   it('survives a remount — the whole point of the change', () => {

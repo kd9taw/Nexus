@@ -95,6 +95,48 @@ describe('OperateRoster works a station where they were heard', () => {
   })
 })
 
+describe('OperateRoster hide-blocked (blocklist display half)', () => {
+  it('the checkbox drops blocked rows; the working station always stays', () => {
+    localStorage.setItem(
+      'nexus.roster.filters',
+      JSON.stringify({ neededOnly: false, hideWorked: false, hideBlocked: true }),
+    )
+    render(
+      <OperateRoster
+        stations={[station('PD2BS', 100), station('K1ABC', 100), station('W5XYZ', 100)]}
+        myGrid="EN52"
+        currentSlot={100}
+        needByCall={new Map()}
+        selectedCall={null}
+        workingCall="W5XYZ"
+        ignoredCalls={new Set(['PD2BS', 'W5XYZ'])}
+        onSelect={() => {}}
+        onCall={() => {}}
+      />,
+    )
+    expect(screen.queryByText('PD2BS')).toBeNull() // blocked + hidden
+    expect(screen.queryByText('K1ABC')).not.toBeNull()
+    expect(screen.queryByText('W5XYZ')).not.toBeNull() // blocked BUT being worked — stays
+    localStorage.clear()
+  })
+
+  it('unchecked (default): blocked rows stay visible (dimmed)', () => {
+    render(
+      <OperateRoster
+        stations={[station('PD2BS', 100)]}
+        myGrid="EN52"
+        currentSlot={100}
+        needByCall={new Map()}
+        selectedCall={null}
+        ignoredCalls={new Set(['PD2BS'])}
+        onSelect={() => {}}
+        onCall={() => {}}
+      />,
+    )
+    expect(screen.queryByText('PD2BS')).not.toBeNull()
+  })
+})
+
 describe('OperateRoster freshness fade', () => {
   it('dims rows as they age toward the drop-off (full when just heard)', () => {
     expect(freshness(0)).toBe(1)

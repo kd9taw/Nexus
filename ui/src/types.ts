@@ -2573,6 +2573,11 @@ export interface Settings {
   bestCaller: string
   /** Ignore answering stations weaker than this SNR (dB) when picking. null = no floor. */
   bestCallerMinSnr: number | null
+  /** Blocked callsigns: the auto-responder never answers these when they reply to your CQ,
+   * and the panes hide/dim them. Base-call matched, stored normalized. ONE writer:
+   * api.setBlockedCalls (the Alt-double-click gesture + the Settings editor) — a
+   * whole-struct settings save deliberately cannot change it. */
+  blockedCalls?: string[]
   // --- Wanted watch list / alert filters (W1.5) ---
   /** Watch list: exact calls or trailing-* wildcard prefixes that raise a loud alert. */
   wantedCalls: string[]
