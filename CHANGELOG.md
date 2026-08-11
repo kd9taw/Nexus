@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One Units setting — metric or imperial, everywhere.** Distances, temperature and wind
+  speed now follow a single Units choice (Settings ▸ Station): automatic from your system's
+  region, or metric/imperial by hand. It covers the spots that were still imperial — the
+  station recall card, the roster distance column, Memories, the repeater search, and APRS
+  weather. Every transmitted value stays native; only the display converts. From F4MQS.
+- **Hide stations you've already confirmed on this band.** A new −Conf switch on Band
+  Activity drops stations you hold an award-grade confirmation from (LoTW or card) on the
+  current band, so you can chase what you still need — while a station that's still new on
+  the band always shows. Asked for by F4MQS.
+- **Pause the country filter without losing your ticks.** The Countries menu gains a Pause
+  switch: turn the whole exclusion off and back on without re-ticking your list.
+
+### Fixed
+
+- **ClubLog uploads no longer hammer, and catch up after you fix the password.** A missing
+  ClubLog application password used to retry every two seconds about twenty times with the
+  same error and then silently drop the contact; fixing the password retried nothing. Now a
+  missing credential pauses ClubLog for the session with one notice, genuine failures back
+  off, and entering the password re-queues every QSO that never uploaded. From F4MQS.
+- **QSOs logged while HRD is closed are no longer lost.** The push to HRD Logbook was
+  fire-and-forget — if HRD wasn't running, the contact vanished. Nexus now queues it and
+  sends when HRD is reachable, with a reachable/queued indicator under the HRD setting.
+- **A portable-callsign warning for QRZ.** A QRZ logbook is tied to one exact callsign, so
+  a /P operator uploading against their base-call book has every contact rejected. Test
+  Connection now compares the book's owner to your station callsign and warns plainly, and
+  QRZ's terse "Unable to add QSO" errors get a plain-language explanation. From F4MQS.
+
+### Added — bands
+
 - **The band system now reaches 24 GHz.** The band table, the frequency pickers, the
   override editor and the typed-dial entry all know 33 cm, 13 cm, 9 cm, 6 cm, 3 cm and
   1.25 cm — ADIF's registered names, so a QO-100 contact finally logs `BAND:3cm` instead
