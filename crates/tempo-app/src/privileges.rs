@@ -34,14 +34,30 @@ const fn s(lo: f64, hi: f64, cw: bool, data: bool, phone: bool) -> Seg {
 }
 
 // VHF/UHF privileges are identical for Technician and above; share them.
+//
+// ⚠️ EXTEND-ONLY against 47 CFR 97.301(a) — this table is the license-privilege TX
+// gate, a load-bearing transmit-path invariant. The microwave rows (Batch 3, the
+// QO-100 report) follow the regulation, not the band table: ADIF's "13cm" LABEL spans
+// 2300–2450 MHz, but US amateurs hold only 2300–2310 and 2390–2450 — the 2310–2390 gap
+// is not amateur spectrum, so the label is one band and the privilege is two segments.
+// 9 cm (3300–3500) has NO row at all: the US amateur secondary allocation there was
+// removed, so a US class must read TX LOCKED on it even though the band is labelled
+// (labels serve tuning and honest logging; the Open class short-circuits above this
+// table and is unaffected — QO-100's actual audience).
 const VHF: &[Seg] = &[
-    s(50.0, 50.1, true, false, false),   // 6 m CW only
-    s(50.1, 54.0, true, true, true),     // 6 m all-mode
-    s(144.0, 144.1, true, false, false), // 2 m CW only
-    s(144.1, 148.0, true, true, true),   // 2 m all-mode
-    s(222.0, 225.0, true, true, true),   // 1.25 m all-mode
-    s(420.0, 450.0, true, true, true),   // 70 cm all-mode
-    s(1240.0, 1300.0, true, true, true), // 23 cm all-mode (IC-9700's third band)
+    s(50.0, 50.1, true, false, false),       // 6 m CW only
+    s(50.1, 54.0, true, true, true),         // 6 m all-mode
+    s(144.0, 144.1, true, false, false),     // 2 m CW only
+    s(144.1, 148.0, true, true, true),       // 2 m all-mode
+    s(222.0, 225.0, true, true, true),       // 1.25 m all-mode
+    s(420.0, 450.0, true, true, true),       // 70 cm all-mode
+    s(902.0, 928.0, true, true, true),       // 33 cm all-mode
+    s(1240.0, 1300.0, true, true, true),     // 23 cm all-mode (IC-9700's third band)
+    s(2300.0, 2310.0, true, true, true),     // 13 cm lower segment (2310–2390 is NOT amateur)
+    s(2390.0, 2450.0, true, true, true),     // 13 cm upper segment (QO-100 uplink territory)
+    s(5650.0, 5925.0, true, true, true),     // 6 cm all-mode
+    s(10_000.0, 10_500.0, true, true, true), // 3 cm all-mode (QO-100 downlink territory)
+    s(24_000.0, 24_250.0, true, true, true), // 1.25 cm all-mode
 ];
 
 // 60 m (General/Extra): the 5.3515–5.3665 subband + 4 retained legacy channel centers
@@ -209,7 +225,11 @@ pub fn phone_home(class: LicenseClass, band: &str) -> Option<(f64, &'static str)
 /// disjoint phone sub-bands, this would shade the no-phone gap between them as legal; then this
 /// must return a segment LIST and the strip must shade each separately.
 pub fn phone_segment(class: LicenseClass, band: &str) -> Option<(f64, f64)> {
-    if band == "60m" || matches!(class, LicenseClass::Open) {
+    // 13 cm is the one band whose phone privilege is genuinely DISJOINT (2300–2310 and
+    // 2390–2450; the gap is not amateur spectrum). Unioning would shade 2310–2390 as
+    // legal — the exact dishonesty the invariant above forbids — so like channelized
+    // 60 m it gets no single-span shade. The TX lockout still enforces per segment.
+    if band == "60m" || band == "13cm" || matches!(class, LicenseClass::Open) {
         return None;
     }
     let mut lo = f64::INFINITY;
@@ -415,9 +435,11 @@ mod tests {
                 }
             }
             for (band, mut segs) in by_band {
-                // 60 m is channelized (5 discrete phone channels) — legitimately multi-segment,
-                // and `phone_segment` early-returns None for it, so the union never runs there.
-                if band == "60m" {
+                // 60 m is channelized (5 discrete phone channels) and 13 cm's privilege is
+                // genuinely disjoint (2300–2310 / 2390–2450, the gap is not amateur) —
+                // both legitimately multi-segment, and `phone_segment` early-returns None
+                // for both, so the union never runs there.
+                if band == "60m" || band == "13cm" {
                     continue;
                 }
                 segs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());

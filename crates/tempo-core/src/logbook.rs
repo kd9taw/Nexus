@@ -1033,7 +1033,13 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if let Some(st) = &r.state {
         out.push_str(&field("STATE", st));
     }
-    out.push_str(&field("BAND", &r.band));
+    // BAND only when we have one: a record made on an off-band-table dial (a 47 GHz
+    // transverter shot, a satellite leg above the table) carries band = "", and
+    // `<BAND:0>` with an empty value is exactly the malformed field LoTW/TQSL reject —
+    // FREQ below still identifies the RF. Same absent-not-guessed rule as FREQ.
+    if !r.band.is_empty() {
+        out.push_str(&field("BAND", &r.band));
+    }
     // FREQ only when we actually have one. Imported QSOs (QRZ/LoTW give BAND, not frequency)
     // carry freq_mhz = 0, and `<FREQ:8>0.000000` is not a valid amateur frequency — Swisslog,
     // DXKeeper and other loggers REJECT a zero-frequency record on import, which is how an

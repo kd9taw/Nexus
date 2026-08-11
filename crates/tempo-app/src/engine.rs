@@ -3997,6 +3997,20 @@ impl Engine {
                 self.sideband_override = None;
             }
             self.settings.band = band.to_string();
+        } else if !self.settings.band.is_empty() {
+            // OFF THE TABLE (47 GHz+): the knob left every named band, and keeping the
+            // OLD label would poison everything keyed on it — the per-(band, mode) dial
+            // memory would bank a 47 GHz dial under "3cm", the log would claim a band
+            // the RF was not on, and the roster would keep an unrelated band's stations.
+            // Absent, not guessed — the sat path's `""` convention (Batch 3; the same
+            // context-change clears as a named cross-band QSY, because it IS one).
+            self.clear_decode_context();
+            self.app.clear_stations();
+            modes::reset_ft8_a7();
+            self.halt_tx_for_context_change();
+            self.clear_cw_decode();
+            self.sideband_override = None;
+            self.settings.band = String::new();
         }
         // Declare the knob's provenance after the band write, so whichever answer it is
         // names the cell the dial landed in. The hand on the knob is always the operator's,
@@ -4053,6 +4067,10 @@ impl Engine {
         self.settings.dial_mhz = mhz;
         if let Some(band) = crate::bandplan::band_for_dial(mhz) {
             self.settings.band = band.to_string();
+        } else {
+            // A rig that boots off the table (47 GHz transverter IF setups) must not
+            // inherit the settings file's stale band label — absent, not guessed.
+            self.settings.band = String::new();
         }
         self.app.set_radio(
             self.settings.dial_mhz,
@@ -4270,6 +4288,11 @@ impl Engine {
     /// stays out of the memory whatever the hold flags say at the time.
     fn bank_dial_memory(&mut self) {
         if let Some(r) = self.dial_residency.take() {
+            // A residency with no band label (an off-table dial, 47 GHz+) has no cell to
+            // bank into — a ("", mode) key would be recalled by nothing and merely leak.
+            if r.band.is_empty() {
+                return;
+            }
             self.freq_memory
                 .insert((r.band, r.mode), (r.dial_mhz, r.sideband));
         }
@@ -24958,10 +24981,10 @@ mod tests {
         half_width_hz: 15_000,
     };
 
-    /// An IC-905 bird whose UPLINK is above `bandplan::band_for_dial`'s 23 cm
-    /// ceiling (5.67 GHz) while its downlink is still on it (23 cm). The
-    /// reachable fail-closed case: `band_for_dial` answers `None` for the
-    /// uplink, so the same-band early return cannot fire.
+    /// An IC-905 bird whose uplink (6 cm, 5.67 GHz) and downlink (23 cm) are
+    /// BOTH named since Batch 3 — the INFORMED cross-band refusal: two known,
+    /// different bands, refused because the rig class's A/B cross-band split is
+    /// unverified, not because Nexus couldn't classify the legs.
     const SHF_UP: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
         uplink_centre_hz: 5_670_000_000,
         downlink_centre_hz: 1_265_000_000,
@@ -24969,12 +24992,22 @@ mod tests {
         half_width_hz: 250_000,
     };
 
-    /// …and a 3 cm in-band repeater: BOTH legs on 10 GHz, so both answer
-    /// `None`. Genuinely SAME-band, which is what decides the wording of
-    /// [`AB_CROSS_BAND_REFUSAL`]'s second clause.
+    /// A 3 cm in-band repeater: BOTH legs on 10 GHz. Since Batch 3 both legs
+    /// NAME "3cm" — provably same-band, so the A/B split is now ALLOWED, the
+    /// same verdict the 2 m V/V case has always had.
     const SHF_SAME_BAND: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
         uplink_centre_hz: 10_450_000_000,
         downlink_centre_hz: 10_489_500_000,
+        invert: false,
+        half_width_hz: 250_000,
+    };
+
+    /// The fail-closed premise after Batch 3 lives ABOVE the new ceiling: a
+    /// 47 GHz leg answers `None`, and an unclassifiable leg is refused, never
+    /// written hopefully.
+    const SHF_OFF_TABLE: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 47_088_000_000,
+        downlink_centre_hz: 1_265_000_000,
         invert: false,
         half_width_hz: 250_000,
     };
@@ -25022,47 +25055,49 @@ mod tests {
             // …and a terrestrial pile-up split is untouched throughout.
             assert_eq!(e.sat_split_tx_vfo(14_235_000, HAMLIB), Ok("VFOB"));
         }
-        // FAILS CLOSED ABOVE THE BAND TABLE. `bandplan::band_for_dial` stops at
-        // 23 cm, so an IC-905 uplink on 5.7 GHz answers `None` — the same-band
-        // early return cannot fire on an unknown band, and the split is REFUSED
-        // rather than sent hopefully. That is the safe direction: an uplink we
-        // cannot classify must not be written to VFO B on a rig whose A/B
-        // cross-band split is unverified.
+        // THE INFORMED CROSS-BAND REFUSAL (Batch 3 turned this case from
+        // fail-closed into judged): 6 cm up / 23 cm down are both NAMED now and
+        // provably different, so the refusal fires on knowledge, same verdict.
         assert_eq!(
             crate::bandplan::band_for_dial(5_670.0),
-            None,
-            "the table's ceiling is the premise of this case"
+            Some("6cm"),
+            "Batch 3 premise: the uplink is named now"
         );
         let mut e = main_sub_station(3090); // IC-905
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
-        e.set_sat_transponder(Some(("L/X|linear".into(), 0, SHF_UP))); // 5.67 GHz up, 23 cm down
+        e.set_sat_transponder(Some(("L/X|linear".into(), 0, SHF_UP))); // 6 cm up, 23 cm down
         e.sat_tune_nominal(SSB_BIRD, 4_000_000);
         for cat in [NATIVE, HAMLIB] {
             assert!(
                 e.sat_split_tx_vfo(5_670_000_000, cat)
                     .unwrap_err()
                     .starts_with(AB_CROSS_BAND_REFUSAL),
+                "a provably cross-band uplink is refused, never written"
+            );
+        }
+        // …AND STILL FAILS CLOSED ABOVE THE NEW CEILING: a 47 GHz uplink
+        // answers `None`, the same-band early return cannot fire, refused.
+        assert_eq!(crate::bandplan::band_for_dial(47_088.0), None);
+        let mut e = main_sub_station(3090);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
+        e.set_sat_transponder(Some(("47G|linear".into(), 0, SHF_OFF_TABLE)));
+        e.sat_tune_nominal(SSB_BIRD, 4_500_000);
+        for cat in [NATIVE, HAMLIB] {
+            assert!(
+                e.sat_split_tx_vfo(47_088_000_000, cat)
+                    .unwrap_err()
+                    .starts_with(AB_CROSS_BAND_REFUSAL),
                 "an uplink off the band table is refused, never written"
             );
         }
 
-        // …AND SO DOES A GENUINELY SAME-BAND PASS off the end of the table:
-        // 10 GHz in, 10 GHz out, BOTH legs `None`. Fail-closed is still the
-        // right call (Nexus cannot prove the legs share a band, and this rig's
-        // A/B cross-band split is unverified), but it is exactly why the
-        // message may not say "the two legs are not on one band" — here they
-        // ARE. It states only what Nexus knows: it could not confirm it.
-        //
-        // ⚠️ THE ROUTE HERE CHANGED AND THE VERDICT DID NOT. This case used to
-        // be reached through the DOPPLER TICK, because `sat_tune_nominal`
-        // REFUSED a bird whose downlink was off the band plan before it ever
-        // marked the pair sent. That refusal is gone — a dial the table cannot
-        // NAME is now tuned (see
-        // `a_downlink_the_band_table_cannot_name_is_still_tuned`), so the pick
-        // itself seeds the pair and this guard is now asked on the production
-        // path rather than through a tick standing in for it. What must NOT
-        // change is the answer: the split is still refused, on both backends,
-        // because Nexus still cannot prove the two legs share a band.
+        // A GENUINELY SAME-BAND 10 GHz pass: Batch 3 flipped this verdict, and
+        // deliberately. Both legs used to answer `None` and the split was
+        // refused for want of proof; both now NAME "3cm", the same-band early
+        // return fires, and the split is ALLOWED — the identical verdict the
+        // 2 m V/V case has always had. The refusal message's careful wording
+        // ("could not confirm…") is exactly what let this flip happen without
+        // the message ever having been a lie.
         let mut e = main_sub_station(3090);
         confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
         e.set_sat_transponder(Some(("3cm|X/X".into(), 0, SHF_SAME_BAND)));
@@ -25077,14 +25112,13 @@ mod tests {
                 crate::bandplan::band_for_dial(10_489.5),
                 crate::bandplan::band_for_dial(up as f64 / 1e6)
             ),
-            (None, None),
-            "both legs are off the table — the premise of this case"
+            (Some("3cm"), Some("3cm")),
+            "both legs are named and equal — the Batch 3 premise"
         );
-        assert!(
-            e.sat_split_tx_vfo(up, HAMLIB)
-                .unwrap_err()
-                .starts_with(AB_CROSS_BAND_REFUSAL),
-            "an unclassifiable pass is refused, never written"
+        assert_eq!(
+            e.sat_split_tx_vfo(up, HAMLIB),
+            Ok("VFOB"),
+            "a provably same-band pass rides VFO B like the 2 m V/V case"
         );
         assert!(
             AB_CROSS_BAND_REFUSAL
@@ -26494,26 +26528,31 @@ mod tests {
         // lookup table is incomplete. The band table is for ROUTING and
         // LABELLING; it is not a permission system, and the operator's licence
         // class never entered into it.
+        // Batch 3 moved the table's ceiling: QO-100's 10.489 GHz is now NAMED
+        // ("3cm", ADIF's name — see the companion test below), so the still-
+        // unnameable premise lives above the NEW ceiling. 47 GHz is real
+        // licensed territory (47.0–47.2, Q65 EME) the table deliberately does
+        // not carry yet — the bandless path must keep working there.
         let (mut e, _, _) = sat_station();
-        let qo100 = tempo_core::doppler::Transponder::channel(0, 10_489_550_000);
+        let bird47 = tempo_core::doppler::Transponder::channel(0, 47_088_100_000);
         assert_eq!(
-            crate::bandplan::band_for_dial(10_489.550),
+            crate::bandplan::band_for_dial(47_088.100),
             None,
-            "premise: the table cannot name this dial — and is deliberately NOT extended, \
-             because `ab_cross_band_refusal` fails closed on exactly that answer"
+            "premise: the table cannot name this dial — the ceiling moved to 24.25 GHz, \
+             and `ab_cross_band_refusal` still fails closed on exactly this answer"
         );
 
-        e.set_sat_transponder(Some(("QO-100|NB transponder".into(), 0, qo100)));
+        e.set_sat_transponder(Some(("47G|experiment".into(), 0, bird47)));
         let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
 
         assert!(
-            (e.settings.dial_mhz - 10_489.550).abs() < 1e-6,
+            (e.settings.dial_mhz - 47_088.100).abs() < 1e-6,
             "the dial goes to the downlink, got {}",
             e.settings.dial_mhz
         );
         assert_eq!(
             b.pending_downlink_mhz.map(|m| (m * 1e6).round() as u64),
-            Some(10_489_550_000),
+            Some(47_088_100_000),
             "the leg is queued for the loop like any other"
         );
         assert_eq!(b.note, None, "and there is nothing left to apologise for");
@@ -26525,6 +26564,23 @@ mod tests {
         assert_eq!(e.settings.band, "", "and neither has the logged band");
         // The mode still follows the bird: absent band, present transponder.
         assert_eq!(e.rig_mode_effective(), "USB");
+    }
+
+    #[test]
+    fn qo100_dials_now_carry_their_band_labels() {
+        // THE BATCH 3 DELIVERABLE, positive half: the microwave bands are named
+        // with ADIF's registered labels, so a QO-100 record logs BAND:3cm (LoTW-
+        // valid) instead of an empty field, and the cockpit prints a band chip.
+        let (mut e, _, _) = sat_station();
+        assert_eq!(crate::bandplan::band_for_dial(10_489.550), Some("3cm"));
+        assert_eq!(crate::bandplan::band_for_dial(2_400.150), Some("13cm"));
+        assert_eq!(crate::bandplan::band_for_dial(5_760.200), Some("6cm"));
+        assert_eq!(crate::bandplan::band_for_dial(3_400.100), Some("9cm"));
+        let qo100 = tempo_core::doppler::Transponder::channel(0, 10_489_550_000);
+        e.set_sat_transponder(Some(("QO-100|NB transponder".into(), 0, qo100)));
+        let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(b.band, "3cm", "the rail's band chip prints the ADIF name");
+        assert_eq!(e.settings.band, "3cm", "and the logged band carries it");
     }
 
     #[test]
@@ -26546,14 +26602,16 @@ mod tests {
         //
         // The line: ask the tiers whose answer never read a band, skip the
         // ones whose answer is a band claim.
+        // Batch 3 note: QO-100's dials are named now, so the unnameable premise
+        // lives at 47 GHz — licensed, real (Q65 EME), above the new ceiling.
         let (mut e, ic9700, _) = sat_station();
-        let qo100 = tempo_core::doppler::Transponder::channel(0, 10_489_550_000);
+        let bird47 = tempo_core::doppler::Transponder::channel(0, 47_088_100_000);
         assert_eq!(e.settings.active_radio, 0, "precondition: HF rig active");
 
         // The station's only satellite-capable rule NAMES bands (sat_station's
         // "2 m + 70 cm SSB → IC-9700"). It cannot be shown to contain a band
         // nothing can name, so it does not claim this dial.
-        e.set_sat_transponder(Some(("QO-100|NB transponder".into(), 0, qo100)));
+        e.set_sat_transponder(Some(("47G|experiment".into(), 0, bird47)));
         let b = e.sat_tune_nominal(SSB_BIRD, 1_000_000);
         assert_eq!(
             e.settings.active_radio, 0,
@@ -26574,7 +26632,7 @@ mod tests {
             radio: ic9700,
         });
         e.set_routing_rules(rules);
-        e.set_sat_transponder(Some(("QO-100|NB transponder".into(), 0, qo100)));
+        e.set_sat_transponder(Some(("47G|experiment".into(), 0, bird47)));
         let b = e.sat_tune_nominal(SSB_BIRD, 2_000_000);
         assert_eq!(
             e.settings.active_radio, ic9700,
@@ -26582,7 +26640,7 @@ mod tests {
         );
         assert_eq!(b.radio_id, Some(ic9700));
         assert!(
-            (e.settings.dial_mhz - 10_489.550).abs() < 1e-6,
+            (e.settings.dial_mhz - 47_088.100).abs() < 1e-6,
             "…and the routed rig is the one that gets the downlink, got {}",
             e.settings.dial_mhz
         );
@@ -26597,23 +26655,46 @@ mod tests {
     }
 
     #[test]
-    fn an_unnameable_band_leaves_the_privilege_gate_exactly_where_it_was() {
-        // The tune is not a transmit permission, and nothing here moved one.
-        // Open class (the reporting operator) may key 10 GHz; every other class
-        // is refused there by `privileges::tx_allowed` for want of a licensed
-        // segment — unchanged, and reached through `emission_allowed`, which is
-        // not on the satellite tune path at all.
+    fn the_privilege_gate_follows_the_regulation_above_23cm() {
+        // Batch 3: the microwave privilege rows are 97.301(a) — 10.0–10.5 GHz is
+        // Technician-and-above, so every class may now key the QO-100 downlink
+        // frequency; 2.4 GHz (13 cm upper) likewise; the 2310–2390 gap and the
+        // removed 9 cm band stay LOCKED for US classes; and ABOVE the table's
+        // ceiling the gate still fails closed — 47.0–47.2 GHz is genuinely
+        // licensed and still reads locked until the table carries it, which is
+        // the conservative direction for a legal guard.
         use crate::settings::{LicenseClass, OperatingMode};
-        for (class, allowed) in [
-            (LicenseClass::Open, true),
-            (LicenseClass::Technician, false),
-            (LicenseClass::General, false),
-            (LicenseClass::Extra, false),
+        for class in [
+            LicenseClass::Open,
+            LicenseClass::Technician,
+            LicenseClass::General,
+            LicenseClass::Extra,
         ] {
-            assert_eq!(
+            assert!(
                 crate::privileges::tx_allowed(class, 10_489.550, OperatingMode::Phone),
-                allowed,
-                "{class:?} at 10 GHz"
+                "{class:?} at 10 GHz — 97.301(a) grants 10.0–10.5 to Tech and above"
+            );
+            assert!(
+                crate::privileges::tx_allowed(class, 2_400.150, OperatingMode::Phone),
+                "{class:?} at 2400.15 — the 13 cm upper segment"
+            );
+        }
+        for class in [
+            LicenseClass::Technician,
+            LicenseClass::General,
+            LicenseClass::Extra,
+        ] {
+            assert!(
+                !crate::privileges::tx_allowed(class, 2_350.0, OperatingMode::Phone),
+                "{class:?} in the 2310–2390 gap — not amateur spectrum"
+            );
+            assert!(
+                !crate::privileges::tx_allowed(class, 3_400.1, OperatingMode::Phone),
+                "{class:?} on 9 cm — the US allocation was removed"
+            );
+            assert!(
+                !crate::privileges::tx_allowed(class, 47_088.1, OperatingMode::Phone),
+                "{class:?} at 47 GHz — fail-closed above the table ceiling"
             );
         }
     }

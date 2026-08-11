@@ -361,10 +361,13 @@ const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
  * 1.25 m is here for the routing half — no FT8/FT4 row exists upstream, but the band is
  * fully supported (`privileges::VHF` 222–225 all-mode from Technician up, `band_for_dial`,
  * `cw_activity_mhz`, native + Q65/JT65 channels) and a 1.25 m rig could not be declared.
- * 33 cm is deliberately absent: `band_for_dial` cannot name a 902 MHz dial and the
- * privilege table has no 902–928 segment, so offering it would produce an unlabellable
- * frequency. Modes stay FT8/FT4 — the override table's own scope. */
-const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '23cm']
+ * The microwave rows (Batch 3): 33 cm's old exclusion rationale is gone — `band_for_dial`
+ * names 902 MHz and the privilege table carries 902–928 — and 13 cm/6 cm/3 cm/1.25 cm join
+ * for QO-100-class and terrestrial microwave stations (an IC-905 could not be declared).
+ * 9 cm is offered for coverage/routing but carries NO US privilege segments (allocation
+ * removed) — the picker shows it TX-locked for US classes, which is the honest answer.
+ * Modes stay FT8/FT4 — the override table's own scope. */
+const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm']
 const FREQ_MODES = ['FT8', 'FT4']
 
 /** The mode classes radio ROUTING decides on, with the operator-facing labels (must match the Rust

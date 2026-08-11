@@ -262,9 +262,9 @@ pub fn q65_band_plan() -> Vec<BandChannel> {
         ch("13cm-2", "VHF", 2304.065000, "USB", "13cm · Q65", n),
         ch("13cm-3", "VHF", 2320.065000, "USB", "13cm · Q65", n),
         ch("9cm", "VHF", 3400.065000, "USB", "9cm · Q65", n),
-        ch("5cm", "VHF", 5760.200000, "USB", "5cm · Q65", n),
+        ch("6cm", "VHF", 5760.200000, "USB", "6cm · Q65", n),
         ch("3cm", "VHF", 10368.200000, "USB", "3cm · Q65", n),
-        ch("1.2cm", "VHF", 24048.200000, "USB", "1.2cm · Q65", n),
+        ch("1.25cm", "VHF", 24048.200000, "USB", "1.25cm · Q65", n),
     ]
 }
 
@@ -330,7 +330,7 @@ pub fn jt65_band_plan() -> Vec<BandChannel> {
         ch("13cm-2", "VHF", 2304.065000, "USB", "13cm · JT65", n),
         ch("13cm-3", "VHF", 2320.065000, "USB", "13cm · JT65", n),
         ch("9cm", "VHF", 3400.065000, "USB", "9cm · JT65", n),
-        ch("5cm", "VHF", 5760.065000, "USB", "5cm · JT65", n),
+        ch("6cm", "VHF", 5760.065000, "USB", "6cm · JT65", n),
     ]
 }
 
@@ -410,7 +410,24 @@ pub fn band_for_dial(dial_mhz: f64) -> Option<&'static str> {
         f if (144.0..148.0).contains(&f) => "2m",
         f if (222.0..225.0).contains(&f) => "1.25m",
         f if (420.0..450.0).contains(&f) => "70cm",
+        f if (902.0..928.0).contains(&f) => "33cm",
         f if (1240.0..1300.0).contains(&f) => "23cm",
+        // The microwave bands (Batch 3, the QO-100 field report): ADIF's registered
+        // band names and edges, because `settings.band` reaches the ADIF BAND field and
+        // LoTW validates it — "13cm" spans BOTH US segments (2300–2310 / 2390–2450, the
+        // gap is privilege-gated, not band-gated), and 5760 is ADIF "6cm", not the
+        // colloquial "5cm". US TX privileges above 23 cm live in `privileges.rs` and are
+        // NOT implied by a label existing here — 9 cm carries a label (EU/QO-100-class
+        // operating, honest logging) with no US segments at all (the 3.3–3.5 GHz
+        // amateur allocation was removed).
+        f if (2300.0..2450.0).contains(&f) => "13cm",
+        f if (3300.0..3500.0).contains(&f) => "9cm",
+        f if (5650.0..5925.0).contains(&f) => "6cm",
+        f if (10_000.0..10_500.0).contains(&f) => "3cm",
+        f if (24_000.0..24_250.0).contains(&f) => "1.25cm",
+        // Everything higher (47 GHz+) stays None on purpose: `ab_cross_band_refusal`
+        // and the typed-dial commits fail closed on an unnamed dial, and that guard
+        // must keep holding for bands this table still does not know.
         _ => return None,
     };
     Some(b)
@@ -647,7 +664,7 @@ mod tests {
         // the loop above into a no-op.
         assert_eq!(
             cm_seen,
-            ["1.2cm", "13cm", "23cm", "33cm", "3cm", "5cm", "70cm", "9cm"],
+            ["1.25cm", "13cm", "23cm", "33cm", "3cm", "6cm", "70cm", "9cm"],
             "the centimetre channels Nexus ships"
         );
     }

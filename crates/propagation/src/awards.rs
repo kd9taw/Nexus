@@ -241,13 +241,21 @@ const VUCC_THRESHOLDS: &[(&str, usize)] = &[
     ("70cm", 50),
     ("33cm", 25),
     ("23cm", 25),
+    // ARRL VUCC: 2.3 GHz and above need 5 grids per band. All named since Batch 3
+    // (QO-100 downlink = 3 cm), 9 cm included — VUCC is an operating award and the
+    // band exists outside the US allocation table.
+    ("13cm", 5),
+    ("9cm", 5),
+    ("6cm", 5),
+    ("3cm", 5),
+    ("1.25cm", 5),
 ];
 
 /// Canonical listing order for the per-band grid table (HF tracker bands first,
 /// then the VUCC bands the DXCC [`Band`] enum does not carry).
 const GRID_BAND_ORDER: &[&str] = &[
     "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m",
-    "1.25m", "70cm", "33cm", "23cm",
+    "1.25m", "70cm", "33cm", "23cm", "13cm", "9cm", "6cm", "3cm", "1.25cm",
 ];
 
 /// Normalise a band label for grid keying: lowercase, trimmed. Grids key on the LABEL,

@@ -32,7 +32,16 @@ const BAND_RANGES: BandRange[] = [
   { lo: 144.0, hi: 148.0, label: '2m' },
   { lo: 222.0, hi: 225.0, label: '1.25m' },
   { lo: 420.0, hi: 450.0, label: '70cm' },
+  { lo: 902.0, hi: 928.0, label: '33cm' },
   { lo: 1240.0, hi: 1300.0, label: '23cm' },
+  // The microwave bands (Batch 3): ADIF band identities, mirroring band_for_dial —
+  // "13cm" spans both US privilege segments (the 2310–2390 gap is privilege-gated,
+  // not band-gated), 5760 is ADIF "6cm", and QO-100's legs live on 13cm/3cm.
+  { lo: 2300.0, hi: 2450.0, label: '13cm' },
+  { lo: 3300.0, hi: 3500.0, label: '9cm' },
+  { lo: 5650.0, hi: 5925.0, label: '6cm' },
+  { lo: 10000.0, hi: 10500.0, label: '3cm' },
+  { lo: 24000.0, hi: 24250.0, label: '1.25cm' },
 ]
 
 /**

@@ -9456,6 +9456,16 @@ fn get_licensed_band_plan(
         ("2m", "VHF"),
         ("1.25m", "VHF"),
         ("70cm", "UHF"),
+        // Batch 3: the named microwave bands. Per-class privilege filtering below keeps
+        // each operator's dropdown honest automatically — a band whose class holds no
+        // segment (9 cm for every US class) is omitted for them and present for Open.
+        ("33cm", "UHF"),
+        ("23cm", "UHF"),
+        ("13cm", "UHF"),
+        ("9cm", "UHF"),
+        ("6cm", "UHF"),
+        ("3cm", "UHF"),
+        ("1.25cm", "UHF"),
     ];
     let eng = engine_lock(&state);
     let class = eng.settings().license_class;
@@ -16920,14 +16930,25 @@ mod tests {
             // the grid falls out exactly as 70 cm does.
             ("1.25m", 222.130, false),
             ("70cm", 436.795, false),
+            ("33cm", 903.100, false),
             ("23cm", 1296.200, false),
+            // Batch 3's microwave bands: no DXCC `Band` variant (the enum tops
+            // out at 2 m by design), so their grids land in the label-keyed
+            // tracker exactly as 70 cm does — and each is a REAL ARRL VUCC
+            // band (threshold 5 at 2.3 GHz and above; QO-100's legs live on
+            // 13 cm / 3 cm).
+            ("13cm", 2400.150, false),
+            ("9cm", 3400.100, false),
+            ("6cm", 5760.200, false),
+            ("3cm", 10489.550, false),
+            ("1.25cm", 24048.200, false),
         ];
 
         // The census is every label the app can produce, not a hand-picked
         // sample: sweep the dial and let `band_for_dial` name the set.
         let mut produced: Vec<&'static str> = Vec::new();
         let mut mhz = 1.0;
-        while mhz < 1400.0 {
+        while mhz < 24_300.0 {
             if let Some(b) = tempo_app::bandplan::band_for_dial(mhz) {
                 if !produced.contains(&b) {
                     produced.push(b);

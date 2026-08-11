@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The band system now reaches 24 GHz.** The band table, the frequency pickers, the
+  override editor and the typed-dial entry all know 33 cm, 13 cm, 9 cm, 6 cm, 3 cm and
+  1.25 cm — ADIF's registered names, so a QO-100 contact finally logs `BAND:3cm` instead
+  of an empty field LoTW rejects. US transmit privileges follow the regulation exactly:
+  Technician-and-above segments for 33 cm, both 13 cm segments (the 2310–2390 gap between
+  them stays locked — it isn't amateur spectrum), 6 cm, 3 cm and 1.25 cm; 9 cm carries a
+  band label but no US privileges (that allocation was removed), so it reads TX LOCKED for
+  US classes and works normally for Open-class operators. Each license class's band
+  dropdown shows only its own bands, exactly as on HF. The microwave bands also join the
+  per-band grid tracker as the real ARRL VUCC bands they are (5 grids each at 2.3 GHz and
+  up). A provably same-band 10 GHz satellite split is now allowed on the Main/Sub Icoms
+  (both legs are named and equal — the old refusal said "could not confirm", and now it
+  can); a cross-band or off-table split still refuses. Above 24.25 GHz everything still
+  fails closed. From the QO-100 field report.
+
 - **A real blocklist — and your auto-responder honors it.** Alt-double-click a decode or
   roster row and the call goes on a persistent blocked list (it survives restarts; the
   same list is editable under Settings ▸ Modes ▸ Auto-CQ & Caller Selection). While you

@@ -2463,7 +2463,15 @@ impl RadioLoop {
             return;
         }
         let band_of = |hz: u64| tempo_app::bandplan::band_for_dial(hz as f64 / 1e6);
-        if prev_dial == 0 || band_of(prev_dial) == band_of(dial) {
+        // ⚠️ `None == None` is NOT "in-band": two dials the table cannot name (47 GHz+,
+        // or one named and one not) may sit on different rig band registers, and reading
+        // the equality as same-band skipped the mode re-assert exactly where the rig's
+        // band-stacking memory is least predictable. Only two EQUAL NAMED bands skip.
+        let same_named_band = matches!(
+            (band_of(prev_dial), band_of(dial)),
+            (Some(a), Some(b)) if a == b
+        );
+        if prev_dial == 0 || same_named_band {
             return; // in-band: the a85f39ac order alone is complete
         }
         let Some(reported) = rig.read_mode() else {
