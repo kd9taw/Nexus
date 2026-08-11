@@ -11551,6 +11551,22 @@ const HRDLOG_APP_NAME: &str = "Nexus";
 /// stop re-POSTing every QSO (ClubLog IP-blocks repeated auth failures); reset when
 /// the operator changes a ClubLog credential.
 static CLUBLOG_SUSPENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Announce-once latch for the "no ClubLog credentials" pause — reset when credentials
+/// become ready so the notice re-arms for the next dry spell (F4MQS storm fix).
+static CLUBLOG_NO_CREDS_ANNOUNCED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Are ALL the ClubLog credentials present (email + API key + app-password)? A missing one
+/// is an operator-fixable Settings gap, not a transient network failure — the worker skips
+/// the leg session-wide rather than retrying it per QSO. `email`/`key` come from the
+/// settings snapshot the caller already holds; only the keychain read is done here.
+fn clublog_credentials_ready(email: &str, effective_key: &str) -> bool {
+    !email.trim().is_empty()
+        && !effective_key.is_empty()
+        && clublog_keychain()
+            .map(|e| e.get_password().is_ok())
+            .unwrap_or(false)
+}
 
 /// One connectivity event for the Settings ▸ Connections log — the answer to
 /// "I hit save / it synced / it failed and I couldn't tell". Every connector
@@ -12878,12 +12894,29 @@ fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Res
         set_upload_toggle(&state, UploadToggle::Clublog, false);
         return Ok(());
     }
-    // A real credential change re-arms auto-push (clears the 403 suspend latch).
+    // A real credential change re-arms auto-push (clears the 403 suspend latch) and the
+    // no-credentials announce latch, so the next dry spell is announced again.
     CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+    CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
     entry
         .set_password(&password)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("ClubLog", "ok", "app-password saved to the OS keychain");
+    // CATCH-UP (F4MQS): entering the credential the QSOs were failing on is the moment to
+    // re-send them — scan the log for ClubLog uploads that never succeeded and re-queue
+    // their ClubLog leg. Without this, every QSO logged before the password was stored
+    // stayed un-uploaded with nothing to flag it.
+    let requeued = {
+        let mut eng = engine_lock(&state);
+        eng.requeue_failed_clublog()
+    };
+    if requeued > 0 {
+        conn_log(
+            "ClubLog",
+            "info",
+            format!("app-password saved — re-queued {requeued} un-uploaded QSO(s) for ClubLog"),
+        );
+    }
     set_upload_toggle(&state, UploadToggle::Clublog, true);
     Ok(())
 }
@@ -15145,11 +15178,11 @@ pub fn run() {
         let push_engine = engine.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            let (recs, qrz_on, clublog_on, eqsl_on, hrdlog_on, n3fjp_on, cloudlog_on, dxk) = {
+            let (recs, qrz_on, clublog_on, eqsl_on, hrdlog_on, n3fjp_on, cloudlog_on, dxk, cl_email, cl_key) = {
                 // Recover a poisoned lock (conn_log pattern) — a panicked command
                 // holding the engine must not silently kill auto-upload forever.
                 let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                let (q, c, e, h, n, cl, dxk) = {
+                let (q, c, e, h, n, cl, dxk, cl_email, cl_key) = {
                     let s = eng.settings();
                     (
                         s.qrz_logbook_upload,
@@ -15168,6 +15201,8 @@ pub fn run() {
                                 s.dxkeeper_uploads,
                             )
                         }),
+                        s.clublog_email.clone(),
+                        effective_clublog_key(&s.clublog_api_key),
                     )
                 };
                 // DXKeeper counts toward "anything enabled" — otherwise a station using ONLY
@@ -15181,13 +15216,53 @@ pub fn run() {
                     // recent QSOs — log-first-configure-later must not lose them.
                     continue;
                 }
-                (eng.take_pending_uploads(), q, c, e, h, n, cl, dxk)
+                (
+                    eng.take_pending_uploads(),
+                    q,
+                    c,
+                    e,
+                    h,
+                    n,
+                    cl,
+                    dxk,
+                    cl_email,
+                    cl_key,
+                )
             };
             // ClubLog suspended (403 latch): skip that leg instead of erroring
             // per QSO — the suspension was announced once; re-push covers later.
-            let clublog_live =
-                clublog_on && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
+            //
+            // A MISSING credential is the same shape as the latch, NOT a per-QSO transient
+            // (the F4MQS storm: no app-password stored → the leg's Err was retried every
+            // 2 s, 20 times, same message, then the QSO was silently dropped). Credentials
+            // cannot heal without an operator visit to Settings, so skip the leg session-
+            // wide and announce ONCE — save_settings/set_clublog_password clear the flag,
+            // and the credential-change rescan re-queues what was skipped.
+            let creds_ready = clublog_credentials_ready(&cl_email, &cl_key);
+            if clublog_on && !creds_ready && !CLUBLOG_NO_CREDS_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                conn_log(
+                    "ClubLog",
+                    "error",
+                    "auto-upload paused — no ClubLog credentials stored (set them in Settings ▸ Confirmations)",
+                );
+            }
+            if creds_ready {
+                CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            let clublog_live = clublog_on
+                && creds_ready
+                && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
+            let now_unix = now_unix();
             for p in recs {
+                // BACKOFF: a record not yet due goes back on the queue untouched — no push,
+                // no attempt spent, no toast. This is what turns 20-in-40-seconds into one
+                // push every few minutes for a genuinely-down service.
+                if p.retry_after_unix > now_unix {
+                    let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                    eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix);
+                    continue;
+                }
                 let rec = p.rec.clone();
                 // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
                 // acknowledges, so there is no success to distinguish from failure and
@@ -15216,8 +15291,10 @@ pub fn run() {
                 // the legs that failed so the next tick retries them, without
                 // re-pushing the legs that already succeeded (no double-upload).
                 if failed != 0 {
+                    let attempts = p.attempts.saturating_add(1);
+                    let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
                     let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                    eng.requeue_upload(rec, failed, p.attempts.saturating_add(1));
+                    eng.requeue_upload_at(rec, failed, attempts, due);
                 }
             }
         });

@@ -928,6 +928,20 @@ pub struct PendingUpload {
     /// Retry count — a record is dropped once it hits [`MAX_UPLOAD_RETRIES`] so a
     /// perpetually-failing service can't pin it in the queue forever.
     pub attempts: u8,
+    /// Earliest wall-clock (Unix secs) the worker may retry this record — exponential
+    /// backoff so a genuinely-transient failure (service busy, network blip) is retried
+    /// with widening gaps instead of hammered once per 2 s tick. `0` = due now (a fresh
+    /// log, no prior failure). See [`upload_backoff_secs`].
+    pub retry_after_unix: i64,
+}
+
+/// Backoff delay (secs) before the `attempts`-th retry: 2·2^(attempts-1), capped at
+/// 300 s. attempts 1→4 s, 2→8 s, …, 8→256 s, then flat 300 s. A transient service that
+/// stays down therefore costs ~1 push every few minutes, not 20 in 40 seconds (the
+/// F4MQS report), and the record still expires at [`MAX_UPLOAD_RETRIES`].
+pub fn upload_backoff_secs(attempts: u8) -> i64 {
+    let a = attempts.clamp(1, 8) as u32;
+    (2_i64 << a).min(300)
 }
 
 /// Give up on a queued upload after this many transient-failure retries (~1 per
@@ -6241,6 +6255,7 @@ impl Engine {
             rec,
             legs: upload_legs::ALL,
             attempts: 0,
+            retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
         });
         self.station.refresh_worked_index();
     }
@@ -13399,6 +13414,23 @@ impl Engine {
         self.station.requeue_upload(rec, legs, attempts)
     }
 
+    /// See [`StationCore::requeue_upload_at`].
+    pub fn requeue_upload_at(
+        &mut self,
+        rec: tempo_core::logbook::QsoRecord,
+        legs: u8,
+        attempts: u8,
+        retry_after_unix: i64,
+    ) {
+        self.station
+            .requeue_upload_at(rec, legs, attempts, retry_after_unix)
+    }
+
+    /// See [`StationCore::requeue_failed_clublog`].
+    pub fn requeue_failed_clublog(&mut self) -> usize {
+        self.station.requeue_failed_clublog()
+    }
+
     /// See [`StationCore::note_upload`].
     pub fn note_upload(&mut self, note: impl Into<String>, ok: bool) {
         self.station.note_upload(note, ok)
@@ -18536,6 +18568,60 @@ mod tests {
     /// POTA activation could not tell the two operators' contacts apart without hand-editing the
     /// exported ADIF. Same funnel argument as the state fill above: every logging path goes
     /// through `log_qso`.
+    #[test]
+    fn upload_backoff_widens_then_caps() {
+        // The F4MQS storm fix: a genuinely-transient failure retries with WIDENING gaps
+        // (not once per 2 s tick), capped so a long outage stays polite.
+        assert_eq!(upload_backoff_secs(1), 4);
+        assert_eq!(upload_backoff_secs(2), 8);
+        assert_eq!(upload_backoff_secs(3), 16);
+        assert_eq!(upload_backoff_secs(7), 256);
+        assert_eq!(upload_backoff_secs(8), 300, "capped");
+        assert_eq!(
+            upload_backoff_secs(20),
+            300,
+            "still capped past the cap rung"
+        );
+    }
+
+    #[test]
+    fn a_credential_fix_requeues_the_clublog_qsos_that_never_uploaded() {
+        // THE F4MQS GAP: QSOs logged before the app-password was stored stayed
+        // un-uploaded with nothing flagging them, and fixing the password retried
+        // NOTHING. `requeue_failed_clublog` (called from set_clublog_password) picks up
+        // exactly the records whose ClubLog upload never succeeded, and only those.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for call in ["W9XYZ", "K1ABC", "N7GHI"] {
+            let rec = e.qso_record(call.into(), None, None);
+            e.log_qso(rec);
+        }
+        // Drain the fresh-log queue so we're testing the CATCH-UP, not first-attempt.
+        e.take_pending_uploads();
+        assert!(e.take_pending_uploads().is_empty(), "queue drained");
+
+        // One QSO already succeeded on ClubLog (duplicate = sent); the other two never did.
+        let sent = e.get_log()[0].clone();
+        e.stamp_clublog_upload(
+            &sent,
+            tempo_core::logbook::UploadOutcome::Duplicate,
+            now_unix_secs() as i64,
+            None,
+        );
+
+        let n = e.requeue_failed_clublog();
+        assert_eq!(n, 2, "only the two that never succeeded are re-queued");
+        let queued = e.take_pending_uploads();
+        assert_eq!(queued.len(), 2);
+        assert!(
+            queued.iter().all(|p| p.legs == upload_legs::CLUBLOG),
+            "only the ClubLog leg is owed — the catch-up must not re-push QRZ/eQSL etc."
+        );
+        assert!(
+            queued.iter().all(|p| p.retry_after_unix == 0),
+            "the catch-up is due immediately, no backoff"
+        );
+    }
+
     #[test]
     fn log_qso_stamps_the_operator_at_the_key() {
         let mut e = Engine::new("K2DEF", "FN31", 0);

@@ -515,17 +515,56 @@ impl StationCore {
     /// already succeeded — a permanently-rejected or successful leg is never in
     /// `legs`. Dropped once past [`MAX_UPLOAD_RETRIES`] or with nothing owed.
     pub fn requeue_upload(&mut self, rec: tempo_core::logbook::QsoRecord, legs: u8, attempts: u8) {
+        self.requeue_upload_at(rec, legs, attempts, 0);
+    }
+
+    /// As [`requeue_upload`](Self::requeue_upload) but stamping when the record is next
+    /// DUE — the exponential-backoff not-before time the worker honours. `now_unix + 0`
+    /// means "due immediately"; the transient-retry path passes `now + upload_backoff_secs`.
+    pub fn requeue_upload_at(
+        &mut self,
+        rec: tempo_core::logbook::QsoRecord,
+        legs: u8,
+        attempts: u8,
+        retry_after_unix: i64,
+    ) {
         if legs == 0 || attempts >= MAX_UPLOAD_RETRIES {
             return;
         }
         if self.pending_uploads.len() >= 256 {
             self.pending_uploads.pop_front();
         }
-        self.pending_uploads.push_back(PendingUpload {
-            rec,
-            legs,
-            attempts,
-        });
+        self.pending_uploads
+            .push_back(crate::engine::PendingUpload {
+                rec,
+                legs,
+                attempts,
+                retry_after_unix,
+            });
+    }
+
+    /// Re-queue the CLUBLOG leg of every logged QSO whose ClubLog upload has NOT succeeded
+    /// (never stamped, or stamped a failure) — the F4MQS "nothing retried after I fixed the
+    /// password" gap. Bounded and due-now. Returns how many were queued.
+    pub fn requeue_failed_clublog(&mut self) -> usize {
+        let stale: Vec<tempo_core::logbook::QsoRecord> = self
+            .logbook
+            .records()
+            .iter()
+            .filter(|r| {
+                !r.upload
+                    .clublog
+                    .as_ref()
+                    .is_some_and(|u| u.outcome.is_sent())
+            })
+            .take(256)
+            .cloned()
+            .collect();
+        let n = stale.len();
+        for rec in stale {
+            self.requeue_upload_at(rec, crate::engine::upload_legs::CLUBLOG, 0, 0);
+        }
+        n
     }
 
     /// Record a connector-upload outcome for the operator (toast text + level).
