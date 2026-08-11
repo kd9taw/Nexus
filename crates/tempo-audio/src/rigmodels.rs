@@ -205,6 +205,9 @@ fn extended_rig_models() -> Vec<(u32, &'static str)> {
         (1023, "Yaesu FT-897"),
         (1027, "Yaesu FT-450"),
         (1014, "Yaesu FT-920"),
+        // Verified against the BUNDLED rigctl.exe -l (Stable backend): the vintage-rig
+        // field ask — an FT-890 owner could already type 1015, now the picker names it.
+        (1015, "Yaesu FT-890"),
         (1030, "Yaesu FTDX9000"),
         (1004, "Yaesu FT-1000MP Mark-V"),
         (1016, "Yaesu FT-990"),
