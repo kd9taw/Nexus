@@ -30,7 +30,8 @@ import {
   type OffsetDir,
   type ToneMode,
 } from '../features/memories'
-import { kmToMi, octant } from '../features/radioprog'
+import { octant } from '../features/radioprog'
+import { fmtDistanceKm, useUnits, type Units } from '../units'
 import { importPack, STARTER_PACKS, type Pack } from '../features/packs'
 import { saveTextToDownloads } from '../api'
 import { pushToast } from '../toast'
@@ -116,7 +117,7 @@ function CommitInput({
 }
 
 /** One-line offset/tone summary for a row ("−0.600 · 103.5" / "→52.030"). */
-function rowSummary(m: Memory, myGrid: string): string {
+function rowSummary(m: Memory, myGrid: string, units: Units): string {
   const parts: string[] = []
   if (m.offsetDir === 'plus' || m.offsetDir === 'minus') {
     parts.push(`${m.offsetDir === 'plus' ? '+' : '−'}${(m.offsetMhz ?? 0).toFixed(3)}`)
@@ -130,7 +131,7 @@ function rowSummary(m: Memory, myGrid: string): string {
   if (m.net) parts.push(`${m.net.days.map((d) => DAY_LABELS[d]).join('')} ${m.net.utcTime}z`)
   // Repeaters starred from the Program picker know where they physically are.
   const off = siteOffset(m, myGrid)
-  if (off) parts.push(`${Math.round(kmToMi(off.km))} mi ${octant(off.bearing)}`)
+  if (off) parts.push(`${fmtDistanceKm(off.km, units)} ${octant(off.bearing)}`)
   return parts.join(' · ')
 }
 
@@ -142,6 +143,7 @@ export function MemoriesView({
   onPopOut,
 }: MemoriesViewProps) {
   const bank = useMemories()
+  const units = useUnits()
   const [sel, setSel] = useState<Selection>('all')
   const [q, setQ] = useState('')
   const [grid, setGrid] = useState(false)
@@ -912,7 +914,7 @@ export function MemoriesView({
                         onCommit={(v) => editRow(m.id, { mode: v })}
                       />
                     </td>
-                    <td className="mv-ro">{rowSummary(m, myGrid) || '—'}</td>
+                    <td className="mv-ro">{rowSummary(m, myGrid, units) || '—'}</td>
                     <td className="mv-ro">
                       {m.toneMode && m.toneMode !== 'none' ? m.toneMode.toUpperCase() : '—'}
                     </td>
@@ -981,7 +983,7 @@ export function MemoriesView({
                     <span className="mv-row-freq">
                       {m.rxMhz.toFixed(m.rxMhz >= 100 ? 3 : 4)} {m.mode}
                     </span>
-                    {rowSummary(m, myGrid) && <span className="mv-row-sum">{rowSummary(m, myGrid)}</span>}
+                    {rowSummary(m, myGrid, units) && <span className="mv-row-sum">{rowSummary(m, myGrid, units)}</span>}
                     {m.groups.map((gid) => {
                       const g = bank.groups.find((x) => x.id === gid)
                       return g ? (

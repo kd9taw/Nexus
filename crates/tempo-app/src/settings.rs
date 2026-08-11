@@ -1126,6 +1126,12 @@ pub struct Settings {
     /// + QRP feats. `None` until the operator sets it (those feats stay gated).
     #[serde(default)]
     pub station_power_w: Option<f64>,
+    /// Display units for distances/temperature/speed (F4MQS): `"auto"` (from the OS
+    /// locale — imperial only for US/LR/MM), `"metric"`, or `"imperial"`. Display-only —
+    /// every wire/protocol value stays native (APRS transmits °F/mph, RepeaterBook fetches
+    /// km). Default auto.
+    #[serde(default = "default_units")]
+    pub units: String,
     /// Per-mode RF-power CEILING as a 0.0–1.0 fraction of the rig's max — a SAFETY cap, not a
     /// convenience. A 100%-duty mode (FT8/FT4/RTTY) at a level that's fine for SSB's ~25% duty
     /// can cook a finals stage or a linear. `None` = uncapped (full power, unchanged behavior).
@@ -1637,6 +1643,10 @@ fn default_cw_key_line() -> String {
 /// Default CW sending speed (WPM) — matches the engine's historical seed.
 fn default_cw_wpm() -> u32 {
     25
+}
+
+fn default_units() -> String {
+    "auto".to_string()
 }
 
 fn default_rtty_backend() -> String {
@@ -2479,6 +2489,7 @@ impl Default for Settings {
             monitor_device: String::new(),
             monitor_level: 0.5,
             station_power_w: None,
+            units: default_units(),
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,

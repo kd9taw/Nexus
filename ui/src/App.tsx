@@ -43,6 +43,7 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast } from './toast'
+import { setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
@@ -878,6 +879,13 @@ export default function App() {
   const reloadSettings = useCallback(() => {
     getSettings().then(setSettings).catch(() => {})
   }, [])
+
+  // Mirror the units setting to localStorage so the display helpers (many called from
+  // components that never receive the full settings object) resolve it synchronously via
+  // useUnits() — the app-global pattern the country exclude uses. (F4MQS.)
+  useEffect(() => {
+    setUnitsMirror(settings?.units)
+  }, [settings?.units])
 
   // initial load + live subscription
   useEffect(() => {

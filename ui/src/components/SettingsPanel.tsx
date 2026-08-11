@@ -4997,6 +4997,26 @@ export function SettingsPanel({
                     Leave blank if unknown.
                   </span>
                 </div>
+
+                <div className="settings-field">
+                  <label className="settings-label" htmlFor="units">
+                    Units
+                  </label>
+                  <select
+                    id="units"
+                    className="settings-input"
+                    value={form.units ?? 'auto'}
+                    onChange={(e) => update('units', e.target.value)}
+                  >
+                    <option value="auto">Automatic (from your system)</option>
+                    <option value="metric">Metric (km, °C)</option>
+                    <option value="imperial">Imperial (mi, °F)</option>
+                  </select>
+                  <span className="settings-hint">
+                    Distances, temperature and wind speed. Automatic follows your operating
+                    system's region. Applies everywhere in the app immediately.
+                  </span>
+                </div>
               </div>
             </div>
           </fieldset>

@@ -1,6 +1,8 @@
 // Minimal Maidenhead grid -> lat/lon and great-circle distance helpers,
 // used only to show a rough "distance" badge on station cards.
 
+import { fmtDistanceKm, type Units } from './units'
+
 export interface LatLon {
   lat: number
   lon: number
@@ -97,16 +99,20 @@ export function stationLatLon(
 }
 
 /** Distance between two RESOLVED points, in statute miles (the unit QRZ shows). */
-export function distanceLabelAt(a: LatLon, b: LatLon): string {
-  return `${Math.round(haversineKm(a, b) * 0.621371)} mi`
+export function distanceLabelAt(a: LatLon, b: LatLon, units: Units = 'imperial'): string {
+  return fmtDistanceKm(haversineKm(a, b), units)
 }
 
-export function distanceLabel(myGrid: string, peerGrid: string | null): string | null {
+export function distanceLabel(
+  myGrid: string,
+  peerGrid: string | null,
+  units: Units = 'imperial',
+): string | null {
   if (!peerGrid) return null
   const me = gridToLatLon(myGrid)
   const them = gridToLatLon(peerGrid)
   if (!me || !them) return null
-  return distanceLabelAt(me, them)
+  return distanceLabelAt(me, them, units)
 }
 
 /** Initial great-circle bearing (degrees, 0–359) from `a` to `b`. */

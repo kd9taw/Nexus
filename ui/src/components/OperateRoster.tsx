@@ -9,6 +9,7 @@ import { withErrorToast } from '../toast'
 import { useRovingList } from '../useRovingList'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
+import { useUnits } from '../units'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
 import { alertsForSurface, chaseRank, strongestNeed } from '../features/needs'
@@ -104,6 +105,7 @@ export function OperateRoster({
 }: Props) {
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass
   // heading a rotator zeroed on magnetic north needs.
+  const units = useUnits()
   const [declination, setDeclination] = useState<number | null>(null)
   useEffect(() => {
     getDeclination()
@@ -436,7 +438,7 @@ export function OperateRoster({
                 </span>
                 <span className="or-country">{s.country ?? '—'}</span>
                 <span className="or-gridc">{s.grid ?? '—'}</span>
-                <span className="or-dist">{distanceLabel(myGrid, s.grid) ?? '—'}</span>
+                <span className="or-dist">{distanceLabel(myGrid, s.grid, units) ?? '—'}</span>
                 <span
                   className="or-brg"
                   title={(() => {

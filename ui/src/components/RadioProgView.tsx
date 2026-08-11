@@ -40,6 +40,7 @@ import {
   sanitizeName,
 } from '../features/radioprog'
 import { gridToLatLon, isValidGrid } from '../grid'
+import { fmtDistanceKm, useUnits } from '../units'
 import { Dialog } from './ui/Dialog'
 import { pushToast } from '../toast'
 
@@ -113,6 +114,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const [cityPick, setCityPick] = useState<GeoCandidate | null>(null)
   const [cityCands, setCityCands] = useState<GeoCandidate[]>([])
   const [geoBusy, setGeoBusy] = useState(false)
+  const units = useUnits()
   const [radiusMi, setRadiusMi] = useState<number | 'auto'>('auto')
   const [bands, setBands] = useState<string[]>(['2m', '70cm'])
   const [showDigital, setShowDigital] = useState(false)
@@ -574,7 +576,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 className={`filter-chip${radiusMi === mi ? ' active' : ''}`}
                 onClick={() => setRadiusMi(mi)}
               >
-                {mi} mi
+                {fmtDistanceKm(mi * 1.609344, units)}
               </button>
             ))}
             <button
@@ -587,7 +589,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             </button>
             {radiusMi === 'auto' && (
               <span className="rp-hint">
-                = {effRadiusMi} mi ({bands.length ? bands.join('+') : 'all bands'})
+                = {fmtDistanceKm(effRadiusMi * 1.609344, units)} ({bands.length ? bands.join('+') : 'all bands'})
               </span>
             )}
           </div>
@@ -600,7 +602,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               disabled={!origin || fetching}
               title={
                 origin
-                  ? `Fetch repeaters within ${effRadiusMi} mi`
+                  ? `Fetch repeaters within ${fmtDistanceKm(effRadiusMi * 1.609344, units)}`
                   : 'Pick a valid origin first (grid or city)'
               }
             >
@@ -706,14 +708,14 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             )}
             {result && shown.length === 0 && (
               <p className="aw-empty">
-                No {showDigital ? '' : 'FM '}repeaters within {effRadiusMi} mi.
+                No {showDigital ? '' : 'FM '}repeaters within {fmtDistanceKm(effRadiusMi * 1.609344, units)}.
                 {radiusMi !== 200 && (
                   <button
                     type="button"
                     className="filter-chip"
                     onClick={() => setRadiusMi(radiusMi === 'auto' ? 100 : 200)}
                   >
-                    Try {radiusMi === 'auto' ? 100 : 200} mi
+                    Try {fmtDistanceKm((radiusMi === 'auto' ? 100 : 200) * 1.609344, units)}
                   </button>
                 )}
                 {!showDigital && (
@@ -748,7 +750,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     {toneLabel(c)}
                   </span>
                   <span className="rp-dist mono" role="cell" title={`${r.city}${r.state ? `, ${r.state}` : ''}`}>
-                    {Math.round(r.distanceKm / 1.609344)} mi {octant(r.bearingDeg)}
+                    {fmtDistanceKm(r.distanceKm, units)} {octant(r.bearingDeg)}
                   </span>
                   <span className="rp-badges" role="cell">
                     {badge && <span className="pota-badge rp-mode-badge">{badge}</span>}

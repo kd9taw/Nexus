@@ -49,7 +49,10 @@ const card = (over: Partial<AprsStation> = {}, me: typeof ME | null = ME) =>
   render(<AprsStationCard station={stn(over)} nowSec={NOW} me={me} onClose={() => {}} />)
 
 afterEach(cleanup)
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  localStorage.setItem('nexus.units', 'imperial')
+})
 
 describe('pure helpers', () => {
   it('altitude comes off the /A= comment token, including below sea level', () => {
@@ -135,7 +138,7 @@ describe('render states', () => {
     expect(screen.getByText('W9AA-9')).toBeTruthy()
     expect(screen.getByText('Car')).toBeTruthy()
     expect(screen.getByText(/41\.9000, -87\.6000/)).toBeTruthy()
-    expect(screen.getByText(/km/)).toBeTruthy()
+    expect(screen.getByText(/mi /)).toBeTruthy()
     expect(screen.getByText('rolling along')).toBeTruthy()
   })
 
@@ -175,7 +178,7 @@ describe('render states', () => {
       },
     })
     expect(screen.getByText('Weather')).toBeTruthy()
-    expect(screen.getByText('85 °F')).toBeTruthy()
+    expect(screen.getByText('85°F')).toBeTruthy()
     expect(screen.getByText('11 mph')).toBeTruthy()
     expect(screen.getByText('1015.6 hPa')).toBeTruthy()
     expect(screen.getByText(/SW 220/)).toBeTruthy()

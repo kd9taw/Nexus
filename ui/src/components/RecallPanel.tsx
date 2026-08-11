@@ -3,6 +3,7 @@ import type { CallHistory } from '../features/callHistory'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '../grid'
+import { useUnits } from '../units'
 
 interface Props {
   call: string
@@ -70,6 +71,7 @@ function initials(call: string): string {
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
 export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot }: Props) {
+  const units = useUnits()
   const c = call.trim()
   if (c.length < 3) return null
   const cu = c.toUpperCase()
@@ -82,7 +84,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
   // input QRZ derives ITS figures from), else the center of a reported grid square.
   const me = myGrid ? gridToLatLon(myGrid) : null
   const them = stationLatLon(lat != null && lon != null ? { lat, lon } : null, grid)
-  const geo = me && them ? `${distanceLabelAt(me, them)} · ${bearingLabelAt(me, them)}` : ''
+  const geo = me && them ? `${distanceLabelAt(me, them, units)} · ${bearingLabelAt(me, them)}` : ''
   // Name whichever side is still a SQUARE rather than a point. A 4-character locator is
   // ±1° of longitude — a degree or so on a DX path, but up to ~29° on a station ~125 miles
   // away, and the reason a grid-derived heading disagrees with QRZ's. Saying so is what

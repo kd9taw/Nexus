@@ -59,6 +59,8 @@ export const PER_SURFACE = [
 /** Keys that describe the STATION or the PERSON and must never be scoped. Listed rather
  *  than inferred so a failure names the key that leaked. */
 const SHARED = [
+  // Display units: one preference the whole station shares, like the country exclude.
+  'nexus.units',
   'nexus.navOrder', // left-rail section order — a person/station preference, same in every window
   'nexus-density',
   // Field mode: being outdoors is a fact about the STATION, not a window — a pop-out beside

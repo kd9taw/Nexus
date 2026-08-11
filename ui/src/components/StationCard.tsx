@@ -2,6 +2,7 @@ import type { NeedTag, Station, Tier } from '../types'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { bearingLabel, distanceLabel } from '../grid'
+import { useUnits } from '../units'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP } from '../features/needVisuals'
 
@@ -42,7 +43,8 @@ export function StationCard({
   onSelect,
   onCall,
 }: Props) {
-  const dist = distanceLabel(myGrid, station.grid)
+  const units = useUnits()
+  const dist = distanceLabel(myGrid, station.grid, units)
   const bearing = bearingLabel(myGrid, station.grid)
   // Top need drives the row's dominant colour; needAll drives the chips.
   const chip = need ? NEED_CHIP[need] : null

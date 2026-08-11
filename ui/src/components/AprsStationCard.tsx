@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { openQrzPage, type AprsStation } from '../api'
 import { withErrorToast } from '../toast'
+import { fmtTempF, fmtSpeedMph, fmtRainIn, fmtDistanceKm, useUnits, type Units } from '../units'
 import { latLonToGrid, bearingDeg, haversineKm, type LatLon } from '../grid'
 import {
   CATEGORY_VAR,
@@ -91,22 +92,27 @@ export function pathSummary(path: string[]): string {
   return `digipeated via ${repeated.join(', ')}`
 }
 
-/** Weather readings as label/value rows, omitting anything the station has no sensor for. */
-export function wxRows(wx: NonNullable<AprsStation['wx']>): [string, string][] {
+/** Weather readings as label/value rows, omitting anything the station has no sensor for.
+ *  APRS transmits °F/mph/inches natively (the wire values are untouched); `units` only
+ *  chooses how they display (F4MQS). Pressure is always hPa. */
+export function wxRows(
+  wx: NonNullable<AprsStation['wx']>,
+  units: Units = 'imperial',
+): [string, string][] {
   const rows: [string, string][] = []
-  if (wx.tempF != null) rows.push(['Temperature', `${wx.tempF} °F`])
+  if (wx.tempF != null) rows.push(['Temperature', fmtTempF(wx.tempF, units)])
   if (wx.windDirDeg != null || wx.windMph != null) {
     const dir = wx.windDirDeg != null ? `${compass(wx.windDirDeg)} ${wx.windDirDeg}°` : 'unknown'
-    const spd = wx.windMph != null ? `${wx.windMph} mph` : ''
+    const spd = wx.windMph != null ? fmtSpeedMph(wx.windMph, units) : ''
     rows.push(['Wind', `${dir}${spd ? ` at ${spd}` : ''}`])
   }
-  if (wx.gustMph != null) rows.push(['Gust', `${wx.gustMph} mph`])
+  if (wx.gustMph != null) rows.push(['Gust', fmtSpeedMph(wx.gustMph, units)])
   if (wx.humidityPct != null) rows.push(['Humidity', `${wx.humidityPct}%`])
   if (wx.pressureTenthHpa != null) {
     rows.push(['Pressure', `${(wx.pressureTenthHpa / 10).toFixed(1)} hPa`])
   }
-  if (wx.rain1hIn100 != null) rows.push(['Rain, last hour', `${(wx.rain1hIn100 / 100).toFixed(2)} in`])
-  if (wx.rain24hIn100 != null) rows.push(['Rain, 24 h', `${(wx.rain24hIn100 / 100).toFixed(2)} in`])
+  if (wx.rain1hIn100 != null) rows.push(['Rain, last hour', fmtRainIn(wx.rain1hIn100 / 100, units)])
+  if (wx.rain24hIn100 != null) rows.push(['Rain, 24 h', fmtRainIn(wx.rain24hIn100 / 100, units)])
   return rows
 }
 
@@ -122,6 +128,7 @@ export function AprsStationCard({
   me: LatLon | null
   onClose: () => void
 }) {
+  const units = useUnits()
   const [rawOpen, setRawOpen] = useState(false)
   const cardRef = useRef<HTMLDivElement | null>(null)
   const sym = resolveSymbol(st.symbolTable, st.symbolCode)
@@ -210,7 +217,7 @@ export function AprsStationCard({
               <div className="aprs-card-row">
                 <dt>From you</dt>
                 <dd>
-                  {Math.round(haversineKm(me, there))} km {compass(bearingDeg(me, there))} ·{' '}
+                  {fmtDistanceKm(haversineKm(me, there), units)} {compass(bearingDeg(me, there))} ·{' '}
                   {Math.round(bearingDeg(me, there))}°
                 </dd>
               </div>
@@ -257,11 +264,11 @@ export function AprsStationCard({
         </div>
       </dl>
 
-      {st.wx && wxRows(st.wx).length > 0 && (
+      {st.wx && wxRows(st.wx, units).length > 0 && (
         <div className="aprs-card-wx">
           <span className="aprs-card-section">Weather</span>
           <dl className="aprs-card-rows">
-            {wxRows(st.wx).map(([k, v]) => (
+            {wxRows(st.wx, units).map(([k, v]) => (
               <div key={k} className="aprs-card-row">
                 <dt>{k}</dt>
                 <dd>{v}</dd>
