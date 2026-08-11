@@ -12814,15 +12814,63 @@ async fn n3fjp_test_connection(state: State<'_, SharedEngine>) -> Result<String,
 /// the API key (and shows which logbook it unlocks) WITHOUT inserting anything.
 /// This is the verification the operator runs after entering credentials.
 #[tauri::command]
-async fn qrz_test_connection() -> Result<String, String> {
+async fn qrz_test_connection(state: State<'_, SharedEngine>) -> Result<String, String> {
+    // The operator's station callsign, to warn on a book/callsign mismatch (F4MQS).
+    let mycall = {
+        let eng = engine_lock(&state);
+        eng.settings().mycall.trim().to_string()
+    };
     conn_logged(
         "QRZ Logbook",
         |s: &String| format!("connection test OK — {s}"),
-        qrz_test_connection_impl().await,
+        qrz_test_connection_impl(&mycall).await,
     )
 }
 
-async fn qrz_test_connection_impl() -> Result<String, String> {
+/// Wrap QRZ's terse server errors in a plain-language hint (F4MQS: QRZ's "Unable to add
+/// QSO to database" is unhelpful). The raw reason is kept — operators still want the exact
+/// string — with an explanation appended for the ones we recognise.
+fn plain_qrz_reason(reason: &str) -> String {
+    let low = reason.to_ascii_lowercase();
+    if low.contains("unable to add qso") || low.contains("internal error") {
+        format!(
+            "{reason} (often the station callsign doesn't match this QRZ logbook — a QRZ book \
+             is per exact callsign, so a /P or other suffix needs its own book)"
+        )
+    } else if low.contains("invalid adif") || low.contains("bad record") {
+        format!("{reason} (QRZ rejected a field in the record — check date/time and band/mode)")
+    } else {
+        reason.to_string()
+    }
+}
+
+/// The portable-callsign warning (F4MQS): a QRZ logbook is bound to ONE exact callsign,
+/// suffix included, so an operator running /P against their base-call book has every
+/// upload rejected. The Test already learns the book's OWNER call — compare it to the
+/// station call and say so plainly. Empty when they match (or either is unknown).
+fn qrz_book_mismatch_warning(mycall: &str, owner: &str) -> String {
+    let my = mycall.trim().to_ascii_uppercase();
+    let bk = owner.trim().to_ascii_uppercase();
+    if my.is_empty() || bk.is_empty() || my == bk {
+        return String::new();
+    }
+    // Same operator, different suffix (F4MQS/P vs F4MQS) is the exact case the letter hit.
+    let same_base = tempo_core::message::base_call(&my) == tempo_core::message::base_call(&bk);
+    if same_base {
+        format!(
+            " ⚠ This logbook belongs to {bk}, but you are operating as {my}. QRZ logbooks are \
+             per exact callsign (suffix included), so {my} contacts will be REJECTED here — \
+             create a separate {my} logbook at logbook.qrz.com and use its API key for /P work."
+        )
+    } else {
+        format!(
+            " ⚠ This logbook belongs to {bk}, but your station callsign is {my}. Uploads may \
+             be rejected — check you pasted the API key for the {my} logbook."
+        )
+    }
+}
+
+async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     let key = qrz_logbook_keychain()?
         .get_password()
         .map_err(|_| {
@@ -12833,10 +12881,12 @@ async fn qrz_test_connection_impl() -> Result<String, String> {
     let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
     let st = tempo_core::qrz::parse_status_response(&resp);
     if st.ok {
+        let owner_raw = st.owner.clone().unwrap_or_default();
         let owner = st.owner.unwrap_or_else(|| "your account".into());
         let book = st.book.map(|b| format!(" ({b})")).unwrap_or_default();
+        let warn = qrz_book_mismatch_warning(mycall, &owner_raw);
         Ok(format!(
-            "{owner}{book} — {} QSOs in the online logbook",
+            "{owner}{book} — {} QSOs in the online logbook{warn}",
             st.count
         ))
     } else {
@@ -13381,7 +13431,10 @@ fn auto_push_one(
                     "replace" => "QRZ ✓ (updated)".to_string(),
                     "duplicate" => "QRZ dup".to_string(),
                     "authFail" => "QRZ ✗ key invalid — check Settings".to_string(),
-                    _ => format!("QRZ ✗ {}", r.reason.as_deref().unwrap_or("failed")),
+                    _ => format!(
+                        "QRZ ✗ {}",
+                        plain_qrz_reason(r.reason.as_deref().unwrap_or("failed"))
+                    ),
                 };
                 // A QRZ reply (auth-fail / reject) is definitive — don't retry.
                 (part, ok, false)
@@ -15975,6 +16028,32 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn qrz_book_mismatch_warns_a_portable_operator() {
+        use super::qrz_book_mismatch_warning;
+        // F4MQS's exact case: /P against the base-call book — warn, and name the fix.
+        let w = qrz_book_mismatch_warning("F4MQS/P", "F4MQS");
+        assert!(w.contains("F4MQS/P"), "{w}");
+        assert!(w.contains("REJECTED") && w.contains("separate"), "{w}");
+        // Exact match (or missing data) → silence.
+        assert_eq!(qrz_book_mismatch_warning("F4MQS", "F4MQS"), "");
+        assert_eq!(qrz_book_mismatch_warning("f4mqs", "F4MQS"), "", "case-insensitive");
+        assert_eq!(qrz_book_mismatch_warning("F4MQS/P", ""), "", "unknown owner = silent");
+        // A genuinely different operator (wrong key) gets the milder warning.
+        let w2 = qrz_book_mismatch_warning("K1ABC", "W9XYZ");
+        assert!(w2.contains("W9XYZ") && w2.contains("K1ABC") && !w2.contains("separate"), "{w2}");
+    }
+
+    #[test]
+    fn plain_qrz_reason_explains_the_internal_error() {
+        use super::plain_qrz_reason;
+        let m = plain_qrz_reason("QRZ Internal Error: Unable to add QSO to database");
+        assert!(m.contains("Unable to add QSO"), "keeps the raw string: {m}");
+        assert!(m.contains("per exact callsign"), "adds the plain explanation: {m}");
+        // Unrecognised reasons pass through untouched.
+        assert_eq!(plain_qrz_reason("some other error"), "some other error");
+    }
+
     use super::{
         callbook_candidates, redact_for_backup,
         iso_from_stamp, reconcile_gallery,
