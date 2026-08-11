@@ -11451,6 +11451,12 @@ impl Engine {
                     }
                     None => (false, false),
                 };
+                // Confirmed (award-grade) on THIS band — for the hide-confirmed filter.
+                // A still-new-on-band station is never marked confirmed (mutually exclusive
+                // by construction), so the filter can never hide a slot that's still open.
+                let confirmed_band = entity
+                    .as_deref()
+                    .is_some_and(|e| self.station.entity_confirmed_on(e, cur_band));
                 // Rarity: prefer the grid on THIS frame, but on report/R/RR73/73
                 // frames (which carry no grid) fall back to the sender's grid
                 // remembered in the roster — so an ULTRA-rare station keeps its
@@ -11477,6 +11483,7 @@ impl Engine {
                     country: entity,
                     new_dxcc,
                     new_band,
+                    confirmed_band,
                     new_grid,
                     grid: grid.filter(|g| !g.is_empty()).map(str::to_string),
                     grid_rarity,
@@ -11517,6 +11524,7 @@ impl Engine {
                 country: None,
                 new_dxcc: false,
                 new_band: false,
+                confirmed_band: false,
                 new_grid: false,
                 grid: None,
                 grid_rarity: None,

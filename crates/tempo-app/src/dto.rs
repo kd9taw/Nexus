@@ -136,6 +136,10 @@ pub struct DecodeRow {
     /// band-slot (DXCC is awarded per band). Mutually exclusive with `new_dxcc`.
     #[serde(default)]
     pub new_band: bool,
+    /// True if the sender's entity is CONFIRMED (award-grade) on this band — for the
+    /// decode panes' hide-confirmed filter (F4MQS). Never true when new_dxcc/new_band is.
+    #[serde(default)]
+    pub confirmed_band: bool,
     /// True if the decode carries a Maidenhead grid never worked before.
     #[serde(default)]
     pub new_grid: bool,

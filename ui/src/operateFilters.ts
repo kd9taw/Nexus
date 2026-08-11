@@ -38,6 +38,7 @@ export const ROSTER_FILTER_KEY = 'nexus.roster.filters'
 export const DECODE_FILTER_KEY = 'nexus.decodes.filter'
 export const DECODE_HIDE_B4_KEY = 'nexus.decodes.hideB4'
 export const DECODE_HIDE_BLOCKED_KEY = 'nexus.decodes.hideBlocked'
+export const DECODE_HIDE_CONFIRMED_KEY = 'nexus.decodes.hideConfirmed'
 
 /** The Band Activity "hide B4" MODIFIER — ANDed with whatever chip is active (the field
  *  ask: "CQ only, but exclude B4"). A modifier rather than another one-of-N chip, the same
@@ -59,6 +60,17 @@ export function loadDecodeHideBlocked(): boolean {
 
 export function saveDecodeHideBlocked(on: boolean): void {
   surfaceSet(DECODE_HIDE_BLOCKED_KEY, on ? '1' : '0')
+}
+
+/** Band Activity's "hide confirmed on this band" modifier (F4MQS) — same shape. Off =
+ *  everything shows; on = stations already award-confirmed on the current band are hidden
+ *  (a still-new-on-band station always shows). */
+export function loadDecodeHideConfirmed(): boolean {
+  return surfaceGet(DECODE_HIDE_CONFIRMED_KEY) === '1'
+}
+
+export function saveDecodeHideConfirmed(on: boolean): void {
+  surfaceSet(DECODE_HIDE_CONFIRMED_KEY, on ? '1' : '0')
 }
 
 /**

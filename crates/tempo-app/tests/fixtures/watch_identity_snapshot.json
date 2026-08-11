@@ -98,6 +98,7 @@
   "recentDecodes": [
     {
       "ap": false,
+      "confirmedBand": false,
       "country": null,
       "directedToMe": false,
       "dtSec": 0.04749727249145508,

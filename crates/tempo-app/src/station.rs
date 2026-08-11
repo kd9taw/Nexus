@@ -126,6 +126,11 @@ pub struct StationCore {
     /// load + each log mutation. Per band because DXCC is a per-band award
     /// (Challenge slots, VHF DXCC): see [`worked_grids`](Self::worked_grids).
     pub(crate) worked_entities: HashSet<(String, String)>,
+    /// DXCC entities CONFIRMED (award-grade: LoTW or card) per band — `(entity, band_key)`.
+    /// Drives the decode panes' "hide confirmed on this band" filter (F4MQS): a station in a
+    /// band-entity slot the operator has already confirmed can be filtered out, while one
+    /// that is still NEW on the band always shows.
+    pub(crate) confirmed_entities: HashSet<(String, String)>,
     /// Maidenhead grids already worked (uppercased), keyed PER BAND —
     /// `(grid, band_key)` — for new-grid highlighting. A grid square is an award
     /// slot on EACH band (VUCC is per band), so FN31 worked on 20 m is genuinely
@@ -192,6 +197,7 @@ impl StationCore {
             grid_rarity_resolve: None,
             lotw_resolve: None,
             worked_entities: HashSet::new(),
+            confirmed_entities: HashSet::new(),
             worked_grids: HashSet::new(),
             worked_parks: HashSet::new(),
             hunted_parks_import: HashSet::new(),
@@ -434,6 +440,7 @@ impl StationCore {
     pub(crate) fn refresh_worked_index(&mut self) {
         self.worked_grids.clear();
         self.worked_entities.clear();
+        self.confirmed_entities.clear();
         self.worked_parks.clear();
         for r in self.logbook.records() {
             // Parks are NOT per band: a POTA/SOTA reference is hunted once, on any
@@ -464,6 +471,12 @@ impl StationCore {
             }
             if let Some(resolve) = &self.dxcc_resolve {
                 if let Some(entity) = resolve(&r.call) {
+                    // award_confirmed = LoTW/card (not eQSL/QRZ) — the same grade the
+                    // awards screens count, so the filter agrees with them.
+                    if r.award_confirmed {
+                        self.confirmed_entities
+                            .insert((entity.clone(), band.clone()));
+                    }
                     self.worked_entities.insert((entity, band));
                 }
             }
@@ -494,6 +507,13 @@ impl StationCore {
     /// [`grid_worked_on`](Self::grid_worked_on).
     pub(crate) fn entity_worked_on(&self, entity: &str, band: &str) -> bool {
         self.worked_entities
+            .contains(&(entity.to_string(), band_key(band)))
+    }
+
+    /// Is this DXCC entity CONFIRMED (award-grade) ON THIS BAND? Drives the decode panes'
+    /// hide-confirmed filter (F4MQS).
+    pub(crate) fn entity_confirmed_on(&self, entity: &str, band: &str) -> bool {
+        self.confirmed_entities
             .contains(&(entity.to_string(), band_key(band)))
     }
 

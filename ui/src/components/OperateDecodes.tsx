@@ -14,7 +14,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
-import { loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked } from '../operateFilters'
+import { loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, loadDecodeHideConfirmed, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked, saveDecodeHideConfirmed } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
 import { gridFromMessage, isIgnored } from '../txMessages'
@@ -214,6 +214,13 @@ export function OperateDecodes({
     saveDecodeHideBlocked(on)
     setHideBlocked(on)
   }
+  // "Hide confirmed on this band" (F4MQS): drop stations already award-confirmed here.
+  // A still-new-on-band station always shows (confirmedBand is never set with newBand).
+  const [hideConfirmed, setHideConfirmed] = useState<boolean>(loadDecodeHideConfirmed)
+  const pickHideConfirmed = (on: boolean) => {
+    saveDecodeHideConfirmed(on)
+    setHideConfirmed(on)
+  }
 
   // The operator's country exclusion — app-global (every window agrees) and RX-display
   // only. See features/countryExclude.ts for why it is not a Rust setting.
@@ -276,6 +283,16 @@ export function OperateDecodes({
           !(
             hideBlocked &&
             isIgnored(ignores, d.from) &&
+            !d.mine &&
+            (selectedCall == null || d.from !== selectedCall)
+          ),
+      )
+      // "Hide confirmed on this band" — own rows and the working partner always stay.
+      .filter(
+        (d) =>
+          !(
+            hideConfirmed &&
+            d.confirmedBand &&
             !d.mine &&
             (selectedCall == null || d.from !== selectedCall)
           ),
@@ -376,6 +393,15 @@ export function OperateDecodes({
               title="Hide blocked callsigns from this pane (they render dimmed when off). The auto-responder never answers blocked calls regardless — Alt-double-click a row to block or unblock."
             >
               −Blk
+            </button>
+            <button
+              type="button"
+              className={`od-chip od-conf${hideConfirmed ? ' active' : ''}`}
+              aria-pressed={hideConfirmed}
+              onClick={() => pickHideConfirmed(!hideConfirmed)}
+              title="Hide stations already CONFIRMED (LoTW/card) on this band — chase what you still need. A station that's new on the band always shows."
+            >
+              −Conf
             </button>
             <button
               type="button"

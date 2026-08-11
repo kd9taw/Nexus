@@ -1360,6 +1360,8 @@ export interface DecodeRow {
   newDxcc?: boolean
   /** Entity worked before, but never on THIS band — a new band-slot (dimmer than newDxcc). */
   newBand?: boolean
+  /** Entity confirmed (award-grade) on this band — for the hide-confirmed filter. */
+  confirmedBand?: boolean
   /** Decode carries a Maidenhead grid never worked before. */
   newGrid?: boolean
   /** The grid the decode carried (CQ/grid messages) — for alert copy + rarity. */

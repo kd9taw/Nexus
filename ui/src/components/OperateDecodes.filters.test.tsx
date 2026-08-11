@@ -115,6 +115,27 @@ describe('the −B4 modifier (field ask: "CQ only, but exclude B4")', () => {
   })
 })
 
+describe('the −Conf modifier (hide confirmed on this band)', () => {
+  const rows = [
+    decode({ from: 'W1AW', message: 'CQ W1AW FN31', confirmedBand: false }),
+    decode({ from: 'DL1ABC', message: 'CQ DL1ABC JO31', freqHz: 900, confirmedBand: true }),
+  ]
+
+  it('hides confirmed-on-band stations only when toggled', () => {
+    mount({ decodes: rows })
+    expect(screen.queryByText(/DL1ABC/)).not.toBeNull() // shown by default
+    fireEvent.click(chip('−Conf'))
+    expect(screen.queryByText(/DL1ABC/)).toBeNull() // confirmed here → gone
+    expect(screen.queryByText(/W1AW/)).not.toBeNull() // still-needed → stays
+  })
+
+  it('never hides the working partner', () => {
+    mount({ decodes: rows, selectedCall: 'DL1ABC' })
+    fireEvent.click(chip('−Conf'))
+    expect(screen.queryByText(/DL1ABC/)).not.toBeNull()
+  })
+})
+
 describe('the −Blk modifier (blocklist display half)', () => {
   const rows = [
     decode({ from: 'W1AW', message: 'CQ W1AW FN31' }),
