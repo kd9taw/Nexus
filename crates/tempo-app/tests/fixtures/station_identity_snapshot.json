@@ -48,6 +48,8 @@
     "dialMhz": 14.074,
     "filterWidthHz": null,
     "holdTxFreq": false,
+    "hrdLinkUp": null,
+    "hrdQueued": 0,
     "micGain": null,
     "nb": null,
     "nextSlotMs": null,

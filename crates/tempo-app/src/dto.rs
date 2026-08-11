@@ -517,6 +517,13 @@ pub struct RadioStatus {
     /// over CAT (#57). Display-only — feeds the TX badge and the meter pane.
     #[serde(default)]
     pub rig_keyed: bool,
+    /// HRD Logbook link (F4MQS): `Some(true)` last datagram delivered, `Some(false)` HRD
+    /// unreachable (contacts queued), `None` forwarding off or nothing sent yet.
+    #[serde(default)]
+    pub hrd_link_up: Option<bool>,
+    /// QSOs queued for HRD because it was unreachable — 0 when caught up.
+    #[serde(default)]
+    pub hrd_queued: u32,
     pub transmitting: bool,
     pub slot: u64,
     pub next_slot_ms: u64,

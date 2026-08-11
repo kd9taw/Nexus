@@ -1329,6 +1329,14 @@ pub struct Engine {
     /// by `a_field_day_contact_never_enters_the_general_upload_queue`. That is what keeps this
     /// from emitting a second datagram per FD contact.
     pending_udp_qsos: std::collections::VecDeque<QsoRecord>,
+    /// QSOs awaiting the HRD Logbook datagram (F4MQS: HRD closed at log time lost the
+    /// contact silently). The shell worker drains this each tick — connect-and-send so a
+    /// closed HRD is DETECTABLE on localhost (ICMP unreachable → ConnectionRefused), sets
+    /// [`Self::hrd_link_up`], and re-queues on failure (bounded) so nothing is lost.
+    hrd_pending: std::collections::VecDeque<QsoRecord>,
+    /// Last HRD datagram outcome: `Some(true)` delivered, `Some(false)` HRD not reachable
+    /// (queued), `None` nothing sent yet. Drives the cockpit's HRD link indicator.
+    hrd_link_up: Option<bool>,
     /// The last ingest's decodes as they were ON AIR (pre hound-split/rewrite)
     /// — what UDP consumers receive. Identical to `last_decodes` outside Hound.
     last_wire_decodes: Vec<modes::Decode>,
@@ -2934,6 +2942,8 @@ impl Engine {
             clear_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
+            hrd_pending: std::collections::VecDeque::new(),
+            hrd_link_up: None,
             cq_dir: None,
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
@@ -6266,10 +6276,23 @@ impl Engine {
     /// standard network path WSJT-X / JTAlert / N1MM use (HRD's default port 2333);
     /// we deliberately use it rather than writing HRD's database. Best-effort and
     /// fire-and-forget — HRD need not be running, and a failed send is ignored.
-    fn push_to_hrd(&self, rec: &QsoRecord) {
+    fn push_to_hrd(&mut self, rec: &QsoRecord) {
         if !self.settings.hrd_logging {
             return;
         }
+        // ENQUEUE, don't fire-and-forget (F4MQS): a datagram sent while HRD is closed used
+        // to evaporate with nothing recording the loss. The shell worker drains this queue
+        // and reports delivery; a closed HRD leaves the record queued for the next tick.
+        // Bounded so a long HRD outage can't grow the queue without limit.
+        if self.hrd_pending.len() >= 256 {
+            self.hrd_pending.pop_front();
+        }
+        self.hrd_pending.push_back(rec.clone());
+    }
+
+    /// Build the HRD Logbook datagram for a record: its ADIF plus the operator's station
+    /// fields (HRD attributes the contact with these). Pure; the socket send is the shell's.
+    pub fn hrd_datagram(&self, rec: &QsoRecord) -> String {
         let mut adif = tempo_core::logbook::adif_record(rec);
         let tag = |name: &str, val: &str| -> String {
             let v = val.trim();
@@ -6284,21 +6307,33 @@ impl Engine {
             tag("STATION_CALLSIGN", &self.settings.mycall),
             tag("MY_GRIDSQUARE", &self.settings.mygrid),
         );
-        // Insert the station fields before the record terminator.
         if let Some(pos) = adif.find("<EOR>") {
             adif.insert_str(pos, &station);
         }
-        // OFF-THREAD like push_to_n1mm below, and for the same reason: the target
-        // is a hostname, so `send_to`'s ToSocketAddrs resolves DNS INLINE — and
-        // this runs from log_qso under the engine mutex. A slow resolver froze
-        // every snapshot poll AND the slot loop for the timeout: a missed T/R
-        // boundary right after logging.
-        let addr = self.settings.hrd_udp_addr.trim().to_string();
-        std::thread::spawn(move || {
-            if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                let _ = sock.send_to(adif.as_bytes(), &addr);
+        adif
+    }
+
+    /// Take the queued HRD records for the shell to send (drains the queue). The shell
+    /// connects+sends each off the engine lock, then reports back via [`Self::note_hrd_result`].
+    pub fn take_hrd_pending(&mut self) -> Vec<QsoRecord> {
+        self.hrd_pending.drain(..).collect()
+    }
+
+    /// The HRD forwarding target (host:port), empty when unset.
+    pub fn hrd_addr(&self) -> String {
+        self.settings.hrd_udp_addr.trim().to_string()
+    }
+
+    /// Report an HRD send outcome from the shell worker. On failure the record is re-queued
+    /// (bounded) so a closed HRD never loses the contact; `hrd_link_up` drives the indicator.
+    pub fn note_hrd_result(&mut self, rec: QsoRecord, delivered: bool) {
+        self.hrd_link_up = Some(delivered);
+        if !delivered {
+            if self.hrd_pending.len() >= 256 {
+                self.hrd_pending.pop_front();
             }
-        });
+            self.hrd_pending.push_back(rec);
+        }
     }
 
     /// Broadcast a logged QSO as an N1MM `<contactinfo>` datagram — the STANDING
@@ -11118,6 +11153,14 @@ impl Engine {
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
         s.radio.rig_keyed = self.rig_keyed;
+        // HRD link: Some(true) delivered, Some(false) HRD unreachable (contacts queued),
+        // None nothing sent yet. Only meaningful when HRD forwarding is on.
+        s.radio.hrd_link_up = self
+            .settings
+            .hrd_logging
+            .then_some(self.hrd_link_up)
+            .flatten();
+        s.radio.hrd_queued = self.hrd_pending.len() as u32;
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
@@ -18568,6 +18611,73 @@ mod tests {
     /// POTA activation could not tell the two operators' contacts apart without hand-editing the
     /// exported ADIF. Same funnel argument as the state fill above: every logging path goes
     /// through `log_qso`.
+    #[test]
+    fn hrd_queues_a_qso_and_holds_it_until_delivery_is_reported() {
+        // F4MQS: a QSO logged while HRD is closed used to vanish (fire-and-forget UDP).
+        // Now log_qso QUEUES it; the shell drains, and a failure re-queues so nothing is
+        // lost, with the link status reflecting reality.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.hrd_logging = true;
+        e.settings.hrd_udp_addr = "127.0.0.1:2333".into();
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+
+        // The datagram carries the operator's station fields (HRD needs them).
+        let queued = e.take_hrd_pending();
+        assert_eq!(
+            queued.len(),
+            1,
+            "the QSO is queued for HRD, not fired and forgotten"
+        );
+        assert!(
+            e.hrd_datagram(&queued[0]).contains("STATION_CALLSIGN"),
+            "the HRD datagram carries the station callsign"
+        );
+
+        // HRD unreachable → the shell reports failure → re-queued, link shows down.
+        e.note_hrd_result(queued[0].clone(), false);
+        assert_eq!(
+            e.take_hrd_pending().len(),
+            1,
+            "a failed send keeps the QSO queued"
+        );
+        assert_eq!(
+            e.snapshot().radio.hrd_link_up,
+            Some(false),
+            "the cockpit shows HRD unreachable"
+        );
+
+        // HRD comes back → delivered → nothing re-queued, link shows up.
+        let rec2 = e.qso_record("K1ABC".into(), None, None);
+        e.log_qso(rec2);
+        let batch = e.take_hrd_pending();
+        for r in &batch {
+            e.note_hrd_result(r.clone(), true);
+        }
+        assert!(
+            e.take_hrd_pending().is_empty(),
+            "delivered QSOs are not re-queued"
+        );
+        assert_eq!(e.snapshot().radio.hrd_link_up, Some(true), "link back up");
+    }
+
+    #[test]
+    fn hrd_status_is_absent_when_forwarding_is_off() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert!(!e.settings.hrd_logging);
+        e.log_qso(e.qso_record("W9XYZ".into(), None, None));
+        assert!(
+            e.take_hrd_pending().is_empty(),
+            "nothing queued with HRD off"
+        );
+        assert_eq!(
+            e.snapshot().radio.hrd_link_up,
+            None,
+            "no HRD indicator when the operator isn't using HRD"
+        );
+    }
+
     #[test]
     fn upload_backoff_widens_then_caps() {
         // The F4MQS storm fix: a genuinely-transient failure retries with WIDENING gaps

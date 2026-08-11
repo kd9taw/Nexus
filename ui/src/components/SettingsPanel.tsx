@@ -6389,6 +6389,16 @@ export function SettingsPanel({
                     spellCheck={false}
                   />
                   <span className="settings-hint">HRD QSO-Forwarding host:port (default 127.0.0.1:2333)</span>
+                  {form.hrdLogging && radio?.hrdLinkUp != null && (
+                    <span
+                      className={`settings-hint ${radio.hrdLinkUp ? 'ok' : 'warn'}`}
+                      style={{ color: radio.hrdLinkUp ? 'var(--ok)' : 'var(--state-weak)' }}
+                    >
+                      {radio.hrdLinkUp
+                        ? '● HRD reachable — contacts are forwarding'
+                        : `○ HRD not reachable — ${radio.hrdQueued ?? 0} contact(s) queued, will send when HRD is back`}
+                    </span>
+                  )}
                 </label>
 
                 <label className="settings-field">

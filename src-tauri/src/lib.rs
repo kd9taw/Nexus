@@ -13274,6 +13274,35 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
 ///
 /// Failures land in the connector log rather than a toast: a logger that is not running is
 /// not an error worth interrupting an operator mid-QSO.
+/// Send one HRD Logbook datagram, returning whether it was DELIVERED. HRD's QSO-Forwarding
+/// listener does not ack, so delivery cannot be confirmed positively over UDP — but a
+/// CONNECTED socket lets the OS report a closed listener: on localhost a datagram to a port
+/// nobody is bound to raises ICMP port-unreachable, surfaced as `ConnectionRefused` on the
+/// next/same send. So `Ok` here means "not refused", which on the usual 127.0.0.1:2333 HRD
+/// setup reliably distinguishes HRD-up from HRD-closed. A bind/connect/resolve failure is a
+/// non-delivery too. ⚠️ NEEDS-BENCH on the operator's OS (loopback ICMP behaviour varies).
+fn hrd_send_connected(addr: &str, bytes: &[u8]) -> bool {
+    if addr.is_empty() {
+        return false;
+    }
+    let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") else {
+        return false;
+    };
+    // connect() resolves + associates the peer; send() then reports ICMP unreachable.
+    if sock.connect(addr).is_err() {
+        return false;
+    }
+    // SEND EXACTLY ONCE — a second send would duplicate the QSO in a live HRD. The closed-
+    // port signal is the pending socket error (SO_ERROR): on localhost a datagram to an
+    // unbound port raises ICMP port-unreachable, which `take_error()` retrieves. Give it a
+    // brief moment to arrive, then a `None` error = delivered (not refused).
+    if sock.send(bytes).is_err() {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    !matches!(sock.take_error(), Ok(Some(_)) | Err(_))
+}
+
 fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
     std::thread::spawn(move || {
         match tempo_net::dxkeeper::push_qso(&host, base_port, &adif, uploads) {
@@ -15295,6 +15324,37 @@ pub fn run() {
                     let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
                     let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
                     eng.requeue_upload_at(rec, failed, attempts, due);
+                }
+            }
+            // HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from
+            // log_qso, so a QSO logged while HRD was closed vanished. Now the engine
+            // queues them and we send here — CONNECTED to the target so a closed HRD on
+            // localhost surfaces ConnectionRefused (ICMP port-unreachable), which we
+            // report back so the record is re-queued and the cockpit shows the link down.
+            // ⚠️ NEEDS-BENCH: the closed-port detection is OS/loopback-dependent; verified
+            // on Windows/Linux localhost but confirm on the operator's box.
+            {
+                let (pending, addr) = {
+                    let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                    (eng.take_hrd_pending(), eng.hrd_addr())
+                };
+                for rec in pending {
+                    let datagram = {
+                        let eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                        eng.hrd_datagram(&rec)
+                    };
+                    // connect()+send() off the lock — DNS/connect can block, and a slow
+                    // resolver must never freeze the engine (the original spawn's reason).
+                    let delivered = hrd_send_connected(&addr, datagram.as_bytes());
+                    let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                    eng.note_hrd_result(rec, delivered);
+                    if !delivered {
+                        // Stop hammering a closed HRD this tick — the queue stays, the next
+                        // tick retries. One log line, not one per queued record.
+                        conn_log("HRD", "error", "HRD Logbook not reachable — QSO queued");
+                        break;
+                    }
+                    conn_log("HRD", "ok", "QSO forwarded to HRD Logbook");
                 }
             }
         });

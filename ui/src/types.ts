@@ -1009,6 +1009,10 @@ export interface RadioStatus {
   /** The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
    * over CAT (#57). Display-only — the TX badge and meter pane light for it. */
   rigKeyed?: boolean
+  /** HRD Logbook link: true = delivered, false = HRD unreachable (queued), null = off. */
+  hrdLinkUp?: boolean | null
+  /** QSOs queued for HRD because it was unreachable; 0 when caught up. */
+  hrdQueued?: number
   transmitting: boolean
   slot: number
   nextSlotMs: number

@@ -240,6 +240,8 @@ impl AppState {
                 sideband: "USB".to_string(),
                 operating_mode: "digital".to_string(),
                 rig_keyed: false,
+                hrd_link_up: None,
+                hrd_queued: 0,
                 transmitting: false,
                 // Nobody holds the transmitter at construction — the engine recomputes this
                 // from `tx_owner()` every snapshot.
