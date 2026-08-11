@@ -78,6 +78,7 @@ const SHARED = [
   // then diverge on its first toggle, so the pop-out would show the decodes the main
   // window hides — two surfaces disagreeing about what is on the band.
   'nexus.decodes.countryExclude',
+  'nexus.decodes.countryExclude.paused',
   'nexus.cw.tuneStep',
   'nexus.cwAssist',
   'nexus.dev.xray',

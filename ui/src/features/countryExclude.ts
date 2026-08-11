@@ -215,6 +215,10 @@ export interface CountryExcludeState {
   toggle: (key: string) => void
   /** Untick every country (the one-click clear beside the hidden count). */
   clear: () => void
+  /** Paused: the ticks are kept but nothing is hidden. */
+  paused: boolean
+  /** Pause/resume the exclusion without losing the ticked set. */
+  setPaused: (paused: boolean) => void
 }
 
 /**
@@ -225,13 +229,37 @@ export interface CountryExcludeState {
  * missed an event still converges on the next one and there is only ever one source of
  * truth for what is ticked.
  */
+/** Pause the country exclusion WITHOUT losing the ticks (F4MQS: Clear discarded them). */
+export const COUNTRY_EXCLUDE_PAUSED_KEY = 'nexus.decodes.countryExclude.paused'
+
+function loadCountryExcludePaused(): boolean {
+  try {
+    return window.localStorage.getItem(COUNTRY_EXCLUDE_PAUSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function saveCountryExcludePaused(paused: boolean): void {
+  try {
+    window.localStorage.setItem(COUNTRY_EXCLUDE_PAUSED_KEY, paused ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+  window.dispatchEvent(new Event(COUNTRY_EXCLUDE_EVENT))
+}
+
 export function useCountryExclude(): CountryExcludeState {
   const [keys, setKeys] = useState<ReadonlySet<string>>(loadCountryExclude)
+  const [paused, setPausedState] = useState<boolean>(loadCountryExcludePaused)
 
   useEffect(() => {
-    const reread = () => setKeys(loadCountryExclude())
+    const reread = () => {
+      setKeys(loadCountryExclude())
+      setPausedState(loadCountryExcludePaused())
+    }
     const onStorage = (e: StorageEvent) => {
-      if (e.key === COUNTRY_EXCLUDE_KEY) reread()
+      if (e.key === COUNTRY_EXCLUDE_KEY || e.key === COUNTRY_EXCLUDE_PAUSED_KEY) reread()
     }
     window.addEventListener(COUNTRY_EXCLUDE_EVENT, reread)
     window.addEventListener('storage', onStorage)
@@ -250,7 +278,12 @@ export function useCountryExclude(): CountryExcludeState {
   }, [])
 
   const clear = useCallback(() => saveCountryExclude([]), [])
+  const setPaused = useCallback((p: boolean) => saveCountryExcludePaused(p), [])
 
-  const hidden = useMemo(() => excludedEntities(keys), [keys])
-  return { keys, hidden, toggle, clear }
+  // Paused → hide NOTHING while keeping the ticks (they resume on unpause).
+  const hidden = useMemo(
+    () => (paused ? new Set<string>() : excludedEntities(keys)),
+    [keys, paused],
+  )
+  return { keys, hidden, toggle, clear, paused, setPaused }
 }

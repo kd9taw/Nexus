@@ -15,11 +15,16 @@ interface PickerProps {
   keys: ReadonlySet<string>
   /** Tick or untick one country. */
   onToggle: (key: string) => void
+  /** Paused: ticks kept, nothing hidden. */
+  paused?: boolean
+  /** Pause/resume without losing the ticks. */
+  onPauseChange?: (paused: boolean) => void
 }
 
 /** The Band Activity chip-bar control: 18 checkboxes, multi-tick, stays open. */
-export function CountryExcludePicker({ keys, onToggle }: PickerProps) {
+export function CountryExcludePicker({ keys, onToggle, paused = false, onPauseChange }: PickerProps) {
   const n = keys.size
+  const active = n > 0 && !paused
   return (
     // NOT modal: a modal menu marks the rest of the page aria-hidden and locks body
     // scroll, which would hide the very thing the operator is judging — they tick a
@@ -28,10 +33,10 @@ export function CountryExcludePicker({ keys, onToggle }: PickerProps) {
       <RM.Trigger asChild>
         <button
           type="button"
-          className={`od-chip${n > 0 ? ' active' : ''}`}
+          className={`od-chip${active ? ' active' : ''}`}
           title="Hide chosen countries from this pane (a display filter — decoding, logging and alerts are untouched)"
         >
-          Countries{n > 0 ? ` · ${n}` : ''}
+          Countries{n > 0 ? ` · ${paused ? 'paused' : n}` : ''}
         </button>
       </RM.Trigger>
       <RM.Portal>
@@ -40,6 +45,16 @@ export function CountryExcludePicker({ keys, onToggle }: PickerProps) {
               `.app`'s zoom:var(--ui-zoom), so the content must re-apply it. */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             <div className="country-menu-head">Hide these countries</div>
+            {onPauseChange && n > 0 && (
+              <RM.CheckboxItem
+                className="ui-menu-item country-item"
+                checked={paused}
+                onSelect={(e) => e.preventDefault()}
+                onCheckedChange={() => onPauseChange(!paused)}
+              >
+                Pause (keep my ticks, show everything)
+              </RM.CheckboxItem>
+            )}
             {EXCLUDABLE_COUNTRIES.map((c) => (
               <RM.CheckboxItem
                 key={c.key}

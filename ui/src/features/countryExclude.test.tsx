@@ -106,6 +106,35 @@ function Probe({ id }: { id: string }) {
 
 const shows = (id: string) => screen.getByTestId(id).textContent
 
+/** Probe that reports the RESOLVED hidden set + pause state, for the pause test. */
+function PauseProbe() {
+  const { keys, toggle, hidden, paused, setPaused } = useCountryExclude()
+  return (
+    <div>
+      <button type="button" data-testid="tick" onClick={() => toggle('dl')} />
+      <button type="button" data-testid="pause" onClick={() => setPaused(!paused)} />
+      <span data-testid="keys">{[...keys].sort().join(',') || 'none'}</span>
+      <span data-testid="hidden">{[...hidden].sort().join(',') || 'none'}</span>
+    </div>
+  )
+}
+
+describe('pausing keeps the ticks but hides nothing (F4MQS)', () => {
+  it('pause empties the hidden set while the ticks survive; resume restores them', () => {
+    render(<PauseProbe />)
+    fireEvent.click(screen.getByTestId('tick'))
+    expect(screen.getByTestId('keys').textContent).toBe('dl')
+    expect(screen.getByTestId('hidden').textContent).not.toBe('none') // hiding Germany
+
+    fireEvent.click(screen.getByTestId('pause'))
+    expect(screen.getByTestId('keys').textContent).toBe('dl') // ticks kept
+    expect(screen.getByTestId('hidden').textContent).toBe('none') // but nothing hidden
+
+    fireEvent.click(screen.getByTestId('pause'))
+    expect(screen.getByTestId('hidden').textContent).not.toBe('none') // resumed
+  })
+})
+
 describe('every mounted consumer converges on one list', () => {
   it('a toggle in one pane reaches the other, same window', () => {
     render(
