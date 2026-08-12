@@ -215,6 +215,10 @@ export interface CountryExcludeState {
   toggle: (key: string) => void
   /** Untick every country (the one-click clear beside the hidden count). */
   clear: () => void
+  /** Arbitrarily-picked entity NAMES beyond the curated 18 (F4MQS). */
+  entities: ReadonlySet<string>
+  /** Add/remove one entity by NAME from the arbitrary set. */
+  toggleEntity: (entity: string) => void
   /** Paused: the ticks are kept but nothing is hidden. */
   paused: boolean
   /** Pause/resume the exclusion without losing the ticked set. */
@@ -231,6 +235,33 @@ export interface CountryExcludeState {
  */
 /** Pause the country exclusion WITHOUT losing the ticks (F4MQS: Clear discarded them). */
 export const COUNTRY_EXCLUDE_PAUSED_KEY = 'nexus.decodes.countryExclude.paused'
+
+/** Arbitrary DXCC entities picked beyond the curated 18 (F4MQS). Stored as entity NAMES
+ *  (cty.dat's own, exactly what a decode row's `country` carries) in a SEPARATE key, so the
+ *  curated-key flow and its cty.dat pin tests are untouched. */
+export const COUNTRY_EXCLUDE_ENTITIES_KEY = 'nexus.decodes.countryExclude.entities'
+
+function loadExcludedEntityNames(): ReadonlySet<string> {
+  try {
+    const raw = window.localStorage.getItem(COUNTRY_EXCLUDE_ENTITIES_KEY)
+    if (!raw) return new Set()
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.filter((k): k is string => typeof k === 'string' && k.length > 0))
+  } catch {
+    return new Set()
+  }
+}
+
+function saveExcludedEntityNames(names: Iterable<string>): void {
+  const ordered = [...new Set(names)].sort()
+  try {
+    window.localStorage.setItem(COUNTRY_EXCLUDE_ENTITIES_KEY, JSON.stringify(ordered))
+  } catch {
+    /* full/unavailable — applies this session via the event */
+  }
+  window.dispatchEvent(new Event(COUNTRY_EXCLUDE_EVENT))
+}
 
 function loadCountryExcludePaused(): boolean {
   try {
@@ -251,15 +282,22 @@ function saveCountryExcludePaused(paused: boolean): void {
 
 export function useCountryExclude(): CountryExcludeState {
   const [keys, setKeys] = useState<ReadonlySet<string>>(loadCountryExclude)
+  const [entities, setEntitiesState] = useState<ReadonlySet<string>>(loadExcludedEntityNames)
   const [paused, setPausedState] = useState<boolean>(loadCountryExcludePaused)
 
   useEffect(() => {
     const reread = () => {
       setKeys(loadCountryExclude())
+      setEntitiesState(loadExcludedEntityNames())
       setPausedState(loadCountryExcludePaused())
     }
     const onStorage = (e: StorageEvent) => {
-      if (e.key === COUNTRY_EXCLUDE_KEY || e.key === COUNTRY_EXCLUDE_PAUSED_KEY) reread()
+      if (
+        e.key === COUNTRY_EXCLUDE_KEY ||
+        e.key === COUNTRY_EXCLUDE_PAUSED_KEY ||
+        e.key === COUNTRY_EXCLUDE_ENTITIES_KEY
+      )
+        reread()
     }
     window.addEventListener(COUNTRY_EXCLUDE_EVENT, reread)
     window.addEventListener('storage', onStorage)
@@ -277,13 +315,25 @@ export function useCountryExclude(): CountryExcludeState {
     saveCountryExclude(next)
   }, [])
 
-  const clear = useCallback(() => saveCountryExclude([]), [])
+  const toggleEntity = useCallback((entity: string) => {
+    const next = new Set(loadExcludedEntityNames())
+    if (!next.delete(entity)) next.add(entity)
+    saveExcludedEntityNames(next)
+  }, [])
+
+  const clear = useCallback(() => {
+    saveCountryExclude([])
+    saveExcludedEntityNames([])
+  }, [])
   const setPaused = useCallback((p: boolean) => saveCountryExcludePaused(p), [])
 
-  // Paused → hide NOTHING while keeping the ticks (they resume on unpause).
-  const hidden = useMemo(
-    () => (paused ? new Set<string>() : excludedEntities(keys)),
-    [keys, paused],
-  )
-  return { keys, hidden, toggle, clear, paused, setPaused }
+  // Paused → hide NOTHING while keeping the ticks (they resume on unpause). Otherwise the
+  // resolved set is the curated keys' entities PLUS the arbitrarily-picked entity names.
+  const hidden = useMemo(() => {
+    if (paused) return new Set<string>()
+    const out = new Set(excludedEntities(keys))
+    for (const e of entities) out.add(e)
+    return out
+  }, [keys, entities, paused])
+  return { keys, entities, hidden, toggle, toggleEntity, clear, paused, setPaused }
 }

@@ -10642,6 +10642,16 @@ fn resolve_entity(call: String) -> Option<String> {
     propagation::dxcc::resolve(&call).map(|i| i.entity.to_string())
 }
 
+/// Every current DXCC entity name (sorted), for the decode panes' "hide any entity" picker
+/// (F4MQS) — the full ~340-entity table behind the curated quick-pick 18.
+#[tauri::command]
+fn dxcc_entity_names() -> Vec<String> {
+    propagation::dxcc::dxcc_entity_names()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 /// Edit logbook entry `index` (oldest-first, as returned by `get_log`) — a
 /// correction. Confirmation/credit/upload state is preserved by the engine.
 /// Returns the refreshed snapshot.
@@ -15656,6 +15666,7 @@ pub fn run() {
             get_band_plan,
             set_license_class,
             get_licensed_band_plan,
+            dxcc_entity_names,
             set_frequency,
             sstv_tune,
             pick_band,

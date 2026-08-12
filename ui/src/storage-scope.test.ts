@@ -64,6 +64,8 @@ const SHARED = [
   'nexus.units',
   // Wildcard call-hide: a standing display preference across windows (features/hideCalls).
   'nexus.decodes.hideCalls',
+  // Arbitrary-entity country excludes, stored beside the curated keys (F4MQS).
+  'nexus.decodes.countryExclude.entities',
   'nexus.navOrder', // left-rail section order — a person/station preference, same in every window
   'nexus-density',
   // Field mode: being outdoors is a fact about the STATION, not a window — a pop-out beside

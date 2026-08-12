@@ -1197,6 +1197,12 @@ export async function getLicensedBandPlan(mode: string): Promise<BandChannel[]> 
   return invoke<BandChannel[]>('get_licensed_band_plan', { mode })
 }
 
+/** Every current DXCC entity name (sorted) — the full table behind the country-hide
+ *  picker's "Other country…" search (F4MQS). */
+export async function getDxccEntityNames(): Promise<string[]> {
+  return invoke<string[]>('dxcc_entity_names')
+}
+
 // --- QSO recording (audio bridge) ---
 /** Start streaming the live RX audio to a timestamped WAV on disk. */
 export async function startQsoRecording(): Promise<AppSnapshot> {

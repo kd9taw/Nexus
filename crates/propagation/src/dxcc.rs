@@ -275,9 +275,39 @@ pub fn dxcc_entity_locations() -> impl Iterator<Item = (&'static str, f64, f64)>
         .map(|e| (e.name.as_str(), e.lat, e.lon))
 }
 
+/// Every current ARRL DXCC entity NAME, sorted and de-duplicated — the source for the
+/// decode panes' "hide any entity" picker (F4MQS), which opens the curated-18 country
+/// exclude to the full table. The names are exactly the `country`/`entity` strings a
+/// decode row carries (cty.dat's own names), so a picked name matches directly.
+pub fn dxcc_entity_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = resolver()
+        .entities
+        .iter()
+        .filter(|e| e.is_dxcc)
+        .map(|e| e.name.as_str())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entity_names_are_the_full_sorted_deduped_set() {
+        // The source for the country-hide picker's "Other country…" search (F4MQS).
+        let names = dxcc_entity_names();
+        assert_eq!(
+            names.len(),
+            current_dxcc_entities(),
+            "one per current entity"
+        );
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "sorted");
+        assert!(names.contains(&"United States"));
+        assert!(names.contains(&"Fiji"));
+    }
 
     #[test]
     fn parses_the_full_list() {

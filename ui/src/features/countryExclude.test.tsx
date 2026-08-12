@@ -119,6 +119,33 @@ function PauseProbe() {
   )
 }
 
+/** Probe reporting the resolved hidden set + the arbitrary-entity toggle. */
+function EntityProbe() {
+  const { hidden, entities, toggleEntity } = useCountryExclude()
+  return (
+    <div>
+      <button type="button" data-testid="tog" onClick={() => toggleEntity('Fiji')} />
+      <span data-testid="ents">{[...entities].sort().join(',') || 'none'}</span>
+      <span data-testid="ehidden">{[...hidden].sort().join(',') || 'none'}</span>
+    </div>
+  )
+}
+
+describe('arbitrary-entity picks beyond the curated 18 (F4MQS)', () => {
+  it('an entity name toggles into the hidden set and back, persisting separately', () => {
+    render(<EntityProbe />)
+    expect(screen.getByTestId('ents').textContent).toBe('none')
+    fireEvent.click(screen.getByTestId('tog'))
+    expect(screen.getByTestId('ents').textContent).toBe('Fiji')
+    expect(screen.getByTestId('ehidden').textContent).toBe('Fiji') // resolved into hidden
+    // Stored under the SEPARATE key, leaving the curated-key store untouched.
+    expect(localStorage.getItem('nexus.decodes.countryExclude.entities')).toBe('["Fiji"]')
+    expect(localStorage.getItem(COUNTRY_EXCLUDE_KEY)).toBeNull()
+    fireEvent.click(screen.getByTestId('tog'))
+    expect(screen.getByTestId('ehidden').textContent).toBe('none')
+  })
+})
+
 describe('pausing keeps the ticks but hides nothing (F4MQS)', () => {
   it('pause empties the hidden set while the ticks survive; resume restores them', () => {
     render(<PauseProbe />)

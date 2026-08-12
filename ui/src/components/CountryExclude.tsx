@@ -8,7 +8,9 @@
 // the `.od-filters` note in styles.css — so an absolutely-positioned popover anchored in
 // the chip bar would be painted outside the clip and be unreachable in the narrow rail.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { useState } from 'react'
 import { EXCLUDABLE_COUNTRIES, countryLabel } from '../features/countryExclude'
+import { getDxccEntityNames } from '../api'
 
 interface PickerProps {
   /** The ticked catalog keys. */
@@ -19,12 +21,41 @@ interface PickerProps {
   paused?: boolean
   /** Pause/resume without losing the ticks. */
   onPauseChange?: (paused: boolean) => void
+  /** Arbitrarily-picked entity NAMES beyond the curated 18 (F4MQS). */
+  entities?: ReadonlySet<string>
+  /** Add/remove one entity by NAME. */
+  onToggleEntity?: (entity: string) => void
 }
 
-/** The Band Activity chip-bar control: 18 checkboxes, multi-tick, stays open. */
-export function CountryExcludePicker({ keys, onToggle, paused = false, onPauseChange }: PickerProps) {
-  const n = keys.size
+/** The Band Activity chip-bar control: 18 quick-pick checkboxes + an "Other country…"
+ *  search over the full DXCC table, multi-tick, stays open. */
+export function CountryExcludePicker({
+  keys,
+  onToggle,
+  paused = false,
+  onPauseChange,
+  entities,
+  onToggleEntity,
+}: PickerProps) {
+  const n = keys.size + (entities?.size ?? 0)
   const active = n > 0 && !paused
+  const [allEntities, setAllEntities] = useState<string[]>([])
+  const [q, setQ] = useState('')
+  // Load the full table lazily on first open (small, cached after).
+  const loadAll = () => {
+    if (allEntities.length === 0 && onToggleEntity) {
+      void getDxccEntityNames().then(setAllEntities).catch(() => {})
+    }
+  }
+  // The curated 18's entity names, so the search doesn't offer a duplicate of a quick pick.
+  const curatedEntities = new Set(EXCLUDABLE_COUNTRIES.map((c) => c.entity))
+  const query = q.trim().toLowerCase()
+  const matches =
+    query.length < 2
+      ? []
+      : allEntities
+          .filter((e) => e.toLowerCase().includes(query) && !curatedEntities.has(e))
+          .slice(0, 12)
   return (
     // NOT modal: a modal menu marks the rest of the page aria-hidden and locks body
     // scroll, which would hide the very thing the operator is judging — they tick a
@@ -70,6 +101,48 @@ export function CountryExcludePicker({ keys, onToggle, paused = false, onPauseCh
                 {countryLabel(c)}
               </RM.CheckboxItem>
             ))}
+            {onToggleEntity && (
+              <>
+                {/* Any-entity picks already made, so they can be un-ticked without searching. */}
+                {[...(entities ?? [])].sort().map((e) => (
+                  <RM.CheckboxItem
+                    key={`ent-${e}`}
+                    className="ui-menu-item country-item"
+                    checked
+                    onSelect={(ev) => ev.preventDefault()}
+                    onCheckedChange={() => onToggleEntity(e)}
+                  >
+                    {e}
+                  </RM.CheckboxItem>
+                ))}
+                <div className="country-menu-head">Other country…</div>
+                <div style={{ padding: '0.3rem 0.6rem' }}>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={q}
+                    placeholder="search all entities…"
+                    autoComplete="off"
+                    spellCheck={false}
+                    onFocus={loadAll}
+                    onChange={(e) => setQ(e.target.value)}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    style={{ width: '15rem', maxWidth: '70vw' }}
+                  />
+                </div>
+                {matches.map((e) => (
+                  <RM.CheckboxItem
+                    key={`match-${e}`}
+                    className="ui-menu-item country-item"
+                    checked={entities?.has(e) ?? false}
+                    onSelect={(ev) => ev.preventDefault()}
+                    onCheckedChange={() => onToggleEntity(e)}
+                  >
+                    {e}
+                  </RM.CheckboxItem>
+                ))}
+              </>
+            )}
             <div className="country-menu-note">
               A view filter only — decoding, logging and alerts are untouched. Stations
               calling you, the one you are working, and new entities or band slots still

@@ -429,7 +429,7 @@ export function OperateDecodes({
             >
               −B4
             </button>
-            <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} paused={countries.paused} onPauseChange={countries.setPaused} />
+            <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} paused={countries.paused} onPauseChange={countries.setPaused} entities={countries.entities} onToggleEntity={countries.toggleEntity} />
             <HideCallsPicker />
             <label className="od-sort">
               <span className="od-sort-label">sort</span>
