@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Settings has a tab for each way you operate — Phone, CW and Digital.** The single Modes
+  page held eleven sections, so the mode you came for sat behind every other mode's: a CW
+  operator scrolled past the whole FT8 section and six weak-signal modes to reach their keyer.
+  It now splits into the three the left-hand rail already shows. SSTV, APRS, RTTY, Tempo and
+  the weak-signal modes (Q65, MSK144, JT65, FST4, WSPR) each keep their own named section under
+  Digital. The Frequencies tab folds in there too, honestly renamed **Working frequencies
+  (FT8/FT4)** — that table only ever held FT8 and FT4 rows, while its name promised every band
+  plan you own.
+- **The audio settings sit with the COM port again.** Picking the serial port and picking the
+  sound card are the same job — on a one-cable interface they are the same cable — but they had
+  drifted more than a thousand lines apart, with the satellite and rotator settings in between,
+  so setting up a rig meant scrolling past hardware you may not own. Audio now renders directly
+  under the CAT settings, the way WSJT-X and fldigi have always had it.
+- **Rig Control is now "Rig & CAT", and holds only that.** It had quietly become the place
+  everything rig-adjacent landed. Band-edge tones, the per-mode power caps, the setup backup,
+  rig sharing and the permission for other programs to key your transmitter move to a new
+  **Transmit limits & sharing** section. Nothing changed about what they do.
+- **Accessibility settings moved to Appearance**, beside text size and density, instead of
+  living under Spots & Alerts.
+
+### Fixed
+
+- **Every "Settings ▸ …" pointer in the app now takes you there.** The app named a Settings path
+  in about 228 places and none of them were clickable — including several that named tabs which
+  no longer existed. Setup health's own "no RX audio" light said to check the audio device
+  *below* and then left you to find it. Those are buttons now, and one that lands on a setting
+  folded inside an Advanced group opens the group on the way, so you arrive looking at the
+  control instead of at the heading above it.
+- **The SSTV status line names the control you actually have to find.** It said "Audio input";
+  the setting is called "Input Device (RX)".
+- **The rotator's "not answering" chip goes to the rotator settings**, which is nearly always a
+  wrong model or port, instead of naming a location for you to go hunting.
+
 ### Added
 
 - **One Units setting — metric or imperial, everywhere.** Distances, temperature and wind
