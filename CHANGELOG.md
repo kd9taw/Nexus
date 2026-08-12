@@ -28,6 +28,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Test CAT now tells you when it couldn't run, instead of pointing at your settings.**
+  Pressing Test CAT while the radio engine was down — its sound-card open failed at launch,
+  which silently takes CAT down with it — reported "No CAT status yet — set your rig + PTT
+  method, Save, then test", sending you to re-check settings that were fine. A test that gets
+  no answer now says exactly what is known, including the engine's own error when it left one.
+  A Test CAT pressed around a settings Save is no longer silently swallowed by the rebuild —
+  it runs right after. From the QDX-on-Linux report.
+- **A DXpedition Fox's two-in-one message is recognized outside Hound mode.** A Fox packs two
+  messages into one transmission — `KR4FQG RR73; W3DIY <YS/WE9G> -06`. In ordinary FT8
+  that line never highlighted, even when the RR73 half was ending *your* QSO. It now lights up
+  when either half is addressed to you, counts as the sign-off it is, and the row's country and
+  worked-before read the Fox's callsign. Display only, deliberately: auto-sequencing from a Fox
+  frame outside Hound mode is a separate question. From KR4FQG.
+- **A decode addressed to a hashed or portable form of your call highlights as yours.**
+  `<YS/WE9G>` when you are YS/WE9G, `W1ABC/P` when you are W1ABC — the auto-sequencer
+  already answered these forms; now the decode row shows them as directed to you, the way
+  WSJT-X does. From KR4FQG.
+- **The logbook edit form can view, correct and add a QSO's POTA park.** The park showed in
+  the logbook's Park column but the edit dialog had no control for it, so a missed or wrong
+  park number meant editing the ADIF by hand. Edit now carries Park (worked) and Park (mine)
+  inputs — and an edit no longer risks dropping a QSO's other OTA/IOTA references.
 - **ClubLog uploads no longer hammer, and catch up after you fix the password.** A missing
   ClubLog application password used to retry every two seconds about twenty times with the
   same error and then silently drop the contact; fixing the password retried nothing. Now a
