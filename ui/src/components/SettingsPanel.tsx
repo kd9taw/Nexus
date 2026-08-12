@@ -3315,12 +3315,17 @@ export function SettingsPanel({
                   <strong>USB/LSB</strong> for those modes instead, and stays there — through band
                   changes and when you call a station.
                   {' '}
-                  Only correct if your transmit audio goes in the <strong>microphone</strong> path,
-                  as with an interface wired to the mic jack (some RIGblaster models). On a rig
-                  where the codec feeds only the data port, plain SSB takes audio from the mic and
-                  the radio transmits <strong>no RF at all</strong> — a red TX light and nothing on
-                  the air. <strong>Per radio</strong>, since it depends on how that rig is cabled.
-                  True FSK RTTY is unaffected — it keeps the rig's own RTTY mode.
+                  Correct if your transmit audio goes in the <strong>microphone</strong> path, as
+                  with an interface wired to the mic jack (some RIGblaster models) — or if you
+                  simply prefer plain USB to the DATA submode (for its wider receive passband, say)
+                  and your rig is set to send its USB-codec audio in SSB, which on many modern rigs
+                  (FT-991A, IC-7300 and the like) is a single menu item. Either way the rig has to
+                  put the audio you're feeding onto the air in plain SSB: where it does not — the
+                  codec feeds only the data port and nothing carries in SSB — plain SSB takes audio
+                  from the mic and the radio transmits <strong>no RF at all</strong>, a red TX light
+                  and nothing on the air. <strong>Per radio</strong>, since it depends on how that
+                  rig is cabled and set. True FSK RTTY is unaffected — it keeps the rig's own RTTY
+                  mode.
                 </span>
               </label>
 
