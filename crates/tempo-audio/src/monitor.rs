@@ -313,7 +313,7 @@ mod device_monitor {
         let host = cpal::default_host();
         let name = (!device_name.trim().is_empty()).then_some(device_name);
         let dev = crate::device::resolve_configured(
-            host.output_devices().ok(),
+            || host.output_devices().ok(),
             name,
             host.default_output_device(),
             "monitor output",

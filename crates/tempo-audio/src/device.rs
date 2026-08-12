@@ -241,6 +241,16 @@ pub(crate) fn pick_device<D: NamedDevice>(
     default
 }
 
+/// The ALSA `CARD=<id>` token of a device name, e.g. `plughw:CARD=Device,DEV=0` →
+/// `CARD=Device`. Two names sharing it are the SAME physical card reached by DIFFERENT
+/// access paths (`hw:` / `plughw:` / `dsnoop:` / `default:` …). `None` when the name carries
+/// no such token (Windows / Pulse / JACK names), which is what confines the card-identity
+/// fallback in [`resolve_configured`] to ALSA, where the menu-vs-cpal naming split lives.
+fn alsa_card_token(name: &str) -> Option<&str> {
+    let rest = &name[name.find("CARD=")?..];
+    Some(&rest[..rest.find(',').unwrap_or(rest.len())])
+}
+
 /// Resolve a CONFIGURED device name, strictly.
 ///
 /// The difference from [`pick_device`] is the whole of fix C: an EMPTY selection still
@@ -257,12 +267,24 @@ pub(crate) fn pick_device<D: NamedDevice>(
 /// `input_devices()`, which probe-opens (see [`enumerate_devices`]), so a card PipeWire or
 /// another application is holding is listed by us and unresolvable here. The message names
 /// both possibilities rather than guessing.
-pub(crate) fn resolve_configured<D: NamedDevice>(
-    devices: Option<impl Iterator<Item = D>>,
+///
+/// **`mk_devices` is a factory, not an iterator, because resolution takes TWO independent
+/// lazy passes** (exact name, then the card-identity fallback below) and each MUST start from
+/// a fresh enumeration — reusing pass 1's iterator, or retaining its devices to re-scan, would
+/// hold the ALSA handles that the lazy drop exists to release (see pass 1). Pass 2 runs only
+/// on the error path, so the second enumeration is paid only when the exact name already
+/// missed.
+pub(crate) fn resolve_configured<D, I, F>(
+    mk_devices: F,
     name: Option<&str>,
     default: Option<D>,
     what: &str,
-) -> Result<D, String> {
+) -> Result<D, String>
+where
+    D: NamedDevice,
+    I: Iterator<Item = D>,
+    F: Fn() -> Option<I>,
+{
     match name.map(str::trim).filter(|n| !n.is_empty()) {
         None => default.ok_or_else(|| format!("this system has no default {what} device")),
         Some(wanted) => {
@@ -283,7 +305,7 @@ pub(crate) fn resolve_configured<D: NamedDevice>(
             let (base, ordinal) = split_device_ordinal(wanted);
             let mut seen: Vec<String> = Vec::new();
             let mut matched = 0usize;
-            if let Some(devs) = devices {
+            if let Some(devs) = mk_devices() {
                 for d in devs {
                     let n = d.device_name();
                     if n.as_deref() == Some(base) {
@@ -296,6 +318,29 @@ pub(crate) fn resolve_configured<D: NamedDevice>(
                         seen.push(n);
                     }
                     // `d` drops HERE, before the next probe — load-bearing, see above.
+                }
+            }
+            // ⭐ CARD-IDENTITY FALLBACK — #8 (mw0cqu, FT-847 on a CM108/CODEC card). The
+            // menu stores the card's `plughw:CARD=<id>` hint (audiodev prefers plughw for
+            // its rate/format conversion), but cpal's own enumerator can surface the SAME
+            // physical card only as `hw:CARD=<id>` — a different ACCESS PATH to one device,
+            // never yielded under the saved name — so the exact pass above never matched and
+            // his real card read as "not available" while its FFT was plainly bouncing. When
+            // the saved name carries an ALSA `CARD=<id>` token, take the first enumerated
+            // device on the SAME card (`CARD=<id>` is the ALSA card id — unique per card, so
+            // this cannot cross to a different rig). A FRESH lazy pass, so the drop-between-
+            // probes guarantee from pass 1 still holds. Confined to ALSA by construction: a
+            // Windows/Pulse/JACK name has no CARD= token, so this never fires there.
+            if let Some(card) = alsa_card_token(base) {
+                if let Some(devs) = mk_devices() {
+                    for d in devs {
+                        let is_mate =
+                            d.device_name().as_deref().and_then(alsa_card_token) == Some(card);
+                        if is_mate {
+                            return Ok(d);
+                        }
+                        // `d` drops HERE before the next probe — same reason as pass 1.
+                    }
                 }
             }
             Err(format!(
@@ -506,7 +551,7 @@ impl CpalBackend {
         let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let host = cpal::default_host();
         let in_dev = resolve_configured(
-            host.input_devices().ok(),
+            || host.input_devices().ok(),
             in_name,
             host.default_input_device(),
             "input",
@@ -517,17 +562,28 @@ impl CpalBackend {
         // name could never resolve. cpal's ALSA Device is Clone with Arc-shared handles:
         // the clone hands the output stream the PLAYBACK half of the pair already opened
         // at probe time, no re-probe at all. (Names compare on the base — the " #N"
-        // ordinal names the same physical card.)
+        // ordinal names the same physical card.) The card-token arm keeps this working when
+        // the card-identity fallback resolved the saved `plughw:CARD=X` input to cpal's
+        // `hw:CARD=X`: the output's saved `plughw:CARD=X` no longer matches the resolved
+        // name by string, but it IS the same card, so it must still clone rather than
+        // re-probe a busy device (regressing the very CM108 both-directions case above).
         let same_card = out_name
             .map(str::trim)
             .filter(|n| !n.is_empty())
             .zip(in_dev.name().ok())
-            .is_some_and(|(want, have)| split_device_ordinal(want).0 == have);
+            .is_some_and(|(want, have)| {
+                let want_base = split_device_ordinal(want).0;
+                want_base == have
+                    || matches!(
+                        (alsa_card_token(want_base), alsa_card_token(&have)),
+                        (Some(w), Some(h)) if w == h
+                    )
+            });
         let out_dev = if same_card {
             in_dev.clone()
         } else {
             resolve_configured(
-                host.output_devices().ok(),
+                || host.output_devices().ok(),
                 out_name,
                 host.default_output_device(),
                 "output",
@@ -1072,14 +1128,16 @@ mod tests {
     fn a_cards_later_alias_resolves_because_the_earlier_probe_was_dropped() {
         let held = Rc::new(RefCell::new(HashSet::new()));
         let dev = resolve_configured(
-            Some(busy_host(
-                &[
-                    ("hw:CARD=CODEC,DEV=0", "CODEC"),
-                    ("plughw:CARD=CODEC,DEV=0", "CODEC"),
-                    ("plughw:CARD=Realtek,DEV=0", "Realtek"),
-                ],
-                &held,
-            )),
+            || {
+                Some(busy_host(
+                    &[
+                        ("hw:CARD=CODEC,DEV=0", "CODEC"),
+                        ("plughw:CARD=CODEC,DEV=0", "CODEC"),
+                        ("plughw:CARD=Realtek,DEV=0", "Realtek"),
+                    ],
+                    &held,
+                ))
+            },
             Some("plughw:CARD=CODEC,DEV=0"),
             None,
             "input",
@@ -1113,7 +1171,7 @@ mod tests {
     #[test]
     fn an_unresolvable_explicit_choice_is_an_error_not_the_default() {
         let err = resolve_configured(
-            Some(host().into_iter()),
+            || Some(host().into_iter()),
             Some("plughw:CARD=CODEC,DEV=0"),
             Some(default_dev()),
             "input",
@@ -1140,7 +1198,12 @@ mod tests {
     fn an_empty_selection_still_means_the_system_default() {
         for name in [None, Some(""), Some("   ")] {
             assert_eq!(
-                resolve_configured(Some(host().into_iter()), name, Some(default_dev()), "input"),
+                resolve_configured(
+                    || Some(host().into_iter()),
+                    name,
+                    Some(default_dev()),
+                    "input"
+                ),
                 Ok(default_dev()),
                 "empty selection {name:?} must keep falling back"
             );
@@ -1154,7 +1217,7 @@ mod tests {
         // id is the only proof the right one came back.
         assert_eq!(
             resolve_configured(
-                Some(host().into_iter()),
+                || Some(host().into_iter()),
                 Some("Microphone (USB Audio CODEC) #2"),
                 Some(default_dev()),
                 "input",
@@ -1189,7 +1252,7 @@ mod tests {
     fn a_label_never_resolves_as_a_device_name() {
         let alsa = vec![("plughw:CARD=CODEC,DEV=0".to_string(), 7)];
         assert!(resolve_configured(
-            Some(alsa.into_iter()),
+            || Some(alsa.clone().into_iter()),
             Some("USB AUDIO CODEC"),
             Some(default_dev()),
             "input"
@@ -1229,7 +1292,7 @@ mod resolve_diagnostics {
     #[test]
     fn a_present_device_still_resolves() {
         let got = resolve_configured(
-            Some(["plughw:CARD=CODEC,DEV=0", "default"].into_iter()),
+            || Some(["plughw:CARD=CODEC,DEV=0", "default"].into_iter()),
             Some("plughw:CARD=CODEC,DEV=0"),
             None,
             "output",
@@ -1243,7 +1306,7 @@ mod resolve_diagnostics {
     #[test]
     fn a_missing_device_names_what_the_backend_did_offer() {
         let err = resolve_configured(
-            Some(["default", "plughw:CARD=Generic,DEV=0"].into_iter()),
+            || Some(["default", "plughw:CARD=Generic,DEV=0"].into_iter()),
             Some("plughw:CARD=CODEC,DEV=0"),
             None,
             "output",
@@ -1272,7 +1335,7 @@ mod resolve_diagnostics {
     #[test]
     fn an_empty_backend_list_says_so() {
         let err = resolve_configured(
-            None::<std::vec::IntoIter<&'static str>>,
+            || None::<std::vec::IntoIter<&'static str>>,
             Some("plughw:CARD=CODEC,DEV=0"),
             None,
             "input",
@@ -1284,7 +1347,75 @@ mod resolve_diagnostics {
     /// No name configured still falls back to the system default, unchanged.
     #[test]
     fn no_configured_name_uses_the_default() {
-        let got = resolve_configured(Some(["a"].into_iter()), None, Some("the-default"), "output");
+        let got = resolve_configured(
+            || Some(["a"].into_iter()),
+            None,
+            Some("the-default"),
+            "output",
+        );
         assert_eq!(got.ok(), Some("the-default"));
+    }
+
+    /// ⭐ #8 (mw0cqu), the exact capture. On 1.2.0 his saved input was
+    /// `plughw:CARD=Device,DEV=0`, but cpal's enumerator offered his USB card ONLY as
+    /// `hw:CARD=Device,DEV=0` (his four-device list, verbatim) — the `plughw:` name is never
+    /// yielded for that card, so the exact-name pass can never match it however lazily it
+    /// iterates, and his rig read "not available" while its FFT bounced. The card-identity
+    /// fallback resolves the saved `plughw:CARD=Device` to cpal's `hw:CARD=Device` — same
+    /// physical card, the only access path cpal offered. This is the fix the earlier lazy
+    /// #2/#8 work did NOT cover: that one assumed the plughw hint was yielded but busy.
+    #[test]
+    fn a_saved_plughw_resolves_to_the_cards_hw_alias_when_thats_all_cpal_offers() {
+        let got = resolve_configured(
+            || {
+                Some(
+                    [
+                        "default:CARD=PCH",
+                        "sysdefault:CARD=PCH",
+                        "dsnoop:CARD=PCH,DEV=0",
+                        "hw:CARD=Device,DEV=0",
+                    ]
+                    .into_iter(),
+                )
+            },
+            Some("plughw:CARD=Device,DEV=0"),
+            None,
+            "input",
+        );
+        assert_eq!(
+            got.ok(),
+            Some("hw:CARD=Device,DEV=0"),
+            "the saved plughw pick must fall back to the same card's hw alias"
+        );
+    }
+
+    /// The fallback matches the CARD, never a different rig. With his exact list but the saved
+    /// card absent entirely, there is no mate and it stays an error — a two-radio operator's
+    /// pick must not silently jump to the other rig.
+    #[test]
+    fn the_card_fallback_does_not_cross_to_a_different_card() {
+        let err = resolve_configured(
+            || Some(["hw:CARD=PCH,DEV=0", "dsnoop:CARD=PCH,DEV=0"].into_iter()),
+            Some("plughw:CARD=Device,DEV=0"),
+            None,
+            "input",
+        )
+        .unwrap_err();
+        assert!(err.contains("plughw:CARD=Device,DEV=0"), "{err}");
+    }
+
+    /// REGRESSION GUARD for the two-pass ordering: when the saved `plughw:` name IS enumerated,
+    /// the exact pass must win and return it — NOT the same card's `hw:` alias picked up by the
+    /// fallback. plughw does the rate/format conversion the app relies on; silently downgrading
+    /// a working plughw pick to raw hw would be a regression the fallback must not cause.
+    #[test]
+    fn an_exact_plughw_still_beats_the_hw_card_mate() {
+        let got = resolve_configured(
+            || Some(["hw:CARD=Device,DEV=0", "plughw:CARD=Device,DEV=0"].into_iter()),
+            Some("plughw:CARD=Device,DEV=0"),
+            None,
+            "input",
+        );
+        assert_eq!(got.ok(), Some("plughw:CARD=Device,DEV=0"));
     }
 }

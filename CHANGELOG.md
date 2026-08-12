@@ -77,7 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fell back to the default device (the capture loop akhepcat documented; the tune tone on
   the PC headphones instead of the CM108 on mw0cqu's FT-847). Devices are now probed one
   at a time and released between probes, and picking one card for both input and output
-  shares a single open instead of fighting itself. (#2, #8)
+  shares a single open instead of fighting itself. And when the menu saved a card's
+  `plughw:CARD=…` name but the audio library only ever offers that same card as
+  `hw:CARD=…` — a different access path to one physical device, which is what mw0cqu's
+  capture showed — Nexus now matches by the card itself and opens it anyway, instead of
+  reporting a card that is plainly there as "not available". (#2, #8)
 
 ## [1.2.0] — 2026-08-10
 
