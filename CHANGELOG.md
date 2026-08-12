@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the band always shows. Asked for by F4MQS.
 - **Pause the country filter without losing your ticks.** The Countries menu gains a Pause
   switch: turn the whole exclusion off and back on without re-ticking your list.
+- **Hide any DXCC entity, not just the common 18.** The Countries menu gains an "Other
+  country…" search over the full entity table, alongside the quick-pick list. From F4MQS.
+- **Hide callsigns by name or prefix.** A new "Hide calls" control on Band Activity takes a
+  list of callsigns or `VP8*`-style prefixes and drops them from the panes — a display
+  filter, separate from the block list your auto-CQ honors. From F4MQS.
 
 ### Fixed
 
