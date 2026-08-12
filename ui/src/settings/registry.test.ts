@@ -285,6 +285,16 @@ describe('resolveTarget — a stale pointer must land, never dead-end', () => {
     expect(resolveTarget('Settings ▸ Audio')).toEqual({ tab: 'radio', section: 'audio' })
   })
 
+  it('resolves a section id however the operator capitalised it', () => {
+    // Prose names a mode the way a ham writes it — "Settings ▸ Q65", "MSK144", "JT65" — not in
+    // the lowercase the id happens to use. Case-sensitive lookup silently returned null for
+    // every one of those, which is the dead-end this resolver exists to prevent.
+    expect(resolveTarget('Q65')).toEqual({ tab: 'digital', section: 'q65' })
+    expect(resolveTarget('MSK144')).toEqual({ tab: 'digital', section: 'msk144' })
+    expect(resolveTarget('Settings ▸ JT65')).toEqual({ tab: 'digital', section: 'jt65' })
+    expect(sectionById('APRS')?.id).toBe('aprs')
+  })
+
   it('returns null rather than guessing at something it does not know', () => {
     expect(resolveTarget('')).toBeNull()
     expect(resolveTarget('Settings ▸ Nonexistent Thing')).toBeNull()

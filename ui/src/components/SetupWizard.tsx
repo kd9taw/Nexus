@@ -586,7 +586,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
           <h2 className="wizard-title">How does the radio connect?</h2>
           <p className="wizard-sub">
             One detect finds everything — USB rigs and FlexRadios on the network.
-            Skippable; Settings ▸ Rig Control has all of this later (including Test CAT).
+            Skippable; Settings ▸ Radio ▸ Rig &amp; CAT has all of this later (including Test CAT).
           </p>
           <div className="wizard-detect">
             <button type="button" className="wizard-btn" disabled={detecting} onClick={runDetect}>
@@ -749,7 +749,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR
                 CAT app on this PC — its default TCP port 5002 drives slice A (per-slice
                 ports: B=60001, C=60002) — and audio through DAX. Other network rigs:
-                pick their model later in Settings ▸ Rig Control.
+                pick their model later in Settings ▸ Radio ▸ Rig &amp; CAT.
               </span>
               {dax && !isDaxPaired(audioIn, audioOut) && (
                 <button

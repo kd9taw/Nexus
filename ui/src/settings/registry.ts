@@ -463,7 +463,11 @@ export function tabById(id: string): SettingsTabDef | undefined {
 }
 
 export function sectionById(id: string): SettingsSectionDef | undefined {
-  const resolved = SECTION_ALIASES[norm(id)] ?? id
+  // Normalise on BOTH sides. Ids are lowercase by convention, but callers pass the operator's
+  // own spelling — prose says "Settings ▸ Q65", "MSK144", "JT65", never "q65". Comparing a raw
+  // caller string against a lowercase id silently returned undefined for every mode written the
+  // way a ham writes it, which is precisely the dead end this module exists to prevent.
+  const resolved = norm(SECTION_ALIASES[norm(id)] ?? id)
   return SETTINGS_SECTIONS.find((s) => s.id === resolved)
 }
 

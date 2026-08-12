@@ -232,7 +232,7 @@ export function GettingStartedGuide({ onClose }: Props) {
                 <div className="gsg-split">
                   <div className="gsg-prose">
                     <p>
-                      In the wizard, or in <strong>Settings ▸ Radio ▸ Rig Control</strong>, click{' '}
+                      In the wizard, or in <strong>Settings ▸ Radio ▸ Rig &amp; CAT</strong>, click{' '}
                       <strong>Detect my radio</strong>.
                     </p>
                     <ul>
@@ -256,7 +256,7 @@ export function GettingStartedGuide({ onClose }: Props) {
                         <strong>Then press Test CAT.</strong> Nexus saves what you entered, starts{' '}
                         <code>rigctld</code> for the radio, and reports the dial frequency it read
                         back — or the specific error. Other programs share the radio through the
-                        address in Settings ▸ Radio ▸ <em>Share this radio</em>.
+                        address in Settings ▸ Radio ▸ <em>Transmit limits &amp; sharing</em>.
                       </li>
                     </ul>
                     <div className="gsg-callout neutral">
@@ -275,7 +275,7 @@ export function GettingStartedGuide({ onClose }: Props) {
                     <p className="wizard-title">How does the radio connect?</p>
                     <p className="wizard-sub">
                       One detect finds everything — USB rigs and FlexRadios on the network.
-                      Skippable; Settings ▸ Rig Control has all of this later.
+                      Skippable; Settings ▸ Radio ▸ Rig &amp; CAT has all of this later.
                     </p>
                     <div className="wizard-detect">
                       <span className="wizard-btn">🔍 Detect my radio</span>

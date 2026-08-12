@@ -1497,7 +1497,7 @@ function TrackRail({
     : !rotorInTrack
     ? rotorOn
       ? 'not in this track — re-arm to take the rotor'
-      : 'no rotator configured — Settings ▸ Rig Control'
+      : 'no rotator configured — Settings ▸ Radio ▸ Rotator'
     : track.azDeg != null
       ? `tracking · cmd az ${deg(track.azDeg)}${track.elDeg == null ? ' (az only)' : ` el ${deg(track.elDeg)}`}`
       : 'armed — takes the rotor 5 min before AOS'
