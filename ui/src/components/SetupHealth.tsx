@@ -1,5 +1,34 @@
+import type { ReactNode } from 'react'
 import type { CatTestResult } from '../types'
 import { rxLevelDb } from './LevelMeter'
+
+/** One health dot. A `<button>` when it can navigate to the fix, a `<span>` when it cannot —
+ * never a button that does nothing, which reads as broken (`GettingStartedGuide.test.tsx`
+ * refuses inert-looking controls for the same reason). */
+function HealthItem({
+  className,
+  title,
+  onGoTo,
+  children,
+}: {
+  className: string
+  title: string
+  onGoTo?: (() => void) | false
+  children: ReactNode
+}) {
+  if (!onGoTo) {
+    return (
+      <span className={className} title={title}>
+        {children}
+      </span>
+    )
+  }
+  return (
+    <button type="button" className={`${className} health-item-link`} title={title} onClick={onGoTo}>
+      {children}
+    </button>
+  )
+}
 
 /** Setup Health — "is the station actually working?" made visible, so setup stops running on
  * faith (0.17.0). Reads live snapshot state: Rig (CAT responding), RX audio (level/error), and
@@ -11,6 +40,7 @@ export function SetupHealth({
   radio,
   catResult,
   onProveTx,
+  onGoTo,
 }: {
   radio?: {
     catOk?: boolean | null
@@ -24,6 +54,13 @@ export function SetupHealth({
   catResult: CatTestResult | null
   /** Key a bounded tune carrier to prove the CAT→PTT→RF path (behind a confirm dialog). */
   onProveTx?: () => void
+  /** Jump to the Settings section that fixes a red light (a registry section id).
+   *
+   * The strip's whole job is to say what is broken, and it used to end its sentences with
+   * "below" — "check the audio device below" pointed 1,870 lines and six fieldsets down a
+   * scroller with no anchors in it. A diagnosis that cannot reach its own remedy is half a
+   * feature. Omitted (the wizard's rig step) = the dots stay plain text, as before. */
+  onGoTo?: (section: string) => void
 }) {
   const rigOk = catResult ? catResult.ok : radio?.catOk
   const rigDetail = catResult ? catResult.detail : radio?.catDetail
@@ -37,22 +74,32 @@ export function SetupHealth({
   return (
     <div className="setup-health" role="status" aria-label="Setup health">
       <span className="setup-health-title">Setup health</span>
-      <span
+      {/* Each dot is a BUTTON when the host can navigate (Settings) and plain text when it
+          cannot (the wizard, which already has the controls on screen). The wording drops
+          "below" in the button form — it now goes there. */}
+      <HealthItem
         className={`health-item ${cls(rigOk)}`}
-        title={rigDetail || 'CAT not tested yet — use Test CAT below'}
+        title={rigDetail || (onGoTo ? 'CAT not tested yet — open Rig Control' : 'CAT not tested yet — use Test CAT below')}
+        onGoTo={onGoTo && (() => onGoTo('rig-control'))}
       >
         <span className="health-dot" /> Rig{' '}
         {rigOk === true ? 'responding' : rigOk === false ? 'not answering' : 'untested'}
-      </span>
-      <span
+      </HealthItem>
+      <HealthItem
         className={`health-item ${radio?.audioError ? 'bad' : rxLive ? 'ok' : 'unknown'}`}
         title={
-          radio?.audioError || (rxLive ? 'Receiving audio' : 'No RX audio — check the audio device below')
+          radio?.audioError ||
+          (rxLive
+            ? 'Receiving audio'
+            : onGoTo
+              ? 'No RX audio — open the audio device settings'
+              : 'No RX audio — check the audio device below')
         }
+        onGoTo={onGoTo && (() => onGoTo('audio'))}
       >
         <span className="health-dot" /> RX audio{' '}
         {radio?.audioError ? 'error' : rxDb != null ? `${rxDb} dB` : '—'}
-      </span>
+      </HealthItem>
       <span
         className={`health-item ${txClass}`}
         title={

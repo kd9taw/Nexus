@@ -187,7 +187,10 @@ describe('Linux: the picker reads like the operator’s own system', () => {
       const sel = await picker(name)
       expect([...sel.options].map((o) => o.textContent?.trim())).toContain('USB AUDIO CODEC')
     }
-    fireEvent.click(await screen.findByRole('tab', { name: 'Modes' }))
+    // The voice mic lives with the mode that records into it. That was `Modes` when the eleven
+    // per-mode fieldsets shared one page; it is `Phone` since they were split into the three
+    // tabs the nav rail itself shows.
+    fireEvent.click(await screen.findByRole('tab', { name: 'Phone' }))
     const mic = await picker('Voice mic (recording)')
     expect([...mic.options].map((o) => o.textContent?.trim())).toContain('USB AUDIO CODEC')
   })

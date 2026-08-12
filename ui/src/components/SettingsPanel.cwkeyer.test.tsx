@@ -97,7 +97,10 @@ async function openCw(cwKeyer: string) {
     Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', cwKeyer } as never),
   )
   renderPanel()
-  fireEvent.click(await screen.findByRole('tab', { name: 'Modes' }))
+  // CW is its own tab since the eleven per-mode fieldsets were split into Phone · CW · Digital;
+  // a CW operator no longer scrolls past a ~660-line FT8 fieldset and six weak-signal tiers to
+  // reach their keyer.
+  fireEvent.click(await screen.findByRole('tab', { name: 'CW' }))
   // Unconditional on this tab — wait for it before asserting anything is absent.
   await screen.findByText('Keyer backend')
 }

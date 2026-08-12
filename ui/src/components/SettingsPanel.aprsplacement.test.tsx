@@ -102,11 +102,11 @@ const sectionOf = (el: HTMLElement) =>
   el.closest('fieldset')?.querySelector('legend')?.textContent ?? null
 
 describe('APRS-IS settings live where operators look for them', () => {
-  it('every one of the nine controls is on the Modes tab under APRS', async () => {
+  it('every one of the nine controls is on the Digital tab under APRS', async () => {
     // The whole group moves together — a half-move that stranded the iGate toggle behind the old
     // heading would be worse than not moving at all.
     renderPanel()
-    await openTab('Modes')
+    await openTab('Digital')
     for (const label of [
       'APRS-IS feed',
       'Server',
@@ -132,21 +132,35 @@ describe('APRS-IS settings live where operators look for them', () => {
   })
 
   it('the APRS section sits with the other per-mode settings, not off on its own', async () => {
-    // Discoverability was the entire complaint: an operator scanning the Modes tab for APRS should
-    // meet it in the same list as the modes they already know.
+    // Discoverability was the entire complaint: an operator scanning for APRS should meet it in
+    // the same list as the modes they already know.
+    //
+    // ⚠️ AMENDED 2026-08-12, WITH THE OPERATOR'S SIGN-OFF, AND NOT AS COLLATERAL FROM A RENAME.
+    // The original assertion named CW alongside RTTY, because at the time every mode shared one
+    // `Modes` page. That page has been split into the three tabs the nav rail itself presents
+    // (Phone · CW · Digital), so CW now has its own tab and can no longer co-render here.
+    //
+    // The 2026-07-29 ruling this test exists to protect is UNCHANGED and still enforced: APRS
+    // keeps its own `<legend>APRS</legend>` beside other modes an operator already knows, rather
+    // than being filed by TYPE under Logging & Connectors where the first operator to go looking
+    // could not find it. A setting nobody can find is a setting that does not exist. What the
+    // ruling forbids is re-filing APRS under a heading that reads better — moving CW to its own
+    // tab does not do that, and the test below still proves APRS has mode neighbours.
     renderPanel()
-    await openTab('Modes')
+    await openTab('Digital')
     const legends = [...document.querySelectorAll('fieldset legend')].map((l) => l.textContent)
     expect(legends).toContain('APRS')
     expect(legends).toContain('RTTY')
-    expect(legends).toContain('CW')
+    // Still a list of modes, not APRS alone on a page of its own.
+    expect(legends.filter((l) => l && /RTTY|APRS|Q65|MSK144|JT65|FST4|WSPR|Digital/.test(l)).length)
+      .toBeGreaterThan(2)
   })
 
   it('the enable-gate survived the move — dependent controls stay disabled until the feed is on', async () => {
     // `disabled={!form.aprsIsEnabled}` on eight controls is easy to drop when re-indenting a
     // 180-line block. The default is feed-off, so every dependent control must start disabled.
     renderPanel()
-    await openTab('Modes')
+    await openTab('Digital')
     const server = (await screen.findByText('Server')).closest('label')?.querySelector('input')
     expect(server).toBeTruthy()
     expect(server!.disabled).toBe(true)

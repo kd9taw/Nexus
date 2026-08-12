@@ -1,0 +1,528 @@
+// Settings registry — the single source of truth for WHERE a setting lives.
+//
+// WHY THIS EXISTS. Settings has been reorganised four times (0.8.2 sub-sections, 0.9.2
+// mode-first, 0.17.0 fourteen→eight tabs, plus a stream of individual relocations), and each
+// time the arrangement decayed again because nothing declared where a new field belonged. The
+// panel refills at roughly three fields a day; the day before this registry was written, a
+// global metric/imperial preference landed inside `<legend>Digital (FT8/FT4)</legend>`. A
+// placement that lives only in the shape of an 8,000-line JSX file cannot be checked, searched,
+// or documented — so it drifts, and the next reorg is the only tool anyone has.
+//
+// This module makes placement DECLARED data instead. Three things read it:
+//   1. deep links  — `resolveTarget()` turns "Settings ▸ Audio" into a tab + an anchor, so the
+//                    app's ~228 prose pointers can actually take an operator there.
+//   2. the docs    — `docs/guide/settings-reference.md` is generated from these tables, so a
+//                    move updates the manual instead of stranding it (the 0.17 consolidation
+//                    left nineteen files pointing at tabs that no longer existed).
+//   3. the guards  — registry.test.ts checks the panel renders exactly these sections, that the
+//                    Advanced rule holds, and that no section grows past the density ceiling.
+//
+// It is pure data + pure helpers (no React, no storage), so it is fully unit-testable in node —
+// the same shape as `features/registry.ts`, which has served the same purpose for 22 features.
+//
+// ⚠️ A SECTION'S `id` IS A PUBLIC NAME. It is the anchor in the manual, the target of every
+// deep link, and the slug in `settings-reference.md`. Ids are deliberately INDEPENDENT of the
+// tab a section currently sits on, so moving a section between tabs is a one-word data edit
+// that breaks no link. Rename an id only with a matching entry in `SECTION_ALIASES`.
+
+/** A tab on the Settings rail. The rail is horizontal and must fit one row at the
+ * supported 1024×768 floor, so labels stay short. */
+export type SettingsTabId =
+  | 'station'
+  | 'radio'
+  | 'phone'
+  | 'cw'
+  | 'digital'
+  | 'spots'
+  | 'logging'
+  | 'contesting'
+  | 'appearance'
+
+export interface SettingsTabDef {
+  id: SettingsTabId
+  label: string
+}
+
+/** The tab rail, in render order. `SettingsPanel.tsx` re-exports its own `SETTINGS_TABS`
+ * from this list — `docs-match-code.test.ts` parses that declaration and asserts the manual's
+ * `##` headings equal these labels IN ORDER, so this array and the manual move together. */
+export const SETTINGS_TABS: SettingsTabDef[] = [
+  { id: 'station', label: 'Station' },
+  { id: 'radio', label: 'Radio' },
+  // The three mode tabs mirror the nav rail's own top-level shape (Phone · CW · Digital), which
+  // is the taxonomy the operator already navigates. It is also the only axis that can house SSTV
+  // and APRS: neither has an `OperatingMode` variant in the backend (SSTV rides Phone, APRS rides
+  // FM, settings.rs:1848-1851), so a split built on the rig-mode policy structurally cannot hold
+  // them. Digital parents the six rail sub-items.
+  { id: 'phone', label: 'Phone' },
+  { id: 'cw', label: 'CW' },
+  { id: 'digital', label: 'Digital' },
+  { id: 'spots', label: 'Spots & Alerts' },
+  { id: 'logging', label: 'Logging & Connectors' },
+  { id: 'contesting', label: 'Contesting' },
+  { id: 'appearance', label: 'Appearance' },
+]
+
+export interface SettingsSectionDef {
+  /** Stable public anchor. Never encodes the tab — see the header warning. */
+  id: string
+  /** Plain-text form of the `<legend>` the panel renders (no HTML entities). */
+  label: string
+  tab: SettingsTabId
+  /** Words an operator would actually type or scan for, that the label does NOT contain.
+   * Every persona walkthrough found the searchable vocabulary lives in hint text, not
+   * labels — "COM port" and "sound card" appear in neither `Rig Control` nor `Audio`. */
+  keywords: string[]
+  /** Rendered inside a collapsed `SettingsGroup` disclosure. A deep link to anything in
+   * here must expand it on the way — a target the operator cannot see has not been found. */
+  advanced?: boolean
+  /** The section id this is nested inside, for `SettingsGroup` disclosures. */
+  parent?: string
+  /** True when a first-hour operator needs this to get on the air. Paired with `advanced`
+   * by the rule test below: nothing needed in hour one may hide in a disclosure. */
+  neededInHourOne?: boolean
+}
+
+/**
+ * Every named section of the Settings panel, in render order within its tab.
+ *
+ * ⚠️ THIS DESCRIBES THE PANEL AS IT IS, NOT AS IT SHOULD BE. It was written before the IA
+ * restructure deliberately, so the guard tests could prove it matches today's panel first.
+ * The restructure then edits the `tab` fields here and the JSX wrappers together.
+ */
+export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
+  // ---- Station -----------------------------------------------------------------
+  {
+    id: 'operator-radio',
+    label: 'Operator & Radio',
+    tab: 'station',
+    neededInHourOne: true,
+    keywords: ['callsign', 'call sign', 'grid', 'maidenhead', 'locator', 'license', 'licence',
+      'class', 'extra', 'general', 'technician', 'operator name', 'state', 'my call'],
+  },
+
+  // ---- Radio -------------------------------------------------------------------
+  {
+    id: 'radios',
+    label: 'Radios',
+    tab: 'radio',
+    neededInHourOne: true,
+    keywords: ['roster', 'second radio', 'two radios', 'dual radio', 'so2r', 'routing',
+      'band routing', 'add radio', 'which radio'],
+  },
+  {
+    id: 'profiles',
+    label: 'Profiles',
+    tab: 'radio',
+    keywords: ['home', 'field', 'portable', 'saved setup', 'preset'],
+  },
+  {
+    // ⚠️ THE NAME CARRIES AN EXCLUSION CRITERION, DELIBERATELY: if it is not a model, port,
+    // baud, framing or keying line, it does not belong here. "Rig Control" had none — a
+    // subsystem heading in a radio app admits anything rig-adjacent — so it accreted the
+    // rotator, band-edge tones, per-mode power caps, the setup backup, rig sharing and
+    // foreign-PTT permission until it was 1,011 lines and the audio settings had been pushed
+    // over a thousand lines away from the COM port they belong beside. Keep the boundary.
+    id: 'rig-control',
+    label: 'Rig & CAT',
+    tab: 'radio',
+    neededInHourOne: true,
+    keywords: ['cat', 'com port', 'serial port', 'usb', 'baud', 'ptt', 'rig model', 'hamlib',
+      'rigctld', 'flex', 'smartsdr', 'icom', 'ci-v', 'civ', 'yaesu', 'kenwood', 'detect',
+      'test cat', 'split', 'stop bits', 'parity', 'handshake', 'data bits', 'rig control'],
+  },
+  {
+    id: 'transmit-limits',
+    label: 'Transmit limits & sharing',
+    tab: 'radio',
+    keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
+      'backup', 'restore', 'export settings', 'share rig', 'rigctld address', 'other programs',
+      'foreign ptt', 'wsjt-x share', 'n1mm share'],
+  },
+  {
+    id: 'rig-advanced',
+    label: 'Advanced',
+    tab: 'radio',
+    parent: 'rig-control',
+    advanced: true,
+    keywords: ['rigctld port', 'cat broker', 'sharing port', 'native ci-v', 'flex ip',
+      'panadapter', 'dax', 'diagnostic log', 'plain ssb', 'data modes', 'no rf', 'red light',
+      'rigblaster', 'mic jack', 'pktusb', 'data-u', 'usb-d'],
+  },
+  {
+    id: 'satellite-doppler',
+    label: 'Satellite Doppler',
+    tab: 'radio',
+    keywords: ['satellite', 'sat', 'bird', 'doppler', 'vfo map', 'uplink', 'downlink',
+      'full duplex', 'linear', 'transponder'],
+  },
+  {
+    id: 'orbital-elements',
+    label: 'Orbital elements',
+    tab: 'radio',
+    keywords: ['tle', 'keps', 'keplerian', 'celestrak', 'satnogs', 'orbit', 'satellite'],
+  },
+  {
+    id: 'rotator',
+    label: 'Rotator',
+    tab: 'radio',
+    keywords: ['rotor', 'rotator', 'azimuth', 'elevation', 'park', 'beam', 'antenna turn',
+      'rotctld', 'yaesu g-5500'],
+  },
+  {
+    id: 'audio',
+    label: 'Audio',
+    tab: 'radio',
+    neededInHourOne: true,
+    keywords: ['sound card', 'soundcard', 'audio device', 'input', 'output', 'codec', 'mic',
+      'microphone', 'speaker', 'usb audio', 'cm108', 'dax', 'tx level', 'rx gain', 'drive',
+      'alc', 'power', 'levels'],
+  },
+  {
+    id: 'headphone-monitor',
+    label: 'Headphone monitor',
+    tab: 'radio',
+    keywords: ['headphones', 'monitor', 'listen', 'sidetone out', 'passthrough'],
+  },
+
+  // ---- Modes -------------------------------------------------------------------
+  {
+    id: 'digital-ft8-ft4',
+    label: 'Digital (FT8/FT4)',
+    tab: 'digital',
+    neededInHourOne: true,
+    keywords: ['ft8', 'ft4', 'auto sequence', 'sequencing', 'tx enable', 'watchdog', 'decode',
+      'depth', 'deep', 'auto cq', 'cq', 'hound', 'fox', 'dxpedition', 'auto log', 'blocked',
+      'ap decode', 'f low', 'f high'],
+  },
+  {
+    id: 'jt65',
+    label: 'JT65 — classic EME',
+    tab: 'digital',
+    keywords: ['jt65', 'eme', 'moonbounce', 'submode'],
+  },
+  {
+    id: 'msk144',
+    label: 'MSK144 — meteor scatter',
+    tab: 'digital',
+    keywords: ['msk144', 'meteor', 'scatter', 'ping', 'six metres', '6m'],
+  },
+  {
+    id: 'beacons-wspr-fst4w',
+    label: 'Beacons — WSPR & FST4W',
+    tab: 'digital',
+    keywords: ['wspr', 'whisper', 'fst4w', 'beacon', 'propagation report', 'tx percent',
+      'dbm', 'round robin'],
+  },
+  {
+    id: 'fst4',
+    label: 'FST4 (QSO) / FST4W (beacon)',
+    tab: 'digital',
+    keywords: ['fst4', 'fst4w', 'lf', 'mf', '2200m', '630m', 'period'],
+  },
+  {
+    id: 'q65',
+    label: 'Q65 — EME / VHF+ scatter',
+    tab: 'digital',
+    keywords: ['q65', 'eme', 'moonbounce', 'aircraft scatter', 'submode', 'vhf', 'uhf'],
+  },
+  {
+    id: 'quick-reply-macros',
+    label: 'Quick-reply macros',
+    tab: 'digital',
+    keywords: ['macro', 'quick reply', 'canned', 'message', 'chat', 'shortcut'],
+  },
+  {
+    id: 'phone',
+    label: 'Phone (SSB / FM)',
+    tab: 'phone',
+    neededInHourOne: true,
+    keywords: ['ssb', 'usb', 'lsb', 'voice', 'fm', 'repeater', 'shift', 'offset', 'ctcss',
+      'pl tone', 'tone', 'mic', 'microphone', 'voice keyer'],
+  },
+  {
+    id: 'cw',
+    label: 'CW',
+    tab: 'cw',
+    neededInHourOne: true,
+    keywords: ['morse', 'keyer', 'winkeyer', 'paddle', 'straight key', 'wpm', 'speed',
+      'sidetone', 'pitch', 'keyline', 'f-key', 'macro', 'iambic'],
+  },
+  {
+    id: 'rtty',
+    label: 'RTTY',
+    tab: 'digital',
+    keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
+      'mark', 'space'],
+  },
+  {
+    id: 'aprs',
+    label: 'APRS',
+    tab: 'digital',
+    keywords: ['aprs', 'aprs-is', 'igate', 'beacon', 'symbol', 'digipeater', 'path', 'wide1-1',
+      'ssid', 'position', 'weather', 'packet', 'tnc'],
+  },
+
+  // ---- Frequencies -------------------------------------------------------------
+  {
+    id: 'working-frequencies',
+    label: 'Working Frequencies',
+    tab: 'digital',
+    keywords: ['frequency', 'dial', 'band plan', 'override', 'calling frequency', 'mhz',
+      'ft8 frequency', 'ft4 frequency'],
+  },
+
+  // ---- Spots & Alerts ----------------------------------------------------------
+  {
+    id: 'pounce',
+    label: 'Pounce — new-one alert',
+    tab: 'spots',
+    keywords: ['pounce', 'atno', 'new one', 'alert', 'needed', 'threshold'],
+  },
+  {
+    id: 'accessibility',
+    label: 'Accessibility & eyes-free',
+    tab: 'appearance',
+    keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
+      'eyes free', 'tick'],
+  },
+  {
+    id: 'alerts',
+    label: 'Alerts',
+    tab: 'spots',
+    keywords: ['alert', 'notify', 'my call', 'cq', 'new dxcc', 'new grid', 'rare', 'watch list',
+      'wanted', 'sound'],
+  },
+
+  // ---- Logging & Connectors ----------------------------------------------------
+  {
+    id: 'connections',
+    label: 'Connections',
+    tab: 'logging',
+    keywords: ['status', 'connector', 'health', 'log', 'connection log', 'test'],
+  },
+  {
+    id: 'integrations-feeds',
+    label: 'Integrations & Feeds',
+    tab: 'logging',
+    keywords: ['wsjt-x', 'udp', 'gridtracker', 'jtalert', 'hrd', 'ham radio deluxe', 'psk',
+      'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'all.txt', 'wav',
+      'recording', 'propagation'],
+  },
+  {
+    id: 'antenna-gain',
+    label: 'Antenna gain (advanced)',
+    tab: 'logging',
+    parent: 'integrations-feeds',
+    advanced: true,
+    keywords: ['antenna', 'gain', 'dbi', 'p.533', 'prediction'],
+  },
+  {
+    id: 'dxkeeper',
+    label: 'DXKeeper (DXLab Suite)',
+    tab: 'logging',
+    keywords: ['dxkeeper', 'dxlab', 'commander', 'logger'],
+  },
+  {
+    id: 'n3fjp',
+    label: 'N3FJP Integration (club master log)',
+    tab: 'logging',
+    keywords: ['n3fjp', 'club log', 'field day', 'master log', 'amateur contact log'],
+  },
+  {
+    id: 'n1mm',
+    label: 'N1MM+ Integration',
+    tab: 'logging',
+    keywords: ['n1mm', 'contest logger', 'broadcast', 'contactinfo'],
+  },
+  {
+    id: 'lotw-users',
+    label: 'LoTW users list',
+    tab: 'logging',
+    keywords: ['lotw', 'logbook of the world', 'users', 'marks', 'known users'],
+  },
+  {
+    id: 'callsign-state',
+    label: 'Callsign → state database',
+    tab: 'logging',
+    keywords: ['fcc', 'state', 'was', 'callsign database', 'us states'],
+  },
+  {
+    id: 'confirmations',
+    label: 'Confirmations',
+    tab: 'logging',
+    neededInHourOne: true,
+    keywords: ['lotw', 'eqsl', 'qrz', 'clublog', 'club log', 'hrdlog', 'cloudlog', 'wavelog',
+      'hamqth', 'qsl', 'upload', 'password', 'api key', 'credential', 'login', 'callbook',
+      'repeaterbook', 'tqsl', 'station location'],
+  },
+
+  // ---- Contesting --------------------------------------------------------------
+  {
+    id: 'contest-category',
+    label: 'Contest Category',
+    tab: 'contesting',
+    keywords: ['contest', 'assisted', 'unassisted', 'category', 'entry'],
+  },
+  {
+    id: 'field-day',
+    label: 'Field Day Setup',
+    tab: 'contesting',
+    keywords: ['field day', 'arrl', 'class', 'section', 'exchange', 'power multiplier',
+      'winter field day'],
+  },
+
+  // ---- Appearance --------------------------------------------------------------
+  {
+    id: 'workspace',
+    label: 'Workspace',
+    tab: 'appearance',
+    keywords: ['theme', 'dark', 'light', 'ui scale', 'text size', 'font size', 'zoom',
+      'density', 'compact', 'pane', 'layout'],
+  },
+  {
+    id: 'features',
+    label: 'Features',
+    tab: 'appearance',
+    keywords: ['sections', 'enable', 'disable', 'turn off', 'hide', 'profile', 'goal',
+      'pota', 'setup wizard', 'field day mode'],
+  },
+]
+
+/** Tab names that USED to exist, mapped to where their content lives now. A prose pointer or a
+ * doc link written against an older layout must still land somewhere sensible — the 0.17
+ * consolidation left nineteen files citing dead tabs, and four of those names are STILL live in
+ * the tree today (`Features` ×11, `Logbook & QSL` ×6, `Integrations` ×4, `Connections` ×3).
+ * Lower-cased on lookup. */
+export const TAB_ALIASES: Record<string, SettingsTabId> = {
+  // The tab this reorganisation split. `Modes` was one page holding eleven fieldsets; it is now
+  // Phone, CW and Digital. A bare "Settings ▸ Modes" can no longer name one page, so it lands on
+  // Digital — the tab that kept the majority of what Modes held (FT8/FT4, the weak-signal tiers,
+  // RTTY, SSTV, APRS, Tempo). A pointer that also names its section (the overwhelming majority,
+  // e.g. "Settings ▸ Modes ▸ CW") never reaches this line: `resolveTarget` matches the section
+  // first and lands exactly.
+  modes: 'digital',
+  // Folded INTO Digital, renamed "Working frequencies (FT8/FT4)" — the table only ever held
+  // FT8/FT4 rows (`FREQ_MODES`), while its top-level name promised park, net and repeater
+  // frequencies it does not have.
+  frequencies: 'digital',
+  // 0.17 consolidation (fourteen → eight)
+  'logbook & qsl': 'logging',
+  'logbook and qsl': 'logging',
+  integrations: 'logging',
+  'integrations & feeds': 'logging',
+  connections: 'logging',
+  qsl: 'logging',
+  features: 'appearance',
+  rig: 'radio',
+  'rig / cat': 'radio',
+  'rig control': 'radio',
+  cat: 'radio',
+  audio: 'radio',
+  alerts: 'spots',
+  'watch list': 'spots',
+  'spot sources': 'spots',
+  satellites: 'radio',
+  'field day': 'contesting',
+  workspace: 'appearance',
+  appearance: 'appearance',
+}
+
+/** Section ids that have been renamed. Same contract as `TAB_ALIASES`, one level down. */
+export const SECTION_ALIASES: Record<string, string> = {
+  'rig-cat': 'rig-control',
+  'rig--cat': 'rig-control',
+  'audio-devices': 'audio',
+  'sound-card': 'audio',
+  'logbook-qsl': 'confirmations',
+  'qsl-services': 'confirmations',
+  'setup-health': 'radios',
+}
+
+/** Where a deep link should land: a tab, and optionally a section to scroll to. */
+export interface SettingsTarget {
+  tab: SettingsTabId
+  /** A `SETTINGS_SECTIONS` id. The panel scrolls it into view and expands it if collapsed. */
+  section?: string
+}
+
+const norm = (s: string) => s.trim().toLowerCase()
+
+/** Slug used for anchors and for the generated manual's heading ids. Mirrors the `slug()` in
+ * `docs-match-code.test.ts` so a section's DOM anchor and its doc anchor agree. */
+export function sectionSlug(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+}
+
+export function tabById(id: string): SettingsTabDef | undefined {
+  return SETTINGS_TABS.find((t) => t.id === id)
+}
+
+export function sectionById(id: string): SettingsSectionDef | undefined {
+  const resolved = SECTION_ALIASES[norm(id)] ?? id
+  return SETTINGS_SECTIONS.find((s) => s.id === resolved)
+}
+
+export function sectionsForTab(tab: SettingsTabId): SettingsSectionDef[] {
+  return SETTINGS_SECTIONS.filter((s) => s.tab === tab)
+}
+
+/**
+ * Resolve a human or legacy reference into a landing place.
+ *
+ * Accepts, in order of precision: a section id (`'audio'`), a tab id (`'radio'`), a tab LABEL
+ * (`'Logging & Connectors'`), a legacy tab name (`'Logbook & QSL'`), or a path
+ * (`'Radio ▸ Audio'`, `'Settings > Modes > CW'`). Returns `null` only when nothing matches,
+ * so a caller can fall back to opening Settings plainly rather than doing nothing.
+ *
+ * A stale pointer MUST degrade to a landing, never to a dead end — that is the whole reason
+ * the alias tables exist.
+ */
+export function resolveTarget(raw: string): SettingsTarget | null {
+  if (!raw) return null
+  // Strip a leading "Settings" and split on the separators the app and docs actually use.
+  const parts = raw
+    .split(/[▸>›»→]|->/)
+    .map((p) => p.trim())
+    .filter((p) => p && norm(p) !== 'settings')
+  if (!parts.length) return null
+
+  // Walk right-to-left: the most specific trailing part wins, so "Radio ▸ Audio" lands on the
+  // Audio section rather than merely the Radio tab.
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
+    const bySectionId = sectionById(p)
+    if (bySectionId) return { tab: bySectionId.tab, section: bySectionId.id }
+    const bySectionLabel = SETTINGS_SECTIONS.find((s) => norm(s.label) === norm(p))
+    if (bySectionLabel) return { tab: bySectionLabel.tab, section: bySectionLabel.id }
+    const bySlug = SETTINGS_SECTIONS.find((s) => sectionSlug(s.label) === norm(p))
+    if (bySlug) return { tab: bySlug.tab, section: bySlug.id }
+  }
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i]
+    const tab = SETTINGS_TABS.find((t) => t.id === norm(p) || norm(t.label) === norm(p))
+    if (tab) {
+      // A tab matched; see whether a later part names one of ITS sections.
+      const rest = parts.slice(i + 1)
+      for (const r of rest) {
+        const sec = sectionsForTab(tab.id).find(
+          (s) => norm(s.label) === norm(r) || s.id === norm(r),
+        )
+        if (sec) return { tab: tab.id, section: sec.id }
+      }
+      return { tab: tab.id }
+    }
+    const alias = TAB_ALIASES[norm(p)]
+    if (alias) {
+      // A legacy name may ALSO be a live section id (e.g. "Audio", "CW") — prefer the section
+      // so the operator lands on the control, not merely the page that now contains it.
+      const sec = SETTINGS_SECTIONS.find((s) => norm(s.label) === norm(p) || s.id === norm(p))
+      return sec ? { tab: sec.tab, section: sec.id } : { tab: alias }
+    }
+  }
+  return null
+}
