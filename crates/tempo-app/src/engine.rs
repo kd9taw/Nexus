@@ -11376,6 +11376,28 @@ impl Engine {
             }
         }
 
+        // #64, display side only: a DXpedition Fox packs two messages into one frame —
+        // "K1ABC RR73; W9XYZ <FOX> -08". In Hound mode `hound_split` has already split it
+        // upstream for everything; in STANDARD mode the sequencer must never see the halves
+        // (a Fox frame must not arm a non-Hound TX — that half of #64 is gated on operator
+        // sign-off), but the ROW must still be recognized the way WSJT-X shows it: the
+        // single on-air line, highlighted when either half is ours. Returns
+        // (first-half addressee, second half) only for the strict Fox shape — first half
+        // exactly "<call> RR73|RRR|73", second half a directed message with a sender — so
+        // free text carrying ';' is untouched.
+        fn fox_multiplex(msg: &str) -> Option<(&str, &str)> {
+            let (a, b) = msg.split_once(';')?;
+            let (a, b) = (a.trim(), b.trim());
+            let [to, fin] = a.split_whitespace().collect::<Vec<_>>()[..] else {
+                return None;
+            };
+            if !matches!(fin, "RR73" | "RRR" | "73") || !tempo_core::message::is_callsign(to) {
+                return None;
+            }
+            let second = Msg::parse(b);
+            (second.sender().is_some() && second.addressee().is_some()).then_some((to, b))
+        }
+
         // Project this slot's decodes into the live feed (alerts + coloring).
         let mycall = &self.settings.mycall;
         // The band these decodes arrived on — new-grid / new-DXCC are per-band
@@ -11386,7 +11408,11 @@ impl Engine {
             .last_decodes
             .iter()
             .map(|d| {
-                let parsed = Msg::parse(&d.message);
+                // A Fox multiplex row classifies by its SECOND half (the one carrying the
+                // Fox's call as sender — country, B4 and rarity are about the transmitter);
+                // the first half contributes only its addressee and its RR73-ness below.
+                let fox_mux = fox_multiplex(&d.message);
+                let parsed = Msg::parse(fox_mux.map_or(d.message.as_str(), |(_, b)| b));
                 // #55: a WSPR spot is "CALL GRID DBM" — a different grammar entirely.
                 // Run through the FT8 parser, the trailing dBm (typ. 23–47, inside the
                 // −50..=49 report range) reads as a signal report and the GRID lands in
@@ -11409,10 +11435,14 @@ impl Engine {
                 // (see `to_me` in the QSO observer); this is the display path catching up, so a
                 // row the sequencer would answer no longer looks unaddressed. (#64)
                 let directed_to_me = wspr_fields.is_none()
-                    && parsed
+                    && (parsed
                         .addressee()
                         .map(|a| same_call(a, mycall))
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        // A Fox multiplex is to us when EITHER half is: `parsed` covers
+                        // the second, this covers the first (the Fox's RR73 that ends
+                        // OUR QSO — the exact line the #64 reporter watched go dark).
+                        || fox_mux.is_some_and(|(to, _)| same_call(to, mycall)));
                 // Worked-before (B4): the decode's sender is in the logbook —
                 // via the SAME prebuilt set as the roster above. The per-row
                 // `worked_before()` this replaces was the exact O(rows × log)
@@ -11483,8 +11513,10 @@ impl Engine {
                     is_cq,
                     directed_to_me,
                     // QSO-ending RR73/73, by parse type (token-positional — a DM73
-                    // grid or an RRR roger never counts). Feeds the CQ+73 chip.
-                    signoff: parsed.is_signoff(),
+                    // grid or an RRR roger never counts). Feeds the CQ+73 chip. A Fox
+                    // multiplex's first half is RR73/RRR/73 by the shape gate, so a
+                    // matched frame is a signoff by construction.
+                    signoff: parsed.is_signoff() || fox_mux.is_some(),
                     worked,
                     country: entity,
                     new_dxcc,
@@ -16842,6 +16874,57 @@ mod tests {
             row.from.as_deref(),
             Some("EK70"),
             "control: the FT8 grammar misparse this fix exists for"
+        );
+    }
+
+    /// #64 first half (kr4fqg, confirmed standard FT8): a DXpedition Fox packs two
+    /// messages into one frame — "KR4FQG RR73; W3DIY <YS/WE9G> -06". Outside Hound
+    /// mode the sequencer must never see the halves (a Fox frame must not arm a
+    /// non-Hound TX), but the ROW must still be recognized the way WSJT-X shows it:
+    /// the single on-air line, highlighted when EITHER half is addressed to us, with
+    /// the sender read from the half that carries the Fox's call.
+    #[test]
+    fn a_fox_multiplex_row_is_recognized_in_standard_mode() {
+        let mut e = Engine::new("KR4FQG", "EM64", 0);
+        // First half addresses us (the Fox's RR73 that ends OUR QSO).
+        e.last_decodes = vec![dec_snr("KR4FQG RR73; W3DIY <YS/WE9G> -06", -13)];
+        let row = &e.snapshot().recent_decodes[0];
+        assert!(row.directed_to_me, "the Fox's RR73 half is addressed to us");
+        assert!(row.signoff, "an RR73 half is a signoff");
+        assert_eq!(
+            row.message, "KR4FQG RR73; W3DIY <YS/WE9G> -06",
+            "the on-air line is shown as transmitted, never rewritten"
+        );
+        assert!(
+            row.from.as_deref().is_some_and(|f| f.contains("YS/WE9G")),
+            "the sender is the Fox, read from the half that carries its call: {:?}",
+            row.from
+        );
+
+        // Second half addresses us (the Fox's report to us, RR73 to someone else).
+        e.last_decodes = vec![dec_snr("W1ABC RR73; KR4FQG <YS/WE9G> -06", -13)];
+        assert!(
+            e.snapshot().recent_decodes[0].directed_to_me,
+            "the report half is addressed to us"
+        );
+
+        // Neither half is us → no highlight (match is by call, not by shape).
+        e.last_decodes = vec![dec_snr("W1ABC RR73; W3DIY <YS/WE9G> -06", -13)];
+        assert!(!e.snapshot().recent_decodes[0].directed_to_me);
+
+        // Controls: the shape gate. A ';' alone is not a multiplex — BOTH halves must
+        // match (exact "<call> RR73|RRR|73" first, directed-with-sender second), so
+        // free text carrying a semicolon can never borrow the Fox handling.
+        e.last_decodes = vec![dec_snr("W1ABC RR73; HELLO THERE", -13)];
+        let row = &e.snapshot().recent_decodes[0];
+        assert!(
+            !row.signoff && !row.directed_to_me,
+            "an undirected second half fails the gate"
+        );
+        e.last_decodes = vec![dec_snr("W1ABC HELLO; KR4FQG <YS/WE9G> -06", -13)];
+        assert!(
+            !e.snapshot().recent_decodes[0].directed_to_me,
+            "a non-RR73 first half fails the gate"
         );
     }
 
