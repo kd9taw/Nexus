@@ -2771,11 +2771,29 @@ impl RadioLoop {
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
                 // simplex here (see `fm_repeater_config`) so a beacon never keys through a shift.
                 let fm = eng.fm_repeater_config();
+                let want = Transport::from_settings(eng.settings());
+                let cat_hold = eng.cat_port_hold();
+                // Consume the Test-CAT request ONLY when this tick's transport branch will
+                // actually probe — the same consume-only-when-acting rule as the retune/split
+                // one-shots below. A rebuild tick (a settings Save, a port hold, a deferred
+                // handoff) used to swallow the request on the way in, so a Test CAT pressed
+                // around a Save reported whatever the rebuild happened to publish instead of
+                // running the probe the operator asked for (#61). Left pending, it fires on
+                // the next idle tick. `cat_hold_active` covers the falling-edge resume tick,
+                // which rebuilds too.
+                let rebuild_tick = self.handoff_deferred
+                    || cat_hold
+                    || self.cat_hold_active
+                    || want.rig_differs(&self.applied);
                 (
-                    Transport::from_settings(eng.settings()),
+                    want,
                     eng.settings().dial_hz(),
                     eng.rig_mode_effective(), // operator Phone mode override, else band-derived policy
-                    eng.take_cat_reprobe(),
+                    if rebuild_tick {
+                        false
+                    } else {
+                        eng.take_cat_reprobe()
+                    },
                     if can_retune {
                         eng.take_immediate_retune()
                     } else {
@@ -2789,7 +2807,7 @@ impl RadioLoop {
                         None
                     },
                     fm,
-                    eng.cat_port_hold(),
+                    cat_hold,
                 )
             };
             // Stash for the key-site latch (ensure_commanded) — the bindings above live in
@@ -9223,6 +9241,48 @@ mod tests {
                 &mut station,
             )
             .unwrap();
+    }
+
+    /// #61 (QDX/Linux report): Save, then Test CAT. The tick that notices the transport
+    /// changed spends itself on the teardown+rebuild — and used to consume the pending
+    /// Test-CAT request on the way in (the take was unconditional), so the probe the
+    /// operator explicitly asked for silently never ran. The request must survive a
+    /// rebuild tick and fire on the next idle one — consume-only-when-acting, the same
+    /// rule the retune/split one-shots already follow.
+    #[test]
+    fn a_rebuild_tick_leaves_a_pending_test_cat_request_queued() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 2014; // any CAT rig — it only has to differ from the loop's applied
+            s.serial_port = "/dev/tempo-test-qdx".to_string();
+            e.apply_settings(s);
+            e.request_cat_reprobe(); // the operator's Test CAT press, racing the Save
+        }
+        let mut state = loop_state(); // applied = defaults → this tick sees rig_differs
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let sinks = no_sinks();
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            engine.lock().unwrap().take_cat_reprobe(),
+            "the rebuild tick swallowed the pending Test CAT request instead of leaving it queued"
+        );
     }
 
     #[test]

@@ -9233,6 +9233,32 @@ struct CatTestResult {
     detail: String,
 }
 
+/// The Test-CAT verdict when the radio loop never published our probe within the wait
+/// window — each arm says what is actually known. An EMPTY current status means no probe
+/// has run all session: the radio engine died before its first one (its audio open failed
+/// at launch, which kills CAT too), so surface the engine's own last words when it left
+/// any. A NON-empty status is real but stale — label it as such rather than presenting it
+/// as this test's answer.
+#[cfg(feature = "radio")]
+fn cat_test_timeout(detail: String, audio_error: Option<String>) -> CatTestResult {
+    let detail = match (detail.is_empty(), audio_error) {
+        (true, Some(err)) => format!(
+            "The radio engine isn't running — it reported: {err} CAT is down with it; fix the \
+             audio device it names, then restart Nexus."
+        ),
+        (true, None) => "The radio engine didn't answer within 20 seconds and hasn't reported \
+             any CAT status this session — it may be stuck opening the sound card or the rig's \
+             serial port. Restart Nexus; if this repeats, close other radio programs (they can \
+             hold the audio device or the rigctld port) and try again."
+            .to_string(),
+        (false, _) => format!(
+            "The test didn't finish within 20 seconds — the rig link may be very slow, or \
+             mid-rebuild after a settings save. Last known status: {detail}"
+        ),
+    };
+    CatTestResult { ok: false, detail }
+}
+
 /// Test the rig/CAT connection now. Asks the radio loop to (re)open + probe the
 /// rig using the **current** settings, waits for THAT probe's result to publish
 /// (generation counter — a daemon rebuild can take seconds, and the old fixed
@@ -9265,14 +9291,35 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             eng.request_cat_reprobe();
             g
         };
-        // Wait for the requested probe to publish (rebuilds cost 700 ms bind + up to
-        // 2 × 2.5 s reads); on timeout fall through with whatever status is current.
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Wait for the requested probe to publish. 20 s, not a token pause: a Save-triggered
+        // rebuild the request may queue behind costs 700 ms daemon bind + a coexist probe +
+        // three slow-transport commands at 2.5 s each, plus the probe itself — and the loop's
+        // own heavy poll can precede it. On timeout, say the truth (below) instead of handing
+        // back a stale status as if it were the test's answer.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut fresh = false;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
             if engine_lock(&state).cat_probe_gen() != gen0 {
+                fresh = true;
                 break;
             }
+        }
+        if !fresh {
+            // The loop never published our probe. Either it is wedged/slow (stale status
+            // exists) or it never ran at all this session (status empty — the radio engine
+            // died before its first probe, classically because the audio open failed at
+            // launch, which takes CAT down with it). The old code fell through and reported
+            // whatever was current: a stale status presented as fresh, or the "set your rig
+            // + PTT method" hint for a dead engine — which sent the #61 reporter chasing
+            // CAT settings while the real fault was elsewhere. Skip the baud ladder too: a
+            // sweep verdict hung off a status this test didn't produce would be noise.
+            let (detail, audio_error) = {
+                let eng = engine_lock(&state);
+                let r = eng.snapshot().radio;
+                (r.cat_detail, r.audio_error)
+            };
+            return Ok(cat_test_timeout(detail, audio_error));
         }
         let (ok, mut detail, ladder) = {
             let eng = engine_lock(&state);
@@ -16039,6 +16086,42 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// #61: a Test CAT that timed out must say so — each arm names what is known,
+    /// never the generic "set your rig + PTT method" hint that sent the reporter
+    /// chasing CAT settings while the radio engine was dead.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn cat_test_timeout_says_what_is_actually_known() {
+        use super::cat_test_timeout;
+        // Dead engine (no status ever published + its dying report): surface the report.
+        let r = cat_test_timeout(
+            String::new(),
+            Some("Sound card failed to open: device busy.".to_string()),
+        );
+        assert!(!r.ok);
+        assert!(
+            r.detail.contains("Sound card failed to open") && r.detail.contains("CAT is down"),
+            "{}",
+            r.detail
+        );
+        // Never-published, no engine report: starting/stuck, not a settings hint.
+        let r = cat_test_timeout(String::new(), None);
+        assert!(!r.ok);
+        assert!(
+            r.detail.contains("hasn't reported any CAT status") && !r.detail.contains("Save"),
+            "{}",
+            r.detail
+        );
+        // Stale status: return it, but LABELED stale — never as this test's answer.
+        let r = cat_test_timeout("CAT confirmed — rig accepted a command".to_string(), None);
+        assert!(!r.ok, "a timed-out test must not claim green off a stale status");
+        assert!(
+            r.detail.contains("Last known status") && r.detail.contains("CAT confirmed"),
+            "{}",
+            r.detail
+        );
+    }
+
     #[test]
     fn qrz_book_mismatch_warns_a_portable_operator() {
         use super::qrz_book_mismatch_warning;
