@@ -132,14 +132,6 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'test cat', 'split', 'stop bits', 'parity', 'handshake', 'data bits', 'rig control'],
   },
   {
-    id: 'transmit-limits',
-    label: 'Transmit limits & sharing',
-    tab: 'radio',
-    keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
-      'backup', 'restore', 'export settings', 'share rig', 'rigctld address', 'other programs',
-      'foreign ptt', 'wsjt-x share', 'n1mm share'],
-  },
-  {
     id: 'rig-advanced',
     label: 'Advanced',
     tab: 'radio',
@@ -148,6 +140,21 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['rigctld port', 'cat broker', 'sharing port', 'native ci-v', 'flex ip',
       'panadapter', 'dax', 'diagnostic log', 'plain ssb', 'data modes', 'no rf', 'red light',
       'rigblaster', 'mic jack', 'pktusb', 'data-u', 'usb-d'],
+  },
+  {
+    id: 'audio',
+    label: 'Audio',
+    tab: 'radio',
+    neededInHourOne: true,
+    keywords: ['sound card', 'soundcard', 'audio device', 'input', 'output', 'codec', 'mic',
+      'microphone', 'speaker', 'usb audio', 'cm108', 'dax', 'tx level', 'rx gain', 'drive',
+      'alc', 'power', 'levels'],
+  },
+  {
+    id: 'headphone-monitor',
+    label: 'Headphone monitor',
+    tab: 'radio',
+    keywords: ['headphones', 'monitor', 'listen', 'sidetone out', 'passthrough'],
   },
   {
     id: 'satellite-doppler',
@@ -170,19 +177,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'rotctld', 'yaesu g-5500'],
   },
   {
-    id: 'audio',
-    label: 'Audio',
+    id: 'transmit-limits',
+    label: 'Transmit limits & sharing',
     tab: 'radio',
-    neededInHourOne: true,
-    keywords: ['sound card', 'soundcard', 'audio device', 'input', 'output', 'codec', 'mic',
-      'microphone', 'speaker', 'usb audio', 'cm108', 'dax', 'tx level', 'rx gain', 'drive',
-      'alc', 'power', 'levels'],
-  },
-  {
-    id: 'headphone-monitor',
-    label: 'Headphone monitor',
-    tab: 'radio',
-    keywords: ['headphones', 'monitor', 'listen', 'sidetone out', 'passthrough'],
+    keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
+      'backup', 'restore', 'export settings', 'share rig', 'rigctld address', 'other programs',
+      'foreign ptt', 'wsjt-x share', 'n1mm share'],
   },
 
   // ---- Modes -------------------------------------------------------------------
@@ -278,13 +278,6 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Pounce — new-one alert',
     tab: 'spots',
     keywords: ['pounce', 'atno', 'new one', 'alert', 'needed', 'threshold'],
-  },
-  {
-    id: 'accessibility',
-    label: 'Accessibility & eyes-free',
-    tab: 'appearance',
-    keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
-      'eyes free', 'tick'],
   },
   {
     id: 'alerts',
@@ -386,6 +379,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'appearance',
     keywords: ['sections', 'enable', 'disable', 'turn off', 'hide', 'profile', 'goal',
       'pota', 'setup wizard', 'field day mode'],
+  },
+  {
+    id: 'accessibility',
+    label: 'Accessibility & eyes-free',
+    tab: 'appearance',
+    keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
+      'eyes free', 'tick'],
   },
 ]
 

@@ -86,7 +86,7 @@ keyer's F-keys are always reachable rather than rendered past the edge. **PTT**,
    - hold the on-screen **PTT** button,
    - **hold the Space bar** (works unless you're typing in a field),
    - or let the configured rig method key it (CAT, serial RTS/DTR, or VOX) — set
-     in [Settings ▸ Radio ▸ Rig Control](settings-reference.md#rig-control).
+     in [Settings ▸ Radio ▸ Rig & CAT](settings-reference.md#rig--cat).
    For hands-free operating, toggle **Lock**.
 3. Talk on the rig's microphone. Nexus handles the canned messages, recording,
    scope, and CAT/PTT — the voice path itself is the rig's own mic.

@@ -110,7 +110,7 @@ export function OperateQsoStrip({
   const noTxWhy = 'This mode is receive-only in Nexus — it decodes but does not transmit'
   const isBeacon = beacon ?? false
   const beaconWhy =
-    'This is a beacon mode — it transmits your callsign, grid and power on a schedule. There is no QSO sequence. Set the transmit % and power in Settings ▸ Modes.'
+    'This is a beacon mode — it transmits your callsign, grid and power on a schedule. There is no QSO sequence. Set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W).'
   // No QSO to run on a beacon, and nothing to send on a receive-only tier.
   const noQso = noTx || isBeacon
   const noQsoWhy = isBeacon ? beaconWhy : noTxWhy

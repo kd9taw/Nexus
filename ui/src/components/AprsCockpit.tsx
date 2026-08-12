@@ -457,9 +457,9 @@ export function aprsDecodeStatus(
       label: 'No input',
       detail:
         'Armed, but no audio samples are arriving at all — the capture device is not delivering ' +
-        'anything. Check that Settings → Audio input is the radio (not a microphone or a ' +
-        'disconnected device); what you hear on the speaker does not tell you what the app is ' +
-        'capturing.',
+        'anything. Check that Input Device (RX) in Settings ▸ Radio ▸ Audio is the radio (not a ' +
+        'microphone or a disconnected device); what you hear on the speaker does not tell you ' +
+        'what the app is capturing.',
     }
   }
   // Decodes outrank everything below: once packets are landing, a squelched gap between them is
@@ -534,6 +534,7 @@ export function AprsCockpit({
   onSetTxEnabled,
   theme,
   myGrid = '',
+  onOpenSettings,
 }: {
   active: boolean
   /** Palette for the embedded APRS map. */
@@ -555,6 +556,9 @@ export function AprsCockpit({
   /** Arm/disarm TX (the TopBar's Enable-Tx is hidden here, so APRS carries its own — otherwise a
    * beacon/message is gated off with no way to turn TX on). */
   onSetTxEnabled?: (on: boolean) => void
+  /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the note below names
+   * where the rest of the APRS settings live without offering to open them. */
+  onOpenSettings?: (target: string) => void
 }) {
   // NO local `armed` state. Arming lives on the ENGINE and is session state that outlives this
   // component, so a local copy drifts: a remount came back up saying "Monitor" while the decoder
@@ -1073,7 +1077,16 @@ export function AprsCockpit({
               <p className="aprs-inet-note">
                 Changing the radius or watched calls reconnects the feed — the server does the
                 filtering, so a new subscription has to be sent. Server, port, traffic types and the
-                iGate live in Settings ▸ Modes ▸ APRS.
+                iGate live in Settings ▸ APRS.{' '}
+                {onOpenSettings && (
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => onOpenSettings('aprs')}
+                  >
+                    Open them
+                  </button>
+                )}
               </p>
             </div>
           )}

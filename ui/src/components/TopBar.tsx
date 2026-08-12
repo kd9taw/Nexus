@@ -12,7 +12,11 @@ import { appVersion } from '../api'
  *  them are DECODE-ONLY (modes::tx_mode refuses them in the engine) and carry a
  *  dashed edge so that is visible before the operator tries to call CQ rather
  *  than after. Order is deliberate: the two Tempo tiers, then the two production
- *  FT modes, then the receive-only set roughly by how often they get used. */
+ *  FT modes, then the receive-only set roughly by how often they get used.
+ *
+ *  Where a title points into Settings it names the SECTION, never the tab: a pill is a tier
+ *  selector, so these five cannot become deep links, and a tab name in a sentence nobody can
+ *  click goes stale the next time the rail is rearranged (this said "Settings ▸ Modes"). */
 const TIER_PILLS: {
   tier: Tier
   small?: string
@@ -34,18 +38,18 @@ const TIER_PILLS: {
     name: 'WSPR',
     small: 'BCN',
     title:
-      'WSPR propagation beacons — 2 min intervals. Transmits on a schedule; set the transmit % and power in Settings ▸ Modes',
+      'WSPR propagation beacons — 2 min intervals. Transmits on a schedule; set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W)',
   },
   {
     tier: 'Q65',
     name: 'Q65',
-    title: 'Q65 — EME / VHF+ scatter. Transmit and receive. Period + submode in Settings ▸ Modes',
+    title: 'Q65 — EME / VHF+ scatter. Transmit and receive. Period + submode in Settings ▸ Q65',
   },
   {
     tier: 'MSK144',
     name: 'MSK144',
     title:
-      'MSK144 — meteor scatter. Transmits for nearly the whole period (that is how the mode works). Period in Settings ▸ Modes',
+      'MSK144 — meteor scatter. Transmits for nearly the whole period (that is how the mode works). Period in Settings ▸ MSK144',
   },
   {
     tier: 'JT65',
@@ -53,7 +57,7 @@ const TIER_PILLS: {
     small: 'RX',
     rxOnly: true,
     title:
-      'JT65 — classic EME, 60 s. Receive only in this build (transmit is disabled pending a fix). Submode in Settings ▸ Modes',
+      'JT65 — classic EME, 60 s. Receive only in this build (transmit is disabled pending a fix). Submode in Settings ▸ JT65',
   },
   {
     tier: 'FST4',
@@ -65,7 +69,7 @@ const TIER_PILLS: {
     name: 'FST4W',
     small: 'BCN',
     title:
-      'FST4W — LF/MF beacons. Transmits on a schedule; set the transmit % and power in Settings ▸ Modes. Hashed calls show as <...>',
+      'FST4W — LF/MF beacons. Transmits on a schedule; set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W). Hashed calls show as <...>',
   },
 ]
 

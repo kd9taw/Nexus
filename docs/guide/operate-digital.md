@@ -114,7 +114,7 @@ end) is not implemented.
 ### Split, decode depth, and re-decode
 
 - **Split Operation** offers the stock trio in
-  [Settings ▸ Radio ▸ Rig Control](settings-reference.md#rig-control): **None**, **Rig**
+  [Settings ▸ Radio ▸ Rig & CAT](settings-reference.md#rig--cat): **None**, **Rig**
   (VFO B), and **Fake It** (TX audio held to 1500–2000 Hz with the dial shifted
   in 500 Hz steps for a cleaner signal).
 - **Decode depth** (Fast / Normal / Deep) and the **decoder passband**

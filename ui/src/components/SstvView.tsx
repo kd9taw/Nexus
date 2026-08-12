@@ -193,6 +193,9 @@ interface Props {
   /** Panel visibility/resize record — host-owned (App), so it survives this view's remounts.
    *  Optional: without it the panels all show and there's no ⊞ menu. */
   panels?: PanelLayoutApi<SstvPanelId>
+  /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the audio and
+   * callsign faults below say what to fix without offering to take you there. */
+  onOpenSettings?: (target: string) => void
 }
 
 /** Display labels for the SSTV removable panels (the ⊞ Panels menu). */
@@ -344,13 +347,18 @@ export function sstvDecodeStatus(
   // LEVEL below because the two have opposite fixes. What you hear on the speaker
   // says nothing about what the app is capturing, which is exactly the trap the
   // field report fell into.
+  //
+  // The two audio faults name the CONTROL — "Input Device (RX)" is the label the
+  // operator is looking for once they get there. They used to say "Settings → Audio
+  // input", a name that appears nowhere in the panel; the caption renders a button to
+  // the section beside this text, so the sentence no longer has to carry a path.
   const noArrivals = health.lastAudioUnix == null || nowSec - health.lastAudioUnix > AUDIO_STALE_SEC
   if (noArrivals && health.drains >= MIN_DRAINS_BEFORE_CAPTURE_FAULT) {
     return {
       state: 'nocapture',
       text:
         'Listening, but no audio is reaching the decoder at all — the capture device is not ' +
-        'delivering anything. Check that Settings → Audio input is the radio; hearing the ' +
+        'delivering anything. Check that Input Device (RX) is the radio; hearing the ' +
         'signal on the speaker does not mean the app is capturing it.',
     }
   }
@@ -399,7 +407,7 @@ export function sstvDecodeStatus(
       state: 'silent',
       text:
         'Audio is arriving but it is silent. If you can hear the signal on the speaker, the app ' +
-        'is on a different input — check Settings → Audio input, and RX Gain if the level is ' +
+        'is on a different input — check Input Device (RX), and RX Gain if the level is ' +
         `just low.${where}`,
     }
   }
@@ -461,7 +469,7 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, panels }: Props) {
+export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, panels, onOpenSettings }: Props) {
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
@@ -1076,7 +1084,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     // empty call is not a cosmetic gap. The backend refuses the same way and is the
     // authority — this is the half that says so before the operator clicks.
     if (!callsign) {
-      pushToast('Set your callsign in Settings → Station — SSTV identifies by burning it into the picture', 'error', 6000)
+      // The refusal carries its own fix: this fires on the Send click, so a path to read and
+      // navigate by hand is a worse answer than the button the toast bus already supports.
+      pushToast(
+        'Set your callsign — SSTV identifies by burning it into the picture',
+        'error',
+        6000,
+        onOpenSettings
+          ? { action: () => onOpenSettings('operator-radio'), actionLabel: 'Set callsign' }
+          : {},
+      )
       return
     }
     const m = MODE_BY_SLUG[packed.slug]
@@ -1297,7 +1314,24 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 ⚠️ NOT a live region — it rewrites the age of the last picture once a
                 second, and aria-live would read the whole paragraph out again every
                 time. State CHANGES are announced instead (see `spokenRx` above). */}
-            <div className={`sstv-band-caption rx-${rx.state}`}>{rx.text}</div>
+            <div className={`sstv-band-caption rx-${rx.state}`}>
+              {rx.text}
+              {/* The two audio faults are the ones with a fix in Settings, and the operator is
+                  looking straight at this line when they hit one — so the trip to the device
+                  pickers is a click from here rather than a path to go find. */}
+              {onOpenSettings && (rx.state === 'nocapture' || rx.state === 'silent') && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => onOpenSettings('audio')}
+                  >
+                    Open audio settings
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         )}
       </section>
@@ -1385,11 +1419,31 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 in the picture (#50), or that Send is going to refuse and why. */}
             {packed && (
               <span className={`sstv-tx-id${callsign ? '' : ' missing'}`}>
-                {callsign
-                  ? idInImage
-                    ? `${callsign} — you've said it's already in the picture`
-                    : `${callsign} burned in · top left`
-                  : 'No callsign set — Settings → Station. SSTV identifies by burning your call into the picture, so it will not transmit without one.'}
+                {callsign ? (
+                  idInImage ? (
+                    `${callsign} — you've said it's already in the picture`
+                  ) : (
+                    `${callsign} burned in · top left`
+                  )
+                ) : (
+                  // Send refuses without a callsign, so this line is a stop sign — it carries
+                  // the way to clear it rather than the name of a screen to go looking for.
+                  <>
+                    No callsign set — SSTV identifies by burning your call into the picture, so it
+                    will not transmit without one.{' '}
+                    {onOpenSettings ? (
+                      <button
+                        type="button"
+                        className="settings-linkbtn"
+                        onClick={() => onOpenSettings('operator-radio')}
+                      >
+                        Set your callsign
+                      </button>
+                    ) : (
+                      'Set one in Settings ▸ Station.'
+                    )}
+                  </>
+                )}
               </span>
             )}
             {/* #50 (akhepcat): a pre-made QSO card already shows the call, and the plate

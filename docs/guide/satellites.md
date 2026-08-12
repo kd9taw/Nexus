@@ -254,7 +254,7 @@ decides where the *next* pick lands.
 ### Auto-track with a rotator
 
 1. Configure your rotator in
-   [Settings ▸ Radio ▸ Rig Control](settings-reference.md#rig-control) — pick
+   [Settings ▸ Radio ▸ Rig & CAT](settings-reference.md#rig--cat) — pick
    your model and its COM port and Nexus runs the control daemon for you. No
    hardware? Pick the **Dummy (testing)** model, or run `rotctld -m 1` and point
    Nexus at `127.0.0.1:4533` to watch it work.

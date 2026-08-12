@@ -1,6 +1,6 @@
 # Settings reference
 
-Settings is organized into eight tabs. Only the active tab renders, so typing in
+Settings is organized into nine tabs. Only the active tab renders, so typing in
 one field doesn't lag the whole panel. **Save** at the bottom applies your
 changes; most take effect live (a few say "takes effect on restart", and a few
 apply the instant you touch them — those say so too).
@@ -11,15 +11,15 @@ leaving a dead button with no reason and no fix.
 
 The tabs, in the order they appear:
 
-[Station](#station) · [Radio](#radio) · [Modes](#modes) ·
-[Frequencies](#frequencies) · [Spots & Alerts](#spots--alerts) ·
+[Station](#station) · [Radio](#radio) · [Phone](#phone) · [CW](#cw) ·
+[Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
 [Logging & Connectors](#logging--connectors) · [Contesting](#contesting) ·
 [Appearance](#appearance)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
 took) and a **Check for updates** button.
 
-![The Settings panel with the Radio tab open. The eight tabs — Station, Radio, Modes, Frequencies, Spots & Alerts, Logging & Connectors, Contesting, Appearance — run across the top, and the panel header carries the build stamp and Check for updates. Under them the Radios roster lists three configured rigs: a Yaesu FTDX10 on COM3 badged ACTIVE, an Icom IC-9700 on COM6 and a 991a on a CP2105 bridge, the two inactive rigs carrying Edit / Make active / Remove while the active one shows only its name and the ACTIVE badge, each with a row of band chips lighting the bands it covers — 160 m through 2 m for the Yaesu, 2 m and 70 cm for the 9700, 6 m and 2 m for the 991a. + Add radio closes the roster and Save sits at the bottom right; the rest of the tab continues below the fold.](../img/manual/settings-radio.webp)
+![The Settings panel with the Radio tab open. The nine tabs — Station, Radio, Phone, CW, Digital, Spots & Alerts, Logging & Connectors, Contesting, Appearance — run across the top, and the panel header carries the build stamp and Check for updates. Under them the Radios roster lists three configured rigs: a Yaesu FTDX10 on COM3 badged ACTIVE, an Icom IC-9700 on COM6 and a 991a on a CP2105 bridge, the two inactive rigs carrying Edit / Make active / Remove while the active one shows only its name and the ACTIVE badge, each with a row of band chips lighting the bands it covers — 160 m through 2 m for the Yaesu, 2 m and 70 cm for the 9700, 6 m and 2 m for the 991a. + Add radio closes the roster and Save sits at the bottom right; the rest of the tab continues below the fold.](../img/manual/settings-radio.webp)
 
 ---
 
@@ -109,7 +109,7 @@ With two or more radios, three more controls appear:
   value.
 - **Save current as** — snapshots the current settings under a name.
 
-### Rig Control
+### Rig & CAT
 
 - **PTT Method** — "How transmit is keyed": CAT (via rigctld), Serial RTS, Serial
   DTR, or VOX (no keying). PTT and CAT are independent axes — VOX PTT with full
@@ -192,28 +192,39 @@ With two or more radios, three more controls appear:
   file. It keeps running while you're on other screens.
 - **Flex radio IP (native panadapter)** — the FlexRadio's own LAN IP (SmartSDR
   API, port 4992). "This is the *radio's* address, not the SmartSDR-CAT port."
-- **Share my radio (CAT broker)** — "Run a rigctld-compatible server so WSJT-X /
-  N1MM / loggers share this radio THROUGH Nexus." Takes effect right away, no
-  restart, and works even when Nexus is sharing an external rigctld. When on:
-  - **CAT broker port** — "Other apps connect here (Hamlib NET rigctl default
-    4532)."
-  - **Broker PTT** — "Let the connected app key transmit when Nexus is idle. Off
-    = other apps control the rig but never key it (Nexus owns TX)." Default off.
 
 **Test CAT** saves, launches the bundled `rigctld` (Hamlib ships with Nexus on
 Windows — no separate install), and reads the rig's frequency to confirm the
 link.
 
-Two more controls sit below the Advanced group:
+### Audio
 
-- **Band-edge tones** — "A short audio cue when the dial crosses your license
-  privileges — a rising 'ding' back in band, a falling 'dong' past an edge."
-  Applies on every mode, not just digital. On by default.
-- **Max power by mode (safety)** — a percentage ceiling on RF output for Phone,
-  CW and Digital; blank = full power. FT8/FT4/RTTY run ~100% duty cycle, so
-  capping Digital (e.g. 30%) protects your finals and any amplifier. The rig is
-  brought down to the cap the moment you enter a capped mode, not only when you
-  touch the power slider.
+With two or more radios, a banner names which radio these devices belong to.
+
+- **Input Device (RX)** — "Sound card carrying receive audio." **Refresh**
+  re-scans.
+- **Output Device (TX)** — "Sound card feeding the rig (transmit)."
+- **Live input spectrum** — what the selected input hears, live. "Band noise
+  should show as a moving floor. Confirms the RIGHT device before you leave
+  Settings." Flat means no audio on that input.
+- **Tx Power** — the audio **drive** into the rig, the same control as the
+  cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
+  just zero. This is *not* the rig's RF watts — set those on the radio."
+- **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
+  from ~15–60 dB decodes fine; red means too hot." An audio error shows here.
+- **RX Gain** — "Boost a quiet interface until RX Level reads around 30 dB — the
+  meter responds as you release the slider. Leave at ×1.0 unless the meter reads
+  low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
+
+### Headphone monitor
+
+- **Enable monitor** — plays "the exact audio the decoder hears — for level / RFI
+  diagnosis and listening to the band. Off by default; UNVERIFIED on-air until
+  the attended session." It guards against the rig's TX device by name; if your
+  devices go by multiple names, pick your headphones explicitly rather than
+  System default.
+- **Monitor Output Device** — "must NOT be the rig's TX output device."
+- **Monitor Level** — "Headphone listening volume (does not affect TX)."
 
 ### Satellite Doppler
 
@@ -273,41 +284,110 @@ satellite auto-track.
   elevation past 90°. Off by default: **many rotators cannot mechanically go past
   90° elevation.** Check your controller first.
 
-### Audio
+### Transmit limits & sharing
 
-With two or more radios, a banner names which radio these devices belong to.
+What the rig is allowed to do, and who else may drive it. These used to sit at
+the bottom of Rig & CAT.
 
-- **Input Device (RX)** — "Sound card carrying receive audio." **Refresh**
-  re-scans.
-- **Output Device (TX)** — "Sound card feeding the rig (transmit)."
-- **Live input spectrum** — what the selected input hears, live. "Band noise
-  should show as a moving floor. Confirms the RIGHT device before you leave
-  Settings." Flat means no audio on that input.
-- **Tx Power** — the audio **drive** into the rig, the same control as the
-  cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
-  just zero. This is *not* the rig's RF watts — set those on the radio."
-- **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
-  from ~15–60 dB decodes fine; red means too hot." An audio error shows here.
-- **RX Gain** — "Boost a quiet interface until RX Level reads around 30 dB — the
-  meter responds as you release the slider. Leave at ×1.0 unless the meter reads
-  low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
+- **Band-edge tones** — "A short audio cue when the dial crosses your license
+  privileges — a rising 'ding' back in band, a falling 'dong' past an edge."
+  Applies on every mode, not just digital. On by default.
+- **Max power by mode (safety)** — a percentage ceiling on RF output for Phone,
+  CW and Digital; blank = full power. FT8/FT4/RTTY run ~100% duty cycle, so
+  capping Digital (e.g. 30%) protects your finals and any amplifier. The rig is
+  brought down to the cap the moment you enter a capped mode, not only when you
+  touch the power slider.
+- **Share my radio (CAT broker)** — "Run a rigctld-compatible server so WSJT-X /
+  N1MM / loggers share this radio THROUGH Nexus." Takes effect right away, no
+  restart, and works even when Nexus is sharing an external rigctld. When on:
+  - **CAT broker port** — "Other apps connect here (Hamlib NET rigctl default
+    4532)."
+  - **Broker PTT** — "Let the connected app key transmit when Nexus is idle. Off
+    = other apps control the rig but never key it (Nexus owns TX)." Default off.
 
-### Headphone monitor
-
-- **Enable monitor** — plays "the exact audio the decoder hears — for level / RFI
-  diagnosis and listening to the band. Off by default; UNVERIFIED on-air until
-  the attended session." It guards against the rig's TX device by name; if your
-  devices go by multiple names, pick your headphones explicitly rather than
-  System default.
-- **Monitor Output Device** — "must NOT be the rig's TX output device."
-- **Monitor Level** — "Headphone listening volume (does not affect TX)."
+<!-- TODO(settings-reference): the setup-backup control on this section has no
+     prose yet — describe it once its behaviour is confirmed against the panel. -->
 
 ---
 
-## Modes
+## Phone
 
-One fieldset per mode. Anything that changes the on-air signal or the decode
-frame lives here, not with the radio.
+Voice operating: the phone mode itself, repeater shift and tone, and the
+microphone used to record voice-keyer messages. Anything that changes the on-air
+signal lives here, not with the radio.
+
+### Phone (SSB / FM)
+
+**Mode**
+
+- **Phone mode** — SSB (USB/LSB by band) or FM. "FM drives the rig to FM + the
+  shift/tone below."
+- **Repeater shift** (FM only) — simplex / plus / minus. "Offset is the band
+  standard (2 m 600 k, 70 cm 5 M…)."
+- **CTCSS (PL) tone** (FM only) — the repeater access tone, off or a standard EIA
+  tone.
+
+**Microphone**
+
+- **Voice mic (recording)** — "Mic used when RECORDING a voice-keyer message.
+  Default records from the audio input device — but on a digital setup that's the
+  rig's RX audio, so you'd record the band, not your voice. Pick your actual mic
+  here." If it can't open, recording falls back to the input device — never
+  silent.
+
+Mic gain and voice-keyer message recording are in the Phone cockpit, not here.
+
+---
+
+## CW
+
+How CW is sent: the keyer backend and its ports, sidetone pitch, and the F-key
+macro profiles. Anything that changes what goes out on the key lives here, not
+with the radio.
+
+### CW
+
+**Keyer**
+
+- **Keyer backend** — four ways to send, also switchable live from the CW
+  cockpit. **CAT** uses the rig's internal keyer (Hamlib `send_morse`), but older
+  rigs (e.g. IC-756PRO III) don't support it. **Serial keyline** toggles DTR/RTS
+  into the rig's KEY jack — the clean N1MM/fldigi method, needs only a keying
+  cable. **WinKeyer** drives a K1EL. **Soundcard** keys an audio tone through SSB
+  — a workaround; set drive so ALC reads zero.
+- **Sidetone pitch (Hz)** — 300–1200 Hz. Sets the soundcard keyer tone and the CW
+  scope zero-beat marker.
+- **WinKeyer port** — "For the WinKeyer CW keyer (select it above). 1200 baud."
+- **Keyline serial port** (serial keyline only) — the USB-to-serial into your
+  keying interface (Buxcomm, US Navigator, a homebrew DTR cable) that plugs into
+  the rig's KEY jack. "Must be a SEPARATE port from CAT. Set the rig to CW and
+  its key-jack to straight-key / bug."
+- **Keying line** (serial keyline only) — DTR (the CW convention) or RTS. "DTR is
+  standard (RTS = PTT); flip to RTS if your interface is wired the other way."
+- **CW ID after 73** — keys your callsign in CW once the final 73 has fully left
+  the air (stock WSJT-X option, default off). It uses the normal CW keying path —
+  PTT + tone — after the FT8 over, never on top of it.
+
+**Macros (F-key profiles)**
+
+- **CW cockpit F-keys** — named macro profiles (**New** / **Rename** /
+  **Delete**, at least one always kept), switchable here or in one click from the
+  CW cockpit bar. The grid edits the active profile: a label and a template per
+  key. **Customize** starts from the built-in F1–F8 set; **Reset to defaults**
+  returns to it.
+  Tokens: `{MYCALL}` `{NAME}` `{MYGRID}` `{MYSTATE}` `{RST}`, `!` = the worked
+  call, and `{HISNAME}` `{HISSTATE}` = the worked station's QRZ name and state.
+  Each key **keeps its role** (F1 CQ, F2 answer, F3 report, F4 sign off, F5 my
+  call, F6 his call, F7 ask repeat, F8 query), so the Guided copilot's next-step
+  highlight still rolls F1→F2→F3→F4 through customized text.
+
+---
+
+## Digital
+
+One fieldset per digital mode, plus the working frequencies they call on.
+Anything that changes the on-air signal or the decode frame lives here, not with
+the radio.
 
 ### Digital (FT8/FT4)
 
@@ -486,63 +566,6 @@ Comma-separated chip lists for the quick text you fire from each surface:
 - **QSO** — chips for sequenced QSOs.
 - **Band / CQ** — open broadcasts: the Call CQ launchpad and band feed.
 
-### Phone (SSB / FM)
-
-**Mode**
-
-- **Phone mode** — SSB (USB/LSB by band) or FM. "FM drives the rig to FM + the
-  shift/tone below."
-- **Repeater shift** (FM only) — simplex / plus / minus. "Offset is the band
-  standard (2 m 600 k, 70 cm 5 M…)."
-- **CTCSS (PL) tone** (FM only) — the repeater access tone, off or a standard EIA
-  tone.
-
-**Microphone**
-
-- **Voice mic (recording)** — "Mic used when RECORDING a voice-keyer message.
-  Default records from the audio input device — but on a digital setup that's the
-  rig's RX audio, so you'd record the band, not your voice. Pick your actual mic
-  here." If it can't open, recording falls back to the input device — never
-  silent.
-
-Mic gain and voice-keyer message recording are in the Phone cockpit, not here.
-
-### CW
-
-**Keyer**
-
-- **Keyer backend** — four ways to send, also switchable live from the CW
-  cockpit. **CAT** uses the rig's internal keyer (Hamlib `send_morse`), but older
-  rigs (e.g. IC-756PRO III) don't support it. **Serial keyline** toggles DTR/RTS
-  into the rig's KEY jack — the clean N1MM/fldigi method, needs only a keying
-  cable. **WinKeyer** drives a K1EL. **Soundcard** keys an audio tone through SSB
-  — a workaround; set drive so ALC reads zero.
-- **Sidetone pitch (Hz)** — 300–1200 Hz. Sets the soundcard keyer tone and the CW
-  scope zero-beat marker.
-- **WinKeyer port** — "For the WinKeyer CW keyer (select it above). 1200 baud."
-- **Keyline serial port** (serial keyline only) — the USB-to-serial into your
-  keying interface (Buxcomm, US Navigator, a homebrew DTR cable) that plugs into
-  the rig's KEY jack. "Must be a SEPARATE port from CAT. Set the rig to CW and
-  its key-jack to straight-key / bug."
-- **Keying line** (serial keyline only) — DTR (the CW convention) or RTS. "DTR is
-  standard (RTS = PTT); flip to RTS if your interface is wired the other way."
-- **CW ID after 73** — keys your callsign in CW once the final 73 has fully left
-  the air (stock WSJT-X option, default off). It uses the normal CW keying path —
-  PTT + tone — after the FT8 over, never on top of it.
-
-**Macros (F-key profiles)**
-
-- **CW cockpit F-keys** — named macro profiles (**New** / **Rename** /
-  **Delete**, at least one always kept), switchable here or in one click from the
-  CW cockpit bar. The grid edits the active profile: a label and a template per
-  key. **Customize** starts from the built-in F1–F8 set; **Reset to defaults**
-  returns to it.
-  Tokens: `{MYCALL}` `{NAME}` `{MYGRID}` `{MYSTATE}` `{RST}`, `!` = the worked
-  call, and `{HISNAME}` `{HISSTATE}` = the worked station's QRZ name and state.
-  Each key **keeps its role** (F1 CQ, F2 answer, F3 report, F4 sign off, F5 my
-  call, F6 his call, F7 ask repeat, F8 query), so the Guided copilot's next-step
-  highlight still rolls F1→F2→F3→F4 through customized text.
-
 ### RTTY
 
 **Keying**
@@ -605,10 +628,6 @@ Mic gain and voice-keyer message recording are in the Phone cockpit, not here.
   never sends the other way**: gating the internet back onto the air means
   transmitting unattended.
 
----
-
-## Frequencies
-
 ### Working Frequencies
 
 The dial frequency used when a band/mode is selected. These are **overrides** of
@@ -643,19 +662,6 @@ How rare "rare" is depends on your own totals: if you are chasing your first
 hundred entities then almost every DX spot is a new one and this would never stop
 talking. Start with *New DXCC entity only* once your log is far enough along that
 a new one is genuinely an event.
-
-### Accessibility & eyes-free
-
-Speech and sound cues for operating by ear. The keyboard and screen-reader labels
-throughout Nexus are **always on** — these settings only control what comes out
-of the speakers.
-
-- **Announce decodes (screen reader)** — Off / Needed only (calling you / new /
-  watched) / All (adds a per-cycle CQ summary). Silent without a reader running.
-- **TX / RX earcon** — "A rising tone when you key up, falling when you unkey —
-  know your TX state by ear."
-- **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
-  band's rhythm, eyes-free."
 
 ### Alerts
 
@@ -983,6 +989,19 @@ Turn sections on and off, and pick a goal profile.
 - The **Contesting** group hosts the **Field Day mode** master switch (the same
   setting as [Contesting ▸ Field Day Setup](#field-day-setup)). Turning it on
   with no Class or Section set jumps you to the Contesting tab to fill them in.
+
+### Accessibility & eyes-free
+
+Speech and sound cues for operating by ear. The keyboard and screen-reader labels
+throughout Nexus are **always on** — these settings only control what comes out
+of the speakers.
+
+- **Announce decodes (screen reader)** — Off / Needed only (calling you / new /
+  watched) / All (adds a per-cycle CQ summary). Silent without a reader running.
+- **TX / RX earcon** — "A rising tone when you key up, falling when you unkey —
+  know your TX state by ear."
+- **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
+  band's rhythm, eyes-free."
 
 ---
 

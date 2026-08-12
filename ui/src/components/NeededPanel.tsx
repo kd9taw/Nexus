@@ -195,6 +195,9 @@ interface Props {
    * is the ONLY source of Phone needs (RBN has no phone), so an empty board reads correctly:
    * "source up, nothing I need is spotted" vs "source down". Omitted in the pop-out window. */
   phoneSource?: { status: FeedStatus; host: string | null; spotsSeen: number } | null
+  /** Open Settings at a section id (see settings/registry.ts). Omitted in the pop-out window
+   * (no cross-window nav) → the phone-source line stays plain text there. */
+  onOpenSettings?: (target: string) => void
 }
 
 /** Compact phone-source descriptor for the board header: [css class, short text, tooltip]. */
@@ -227,6 +230,7 @@ export function NeededPanel({
   onPoint,
   onPopOut,
   phoneSource,
+  onOpenSettings,
 }: Props) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'priority',
@@ -441,9 +445,23 @@ export function NeededPanel({
         ) : (
           <div
             className="np-phone-src weak"
-            title="Phone/SSB needs come only from a human DX-cluster node. This shows when the DX Cluster feed is disabled OR no human host is set — turn on “DX Cluster / RBN spots” and add a host (e.g. ve7cc.net:23) in Settings ▸ Connections. RBN carries only CW + digital, never SSB."
+            title="Phone/SSB needs come only from a human DX-cluster node. This shows when the DX Cluster feed is disabled OR no human host is set — turn on “DX Cluster / RBN spots” and add a host (e.g. ve7cc.net:23) in Settings ▸ Integrations & Feeds. RBN carries only CW + digital, never SSB."
           >
-            Phone source off — turn on “DX Cluster / RBN spots” in Settings
+            {/* The toggle and the host field live in Integrations & Feeds; this line used to
+                send the operator to "Settings ▸ Connections", which is the connectivity LOG
+                (and was written as a tab, which it has never been). Now it takes them there. */}
+            Phone source off —{' '}
+            {onOpenSettings ? (
+              <button
+                type="button"
+                className="settings-linkbtn"
+                onClick={() => onOpenSettings('integrations-feeds')}
+              >
+                turn on “DX Cluster / RBN spots”
+              </button>
+            ) : (
+              'turn on “DX Cluster / RBN spots” in Settings ▸ Integrations & Feeds'
+            )}
           </div>
         ))}
 

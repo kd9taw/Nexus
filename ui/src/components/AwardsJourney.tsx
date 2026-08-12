@@ -15,7 +15,15 @@ type Tab = 'journey' | 'official'
  * When the operator has turned the Achievements (gamification) capability off, the
  * Journey layer disappears entirely and this is just the plain official tracker.
  */
-export function AwardsJourney({ showGamification }: { showGamification: boolean }) {
+export function AwardsJourney({
+  showGamification,
+  onOpenSettings,
+}: {
+  showGamification: boolean
+  /** Open Settings at a section id — passed straight through to the official tracker, whose
+   * "fix this login" rows are the one place here that points into Settings. */
+  onOpenSettings?: (target: string) => void
+}) {
   const [tab, setTab] = useState<Tab>(() => (surfaceGet(TAB_KEY) as Tab) || 'journey')
   const choose = (t: Tab) => {
     setTab(t)
@@ -27,7 +35,7 @@ export function AwardsJourney({ showGamification }: { showGamification: boolean 
     return (
       <main className="awards-journey">
         <div className="aj-scroll">
-          <AwardsView showGamification={false} />
+          <AwardsView showGamification={false} onOpenSettings={onOpenSettings} />
         </div>
       </main>
     )
@@ -56,7 +64,11 @@ export function AwardsJourney({ showGamification }: { showGamification: boolean 
         </button>
       </div>
       <div className="aj-scroll">
-        {tab === 'journey' ? <JourneyView /> : <AwardsView showGamification />}
+        {tab === 'journey' ? (
+          <JourneyView />
+        ) : (
+          <AwardsView showGamification onOpenSettings={onOpenSettings} />
+        )}
       </div>
     </main>
   )

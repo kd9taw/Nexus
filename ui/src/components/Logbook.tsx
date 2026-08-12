@@ -715,7 +715,7 @@ export function Logbook({
                 load()
               }
             }}
-            title="Fetch confirmations directly from LoTW (no file download — uses the LoTW credentials saved in Settings ▸ Logbook & QSL)"
+            title="Fetch confirmations directly from LoTW (no file download — uses the LoTW credentials saved in Settings ▸ Confirmations)"
           >
             Fetch LoTW
           </button>
@@ -735,7 +735,7 @@ export function Logbook({
                 load()
               }
             }}
-            title="Fetch your online QRZ Logbook and merge it here — QSOs logged elsewhere plus QRZ confirmation status (needs the QRZ Logbook API key in Settings ▸ Logbook & QSL)"
+            title="Fetch your online QRZ Logbook and merge it here — QSOs logged elsewhere plus QRZ confirmation status (needs the QRZ Logbook API key in Settings ▸ Confirmations)"
           >
             Sync QRZ
           </button>

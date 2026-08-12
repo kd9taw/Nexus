@@ -127,6 +127,9 @@ interface Props {
   onRecallMemory?: (m: Memory) => void
   /** Open the Memories section (manage/groups/import). */
   onOpenMemories?: () => void
+  /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
+   * point at Settings stay plain text. */
+  onOpenSettings?: (target: string) => void
   /** Wheel sensitivity (Settings) — how much scroll one tuning step costs on the readout. */
   wheelSensitivity?: number
   /** True when the cockpit is the active view. The cockpit stays MOUNTED across
@@ -252,6 +255,7 @@ export function OperateCockpit({
   companionAddr,
   onRecallMemory,
   onOpenMemories,
+  onOpenSettings,
   wheelSensitivity,
 }: Props) {
   // Container the waterfall-height splitter measures + writes its CSS var on.
@@ -990,6 +994,7 @@ export function OperateCockpit({
           rotor={
             <RotorStrip
               active={active}
+              onOpenSettings={onOpenSettings}
               targetCall={selectedCall}
               onPointAt={(call) =>
                 pointRotatorAtCall(call)

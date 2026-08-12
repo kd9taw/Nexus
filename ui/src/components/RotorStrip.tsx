@@ -26,6 +26,10 @@ export interface RotorStripProps {
   targetCall?: string | null
   /** Slew the rotator toward targetCall (the host wires pointRotatorAtCall). */
   onPointAt?: (call: string) => void
+  /** Open Settings at a section id. Given one, the "not answering" chip becomes the way to
+   * the rotator's model/port instead of a tooltip naming where to go looking; without one
+   * (a host that cannot navigate) the chip stays the plain indicator it has always been. */
+  onOpenSettings?: (target: string) => void
 }
 
 // Sized for operating distance (operator: the 16 px original was "super small").
@@ -47,7 +51,7 @@ const chipStyle: CSSProperties = {
   cursor: 'pointer',
 }
 
-export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripProps) {
+export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSettings }: RotorStripProps) {
   // null = never read (no rotator / daemon down) → the strip hides itself.
   const [az, setAz] = useState<number | null>(null)
   const [declination, setDeclination] = useState<number | null>(null)
@@ -220,32 +224,57 @@ export function RotorStrip({ active = true, targetCall, onPointAt }: RotorStripP
         </span>
       )
     if (!configured) return satChip
+    // The dim chip's whole job is the model/port — a rotator that is configured and silent is
+    // nearly always wired to the wrong port. So where the host can navigate, the chip IS the
+    // trip to those fields rather than a tooltip naming a place to go looking for. The path in
+    // the text is the Rotator SECTION on the Radio tab; it was written as a child of Rig
+    // Control, which it has never been.
+    const lost = satTrack?.rotorLost === true
+    const lostName = lost ? 'Rotator stopped answering' : 'Rotator not answering'
+    const lostTitle = lost
+      ? 'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model/port in Settings ▸ Radio ▸ Rotator, or the external rotctld, and the Connections log'
+      : 'A rotator is configured but not answering — check the model/port in Settings ▸ Radio ▸ Rotator, or the external rotctld, and the Connections log'
+    const lostStyle: CSSProperties = {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '0.3rem',
+      opacity: 0.45,
+      color: 'inherit',
+    }
+    const lostBody = (
+      <>
+        <span style={{ fontSize: '0.65em', letterSpacing: '0.08em', fontWeight: 600 }} aria-hidden>
+          ROTOR
+        </span>
+        <span className="mono" style={{ fontSize: '0.9em' }}>—</span>
+      </>
+    )
     return (
       <>
-        <span
-          aria-label={
-            satTrack?.rotorLost === true
-              ? 'Rotator stopped answering'
-              : 'Rotator not answering'
-          }
-          title={
-            satTrack?.rotorLost === true
-              ? 'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check Settings ▸ Rig Control ▸ Rotator (model/port) or the external rotctld, and the Connections log'
-              : 'A rotator is configured but not answering — check Settings ▸ Rig Control ▸ Rotator (model/port) or the external rotctld, and the Connections log'
-          }
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.3rem',
-            opacity: 0.45,
-            color: 'inherit',
-          }}
-        >
-          <span style={{ fontSize: '0.65em', letterSpacing: '0.08em', fontWeight: 600 }} aria-hidden>
-            ROTOR
+        {onOpenSettings ? (
+          <button
+            type="button"
+            aria-label={`${lostName} — open the rotator settings`}
+            title={`${lostTitle}. Click to open it`}
+            // Button reset inline, the same reason chipStyle exists above: it must still read
+            // as the dim indicator it replaced, not as a control this header never had.
+            style={{
+              ...lostStyle,
+              font: 'inherit',
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+            }}
+            onClick={() => onOpenSettings('rotator')}
+          >
+            {lostBody}
+          </button>
+        ) : (
+          <span aria-label={lostName} title={lostTitle} style={lostStyle}>
+            {lostBody}
           </span>
-          <span className="mono" style={{ fontSize: '0.9em' }}>—</span>
-        </span>
+        )}
         {satChip}
       </>
     )

@@ -1770,9 +1770,15 @@ export default function App() {
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI
   // screens that leave the operating mode unchanged.
+  // Where a Settings deep link asked the panel to land. Cleared on the way OUT of Settings so a
+  // later plain visit (the rail gear) opens on Station as it always has, rather than returning to
+  // wherever the last pointer sent the operator.
+  const [settingsTarget, setSettingsTarget] = useState<string | undefined>(undefined)
+
   const handleView = useCallback(
     (next: View) => {
       setView(next)
+      if (next !== 'settings') setSettingsTarget(undefined)
       // Passive-first: entering QSO / Field Day starts in Search-&-Pounce
       // (listen + answer), never auto-calling CQ. The operator hits "Call CQ" /
       // "Running" in the panel to start transmitting.
@@ -1780,6 +1786,23 @@ export default function App() {
       else if (next === 'fieldDay') handleSetMode('fieldday-sp')
     },
     [handleSetMode],
+  )
+
+  /**
+   * Open Settings AT a specific place. `where` is anything `resolveTarget` understands: a section
+   * id (`'audio'`), a tab, a tab label, a legacy tab name, or a prose path
+   * (`'Settings ▸ Radio ▸ Audio'`).
+   *
+   * This is what turns the app's ~228 prose pointers into something that takes the operator
+   * there. Passing an unrecognised string is safe — the panel opens on its default tab, which is
+   * exactly what happened before this existed.
+   */
+  const openSettingsAt = useCallback(
+    (where: string) => {
+      setSettingsTarget(where)
+      setView('settings')
+    },
+    [],
   )
 
   const handleTier = useCallback((t: Tier) => {
@@ -2196,6 +2219,7 @@ export default function App() {
                 : undefined
             }
           onPopOut={() => void openPanelWindow('needed')}
+          onOpenSettings={openSettingsAt}
           phoneSource={
             feedHealth
               ? {
@@ -2221,7 +2245,12 @@ export default function App() {
       break
     case 'awards':
       // Awards + Journey combined: one section, tabbed (Journey + Official Awards).
-      workspace = <AwardsJourney showGamification={features.isOn('gamification')} />
+      workspace = (
+        <AwardsJourney
+          showGamification={features.isOn('gamification')}
+          onOpenSettings={openSettingsAt}
+        />
+      )
       break
     case 'stats':
       // Descriptive logbook analytics — the log sliced by band/mode/year/hour/entity.
@@ -2244,6 +2273,7 @@ export default function App() {
           onWorkSpot={handleWorkSpotHere}
           onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
           onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+          onOpenSettings={openSettingsAt}
           panels={cwPanels}
         />
       )
@@ -2266,6 +2296,7 @@ export default function App() {
           onWorkSpot={handleWorkSpotHere}
           onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
           onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+          onOpenSettings={openSettingsAt}
         />
       )
       break
@@ -2286,6 +2317,7 @@ export default function App() {
           <SettingsPanel
             key={`sp-wiz${wizardGen}`}
             onSaved={handleSettingsSaved}
+            target={settingsTarget}
             radio={snap.radio}
             activeRadioId={snap.activeRadioId}
             onProveTx={handleProveTx}
@@ -2656,6 +2688,7 @@ export default function App() {
               onSnap={setSnap}
               onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
               onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+              onOpenSettings={openSettingsAt}
               wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
               preferRrr={settings?.preferRrr ?? false}
               qsoMacros={macros.qso}
@@ -2701,6 +2734,7 @@ export default function App() {
                 onSetTxEnabled={handleSetTxEnabled}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={sstvPanels}
+                onOpenSettings={openSettingsAt}
               />
             </div>
           )}
@@ -2713,6 +2747,7 @@ export default function App() {
                 onTune={handleAprsTune}
                 radio={snap.radio}
                 onSetTxEnabled={handleSetTxEnabled}
+                onOpenSettings={openSettingsAt}
               />
             </div>
           )}

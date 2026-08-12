@@ -187,7 +187,7 @@ describe('the idle caption states what is being heard', () => {
     })
     render(<SstvView snap={snap} />)
     await waitFor(() => expect(caption().className).toContain('rx-starting'))
-    expect(caption().textContent).not.toMatch(/Audio input/)
+    expect(caption().textContent).not.toMatch(/Input Device/)
   })
 
   it('⭐ names an unsupported mode instead of looking like a dead band', async () => {
@@ -284,7 +284,8 @@ describe('sstvDecodeStatus — the ladder', () => {
   it('samples arriving but silent is a routing/level fault, not a dead band', () => {
     const s = sstvDecodeStatus({ ...HEARING, audioPeak: 0 }, NOW + 5, ch20)
     expect(s.state).toBe('silent')
-    expect(s.text).toMatch(/Audio input/)
+    // Names the control the operator has to find, verbatim from the panel's own label.
+    expect(s.text).toMatch(/Input Device \(RX\)/)
   })
 
   it('nothing arriving at all is the capture fault — and it says the speaker proves nothing', () => {
@@ -307,7 +308,7 @@ describe('sstvDecodeStatus — the ladder', () => {
     const fresh = { ...NO_HEALTH, armed: true } // exactly what sstv_auto_arm leaves
     const s = sstvDecodeStatus(fresh, NOW, ch20)
     expect(s.state).toBe('starting')
-    expect(s.text).not.toMatch(/Audio input/)
+    expect(s.text).not.toMatch(/Input Device/)
     expect(s.text).not.toMatch(/speaker/)
   })
 

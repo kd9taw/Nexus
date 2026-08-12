@@ -6193,6 +6193,15 @@ export function SettingsPanel({
             </label>
           </fieldset>
 
+          </>
+          )}
+
+          {/* Accessibility rides with the other display + presentation prefs, not with the spot
+              feeds. It sat on Spots & Alerts only because the earcons happen to fire on decode
+              alerts; the settings themselves are about how the app SPEAKS and is read, which is
+              what an operator opens Appearance for. Reunited with UI scale and density. */}
+          {tab === 'appearance' && (
+          <>
           <fieldset className="settings-section" id="settings-accessibility">
             <legend>Accessibility &amp; eyes-free</legend>
             <p className="settings-note">
@@ -6251,6 +6260,11 @@ export function SettingsPanel({
               </div>
             </div>
           </fieldset>
+          </>
+          )}
+
+          {tab === 'spots' && (
+          <>
           <fieldset className="settings-section" id="settings-alerts">
             <legend>Alerts</legend>
             <div className="settings-grid">

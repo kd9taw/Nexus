@@ -136,6 +136,31 @@ describe('the panel rail and the registry agree', () => {
     expect(panelTabs).toEqual(SETTINGS_TABS.map((t) => ({ id: t.id, label: t.label })))
   })
 
+  it('lists sections in the order the panel renders them', () => {
+    // Membership is not enough. The generated manual walks this array, so an array that holds
+    // the right sections in the wrong order publishes a reference that describes a panel nobody
+    // has — which is the drift this registry exists to stop, just quieter. Caught exactly that
+    // way: the JSX move that put Audio under the CAT rows left this array still listing it after
+    // the satellite stack, and the manual dutifully documented the old order.
+    // Compared PER TAB, deliberately. The panel's source order is not the rail's order — the
+    // Appearance blocks are declared first in the file — and only the active tab ever mounts, so
+    // cross-tab source order is invisible to an operator and meaningless to the manual. What
+    // must agree is the order WITHIN a page.
+    const rendered = [...panelSrc.matchAll(/id="settings-([a-z0-9-]+)"/g)].map((m) => m[1])
+    // Nested disclosures render inside their parent's fieldset, so compare only top-level ones.
+    const nested = new Set(SETTINGS_SECTIONS.filter((s) => s.parent).map((s) => s.id))
+    const byId = new Map(SETTINGS_SECTIONS.map((s) => [s.id, s]))
+    for (const tab of SETTINGS_TABS) {
+      const declared = SETTINGS_SECTIONS.filter((s) => s.tab === tab.id && !nested.has(s.id)).map(
+        (s) => s.id,
+      )
+      const actual = rendered.filter((id) => !nested.has(id) && byId.get(id)?.tab === tab.id)
+      expect(actual, `${tab.label} renders its sections in a different order than declared`).toEqual(
+        declared,
+      )
+    }
+  })
+
   it('anchors every section it renders', () => {
     // The anchor is what a deep link scrolls to; a section without one is reachable only by
     // landing on its tab and scrolling by eye, which is the state this whole change exists to end.

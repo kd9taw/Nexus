@@ -155,6 +155,7 @@ function RowAction({
   onUpload,
   onPush,
   canPush,
+  onOpenSettings,
 }: {
   d: QsoDiagnosis
   busyKey: string | null
@@ -162,6 +163,8 @@ function RowAction({
   onPush: (index: number, service: PushService, key: string) => void
   /** False while the log hasn't loaded — pushes need the QSO record. */
   canPush: boolean
+  /** Open Settings at a section id. Absent ⇒ the re-login row stays a guidance chip. */
+  onOpenSettings?: (target: string) => void
 }) {
   const a = d.reasons[0]?.action
   if (!a) return null
@@ -196,12 +199,23 @@ function RowAction({
       </button>
     )
   }
-  if (a.kind === 'reauthenticate')
+  // Re-login: LoTW's certificate lives in TQSL, outside the app, so that one stays a chip.
+  // Every other service's credentials are in Confirmations, and this row is where the
+  // operator is when they learn the login is stale — so it takes them there.
+  if (a.kind === 'reauthenticate') {
+    const src = a.source ?? 'LoTW'
+    if (src === 'LoTW') return <span className="conf-act">Fix cert in TQSL</span>
+    if (!onOpenSettings) return <span className="conf-act">Fix {src} login in Settings</span>
     return (
-      <span className="conf-act">
-        {(a.source ?? 'LoTW') === 'LoTW' ? 'Fix cert in TQSL' : `Fix ${a.source} login in Settings`}
-      </span>
+      <button
+        className="conf-btn"
+        title={`Opens Settings ▸ Confirmations, where the ${src} login is saved`}
+        onClick={() => onOpenSettings('confirmations')}
+      >
+        Fix {src} login
+      </button>
     )
+  }
   if (a.kind === 'nudgePartner') return <span className="conf-act">Waiting on {a.call}</span>
   if (a.kind === 'mergeDuplicate') return <span className="conf-act">Review dup #{(a.otherIndex ?? 0) + 1}</span>
   if (a.kind === 'fixField') return <span className="conf-act">Fix {a.field}</span>
@@ -209,7 +223,14 @@ function RowAction({
   return null
 }
 
-export function AwardsView({ showGamification = true }: { showGamification?: boolean }) {
+export function AwardsView({
+  showGamification = true,
+  onOpenSettings,
+}: {
+  showGamification?: boolean
+  /** Open Settings at a section id (see settings/registry.ts). */
+  onOpenSettings?: (target: string) => void
+}) {
   const [aw, setAw] = useState<AwardSummary | null>(null)
   const [diag, setDiag] = useState<DiagnosticsReport | null>(null)
   // The log itself, so a diagnosis row (indexed oldest-first, same order as
@@ -778,7 +799,14 @@ export function AwardsView({ showGamification = true }: { showGamification?: boo
                     <span className={`conf-code conf-${r?.code ?? 'x'}`}>{(r?.code ?? '').toUpperCase()}</span>
                     <span className="conf-expl">{r?.explanation}</span>
                     {r?.confidence === 'likely' && <span className="conf-likely">likely</span>}
-                    <RowAction d={d} busyKey={busyKey} onUpload={upload} onPush={push} canPush={log !== null} />
+                    <RowAction
+                      d={d}
+                      busyKey={busyKey}
+                      onUpload={upload}
+                      onPush={push}
+                      canPush={log !== null}
+                      onOpenSettings={onOpenSettings}
+                    />
                   </li>
                 )
               })}

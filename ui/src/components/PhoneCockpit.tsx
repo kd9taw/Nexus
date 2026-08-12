@@ -77,6 +77,9 @@ interface Props {
   onRecallMemory?: (m: Memory) => void
   /** Open the Memories section (manage/groups/import). */
   onOpenMemories?: () => void
+  /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
+   * point at Settings stay plain text. */
+  onOpenSettings?: (target: string) => void
 }
 
 /**
@@ -193,7 +196,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, panels }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, panels }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -1008,7 +1011,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             onManage={onOpenMemories}
           />
         )}
-        <RotorStrip />
+        <RotorStrip onOpenSettings={onOpenSettings} />
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
             '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
             the glyph and the tooltip already say. The accessible name is explicit here rather

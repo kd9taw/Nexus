@@ -98,7 +98,8 @@ const KEYER_HELP = {
   cat: 'CAT keyer — the rig generates CW (rig in CW). Zero extra hardware.',
   serial:
     "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean N1MM/fldigi method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
-  winkeyer: 'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings.',
+  winkeyer:
+    'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings ▸ CW.',
   soundcard:
     "Soundcard keyer — a keyed audio tone through SSB (rig in USB). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
 } as const
@@ -132,6 +133,9 @@ interface Props {
   onRecallMemory?: (m: Memory) => void
   /** Open the Memories section (manage/groups/import). */
   onOpenMemories?: () => void
+  /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
+   * point at Settings stay plain text. */
+  onOpenSettings?: (target: string) => void
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
    *  Optional: without it every pane shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<CwPanelId>
@@ -212,6 +216,7 @@ export function CwCockpit({
   onWorkSpot,
   onRecallMemory,
   onOpenMemories,
+  onOpenSettings,
   panels,
 }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -453,7 +458,7 @@ export function CwCockpit({
   })
   // True once the operator sets WPM by hand → stop auto-matching to the decoded speed.
   const wpmTouched = useRef(false)
-  // F-key macros come from the ACTIVE named CW profile (Settings ▸ Macros). A rotating
+  // F-key macros come from the ACTIVE named CW profile (Settings ▸ CW). A rotating
   // operator can switch profiles right here in the cockpit bar; an empty profile falls
   // back to the built-in defaults — which swap to the Field Day set (with the {EXCH}
   // exchange tokens) while FD mode is on. Keep the full settings so the switcher can
@@ -1178,7 +1183,7 @@ export function CwCockpit({
           />
         </label>
         {profiles.length > 1 && (
-          <label className="cw-wpm" title="CW macro profile — your active F-key set (edit sets in Settings ▸ Macros)">
+          <label className="cw-wpm" title="CW macro profile — your active F-key set (edit sets in Settings ▸ CW)">
             <span>Macros</span>
             <select
               className="settings-input"
@@ -1225,6 +1230,7 @@ export function CwCockpit({
           />
         )}
         <RotorStrip
+          onOpenSettings={onOpenSettings}
           targetCall={guide.workedCall}
           onPointAt={(call) =>
             pointRotatorAtCall(call)
