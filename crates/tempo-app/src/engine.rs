@@ -11402,10 +11402,16 @@ impl Engine {
                     Some((call, _)) => call.clone(),
                     None => parsed.sender().map(|c| c.to_string()),
                 };
+                // `same_call`, not an exact string compare: a decode addressed with a hashed,
+                // portable or compound form of our call — `<YS/WE9G>` for YS/WE9G, `W1ABC/P`
+                // for W1ABC — is still to us, and WSJT-X highlights it (its report() matches on
+                // the `/`-aware base call). The auto-sequencer already matches on `same_call`
+                // (see `to_me` in the QSO observer); this is the display path catching up, so a
+                // row the sequencer would answer no longer looks unaddressed. (#64)
                 let directed_to_me = wspr_fields.is_none()
                     && parsed
                         .addressee()
-                        .map(|a| a.eq_ignore_ascii_case(mycall))
+                        .map(|a| same_call(a, mycall))
                         .unwrap_or(false);
                 // Worked-before (B4): the decode's sender is in the logbook —
                 // via the SAME prebuilt set as the roster above. The per-row
@@ -16836,6 +16842,31 @@ mod tests {
             row.from.as_deref(),
             Some("EK70"),
             "control: the FT8 grammar misparse this fix exists for"
+        );
+    }
+
+    #[test]
+    fn a_hashed_form_of_our_compound_call_is_directed_to_us() {
+        // #64 (kr4fqg): a decode addressed with the hashed form of our own call —
+        // "<YS/WE9G> KR4FQG R-13" when we are YS/WE9G — is to us and must highlight, the
+        // way WSJT-X does (its report() matches on the /-aware base call). The exact-string
+        // compare this replaces never matched the angle brackets, so a row the auto-sequencer
+        // would answer looked unaddressed.
+        let mut e = Engine::new("YS/WE9G", "FK52", 0);
+        e.last_decodes = vec![dec_snr("<YS/WE9G> KR4FQG R-13", -13)];
+        let row = &e.snapshot().recent_decodes[0];
+        assert!(
+            row.directed_to_me,
+            "the hashed form of our own call is to us"
+        );
+
+        // Control: a hashed form of a DIFFERENT call is NOT to us — the match is by call,
+        // not merely "has brackets".
+        e.last_decodes = vec![dec_snr("<W1ABC> KR4FQG R-13", -13)];
+        let row = &e.snapshot().recent_decodes[0];
+        assert!(
+            !row.directed_to_me,
+            "a hashed form of someone else's call is not"
         );
     }
 
