@@ -115,6 +115,28 @@ describe('the −B4 modifier (field ask: "CQ only, but exclude B4")', () => {
   })
 })
 
+describe('the wildcard call-hide (VP8* etc.)', () => {
+  const rows = [
+    decode({ from: 'W1AW', message: 'CQ W1AW FN31' }),
+    decode({ from: 'VP8PJ', message: 'CQ VP8PJ', freqHz: 900 }),
+  ]
+
+  it('hides calls matching a stored prefix, keeps the rest', () => {
+    localStorage.setItem('nexus.decodes.hideCalls', 'VP8*')
+    mount({ decodes: rows })
+    expect(screen.queryByText(/W1AW/)).not.toBeNull()
+    expect(screen.queryByText(/VP8PJ/)).toBeNull()
+    localStorage.clear()
+  })
+
+  it('never hides the station being worked', () => {
+    localStorage.setItem('nexus.decodes.hideCalls', 'VP8*')
+    mount({ decodes: rows, selectedCall: 'VP8PJ' })
+    expect(screen.queryByText(/VP8PJ/)).not.toBeNull()
+    localStorage.clear()
+  })
+})
+
 describe('the −Conf modifier (hide confirmed on this band)', () => {
   const rows = [
     decode({ from: 'W1AW', message: 'CQ W1AW FN31', confirmedBand: false }),

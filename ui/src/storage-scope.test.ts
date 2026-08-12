@@ -62,6 +62,8 @@ export const PER_SURFACE = [
 const SHARED = [
   // Display units: one preference the whole station shares, like the country exclude.
   'nexus.units',
+  // Wildcard call-hide: a standing display preference across windows (features/hideCalls).
+  'nexus.decodes.hideCalls',
   'nexus.navOrder', // left-rail section order — a person/station preference, same in every window
   'nexus-density',
   // Field mode: being outdoors is a fact about the STATION, not a window — a pop-out beside

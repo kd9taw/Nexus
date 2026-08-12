@@ -14,6 +14,7 @@ import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
 import { alertsForSurface, chaseRank, strongestNeed } from '../features/needs'
 import { isIgnored } from '../txMessages'
+import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
 import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { CountryHiddenChip } from './CountryExclude'
@@ -130,6 +131,7 @@ export function OperateRoster({
   // The operator's country exclusion. Shared with Band Activity through one app-global key,
   // so the two panes can never show different bands.
   const countries = useCountryExclude()
+  const hideCalls = useHideCalls()
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
 
   const rows = useMemo(() => {
@@ -202,6 +204,14 @@ export function OperateRoster({
           x.s.call === selectedCall ||
           x.s.call === workingCall,
       )
+    // Wildcard call-hide (VP8* etc.) — display-only; the worked/selected station stays.
+    if (hideCalls.entries.length > 0)
+      f = f.filter(
+        (x) =>
+          !isCallHidden(x.s.call, hideCalls.entries) ||
+          x.s.call === selectedCall ||
+          x.s.call === workingCall,
+      )
     const dir = sort.dir === 'asc' ? 1 : -1
     f.sort((a, b) => {
       let c = 0
@@ -252,6 +262,7 @@ export function OperateRoster({
     neededOnly,
     hideWorked,
     filters.hideBlocked,
+    hideCalls.entries,
     ignoredCalls,
     workingCall,
     countries.hidden,

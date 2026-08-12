@@ -16,7 +16,9 @@ import {
 } from '../decodeHistory'
 import { loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, loadDecodeHideConfirmed, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked, saveDecodeHideConfirmed } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
+import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
+import { HideCallsPicker } from './HideCallsPicker'
 import { gridFromMessage, isIgnored } from '../txMessages'
 import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
@@ -225,6 +227,7 @@ export function OperateDecodes({
   // The operator's country exclusion — app-global (every window agrees) and RX-display
   // only. See features/countryExclude.ts for why it is not a Rust setting.
   const countries = useCountryExclude()
+  const hideCalls = useHideCalls()
   const hiddenEntities = hideExcludedCountries ? countries.hidden : NO_ENTITIES
 
   // Bottom-pinned auto-scroll (WSJT-X flow) — the shared discipline, extracted
@@ -293,6 +296,15 @@ export function OperateDecodes({
           !(
             hideConfirmed &&
             d.confirmedBand &&
+            !d.mine &&
+            (selectedCall == null || d.from !== selectedCall)
+          ),
+      )
+      // Wildcard call-hide (VP8* etc.) — display-only; own rows and the QSO partner stay.
+      .filter(
+        (d) =>
+          !(
+            isCallHidden(d.from, hideCalls.entries) &&
             !d.mine &&
             (selectedCall == null || d.from !== selectedCall)
           ),
@@ -418,6 +430,7 @@ export function OperateDecodes({
               −B4
             </button>
             <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} paused={countries.paused} onPauseChange={countries.setPaused} />
+            <HideCallsPicker />
             <label className="od-sort">
               <span className="od-sort-label">sort</span>
               <select value={sort} onChange={(e) => setSort(e.target.value as DecodeSort)}>
