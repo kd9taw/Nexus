@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { render, waitFor, fireEvent } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import * as toast from '../toast'
 
 // react-virtual (virtual-core) measures the scroll element and rows via offsetHeight + a
 // ResizeObserver, neither of which jsdom implements — stub them so a non-trivial visible window is
@@ -163,5 +164,61 @@ describe('per-operator export', () => {
     // The tooltip names them, because a wrong operator is silent until submission.
     expect(btn.title).toMatch(/G0PQR/)
     expect(btn.title).toMatch(/W1ABC/)
+  })
+})
+
+// POTA park on the edit form (#60). The park round-trips through the DTO and shows in the table's
+// Park column, but the EDIT form never rendered a control for it, so a park could not be viewed,
+// corrected or added on an existing QSO — and the fix must not become an ADIF-field-loss bug of its
+// own (the backend's ota-preserve guard checks only the four park fields, not iota).
+describe('POTA park on logbook edit (#60)', () => {
+  function logWithOta(ota: unknown) {
+    const [row] = fakeLog(1)
+    return [{ ...row, ota }]
+  }
+
+  it('shows the stored park in the edit form', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+      logWithOta({ theirProgram: 'POTA', theirRef: 'US-1234' }),
+    )
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    fireEvent.click(container.querySelector('button[aria-label="Edit K0ABC"]') as HTMLButtonElement)
+    // RED before the fix: the form rendered no park control at all, so this input did not exist.
+    await waitFor(() =>
+      expect(
+        (container.querySelector('input[title*="you worked"]') as HTMLInputElement)?.value,
+      ).toBe('US-1234'),
+    )
+  })
+
+  it('does not drop an IOTA reference when editing a POTA QSO', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+      logWithOta({ theirProgram: 'POTA', theirRef: 'US-1234', iota: 'NA-001' }),
+    )
+    // The real withErrorToast runs its callback; the module mock is a bare stub that never does,
+    // so override it here or editQso is never reached and the assertion is vacuous.
+    ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
+      fn(),
+    )
+    const editQso = api.editQso as ReturnType<typeof vi.fn>
+    editQso.mockResolvedValue({})
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    fireEvent.click(container.querySelector('button[aria-label="Edit K0ABC"]') as HTMLButtonElement)
+    await waitFor(() =>
+      expect(container.querySelector('input[title*="you worked"]')).not.toBeNull(),
+    )
+    fireEvent.click(container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement)
+    await waitFor(() => expect(editQso).toHaveBeenCalled())
+    const record = editQso.mock.calls[0][1]
+    // Editing a POTA QSO that also carries an island reference must keep the iota (the guard's
+    // blind spot): a park-only ota built from the four editable fields would silently drop it.
+    expect(record.ota.iota).toBe('NA-001')
+    expect(record.ota.theirRef).toBe('US-1234')
   })
 })

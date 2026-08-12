@@ -57,6 +57,13 @@ interface DraftQso {
   state: string
   /** TX power in watts (ADIF TX_PWR) — part of a complete hand-log, and some awards want it. */
   txPower: string
+  /** POTA/SIG park references: the worked station's park (`ota.theirRef`, the hunter case) and
+   * your own activation (`ota.myRef`). Editable so a park can be viewed, corrected or added on
+   * an existing QSO (#60). Only these two of the five `Ota` fields are exposed; the loaded
+   * program (POTA/SOTA/WWFF) and any `iota` ride through `submit` from the stored record so an
+   * edit never clobbers a non-POTA program or drops an island reference. */
+  parkTheirRef: string
+  parkMyRef: string
 }
 
 /** The word the operator must type to arm the full-log purge (irreversible). */
@@ -161,6 +168,8 @@ export function Logbook({
     whenUtc: '',
     state: '',
     txPower: '',
+    parkTheirRef: '',
+    parkMyRef: '',
   }))
   const [err, setErr] = useState<string | null>(null)
   // Operators present in the log (#25) — drives whether the per-operator export is offered.
@@ -367,6 +376,8 @@ export function Logbook({
       whenUtc: toUtcLocal(q.whenUnix),
       state: q.state ?? '',
       txPower: q.txPower != null ? String(q.txPower) : '',
+      parkTheirRef: q.ota?.theirRef ?? '',
+      parkMyRef: q.ota?.myRef ?? '',
     })
     setShowForm(true)
   }
@@ -548,6 +559,23 @@ export function Logbook({
     }
     const freq = Number(draft.freq)
     const existing = editIndex !== null ? log[editIndex] : undefined
+    const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
+    const parkMyRef = draft.parkMyRef.trim().toUpperCase() || null
+    // Only the two park REFS are editable. The program (POTA/SOTA/WWFF) and any IOTA reference
+    // ride through from the stored record: a park-only `ota` would trip the backend's ota-preserve
+    // guard, which tests only the four park fields and would silently drop `iota`. With both refs
+    // blank we send no `ota` at all, so that guard restores the stored `ota` untouched (which is
+    // also why clearing a park to REMOVE it does not take effect — a separate backend change).
+    const ota: LoggedQso['ota'] =
+      parkTheirRef || parkMyRef
+        ? {
+            theirRef: parkTheirRef,
+            theirProgram: parkTheirRef ? existing?.ota?.theirProgram || 'POTA' : null,
+            myRef: parkMyRef,
+            myProgram: parkMyRef ? existing?.ota?.myProgram || 'POTA' : null,
+            iota: existing?.ota?.iota ?? null,
+          }
+        : undefined
     const record: LoggedQso = {
       call,
       grid: draft.grid.trim() || null,
@@ -562,6 +590,7 @@ export function Logbook({
       notes: draft.notes.trim() || null,
       state: draft.state.trim().toUpperCase() || null,
       txPower: draft.txPower.trim() ? Number(draft.txPower) : null,
+      ota,
       // The operator's typed UTC wins; otherwise keep the original (edit) or stamp now (new).
       // Hand-logging is inherently after the fact, so "now" is the wrong default whenever the
       // operator has told us when it actually happened.
@@ -584,7 +613,7 @@ export function Logbook({
       if (snap) {
         pushToast(`Updated ${record.call}`, 'success')
         cancelForm()
-        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '' }))
+        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '' }))
         load()
       }
       return
@@ -896,6 +925,28 @@ export function Logbook({
                 onChange={(e) => setField('txPower', e.target.value)}
                 placeholder="100"
                 autoComplete="off"
+              />
+            </label>
+            <label className="logbook-field">
+              <span>Park (worked)</span>
+              <input
+                className="settings-input"
+                value={draft.parkTheirRef}
+                onChange={(e) => setField('parkTheirRef', e.target.value)}
+                placeholder="US-1234"
+                autoComplete="off"
+                title="POTA reference of the park the station you worked was activating (ADIF SIG_INFO). Defaults to POTA."
+              />
+            </label>
+            <label className="logbook-field">
+              <span>Park (mine)</span>
+              <input
+                className="settings-input"
+                value={draft.parkMyRef}
+                onChange={(e) => setField('parkMyRef', e.target.value)}
+                placeholder="US-5678"
+                autoComplete="off"
+                title="POTA reference of YOUR own activation for this contact (ADIF MY_SIG_INFO). Defaults to POTA."
               />
             </label>
             <label className="logbook-field">
