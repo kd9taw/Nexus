@@ -1071,6 +1071,7 @@ export function OperateCockpit({
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}
+                        myGrid={snap.mygrid}
                         {...decodeClickProps}
                         onErase={() => notifyErase(0)}
                         title="Band Activity"
@@ -1098,6 +1099,7 @@ export function OperateCockpit({
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}
+                        myGrid={snap.mygrid}
                         {...decodeClickProps}
                         onErase={() => notifyErase(1)}
                         lockedFilter="rx"
@@ -1135,6 +1137,7 @@ export function OperateCockpit({
                     harqRescues={snap.harqRescues}
                     onCall={onCall}
                     needAlertsByCall={needAlertsByCall}
+                    myGrid={snap.mygrid}
                     {...decodeClickProps}
                     onErase={() => notifyErase(0)}
                   />
@@ -1157,6 +1160,7 @@ export function OperateCockpit({
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}
+                        myGrid={snap.mygrid}
                         {...decodeClickProps}
                         onErase={() => notifyErase(1)}
                         lockedFilter="rx"

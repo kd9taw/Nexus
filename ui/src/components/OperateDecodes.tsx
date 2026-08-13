@@ -22,6 +22,8 @@ import { HideCallsPicker } from './HideCallsPicker'
 import { gridFromMessage, isIgnored } from '../txMessages'
 import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
+import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
+import { useEntityCentroids } from '../features/entityCentroids'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 
@@ -85,6 +87,13 @@ interface Props {
   compact?: boolean
   /** Header title (default "Band Activity"). */
   title?: string
+  /**
+   * The operator's own Maidenhead square — the origin every row's azimuth is
+   * measured FROM. Optional and defaulting to empty: a host that doesn't pass it
+   * (or an operator who has never set a grid) gets no azimuth column-side text at
+   * all, which is the intended answer. There is no sensible default origin.
+   */
+  myGrid?: string
   /**
    * JTAlert-style UDP callsign highlights (built by OperateCockpit via
    * buildHighlightMap). When a row's from-call matches an entry, the row's
@@ -180,6 +189,7 @@ export function OperateDecodes({
   clearTick = 0,
   history,
   hideExcludedCountries = true,
+  myGrid = '',
 }: Props) {
   // Cockpit-owned history when provided (survives layout remounts); private otherwise.
   const localHistRef = useRef<DecodeHistory | null>(null)
@@ -228,6 +238,10 @@ export function OperateDecodes({
   // only. See features/countryExclude.ts for why it is not a Rust setting.
   const countries = useCountryExclude()
   const hideCalls = useHideCalls()
+  // Entity centroids for the azimuth beside the country. Most decodes carry no grid
+  // (only CQ/grid messages do), so without this the heading would appear on a
+  // minority of rows and read as a glitch rather than a feature.
+  const centroids = useEntityCentroids()
   const hiddenEntities = hideExcludedCountries ? countries.hidden : NO_ENTITIES
 
   // Bottom-pinned auto-scroll (WSJT-X flow) — the shared discipline, extracted
@@ -509,6 +523,10 @@ export function OperateDecodes({
           // Need context for this row (why is this station worth working) — icons + colour.
           const rowAlerts = d.from ? (needAlertsByCall.get(d.from.toUpperCase()) ?? []) : []
           const needs = resolveDecodeNeeds(d, band, rowAlerts)
+          // Beam heading for this row: the decode's own grid when it sent one, else
+          // the centre of its entity (marked `~`), else nothing at all.
+          const az = azimuthTo(myGrid, d.grid, d.country, centroids)
+          const azText = azimuthLabel(az)
           return (
             <Fragment key={d.id}>
               {/* WSJT-X period separator: a dim bar with the period's UTC start +
@@ -528,7 +546,7 @@ export function OperateDecodes({
                 aria-selected={selectedRow}
                 aria-label={
                   d.from
-                    ? `${d.from}, ${fmtSnr(d.snr)} dB, ${Math.round(d.freqHz)} hertz, ${d.message}${d.country ? `, ${d.country}` : ''}`
+                    ? `${d.from}, ${fmtSnr(d.snr)} dB, ${Math.round(d.freqHz)} hertz, ${d.message}${d.country ? `, ${d.country}` : ''}${az ? `, ${az.approx ? 'about ' : ''}${az.deg} degrees` : ''}`
                     : d.message
                 }
                 tabIndex={roving.rowProps(i).tabIndex}
@@ -615,6 +633,15 @@ export function OperateDecodes({
                     </span>
                   )}
                   {d.country && <span className="decode-country">{d.country}</span>}
+                  {/* The heading, immediately after the country — where every other
+                      logger puts it, and where the tester asked for it. `.decode-country`
+                      already carries `margin-left:auto`, so the pair floats to the right
+                      of the message together and no other cell moves. */}
+                  {az && azText && (
+                    <span className="decode-az" title={azimuthTitle(az, d.country)}>
+                      {azText}
+                    </span>
+                  )}
                 </span>
                 {d.from && (
                   // WSJT-X style: DOUBLE-CLICK the row to work the station (see onDoubleClick) — no

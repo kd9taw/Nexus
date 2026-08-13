@@ -6,7 +6,15 @@ import { modeClassOf } from '../../features/needs'
 import { beaconsNow, beaconHeard } from '../../features/beacons'
 import { isEsSeason } from '../../features/es'
 import { nextTerminatorMs } from '../../mapGeo'
-import { gridToLatLon, haversineKm } from '../../grid'
+import {
+  gridToLatLon,
+  haversineKm,
+  bearingDeg,
+  azimuthLabel,
+  azimuthTo,
+  backendAzimuth,
+  type Azimuth,
+} from '../../grid'
 import { dualStateLabel, kpImpact, sortInsights } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
 import { buildChaseFeed, chaseFeedLine as feedSummary } from '../../features/chaseFeed'
@@ -83,11 +91,45 @@ export function bandAdvisorLine(c: PaneContext): string {
   return `Best band now: ${b.band}${b.bestRegion ? ` to ${b.bestRegion.region}` : ''} (${word}).`
 }
 
+/** The entity name the selection headlines with — spot, then DXpedition, then the
+ * heard station's country. One definition so the card and this module's text mirror
+ * can never name different places (and so the heading below matches whichever it is). */
+export function selectionEntity(c: PaneContext): string | null {
+  return c.selSpot?.entity ?? c.selDxped?.entity ?? c.selStation?.country ?? null
+}
+
+/**
+ * The beam heading for whatever is selected, or null.
+ *
+ * Three sources in the same precedence as the name above, because the three kinds of
+ * selection know different things:
+ *  · a MAP SPOT already carries resolved coordinates, and its own `approx` flag
+ *    records whether they came from a real grid or from the entity centre — more
+ *    accurate than re-deciding that here,
+ *  · a DXPEDITION carries a bearing the backend measured from the announced grid,
+ *  · a heard STATION has a grid when it sent one, else its entity's centre.
+ */
+export function selectionAzimuth(c: PaneContext): Azimuth | null {
+  if (c.selSpot) {
+    const me = gridToLatLon(c.myGrid)
+    if (!me) return null
+    return {
+      deg: bearingDeg(me, { lat: c.selSpot.lat, lon: c.selSpot.lon }),
+      approx: c.selSpot.approx,
+    }
+  }
+  if (c.selDxped) return backendAzimuth(c.selDxped.bearingDeg, c.selDxped.distanceKm)
+  if (c.selStation)
+    return azimuthTo(c.myGrid, c.selStation.grid, c.selStation.country, c.entityCentroids)
+  return null
+}
+
 export function selectionLine(c: PaneContext): string {
   if (!c.selectedCall) return 'Tap a station, spot, or DXpedition on the map.'
-  const who = c.selSpot?.entity ?? c.selDxped?.entity ?? c.selStation?.country ?? '—'
+  const who = selectionEntity(c) ?? '—'
+  const az = azimuthLabel(selectionAzimuth(c))
   const band = c.selSpot?.band ?? c.selDxped?.band ?? null
-  return `${c.selectedCall} — ${who}${band ? ` on ${band}` : ''}${
+  return `${c.selectedCall} — ${who}${az ? ` ${az}` : ''}${band ? ` on ${band}` : ''}${
     c.selSpot?.heardMe ? ', and is hearing you' : ''
   }.`
 }

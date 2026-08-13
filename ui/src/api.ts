@@ -1204,6 +1204,14 @@ export async function getDxccEntityNames(): Promise<string[]> {
   return invoke<string[]>('dxcc_entity_names')
 }
 
+/** Every entity's cty.dat representative location as `[name, lat, lon]` — the azimuth
+ *  fallback for a station that never sent a grid. Keyed by the same `country`/`entity`
+ *  string a decode/spot row carries. WAE/CQ-only entities are included: `resolve()`
+ *  returns those as a country too. */
+export async function getDxccEntityLocations(): Promise<[string, number, number][]> {
+  return invoke<[string, number, number][]>('dxcc_entity_locations')
+}
+
 // --- QSO recording (audio bridge) ---
 /** Start streaming the live RX audio to a timestamped WAV on disk. */
 export async function startQsoRecording(): Promise<AppSnapshot> {

@@ -6,6 +6,7 @@
 import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
 import { buildChaseFeed, type ChaseFeedItem } from '../../features/chaseFeed'
+import { azimuthLabel, azimuthTitle, azimuthTo } from '../../grid'
 
 /** Rarity gem, matching the Needed-board glyphs. */
 function gem(i: ChaseFeedItem): { glyph: string; cls: string; title: string } | null {
@@ -59,6 +60,15 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
                     </span>
                   )}
                   <span className="chase-entity">{i.entity}</span>
+                  {/* Same treatment as the Chase pane it shares row chrome with. */}
+                  {(() => {
+                    const az = azimuthTo(ctx.myGrid, null, i.entity, ctx.entityCentroids)
+                    return az ? (
+                      <span className="chase-az" title={azimuthTitle(az, i.entity)}>
+                        {azimuthLabel(az)}
+                      </span>
+                    ) : null
+                  })()}
                 </div>
                 <div className={`chase-open o-${i.openNow ? 'open' : 'closed'}`}>{i.why}</div>
               </div>

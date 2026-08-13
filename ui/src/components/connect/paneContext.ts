@@ -2,6 +2,7 @@
 // already-lifted state (no new computation). Field set is exactly what the B1 panes
 // consume, plus a few forward-compat fields for B2/B3.
 import type { Theme } from '../../useTheme'
+import type { LatLon } from '../../grid'
 import type { MapIntent } from '../MapView'
 import type {
   AlertView,
@@ -22,6 +23,11 @@ import type {
 export interface PaneContext {
   // environment (B2/B3-ready; B1 panes mostly read prop/selection)
   myGrid: string
+  /** DXCC entity → representative location, for the beam heading a pane prints beside
+   * an entity name. Lives on the context because several panes render through plain
+   * functions (`renderSelection`), which cannot call the hook themselves. Null until
+   * the table arrives — panes then show grid-derived headings only. */
+  entityCentroids: ReadonlyMap<string, LatLon> | null
   theme: Theme
   intent: MapIntent
   // shared live state

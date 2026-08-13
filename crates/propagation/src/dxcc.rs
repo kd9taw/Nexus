@@ -275,6 +275,32 @@ pub fn dxcc_entity_locations() -> impl Iterator<Item = (&'static str, f64, f64)>
         .map(|e| (e.name.as_str(), e.lat, e.lon))
 }
 
+/// EVERY cty.dat entity name with its representative location — the DXCC entities
+/// **and** the six WAE/CQ-only ones, which is the difference from
+/// [`dxcc_entity_locations`].
+///
+/// The `is_dxcc` filter is right for satellite-footprint geometry and wrong here.
+/// [`resolve`] hands a decode row its `country` string off this same table without
+/// ever consulting the flag, so an IT9 call puts "Sicily" on the screen like any
+/// other country. A DXCC-only table would leave that row — and the five others —
+/// showing a country with no bearing beside it while every neighbouring row had
+/// one, which reads as a broken pane rather than as a deliberate exclusion.
+///
+/// De-duplicated by name, first occurrence winning: the consumer keys a map on the
+/// name, so a repeated name would otherwise make the location depend on iteration
+/// order. Sorted, like [`dxcc_entity_names`], so the wire order is stable.
+pub fn entity_locations() -> Vec<(&'static str, f64, f64)> {
+    let mut out: Vec<(&'static str, f64, f64)> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for e in &resolver().entities {
+        if seen.insert(e.name.as_str()) {
+            out.push((e.name.as_str(), e.lat, e.lon));
+        }
+    }
+    out.sort_unstable_by_key(|(name, _, _)| *name);
+    out
+}
+
 /// Every current ARRL DXCC entity NAME, sorted and de-duplicated — the source for the
 /// decode panes' "hide any entity" picker (F4MQS), which opens the curated-18 country
 /// exclude to the full table. The names are exactly the `country`/`entity` strings a
@@ -307,6 +333,45 @@ mod tests {
         assert!(names.windows(2).all(|w| w[0] <= w[1]), "sorted");
         assert!(names.contains(&"United States"));
         assert!(names.contains(&"Fiji"));
+    }
+
+    #[test]
+    fn entity_locations_carry_the_wae_entities_the_dxcc_table_drops() {
+        // The UI's azimuth fallback keys a location map on the SAME string `resolve`
+        // puts on screen, so this table has to answer for every entity `resolve` can
+        // return — the WAE/CQ-only six included, or those rows show a country with no
+        // bearing beside it while every neighbouring row has one.
+        let all: HashMap<&str, (f64, f64)> = entity_locations()
+            .into_iter()
+            .map(|(n, lat, lon)| (n, (lat, lon)))
+            .collect();
+        let dxcc_only: std::collections::HashSet<&str> =
+            dxcc_entity_locations().map(|(n, _, _)| n).collect();
+
+        // Positive control for the filter itself: if the two accessors returned the
+        // same set, every assertion below would pass while proving nothing.
+        assert!(
+            all.keys().any(|n| !dxcc_only.contains(*n)),
+            "no entity is WAE-only — the is_dxcc filter is inert, so this test is vacuous"
+        );
+        for n in &dxcc_only {
+            assert!(all.contains_key(n), "{n} missing from the unfiltered table");
+        }
+
+        // The case that motivated it, end to end: an IT9 call resolves to a WAE-only
+        // entity, and that entity must have somewhere to point at.
+        let sicily = resolve("IT9ABC").expect("IT9 resolves");
+        assert!(!sicily.is_dxcc, "IT9 is the WAE-only case");
+        assert!(
+            all.contains_key(sicily.entity),
+            "{} has no location",
+            sicily.entity
+        );
+        assert!(
+            !dxcc_only.contains(sicily.entity),
+            "control: the DXCC-only table must omit {}",
+            sicily.entity
+        );
     }
 
     #[test]

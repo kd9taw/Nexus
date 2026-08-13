@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A beam heading next to the country, everywhere the country appears.** Band Activity, the
+  Call Roster, the Tempo roster, the Needed board, Spots, the chase panes, the pounce banner,
+  the selected-station card, the DXpedition views and the map's tooltips all print the short-path
+  bearing from your grid straight after the entity name — `Fed. Rep. of Germany 47°` — which is
+  where every other logger puts it and where it was asked for. When the station sent a grid the
+  heading is measured to that square. When it did not, it is measured to the middle of its DXCC
+  entity and marked with a tilde, `~47°`, because the middle of a continental country is nowhere
+  near most of the stations in it: every US callsign resolves to one point in Missouri, so a `~`
+  heading is a hint about which way to turn, not a number to trust a beam to. Hover it and it
+  says so, and says "short path", which is what all of these are. If your grid is not set in
+  Settings, or cty.dat has no location for the country, nothing is shown at all — an honest gap
+  rather than a confident 0° pointing due north. The roster's existing Brg column, which used to
+  read "—" for any station heard outside a CQ, now fills in the same way and sorts on it.
+
 - **Find a setting by typing what you call it.** Settings has a search box in its header, and it
   searches the words on the control rather than only the headings above them — "COM port",
   "sound card", "PL tone", "WPM", "keps", "stop bits", "no RF" all land on the right page even

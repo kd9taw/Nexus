@@ -33,6 +33,7 @@ import { PaneFrame } from './connect/PaneFrame'
 import type { PaneContext } from './connect/paneContext'
 import { useConnectConfig, type SlotId } from '../features/connectConfig'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { useEntityCentroids } from '../features/entityCentroids'
 
 /** Intent presets — beginner picks a goal once; map + prop configure themselves. */
 const INTENTS: { id: MapIntent; label: string; title: string }[] = [
@@ -85,6 +86,9 @@ export function ConnectView({
   onPopOut,
 }: Props) {
   const prov = prop ? provLabel(prop.source, prop.asOf) : null
+  // Fetched here, once, and handed to every pane through the context — the panes that
+  // need it include plain render functions that cannot hold a hook of their own.
+  const entityCentroids = useEntityCentroids()
   const [intent, setIntent] = useState<MapIntent>(() =>
     persisted('nexus.connect.intent', ['dx', 'pota', 'casual', 'vhf'] as const, 'dx'),
   )
@@ -270,6 +274,7 @@ export function ConnectView({
   // One context handed to every pane (built from the already-lifted state above).
   const ctx: PaneContext = {
     myGrid,
+    entityCentroids,
     theme,
     intent,
     prop,

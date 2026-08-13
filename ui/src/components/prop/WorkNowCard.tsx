@@ -6,6 +6,7 @@ import { useState } from 'react'
 import { Check } from 'lucide-react'
 import type { DxpedWindow, WorkableCard } from '../../types'
 import { needMeta, workabilityVar, bandTiming } from '../../propViz'
+import { azimuthLabel, azimuthTitle, backendAzimuth } from '../../grid'
 import { LikelihoodHeatmap } from './LikelihoodHeatmap'
 
 export function WorkNowCard({
@@ -26,6 +27,7 @@ export function WorkNowCard({
   onToggleChase?: (call: string) => void
 }) {
   const need = needMeta(card.need)
+  const az = backendAzimuth(card.bearingDeg, card.distanceKm)
   const [details, setDetails] = useState(false)
   // Headline this card with ITS OWN band. `win.best`/`win.outlook[0]` rank every HF band
   // on the PATH, so they are a cross-band answer on a per-band card: a 20m card read
@@ -71,8 +73,12 @@ export function WorkNowCard({
             <Check size={12} strokeWidth={3} aria-hidden="true" /> live spots
           </span>
         )}
-        <span className="wn-geo">
-          {card.octant} · {Math.round(card.distanceKm).toLocaleString()} km
+        {/* The octant alone ("NE") was never a beam heading. The degrees were already
+            in this payload — measured backend-side from the operator's grid to the
+            announced one — and simply never rendered. */}
+        <span className="wn-geo" title={az ? azimuthTitle(az, card.entity) : undefined}>
+          {card.octant}
+          {az ? ` ${azimuthLabel(az)}` : ''} · {Math.round(card.distanceKm).toLocaleString()} km
         </span>
       </div>
       {win && own ? (

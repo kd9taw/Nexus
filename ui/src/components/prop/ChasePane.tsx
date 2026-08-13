@@ -6,6 +6,7 @@
 import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
 import { buildChaseTargets, type ChaseTarget } from '../../features/chase'
+import { azimuthLabel, azimuthTitle, azimuthTo } from '../../grid'
 
 function ageLabel(secs: number | null): string {
   if (secs == null) return ''
@@ -56,6 +57,17 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
                     </button>
                   )}
                   <span className="chase-entity">{t.entity}</span>
+                  {/* The heading beside the entity — this is the pane with a
+                      point-the-antenna button on the same row, so the number the
+                      button is about should be readable without pressing it. */}
+                  {(() => {
+                    const az = azimuthTo(ctx.myGrid, null, t.entity, ctx.entityCentroids)
+                    return az ? (
+                      <span className="chase-az" title={azimuthTitle(az, t.entity)}>
+                        {azimuthLabel(az)}
+                      </span>
+                    ) : null
+                  })()}
                   {t.ageSecs != null && <span className="chase-age">{ageLabel(t.ageSecs)}</span>}
                 </div>
                 <div className={`chase-open o-${op.cls}`}>{op.text}</div>

@@ -12,6 +12,7 @@
 // themselves. This states the conclusion instead of the evidence.
 import type { CalendarEntry, DxpedWindow } from '../../types'
 import { dxpedColorIndex } from './dxpedLanes'
+import { azimuthLabel, azimuthTitle, backendAzimuth } from '../../grid'
 
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -99,6 +100,16 @@ export function DxpedDigest({
                 {e.call}
               </button>
               <span className="dxd-entity">{e.entity}</span>
+              {/* Heading right after the entity, matching the calendar entry this row
+                  expands into — free, the bearing is already in the payload. */}
+              {(() => {
+                const az = backendAzimuth(e.bearingDeg, e.distanceKm)
+                return az ? (
+                  <span className="dxd-az" title={azimuthTitle(az, e.entity)}>
+                    {azimuthLabel(az)}
+                  </span>
+                ) : null
+              })()}
               <span className="dxd-when">{live ? 'ON THE AIR' : startsIn(e, now)}</span>
               {headline && <span className="dxd-best">{headline}</span>}
               {days && <span className="dxd-days">best {days}</span>}

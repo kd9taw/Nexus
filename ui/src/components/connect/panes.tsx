@@ -10,6 +10,7 @@ import { type PaneId, PANE_IDS } from '../../features/connectConfig'
 import type { PaneContext } from './paneContext'
 import type { BandOutlook } from '../../types'
 import { bandTiming } from '../../propViz'
+import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
 import { OpeningStrip } from '../prop/OpeningStrip'
@@ -37,6 +38,8 @@ import {
   advisoryLine,
   bandAdvisorLine,
   selectionLine,
+  selectionAzimuth,
+  selectionEntity,
   outlookLine,
   openingsLine,
   spaceWxLine,
@@ -108,6 +111,15 @@ function renderSelection(c: PaneContext): ReactNode {
       </div>
       <div className="cs-who">
         {c.selSpot?.entity ?? c.selDxped?.entity ?? c.selStation?.country ?? '—'}
+        {(() => {
+          const az = selectionAzimuth(c)
+          return az ? (
+            <span className="cs-az" title={azimuthTitle(az, selectionEntity(c))}>
+              {' '}
+              {azimuthLabel(az)}
+            </span>
+          ) : null
+        })()}
         {c.selSpot?.cqZone != null && ` · CQ ${c.selSpot.cqZone}`}
         {c.selStation?.grid && ` · ${c.selStation.grid}`}
       </div>

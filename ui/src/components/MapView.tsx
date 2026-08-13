@@ -49,7 +49,15 @@ import {
 import { decollideLabels } from '../features/mapLabels'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
-import { gridToLatLon, haversineKm, bearingDeg, magneticDeg, type LatLon } from '../grid'
+import {
+  gridToLatLon,
+  haversineKm,
+  bearingDeg,
+  magneticDeg,
+  azimuthLabel,
+  backendAzimuth,
+  type LatLon,
+} from '../grid'
 import { heatBoost, sectorPulse } from '../features/pulse'
 import { openingModeColor } from '../bandColors'
 import {
@@ -2197,7 +2205,10 @@ export function MapView({
     }
     if (hit.kind === 'dxped') {
       const c = hit.card
-      return `${c.call} · ${c.entity} · ${c.need} on ${c.band} · ${c.likelihood}${c.liveConfirmed ? ' · live-confirmed' : ''}${workHint}`
+      // Same shape as the station tooltip above: entity, then the heading. Without
+      // it, hovering two pins on one map gave a bearing for one and not the other.
+      const az = backendAzimuth(c.bearingDeg, c.distanceKm)
+      return `${c.call} · ${c.entity}${az ? ` · ${azimuthLabel(az)}` : ''} · ${c.need} on ${c.band} · ${c.likelihood}${c.liveConfirmed ? ' · live-confirmed' : ''}${workHint}`
     }
     if (hit.kind === 'muf') {
       return `Ionosonde · measured MUF ${hit.muf.toFixed(1)} MHz here (KC2G) — a data point, not a station`

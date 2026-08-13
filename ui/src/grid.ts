@@ -141,6 +141,94 @@ export function bearingLabel(myGrid: string, peerGrid: string | null): string | 
   return bearingLabelAt(me, them)
 }
 
+/**
+ * A bearing to print beside a callsign, carrying WHERE it came from.
+ *
+ * `approx` is not decoration. An exact bearing points at the position the station
+ * itself reported. An approximate one points at the single cty.dat coordinate that
+ * stands for its whole DXCC entity, and for a continental entity that point is
+ * nowhere near most of its stations — every US callsign resolves to one spot in
+ * Missouri, so a W6 and a W4 heard on the same band get the same number. Printing
+ * the two identically would invite an operator to swing a beam on something that
+ * was never a measurement, so every surface marks it and says so in the tooltip.
+ */
+export interface Azimuth {
+  deg: number
+  approx: boolean
+}
+
+/**
+ * Short-path true bearing from the operator's grid to a station, or null.
+ *
+ * Best evidence first: the grid the station actually sent, then its DXCC entity's
+ * centroid (marked `approx`), then NOTHING. There is deliberately no third rung —
+ * an operator with no grid set, an entity with no coordinates, or a row with
+ * neither gets no azimuth at all. "No bearing" is a legible answer on a row; a
+ * confident 0° pointing due north is not.
+ *
+ * Short path only, like every other bearing Nexus shows (`bearingDeg`,
+ * `propagation::geo::bearing_deg`). The one long-path-aware routine in the tree
+ * lives inside the P.533 engine and is not a display helper.
+ */
+export function azimuthTo(
+  myGrid: string,
+  peerGrid: string | null | undefined,
+  entity: string | null | undefined,
+  centroids?: ReadonlyMap<string, LatLon> | null,
+): Azimuth | null {
+  const me = gridToLatLon(myGrid)
+  if (!me) return null // no origin ⇒ no bearing, on every surface at once
+  const them = peerGrid ? gridToLatLon(peerGrid) : null
+  if (them) return { deg: bearingDeg(me, them), approx: false }
+  const centre = entity && centroids ? centroids.get(entity) : null
+  return centre ? { deg: bearingDeg(me, centre), approx: true } : null
+}
+
+/** The compact on-screen form: `"47°"`, or `"~47°"` for an entity-centroid bearing.
+ * Null in, null out, so a caller can render it with `{label && …}` and never emit
+ * an empty span. */
+export function azimuthLabel(az: Azimuth | null | undefined): string | null {
+  return az ? `${az.approx ? '~' : ''}${az.deg}°` : null
+}
+
+/**
+ * The tooltip that goes with the label — one wording for every surface, so the
+ * `~` means the same thing wherever the operator meets it.
+ *
+ * Says "short path" out loud: the number is only half an answer without it, and a
+ * chaser who assumes long path on a low band points the beam 180° wrong.
+ * `magnetic` is optional and appended only where a surface actually knows the QTH
+ * declination — the project's convention is true on the face, magnetic in the
+ * tooltip.
+ */
+export function azimuthTitle(
+  az: Azimuth,
+  entity?: string | null,
+  magnetic?: number | null,
+): string {
+  const mag = magnetic != null ? ` · ${magnetic}° magnetic (WMM)` : ''
+  if (!az.approx) return `${az.deg}° true, short path${mag}`
+  const where = entity ? `the centre of ${entity}` : 'the centre of its DXCC entity'
+  return `~${az.deg}° true, short path${mag} — to ${where}, not to this station (no grid heard), so it is a rough heading only`
+}
+
+/**
+ * A bearing the BACKEND already computed, admitted only when it is real.
+ *
+ * `WorkableCard` and `CalendarEntry` carry `bearingDeg`/`distanceKm` measured in
+ * `propagation::dxped` from the operator's grid to the operation's announced grid —
+ * already short path, already from the right origin, so the UI must not recompute
+ * it. But that code fills **both** fields with `0.0` when it has no operator
+ * position, and a bare `bearingDeg` of 0 is indistinguishable from a genuine due-north
+ * path. The 0/0 pair is the tell: an operation 0 km away is not a thing, so both
+ * zeroes together mean "we never knew where you are" and the honest render is nothing.
+ */
+export function backendAzimuth(bearing: number, distanceKm: number): Azimuth | null {
+  if (!Number.isFinite(bearing) || !Number.isFinite(distanceKm)) return null
+  if (bearing === 0 && distanceKm === 0) return null
+  return { deg: Math.round(((bearing % 360) + 360) % 360), approx: false }
+}
+
 /** The magnetic heading for a true bearing given the QTH declination (° east-
  * positive, WMM): magnetic = true − declination. Null declination = unknown. */
 export function magneticDeg(trueDeg: number, declination: number | null): number | null {

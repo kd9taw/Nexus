@@ -23,6 +23,8 @@ import { pushToast, withErrorToast } from '../toast'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
+import { useEntityCentroids } from '../features/entityCentroids'
 
 /** Defensive chip lookup — an unknown future tag renders visibly, never throws. */
 function chipFor(t: NeedTag): { label: string; cls: string; title: string } {
@@ -175,6 +177,10 @@ interface Props {
   alerts: NeedAlert[]
   bandPlan: BandChannel[]
   selectedCall: string | null
+  /** The operator's own square — the origin for the beam heading beside each entity.
+   * A need alert never carries the station's grid, so that heading is always the
+   * entity centre; omit this (or leave the grid unset) and no heading is shown. */
+  myGrid?: string
   /** QSY the rig to a digital need — to the SPOT's exact frequency (DXpeditions run off the
    * standard FT8/FT4 watering hole), falling back to the band's dial only when the spot
    * carries no frequency. The spotting network's freq/band is the source of truth. */
@@ -224,6 +230,7 @@ export function NeededPanel({
   alerts,
   bandPlan,
   selectedCall,
+  myGrid = '',
   onQsy,
   onSelect,
   onWork,
@@ -248,6 +255,8 @@ export function NeededPanel({
   })
 
   const knownBands = useMemo(() => new Set(bandPlan.map((b) => b.band)), [bandPlan])
+  // Entity centres — the only geometry a need alert can offer, since it carries no grid.
+  const centroids = useEntityCentroids()
 
   // All distinct bands present in the current alerts, merged with the common list.
   const availableBands = useMemo(() => {
@@ -583,12 +592,14 @@ export function NeededPanel({
             const fullTooltip = evidenceLine
               ? `${tooltipBody}\n${evidenceLine}`
               : tooltipBody
+            // Always the entity centre here — a need alert carries no grid of its own.
+            const az = azimuthTo(myGrid, null, a.entity, centroids)
             return (
               <div
                 key={`${a.call}|${a.band}|${a.mode}`}
                 role="row"
                 aria-selected={a.call === selectedCall}
-                aria-label={`${a.call}, ${a.entity}, ${a.band} ${a.mode}, needed ${a.tags.join(' ')}`}
+                aria-label={`${a.call}, ${a.entity}${az ? `, about ${az.deg} degrees` : ''}, ${a.band} ${a.mode}, needed ${a.tags.join(' ')}`}
                 tabIndex={roving.rowProps(i).tabIndex}
                 ref={roving.rowProps(i).ref as (el: HTMLDivElement | null) => void}
                 onFocus={roving.rowProps(i).onFocus}
@@ -634,7 +645,17 @@ export function NeededPanel({
                     </button>
                   )}
                 </span>
-                <span className="np-entity">{a.entity || '—'}</span>
+                {/* Entity, then its beam heading — the order every other logger uses.
+                    Two spans, not one string: the name has to keep ellipsising in a
+                    narrow column and the heading has to survive when it does. */}
+                <span className="np-entity">
+                  <span className="np-name">{a.entity || '—'}</span>
+                  {az && (
+                    <span className="np-az" title={azimuthTitle(az, a.entity)}>
+                      {azimuthLabel(az)}
+                    </span>
+                  )}
+                </span>
                 <span className="np-band">{a.band}</span>
                 <span
                   className={`np-mode-col np-mode-${a.mode.toLowerCase()}`}

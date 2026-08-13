@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { BandChannel, SpotRow } from '../types'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
+import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
+import { useEntityCentroids } from '../features/entityCentroids'
 
 type SortKey = 'age' | 'call' | 'entity' | 'band' | 'freq' | 'mode'
 
@@ -29,6 +31,9 @@ interface Props {
   /** Work the spot — QSY to its freq/mode and open the matching cockpit. */
   onWork: (spot: SpotRow) => void
   onPopOut?: () => void
+  /** The operator's own square — origin for the beam heading beside each entity. A
+   * cluster/RBN spot carries no grid, so that heading is always the entity centre. */
+  myGrid?: string
 }
 
 /** View-session state: the Spots panel unmounts on every view switch, which wiped all
@@ -55,7 +60,9 @@ function useSessionState<T>(key: string, init: T): [T, React.Dispatch<React.SetS
   return [v, setV]
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut }: Props) {
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut, myGrid = '' }: Props) {
+  // Entity centres — the only geometry the firehose carries (a spot has no grid).
+  const centroids = useEntityCentroids()
   // ONE flat mode filter: the SPECIFIC modes present (CW/Phone/FT8/FT4/RTTY/Digital…), each a
   // show/hide toggle. Stores the HIDDEN set (empty = all shown) so a mode that first appears
   // mid-session shows by default instead of being silently hidden.
@@ -342,7 +349,19 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                     {s.call}
                   </button>
                 </span>
-                <span className="np-entity">{s.entity || '—'}</span>
+                {/* Entity then heading, same cell shape as the Needed board — the two
+                    boards sit one click apart and have to read as one thing. */}
+                <span className="np-entity">
+                  <span className="np-name">{s.entity || '—'}</span>
+                  {(() => {
+                    const az = azimuthTo(myGrid, null, s.entity, centroids)
+                    return az ? (
+                      <span className="np-az" title={azimuthTitle(az, s.entity)}>
+                        {azimuthLabel(az)}
+                      </span>
+                    ) : null
+                  })()}
+                </span>
                 <span className="np-band">{s.band || '—'}</span>
                 <span className="sp-freq">{s.freqMhz.toFixed(3)}</span>
                 <span

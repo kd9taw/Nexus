@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Activity, Radio, SignalHigh, Target } from 'lucide-react'
 import type { AppSnapshot, FeedHealth, FeedStatus, PropagationSnapshot } from '../types'
 import type { View } from './ModeNav'
+import { azimuthLabel, backendAzimuth } from '../grid'
 
 interface Props {
   snap: AppSnapshot
@@ -120,6 +121,10 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
   // Skip NotOpen cards: the chip must never advertise an unworkable slot as the
   // top need (the tracker keeps NotOpen cards for the board, filtered here).
   const need = prop?.dxpeditions.workableNow.find((c) => c.status !== 'NotOpen') ?? null
+  // Tooltip only. The visible chip is one line of a status strip that already competes
+  // for width at the 1024 px floor, and this bar's job is "is there something to chase",
+  // not "where do I point" — the board a click away answers that on its face.
+  const needAz = need ? backendAzimuth(need.bearingDeg, need.distanceKm) : null
 
   // Band open?
   const [bandWord, bandCls] = report ? (BAND_WORD[report.tier] ?? ['—', 'weak']) : ['…', 'weak']
@@ -176,7 +181,7 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
         onClick={dxpedEnabled ? () => onNavigate('dxped') : undefined}
         title={
           need
-            ? `${need.call} (${need.entity}) — ${need.need} on ${need.band}, likelihood ${need.likelihood}${need.liveConfirmed ? ' (live-confirmed)' : ''}`
+            ? `${need.call} (${need.entity}${needAz ? ` ${azimuthLabel(needAz)}` : ''}) — ${need.need} on ${need.band}, likelihood ${need.likelihood}${need.liveConfirmed ? ' (live-confirmed)' : ''}`
             : 'No DXpedition needs workable right now'
         }
       >

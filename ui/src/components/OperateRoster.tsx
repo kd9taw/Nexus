@@ -8,7 +8,16 @@ import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { useRovingList } from '../useRovingList'
 import type { NeedAlert, NeedTag, Station } from '../types'
-import { gridToLatLon, haversineKm, bearingDeg, distanceLabel, bearingLabel, magneticDeg } from '../grid'
+import {
+  gridToLatLon,
+  haversineKm,
+  distanceLabel,
+  magneticDeg,
+  azimuthLabel,
+  azimuthTitle,
+  azimuthTo,
+} from '../grid'
+import { useEntityCentroids } from '../features/entityCentroids'
 import { useUnits } from '../units'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
@@ -132,6 +141,9 @@ export function OperateRoster({
   // so the two panes can never show different bands.
   const countries = useCountryExclude()
   const hideCalls = useHideCalls()
+  // Entity centroids, so Brg stops reading "—" for a station heard only in traffic
+  // that carried no grid — which was most of the column on a busy band.
+  const centroids = useEntityCentroids()
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
 
   const rows = useMemo(() => {
@@ -170,7 +182,11 @@ export function OperateRoster({
         needAll,
         needRank: chaseRank(alerts, need),
         distKm: me && ll ? haversineKm(me, ll) : Infinity,
-        brg: me && ll ? bearingDeg(me, ll) : 999,
+        // Sorts on the SAME number the Brg cell prints, centroid fallback included.
+        // Left as `me && ll ? … : 999` it would file every `~` row at the end of a
+        // Brg sort while showing it a real heading — the column would read as broken.
+        // 999 still parks a row with no bearing at all after everything that has one.
+        brg: azimuthTo(myGrid, s.grid, s.country, centroids)?.deg ?? 999,
         age: currentSlot - s.lastHeardSlot,
       }
     })
@@ -257,6 +273,8 @@ export function OperateRoster({
     band,
     feedMode,
     me,
+    myGrid,
+    centroids,
     currentSlot,
     sort,
     neededOnly,
@@ -450,19 +468,20 @@ export function OperateRoster({
                 <span className="or-country">{s.country ?? '—'}</span>
                 <span className="or-gridc">{s.grid ?? '—'}</span>
                 <span className="or-dist">{distanceLabel(myGrid, s.grid, units) ?? '—'}</span>
-                <span
-                  className="or-brg"
-                  title={(() => {
-                    const me = gridToLatLon(myGrid)
-                    const them = s.grid ? gridToLatLon(s.grid) : null
-                    if (!me || !them) return undefined
-                    const t = bearingDeg(me, them)
-                    const mg = magneticDeg(t, declination)
-                    return mg != null ? `${t}° true · ${mg}° magnetic (WMM)` : `${t}° true`
-                  })()}
-                >
-                  {bearingLabel(myGrid, s.grid) ?? '—'}
-                </span>
+                {/* Brg falls back to the entity centre (shown `~`) when the station
+                    never sent a grid — same rule as Band Activity, so the two panes
+                    of one cockpit cannot disagree about where a station is. */}
+                {(() => {
+                  const az = azimuthTo(myGrid, s.grid, s.country, centroids)
+                  return (
+                    <span
+                      className="or-brg"
+                      title={az ? azimuthTitle(az, s.country, magneticDeg(az.deg, declination)) : undefined}
+                    >
+                      {azimuthLabel(az) ?? '—'}
+                    </span>
+                  )
+                })()}
                 <span className={`or-snr snr-${snrClass(s.snr)}`}>
                   {s.snr > 0 ? '+' : ''}
                   {s.snr}

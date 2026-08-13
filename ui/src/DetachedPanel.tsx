@@ -319,6 +319,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
           alerts={needAlerts}
           bandPlan={bandPlan}
           selectedCall={selected}
+          myGrid={snap?.mygrid ?? ''}
           onQsy={(a) => qsyBand(a.band, a.freqMhz ?? undefined)}
           onSelect={onSelect}
           // Full work path from the pop-out too: the atomic workSpot switches the

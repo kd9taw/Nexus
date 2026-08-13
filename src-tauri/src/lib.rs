@@ -10702,6 +10702,23 @@ fn resolve_entity(call: String) -> Option<String> {
     propagation::dxcc::resolve(&call).map(|i| i.entity.to_string())
 }
 
+/// Every entity name paired with its cty.dat representative location, as
+/// `[name, lat, lon]` — the fallback that lets a pane print an azimuth beside a
+/// country for a station that never sent a grid.
+///
+/// **Coordinates, not bearings, deliberately.** A bearing depends on the operator's
+/// own grid, which they can change in Settings at any moment; a table of
+/// pre-computed headings fetched once at mount would then be silently wrong on
+/// every row. Coordinates are grid-independent, so they cache for the life of the
+/// window and the bearing is re-derived in the UI from whatever `mygrid` is now.
+#[tauri::command]
+fn dxcc_entity_locations() -> Vec<(String, f64, f64)> {
+    propagation::dxcc::entity_locations()
+        .into_iter()
+        .map(|(name, lat, lon)| (name.to_string(), lat, lon))
+        .collect()
+}
+
 /// Every current DXCC entity name (sorted), for the decode panes' "hide any entity" picker
 /// (F4MQS) — the full ~340-entity table behind the curated quick-pick 18.
 #[tauri::command]
@@ -16057,6 +16074,7 @@ pub fn run() {
             set_license_class,
             get_licensed_band_plan,
             dxcc_entity_names,
+            dxcc_entity_locations,
             set_frequency,
             sstv_tune,
             pick_band,

@@ -33,6 +33,7 @@ import {
   layoutCalendar,
 } from './dxpedLanes'
 import { dxpedLink, dxpedLinkTitle } from './dxpedLink'
+import { azimuthLabel, backendAzimuth } from '../../grid'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -48,7 +49,11 @@ function runDates(e: CalendarEntry): string {
 
 /** Everything the bar cannot fit: the full band list, the modes, the headline. */
 function barDetail(e: CalendarEntry): string {
-  const parts = [`${e.call} — ${e.entity}`, runDates(e)]
+  // The heading rides with the entity name here too. A month bar is the one place
+  // the entity appears with no room beside it, so the detail line is where it goes —
+  // leaving it out would make this the one dxped view that never states a beam.
+  const az = backendAzimuth(e.bearingDeg, e.distanceKm)
+  const parts = [`${e.call} — ${e.entity}${az ? ` ${azimuthLabel(az)}` : ''}`, runDates(e)]
   if (e.bands.length > 0) parts.push(e.bands.join(' '))
   if (e.modes.length > 0) parts.push(e.modes.join('/'))
   if (e.best) parts.push(e.best)

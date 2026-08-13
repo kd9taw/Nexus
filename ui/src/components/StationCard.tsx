@@ -1,7 +1,8 @@
 import type { NeedTag, Station, Tier } from '../types'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
-import { bearingLabel, distanceLabel } from '../grid'
+import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
+import { useEntityCentroids } from '../features/entityCentroids'
 import { useUnits } from '../units'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP } from '../features/needVisuals'
@@ -44,8 +45,12 @@ export function StationCard({
   onCall,
 }: Props) {
   const units = useUnits()
+  const centroids = useEntityCentroids()
   const dist = distanceLabel(myGrid, station.grid, units)
-  const bearing = bearingLabel(myGrid, station.grid)
+  // Distance still needs a real grid — an entity centroid would claim a precision
+  // it does not have on a number the operator reads as a measurement. A BEARING
+  // degrades gracefully to "roughly that way" and is marked `~`, so it falls back.
+  const az = azimuthTo(myGrid, station.grid, station.country, centroids)
   // Top need drives the row's dominant colour; needAll drives the chips.
   const chip = need ? NEED_CHIP[need] : null
   return (
@@ -87,7 +92,12 @@ export function StationCard({
             {station.country && ' · '}
             {station.grid ?? '—'}
             {dist && <span className="station-dist"> · {dist}</span>}
-            {bearing && <span className="station-bearing"> · {bearing}</span>}
+            {az && (
+              <span className="station-bearing" title={azimuthTitle(az, station.country)}>
+                {' · '}
+                {azimuthLabel(az)}
+              </span>
+            )}
             <span className="station-heard"> · {lastHeardLabel(station.lastHeardSlot, currentSlot)}</span>
           </span>
         </span>

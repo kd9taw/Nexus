@@ -10,6 +10,7 @@ import { DxpedMonth } from './DxpedMonth'
 import { DxpedDigest } from './DxpedDigest'
 import { dxpedColorIndex } from './dxpedLanes'
 import { dxpedLink, dxpedLinkTitle } from './dxpedLink'
+import { azimuthLabel, azimuthTitle, backendAzimuth } from '../../grid'
 import { openDxpedPage } from '../../api'
 import { withErrorToast } from '../../toast'
 
@@ -151,9 +152,17 @@ export function DxpedCalendar({
                 <b className="cal-call">{e.call}</b>
                 <span className="cal-entity">{e.entity}</span>
                 <span className="cal-when">{daysUntil(e.startUnix)}</span>
-                <span className="cal-geo">
-                  {e.octant} · {e.region}
-                </span>
+                {/* Degrees beside the octant — the payload has carried `bearingDeg`
+                    since this view was built; only the octant was ever shown. */}
+                {(() => {
+                  const az = backendAzimuth(e.bearingDeg, e.distanceKm)
+                  return (
+                    <span className="cal-geo" title={az ? azimuthTitle(az, e.entity) : undefined}>
+                      {e.octant}
+                      {az ? ` ${azimuthLabel(az)}` : ''} · {e.region}
+                    </span>
+                  )
+                })()}
                 {(w?.best || e.best) && (
                   <span className="cal-best">
                     {w?.best ?? e.best}

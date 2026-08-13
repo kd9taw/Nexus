@@ -11,6 +11,8 @@
 import type { PounceAlert } from '../usePounce'
 import { NEED_VISUALS } from '../features/needVisuals'
 import type { NeedCat } from '../features/needVisuals'
+import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
+import { useEntityCentroids } from '../features/entityCentroids'
 
 /** Backend NeedTag → the shared chip vocabulary, so the banner reads like the rest of the app. */
 const TAG_TO_CAT: Record<string, NeedCat> = {
@@ -28,9 +30,15 @@ interface Props {
   onDismiss: () => void
   /** Work it: QSY to the spot and set up the QSO. */
   onWork: (a: PounceAlert) => void
+  /** The operator's own square. This banner is the one place in the app where a beam
+   * heading is time-critical — "you have seconds, not minutes" is the whole premise,
+   * and turning the antenna is what those seconds are spent on. */
+  myGrid?: string
 }
 
-export function PounceBanner({ alert, onDismiss, onWork }: Props) {
+export function PounceBanner({ alert, onDismiss, onWork, myGrid = '' }: Props) {
+  // Before the early return: hooks must run on every render of this component.
+  const centroids = useEntityCentroids()
   if (!alert) return null
   const cat = TAG_TO_CAT[alert.tags[0] ?? '']
   const vis = cat ? NEED_VISUALS[cat] : null
@@ -43,6 +51,14 @@ export function PounceBanner({ alert, onDismiss, onWork }: Props) {
       <span className="pounce-what">
         <strong>{alert.call}</strong>
         {alert.entity ? <span className="pounce-entity">{alert.entity}</span> : null}
+        {(() => {
+          const az = azimuthTo(myGrid, null, alert.entity, centroids)
+          return az ? (
+            <span className="pounce-az" title={azimuthTitle(az, alert.entity)}>
+              {azimuthLabel(az)}
+            </span>
+          ) : null
+        })()}
       </span>
       <span className="pounce-where">
         {where} · {alert.mode} · {alert.band}

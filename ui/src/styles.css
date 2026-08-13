@@ -1848,6 +1848,11 @@ button.nb-chip:hover {
   font-size: 0.85rem;
   margin-top: 2px;
 }
+/* Beam heading on the selected-station card, right after the entity name. */
+.connect-sel .cs-az {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .connect-sel .cs-spot {
   color: var(--text);
   font-size: 0.85rem;
@@ -2020,6 +2025,15 @@ button.nb-chip:hover {
   font-size: var(--fs-micro);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Beam heading beside the entity on both chase panes. `flex:none` for the same
+   reason as everywhere else: the country name may truncate, the number may not. */
+.chase-az {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .chase-age {
@@ -10998,6 +11012,20 @@ select.settings-input {
   max-width: 16ch;
   flex: none;
 }
+/* The beam heading, riding immediately after the country — where every other logger
+   puts it. `.decode-country` above already carries `margin-left:auto`, so the pair
+   floats to the right edge together and no other cell in `.decode-row` moves; this
+   one is `flex:none` and never ellipsises, so when the row narrows it is the COUNTRY
+   that truncates, not the number. ~5ch at the 1024 px floor. */
+.decode-az {
+  flex: none;
+  padding-left: var(--space-1);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .decode-work {
   flex: 0 0 auto;
   border: 1px solid var(--border);
@@ -13317,6 +13345,26 @@ button.cq-skiptx1.on {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The entity cell became a two-part cell when the beam heading joined it (Needed
+   board AND Spots — they share this row chrome and have to read as one thing).
+   The NAME keeps the ellipsis; the heading is `flex:none` so a long country name
+   truncates instead of eating the number. No new grid column: `.np-row`'s
+   `grid-template-columns` is untouched, so nothing else on the row shifts. */
+.np-entity {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.np-entity > .np-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-az {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
 }
 .np-band,
 .np-zone {
@@ -19907,6 +19955,9 @@ tr.sel .aprs-sym {
 .pounce-what { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
 .pounce-what strong { font-size: 1.15rem; letter-spacing: 0.02em; }
 .pounce-entity { opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The beam heading on the pounce banner. `flex:none` because this is the one place
+   the number matters MORE than the country name: the operator is turning an antenna. */
+.pounce-az { flex: none; opacity: 0.85; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pounce-where { opacity: 0.9; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pounce-work {
   font-weight: 700;
@@ -20055,6 +20106,13 @@ tr.sel .aprs-sym {
 }
 .dxd-entity {
   color: var(--text-dim);
+}
+/* Beam heading beside the entity in the DXpedition digest — the payload has carried
+   this bearing since the view was built; only the octant was ever rendered. */
+.dxd-az {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .dxd-when {
   font-family: var(--font-mono);

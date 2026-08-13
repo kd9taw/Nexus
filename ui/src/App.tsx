@@ -2130,6 +2130,7 @@ export default function App() {
         harqRescues={snap.harqRescues}
         onCall={handleCall}
         needAlertsByCall={needAlertsByCall}
+        myGrid={snap.mygrid}
         compact
         title="Band Activity — heard on the band"
       />
@@ -2210,6 +2211,7 @@ export default function App() {
           alerts={needAlerts}
           bandPlan={bandPlan}
           selectedCall={activePeer}
+          myGrid={snap.mygrid}
           onQsy={(a) => handleQsy(a.band, a.freqMhz ?? undefined)}
           onSelect={handleSelect}
           onWork={handleWorkNeeded}
@@ -2238,6 +2240,7 @@ export default function App() {
           spots={allSpots}
           bandPlan={bandPlan}
           selectedCall={activePeer}
+          myGrid={snap.mygrid}
           onSelect={handleSelect}
           onWork={handleWorkSpot}
         />
@@ -2594,7 +2597,7 @@ export default function App() {
           keying across it. This removes a UI refusal, not a TX-path guard.
           Still notify-never-act ([[feedback-alerts-notify-never-act]]): Nexus does not move the
           radio on its own here — this is a button the operator presses. */}
-      <PounceBanner alert={pounceAlert} onDismiss={dismissPounce} onWork={handlePounceWork} />
+      <PounceBanner alert={pounceAlert} onDismiss={dismissPounce} onWork={handlePounceWork} myGrid={snap.mygrid} />
 
       {needsOnboarding && (
         <OnboardingBanner
