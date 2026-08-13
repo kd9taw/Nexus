@@ -370,4 +370,25 @@ describe('sstvChannelForDial', () => {
     expect(sstvChannelForDial([], 14.23)).toBeNull()
     expect(sstvChannelForDial(PLAN, undefined)).toBeNull()
   })
+
+  // FIELD REPORT (2026-08-12): "the text under the waterfall is incorrect when I am in custom
+  // mode." The operator was on his own 2 m FM repeater; the unbounded nearest-match named the
+  // ISS downlink 250 kHz away as where "images on this band appear" — a frequency the app
+  // itself puts behind a confirm dialog before it will transmit there.
+  it('says nothing rather than naming a channel the operator is nowhere near', () => {
+    // A local 2 m repeater output: nearest plan row is 145.800, a quarter of a MHz away.
+    expect(sstvChannelForDial(PLAN, 145.55)).toBeNull()
+    expect(sstvChannelForDial(PLAN, 146.52)).toBeNull()
+    // POSITIVE CONTROL for the bound: sitting ON (or beside) the ISS park still names it, or
+    // the null above would just be "the function stopped answering on 2 m".
+    expect(sstvChannelForDial(PLAN, 145.8)?.dialMhz).toBe(145.8)
+    expect(sstvChannelForDial(PLAN, 145.75)?.dialMhz).toBe(145.8)
+  })
+
+  it('still points anywhere on an HF band at that band’s calling frequency', () => {
+    // The pointer earns its place on HF: one activity centre per band, and this view is often
+    // the first place a new operator lands. A 2 m-shaped bound here would silently delete it.
+    expect(sstvChannelForDial(PLAN, 14.074)?.dialMhz).toBe(14.23)
+    expect(sstvChannelForDial(PLAN, 14.35)?.dialMhz).toBe(14.236)
+  })
 })

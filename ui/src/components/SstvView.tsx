@@ -263,6 +263,20 @@ const MIN_DRAINS_BEFORE_CAPTURE_FAULT = 20
 const SILENT_PEAK = 0.002
 /** An unsupported-mode burst is news for this long; after that it is history. */
 const UNKNOWN_VIS_RECENT_SEC = 300
+/** The dial at and above which FM is a mode the app will command — 29.0 MHz is the bottom of
+ * the 10 m FM segment, and below it FM is not used. Mirrors the floor in `Settings::rig_mode`
+ * and `Engine::rig_mode_effective` (`fm_does_not_follow_the_operator_down_to_hf`); it is a
+ * documented bug fix, so this only DECIDES WHAT TO SHOW and never changes what is commanded. */
+const FM_FLOOR_MHZ = 29.0
+/** How far from a band-plan SSTV channel the "images appear at …" pointer still describes where
+ * the operator is. Two figures, because a channel means different things either side of the FM
+ * floor: on HF the calling frequency is the band's single activity centre and naming it is
+ * useful from anywhere on the band, while on VHF/UHF each entry is a discrete machine —
+ * 145.800 is the ISS downlink, 1.3 MHz from the 144.500 calling channel, and telling an
+ * operator sitting on their local repeater that "images on this band appear at 145.800" is the
+ * caption the field report called incorrect. */
+const SUGGEST_WITHIN_MHZ_HF = 0.5
+const SUGGEST_WITHIN_MHZ_VHF = 0.1
 
 /** "3 min" / "45 s" — the age of a stamped fact. */
 function ageLabel(unix: number, nowSec: number): string {
@@ -275,16 +289,26 @@ function ageLabel(unix: number, nowSec: number): string {
 /** The SSTV calling channel for the band the radio is on, from the built-in plan —
  * never a hardcoded pair. Prefers the channel nearest the current dial, so an
  * operator on 20 m is told about 14.236 rather than 14.230 when that is where they
- * are. Null when the plan carries nothing for this band. */
+ * are. Null when the plan carries nothing for this band.
+ *
+ * ⭐ AND THE NEAREST MATCH IS BOUNDED (field report, 2026-08-12: "the text under the waterfall
+ * is incorrect when I am in custom mode"). Unbounded, it named the nearest plan row however
+ * far away it was — so an operator on their own 2 m FM repeater was told "images on this band
+ * appear at 145.800 FM", the ISS downlink, a frequency this app itself guards with a confirm
+ * dialog before transmitting. Past the bound the caption simply says nothing about where to
+ * tune, which is honest: on a custom channel the operator already knows where they are.
+ * See `SUGGEST_WITHIN_MHZ_HF` / `_VHF` for why the bound differs by band. */
 export function sstvChannelForDial(plan: BandChannel[], dialMhz?: number): BandChannel | null {
   if (dialMhz == null || !Number.isFinite(dialMhz)) return null
   const band = bandLabelForMhz(dialMhz)
   if (!band) return null
   const onBand = plan.filter((c) => c.band === band || c.band.startsWith(`${band}-`))
   if (onBand.length === 0) return null
-  return onBand.reduce((best, c) =>
+  const nearest = onBand.reduce((best, c) =>
     Math.abs(c.dialMhz - dialMhz) < Math.abs(best.dialMhz - dialMhz) ? c : best,
   )
+  const within = dialMhz >= FM_FLOOR_MHZ ? SUGGEST_WITHIN_MHZ_VHF : SUGGEST_WITHIN_MHZ_HF
+  return Math.abs(nearest.dialMhz - dialMhz) <= within ? nearest : null
 }
 
 /** Turn receiver health into what the operator should be told while no picture is
@@ -1098,8 +1122,24 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       // Human-initiated: force Phone (USB/LSB) so SSTV rides the phone segment,
       // WITHOUT a QSY (followFreq=false). Then hand the packed image to the gated
       // backend — nothing keys until the radio loop takes it behind every gate.
-      const s1 = await setOperatingMode('phone', false)
-      onSnap?.(s1)
+      //
+      // ⭐ ONLY WHEN WE ARE NOT ALREADY IN PHONE, and that condition is the second half of
+      // the FM-SSTV bug (FTDX10 + IC-9700, 2026-08-12). `set_operating_mode` treats every
+      // call as ENTERING a section, so it clears the FM-channel hold — the one authority
+      // that makes a 144.500 preset (or any custom FM dial picked in this cockpit) command
+      // FM. Pressing Send therefore destroyed the hold one call before queueing the image,
+      // and the picture went out on an SSB submode. Already being in Phone is the normal
+      // case: `sstv_tune` claims Phone when the channel is picked, and `sstv_tx_gate`
+      // refuses a send from any other section anyway — so this call is a convenience whose
+      // side effect was doing real damage.
+      //
+      // The rest of the sequence is deliberately unchanged: when we DO switch, the drive is
+      // applied AFTER (set_operating_mode re-applies the section's power ceiling) and the
+      // refreshed snapshot is published.
+      if (snapRef.current?.radio.operatingMode !== 'phone') {
+        const s1 = await setOperatingMode('phone', false)
+        onSnap?.(s1)
+      }
       // The operator's SSTV drive, when they have set one. AFTER the mode switch, because
       // set_operating_mode re-applies that mode's power ceiling; before the send, because this
       // is the level the picture goes out at. `set_rf_power` clamps to the Phone ceiling, so
@@ -1189,7 +1229,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 mode={snap.radio.sideband}
                 variant="compact"
                 showReadout={false}
-                showModeToggle={false}
+                // ⭐ THE MISSING HALF OF THE TESTER'S WORKFLOW: with this off there was no way
+                // to declare a CUSTOM dial FM in this cockpit at all — only the plan's two FM
+                // rows could ever arm the hold, so "my own custom-mode frequency (local FM
+                // repeater)" could not be operated. The pick routes through `sstv_tune`, which
+                // arms the FM-channel hold for mode == "fm".
+                //
+                // ⚠️ ≥29 MHz ONLY, and the floor is not ours to move: `Settings::rig_mode` and
+                // `rig_mode_effective` both refuse FM below 29 MHz on purpose
+                // (`fm_does_not_follow_the_operator_down_to_hf` — working an FM repeater and
+                // then tuning to 20 m phone must not command FM onto 20 m). Showing the button
+                // on HF would let it LATCH (the toggle reads `radio.sideband`, which the pick
+                // writes) while nothing commanded FM — a control that looks like it worked and
+                // did nothing. HF SSTV is SSB everywhere, so there is nothing to offer there.
+                showModeToggle={snap.radio.dialMhz >= FM_FLOOR_MHZ}
                 onSet={onSetFrequency}
               />
             ) : (

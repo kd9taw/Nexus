@@ -122,6 +122,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *below* and then left you to find it. Those are buttons now, and one that lands on a setting
   folded inside an Advanced group opens the group on the way, so you arrive looking at the
   control instead of at the heading above it.
+- **SSTV on an FM channel now transmits in FM, not USB-D.** Reported from an FTDX10 and an
+  IC-9700: pick the 144.500 SSTV channel and the radio goes to FM, then press Send and it jumps
+  to USB-D — an SSB signal on an FM repeater. Two separate faults did that. Sending an image
+  asked only *which sideband*, so it overrode FM entirely; and Send itself re-entered the Phone
+  section, which released the FM channel it had just been put on. An image on an FM channel is
+  now sent in the rig's FM data submode (FM-D / PKTFM), so the sound card still reaches the
+  modulator and the emission stays FM, and the repeater shift and PL tone stay applied through
+  the picture. A radio that does not have FM-D is left in plain FM — never a sideband.
+  **This one needs bench time on a real radio before release.**
+- **SSTV can be told a custom frequency is FM.** The USB/FM pick is now in the SSTV cockpit's
+  band control on 10 m and up, so a local FM repeater or simplex channel you type in yourself
+  can be worked like the built-in ones. It is deliberately not offered below 29 MHz, where the
+  app does not command FM at all.
+- **The line under the SSTV waterfall stops naming a frequency you are nowhere near.** Sitting on
+  a 2 m repeater, it said "Images on this band appear at 145.800 FM" — the ISS downlink, most of
+  a megahertz away. It now says that only when the calling channel is near enough to describe
+  where you are.
 - **The SSTV status line names the control you actually have to find.** It said "Audio input";
   the setting is called "Input Device (RX)".
 - **The rotator's "not answering" chip goes to the rotator settings**, which is nearly always a

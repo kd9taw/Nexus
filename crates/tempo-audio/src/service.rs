@@ -3352,17 +3352,16 @@ impl RadioLoop {
                                     self.mode_fail_count = 0;
                                     let saw_reject = std::mem::take(&mut self.mode_saw_reject);
                                     // Last rung of the ladder: a rig that actively REFUSED a
-                                    // DATA submode still speaks the plain sideband — put it
-                                    // there (filter untouched) so the operator only has to
-                                    // press the rig's DATA key, instead of a dead-end note.
-                                    // Sent ONCE; link-fault give-ups skip it (the link, not
-                                    // the mode, is the problem — don't add more traffic).
-                                    let fallback = if saw_reject {
-                                        fallback_sideband(&md)
-                                            .filter(|base| rig.set_mode(base, -1).is_ok())
-                                    } else {
-                                        None
-                                    };
+                                    // DATA submode still speaks the plain mode underneath —
+                                    // put it there (filter untouched) so the operator only has
+                                    // to press the rig's DATA key, instead of a dead-end note.
+                                    // Sent ONCE. Link-fault give-ups skip it (the link, not the
+                                    // mode, is the problem — don't add more traffic) EXCEPT for
+                                    // the FM family, which falls back unconditionally because
+                                    // the alternative is keying an SSTV image in whatever mode
+                                    // the rig was left in — see `giveup_fallback`.
+                                    let fallback = giveup_fallback(&md, saw_reject)
+                                        .filter(|base| rig.set_mode(base, -1).is_ok());
                                     if let Some(base) = fallback {
                                         self.last_mode = base.to_string();
                                     }
@@ -3403,13 +3402,20 @@ impl RadioLoop {
             // pushed before the first genuine assert — with last_fm starting None it
             // would otherwise fire on the first FM tick with no operator action, i.e. a
             // launch-time command surviving the flip.
-            if can_retune && md == "FM" && self.rig_asserted {
+            // THE FAMILY, not the word (`mode_is_fm_family`): an SSTV image on an FM channel is
+            // commanded PKTFM, so a bare `md == "FM"` test read the picture as "we have left FM"
+            // and cleared the tracker mid-over — then re-pushed the shift, offset and CTCSS the
+            // moment the image finished. The rig keeps its repeater settings either way (nothing
+            // ever tells it to stop), so this was churn rather than a dropped shift; it is still
+            // a CAT write into the seconds right after an over, and the tracker is supposed to
+            // mean "the machine's settings are current".
+            if can_retune && mode_is_fm_family(&md) && self.rig_asserted {
                 if self.last_fm.as_ref() != Some(&fm) {
                     let _ = rig.set_fm_repeater(&fm.0, fm.1, fm.2);
                     self.last_fm = Some(fm);
                     retuned = true;
                 }
-            } else if md != "FM" {
+            } else if !mode_is_fm_family(&md) {
                 self.last_fm = None;
             }
 
@@ -6621,6 +6627,20 @@ fn mode_is_data(md: &str) -> bool {
     m.starts_with("PKT") || m.starts_with("DATA")
 }
 
+/// Is `md` in the FM FAMILY — plain `FM` or its data submode `PKTFM`?
+///
+/// FM is a CLASS, not a sideband, and since an SSTV image on an FM channel is sent in
+/// `PKTFM` (see `Engine::fm_mode_word`) the class now has two spellings. Everything that
+/// keys off "the rig is in FM" has to ask about the family rather than the word — today that
+/// is the repeater shift/offset/CTCSS tracker in the retune block, which a bare `md == "FM"`
+/// test reset the instant a picture was queued, and the give-up fallback ladder.
+fn mode_is_fm_family(md: &str) -> bool {
+    matches!(
+        md.trim().to_ascii_uppercase().as_str(),
+        "FM" | "PKTFM" | "FM-D" | "PKT-FM"
+    )
+}
+
 fn passband_for(md: &str) -> i32 {
     match md.trim().to_ascii_uppercase().as_str() {
         "PKTUSB" | "PKTLSB" => 3000,
@@ -6653,7 +6673,33 @@ fn fallback_sideband(md: &str) -> Option<&'static str> {
     match md.trim().to_ascii_uppercase().as_str() {
         "PKTUSB" | "DATA-U" | "PKT-U" => Some("USB"),
         "PKTLSB" | "DATA-L" | "PKT-L" => Some("LSB"),
+        // The FM data submode's plain form. NOT a sideband — the name is historical — but the
+        // same question: what does this rig still speak underneath the DATA submode? Landing an
+        // SSTV image on plain FM keeps the EMISSION right (an FM channel stays FM) and costs
+        // only the codec routing; landing it on a sideband would put SSB on an FM repeater.
+        "PKTFM" | "FM-D" | "PKT-FM" => Some("FM"),
         _ => None,
+    }
+}
+
+/// The plain mode to fall back to after the ladder has given up on `md` — [`fallback_sideband`]
+/// plus the rule about WHEN it may be sent.
+///
+/// For a DATA-on-SSB submode the fallback is gated on `saw_reject` (an explicit `RPRT -1`): a run
+/// of link faults proves nothing about the rig's modes, and pushing another command down a mute
+/// link is noise. **The FM family is the deliberate exception** — it falls back unconditionally,
+/// timeouts included. The asymmetry is TX safety, not tidiness: `PKTFM` is only ever commanded
+/// while an SSTV image is queued on an FM channel, so the alternative to "assert plain FM" is
+/// "key a picture in whatever mode the rig happens to be in", and a rig that answers an unknown
+/// mode word with SILENCE (the slow-CI-V / mute-rig case `mode_giveup_note` was written for)
+/// never reaches an `RPRT -1` at all. One extra `M FM` on a possibly-dead link is a cheap price
+/// for the emission being right; if that command also fails, the caller's `.filter` drops it and
+/// the give-up note says so honestly.
+fn giveup_fallback(md: &str, saw_reject: bool) -> Option<&'static str> {
+    if saw_reject || mode_is_fm_family(md) {
+        fallback_sideband(md)
+    } else {
+        None
     }
 }
 
@@ -8072,6 +8118,74 @@ mod tests {
         let n = mode_giveup_note("CW", true, None);
         assert!(n.contains("refused CW"), "{n}");
         assert!(!n.contains("USB-D"), "{n}");
+    }
+
+    /// ⭐ THE SAFETY NET UNDER THE CLASS-WIDE `PKTFM` CHANGE (audit, 2026-08-12).
+    ///
+    /// `PKTFM` is commanded only while an SSTV image is queued on an FM channel, and it goes to
+    /// EVERY rig on that path — including ones nobody here can test. The whole safety story is
+    /// that a rig which does not know the word degrades to plain **FM**, never to a sideband.
+    ///
+    /// The SSB half of this ladder is gated on `saw_reject` for a good reason (a run of
+    /// timeouts proves nothing about the rig's modes, so don't push more traffic at a mute
+    /// link). Applied to `PKTFM` that gate is a trap: a backend that answers an unknown mode
+    /// word by TIMING OUT never sets `saw_reject`, so it would get no fallback at all and the
+    /// image would key in whatever mode the rig was left in. The FM family therefore falls back
+    /// unconditionally.
+    #[test]
+    fn the_fm_family_falls_back_to_plain_fm_even_when_the_rig_never_says_no() {
+        // The word itself resolves to the plain FM underneath it.
+        assert_eq!(fallback_sideband("PKTFM"), Some("FM"));
+        assert_eq!(fallback_sideband("FM-D"), Some("FM"));
+        assert_eq!(fallback_sideband("pkt-fm"), Some("FM"));
+
+        // THE AUDIT'S CASE: a mute rig / slow CI-V link, no explicit RPRT -1 anywhere in the
+        // run. The SSB submodes still (correctly) send nothing; FM still lands on FM.
+        assert_eq!(
+            giveup_fallback("PKTFM", false),
+            Some("FM"),
+            "a rig that answers PKTFM with silence must still be put in plain FM — the \
+             alternative is keying a picture in whatever mode it was left in"
+        );
+        assert_eq!(
+            giveup_fallback("PKTUSB", false),
+            None,
+            "unchanged for the SSB submodes: a link fault is not evidence about the rig's modes"
+        );
+
+        // …and an explicit rejection is unchanged for everything.
+        assert_eq!(giveup_fallback("PKTFM", true), Some("FM"));
+        assert_eq!(giveup_fallback("PKTUSB", true), Some("USB"));
+        assert_eq!(giveup_fallback("PKTLSB", true), Some("LSB"));
+
+        // A plain mode has nothing underneath it to fall back to, either way round.
+        assert_eq!(giveup_fallback("FM", false), None);
+        assert_eq!(giveup_fallback("USB", true), None);
+
+        // The note stays accurate for the new word: no bogus "select USB-D by hand" advice on
+        // an FM channel — the fallback landed, so it says which mode the rig is now in.
+        let n = mode_giveup_note("PKTFM", true, Some("FM"));
+        assert!(n.contains("refused PKTFM"), "{n}");
+        assert!(n.contains("FM-D"), "must name the rig-side mode: {n}");
+    }
+
+    /// FM is a CLASS with two spellings now, and everything that keys off "the rig is in FM"
+    /// has to ask about the family. The repeater shift/offset/CTCSS tracker is the one that
+    /// touches the air.
+    #[test]
+    fn the_fm_family_covers_the_data_submode_but_not_the_sidebands() {
+        assert!(mode_is_fm_family("FM"));
+        assert!(mode_is_fm_family("PKTFM"));
+        assert!(mode_is_fm_family(" fm-d "));
+        // The negative half — a family test that answered yes to everything would silently
+        // keep pushing repeater settings while the rig sat in USB.
+        assert!(!mode_is_fm_family("PKTUSB"));
+        assert!(!mode_is_fm_family("USB"));
+        assert!(
+            !mode_is_fm_family("FMN"),
+            "narrow FM is not a word Nexus commands"
+        );
+        assert!(!mode_is_fm_family(""));
     }
 
     #[test]
@@ -11542,6 +11656,235 @@ mod tests {
         assert!(
             !engine.lock().unwrap().sstv_sending(),
             "sending cleared on completion"
+        );
+    }
+
+    /// A logging rigctld stub parked on `dial_hz`. `reject_pkt` makes it answer `RPRT -1` to
+    /// every `M PKT…` — the rig with no DATA submode for the mode we asked for. The dial is a
+    /// parameter because the stub's `f` reply IS the read-back the loop adopts as a knob QSY:
+    /// the shared `mock_pkt_rejecting_rigctld` answers 14.074, which would drag a 2 m scene off
+    /// its own channel mid-test.
+    fn mock_rigctld_on(dial_hz: u64, reject_pkt: bool) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let dial = format!("{dial_hz}\n");
+                    let reply = if l == "f" {
+                        dial.as_str()
+                    } else if reject_pkt && l.starts_with("M PKT") {
+                        "RPRT -1\n"
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// An engine parked on the 2 m SSTV calling channel in FM — the tester's exact setup
+    /// (`sstv_tune` is what the channel pick calls). NO image queued: the send is a separate
+    /// operator act in both tests below, made AFTER a settling tick, because that is the real
+    /// order and the difference is not cosmetic. `sstv_tune`'s QSY arms the slot-TX abort
+    /// (`halt_tx_for_context_change`), and an image queued before the loop has run even once
+    /// is cut by that stale abort on the tick it keys.
+    fn sstv_fm_engine() -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.sstv_tune(144.500, "2m", "FM");
+        }
+        engine
+    }
+
+    /// ⭐ THE FIELD REPORT ON THE WIRE (FTDX10 + IC-9700, 2026-08-12): *"as soon as I start
+    /// TXing it switches to USB-D."* Measured as the rigctld command log, in order, because
+    /// the thing that was wrong is WHAT THE RADIO WAS TOLD in the instant before PTT — not a
+    /// value in a snapshot.
+    #[test]
+    fn an_sstv_image_on_an_fm_channel_commands_the_fm_data_word_before_it_keys() {
+        let engine = sstv_fm_engine();
+        let (addr, log) = mock_rigctld_on(144_500_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        // Settle on the channel first — the operator picks it, listens, then presses Send.
+        run(&mut state, &mut rig, &mut backend, 1000.0);
+        let idle = log.lock().unwrap().clone();
+        assert!(
+            idle.iter().any(|l| l.starts_with("M FM")),
+            "precondition: an FM calling channel is plain FM while idle, so voice and the \
+             speaker work normally — {idle:?}"
+        );
+        let mark = log.lock().unwrap().len();
+
+        // THE SEND.
+        engine
+            .lock()
+            .unwrap()
+            .sstv_send(vec![0.2f32; 36_000], "Scottie 1".to_string())
+            .unwrap();
+        for i in 1..4 {
+            run(
+                &mut state,
+                &mut rig,
+                &mut backend,
+                1000.0 + f64::from(i) * 20.0,
+            );
+        }
+
+        let lines = log.lock().unwrap()[mark..].to_vec();
+        // POSITIVE CONTROL: the image must actually have keyed, or every claim below is
+        // vacuous — a scene that refused the send would pass "never commanded PKTUSB".
+        let keyed = lines
+            .iter()
+            .position(|l| l == "T 1")
+            .unwrap_or_else(|| panic!("control: the image must key — {lines:?}"));
+        let mode_cmd = lines
+            .iter()
+            .position(|l| l.starts_with("M PKTFM"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "an FM channel must be commanded the FM DATA submode, so the codec reaches \
+                     the modulator without changing the emission — {lines:?}"
+                )
+            });
+        assert!(
+            mode_cmd < keyed,
+            "the mode has to reach the rig BEFORE the key, not after: {lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.starts_with("M PKTUSB") || l.starts_with("M PKTLSB")),
+            "an SSB DATA submode on an FM repeater input is the reported bug: {lines:?}"
+        );
+        // The repeater shift/offset/CTCSS tracker must still recognise the rig as being in the
+        // FM family while the picture is on the air (`mode_is_fm_family`) — a bare `md == "FM"`
+        // test dropped it the instant the image was queued.
+        assert!(
+            state.last_fm.is_some(),
+            "the FM repeater settings must still be tracked as current during an image"
+        );
+    }
+
+    /// ⚠️ THE OTHER HALF OF A CLASS-WIDE CAT CHANGE: what a rig that does NOT know `PKTFM`
+    /// gets. It must be plain FM — the mode the very same FM authority commanded while idle —
+    /// and never a sideband.
+    ///
+    /// The rung that carries this is NOT the give-up fallback, and the audit was right to ask:
+    /// inside one image the ladder gets exactly ONE attempt. `md` becomes PKTFM on the tick the
+    /// job is queued, the retune block tries it, the SSTV block keys later in that same tick,
+    /// and from then on `can_retune` is false (PTT held) so nothing retries until the picture
+    /// ends. What holds the emission right is that **a failed `set_mode` never advances
+    /// `last_mode`** — so the radio is left in the FM it was already in. The 30-try give-up and
+    /// its unconditional FM fallback are the backstop for the states where the ladder does run
+    /// out; they are unit-tested in `the_fm_family_falls_back_to_plain_fm_even_when_the_rig_
+    /// never_says_no`, which is the honest place for them.
+    #[test]
+    fn a_rig_that_refuses_pktfm_keys_the_image_in_fm_never_a_sideband() {
+        let engine = sstv_fm_engine();
+        let (addr, log) = mock_rigctld_on(144_500_000, true);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, &mut backend, 1000.0); // settle on the channel, in FM
+        engine
+            .lock()
+            .unwrap()
+            .sstv_send(vec![0.2f32; 36_000], "Scottie 1".to_string())
+            .unwrap();
+        for i in 1..4 {
+            run(
+                &mut state,
+                &mut rig,
+                &mut backend,
+                1000.0 + f64::from(i) * 20.0,
+            );
+        }
+
+        let lines = log.lock().unwrap().clone();
+        // POSITIVE CONTROLS. Both are needed: "it stayed in FM" proves nothing if the word was
+        // never asked for, and "never a sideband" proves nothing if the image never keyed.
+        assert!(
+            lines.iter().any(|l| l.starts_with("M PKTFM")),
+            "control: the loop must have commanded PKTFM and been refused — {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "T 1"),
+            "control: the image must key even though the mode word was refused — {lines:?}"
+        );
+        // The idle FM the channel had already commanded is what the rig is left in.
+        assert!(
+            lines.iter().any(|l| l.starts_with("M FM")),
+            "control: the channel commands plain FM while idle — that is the mode a refused \
+             PKTFM falls back to by NOT moving — {lines:?}"
+        );
+        assert_eq!(
+            state.last_mode, "FM",
+            "a refused mode must not be credited: the rig is still in FM, and the operator is \
+             one front-panel DATA press from a working picture"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("M USB")
+                || l.starts_with("M LSB")
+                || l.starts_with("M PKTUSB")
+                || l.starts_with("M PKTLSB")),
+            "never a sideband on an FM channel — not as a command, not as a fallback: {lines:?}"
         );
     }
 

@@ -138,7 +138,11 @@ function dtLabel(dtSec: number): string {
  * mismatch worth shouting about outside an operating cockpit. */
 function modeFamily(mode: string): string {
   const m = mode.trim().toUpperCase()
-  if (/^W?FM/.test(m)) return 'FM'
+  // PKTFM / FM-D belongs to the FM family for exactly the reason PKTUSB belongs to USB: same
+  // emission, rear jack live. Nexus commands it while an SSTV image is on the air on an FM
+  // channel, and a Hamlib backend reports an FTDX10 in DATA-FM as PKTFM — so without this the
+  // top bar would flag a mismatch against the FM it believes, for the whole picture.
+  if (/^(PKT|DATA[- ]?)?W?FM/.test(m) || m === 'FM-D') return 'FM'
   if (/^(PKT|DATA[- ]?)?USB/.test(m) || m === 'USB-D') return 'USB'
   if (/^(PKT|DATA[- ]?)?LSB/.test(m) || m === 'LSB-D') return 'LSB'
   if (m === 'CWR') return 'CW'

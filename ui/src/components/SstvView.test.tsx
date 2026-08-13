@@ -332,6 +332,69 @@ describe('SstvView TX panel', () => {
     )
   })
 
+  // ⭐ THE FM-SSTV FIELD REPORT (FTDX10 + IC-9700, 2026-08-12): "when I select preset
+  // frequency 144.500 for SSTV it switches to FM, but as soon as I start TXing it switches to
+  // USB-D." `set_operating_mode` treats EVERY call as entering a section, so it clears the
+  // FM-channel hold — the only authority that makes a 144.500 preset (or a custom FM dial
+  // picked here) command FM. Send was making that call one line before queueing the image,
+  // wiping the hold, and the picture went out on an SSB submode.
+  it('⭐ Send does not re-enter Phone when already there — that call wipes the FM hold', async () => {
+    const inPhone = {
+      ...snap,
+      radio: { ...snap.radio, dialMhz: 144.5, band: '2m', sideband: 'FM', operatingMode: 'phone' },
+    } as AppSnapshot
+    render(<SstvView snap={inPhone} txPowerPct={40} />)
+    const send = await loadPicture()
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(setOperatingMode).not.toHaveBeenCalled()
+    // …and nothing ELSE about the send sequence changed: the drive is still applied, and
+    // still before the send.
+    expect(setRfPower).toHaveBeenCalledWith(0.4)
+    expect(setRfPower.mock.invocationCallOrder[0]).toBeLessThan(
+      sstvSend.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('…and still claims Phone when the operator is in another section', async () => {
+    // The positive control for the skip above: the preflight is not dead, it is conditional.
+    const inDigital = {
+      ...snap,
+      radio: { ...snap.radio, operatingMode: 'digital' },
+    } as AppSnapshot
+    render(<SstvView snap={inDigital} />)
+    const send = await loadPicture()
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(setOperatingMode).toHaveBeenCalledWith('phone', false)
+    expect(setOperatingMode.mock.invocationCallOrder[0]).toBeLessThan(
+      sstvSend.mock.invocationCallOrder[0],
+    )
+  })
+
+  // ---- The USB/FM pick, and the band floor under it ------------------------------------
+
+  it('⭐ offers the FM pick on VHF — a custom FM dial had no way to be declared FM at all', async () => {
+    const vhf = {
+      ...snap,
+      radio: { ...snap.radio, dialMhz: 146.55, band: '2m', sideband: 'FM' },
+    } as AppSnapshot
+    render(<SstvView snap={vhf} onSetFrequency={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Phone mode' })).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'FM' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'USB' })).toBeTruthy()
+  })
+
+  it('⭐ and hides it below 29 MHz, where the app deliberately refuses to command FM', async () => {
+    // `fm_does_not_follow_the_operator_down_to_hf`: nothing commands FM under 29 MHz, so an FM
+    // button on 20 m would latch (the toggle reads back `radio.sideband`, which the pick
+    // writes) while the radio stayed in USB — a control that looks like it worked and did not.
+    render(<SstvView snap={snap} onSetFrequency={vi.fn()} />)
+    await waitFor(() => expect(screen.getByLabelText('Band channel preset')).toBeTruthy())
+    expect(screen.queryByRole('group', { name: 'Phone mode' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'FM' })).toBeNull()
+  })
+
   // ---- Settings ▸ Digital ▸ SSTV — the default mode and the default drive -------------
 
   it('the Settings default mode outranks the band-aware pick, and Send uses it', async () => {

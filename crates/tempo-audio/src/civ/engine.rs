@@ -397,6 +397,10 @@ pub(crate) mod tests_support {
         /// CI-V mode bytes per band (`06` on the selected band).
         pub main_mode: u8,
         pub sub_mode: u8,
+        /// DATA mode (`1A 06`) — the rear-jack/soundcard flag that turns USB into USB-D and
+        /// FM into FM-D. Separate from the mode byte on a real Icom, and separate here, which
+        /// is the whole point: "FM" and "FM-D" differ ONLY in this bit.
+        pub data_mode: bool,
         /// NAK `16 5A` like a single-band rig (IC-7300) — honest "no such mode".
         pub no_satmode: bool,
         /// Fault injection — NAK the next N Main selects (`07 D0`): the
@@ -449,6 +453,7 @@ pub(crate) mod tests_support {
                         unselected_hz: 0,
                         main_mode: 0x01, // USB
                         sub_mode: 0x05,  // FM — the 9700's Sub-band default
+                        data_mode: false,
                         no_satmode: false,
                         nak_main_select: 0,
                         nak_satmode_set: 0,
@@ -580,6 +585,17 @@ pub(crate) mod tests_support {
                                     Some((0x16, vec![0x5A, u8::from(r.satmode)]))
                                 }
                             }
+                        },
+                        // DATA mode set (`1A 06 <on> <filter>`) / read (`1A 06`). A real
+                        // IC-7300/9700 answers both; without them this fake NAKed every
+                        // DATA-submode set, so `M PKTUSB`/`M PKTFM` could not be tested at
+                        // all against it — the daemon's `set_mode` requires the DATA ack.
+                        (0x1A, Some(0x06)) => match f.data.get(1) {
+                            Some(&on) => {
+                                r.data_mode = on != 0;
+                                None // ack
+                            }
+                            None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
                         },
                         (0x15, Some(0x02)) => Some((0x15, vec![0x02, 0x01, 0x20])), // raw 120 = S9
                         (0x27, _) => None,             // scope enable/disable

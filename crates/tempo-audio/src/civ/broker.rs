@@ -311,10 +311,19 @@ impl RigBackend for CivBackend {
             Some(m) => m,
             None => (st.mode.unwrap_or(Mode::Usb), st.filter),
         };
-        // Report soundcard-digital as PKTUSB/PKTLSB, the names the rest of Nexus speaks.
+        // Report soundcard-digital as PKTUSB/PKTLSB/PKTFM, the names the rest of Nexus
+        // speaks. FM-D belongs here for the same reason the other two do — the app compares
+        // this read-back against the mode it commanded, and a rig answering a bare "FM" to a
+        // commanded PKTFM reads as a mode mismatch.
+        //
+        // ⚠️ All three arms need `data_mode`, which the state cache only ever learns from a
+        // RECEIVED `1A 06` frame (a transceive push): nothing here solicits one, so in
+        // practice this reports the plain mode today. Adding FM keeps the three consistent
+        // rather than leaving one to answer differently the day something does read it.
         let name = match (mode, st.data_mode.unwrap_or(false)) {
             (Mode::Usb, true) => "PKTUSB".to_string(),
             (Mode::Lsb, true) => "PKTLSB".to_string(),
+            (Mode::Fm, true) => "PKTFM".to_string(),
             (m, _) => m.name().to_string(),
         };
         (name, 0) // passband unreported (0 = unknown to Hamlib clients)
@@ -360,11 +369,22 @@ impl RigBackend for CivBackend {
         if !self.ensure_main(&mut g) {
             return false; // same stray-selection refusal as `set_freq`
         }
-        // PKT*/DATA-* = base sideband + DATA mode on; every plain mode turns DATA off.
+        // PKT*/DATA-* = base mode + DATA mode on; every plain mode turns DATA off.
         let up = mode.to_ascii_uppercase();
         let (base, data) = match up.as_str() {
             "PKTUSB" | "DATA-U" | "PKT-U" => (Mode::Usb, true),
             "PKTLSB" | "DATA-L" | "PKT-L" => (Mode::Lsb, true),
+            // FM-D, and it is the whole IC-9700 half of the SSTV-on-FM fix: the `1A 06`
+            // DATA verb below has always been wired, it had simply never been paired with
+            // `Mode::Fm` — so the only FM this daemon could command was one with DATA
+            // actively turned OFF, i.e. the modulator handed back to the mic. An SSTV
+            // picture sent that way radiates nothing.
+            //
+            // ⚠️ PLAIN "FM" IS DELIBERATELY NOT IN THIS ARM. It falls through to
+            // `Mode::from_name` → `(Mode::Fm, false)`, so APRS, repeater voice and every
+            // other FM user still gets DATA explicitly OFF, exactly as before. That
+            // guarantee is pinned by the test below; do not "simplify" the two into one.
+            "PKTFM" | "FM-D" | "PKT-FM" => (Mode::Fm, true),
             _ => match Mode::from_name(&up) {
                 Some(m) => (m, false),
                 None => return false,
@@ -1128,6 +1148,60 @@ mod tests {
         assert!(!r.satmode, "satellite mode is not involved");
         assert_eq!(r.unselected_hz, 14_235_000, "25 01 as before");
         assert_eq!(r.sub_hz, 435_000_000, "the Sub band untouched");
+    }
+
+    /// ⭐ THE ICOM HALF OF THE SSTV-ON-FM FIX (field report, FTDX10 + IC-9700, 2026-08-12).
+    ///
+    /// `FM` and `FM-D` differ by ONE bit on the wire — the `1A 06` DATA flag — and until this
+    /// arm existed the daemon could only ever command the version with that bit turned OFF, so
+    /// an SSTV image on an FM repeater was modulated from the MIC jack (no RF) or, once the
+    /// engine fell through to the sideband arm, sent as USB-D on an FM channel.
+    ///
+    /// The second half of this test is the guard the audit asked for on a class-wide CAT
+    /// change: every OTHER FM user of this daemon — APRS, repeater voice — must still get DATA
+    /// explicitly off. Both directions are asserted, because a "DATA is on when it should be"
+    /// test that never checks the off case would pass an arm that turned DATA on for all FM.
+    #[test]
+    fn fm_d_is_the_fm_mode_byte_plus_the_data_flag_and_plain_fm_still_turns_data_off() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let engine = CivEngine::start(Box::new(radio), 0xA2);
+        let backend = CivBackend::new(engine.handle(), 0xA2, Arc::new(AtomicBool::new(false)));
+
+        assert!(
+            backend.set_mode("PKTFM", 0),
+            "the daemon must accept the FM data submode"
+        );
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.main_mode, 0x05, "CI-V mode byte 05 = FM (the emission)");
+            assert!(
+                r.data_mode,
+                "…with the DATA flag ON, which is what routes the USB codec to the modulator"
+            );
+        }
+        // The `m` read-back still says "FM" here, and that is NOT this change failing: the
+        // state cache only learns the DATA flag from a RECEIVED `1A 06` frame (a transceive
+        // push), and nothing in the tree solicits one — so the same is true of PKTUSB today.
+        // The reporting arm is added for symmetry with the USB/LSB ones, and is asserted only
+        // as far as this fake can honestly prove it.
+        assert_eq!(
+            backend.mode().0,
+            "FM",
+            "emission reported from the mode byte"
+        );
+
+        assert!(backend.set_mode("FM", 0), "plain FM still works");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.main_mode, 0x05, "same emission…");
+            assert!(
+                !r.data_mode,
+                "…but DATA OFF: an APRS beacon or a voice repeater over must keep taking its \
+                 audio from the mic, exactly as before this change"
+            );
+        }
+        assert_eq!(backend.mode().0, "FM");
     }
 
     #[test]

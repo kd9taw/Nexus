@@ -3591,6 +3591,10 @@ impl Settings {
         match m {
             "PKTUSB" => "USB".to_string(),
             "PKTLSB" => "LSB".to_string(),
+            // The FM data submode an SSTV image on an FM channel is sent in
+            // (`Engine::fm_mode_word`). Same opt-out for the same reason: on a mic-jack
+            // interface the picture has to go in the mic input, which is plain FM.
+            "PKTFM" => "FM".to_string(),
             other => other.to_string(),
         }
     }

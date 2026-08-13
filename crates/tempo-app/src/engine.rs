@@ -4846,6 +4846,68 @@ impl Engine {
         self.sat_mode.filter(|c| !c.is_fm())
     }
 
+    /// Is an SSTV image QUEUED or on the air? While it is, every mode commanded has to be a
+    /// DATA submode: the picture is SOUNDCARD audio, and a plain (mic-routed) mode keys with
+    /// zero RF on a normally-wired rig.
+    fn sstv_in_flight(&self) -> bool {
+        self.sstv_tx.is_some() || self.sstv_sending
+    }
+
+    /// The FM-class word to command right now: the FM **data** submode `PKTFM` (Hamlib's
+    /// `RIG_MODE_PKTFM` → Yaesu FM-D, Icom FM-D) while an SSTV image is queued or in flight,
+    /// plain `FM` otherwise.
+    ///
+    /// ⭐ THE ON-AIR BUG THIS EXISTS FOR (FTDX10 + IC-9700 owner, 2026-08-12): *"when I select
+    /// preset frequency 144.500 for SSTV it switches to FM, but as soon as I start TXing it
+    /// switches to USB-D."* FM is a CLASS, not a side — but the SSTV arm below asked only WHICH
+    /// SIDE the image was on, so an FM channel keyed PKTUSB: an SSB emission on an FM repeater
+    /// input. Every FM answer in [`Self::rig_mode_effective`] goes through here, so the class
+    /// survives the send and only the DATA half is added.
+    ///
+    /// ⚠️ NEEDS-BENCH — a CLASS-WIDE CAT change: `PKTFM` reaches EVERY rig on the SSTV path.
+    /// The degradation is the whole safety story, and it has two rungs, in this order:
+    /// 1. a `set_mode` that FAILS never advances `last_mode` (service.rs), and the same FM
+    ///    authority commanded plain `FM` while idle — so a rig that refuses or ignores the word
+    ///    keys in FM, the mode it was already in. Never USB.
+    /// 2. if the ladder runs out of tries, `fallback_sideband` maps `PKTFM` → `FM` and the FM
+    ///    family takes that rung UNCONDITIONALLY (not only on an explicit `RPRT -1`), so a rig
+    ///    that answers a bad mode word with silence still lands on plain FM.
+    ///
+    /// `plain_ssb_if_configured` keeps the per-radio mic-jack opt-out working: it maps `PKTFM`
+    /// back to plain `FM` exactly as it maps `PKTUSB` to `USB`.
+    fn fm_mode_word(&self) -> String {
+        if self.sstv_in_flight() {
+            self.settings.plain_ssb_if_configured("PKTFM")
+        } else {
+            "FM".to_string()
+        }
+    }
+
+    /// Is the PHONE section's mode class FM at `band` / `dial_mhz`? THE one predicate both
+    /// [`Self::rig_mode_effective`] and [`Self::route_mode`] ask, so the mode a rig is
+    /// COMMANDED and the class a QSY ROUTES on cannot be derived from two copies that drift.
+    /// (They did not disagree in the field — `route_mode` is asked only from `tune_dial`, where
+    /// no image is ever in flight — but the SSTV arm below had grown its own idea of what FM
+    /// means, and one predicate is what stops the next arm doing the same.)
+    ///
+    /// The two terms are gated DIFFERENTLY and both gates are load-bearing:
+    /// * the cockpit's explicit pick (`sideband_override`) has no dial gate — it is the
+    ///   operator's own current word, and `set_frequency` drops it on a band change. The band
+    ///   filter is what makes that true for the routing caller, which asks about a band the
+    ///   radio is not on yet.
+    /// * the station-wide `phone_mode` policy carries [`Settings::rig_mode`]'s 29 MHz floor
+    ///   (`fm_does_not_follow_the_operator_down_to_hf`): nothing resets that field on a band
+    ///   change, so without the floor an evening on an FM repeater commands FM onto 20 m phone.
+    fn phone_fm_in_force(&self, band: &str, dial_mhz: f64) -> bool {
+        let override_fm = self
+            .sideband_override
+            .as_deref()
+            .filter(|_| self.settings.band.eq_ignore_ascii_case(band))
+            .is_some_and(|m| m.eq_ignore_ascii_case("fm"));
+        let policy_fm = self.settings.phone_mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0;
+        override_fm || policy_fm
+    }
+
     /// The mode the radio loop should COMMAND: the operator's transient Phone override when set,
     /// else the band-derived policy (`settings.rig_mode`). Write-side canon for the rig `M` verb.
     pub fn rig_mode_effective(&self) -> String {
@@ -4856,14 +4918,20 @@ impl Engine {
         // never leave FM forced on another band (the `fm_does_not_follow_the_operator_down_to_hf`
         // invariant). The flag is also cleared by every QSY / section change / radio switch.
         if self.aprs_fm && self.settings.band.eq_ignore_ascii_case("2m") {
-            return "FM".to_string();
+            return self.fm_mode_word();
         }
         // A repeater/FM-simplex channel parks the rig in FM the same way, from whatever section the
         // operator tuned it out of. Dial-gated (not band-gated like APRS) because an FM channel can
         // be on 10 m through 23 cm, and 29 MHz is the line below which FM isn't used — the same
         // threshold `Settings::rig_mode` applies to Phone-FM, so the two can't disagree.
+        //
+        // ⚠️ AND IT ANSWERS FOR AN SSTV SEND TOO, via `fm_mode_word` — this arm sits ABOVE the
+        // Phone/SSTV arm below, so on a 144.500 preset it is the arm that speaks while an image
+        // is in flight. Answering a bare "FM" here would key the picture through the MIC jack
+        // (no RF); answering PKTUSB — what the SSTV arm below used to do once the hold had been
+        // cleared — puts an SSB emission on an FM channel. Neither is the operator's intent.
         if self.fm_channel && self.settings.dial_mhz >= 29.0 {
-            return "FM".to_string();
+            return self.fm_mode_word();
         }
         if self.settings.operating_mode == crate::settings::OperatingMode::Phone {
             // SSTV rides the Phone segment but transmits SOUNDCARD audio, so — exactly like
@@ -4873,7 +4941,17 @@ impl Engine {
             // signal"). Only while an image is queued or in flight, so live voice PTT keeps
             // plain SSB. Driving it through the continuous mode-apply commands DATA BEFORE the
             // SSTV PTT and restores plain SSB when the image ends — no Icom-only set_data_mode.
-            if self.sstv_tx.is_some() || self.sstv_sending {
+            if self.sstv_in_flight() {
+                // ⭐ FM IS A CLASS, NOT A SIDE — and asking only "which side?" here is what put
+                // an SSB emission on an FM channel (see `fm_mode_word`). The Phone section's
+                // own two FM authorities both sit BELOW this arm — the cockpit's explicit pick
+                // in the `sideband_override` return just after it, and the station-wide
+                // `phone_mode = "fm"` policy inside the `settings.rig_mode()` on the last line
+                // of this function — so an unconditional sideband answer here short-circuited
+                // both. Ask the shared predicate first and the class survives the send.
+                if self.phone_fm_in_force(&self.settings.band, self.settings.dial_mhz) {
+                    return self.fm_mode_word();
+                }
                 let lsb = self
                     .sideband_override
                     .as_deref()
@@ -4934,7 +5012,9 @@ impl Engine {
             // and the 145.825 packet digipeaters are FM channels, and a packet
             // or FM-voice downlink demodulated as USB is garbled audio.
             if self.sat_fm() {
-                return "FM".to_string();
+                // …and an image sent through an FM bird is the same class question as one sent
+                // through an FM repeater, so this arm answers with `fm_mode_word` too.
+                return self.fm_mode_word();
             }
             if let Some(class) = self.sat_linear_mode() {
                 return self
@@ -4981,20 +5061,12 @@ impl Engine {
             OperatingMode::Digital => RouteMode::Digital,
             // SSTV rides the Phone section, so it routes as SSB — see `RouteMode`'s note on why it
             // is not its own class.
+            // The cockpit's explicit mode pick (no dial gate, same-band only) and the
+            // station-wide `phone_mode` policy (29 MHz floor) — both from the ONE predicate
+            // `rig_mode_effective` asks, so the two answers cannot drift apart. See
+            // [`Self::phone_fm_in_force`] for why the two terms are gated differently.
             OperatingMode::Phone => {
-                // The cockpit's explicit mode pick wins with NO band gate, matching
-                // `rig_mode_effective` (which returns the override verbatim) — but only for a
-                // SAME-BAND move, because `set_frequency` DROPS the override on a band change, so
-                // on a cross-band QSY the override describes where we're leaving, not arriving.
-                let override_fm = self
-                    .sideband_override
-                    .as_deref()
-                    .filter(|_| self.settings.band.eq_ignore_ascii_case(band))
-                    .is_some_and(|m| m.eq_ignore_ascii_case("fm"));
-                // Otherwise the station-wide `phone_mode`, under `rig_mode`'s 29 MHz FM gate.
-                let policy_fm =
-                    self.settings.phone_mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0;
-                if override_fm || policy_fm {
+                if self.phone_fm_in_force(band, dial_mhz) {
                     RouteMode::Fm
                 } else {
                     RouteMode::Ssb
@@ -14821,6 +14893,179 @@ mod tests {
             e.rig_mode_effective(),
             "USB",
             "FM never lingers onto an HF image channel"
+        );
+    }
+
+    /// ⭐ THE FIELD REPORT (FTDX10 + IC-9700 owner, 2026-08-12): *"when I select preset
+    /// frequency 144.500 for SSTV it switches to FM, but as soon as I start TXing it switches
+    /// to USB-D. That is not right."*
+    ///
+    /// This is the test its neighbour above should have been: that one asserts FM **at idle**
+    /// and never sends an image, which is exactly the gap the bug shipped through. FM is a
+    /// CLASS, not a side — and the SSTV arm asked only which SIDE the image was on, so the
+    /// moment a picture was queued an FM repeater input was commanded PKTUSB. Not a display
+    /// glitch: that is an SSB emission on an FM channel, decided in the write-side canon the
+    /// radio loop re-asserts immediately before key-down.
+    ///
+    /// Drives the REAL click order (`sstv_tune` → send), not a hand-set flag.
+    #[test]
+    fn an_sstv_image_on_an_fm_channel_commands_the_fm_data_word_not_usb() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.sstv_tune(144.500, "2m", "FM");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "precondition: the 2 m calling channel is FM while idle (voice through the mic)"
+        );
+        e.sstv_send(sstv_img_samples(), "Scottie 1".into()).unwrap();
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTFM",
+            "queued image on an FM channel → the FM DATA submode, so the codec reaches the \
+             modulator WITHOUT changing the emission from FM to SSB"
+        );
+        // …and it holds for the whole over, not just the queued instant.
+        let _ = e.poll_sstv_tx();
+        e.set_sstv_sending(true);
+        assert_eq!(e.rig_mode_effective(), "PKTFM", "sending → still FM DATA");
+        // Image done → back to plain FM so the next voice PTT keys the mic, and the repeater
+        // shift/CTCSS gate (service.rs) sees the FM family throughout.
+        e.set_sstv_sending(false);
+        assert_eq!(e.rig_mode_effective(), "FM", "idle again → plain FM");
+    }
+
+    /// The other two ways the Phone section can be in FM — neither of which arms `fm_channel`,
+    /// so neither was reachable through the arm above. Both were PKTUSB on the air before the
+    /// shared predicate existed: the tester's own "my custom-mode frequency (local FM
+    /// repeater)" is this shape, not the preset one.
+    #[test]
+    fn a_phone_fm_policy_or_an_fm_pick_also_survives_an_sstv_send() {
+        // (1) The station-wide policy — what `repeater_tune` writes and no band change resets.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.phone_mode = "fm".to_string();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(146.520, "2m", "FM");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "precondition: policy FM at idle"
+        );
+        e.sstv_send(sstv_img_samples(), "Scottie 1".into()).unwrap();
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTFM",
+            "the station-wide FM policy outranks the SSTV side-derivation"
+        );
+
+        // (2) The cockpit's explicit FM pick, on a dial the policy says nothing about.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(146.550, "2m", "FM");
+        e.request_sideband_override(Some("FM"));
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "precondition: the explicit pick is FM at idle"
+        );
+        e.sstv_send(sstv_img_samples(), "Scottie 1".into()).unwrap();
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTFM",
+            "an explicit FM pick outranks the SSTV side-derivation too"
+        );
+    }
+
+    /// THE GUARD ON THE FIX, and the half that matters most: HF SSTV — the overwhelmingly
+    /// common case — must be untouched, and nothing FM may appear below 29 MHz. The 29 MHz
+    /// floor is a documented bug fix (`fm_does_not_follow_the_operator_down_to_hf`): without
+    /// it, an evening on an FM repeater commands FM onto 20 m phone. A stale station-wide
+    /// `phone_mode = "fm"` must therefore change NOTHING about a 14.230 image.
+    #[test]
+    fn an_hf_sstv_send_is_unchanged_and_never_reaches_the_fm_arm() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        // The stale FM policy, deliberately left set — this is the state the floor exists for.
+        e.settings.phone_mode = "fm".to_string();
+        e.sstv_tune(14.230, "20m", "USB");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "precondition: the 29 MHz floor already refuses FM on 20 m at idle"
+        );
+        e.sstv_send(sstv_img_samples(), "Scottie 1".into()).unwrap();
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTUSB",
+            "20 m image → DATA-U exactly as before; the FM arm must not reach HF"
+        );
+        // LSB-side HF is likewise untouched.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.phone_mode = "fm".to_string();
+        e.sstv_tune(7.171, "40m", "LSB");
+        e.sstv_send(sstv_img_samples(), "Scottie 1".into()).unwrap();
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTLSB",
+            "40 m image → DATA-L exactly as before"
+        );
+    }
+
+    /// The mic-jack opt-out reaches the new word too. On that wiring a DATA submode routes TX
+    /// audio to a port the interface is not on, so the picture has to go in the mic input —
+    /// which for an FM channel is plain FM, not plain USB.
+    #[test]
+    fn the_plain_ssb_opt_out_maps_the_fm_data_word_to_plain_fm() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.data_modes_plain_ssb = true;
+        e.sstv_tune(144.500, "2m", "FM");
+        e.sstv_send(sstv_img_samples(), "Scottie 1".into()).unwrap();
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "mic-jack rigs get plain FM, never PKTFM and never USB"
+        );
+    }
+
+    /// The REGRESSION GUARD the shared predicate buys, stated as the invariant rather than as
+    /// a symptom: `route_mode` and `rig_mode_effective` are asked at different moments (only
+    /// `tune_dial` asks the former, and no image is in flight there), so they never actually
+    /// disagreed in the field — the defect presented as a wrong emission, not a mis-routed
+    /// QSY. This pins that they cannot start to: with an image in flight on an FM channel the
+    /// routing class is FM and the commanded word is in the FM family.
+    #[test]
+    fn routing_and_the_commanded_mode_agree_about_fm_during_an_sstv_send() {
+        use crate::settings::RouteMode;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.phone_mode = "fm".to_string();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(146.520, "2m", "FM");
+        e.sstv_send(sstv_img_samples(), "Scottie 1".into()).unwrap();
+        assert_eq!(
+            e.route_mode("2m", 146.520),
+            RouteMode::Fm,
+            "routing says FM…"
+        );
+        assert!(
+            e.rig_mode_effective().ends_with("FM"),
+            "…so the commanded word must be in the FM family, got {}",
+            e.rig_mode_effective()
+        );
+        // And below the floor both must say SSB — one predicate, one answer, both directions.
+        // (The band-crossing QSY drops the queued image with the rest of the TX queue —
+        // `halt_tx_for_context_change` — so the send has to be re-made to ask the question.)
+        e.set_frequency(14.230, "20m", "USB");
+        e.sstv_send(sstv_img_samples(), "Scottie 1".into()).unwrap();
+        assert_eq!(e.route_mode("20m", 14.230), RouteMode::Ssb, "HF routes SSB");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTUSB",
+            "and commands the USB-side data submode"
         );
     }
 
