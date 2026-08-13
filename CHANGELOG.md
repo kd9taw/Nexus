@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Find a setting by typing what you call it.** Settings has a search box in its header, and it
+  searches the words on the control rather than only the headings above them — "COM port",
+  "sound card", "PL tone", "WPM", "keps", "stop bits", "no RF" all land on the right page even
+  though none of those phrases is a heading. Picking a result takes you there, and if the
+  setting lives inside a collapsed **Advanced** group it opens the group with the control in
+  view, so you arrive looking at the thing rather than at the heading above it.
 - **Nexus can hand your log to TQSL on a timer.** Settings ▸ Confirmations ▸ LoTW gained
   **Upload to LoTW automatically** — every few hours it runs the same batch the Logbook's
   "Upload to LoTW" button runs, signed by your own TQSL. It is off until you turn it on, and
