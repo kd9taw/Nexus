@@ -90,6 +90,12 @@ import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { resolveTarget } from '../settings/registry'
+// The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
+// the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
+import { SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
+// The APRS channel list and the grid→channel derivation, shared with the APRS cockpit so the
+// picker's options and the derived default can never name different numbers.
+import { APRS_FREQS, BEACON_SYMBOLS, aprsChannelForGrid } from '../aprsBeacon'
 import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
@@ -217,6 +223,28 @@ const CTCSS_TONES = [
 ]
 
 const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin']
+
+/** The APRS SSID conventions (APRS spec appendix / the de-facto community list). Not enforced
+ *  anywhere — an SSID is free-form 0..15 — but naming them is the difference between a number
+ *  picker and a choice an operator can make. */
+const APRS_SSIDS: [number, string][] = [
+  [0, 'fixed station'],
+  [1, 'generic / secondary'],
+  [2, 'generic'],
+  [3, 'generic'],
+  [4, 'generic'],
+  [5, 'phone / tablet'],
+  [6, 'satellite / special'],
+  [7, 'handheld'],
+  [8, 'boat / marine mobile'],
+  [9, 'mobile (car)'],
+  [10, 'iGate / internet'],
+  [11, 'balloon / aircraft'],
+  [12, 'tracker'],
+  [13, 'weather station'],
+  [14, 'truck / freight'],
+  [15, 'generic'],
+]
 
 // Standard serial CAT baud rates offered in the Rig baud picker. A rig's manual lists its
 // supported rate(s); most modern rigs run 38400 or 115200. Auto-detect may set a value outside
@@ -855,6 +883,20 @@ export function SettingsPanel({
   }
   const capPct = (v: number | null | undefined): string => (v == null ? '' : String(Math.round(v * 100)))
 
+  // SSTV drive, stored as a PERCENT (unlike the caps above, which are 0–1 fractions) because
+  // the control it seeds is a percent slider. Blank = null = never touch the rig's power, which
+  // is the shipped behaviour — `updateNum` cannot express that state, it would store 0.
+  const updateSstvTxPower = (pct: string) => {
+    markDirty()
+    const t = pct.trim()
+    const n = t === '' ? null : Math.min(100, Math.max(0, Math.round(Number(t))))
+    setForm((prev) =>
+      prev
+        ? { ...prev, sstvTxPowerPct: t !== '' && !Number.isFinite(n as number) ? prev.sstvTxPowerPct : n }
+        : prev,
+    )
+  }
+
   // Apply RX capture gain to the LIVE audio stream (not just the form). Called on
   // release — `set_rx_gain` persists + returns a snapshot, so we commit once the
   // operator lets go of the slider rather than on every drag tick (which would
@@ -946,6 +988,14 @@ export function SettingsPanel({
   const setWatchCalls = (calls: string[]) => {
     markDirty()
     setForm((prev) => (prev ? { ...prev, aprsIsWatchCalls: calls } : prev))
+  }
+
+  // The RF digipeater path, edited as one comma-separated field for the same reason as the
+  // budlist above. An EMPTY list is a real value here — "direct, no digipeaters" — so this
+  // must never coerce empty to a default.
+  const setAprsPath = (hops: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, aprsPath: hops } : prev))
   }
 
   // Optional numeric fields ('' = null = feature off) — `update` coerces '' to 0,
@@ -3283,22 +3333,6 @@ export function SettingsPanel({
                   aria-label="External rotctld address (advanced)"
                 />
               </div>
-
-              <label className="settings-field">
-                <span className="settings-label">ISS SSTV auto-arm</span>
-                <span className="settings-input-row">
-                  <input
-                    type="checkbox"
-                    checked={!!form.issSstvAutoArm}
-                    onChange={(e) => updateBool('issSstvAutoArm', e.target.checked)}
-                    aria-label="Auto-arm SSTV for ISS passes"
-                  />
-                  <span className="settings-hint">
-                    Auto-arm SSTV for ISS passes — tunes 145.800 FM and arms the decoder when
-                    the ISS is overhead, restores your dial at LOS. Off by default.
-                  </span>
-                </span>
-              </label>
 
               <div className="settings-field">
                 <span className="settings-label">Split operation</span>
@@ -5827,12 +5861,259 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- SSTV — what the SSTV screen starts on, and the ISS pass auto-arm. The ISS
+               switch used to live in Rig & CAT, where nothing about it is a rig model, port,
+               baud, framing or keying; it is here now, beside the rest of SSTV. ---- */}
+          {tab === 'digital' && (
+          <fieldset className="settings-section" id="settings-sstv">
+            <legend>SSTV</legend>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">Receiving</span>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">Start receiving when SSTV opens</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
+                    aria-checked={form.sstvRxAutoArm !== false}
+                    className={`toggle${form.sstvRxAutoArm !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('sstvRxAutoArm', form.sstvRxAutoArm === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  The SSTV screen starts the decoder as soon as you open it, so a picture on the
+                  band decodes without arming anything. Turn this off to arm the receiver by hand
+                  (the Arm button in the SSTV header). Stopping the receiver yourself is already
+                  remembered for the rest of the session.
+                </span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">ISS SSTV auto-arm</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!form.issSstvAutoArm}
+                    className={`toggle${form.issSstvAutoArm ? ' on' : ''}`}
+                    onClick={() => updateBool('issSstvAutoArm', !form.issSstvAutoArm)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  Auto-arm SSTV for ISS passes — tunes 145.800 FM and arms the decoder when the
+                  ISS is overhead, restores your dial at LOS. Off by default. A pass arm is an
+                  explicit act, so it works whether or not the switch above is on.
+                </span>
+              </div>
+            </div>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">Transmitting</span>
+              <label className="settings-field">
+                <span className="settings-label">Transmit mode</span>
+                <select
+                  className="settings-input"
+                  value={form.sstvDefaultTxMode ?? 'auto'}
+                  onChange={(e) => update('sstvDefaultTxMode', e.target.value)}
+                >
+                  <option value="auto">Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)</option>
+                  {TX_MODE_GROUPS.map((g) => (
+                    <optgroup key={g} label={g}>
+                      {SSTV_TX_MODES.filter((m) => m.group === g).map((m) => (
+                        <option key={m.slug} value={m.slug}>
+                          {m.name} · ≈{m.seconds}s · {m.width}×{m.height}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <span className="settings-hint">
+                  This is the mode the SSTV screen starts on; you can still change it there for one
+                  picture. <strong>Automatic</strong> follows the band: HF gets Scottie 1 (the NA
+                  calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is
+                  what ARISS transmits.
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">Transmit power</span>
+                <span className="settings-input-row">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    inputMode="numeric"
+                    placeholder="—"
+                    value={form.sstvTxPowerPct == null ? '' : String(form.sstvTxPowerPct)}
+                    onChange={(e) => updateSstvTxPower(e.target.value)}
+                    aria-label="SSTV transmit power percent"
+                  />
+                  <span>%</span>
+                </span>
+                <span className="settings-hint">
+                  The drive the SSTV screen starts on, and the level an image is sent at. Leave it
+                  blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous
+                  key-down at full duty, so most operators run it well below their SSB drive. Your
+                  Phone power cap still applies on top of this.
+                </span>
+              </label>
+            </div>
+            {/* Not a control — the answer to the question this section otherwise invites. The
+                plate is drawn in Rust before encoding so no webview path can bypass it, and its
+                geometry is derived from the demodulator's own window lengths, not chosen. */}
+            <p className="settings-note">
+              Your callsign is burned into the top-left of every picture you transmit, and there is
+              no switch for it: an SSTV over is one long carrier of picture-only audio, so the
+              picture is the identification (§97.119(b)(4)). Send is refused until you have set a
+              callsign in Settings ▸ Station. If a picture already shows your call — a pre-made QSO
+              card — tick &ldquo;My picture already shows my callsign&rdquo; in the SSTV screen:
+              that is per-picture on purpose and resets with every new image.
+            </p>
+          </fieldset>
+          )}
+
           {/* ---- APRS — the internet feed (APRS-IS) + the receive-only iGate. Lives HERE, beside
                the other per-mode settings, because that is where operators look for it: the first
                person to go hunting for these went to APRS, not to Integrations & Feeds. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-aprs">
             <legend>APRS</legend>
+            {/* The RF side. ⚠️ NOTHING HERE MAY CARRY `disabled={!form.aprsIsEnabled}` — that is
+                the internet feed's gate, and copying it down would put RF APRS behind an
+                internet connection it does not need. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">Over the air</span>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">Channel (RF)</span>
+                  <select
+                    className="settings-input"
+                    value={form.aprsChannelMhz == null ? '' : String(form.aprsChannelMhz)}
+                    onChange={(e) => updateNullableNum('aprsChannelMhz', e.target.value, 0)}
+                  >
+                    {/* Naming the derived number is the whole mitigation for a table of
+                        approximate bounding boxes: a wrong guess is visible, not silent. */}
+                    <option value="">
+                      {form.mygrid
+                        ? `Automatic — ${aprsChannelForGrid(form.mygrid).toFixed(3)} from your grid`
+                        : 'Automatic — 144.390 (set your grid on the Station tab)'}
+                    </option>
+                    {APRS_FREQS.map(([f, region]) => (
+                      <option key={f} value={String(f)}>
+                        {f.toFixed(3)} · {region}
+                      </option>
+                    ))}
+                    {/* A stored channel outside the list is kept as its own option rather than
+                        silently dropped — the STANDARD_BAUDS precedent. */}
+                    {form.aprsChannelMhz != null &&
+                      !APRS_FREQS.some(([f]) => f === form.aprsChannelMhz) && (
+                        <option value={String(form.aprsChannelMhz)}>
+                          {form.aprsChannelMhz.toFixed(3)} · custom
+                        </option>
+                      )}
+                  </select>
+                  <span className="settings-hint">
+                    The 2 m FM channel APRS runs on, which is regional.{' '}
+                    <strong>Automatic</strong> follows your grid square, so moving to another
+                    region lands you on the right channel with nothing to configure — the number
+                    it picked is shown above. The boundaries are approximate; pick a channel here
+                    to pin it for good.
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">Beacon symbol</span>
+                  <select
+                    className="settings-input"
+                    value={`${form.aprsSymbolTable ?? '/'}${form.aprsSymbolCode ?? '>'}`}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      update('aprsSymbolTable', v[0])
+                      update('aprsSymbolCode', v[1])
+                    }}
+                  >
+                    {BEACON_SYMBOLS.map(([table, code, label]) => (
+                      <option key={`${table}${code}`} value={`${table}${code}`}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-hint">
+                    The icon other stations see on the map for your beacon. Digipeater and iGate
+                    come from the alternate symbol table and are what a fixed station running as
+                    infrastructure should show.
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">Beacon comment</span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    maxLength={43}
+                    value={form.aprsComment ?? ''}
+                    onChange={(e) => update('aprsComment', e.target.value)}
+                    autoComplete="off"
+                  />
+                  <span className="settings-hint">
+                    Free text carried with your position — a name, a net, a URL. This goes on the
+                    air, and APRS caps it at 43 characters.
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">Digipeater path</span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={(form.aprsPath ?? []).join(', ')}
+                    onChange={(e) =>
+                      setAprsPath(
+                        e.target.value
+                          .split(',')
+                          .map((s) => s.trim().toUpperCase())
+                          .filter(Boolean),
+                      )
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">
+                    Which digipeaters may repeat your beacon. <code>WIDE1-1, WIDE2-1</code> is the
+                    near-universal default — one hop through a local fill-in digi, then one wide
+                    hop. Leave it empty to transmit direct, with no digipeaters at all.
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">Beacon SSID</span>
+                  <select
+                    className="settings-input"
+                    value={form.aprsSsid == null ? '' : String(form.aprsSsid)}
+                    onChange={(e) => updateNullableNum('aprsSsid', e.target.value, 0)}
+                  >
+                    {/* '' = null = follow the callsign, exactly like the channel picker above.
+                        NOT `updateNum` — a plain number cannot express "I have not chosen", and
+                        writing 0 unconditionally would demote a station whose call is KD9TAW-9. */}
+                    <option value="">From my callsign</option>
+                    {APRS_SSIDS.map(([n, what]) => (
+                      <option key={n} value={String(n)}>
+                        {n} — {what}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-hint">
+                    The suffix on your callsign in every APRS frame you send, which is how other
+                    operators tell your mobile from your home station.{' '}
+                    <strong>From my callsign</strong> uses whatever your callsign already spells
+                    out — so if you have set it to <code>KD9TAW-9</code> on the Station tab,
+                    that is what goes out.
+                  </span>
+                </label>
+              </div>
+            </div>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">APRS-IS (internet feed)</span>
               <div className="settings-grid">

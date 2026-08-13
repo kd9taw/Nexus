@@ -2196,6 +2196,23 @@ export interface Settings {
    * fade after a third of this. Shorter windows make slow fixed stations blink off between their
    * own beacons — the bug the per-station store exists to fix. */
   aprsStationTtlMin?: number
+  /** The regional 2 m FM APRS channel (MHz), or null to FOLLOW MY GRID — `aprsBeacon.ts`
+   * resolves null to a real channel on every read, so the operator never meets an empty box.
+   * The `| null` matters: `Option<f64>` serialises as null and `set_settings` deserialises
+   * `Settings` directly. */
+  aprsChannelMhz?: number | null
+  /** Beacon symbol code — the character picking the icon within the table below ('>' = Car). */
+  aprsSymbolCode?: string
+  /** Beacon symbol table: '/' (primary) or '\\' (alternate — digipeater `\#`, iGate `\&`). */
+  aprsSymbolTable?: string
+  /** The free-text beacon comment. Goes ON THE AIR; APRS caps it at 43 characters. */
+  aprsComment?: string
+  /** The digipeater path, e.g. ['WIDE1-1','WIDE2-1']. Empty is a real value: direct, no hops. */
+  aprsPath?: string[]
+  /** The SSID every APRS frame we originate carries (-9 mobile, -10 iGate, -7 HT …), or
+   * null/undefined to FOLLOW MY CALLSIGN — whatever `mycall` already spells out. Applied in
+   * Rust only; the UI never sends a source address. */
+  aprsSsid?: number | null
   /** Companion-mode UDP listen address (WSJT-X/JTDX). */
   companionAddr: string
   /** CW keyer backend: 'cat' | 'serial' | 'winkeyer' | 'soundcard'. Persisted (Rust `cwKeyer`);
@@ -2553,6 +2570,17 @@ export interface Settings {
   /** Opt-in (off by default): at ISS AOS auto-tune 145.800 FM + arm SSTV RX, and
    * restore the dial at LOS. Every rig-touching action is gated on this. */
   issSstvAutoArm: boolean
+  /** Whether opening the SSTV view starts the receiver. Default TRUE (today's
+   * behaviour), so an ABSENT key must read as on — `!== false`, never `!!`. The gate
+   * is in the engine; the ISS pass arm is an explicit act and is unaffected. */
+  sstvRxAutoArm?: boolean
+  /** The transmit mode the SSTV screen starts on: a `sstvModes.ts` slug, or 'auto'
+   * for the band-aware pick. Named `default` because `SstvState.txMode` is the live
+   * "mode currently going out" and the two must not be confusable. */
+  sstvDefaultTxMode?: string
+  /** SSTV drive, percent. null/undefined = never touch the rig's power (the shipped
+   * behaviour); a value both seeds the screen's slider and is applied at Send. */
+  sstvTxPowerPct?: number | null
   /** Alert (beep + flash) when a decode is directed at my callsign. */
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */

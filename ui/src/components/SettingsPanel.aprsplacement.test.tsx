@@ -179,3 +179,86 @@ describe('APRS-IS settings live where operators look for them', () => {
     expect(master!.getAttribute('aria-checked')).toBe('false')
   })
 })
+
+describe('the RF side — "Over the air"', () => {
+  it('all five controls sit under the APRS legend', async () => {
+    renderPanel()
+    await openTab('Digital')
+    for (const label of [
+      'Channel (RF)',
+      'Beacon symbol',
+      'Beacon comment',
+      'Digipeater path',
+      'Beacon SSID',
+    ]) {
+      const el = await screen.findByText(label)
+      expect(sectionOf(el), `"${label}" must sit under the APRS legend`).toBe('APRS')
+    }
+  })
+
+  it('⭐ NONE of them is gated on the internet feed', async () => {
+    // The neighbouring block's `disabled={!form.aprsIsEnabled}` is one careless re-indent away
+    // from these five, and it would be backwards: RF APRS works with the feed off, which is how
+    // most stations run it. The fixture has the feed OFF, so a copied gate shows up immediately.
+    renderPanel()
+    await openTab('Digital')
+    for (const label of ['Channel (RF)', 'Beacon symbol', 'Beacon SSID']) {
+      const el = (await screen.findByText(label)).closest('label')!.querySelector('select')
+      expect(el!.disabled, `"${label}" must not be behind the internet feed`).toBe(false)
+    }
+    for (const label of ['Beacon comment', 'Digipeater path']) {
+      const el = (await screen.findByText(label)).closest('label')!.querySelector('input')
+      expect(el!.disabled, `"${label}" must not be behind the internet feed`).toBe(false)
+    }
+    // The positive control: the gate DOES still bite next door, so "not disabled" above means
+    // something. Without this, a build where nothing is ever disabled passes the whole block.
+    const server = (await screen.findByText('Server')).closest('label')?.querySelector('input')
+    expect(server!.disabled, 'the APRS-IS gate must still be in force').toBe(true)
+  })
+
+  it('the channel and SSID both default to "follow me", and name what they resolved to', async () => {
+    // Neither is "unset": null means follow my grid / follow my callsign, and the channel option
+    // NAMES the number it derived — which is the whole mitigation for approximate boundaries.
+    renderPanel()
+    await openTab('Digital')
+    const channel = (await screen.findByText('Channel (RF)'))
+      .closest('label')!
+      .querySelector('select') as HTMLSelectElement
+    expect(channel.value).toBe('')
+    // The fixture's grid is EN52 (Wisconsin) → 144.390.
+    expect(channel.options[0].textContent).toContain('144.390')
+    expect(channel.options[0].textContent).toContain('from your grid')
+
+    const ssid = (await screen.findByText('Beacon SSID'))
+      .closest('label')!
+      .querySelector('select') as HTMLSelectElement
+    expect(ssid.value).toBe('')
+    expect(ssid.options[0].textContent).toBe('From my callsign')
+  })
+
+  it('the digipeater path shows the stored hops and can be emptied to mean "direct"', async () => {
+    renderPanel()
+    await openTab('Digital')
+    const path = (await screen.findByText('Digipeater path'))
+      .closest('label')!
+      .querySelector('input') as HTMLInputElement
+    expect(path.value).toBe('WIDE1-1, WIDE2-1')
+    fireEvent.change(path, { target: { value: '' } })
+    expect(path.value).toBe('')
+  })
+
+  it('the symbol picker offers the alternate-table identities, not just the primary eight', async () => {
+    // Digipeater `\#` and iGate `\&` are the two a fixed station running as infrastructure
+    // wants, and they are the only reason the symbol TABLE is a stored field at all.
+    renderPanel()
+    await openTab('Digital')
+    const sym = (await screen.findByText('Beacon symbol'))
+      .closest('label')!
+      .querySelector('select') as HTMLSelectElement
+    const values = [...sym.options].map((o) => o.value)
+    expect(values).toContain('/>')
+    expect(values).toContain('\\#')
+    expect(values).toContain('\\&')
+    expect(sym.value).toBe('/>') // Car, on the primary table — the shipped default
+  })
+})

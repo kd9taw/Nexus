@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SSTV has a Settings section.** It was the only mode with a cockpit and no settings, so
+  every choice you made — transmit mode, drive — was gone by the next launch, and the one
+  thing that did persist (the ISS pass auto-arm) was filed under Rig & CAT, where nothing else
+  is about a satellite. Settings ▸ Digital ▸ SSTV now holds all of it: a **default transmit
+  mode**, so a station that always sends Scottie 1 stops re-picking it; an **SSTV transmit
+  power** that is remembered and applied at Send — leave it blank and Nexus never touches your
+  power, which is what it has always done; and a switch for **starting the receiver when the
+  SSTV screen opens**, on by default, for operators who keep SSTV up as a monitor on a shared
+  rig. Your callsign is still burned into every transmitted picture and still has no off
+  switch: an SSTV over carries no other identification.
+- **APRS remembers your station.** The beacon symbol, comment, digipeater path and the RF
+  channel lived in the screen and reset on every restart, so a European operator's rig was
+  retuned to the US channel each launch and their beacon identity retyped each session. All of
+  it now persists, under Settings ▸ Digital ▸ APRS ▸ **Over the air**. The channel is
+  **derived from your grid square** when you have not picked one — open APRS in Europe and it
+  lands on 144.800 with nothing configured, and fixing your grid updates it without a restart.
+  There is also a **beacon SSID** control for the first time (-9 mobile, -10 iGate, -7
+  handheld): leave it on **From my callsign** and Nexus sends exactly what your callsign
+  already spells out, which is what it has always sent. Beaconing gains the two
+  alternate-table symbols a fixed station wants, **digipeater** and **iGate**.
+
 ### Changed
 
 - **Settings has a tab for each way you operate — Phone, CW and Digital.** The single Modes

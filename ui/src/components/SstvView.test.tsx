@@ -18,6 +18,10 @@ vi.mock('../api', () => ({
   sstvSend: vi.fn(),
   sstvStop: vi.fn(),
   setOperatingMode: vi.fn(),
+  // The Settings SSTV drive reaches the rig through this on the Send path. A verb the
+  // component imports but the factory omits is not a silent no-op — Vitest throws
+  // 'No "setRfPower" export is defined on the "../api" mock' the first time it is touched.
+  setRfPower: vi.fn(async () => {}),
 }))
 // withErrorToast passes through to its action so the Send path exercises the real
 // setOperatingMode → sstvSend sequence (returns null on reject, like the real one).
@@ -39,6 +43,7 @@ const getLicensedBandPlan = api.getLicensedBandPlan as ReturnType<typeof vi.fn>
 const sstvSend = api.sstvSend as ReturnType<typeof vi.fn>
 const sstvStop = api.sstvStop as ReturnType<typeof vi.fn>
 const setOperatingMode = api.setOperatingMode as ReturnType<typeof vi.fn>
+const setRfPower = api.setRfPower as ReturnType<typeof vi.fn>
 
 const snap = {
   // ⚠️ REQUIRED, and not decoration: SSTV identifies the station by burning this call
@@ -98,6 +103,9 @@ beforeEach(() => {
   sstvSend.mockReset().mockResolvedValue({ ...IDLE, sending: true, txMode: 'Scottie 1' })
   sstvStop.mockReset().mockResolvedValue(IDLE)
   setOperatingMode.mockReset().mockResolvedValue(snap)
+  // Resolved, not bare: the Send path does `setRfPower(…).catch(…)`, so a reset that left it
+  // returning undefined would throw on `.catch` instead of testing anything.
+  setRfPower.mockReset().mockResolvedValue(undefined)
 })
 afterEach(cleanup)
 
@@ -322,6 +330,71 @@ describe('SstvView TX panel', () => {
     expect(setOperatingMode.mock.invocationCallOrder[0]).toBeLessThan(
       sstvSend.mock.invocationCallOrder[0],
     )
+  })
+
+  // ---- Settings ▸ Digital ▸ SSTV — the default mode and the default drive -------------
+
+  it('the Settings default mode outranks the band-aware pick, and Send uses it', async () => {
+    render(<SstvView snap={snap} txModeDefault="martin1" />)
+    const modeSelect = screen.getByLabelText('SSTV transmit mode') as HTMLSelectElement
+    await waitFor(() => expect(modeSelect.value).toBe('martin1'))
+    const send = await loadPicture()
+    fireEvent.click(send)
+    await waitFor(() =>
+      expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 320, 256, 'martin1', false),
+    )
+  })
+
+  it('⭐ switching the Settings default back to Automatic releases the band-aware latch', async () => {
+    // The latch that holds the band-aware effect off is a ref. Latching it on a real default
+    // and never clearing it made "Automatic" silently dead for the rest of the session — the
+    // picker would sit on the old mode however the dial moved.
+    const { rerender } = render(<SstvView snap={snap} txModeDefault="martin1" />)
+    const modeSelect = screen.getByLabelText('SSTV transmit mode') as HTMLSelectElement
+    await waitFor(() => expect(modeSelect.value).toBe('martin1'))
+
+    rerender(<SstvView snap={snap} txModeDefault="auto" />)
+    // Released: the next dial change follows the band again (14.23 → 145.8 is 2 m → PD-120).
+    const vhf = { ...snap, radio: { ...snap.radio, dialMhz: 145.8 } } as AppSnapshot
+    rerender(<SstvView snap={vhf} txModeDefault="auto" />)
+    await waitFor(() => expect(modeSelect.value).toBe('pd120'))
+  })
+
+  it('the Settings drive is applied at Send, after the Phone preflight', async () => {
+    render(<SstvView snap={snap} txPowerPct={40} />)
+    const send = await loadPicture()
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(setRfPower).toHaveBeenCalledWith(0.4)
+    // AFTER set_operating_mode (which re-applies the mode's power ceiling), BEFORE the send.
+    expect(setOperatingMode.mock.invocationCallOrder[0]).toBeLessThan(
+      setRfPower.mock.invocationCallOrder[0],
+    )
+    expect(setRfPower.mock.invocationCallOrder[0]).toBeLessThan(
+      sstvSend.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('⭐ with no Settings drive set, Send never touches the rig’s power', async () => {
+    // The regression that matters: blank must be bit-identical to the shipped behaviour, or
+    // every operator who ignores this field has their power moved by an upgrade.
+    render(<SstvView snap={snap} />)
+    const send = await loadPicture()
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(setRfPower).not.toHaveBeenCalled()
+  })
+
+  it('a drag of the power slider wins over the Settings drive for the rest of the session', async () => {
+    render(<SstvView snap={snap} txPowerPct={40} />)
+    const slider = screen.getByLabelText('Power') as HTMLInputElement
+    fireEvent.change(slider, { target: { value: '25' } })
+    expect(setRfPower).toHaveBeenCalledWith(0.25)
+    setRfPower.mockClear()
+    const send = await loadPicture()
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(setRfPower).not.toHaveBeenCalled()
   })
 
   it('changing the mode re-crops to the new dimensions', async () => {

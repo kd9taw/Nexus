@@ -34,7 +34,10 @@ controls.
   simplex, because a 2 m packet signal demodulated as USB/DATA never decodes.
   The *selection* always sticks even on a radio that cannot get there, since it
   is also what the decode chip judges "wrong frequency" against; only the retune
-  is gated.
+  is gated. The channel is **derived from your grid square the first time and
+  then remembered** — a European station opens APRS on 144.800 with nothing to
+  configure — and a pick you make here is pinned for good, in the same setting
+  [Settings ▸ Digital ▸ APRS](settings-reference.md#aprs) shows.
 - **Re-tune** puts the rig back on the selected channel after you have been
   elsewhere. It is disabled, with the reason in its tooltip, when the radio
   provably cannot receive that frequency — *"This radio doesn't cover 144.390
@@ -244,9 +247,12 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
 2. Check the **Lat** and **Lon** in the beacon form. They are prefilled from your
    Maidenhead grid, which is the *centre of the square*, not a fix — type real
    coordinates if you want to be where you actually are.
-3. Pick a **Symbol** (car, house, person, bicycle, jeep, motorcycle, truck, dot),
-   set the **Comment** (43 characters) and the digipeater **Path** — `WIDE1-1,WIDE2-1`
-   by default.
+3. Pick a **Symbol**, set the **Comment** (43 characters) and the digipeater
+   **Path** — `WIDE1-1, WIDE2-1` by default. All three are **remembered**, so
+   this is a once-and-done step rather than something to retype each session;
+   they are the same settings [Settings ▸ Digital ▸ APRS ▸ Over the
+   air](settings-reference.md#aprs) edits, along with your beacon **SSID**,
+   which has no control on this screen.
 4. Press **Send beacon**. The frame is rendered to AFSK-1200 audio up front and
    keyed as one short burst; the status line reports what happened, including a
    refusal and its reason. It fires once. Nothing repeats it.
@@ -295,10 +301,10 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
   one-shot you pressed. Nexus will not beacon your position on a timer, will not
   beacon faster when you are moving, and reads no GPS receiver — the position in
   the form is whatever you typed, prefilled from your grid square's centre.
-- **You can beacon eight symbols, all from the primary table.** Receiving
-  resolves the full symbol space including alternate-table and overlaid symbols;
-  sending offers car, house, person, bicycle, jeep, motorcycle, truck and dot,
-  and always on the `/` table.
+- **You can beacon ten symbols.** Receiving resolves the full symbol space
+  including alternate-table and overlaid symbols; sending offers car, house,
+  person, bicycle, jeep, motorcycle, truck and dot on the primary `/` table,
+  plus digipeater and iGate on the alternate `\` table.
 - **AFSK-1200 on 2 m FM only.** No 9600-baud packet, no HF 300-baud APRS, no
   other TNC formats. The seven channels in the picker are the modes this decoder
   handles.

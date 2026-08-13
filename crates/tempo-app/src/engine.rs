@@ -9532,6 +9532,26 @@ impl Engine {
         Ok(())
     }
 
+    /// The source address every APRS frame we originate carries: the station callsign with
+    /// the operator's chosen SSID.
+    ///
+    /// ONE helper for all three keying paths (beacon, message, auto-ack) so a fourth can
+    /// never miss it. Identity validation is UNCHANGED — an unparseable `mycall` still
+    /// yields None and every caller still refuses the send.
+    ///
+    /// ⚠️ THE SETTING IS APPLIED ONLY WHEN IT IS SET, and that is not a stylistic choice.
+    /// [`Address::parse`] already splits `KD9TAW-9` and returns SSID 9, so writing the
+    /// setting unconditionally would take an operator who spells their SSID into `mycall`
+    /// from -9 to -0 the first time they upgraded — a silent on-air identity change. None
+    /// means "follow my callsign", which is what every install does today.
+    fn aprs_source(&self) -> Option<tempo_core::aprs::Address> {
+        let mut a = tempo_core::aprs::Address::parse(self.settings.mycall.trim())?;
+        if let Some(n) = self.settings.aprs_ssid {
+            a.ssid = n & 0x0F;
+        }
+        Some(a)
+    }
+
     /// Queue one APRS position beacon for transmission — an explicit operator send (the ONLY way
     /// APRS TX keys). Renders the frame to AFSK-1200 audio up front; the radio loop keys it via
     /// [`Engine::poll_aprs_tx`]. `path` is the digipeater aliases (e.g. `["WIDE1-1","WIDE2-1"]`).
@@ -9550,7 +9570,8 @@ impl Engine {
         if mycall.is_empty() {
             return Err("Set your callsign in Settings before beaconing".to_string());
         }
-        let src = aprs::Address::parse(mycall)
+        let src = self
+            .aprs_source()
             .ok_or_else(|| "Your callsign isn't a valid APRS source address".to_string())?;
         let mut digis = Vec::new();
         for p in path.iter().filter(|p| !p.trim().is_empty()) {
@@ -9693,8 +9714,8 @@ impl Engine {
         if text.chars().count() > 67 {
             return Err("APRS messages are limited to 67 characters".to_string());
         }
-        let mycall = self.settings.mycall.trim();
-        let src = aprs::Address::parse(mycall)
+        let src = self
+            .aprs_source()
             .ok_or_else(|| "Set a valid callsign in Settings first".to_string())?;
         // Roll 001..999 (never 000 — a zero id reads as "no ack expected").
         self.aprs_msg_seq = self.aprs_msg_seq % 999 + 1;
@@ -9747,7 +9768,7 @@ impl Engine {
         if self.aprs_tx_gate().is_err() {
             return; // TX off / outside privileges / busy → don't auto-ack
         }
-        let Some(src) = aprs::Address::parse(self.settings.mycall.trim()) else {
+        let Some(src) = self.aprs_source() else {
             return;
         };
         // The ack itself carries no id (an ack is never itself acked).
@@ -10422,8 +10443,13 @@ impl Engine {
     /// ever an upgrade from disarmed, and it refuses outright once the operator has
     /// explicitly stopped the receiver this session. The policy lives here rather than
     /// in the view so it survives a remount and is testable without a webview.
+    ///
+    /// Settings ▸ Digital ▸ SSTV ▸ "Start receiving when SSTV opens" turns it off for
+    /// good, for the operator monitoring on a shared rig. That switch reaches ONLY this
+    /// entry path: the Arm button and the ISS pass arm both call
+    /// [`Engine::set_sstv_armed`], an explicit operator act, and are unaffected.
     pub fn sstv_auto_arm(&mut self) -> bool {
-        if self.sstv_armed || self.sstv_auto_arm_declined {
+        if self.sstv_armed || self.sstv_auto_arm_declined || !self.settings.sstv_rx_auto_arm {
             return false;
         }
         self.sstv_health = SstvHealth {
@@ -14566,6 +14592,29 @@ mod tests {
             e.sstv_auto_arm(),
             "re-opening the view must still start the receiver"
         );
+    }
+
+    /// The Settings opt-out (`sstv_rx_auto_arm = false`) stops the view from starting
+    /// the receiver — and nothing else.
+    ///
+    /// ⚠️ POSITIVE CONTROL IN THE SAME TEST, deliberately: a broken gate that always
+    /// returns false passes the opt-out half on its own. The default engine must still
+    /// arm on view entry, and the explicit paths (the Arm button, the ISS pass arm)
+    /// must still work with the opt-out ON — they go through `set_sstv_armed`, which is
+    /// an operator act, not an automatic one.
+    #[test]
+    fn the_settings_opt_out_stops_the_view_from_arming_but_not_the_operator() {
+        let mut on = Engine::new("W9XYZ", "EN61", 0);
+        assert!(on.sstv_auto_arm(), "default: opening the view arms the receiver");
+
+        let mut off = Engine::with_settings(Settings {
+            sstv_rx_auto_arm: false,
+            ..Default::default()
+        });
+        assert!(!off.sstv_auto_arm(), "opted out: the view does not arm it");
+        assert!(!off.sstv_armed());
+        off.set_sstv_armed(true);
+        assert!(off.sstv_armed(), "the Arm button and the ISS pass arm still work");
     }
 
     /// An explicit Arm is the operator's latest word, so it retires an earlier Stop.
@@ -23519,6 +23568,44 @@ mod tests {
             "expected a TX-off refusal, got: {err}"
         );
         assert!(e.poll_aprs_tx().is_none(), "nothing queued");
+    }
+
+    /// ⭐ THE BEACON SSID FOLLOWS THE CALLSIGN UNTIL THE OPERATOR SAYS OTHERWISE.
+    ///
+    /// `Address::parse` already splits `KD9TAW-9`, so the failure this pins is an upgrade
+    /// that DEMOTES a station: apply a `u8` SSID field unconditionally and an operator who
+    /// has always spelled `-9` into their callsign starts beaconing as `-0`, on the air,
+    /// with nothing on screen saying so. None must mean "follow my callsign".
+    #[test]
+    fn the_aprs_source_ssid_follows_the_callsign_until_the_operator_picks_one() {
+        let mut e = Engine::with_settings(Settings {
+            mycall: "KD9TAW-9".to_string(),
+            ..Default::default()
+        });
+        let src = e.aprs_source().expect("a valid call parses");
+        assert_eq!(src.call, "KD9TAW");
+        assert_eq!(src.ssid, 9, "the SSID already in mycall must survive the upgrade");
+
+        // An explicit pick overrides it — including an explicit 0, which is a real choice.
+        e.settings.aprs_ssid = Some(10);
+        assert_eq!(e.aprs_source().unwrap().ssid, 10);
+        e.settings.aprs_ssid = Some(0);
+        assert_eq!(e.aprs_source().unwrap().ssid, 0);
+
+        // A plain callsign with no pick is SSID 0 — today's behaviour for everyone else.
+        let plain = Engine::with_settings(Settings {
+            mycall: "W9XYZ".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(plain.aprs_source().unwrap().ssid, 0);
+
+        // Identity validation is UNCHANGED: an unparseable call still yields None, which is
+        // what every keying path refuses on.
+        let bad = Engine::with_settings(Settings {
+            mycall: "  ".to_string(),
+            ..Default::default()
+        });
+        assert!(bad.aprs_source().is_none());
     }
 
     // ---- Auto-arm is RX-ONLY: it must never confer the auto-ack ----

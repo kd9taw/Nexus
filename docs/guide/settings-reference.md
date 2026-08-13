@@ -153,8 +153,6 @@ With two or more radios, three more controls appear:
   compass anywhere. **Dummy (testing — no hardware)** lets you try it without a
   rotator; **Other Hamlib model #…** takes any model number. A separate advanced
   field takes an external `rotctld` host:port that overrides all of the above.
-- **ISS SSTV auto-arm** — "tunes 145.800 FM and arms the decoder when the ISS is
-  overhead, restores your dial at LOS. Off by default."
 - **Split operation** — None / Rig / Fake It. "Keeps your transmitted audio
   between 1500–2000 Hz by shifting the TX dial in 500 Hz steps, so audio
   harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B
@@ -592,7 +590,65 @@ Comma-separated chip lists for the quick text you fire from each surface:
   AFSK in USB/DATA-U) so the on-air sense stays correct." Applies to TX and the
   RX decoder.
 
+### SSTV
+
+**Receiving**
+
+- **Start receiving when SSTV opens** — on by default. The SSTV screen starts the
+  decoder as soon as you open it, so a picture on the band decodes without your
+  arming anything. Turn it off to arm by hand (the Arm button in the SSTV header)
+  — worth doing if you keep SSTV open as a monitor on a shared rig. Stopping the
+  receiver yourself is already remembered for the rest of the session.
+- **ISS SSTV auto-arm** — off by default. Tunes 145.800 FM and arms the decoder
+  when the ISS is overhead, and restores your dial at LOS. A pass arm is an
+  explicit act, so this works whether or not the switch above is on.
+
+**Transmitting**
+
+- **Transmit mode** — the mode the SSTV screen starts on; you can still change it
+  there for one picture. **Automatic** follows the band: HF gets Scottie 1 (the
+  NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120,
+  which is what ARISS transmits. Pick one of the 15 modes to always start there.
+- **Transmit power** — the drive the SSTV screen starts on, and the level an
+  image is sent at. Leave it blank and Nexus never touches your power. SSTV is up
+  to 290 seconds of continuous key-down at full duty, so most operators run it
+  well below their SSB drive. Your Phone power cap still applies on top of this.
+
+Your callsign is burned into the top-left of every picture you transmit and there
+is no switch for it: an SSTV over is one long carrier of picture-only audio, so
+the picture is the identification (§97.119(b)(4)). Send is refused until you have
+set a callsign in [Station](#station). If a picture already shows your call — a
+pre-made QSO card — tick "My picture already shows my callsign" in the SSTV
+screen; that one is per-picture on purpose and resets with every new image.
+
 ### APRS
+
+**Over the air**
+
+These are the RF side, and none of them needs the internet feed below — most
+stations run APRS on the radio alone.
+
+- **Channel (RF)** — the 2 m FM channel APRS runs on, which is regional.
+  **Automatic** follows your grid square, so moving to another region lands you
+  on the right channel with nothing to configure, and the number it picked is
+  shown in the menu itself. The boundaries between regions are approximate; pick
+  a channel to pin it for good. Picking one from the APRS screen's header pins it
+  too — the two surfaces write the same setting.
+- **Beacon symbol** — the icon other stations see on the map for your beacon.
+  Car, House, Person, Bicycle, Jeep, Motorcycle, Truck and Dot come from the
+  primary symbol table; **Digipeater** and **iGate** come from the alternate one
+  and are what a fixed station running as infrastructure should show.
+- **Beacon comment** — free text carried with your position: a name, a net, a
+  URL. This goes on the air, and APRS caps it at 43 characters.
+- **Digipeater path** — which digipeaters may repeat your beacon.
+  `WIDE1-1, WIDE2-1` is the near-universal default: one hop through a local
+  fill-in digi, then one wide hop. Leave it empty to transmit direct, with no
+  digipeaters at all.
+- **Beacon SSID** — the suffix on your callsign in every APRS frame you send,
+  which is how other operators tell your mobile from your home station (-9
+  mobile, -10 iGate, -7 handheld, -13 weather). **From my callsign** uses
+  whatever your callsign already spells out, so if you have set it to
+  `KD9TAW-9` on the Station tab, that is what goes out.
 
 **APRS-IS (internet feed)**
 

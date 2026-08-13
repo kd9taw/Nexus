@@ -1,5 +1,6 @@
-// THE SSTV MODE TABLE — `SstvView.tsx`'s `SSTV_TX_MODES` against `modespec.rs`, which is
-// the arbiter.
+// THE SSTV MODE TABLE — `sstvModes.ts`'s `SSTV_TX_MODES` against `modespec.rs`, which is
+// the arbiter. (The table lived in `SstvView.tsx` until Settings grew a default-mode picker
+// that needs the same 15 rows; it moved to a pure module rather than being copied.)
 //
 // There are two tables describing the same 15 modes and nothing compared them. The Rust
 // one calls itself the "single source of truth" and is the one the transmit path actually
@@ -25,8 +26,8 @@ import { fileURLToPath } from 'node:url'
 const repo = (rel: string) => readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), 'utf8')
 const MODESPEC_RS = repo('crates/tempo-sstv/src/modespec.rs')
 const ENCODE_RS = repo('crates/tempo-sstv/src/encode.rs')
-const SSTV_VIEW_TSX = readFileSync(
-  fileURLToPath(new URL('./components/SstvView.tsx', import.meta.url)),
+const SSTV_MODES_TS = readFileSync(
+  fileURLToPath(new URL('./sstvModes.ts', import.meta.url)),
   'utf8',
 )
 
@@ -113,13 +114,13 @@ function txSeconds(s: RustSpec): number {
   return header + frames * Math.max(content, s.line)
 }
 
-/** Every row of `SSTV_TX_MODES` in SstvView.tsx. */
+/** Every row of `SSTV_TX_MODES` in sstvModes.ts. */
 function tsModes() {
-  const decl = /const SSTV_TX_MODES: TxMode\[\] = \[/.exec(SSTV_VIEW_TSX)
-  expect(decl, 'SstvView.tsx declares SSTV_TX_MODES').not.toBeNull()
+  const decl = /const SSTV_TX_MODES: TxMode\[\] = \[/.exec(SSTV_MODES_TS)
+  expect(decl, 'sstvModes.ts declares SSTV_TX_MODES').not.toBeNull()
   const start = decl!.index
-  const end = SSTV_VIEW_TSX.indexOf('\n]', start)
-  const body = SSTV_VIEW_TSX.slice(start, end)
+  const end = SSTV_MODES_TS.indexOf('\n]', start)
+  const body = SSTV_MODES_TS.slice(start, end)
   return [
     ...body.matchAll(
       /slug:\s*'([^']+)'[^}]*?width:\s*(\d+),\s*height:\s*(\d+),\s*seconds:\s*(\d+)/g,

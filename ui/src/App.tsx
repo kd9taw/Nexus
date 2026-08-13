@@ -2733,6 +2733,8 @@ export default function App() {
                 onSetFrequency={handleSstvTune}
                 onSetTxEnabled={handleSetTxEnabled}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+                txModeDefault={settings?.sstvDefaultTxMode}
+                txPowerPct={settings?.sstvTxPowerPct}
                 panels={sstvPanels}
                 onOpenSettings={openSettingsAt}
               />

@@ -1090,6 +1090,52 @@ pub struct Settings {
     #[serde(default = "default_aprs_station_ttl_min")]
     pub aprs_station_ttl_min: u32,
 
+    // --- APRS over the air (the RF side) ---
+    /// The regional 2 m FM APRS channel (MHz), or None to FOLLOW THE OPERATOR'S GRID.
+    ///
+    /// None is not "unset": the UI resolves it to a real channel on every read from
+    /// `mygrid`, so the operator never meets an empty box, and an operator who moves
+    /// gets their new region's channel without touching anything. Writing a concrete
+    /// 144.39 here instead would freeze a US channel onto disk the moment the file is
+    /// first saved, and no later improvement to the derivation could ever reach that
+    /// operator. Global rather than per-radio: it is a property of the NETWORK the
+    /// operator is standing in, and the app already hands APRS to whichever rig covers
+    /// 2 m FM ([`Engine::aprs_tune`]).
+    #[serde(default)]
+    pub aprs_channel_mhz: Option<f64>,
+    /// Beacon symbol code — the character that picks the icon within the table below.
+    /// ">" is Car, which is what the cockpit has always sent.
+    #[serde(default = "default_aprs_symbol_code")]
+    pub aprs_symbol_code: String,
+    /// Beacon symbol TABLE: "/" (primary) or "\\" (alternate). The cockpit hardcoded
+    /// "/" before this; the alternate table is what digipeater (`\#`) and iGate (`\&`)
+    /// need, which are the two most likely fixed-station identities here.
+    #[serde(default = "default_aprs_symbol_table")]
+    pub aprs_symbol_table: String,
+    /// The free-text beacon comment. ⚠️ THIS STRING GOES ON THE AIR, so the default is
+    /// a deliberate choice and not a placeholder. APRS caps it at 43 characters.
+    #[serde(default = "default_aprs_comment")]
+    pub aprs_comment: String,
+    /// The digipeater path (e.g. `["WIDE1-1","WIDE2-1"]`). Empty is a LEGITIMATE value
+    /// meaning "direct, no digipeaters".
+    ///
+    /// ⚠️ MUST be the named default fn, never a bare `#[serde(default)]`. Bare yields
+    /// an empty vec for a settings file written before this field existed — which reads
+    /// as a deliberate "no digipeaters" — so every existing operator would silently lose
+    /// their hops with nothing on screen to explain it.
+    #[serde(default = "default_aprs_path")]
+    pub aprs_path: Vec<String>,
+    /// The SSID every APRS frame we originate carries (-9 mobile, -10 iGate, -7 HT …),
+    /// or None to FOLLOW THE CALLSIGN — take whatever `mycall` already spells out.
+    ///
+    /// ⚠️ `Option`, and that is the whole point. `Address::parse` already splits
+    /// `KD9TAW-9` and returns SSID 9, so an unconditional write of a `u8` field would
+    /// demote an operator who spells their SSID into `mycall` from -9 to -0 on upgrade —
+    /// an on-air identity change nobody asked for. None applies nothing, which is
+    /// today's behaviour exactly.
+    #[serde(default)]
+    pub aprs_ssid: Option<u8>,
+
     // --- audio I/O ---
     /// Input (capture) device name. Empty = system default input.
     pub audio_in: String,
@@ -1354,6 +1400,44 @@ pub struct Settings {
     /// frontend (issAutoArm.ts, mirroring the sat alarm) since SSTV RX only runs
     /// while the app is open.
     pub iss_sstv_auto_arm: bool,
+
+    // --- SSTV (Settings ▸ Digital ▸ SSTV) ---
+    /// Whether opening the SSTV view starts the receiver.
+    ///
+    /// TRUE is today's behaviour and must stay the default: arming used to be manual,
+    /// session-only and off, so the ordinary way to use SSTV — open the view, tune
+    /// 14.230, wait — decoded nothing. [`Engine::sstv_auto_arm`] is the fix, and this
+    /// is its opt-out for the operator who runs SSTV as a monitor on a shared rig and
+    /// does not want an armed decoder every time they glance at the screen. The gate
+    /// lives in the engine, not the view, so a remount cannot lose it. The ISS pass
+    /// arm is unaffected — that path calls `set_sstv_armed`, an explicit act.
+    #[serde(default = "default_true")]
+    pub sstv_rx_auto_arm: bool,
+    /// The transmit mode the SSTV screen starts on: a `SSTV_TX_MODES` slug, or "auto"
+    /// for the band-aware pick (HF → Scottie 1, the NA calling-frequency convention;
+    /// 2 m → PD-120, which is what ARISS transmits).
+    ///
+    /// A `String`, not a Rust enum mirroring 15 slugs, because the backend never reads
+    /// it: the transmit path still resolves and validates the slug at `sstv_send` /
+    /// `for_mode`, which refuses any raster mismatch. An unknown or retired slug falls
+    /// back to the band-aware pick in the view, so a hand-edited or downgraded settings
+    /// file can never strand the picker. Named `sstv_default_tx_mode` and not
+    /// `sstv_tx_mode` on purpose — the latter is live Engine state meaning "the mode
+    /// currently going out", and the two would differ by one token at every read site.
+    #[serde(default = "default_sstv_default_tx_mode")]
+    pub sstv_default_tx_mode: String,
+    /// SSTV drive, percent — the level the picture is sent at, and the position the
+    /// screen's power slider starts on.
+    ///
+    /// None = LEAVE THE RIG'S POWER ALONE, which is today's behaviour to the byte. A
+    /// default of 100 would take an operator whose rig sits at 20 W for a reason to
+    /// full power on their first Send after upgrading. Percent (u8) rather than the
+    /// 0.0–1.0 fraction the `max_power_*` caps use, because the control it seeds is a
+    /// percent slider — `beacon_tx_percent` is the precedent. It only ever reaches a
+    /// radio through `set_rf_power`, which clamps to [`Settings::rf_power_ceiling`], so
+    /// it can lower power past the operator's cap but never raise it past one.
+    #[serde(default)]
+    pub sstv_tx_power_pct: Option<u8>,
 
     // --- alerts / comforts ---
     /// Alert (sound + visual) when your callsign is decoded (someone calling you).
@@ -1663,6 +1747,11 @@ fn default_rtty_baud() -> f64 {
 
 fn default_rtty_shift_hz() -> u32 {
     170
+}
+
+/// "auto" = the SSTV screen's band-aware pick, which is what it does today.
+fn default_sstv_default_tx_mode() -> String {
+    "auto".to_string()
 }
 
 fn default_monitor_level() -> f32 {
@@ -2109,6 +2198,28 @@ fn default_aprs_is_radius_km() -> u32 {
     150
 }
 
+/// ">" — Car, on the primary table. What the cockpit has always beaconed.
+fn default_aprs_symbol_code() -> String {
+    ">".to_string()
+}
+
+/// "/" — the primary symbol table, which is what the cockpit hardcoded before the
+/// symbol became a setting.
+fn default_aprs_symbol_table() -> String {
+    "/".to_string()
+}
+
+fn default_aprs_comment() -> String {
+    "Nexus APRS".to_string()
+}
+
+/// The near-universal two-hop path. ⚠️ NAMED, not `#[serde(default)]` — see the field
+/// doc: an empty vec is a legitimate "direct, no digipeaters", so a bare default would
+/// silently strip every upgrading operator's hops.
+fn default_aprs_path() -> Vec<String> {
+    vec!["WIDE1-1".to_string(), "WIDE2-1".to_string()]
+}
+
 fn default_true() -> bool {
     true
 }
@@ -2480,6 +2591,12 @@ impl Default for Settings {
             aprs_is_messages: true,
             aprs_is_uplink: false,
             aprs_station_ttl_min: default_aprs_station_ttl_min(),
+            aprs_channel_mhz: None,
+            aprs_symbol_code: default_aprs_symbol_code(),
+            aprs_symbol_table: default_aprs_symbol_table(),
+            aprs_comment: default_aprs_comment(),
+            aprs_path: default_aprs_path(),
+            aprs_ssid: None,
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
@@ -2533,6 +2650,9 @@ impl Default for Settings {
             qsy_set: vec!["20m".to_string(), "40m".to_string(), "30m".to_string()],
             qsy_cadence: tempo_core::qsy::DEFAULT_CADENCE,
             iss_sstv_auto_arm: false,
+            sstv_rx_auto_arm: true,
+            sstv_default_tx_mode: default_sstv_default_tx_mode(),
+            sstv_tx_power_pct: None,
             alert_my_call: true,
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
@@ -4386,9 +4506,52 @@ mod tests {
             "\"aprsIsMessages\":true",
             "\"aprsIsUplink\":false",
             "\"aprsStationTtlMin\":60",
+            // The RF side. `aprsSsid`, NOT `aprsSSID` — SSID is the form every ham and every
+            // developer writes, and the failure is invisible: the key never matches, serde
+            // falls back to the default and the select appears dead.
+            "\"aprsChannelMhz\":null",
+            "\"aprsSymbolCode\":\">\"",
+            "\"aprsSymbolTable\":\"/\"",
+            "\"aprsComment\":\"Nexus APRS\"",
+            "\"aprsPath\":[\"WIDE1-1\",\"WIDE2-1\"]",
+            "\"aprsSsid\":null",
         ] {
             assert!(json.contains(key), "missing wire key {key} in {json}");
         }
+    }
+
+    /// ⭐ THE UPGRADE PATH FOR THE APRS RF SETTINGS, and the digipeater path is why it
+    /// exists. An empty `aprs_path` is a LEGITIMATE value — "direct, no digipeaters" —
+    /// so a bare `#[serde(default)]` on the `Vec` would read a file written before the
+    /// field existed as a deliberate choice and silently strip every existing operator's
+    /// hops, with nothing on screen to explain it.
+    #[test]
+    fn an_old_settings_file_keeps_its_digipeater_path_and_its_callsign_ssid() {
+        let old: Settings =
+            serde_json::from_str(r#"{"mycall":"KD9TAW-9","mygrid":"EN51"}"#).unwrap();
+        assert_eq!(
+            old.aprs_path,
+            vec!["WIDE1-1".to_string(), "WIDE2-1".to_string()],
+            "a pre-field file must keep the two-hop path, not read as 'direct'"
+        );
+        assert_eq!(old.aprs_channel_mhz, None, "None = follow my grid");
+        assert_eq!(old.aprs_ssid, None, "None = follow my callsign");
+        assert_eq!(old.aprs_symbol_table, "/");
+        assert_eq!(old.aprs_symbol_code, ">");
+        assert_eq!(old.aprs_comment, "Nexus APRS");
+
+        // The other direction of each gate — an explicit choice must survive, including
+        // the empty path, or "direct" would be unrepresentable.
+        // `r##`, because the digipeater symbol code is itself a `#`.
+        let set: Settings = serde_json::from_str(
+            r##"{"aprsPath":[],"aprsChannelMhz":144.8,"aprsSsid":9,"aprsSymbolTable":"\\","aprsSymbolCode":"#"}"##,
+        )
+        .unwrap();
+        assert!(set.aprs_path.is_empty(), "an explicit empty path means direct");
+        assert_eq!(set.aprs_channel_mhz, Some(144.8));
+        assert_eq!(set.aprs_ssid, Some(9));
+        assert_eq!(set.aprs_symbol_table, "\\");
+        assert_eq!(set.aprs_symbol_code, "#");
     }
 
     /// #53: the CAT broker is the advertised share endpoint, so it must arrive ON — including
@@ -4457,6 +4620,47 @@ mod tests {
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
         assert_eq!(s.dial_hz(), 14_074_000); // default = FT8 20 m (the default mode)
+    }
+
+    /// The SSTV section's three fields, on the exact wire keys the UI hand-writes.
+    ///
+    /// All three carry an interior two-letter acronym, which is the `decodeFlowHz` /
+    /// `decodeFLowHz` shape: a TS key written `sstvRXAutoArm` or `sstvTXPowerPct`
+    /// compiles clean on both sides, never matches, and the control silently does
+    /// nothing while the backend keeps the default. Literal strings, therefore, and
+    /// `ui/src/types.ts` + `defaultSettings.json` are copy-pasted from here.
+    #[test]
+    fn sstv_settings_defaults_and_wire_keys() {
+        let s = Settings::default();
+        assert!(s.sstv_rx_auto_arm, "opening the SSTV view arms the receiver — today's behaviour");
+        assert_eq!(s.sstv_default_tx_mode, "auto");
+        assert_eq!(s.sstv_tx_power_pct, None, "None = never touch the operator's power");
+
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"sstvRxAutoArm\":true",
+            "\"sstvDefaultTxMode\":\"auto\"",
+            "\"sstvTxPowerPct\":null",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+
+        // An upgrader's file predates all three keys: nobody's behaviour changes.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(old.sstv_rx_auto_arm);
+        assert_eq!(old.sstv_default_tx_mode, "auto");
+        assert_eq!(old.sstv_tx_power_pct, None);
+
+        // …and an explicit opt-out survives the round trip (the other direction of the
+        // same gate — a `default_true` that ignored the file would pass the line above).
+        let off: Settings = serde_json::from_str(
+            r#"{"sstvRxAutoArm":false,"sstvDefaultTxMode":"martin1","sstvTxPowerPct":40}"#,
+        )
+        .unwrap();
+        assert!(!off.sstv_rx_auto_arm);
+        assert_eq!(off.sstv_default_tx_mode, "martin1");
+        assert_eq!(off.sstv_tx_power_pct, Some(40));
     }
 
     #[test]

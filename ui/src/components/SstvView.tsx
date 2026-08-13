@@ -38,49 +38,10 @@ import {
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
-
-/** One transmittable SSTV mode: the backend `parse_sstv_mode` slug, its display
- * name, its exact pixel dimensions (the composer resizes to these; the backend
- * refuses any mismatch), and the EXACT on-air key-down time.
- *
- * ⚠️ THIS TABLE IS A MIRROR, AND `crates/tempo-sstv/src/modespec.rs` IS THE ARBITER.
- * `sstv-modes.test.ts` parses both sides and compares them — dimensions against
- * `ModeSpec`, seconds against the encoder's own `tx_duration_secs` formula. Nothing
- * here may be edited without that guard agreeing: the transmit path reads the Rust
- * table and REFUSES anything that is not exactly `line_pixels × image_lines`, so a
- * drift here is a resizer producing a picture the backend will not send. */
-interface TxMode {
-  slug: string
-  name: string
-  group: 'Scottie' | 'Martin' | 'Robot' | 'PD'
-  width: number
-  height: number
-  /** Exact key-down seconds: header + scanlines, rounded. NOT approximate — the
-   *  composer tells the operator how long the rig is keyed, and every entry here
-   *  used to be about a second short of what the encoder actually emits. */
-  seconds: number
-}
-
-/** The 15 modes, grouped by family. Five distinct rasters and five distinct aspect
- * ratios, which is why the crop box re-derives its shape on every mode change and
- * not just its pixel size. */
-const SSTV_TX_MODES: TxMode[] = [
-  { slug: 'scottie1', name: 'Scottie 1', group: 'Scottie', width: 320, height: 256, seconds: 111 },
-  { slug: 'scottie2', name: 'Scottie 2', group: 'Scottie', width: 320, height: 256, seconds: 72 },
-  { slug: 'scottiedx', name: 'Scottie DX', group: 'Scottie', width: 320, height: 256, seconds: 270 },
-  { slug: 'martin1', name: 'Martin 1', group: 'Martin', width: 320, height: 256, seconds: 115 },
-  { slug: 'martin2', name: 'Martin 2', group: 'Martin', width: 320, height: 256, seconds: 59 },
-  { slug: 'robot24', name: 'Robot 24', group: 'Robot', width: 320, height: 240, seconds: 37 },
-  { slug: 'robot36', name: 'Robot 36', group: 'Robot', width: 320, height: 240, seconds: 37 },
-  { slug: 'robot72', name: 'Robot 72', group: 'Robot', width: 320, height: 240, seconds: 73 },
-  { slug: 'pd50', name: 'PD-50', group: 'PD', width: 320, height: 256, seconds: 51 },
-  { slug: 'pd90', name: 'PD-90', group: 'PD', width: 320, height: 256, seconds: 91 },
-  { slug: 'pd120', name: 'PD-120', group: 'PD', width: 640, height: 496, seconds: 127 },
-  { slug: 'pd160', name: 'PD-160', group: 'PD', width: 512, height: 400, seconds: 162 },
-  { slug: 'pd180', name: 'PD-180', group: 'PD', width: 640, height: 496, seconds: 188 },
-  { slug: 'pd240', name: 'PD-240', group: 'PD', width: 640, height: 496, seconds: 249 },
-  { slug: 'pd290', name: 'PD-290', group: 'PD', width: 800, height: 616, seconds: 290 },
-]
+// The 15 transmittable modes, their rasters and their exact key-down seconds. A pure
+// module because Settings ▸ Digital ▸ SSTV picks the DEFAULT mode from the same rows —
+// see its header for why that is not a second hand-written table.
+import { MODE_BY_SLUG, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
 
 /** What the file picker offers. The magic-number sniff is what actually decides — an
  *  iPhone HEIC renamed `.jpg` has to be caught by its bytes — but the picker should
@@ -139,11 +100,6 @@ function magicHex(b: Uint8Array): string {
     .map((v) => v.toString(16).padStart(2, '0'))
     .join(' ')
 }
-const TX_MODE_GROUPS: TxMode['group'][] = ['Scottie', 'Martin', 'Robot', 'PD']
-const MODE_BY_SLUG: Record<string, TxMode> = Object.fromEntries(
-  SSTV_TX_MODES.map((m) => [m.slug, m]),
-)
-
 /** Pack the RGB channels of RGBA canvas data (dropping alpha) into base64 — the
  * raw row-major RGB the `sstv_send` backend validates against the mode's size. */
 function rgbToBase64(data: Uint8ClampedArray, pixels: number): string {
@@ -177,6 +133,12 @@ interface Props {
   theme?: string
   /** Wheel sensitivity (Settings) — how much scroll one tuning step costs on the readout. */
   wheelSensitivity?: number
+  /** Settings ▸ Digital ▸ SSTV — default transmit mode: a `sstvModes.ts` slug, or
+   *  'auto'/undefined to keep the band-aware pick. */
+  txModeDefault?: string
+  /** Settings ▸ Digital ▸ SSTV — transmit power, percent. null/undefined = leave the
+   *  rig's power alone (the shipped behaviour). */
+  txPowerPct?: number | null
   /** Apply a snapshot returned by a command without waiting for the poll. */
   onSnap?: (snap: AppSnapshot) => void
   /** True when SSTV is the visible view. The view stays MOUNTED in its
@@ -469,7 +431,7 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, panels, onOpenSettings }: Props) {
+export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txPowerPct, panels, onOpenSettings }: Props) {
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
@@ -559,6 +521,18 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // as the Phone cockpit's slider. Deliberately not read back from CAT: no rig reports
   // drive reliably, and a wrong read-back here would move the operator's power for them.
   const [txPower, setTxPower] = useState(100)
+  // Settings ▸ Digital ▸ SSTV seeds that slider. Tracks whether the operator has since
+  // dragged it, because a drag already reached the rig and must not be re-sent at Send.
+  //
+  // ⚠️ THIS EFFECT MUST NOT CALL setRfPower. Opening a screen may not move the operator's
+  // power — notify, never act unattended. It seeds the control only; the value reaches the
+  // rig at Send, which is already a rig-commanding act.
+  const powerTouched = useRef(false)
+  useEffect(() => {
+    if (txPowerPct == null) return
+    powerTouched.current = false // a Settings change supersedes this session's drag
+    setTxPower(Math.min(100, Math.max(0, Math.round(txPowerPct))))
+  }, [txPowerPct])
   useEffect(() => {
     void getLicensedBandPlan('sstv').then(setPlan).catch(() => {})
   }, [])
@@ -734,6 +708,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     if (userPickedMode.current || dialMhz == null) return
     setModeSlug(dialMhz >= 30 ? 'pd120' : 'scottie1')
   }, [dialMhz])
+  // An explicit Settings default outranks the band-aware pick, and arrives LATE — App fetches
+  // settings after this keep-alive view has mounted. Keyed on the value, so a later Save wins
+  // while a pick made in this cockpit stands (the prop did not change).
+  //
+  // ⚠️ THE LATCH IS SET FROM THE VALUE, AND THE EFFECT RUNS UNCONDITIONALLY. `userPickedMode`
+  // is what holds the band-aware effect above off; early-returning on 'auto' would leave it
+  // latched from a previous default, so setting the picker back to Automatic would silently do
+  // nothing for the rest of the session. An unknown slug (hand-edited file, downgrade) counts
+  // as no default and releases it too.
+  useEffect(() => {
+    const pinned = Boolean(txModeDefault && txModeDefault !== 'auto' && MODE_BY_SLUG[txModeDefault])
+    userPickedMode.current = pinned
+    if (pinned) setModeSlug(txModeDefault as string)
+  }, [txModeDefault])
   const modeSlugRef = useRef(modeSlug)
   modeSlugRef.current = modeSlug
   const txMode = MODE_BY_SLUG[modeSlug]
@@ -1112,6 +1100,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       // backend — nothing keys until the radio loop takes it behind every gate.
       const s1 = await setOperatingMode('phone', false)
       onSnap?.(s1)
+      // The operator's SSTV drive, when they have set one. AFTER the mode switch, because
+      // set_operating_mode re-applies that mode's power ceiling; before the send, because this
+      // is the level the picture goes out at. `set_rf_power` clamps to the Phone ceiling, so
+      // this can only lower power past the cap, never raise it past one. Skipped when the
+      // slider was moved this session — that value already reached the rig on the move — and
+      // skipped entirely when the setting is blank, which is the shipped behaviour unchanged.
+      // A power command that fails must not block a send.
+      if (!powerTouched.current && txPowerPct != null) {
+        await setRfPower(Math.min(100, Math.max(0, Math.round(txPowerPct))) / 100).catch(() => {})
+      }
       return sstvSend(packed.b64, packed.width, packed.height, packed.slug, idInImageRef.current)
     }, 'SSTV send refused').then((s) => {
       if (s) {
@@ -1159,6 +1157,9 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             value: txPower,
             unit: '%',
             onChange: (pct: number) => {
+              // The drag IS the operator's latest word on drive, and it has already reached
+              // the rig — Send must not overwrite it with the Settings default.
+              powerTouched.current = true
               setTxPower(pct)
               void setRfPower(pct / 100)
             },

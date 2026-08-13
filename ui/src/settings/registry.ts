@@ -256,11 +256,19 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'mark', 'space'],
   },
   {
+    id: 'sstv',
+    label: 'SSTV',
+    tab: 'digital',
+    keywords: ['slow scan', 'slow-scan', 'television', 'picture', 'image', 'photo', 'scottie',
+      'martin', 'robot', 'pd120', 'iss', 'ariss', '145.800', '14.230', 'gallery'],
+  },
+  {
     id: 'aprs',
     label: 'APRS',
     tab: 'digital',
     keywords: ['aprs', 'aprs-is', 'igate', 'beacon', 'symbol', 'digipeater', 'path', 'wide1-1',
-      'ssid', 'position', 'weather', 'packet', 'tnc'],
+      'ssid', 'position', 'weather', 'packet', 'tnc', '144.390', '144.800', 'channel',
+      'frequency', 'comment', 'symbol table', 'over the air'],
   },
 
   // ---- Frequencies -------------------------------------------------------------

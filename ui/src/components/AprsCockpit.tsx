@@ -24,34 +24,14 @@ import {
 import type { Settings } from '../types'
 import { ageFade, CATEGORY_VAR, GLYPH_PATHS, resolveSymbol, symbolCategory } from '../aprsSymbols'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
+// The channel list, the grid→channel derivation and the beaconable symbols — shared with the
+// Settings panel so the two surfaces cannot offer different channels or derive different ones.
+import { APRS_FREQS, BEACON_SYMBOLS, resolveAprsChannel } from '../aprsBeacon'
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 function compass(deg: number): string {
   return COMPASS[Math.round(deg / 45) % 8]
 }
-
-/** The regional 2 m FM APRS frequencies (MHz) — all AFSK-1200, what this decoder handles. */
-const APRS_FREQS: [number, string][] = [
-  [144.39, 'N. America'],
-  [144.8, 'Europe / Africa'],
-  [145.175, 'Australia'],
-  [144.575, 'New Zealand'],
-  [144.66, 'Japan'],
-  [144.93, 'Argentina'],
-  [145.57, 'Brazil'],
-]
-
-/** Common APRS symbols (primary table `/`): [code, label]. */
-const SYMBOLS: [string, string][] = [
-  ['>', 'Car'],
-  ['-', 'House'],
-  ['[', 'Person'],
-  ['b', 'Bicycle'],
-  ['j', 'Jeep'],
-  ['<', 'Motorcycle'],
-  ['k', 'Truck'],
-  ['.', 'Dot'],
-]
 
 function ageLabel(atUnix: number, nowSec: number): string {
   const s = Math.max(0, nowSec - atUnix)
@@ -567,13 +547,17 @@ export function AprsCockpit({
   // decode chip, which can therefore never disagree.
   // One selection shared by the list and the map — clicking either highlights both.
   const [selected, setSelected] = useState<string | null>(null)
-  const [freq, setFreq] = useState(144.39)
+  // ⚠️ NULL UNTIL SETTINGS ARRIVE, and this is not stylistic. The auto-tune effect below latches
+  // on its first render with `active`, so a `freq` that starts at a number commands the rig to
+  // THAT channel a tick before the operator's real one is known — and the latch then blocks the
+  // correction. Null means "we do not know yet"; the effect waits.
+  const [freq, setFreq] = useState<number | null>(null)
   const [heard, setHeard] = useState<AprsHeard[]>([])
   // The STATION roster — what the list and map draw. The packet log above still feeds the packet
   // pane and the message list, which are about events rather than stations.
   const [roster, setRoster] = useState<AprsStationsView>(EMPTY_ROSTER)
   // The operator's settings, held whole so a board write can ride along without clobbering the
-  // ~170 fields it does not touch. THE SAME state the Settings panel edits — see `writeAprsIs`.
+  // ~170 fields it does not touch. THE SAME state the Settings panel edits — see `writeSettings`.
   const [settings, setSettingsState] = useState<Settings | null>(null)
   const [inetOpen, setInetOpen] = useState(false)
   const [savingInet, setSavingInet] = useState(false)
@@ -586,14 +570,17 @@ export function AprsCockpit({
   const [showInet, setShowInet] = useState(true)
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
-  const [comment, setComment] = useState('Nexus APRS')
-  const [symbol, setSymbol] = useState('>')
+  // Edit BUFFERS for the two blur-committed text fields, seeded from settings when they arrive.
+  // The stored value is the truth (see `writeSettings`); these exist only so typing does not
+  // round-trip the whole struct to disk on every keystroke. The symbol needs no buffer — a
+  // `<select>` commits in one act.
+  const [comment, setComment] = useState('')
   // Stable empty inputs for the embedded map (it plots APRS only — no decode
   // stations, spots or needs), so MapView's per-tick projections don't rebuild.
   const noStations = useMemo(() => [] as Station[], [])
   const noNeeds = useMemo(() => new Map<string, NeedTag>(), [])
   const noSelectCall = useMemo(() => () => {}, [])
-  const [path, setPath] = useState('WIDE1-1,WIDE2-1')
+  const [path, setPath] = useState('')
   const [msgTo, setMsgTo] = useState('')
   const [msgText, setMsgText] = useState('')
   const [status, setStatus] = useState<string | null>(null)
@@ -605,7 +592,7 @@ export function AprsCockpit({
 
   // Can the radio reach the selected APRS channel? `null` = unknown, which must read as "yes,
   // try it" — the backend's refusal handling is the backstop for a radio whose caps we can't read.
-  const canReachAprs = radioCoversMhz(radio?.rxRangesMhz, freq) !== false
+  const canReachAprs = freq == null ? true : radioCoversMhz(radio?.rxRangesMhz, freq) !== false
 
   // Default to the APRS radio on ENTERING the view: hand off to the 2 m-capable rig, land on the
   // selected APRS frequency in FM. This is the operator's "hitting APRS should default to the 9700"
@@ -620,6 +607,10 @@ export function AprsCockpit({
       autoTuned.current = false
       return
     }
+    // Not yet — the operator's channel is still being read. Latching here would tune the rig to
+    // a guess and then refuse to correct it, which is the exact bug the persisted channel exists
+    // to end.
+    if (freq == null) return
     if (!autoTuned.current && onTune && canReachAprs) {
       autoTuned.current = true
       onTune(freq)
@@ -654,6 +645,11 @@ export function AprsCockpit({
     void getSettings()
       .then((s) => {
         setSettingsState(s)
+        // The operator's pinned channel, or the one their grid implies — this is what releases
+        // the auto-tune effect above.
+        setFreq(resolveAprsChannel(s.aprsChannelMhz, myGrid || s.mygrid || ''))
+        setComment(s.aprsComment ?? '')
+        setPath((s.aprsPath ?? []).join(', '))
         const ll = gridToLatLon(s.mygrid || '')
         if (ll) {
           setLat(ll.lat.toFixed(4))
@@ -662,7 +658,25 @@ export function AprsCockpit({
         }
       })
       .catch(() => {})
-  }, [])
+  }, [myGrid])
+
+  // Follow the grid when it CHANGES, not only at startup. The prefill above is once-per-session,
+  // so an operator who fixed a wrong grid on the Station tab kept the old derived channel until
+  // they restarted — which is the opposite of what "Automatic — from your grid" promises. Only
+  // while the channel is unpinned: an explicit pick outranks the grid, always.
+  // The LIVE grid first: `myGrid` comes from the app snapshot and updates within a poll of the
+  // operator saving one, while `settings` here is the copy fetched when this view mounted and
+  // goes stale the moment they fix it on the Station tab — which is exactly the case this
+  // re-derive exists to serve.
+  const derivedGrid = myGrid || settings?.mygrid || ''
+  const pinnedChannel = settings?.aprsChannelMhz
+  useEffect(() => {
+    // Gated on `settings` having ARRIVED, not on the prefill having been kicked off: the ref is
+    // set synchronously while `getSettings` is still in flight, so keying off it would re-derive
+    // from the grid alone and let the auto-tune latch fire on a guess.
+    if (!settings || pinnedChannel != null) return
+    setFreq(resolveAprsChannel(null, derivedGrid))
+  }, [settings, derivedGrid, pinnedChannel])
 
   // Poll the heard list + decoder health (and tick the age clock) while the cockpit is visible.
   useEffect(() => {
@@ -694,7 +708,8 @@ export function AprsCockpit({
   // The chip judges against the rig's ACTUAL dial/mode and the APRS channel the operator has
   // selected — so it can say "you are on the FT8 frequency" instead of guessing from audio.
   /**
-   * Write an APRS-IS setting from the board.
+   * Write an APRS setting from the board — the internet feed's switches AND, since the RF side
+   * became persistent, the channel, symbol, comment and path.
    *
    * ⭐ ONE SOURCE OF TRUTH. The board keeps no copy of anything — it writes the same `Settings`
    * fields the Settings panel reads and writes, through the same `set_settings` command, so the two
@@ -703,8 +718,12 @@ export function AprsCockpit({
    * ~170 fields the board does not know about.
    *
    * The backend reconnects the feed only when the server, filter or callsign actually changed.
+   *
+   * ⚠️ A NO-OP UNTIL `settings` ARRIVES. Every caller must therefore keep whatever local effect it
+   * wanted (a tune, a field update) OUTSIDE this call — a write that silently did not happen must
+   * not take the operator's action with it.
    */
-  const writeAprsIs = (patch: Partial<Settings>) => {
+  const writeSettings = (patch: Partial<Settings>) => {
     if (!settings) return
     const next = { ...settings, ...patch }
     setSettingsState(next) // optimistic, so the control does not lag a round-trip
@@ -752,7 +771,9 @@ export function AprsCockpit({
   )
 
   const decode = useMemo(
-    () => aprsDecodeStatus(health, now, radio ?? null, freq),
+    // `wantDialMhz` is optional — undefined while the channel is still being read means "no
+    // opinion about the dial yet", which is the honest thing to say before we know it.
+    () => aprsDecodeStatus(health, now, radio ?? null, freq ?? undefined),
     [health, now, radio, freq],
   )
 
@@ -805,12 +826,17 @@ export function AprsCockpit({
       setStatus('Enter a valid latitude and longitude first.')
       return
     }
-    const digis = path
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
     setStatus('Sending beacon…')
-    void aprsSendBeacon(la, lo, '/', symbol, comment, digis)
+    // Read the persisted identity, not a local copy — the same fields the Settings panel edits.
+    // An empty path is a real choice (direct, no digipeaters), so it is never defaulted here.
+    void aprsSendBeacon(
+      la,
+      lo,
+      settings?.aprsSymbolTable ?? '/',
+      settings?.aprsSymbolCode ?? '>',
+      settings?.aprsComment ?? '',
+      settings?.aprsPath ?? [],
+    )
       .then(() => setStatus('Beacon queued — keying now.'))
       .catch((e) => setStatus(String(e)))
   }
@@ -891,7 +917,8 @@ export function AprsCockpit({
           <>
             <select
               className="np-chip aprs-freq"
-              value={freq}
+              value={freq ?? ''}
+              disabled={freq == null}
               onChange={(e) => {
                 // Selecting a frequency retunes the rig immediately (band-picker behavior) — no
                 // separate Tune click needed. Switches to the 2 m radio + FM simplex via onTune.
@@ -901,6 +928,10 @@ export function AprsCockpit({
                 const f = Number(e.target.value)
                 setFreq(f)
                 if (radioCoversMhz(radio?.rxRangesMhz, f) !== false) tuneToAprs(f)
+                // …and PIN it, so the pick survives a restart instead of being re-derived. A
+                // no-op while `settings` is still loading — hence the tune above staying outside
+                // it, so the pick still moves the radio even on the round trip that cannot save.
+                writeSettings({ aprsChannelMhz: f })
               }}
               title="APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)"
             >
@@ -916,12 +947,15 @@ export function AprsCockpit({
             <button
               type="button"
               className="np-chip"
-              disabled={!canReachAprs}
-              onClick={() => tuneToAprs(freq)}
+              // Also dead while the channel is still being read — there is nothing to re-tune TO.
+              disabled={!canReachAprs || freq == null}
+              onClick={() => freq != null && tuneToAprs(freq)}
               title={
-                canReachAprs
-                  ? 'Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)'
-                  : `This radio doesn't cover ${freq.toFixed(3)} MHz — RF APRS needs a VHF radio.`
+                freq == null
+                  ? 'Reading your APRS channel…'
+                  : canReachAprs
+                    ? 'Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)'
+                    : `This radio doesn't cover ${freq.toFixed(3)} MHz — RF APRS needs a VHF radio.`
               }
             >
               Re-tune
@@ -991,7 +1025,9 @@ export function AprsCockpit({
             {radioNote.label}
           </span>
         )}
-        {decode.state === 'wrongfreq' && onTune && (
+        {/* `wrongfreq` cannot arise while `freq` is null — the status takes no view of the dial
+            without a channel to compare it to — but say so structurally rather than by inference. */}
+        {decode.state === 'wrongfreq' && onTune && freq != null && (
           <button
             type="button"
             className="np-chip aprs-health-fix"
@@ -1033,7 +1069,7 @@ export function AprsCockpit({
                   aria-checked={!!settings?.aprsIsEnabled}
                   className={`toggle${settings?.aprsIsEnabled ? ' on' : ''}`}
                   disabled={!settings || savingInet}
-                  onClick={() => writeAprsIs({ aprsIsEnabled: !settings?.aprsIsEnabled })}
+                  onClick={() => writeSettings({ aprsIsEnabled: !settings?.aprsIsEnabled })}
                 >
                   <span className="toggle-knob" />
                 </button>
@@ -1048,7 +1084,7 @@ export function AprsCockpit({
                   className="settings-input"
                   value={settings?.aprsIsRadiusKm ?? 150}
                   disabled={!settings || savingInet}
-                  onChange={(e) => writeAprsIs({ aprsIsRadiusKm: Number(e.target.value) })}
+                  onChange={(e) => writeSettings({ aprsIsRadiusKm: Number(e.target.value) })}
                 />
               </label>
 
@@ -1064,7 +1100,7 @@ export function AprsCockpit({
                   // On blur, not per keystroke: each write reconnects the feed, so committing
                   // mid-callsign would drop the session on every character typed.
                   onBlur={(e) =>
-                    writeAprsIs({
+                    writeSettings({
                       aprsIsWatchCalls: e.target.value
                         .split(',')
                         .map((c) => c.trim().toUpperCase())
@@ -1130,11 +1166,23 @@ export function AprsCockpit({
           Lon
           <input value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" size={9} />
         </label>
+        {/* Symbol / Comment / Path are the operator's PERSISTED beacon identity (Settings ▸
+            Digital ▸ APRS ▸ Over the air) rather than session state, so they survive a restart.
+            The symbol writes on change; the two text fields write on BLUR — every write is a
+            whole-settings round trip plus a disk save, so per-keystroke would thrash. */}
         <label>
           Symbol
-          <select value={symbol} onChange={(e) => setSymbol(e.target.value)}>
-            {SYMBOLS.map(([code, name]) => (
-              <option key={code} value={code}>
+          <select
+            value={`${settings?.aprsSymbolTable ?? '/'}${settings?.aprsSymbolCode ?? '>'}`}
+            onChange={(e) =>
+              writeSettings({
+                aprsSymbolTable: e.target.value[0],
+                aprsSymbolCode: e.target.value[1],
+              })
+            }
+          >
+            {BEACON_SYMBOLS.map(([table, code, name]) => (
+              <option key={`${table}${code}`} value={`${table}${code}`}>
                 {name}
               </option>
             ))}
@@ -1142,11 +1190,28 @@ export function AprsCockpit({
         </label>
         <label className="aprs-beacon-comment">
           Comment
-          <input value={comment} onChange={(e) => setComment(e.target.value)} maxLength={43} />
+          <input
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            onBlur={() => writeSettings({ aprsComment: comment })}
+            maxLength={43}
+          />
         </label>
         <label>
           Path
-          <input value={path} onChange={(e) => setPath(e.target.value)} size={14} />
+          <input
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            onBlur={() =>
+              writeSettings({
+                aprsPath: path
+                  .split(',')
+                  .map((s) => s.trim().toUpperCase())
+                  .filter(Boolean),
+              })
+            }
+            size={14}
+          />
         </label>
         <button type="button" className="np-chip aprs-beacon-send" onClick={sendBeacon}>
           Send beacon
