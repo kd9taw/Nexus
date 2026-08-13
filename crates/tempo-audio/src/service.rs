@@ -3065,7 +3065,37 @@ impl RadioLoop {
                 }
                 match reopen_audio(&want) {
                     Ok(b) => {
-                        *backend = b;
+                        // ⚠️ THE SWAP DROPS THE OLD BACKEND, AND THAT DROP IS A NATIVE
+                        // DEVICE-GRAPH TEARDOWN — up to four live WASAPI streams released at
+                        // once. `CpalBackend` has no `Drop` impl, so it happens right here, and
+                        // it must be serialised against every other cpal entry point:
+                        // `device.rs`'s own header says two concurrent `default_host()` callers
+                        // "fault natively and hard-kill the process (the default unwind strategy
+                        // can't catch a native SIGSEGV/abort)" — an access violation, not a Rust
+                        // panic, so nothing upstream can contain it.
+                        //
+                        // The racing party is ordinary: `available_devices()` runs on the
+                        // `audio_devices` and `detect_rigs` commands — opening Settings, or
+                        // pressing Detect. This side fires on a device change and on a
+                        // dual-radio switch.
+                        //
+                        // Two other teardowns already take this lock (`device.rs`'s reopen path
+                        // and `monitor.rs`); this one did not. When one use of a lock is guarded
+                        // and its sibling is not, the unguarded one is the bug.
+                        //
+                        // Taking it HERE and not around `reopen_audio` is deliberate: the open
+                        // path acquires it internally and `std::sync::Mutex` is not reentrant,
+                        // so wrapping the call would deadlock the radio loop.
+                        //
+                        // NOTE this is NOT the 1.2.0 startup-crash path — a card that cannot
+                        // open returns `Err`, so the retry timer spins without ever reaching
+                        // this swap. It is a real race on the device-change path regardless.
+                        {
+                            let _host_guard = crate::device::AUDIO_HOST_LOCK
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            *backend = b;
+                        }
                         audio_rebuilt = true;
                         // New stream, new ring: republish so the producer rebuilds its resampler
                         // and clears its window rather than smearing two sample rates together.
