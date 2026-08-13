@@ -392,6 +392,12 @@ jobs:
           # radio build without it (the silent-lobotomy gate). Allow it HERE
           # only — release.yml stages + digest-verifies the real model.
           NEXUS_ALLOW_MISSING_AICW: "1"
+          # Same reasoning for the bundled Hamlib: the .exe/.dll are gitignored and
+          # this job deliberately doesn't run scripts/fetch-hamlib.sh, so build.rs's
+          # CAT-dead gate would fail a release+radio Windows build. Allow it HERE
+          # only — the gate exists to stop a SHIPPING build (build-windows-cross.sh
+          # and any local `cargo tauri build`) going out with no CAT.
+          NEXUS_ALLOW_MISSING_HAMLIB: "1"
         run: >
           cargo build --release
           --manifest-path src-tauri/Cargo.toml

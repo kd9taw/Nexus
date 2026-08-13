@@ -36,5 +36,75 @@ fn main() {
         println!("cargo:warning=AI CW model missing — this build has no AI CW decoder");
     }
 
+    // Bundled-Hamlib presence gate — the same silent-lobotomy class as the model
+    // above, and the wrapper script is not enough on its own: build-windows-cross.sh
+    // stages these via scripts/fetch-hamlib.sh, but running `cargo tauri build`
+    // directly (the normal way to iterate) skips that entirely, and a git WORKTREE
+    // starts out in exactly that state. resources/hamlib/ holds the Windows CAT
+    // runtime — rigctld.exe plus libhamlib-4.dll and the MinGW DLLs it loads — and
+    // *.exe/*.dll are gitignored, so a fresh clone has only the tracked licence
+    // .txt files. The bundle glob `resources/hamlib/*` still matches THOSE, so
+    // nothing errors: the installer ships a hamlib directory with no Hamlib in it.
+    // Every Hamlib-backed rig (Yaesu, Kenwood, Elecraft…) is then CAT-dead while a
+    // native CI-V Icom works perfectly — indistinguishable from a code regression,
+    // and it burns operator time before anyone suspects the build.
+    //
+    // WINDOWS TARGETS ONLY: Linux uses the system Hamlib, and build-linux.sh
+    // deliberately DELETES these files before it builds, so gating any wider
+    // would break every .deb / AppImage / Pi build.
+    //
+    // Keep this list in step with WANT in scripts/fetch-hamlib.sh. The smallest
+    // real file in Hamlib 4.7.1 is rotctl.exe at ~114 KB, so 32 KB separates a
+    // staged binary from an empty or truncated one.
+    const HAMLIB: [&str; 8] = [
+        "rigctld.exe",
+        "rigctl.exe",
+        "rotctld.exe",
+        "rotctl.exe",
+        "libhamlib-4.dll",
+        "libwinpthread-1.dll",
+        "libusb-1.0.dll",
+        "libgcc_s_seh-1.dll",
+    ];
+    const HAMLIB_MIN_BYTES: u64 = 32 * 1024;
+    println!("cargo:rerun-if-changed=resources/hamlib");
+    println!("cargo:rerun-if-env-changed=NEXUS_ALLOW_MISSING_HAMLIB");
+    let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    if radio && windows {
+        let gaps: Vec<String> = HAMLIB
+            .iter()
+            .filter_map(|f| {
+                let path = std::path::Path::new("resources/hamlib").join(f);
+                match std::fs::metadata(&path) {
+                    Err(_) => Some(format!("  {f} — MISSING")),
+                    Ok(m) if m.len() < HAMLIB_MIN_BYTES => {
+                        Some(format!("  {f} — only {} bytes (truncated?)", m.len()))
+                    }
+                    Ok(_) => None,
+                }
+            })
+            .collect();
+        if !gaps.is_empty() {
+            let release = std::env::var("PROFILE").as_deref() == Ok("release");
+            let allowed = std::env::var("NEXUS_ALLOW_MISSING_HAMLIB").is_ok();
+            if release && !allowed {
+                panic!(
+                    "\nBundled Hamlib is INCOMPLETE — this release build would ship with NO CAT \
+                     control for every non-Icom rig (Yaesu, Kenwood, Elecraft…), while a native \
+                     CI-V Icom kept working, which looks exactly like a code regression:\n\n{}\n\n\
+                     Stage it with:  ./scripts/fetch-hamlib.sh\n\
+                     (The .exe/.dll are gitignored, so worktrees and fresh checkouts never have \
+                     them. Set NEXUS_ALLOW_MISSING_HAMLIB=1 to build a knowingly CAT-less \
+                     binary — CI's windows-cross link-check does, as it proves compile, not \
+                     shipping.)\n",
+                    gaps.join("\n")
+                );
+            }
+            println!(
+                "cargo:warning=bundled Hamlib incomplete — this build has no CAT for non-Icom rigs"
+            );
+        }
+    }
+
     tauri_build::build();
 }
