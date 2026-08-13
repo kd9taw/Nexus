@@ -14,7 +14,7 @@ The tabs, in the order they appear:
 [Station](#station) · [Radio](#radio) · [Phone](#phone) · [CW](#cw) ·
 [Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
 [Logging & Connectors](#logging--connectors) · [Contesting](#contesting) ·
-[Appearance](#appearance)
+[Appearance](#appearance) · [Config](#config)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
 took) and a **Check for updates** button.
@@ -1134,6 +1134,29 @@ of the speakers.
   know your TX state by ear."
 - **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
   band's rhythm, eyes-free."
+
+---
+
+## Config
+
+Your whole setup in one file, and the way back to a clean slate. These were
+previously under *Radio → Transmit limits & sharing*, where they were effectively
+undiscoverable.
+
+- **Back up** — writes your radios, operating preferences, memory channels,
+  watchlist and chase sets to a single `.json`. For a new computer, or before a
+  rebuild. **It holds no passwords or API keys** — those stay in your operating
+  system's keychain, so a restore asks for them again and the file is safe to
+  keep on a USB stick.
+- **Restore…** — replaces your current setup from a file written by *Back up*. It
+  refuses anything that is not one of ours, by name and by schema: a partial
+  restore of a mangled file is worse than a refusal, because you would believe
+  you were configured when you were not.
+- **Reset all settings…** — returns everything to factory defaults: radios, audio
+  devices, callsign, preferences. **Your logbook is not touched** (it lives
+  outside the settings), and **stored passwords stay in your keychain** — clear
+  those individually under *Logging & Connectors*. Confirms first, and cannot be
+  undone, so back up if you have not.
 
 ---
 

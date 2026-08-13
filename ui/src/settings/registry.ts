@@ -37,6 +37,7 @@ export type SettingsTabId =
   | 'logging'
   | 'contesting'
   | 'appearance'
+  | 'configurations'
 
 export interface SettingsTabDef {
   id: SettingsTabId
@@ -61,6 +62,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
   { id: 'logging', label: 'Logging & Connectors' },
   { id: 'contesting', label: 'Contesting' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'configurations', label: 'Config' },
 ]
 
 export interface SettingsSectionDef {
@@ -409,6 +411,19 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'appearance',
     keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
       'eyes free', 'tick'],
+  },
+
+  // ---- Config ------------------------------------------------------------------
+  // Backup and Restore previously sat under Radio -> "Transmit limits & sharing", which is why
+  // no one found them: backing up a whole station has nothing to do with transmit limits. The
+  // keywords are deliberately wide because this is what an operator searches for in a panic.
+  {
+    id: 'configurations',
+    label: 'Backup & reset',
+    tab: 'configurations',
+    keywords: ['backup', 'back up', 'restore', 'reset', 'factory', 'defaults', 'start over',
+      'export', 'import', 'new computer', 'migrate', 'move to a new laptop', 'wipe',
+      'clean slate', 'settings file'],
   },
 ]
 

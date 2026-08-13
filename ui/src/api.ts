@@ -2340,6 +2340,17 @@ export async function exportSettingsBundle(): Promise<string> {
   return invoke<string>('export_settings_bundle')
 }
 
+/**
+ * Reset the configuration to factory defaults.
+ *
+ * Keeps the logbook (it lives outside the settings) and keeps stored credentials (they live in
+ * the OS keychain — `clear*` verbs forget those, deliberately separately). Applies through the
+ * same path a restore uses, so a running app reconfigures rather than writing the old config back.
+ */
+export async function resetSettings(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('reset_settings')
+}
+
 /** Restore a bundle written by `exportSettingsBundle`. Refuses anything that is not one, by
  *  name and schema — a partial restore is worse than a refusal. */
 export async function importSettingsBundle(text: string): Promise<void> {

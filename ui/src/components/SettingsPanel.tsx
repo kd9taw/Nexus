@@ -5,6 +5,7 @@ import { checkRigForm, blocks, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   exportSettingsBundle,
+  resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
   setBlockedCalls as apiSetBlockedCalls,
@@ -561,6 +562,7 @@ type SettingsTab =
   | 'logging'
   | 'contesting'
   | 'appearance'
+  | 'configurations'
 
 const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'station', label: 'Station' },
@@ -572,6 +574,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'logging', label: 'Logging & Connectors' },
   { id: 'contesting', label: 'Contesting' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'configurations', label: 'Config' },
 ]
 
 /** How the OmniRig connection option is offered, as a function of the platform.
@@ -1834,6 +1837,31 @@ export function SettingsPanel({
     onSaved?.()
     pushToast(`Loaded profile "${p.name}"`, 'success')
   }
+  // Reset everything to factory defaults. Destructive, immediate, and the one action here an
+  // operator can reach by accident, so it confirms — and it offers the backup FIRST, because the
+  // machinery to make this reversible is one click away and there is no excuse not to point at it.
+  const handleResetConfig = async () => {
+    if (
+      !window.confirm(
+        'Reset ALL settings to factory defaults?\n\n' +
+          'Your radios, audio devices, callsign and preferences are erased.\n' +
+          'Your LOGBOOK is not touched, and stored passwords stay in the keychain.\n\n' +
+          'This cannot be undone — back up first if you have not.',
+      )
+    ) {
+      return
+    }
+    const snap = await withErrorToast(() => resetSettings(), 'Could not reset the configuration')
+    if (snap) {
+      const fresh = await getSettings()
+      setForm(fresh)
+      setEditingRadioId(fresh.activeRadio)
+      dirtyRef.current = false
+      onSaved?.()
+      pushToast('Settings reset to defaults', 'success')
+    }
+  }
+
   const handleDeleteProfile = () => {
     if (!selectedProfile) return
     setProfiles(deleteProfile(selectedProfile))
@@ -2348,6 +2376,83 @@ export function SettingsPanel({
         </div>
         <div className="settings-scroll">
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
+          {tab === 'configurations' && (
+            <fieldset className="settings-section" id="settings-configurations">
+              <legend>Backup &amp; reset</legend>
+              <p className="settings-note">
+                Your whole setup in one file — for a new computer, before a rebuild, or to get back
+                to a known-good state. These used to live under <em>Radio → Transmit limits &amp;
+                sharing</em>, where nobody found them.
+              </p>
+            {/* Back up / restore the whole station (#28 item 4). Until now there was no way
+                to keep a copy of any of this: settings.json sits in a config folder most
+                operators never open, and the honest answer to "how do I move to a new laptop"
+                was to go and find it. */}
+            <div className="settings-field">
+              <span className="settings-label">Back up your setup</span>
+              <div className="rig-share-row">
+                <button
+                  type="button"
+                  className="settings-linkbtn"
+                  onClick={() =>
+                    withErrorToast(async () => {
+                      const text = await exportSettingsBundle()
+                      const stamp = new Date().toISOString().slice(0, 10)
+                      const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
+                      pushToast(`Settings backed up → ${path}`, 'success')
+                    }, 'Backup failed')
+                  }
+                  title="Save your radios, preferences, memory channels and watchlist to a file"
+                >
+                  Back up
+                </button>
+                <input
+                  ref={backupFileRef}
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={onRestoreBackup}
+                />
+                <button
+                  type="button"
+                  className="settings-linkbtn"
+                  onClick={() => backupFileRef.current?.click()}
+                  title="Replace your current setup with a saved backup"
+                >
+                  Restore…
+                </button>
+              </div>
+              <span className="settings-hint">
+                Your radios, operating preferences, memory channels, watchlist and chase sets in
+                one file — for a new computer, or before a rebuild. <strong>It holds no
+                passwords or API keys</strong>: those stay in your operating system&apos;s
+                keychain, so a restore asks for them again, and the file is safe to keep on a USB
+                stick. Your contact log is separate — export that from the Logbook. Restoring
+                replaces your current setup.
+              </span>
+            </div>
+              <div className="settings-field">
+                <span className="settings-label">Start over</span>
+                <div className="rig-share-row">
+                  <button
+                    type="button"
+                    className="settings-linkbtn danger"
+                    onClick={handleResetConfig}
+                    title="Erase all settings and return to factory defaults"
+                  >
+                    Reset all settings…
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  Erases your radios, audio devices, callsign and preferences. Your{' '}
+                  <strong>logbook is not touched</strong>, and stored passwords stay in your
+                  keychain (clear those individually under Logging &amp; Connectors). Back up first
+                  — this cannot be undone.
+                </span>
+              </div>
+            </fieldset>
+          )}
+
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-workspace">
             <legend>Workspace</legend>
@@ -4754,53 +4859,8 @@ export function SettingsPanel({
 
                 The address existed all along — `rigctld_port` is per-radio and validated
                 unique — and was simply never shown to anyone. That is the whole defect. */}
-            {/* Back up / restore the whole station (#28 item 4). Until now there was no way
-                to keep a copy of any of this: settings.json sits in a config folder most
-                operators never open, and the honest answer to "how do I move to a new laptop"
-                was to go and find it. */}
-            <div className="settings-field">
-              <span className="settings-label">Back up your setup</span>
-              <div className="rig-share-row">
-                <button
-                  type="button"
-                  className="settings-linkbtn"
-                  onClick={() =>
-                    withErrorToast(async () => {
-                      const text = await exportSettingsBundle()
-                      const stamp = new Date().toISOString().slice(0, 10)
-                      const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
-                      pushToast(`Settings backed up → ${path}`, 'success')
-                    }, 'Backup failed')
-                  }
-                  title="Save your radios, preferences, memory channels and watchlist to a file"
-                >
-                  Back up
-                </button>
-                <input
-                  ref={backupFileRef}
-                  type="file"
-                  accept=".json,application/json"
-                  style={{ display: 'none' }}
-                  onChange={onRestoreBackup}
-                />
-                <button
-                  type="button"
-                  className="settings-linkbtn"
-                  onClick={() => backupFileRef.current?.click()}
-                  title="Replace your current setup with a saved backup"
-                >
-                  Restore…
-                </button>
-              </div>
-              <span className="settings-hint">
-                Your radios, operating preferences, memory channels, watchlist and chase sets in
-                one file — for a new computer, or before a rebuild. <strong>It holds no
-                passwords or API keys</strong>: those stay in your operating system&apos;s
-                keychain, so a restore asks for them again, and the file is safe to keep on a USB
-                stick. Your contact log is separate — export that from the Logbook. Restoring
-                replaces your current setup.
-              </span>
-            </div>
+
+
 
             {/* THE share affordance (#53) — one block, and it advertises the CAT BROKER, not the
                 Hamlib daemon's port. The daemon is torn down by Test CAT and every CAT-config
@@ -4886,8 +4946,7 @@ export function SettingsPanel({
                   </span>
                 </div>
               )}
-            </div>
-          </fieldset>
+            </div>          </fieldset>
           </>
           )}
 
