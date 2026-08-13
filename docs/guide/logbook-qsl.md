@@ -53,10 +53,16 @@ nothing moves at any window size where the form already fits.
    Nexus signs through *your installed TQSL* against that named Station Location
    — no certificate or password is stored by Nexus.
 2. Click **Upload to LoTW** in the logbook. The button shows the count of
-   un-uploaded QSOs; it signs and uploads the unsent batch.
-3. Pull confirmations back with **Sync LoTW now** (Settings ▸ Logging &
-   Connectors). The first sync pulls your whole history; later syncs are
-   incremental. Syncing also
+   un-uploaded QSOs; it signs and uploads the unsent batch. If you would rather
+   not remember, turn on **Upload to LoTW automatically** in the same Settings
+   group and Nexus runs that batch every few hours. It stops and waits for you if
+   a batch is ever refused, and it is unavailable while *Sign from ADIF location*
+   is on — that mode signs everything from wherever you are now, so it needs you
+   to pick the moment.
+3. Pull confirmations back with **Download confirmations** (Settings ▸ Logging &
+   Connectors ▸ LoTW). That button only goes one way, *down*; the upload is step 2
+   above. The first pull covers your whole history; later ones are incremental.
+   Pulling also
    marks which of *your* uploads LoTW holds on file, so a pending contact reads
    "waiting on the other op," not "never uploaded."
 

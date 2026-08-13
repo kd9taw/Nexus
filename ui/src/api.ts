@@ -107,7 +107,8 @@ export async function getConnectionLog(): Promise<import('./types').ConnEvent[]>
   return invoke('get_connection_log')
 }
 
-/** Which connector credentials are stored (never the secrets). */
+/** Per-connector status: whether a credential is stored, AND what happened the last time
+ *  Nexus actually talked to the service (never the secrets). */
 export async function getCredentialsStatus(): Promise<import('./types').CredStatus[]> {
   return invoke('get_credentials_status')
 }

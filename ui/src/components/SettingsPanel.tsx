@@ -82,6 +82,7 @@ import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, recordingsLocation, revealAllTxt, revealRecordings } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
+import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { FrequencyControl } from './FrequencyControl'
 import { SetupHealth } from './SetupHealth'
 import { ThemeSwitcher } from './ThemeSwitcher'
@@ -6659,15 +6660,26 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-connections">
             <legend>Connections</legend>
             <div className="conn-status-grid">
-              {creds.map((c) => (
-                <div key={c.connector} className="conn-status-row">
-                  <span className={`conn-dot ${c.stored ? 'on' : 'off'}`} aria-hidden="true" />
+              {creds.map((c) => {
+                // The dot comes from the last ROUND TRIP, not from `stored` — see
+                // settings/connHealth.ts. A stored secret proves only that a save took.
+                const state = connState(c)
+                const dot = dotClass(state)
+                const when = whenText(c, state)
+                return (
+                <div key={c.id} className="conn-status-row">
+                  <span className={`conn-dot ${dot}`} aria-hidden="true" />
                   <span className="conn-name">{c.connector}</span>
                   <span className="conn-id">{c.identity || '—'}</span>
-                  <span className={`conn-state ${c.stored ? 'on' : 'off'}`}>
-                    {c.stored ? 'credential stored' : 'no credential'}
-                  </span>
-                  {c.connector === 'QRZ Logbook' && (
+                  <span className={`conn-state ${dot}`}>{stateLabel(state)}</span>
+                  {/* Before the Test button, which takes margin-left:auto — a span after it
+                      would be shoved to the far edge of the row. */}
+                  {when && (
+                    <span className="conn-when" title={c.lastFailureDetail ?? ''}>
+                      {when}
+                    </span>
+                  )}
+                  {c.id === 'qrz-logbook' && (
                     <button
                       type="button"
                       className="settings-test-btn"
@@ -6679,7 +6691,8 @@ export function SettingsPanel({
                     </button>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
             {qrzTest.state !== 'idle' && qrzTest.state !== 'testing' && (
               <p className={`conn-test-result ${qrzTest.state}`}>
@@ -7503,7 +7516,7 @@ export function SettingsPanel({
                 </label>
 
                 <div className="settings-field">
-                  <span className="settings-label">LoTW sync</span>
+                  <span className="settings-label">LoTW confirmations</span>
                   <div className="settings-input-row">
                     <button
                       type="button"
@@ -7511,13 +7524,15 @@ export function SettingsPanel({
                       onClick={onSyncLotw}
                       disabled={lotwSyncing || !form.lotwUsername.trim()}
                     >
-                      {lotwSyncing ? 'Syncing…' : 'Sync LoTW now'}
+                      {lotwSyncing ? 'Downloading…' : 'Download confirmations'}
                     </button>
                   </div>
                   <span className="settings-hint">
+                    This only pulls confirmations <strong>down</strong>. To send your contacts{' '}
+                    <em>to</em> LoTW, use <strong>Upload to LoTW (N)</strong> in the Logbook.{' '}
                     Pulls new confirmations into your log and marks which of your uploads LoTW now holds on file
-                    (so they read “waiting on the other op,” not “never uploaded”). The first sync pulls your whole
-                    history (can be slow); later syncs are incremental.
+                    (so they read “waiting on the other op,” not “never uploaded”). The first pull covers your whole
+                    history (can be slow); later ones are incremental.
                   </span>
                 </div>
 
@@ -7545,7 +7560,13 @@ export function SettingsPanel({
                     <input
                       type="checkbox"
                       checked={!!form.lotwUseAdifLocation}
-                      onChange={(e) => updateBool('lotwUseAdifLocation', e.target.checked)}
+                      onChange={(e) => {
+                        updateBool('lotwUseAdifLocation', e.target.checked)
+                        // The two can never be true at once, so turning traveler mode ON
+                        // turns the timer OFF rather than leaving a switch that is checked
+                        // and silently refused. The backend gate is the one that holds.
+                        if (e.target.checked) updateBool('lotwAutoUpload', false)
+                      }}
                       aria-label="Sign LoTW uploads from the ADIF location"
                     />
                     <span className="settings-hint">
@@ -7575,6 +7596,48 @@ export function SettingsPanel({
                     Only if TQSL is installed somewhere non-standard; otherwise leave blank to auto-detect.
                   </span>
                 </label>
+
+                {/* Deliberately NOT worded like the sibling "Auto-upload QSOs to …" switches:
+                    those push one QSO over HTTP as you log it, this hands a whole batch to
+                    TQSL on a timer. Promising push-as-you-log would be a lie about a path
+                    that cannot do it. Disabled in traveler mode, with the reason on screen —
+                    a dead control that does not say why reads as a bug. */}
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">Upload to LoTW automatically</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.lotwAutoUpload}
+                      disabled={!!form.lotwUseAdifLocation}
+                      className={`toggle${form.lotwAutoUpload ? ' on' : ''}`}
+                      onClick={() => updateBool('lotwAutoUpload', !form.lotwAutoUpload)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Every few hours, Nexus hands your un-uploaded contacts to TQSL in one batch and
+                    TQSL signs and sends them — the same thing the Logbook's{' '}
+                    <strong>Upload to LoTW</strong> button does, on a timer. Needs TQSL installed and
+                    the Station Location above. If a batch is refused, this stops and waits for you
+                    rather than retrying; save any LoTW setting to start it again.
+                    {form.lotwUseAdifLocation && (
+                      <>
+                        {' '}
+                        <strong>
+                          Unavailable while “Sign from ADIF location” is on: an unattended batch
+                          would sign older contacts with wherever you are NOW.
+                        </strong>
+                      </>
+                    )}
+                    {!!form.lotwLastAutoUploadUnix && form.lotwLastAutoUploadUnix > 0 && (
+                      <>
+                        {' '}Last run: {new Date(form.lotwLastAutoUploadUnix * 1000).toLocaleString()}.
+                      </>
+                    )}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="settings-featgroup">

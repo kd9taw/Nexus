@@ -7276,6 +7276,19 @@ fn set_settings(
         {
             CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
         }
+        // Same shape for the automatic LoTW batch: everything its suspension could have been
+        // ABOUT lives in these four fields, so touching any of them is the operator saying
+        // "I fixed it". Without this the operator corrects their Station Location, saves,
+        // and nothing ever restarts — the latch is session-wide and there is no other way
+        // out of it short of a relaunch.
+        if cur.lotw_station_location != settings.lotw_station_location
+            || cur.lotw_use_adif_location != settings.lotw_use_adif_location
+            || cur.tqsl_path != settings.tqsl_path
+            || cur.lotw_auto_upload != settings.lotw_auto_upload
+        {
+            LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+            LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
         // Keep the live DXpedition layer's most-wanted key current (Settings
         // override, else the build's baked application key).
         propagation::live::dxped::set_clublog_key(&effective_clublog_key(
@@ -11613,6 +11626,26 @@ static CLUBLOG_SUSPENDED: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 static CLUBLOG_NO_CREDS_ANNOUNCED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Session kill-switch for the AUTOMATIC LoTW batch upload: set on a rejected or
+/// auth-failed batch so the timer stops offering it. This is the whole reason the
+/// automatic upload was allowed to exist.
+///
+/// `UploadOutcome::is_sent()` deliberately excludes `Rejected` and `AuthFail`, so
+/// `lotw_unsent_indices()` keeps handing back a batch that already failed. Without this
+/// latch a missing Callsign Certificate — or ONE malformed QSO, since TQSL's exit 9
+/// stamps the entire batch `Rejected` without naming the record it dropped — would
+/// re-sign and re-upload everything every interval, spawning TQSL each time. That is the
+/// ClubLog storm class ([`CLUBLOG_SUSPENDED`]) with a GUI-linked binary in place of an
+/// HTTP POST. One failure, one notice, and it waits for the operator; a save that touches
+/// any LoTW upload setting re-arms it (see `save_settings`). A network failure ("retry")
+/// deliberately does NOT latch — nothing is wrong with the operator's setup.
+static LOTW_AUTO_SUSPENDED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Announce-once latch for the pause above, so a suspended connector costs exactly one
+/// line in the connection log rather than one per tick.
+static LOTW_AUTO_ANNOUNCED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Are ALL the ClubLog credentials present (email + API key + app-password)? A missing one
 /// is an operator-fixable Settings gap, not a transient network failure — the worker skips
 /// the leg session-wide rather than retrying it per QSO. `email`/`key` come from the
@@ -11642,6 +11675,61 @@ struct ConnEvent {
 static CONN_LOG: Mutex<std::collections::VecDeque<ConnEvent>> =
     Mutex::new(std::collections::VecDeque::new());
 const CONN_LOG_CAP: usize = 200;
+
+/// Last real ROUND-TRIP outcome for the two connectors that leave no per-QSO stamp
+/// (HRDLog.net, Cloudlog). `(id, last_success, last_failure(when, detail))`.
+///
+/// BOTH halves are kept, and separately: one slot per connector would mean a failure
+/// erases the prior success and a recovery erases the failure, so "worked until 3pm,
+/// failing since" — the single most useful thing this panel can say — would be
+/// unrepresentable. `note_conn_health` therefore upserts into the matching half only and
+/// never touches the other.
+///
+/// Session-only, and honestly so: the other four connectors read their history out of
+/// `log.adi` and survive a restart, these two show "not verified yet" until the next QSO.
+/// Deliberately NOT derived from [`CONN_LOG`] — that log's "ok" level also covers
+/// credential SAVES, and counting a save as a working upload is the same green-forever
+/// lie in a new costume.
+///
+/// `Vec::new()` is const (a `HashMap` would not be), and n ≤ 2, so a linear scan is right.
+#[allow(clippy::type_complexity)]
+static CONN_HEALTH: Mutex<Vec<(&'static str, Option<i64>, Option<(i64, String)>)>> =
+    Mutex::new(Vec::new());
+
+/// Record a real round trip for a session-only connector. `ok` picks the half; the other
+/// half is left exactly as it was.
+fn note_conn_health(id: &'static str, ok: bool, detail: String) {
+    let now = now_unix();
+    // Poisoned-lock recovery, the conn_log pattern: a panicked command holding this must
+    // not silently freeze the health panel for the rest of the session.
+    let mut m = CONN_HEALTH.lock().unwrap_or_else(|e| e.into_inner());
+    let slot = match m.iter_mut().find(|(k, _, _)| *k == id) {
+        Some(s) => s,
+        None => {
+            m.push((id, None, None));
+            m.last_mut().expect("just pushed")
+        }
+    };
+    if ok {
+        slot.1 = Some(now);
+    } else {
+        slot.2 = Some((now, detail));
+    }
+}
+
+/// Read one connector's session health back as `(last_success, last_failure_when,
+/// last_failure_detail)`.
+fn conn_health_of(id: &str) -> (Option<i64>, Option<i64>, Option<String>) {
+    let m = CONN_HEALTH.lock().unwrap_or_else(|e| e.into_inner());
+    match m.iter().find(|(k, _, _)| *k == id) {
+        Some((_, ok, fail)) => (
+            *ok,
+            fail.as_ref().map(|(w, _)| *w),
+            fail.as_ref().map(|(_, d)| d.clone()),
+        ),
+        None => (None, None, None),
+    }
+}
 
 /// Record a connectivity event (and mirror it to stderr for dev logs).
 fn conn_log(connector: &str, level: &str, message: impl Into<String>) {
@@ -11681,22 +11769,76 @@ fn get_connection_log() -> Vec<ConnEvent> {
     log.iter().rev().cloned().collect()
 }
 
-/// Which credentials are PRESENT (stored) per connector — so the operator can
-/// finally SEE that a save took. Never returns the secrets themselves.
+/// Per-connector STATUS: whether a credential is stored, and — the part that matters —
+/// what happened the last time Nexus actually talked to the service.
+///
+/// This used to carry `stored` alone, and the panel painted its dot from it. That answered
+/// the wrong question: a revoked ClubLog app-password, a rotated QRZ Logbook key or a
+/// mistyped HRDLog upload code all stayed green forever, because the secret was still
+/// sitting in the keychain. `stored` is kept — it is still the right answer for "you never
+/// entered this" — but the dot now comes from the timestamps below.
+///
+/// The UI derives the displayed state from these fields (see `ui/src/settings/connHealth.ts`),
+/// deliberately rather than shipping a status string: two timestamps cannot drift out of
+/// step with a Rust enum, and the derivation is unit-testable on the TS side.
+/// Never returns the secrets themselves.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CredStatus {
+    /// Stable slug — "lotw" | "qrz-xml" | "qrz-logbook" | "eqsl" | "clublog" | "hrdlog" |
+    /// "cloudlog" | "repeaterbook". The UI used to branch on the PROSE label
+    /// (`connector === 'QRZ Logbook'`), which breaks the day someone rewords a legend.
+    id: String,
+    /// Display label.
     connector: String,
     /// A secret exists in the OS keychain (or key field) for this connector.
     stored: bool,
     /// The associated non-secret identity (username/email), for display.
     identity: String,
+    /// Does this connector push QSOs outward at all? False for the lookup-only ones (QRZ
+    /// callbook, RepeaterBook), where "never uploaded anything" is not a fault and must
+    /// not be rendered as one.
+    uploads: bool,
+    /// Is its auto-upload switched on? Separates "nothing has happened because you turned
+    /// it off" from "nothing has happened and that is a problem".
+    enabled: bool,
+    /// Newest upload this connector actually accepted. `None` = never verified, which the
+    /// UI must render as amber "not verified yet" and NEVER as green. Named
+    /// `last_success_unix` rather than `last_ok_unix` on purpose: `lastOkUnix` invites a
+    /// hand-written `lastOKUnix` on the TS side, the silent `decodeFLowHz` failure.
+    last_success_unix: Option<i64>,
+    /// Newest failure. Compared against `last_success_unix` in the UI to decide
+    /// failing-vs-working.
+    last_failure_unix: Option<i64>,
+    /// The service's own (already sanitized) reason for that failure.
+    last_failure_detail: Option<String>,
+    /// Session kill-switch tripped (ClubLog's 403 latch). While set, EVERY ClubLog leg is
+    /// skipped — today that appears only as one line in a 200-entry log the operator has
+    /// almost certainly scrolled past.
+    paused: bool,
 }
 
 #[tauri::command(async)]
 fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStatus>, String> {
-    let (lotw_user, eqsl_user, qrz_user, clublog_email, mycall, clublog_key, cloudlog_url) = {
+    // ONE lock, taken once and released before the eight keychain reads below (keychain
+    // I/O is the slow part, and the radio thread contends for this lock). `upload_health`
+    // is O(records) but only cheap Option comparisons, and it BORROWS — never `get_log`,
+    // which clones the whole record vector and would be a real regression on a big log at
+    // the panel's 5 s poll.
+    #[allow(clippy::type_complexity)]
+    let (
+        lotw_user,
+        eqsl_user,
+        qrz_user,
+        clublog_email,
+        mycall,
+        clublog_key,
+        cloudlog_url,
+        health,
+        toggles,
+    ) = {
         let eng = engine_lock(&state);
+        let health = eng.upload_health();
         let st = eng.settings();
         (
             st.lotw_username.clone(),
@@ -11710,57 +11852,145 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             // own credentials are only email + app-password.
             !effective_clublog_key(&st.clublog_api_key).is_empty(),
             st.cloudlog_url.clone(),
+            health,
+            // (qrz-logbook, clublog, eqsl, hrdlog, cloudlog) auto-upload switches. Cloudlog
+            // mirrors the worker's own gate — a URL-less Cloudlog is off however the toggle
+            // reads (see the auto-upload worker).
+            (
+                st.qrz_logbook_upload,
+                st.clublog_upload,
+                st.eqsl_upload,
+                st.hrdlog_upload,
+                st.cloudlog_upload && !st.cloudlog_url.trim().is_empty(),
+            )
         )
     };
+    let (qrz_book_on, clublog_on, eqsl_on, hrdlog_on, cloudlog_on) = toggles;
+    let (hrdlog_ok, hrdlog_fail, hrdlog_detail) = conn_health_of("hrdlog");
+    let (cloudlog_ok, cloudlog_fail, cloudlog_detail) = conn_health_of("cloudlog");
     let has = |entry: Result<keyring::Entry, String>| {
         entry
             .and_then(|e| e.get_password().map_err(|er| er.to_string()))
             .is_ok()
     };
+    // LoTW, QRZ Logbook, eQSL and ClubLog read their history off the persisted per-QSO
+    // stamps, so it survives a restart. The lookup-only rows (QRZ callbook, RepeaterBook)
+    // carry `uploads: false` and no history at all — see the note on `uploads`.
+    let stored_lotw = has(lotw_keychain());
+    let stored_qrz = has(qrz_keychain());
+    let stored_rb = has(repeaterbook_keychain());
     Ok(vec![
         CredStatus {
+            id: "lotw".into(),
             connector: "LoTW".into(),
-            stored: has(lotw_keychain()),
+            stored: stored_lotw,
             identity: lotw_user,
+            uploads: true,
+            // LoTW's upload has no per-QSO auto toggle of its own beyond the batch timer,
+            // and the manual Logbook button is always available — so "enabled" here means
+            // "configured", not "on a timer".
+            enabled: stored_lotw,
+            last_success_unix: health.lotw.last_success_unix,
+            last_failure_unix: health.lotw.last_failure_unix,
+            last_failure_detail: health.lotw.last_failure_detail,
+            paused: false,
         },
         CredStatus {
+            id: "qrz-xml".into(),
             connector: "QRZ callbook (name/QTH)".into(),
-            stored: has(qrz_keychain()),
+            stored: stored_qrz,
             identity: qrz_user.clone(),
+            // Lookup only. The signal genuinely exists (lookups run constantly while
+            // operating) but is not wired to this panel — an expired XML subscription
+            // still reads as a benign grey row. Flagged rather than pretended away.
+            uploads: false,
+            enabled: stored_qrz,
+            last_success_unix: None,
+            last_failure_unix: None,
+            last_failure_detail: None,
+            paused: false,
         },
         CredStatus {
+            id: "qrz-logbook".into(),
             connector: "QRZ Logbook".into(),
             stored: has(qrz_logbook_keychain()),
             identity: qrz_user,
+            uploads: true,
+            enabled: qrz_book_on,
+            last_success_unix: health.qrz.last_success_unix,
+            last_failure_unix: health.qrz.last_failure_unix,
+            last_failure_detail: health.qrz.last_failure_detail,
+            paused: false,
         },
         CredStatus {
+            id: "eqsl".into(),
             connector: "eQSL".into(),
             stored: has(eqsl_keychain()),
             identity: eqsl_user,
+            uploads: true,
+            enabled: eqsl_on,
+            last_success_unix: health.eqsl.last_success_unix,
+            last_failure_unix: health.eqsl.last_failure_unix,
+            last_failure_detail: health.eqsl.last_failure_detail,
+            paused: false,
         },
         CredStatus {
+            id: "clublog".into(),
             connector: "ClubLog".into(),
             stored: has(clublog_keychain()) && clublog_key,
             identity: clublog_email,
+            uploads: true,
+            enabled: clublog_on,
+            last_success_unix: health.clublog.last_success_unix,
+            last_failure_unix: health.clublog.last_failure_unix,
+            last_failure_detail: health.clublog.last_failure_detail,
+            // The 403 latch, finally visible. Note it is process-global: two instances
+            // sharing one log will disagree until the log-derived AuthFail stamp reaches
+            // the other one, which then shows `failing` rather than `paused`.
+            paused: CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed),
         },
         CredStatus {
             // The station callsign IS the HRDLog identity (the upload code is the
             // only secret); show mycall so a save is visibly attributed.
+            id: "hrdlog".into(),
             connector: "HRDLog.net".into(),
             stored: has(hrdlog_keychain()),
             identity: mycall,
+            uploads: true,
+            enabled: hrdlog_on,
+            // Session-only: HRDLog leaves no per-QSO stamp, so after a restart this reads
+            // "not verified yet" until the next QSO. Honest, and not green.
+            last_success_unix: hrdlog_ok,
+            last_failure_unix: hrdlog_fail,
+            last_failure_detail: hrdlog_detail,
+            paused: false,
         },
         CredStatus {
+            id: "cloudlog".into(),
             connector: "Cloudlog".into(),
             stored: has(cloudlog_keychain()),
             identity: cloudlog_url,
+            uploads: true,
+            enabled: cloudlog_on,
+            // Session-only, same as HRDLog above.
+            last_success_unix: cloudlog_ok,
+            last_failure_unix: cloudlog_fail,
+            last_failure_detail: cloudlog_detail,
+            paused: false,
         },
         CredStatus {
             // The token is app-scoped (an rbuapp_… token the user generates on
             // RepeaterBook); there's no separate username identity to show.
+            id: "repeaterbook".into(),
             connector: "RepeaterBook".into(),
-            stored: has(repeaterbook_keychain()),
+            stored: stored_rb,
             identity: String::new(),
+            uploads: false,
+            enabled: stored_rb,
+            last_success_unix: None,
+            last_failure_unix: None,
+            last_failure_detail: None,
+            paused: false,
         },
     ])
 }
@@ -12289,9 +12519,22 @@ async fn upload_lotw_report_impl(
     state: State<'_, SharedEngine>,
     indices: Option<Vec<usize>>,
 ) -> Result<UploadReportDto, String> {
+    lotw_upload_batch(&state, indices)
+}
+
+/// The whole LoTW upload, independent of Tauri's command shape, so the automatic worker
+/// runs the SAME code the button does rather than a parallel copy that drifts from it.
+/// Plain sync: nothing in here awaits — the command above was only ever `async` for the
+/// `State` lifetime.
+fn lotw_upload_batch(
+    state: &SharedEngine,
+    indices: Option<Vec<usize>>,
+) -> Result<UploadReportDto, String> {
     // Brief lock: read config + build the batch + ADIF, then release before spawn.
+    // Held across the TQSL spawn it would freeze the whole UI for as long as ARRL takes
+    // to answer, which is tens of seconds on a big batch.
     let (batch, adif, location, tqsl_path) = {
-        let eng = engine_lock(&state);
+        let eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
         // A named Station Location is required UNLESS the operator signs from the ADIF
@@ -12385,7 +12628,7 @@ async fn upload_lotw_report_impl(
         }),
         Some(outcome) => {
             {
-                let mut eng = engine_lock(&state);
+                let mut eng = engine_lock(state);
                 eng.stamp_lotw_upload(&batch, outcome, now_unix(), detail.clone());
             }
             Ok(UploadReportDto {
@@ -13562,6 +13805,9 @@ fn auto_push_one(
                 (format!("HRDLog ✗ {e}"), false, true)
             }
         };
+        // HRDLog leaves no per-QSO stamp, so this round trip is the ONLY evidence the
+        // Connections panel will ever have that the upload code still works.
+        note_conn_health("hrdlog", ok, part.clone());
         parts.push(part);
         all_ok &= ok;
         if transient {
@@ -13634,6 +13880,8 @@ fn auto_push_one(
                 (format!("Cloudlog ✗ {e}"), false, true)
             }
         };
+        // Same as HRDLog above: no per-QSO stamp, so this is the only health signal.
+        note_conn_health("cloudlog", ok, part.clone());
         parts.push(part);
         all_ok &= ok;
         if transient {
@@ -15286,6 +15534,101 @@ pub fn run() {
         });
     }
 
+    // Automatic LoTW batch upload — the Logbook's "Upload to LoTW (N)" button on a timer.
+    // Deliberately NOT part of the per-QSO funnel below: that pushes ONE record over HTTP
+    // per connector leg, while this signs a whole batch through the operator's external
+    // TQSL and gets ONE exit code back for all of it. Putting LoTW in the legs bitmask
+    // would spawn a TQSL process per QSO and per retry.
+    //
+    // Every refusal that matters lives in `lotw_auto_upload_due` (a pure, tested gate),
+    // including the one that protects the operator's ARRL record: never in
+    // "sign from ADIF location" mode.
+    {
+        let auto_engine = engine.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(300));
+            let (settings, suspended) = {
+                let eng = engine_lock(&auto_engine);
+                (
+                    eng.settings().clone(),
+                    LOTW_AUTO_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            };
+            let now = now_unix().max(0) as u64;
+            if !tempo_app::engine::lotw_auto_upload_due(&settings, suspended, now) {
+                continue;
+            }
+            // Nothing to send: return WITHOUT spawning TQSL and without touching the
+            // cursor, so an idle station stays due and uploads promptly once it works
+            // someone — rather than sitting out the rest of the interval.
+            if engine_lock(&auto_engine).lotw_unsent_indices().is_empty() {
+                continue;
+            }
+            // THE CURSOR POLICY, and it deliberately differs from the QRZ worker this is
+            // modelled on. QRZ leaves its high-water alone on failure because it is a
+            // DELTA mark — advancing it past a failed span would punch a hole in the
+            // history. This cursor marks nothing; it is purely a rate limiter on how often
+            // TQSL may be spawned. So it advances on every `Ok`, INCLUDING "retry": a
+            // network outage that did not advance it would spawn TQSL every 300 s for as
+            // long as the outage lasted. Only a hard `Err` (no TQSL installed, unwritable
+            // temp file) leaves it alone, and that case cannot loop because it never got
+            // as far as a process.
+            match lotw_upload_batch(&auto_engine, None) {
+                Ok(r) => {
+                    {
+                        // The NARROW mutation — never `apply_settings` for one field
+                        // (#54, same as the QRZ cursor above).
+                        let mut eng = engine_lock(&auto_engine);
+                        eng.set_lotw_auto_upload_cursor(now);
+                        if let Err(e) = eng.settings().save(&settings_path()) {
+                            eprintln!("[lotw-auto] settings save failed: {e}");
+                        }
+                    }
+                    match r.outcome.as_str() {
+                        // A bad certificate, a wrong Station Location, or one malformed
+                        // record: none of these heal on their own, so stop rather than
+                        // re-sign the same batch every six hours.
+                        "authfail" | "rejected" => {
+                            LOTW_AUTO_SUSPENDED
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            if !LOTW_AUTO_ANNOUNCED
+                                .swap(true, std::sync::atomic::Ordering::Relaxed)
+                            {
+                                conn_log(
+                                    "LoTW",
+                                    "error",
+                                    format!(
+                                        "automatic upload paused — {}{}. Fix it, then use \
+                                         Upload to LoTW in the Logbook; saving any LoTW \
+                                         setting restarts the timer.",
+                                        if r.outcome == "authfail" {
+                                            "TQSL could not sign the batch"
+                                        } else {
+                                            "LoTW refused the batch"
+                                        },
+                                        r.detail
+                                            .as_deref()
+                                            .map(|d| format!(" ({d})"))
+                                            .unwrap_or_default(),
+                                    ),
+                                );
+                            }
+                        }
+                        // Quiet unless something actually went out — a six-hourly "0 sent"
+                        // would bury the log it shares with every other connector.
+                        _ if r.dispatched > 0 && r.outcome != "retry" => conn_log(
+                            "LoTW",
+                            "ok",
+                            format!("automatic upload — {} QSO(s), {}", r.dispatched, r.outcome),
+                        ),
+                        _ => {}
+                    }
+                }
+                Err(e) => eprintln!("[lotw-auto] failed: {e}"),
+            }
+        });
+    }
+
     // Persist Tempo conversation threads to disk on a slow cadence so chat history
     // survives a restart — only writes when something changed (no idle disk churn).
     {
@@ -16086,6 +16429,58 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// ⭐ THE SESSION HEALTH STORE KEEPS BOTH HALVES. HRDLog and Cloudlog leave no per-QSO
+    /// stamp, so this map is the only health they will ever have — and the obvious shape
+    /// for it (one slot: `(id, ok, when, detail)`) cannot hold what the panel needs. With
+    /// one slot a failure erases the prior success and a recovery erases the failure, so
+    /// "worked until 3pm, failing since" — the single most useful thing the row can say —
+    /// becomes unsayable, and the row silently drops back to "not verified yet".
+    #[test]
+    fn a_failure_does_not_erase_the_last_success_or_the_other_way_round() {
+        use super::{conn_health_of, note_conn_health};
+        // A distinct id: this static is process-global and other tests share the process.
+        const ID: &str = "hrdlog-test-both-halves";
+        assert_eq!(
+            conn_health_of(ID),
+            (None, None, None),
+            "control: an unknown connector starts with no history at all"
+        );
+
+        note_conn_health(ID, true, String::new());
+        let (ok1, fail1, _) = conn_health_of(ID);
+        assert!(ok1.is_some(), "control: a success is recorded");
+        assert!(fail1.is_none());
+
+        // The failure must NOT take the success with it.
+        note_conn_health(ID, false, "HRDLog ✗ code invalid — check Settings".into());
+        let (ok2, fail2, detail2) = conn_health_of(ID);
+        assert_eq!(ok2, ok1, "the earlier success must survive a later failure");
+        assert!(fail2.is_some());
+        assert_eq!(
+            detail2.as_deref(),
+            Some("HRDLog ✗ code invalid — check Settings"),
+            "the service's own reason rides with the failure"
+        );
+
+        // …and the recovery must not take the failure with it, or the row could never
+        // show "it recovered at 4pm after failing at 3pm".
+        note_conn_health(ID, true, String::new());
+        let (ok3, fail3, detail3) = conn_health_of(ID);
+        assert!(ok3.is_some());
+        assert_eq!(fail3, fail2, "the failure timestamp must survive a recovery");
+        assert_eq!(detail3, detail2, "and so must its reason");
+
+        // One slot per connector, not one per call — otherwise the vec grows unbounded
+        // for the life of the session.
+        note_conn_health(ID, true, String::new());
+        let m = super::CONN_HEALTH.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            m.iter().filter(|(k, _, _)| *k == ID).count(),
+            1,
+            "upsert, never append"
+        );
+    }
+
     /// #61: a Test CAT that timed out must say so — each arm names what is known,
     /// never the generic "set your rig + PTT method" hint that sent the reporter
     /// chasing CAT settings while the radio engine was dead.

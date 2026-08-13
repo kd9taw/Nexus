@@ -1696,10 +1696,28 @@ button.nb-chip:hover {
 }
 .conn-dot.on { background: var(--state-good); }
 .conn-dot.off { background: var(--text-faint); }
+/* Failing/paused uses the same ink as .conn-test-result.fail below — one "this connector
+   is not working" colour in this panel, not two. Amber is the never-verified case: not a
+   fault, not a clean bill of health. */
+.conn-dot.bad { background: var(--state-weak); }
+.conn-dot.warn { background: var(--state-ok); }
 .conn-name { font-weight: 700; min-width: 11ch; }
 .conn-id { color: var(--text-dim); min-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
 .conn-state.on { color: var(--state-good); }
 .conn-state.off { color: var(--text-faint); }
+.conn-state.bad { color: var(--state-weak); }
+.conn-state.warn { color: var(--state-ok); }
+/* A long service message must never wrap the row — it ellipsizes and the full text is on
+   the title attribute. Sits BEFORE .settings-test-btn, whose margin-left:auto would
+   otherwise push it to the far edge. */
+.conn-when {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 .settings-test-btn {
   margin-left: auto;
   padding: 2px var(--space-3);

@@ -1843,11 +1843,38 @@ export interface AssistanceEvent {
   note: string
 }
 
-/** Whether a secret is stored for a connector (never the secret itself). */
+/** Per-connector status: whether a credential is stored, and — the part the dot is painted
+ *  from — what happened the last time Nexus actually talked to the service. The displayed
+ *  state is derived in `settings/connHealth.ts`, not sent as a string, so the derivation is
+ *  unit-testable and cannot drift from a Rust enum.
+ *
+ *  These Options carry no `skip_serializing_if` on the Rust side, so serde emits explicit
+ *  `null` — declared `| null`, not `?:`. */
 export interface CredStatus {
+  /** Stable slug: 'lotw' | 'qrz-xml' | 'qrz-logbook' | 'eqsl' | 'clublog' | 'hrdlog' |
+   *  'cloudlog' | 'repeaterbook'. Branch on THIS, never on `connector` (a display label). */
+  id: string
+  /** Display label. */
   connector: string
+  /** A secret exists in the OS keychain. Still the right answer for "you never entered
+   *  this" — but on its own it is what made a revoked password read as healthy. */
   stored: boolean
   identity: string
+  /** Does this connector push QSOs outward at all? False for lookup-only (QRZ callbook,
+   *  RepeaterBook), where "never uploaded" is not a fault. */
+  uploads: boolean
+  /** Is its auto-upload switched on? Separates "off on purpose" from "broken". */
+  enabled: boolean
+  /** Newest accepted upload, unix seconds. null = never verified — amber, never green.
+   *  Survives a restart for lotw/eqsl/qrz/clublog (read off the per-QSO log stamps);
+   *  session-only for hrdlog/cloudlog, which leave no stamp. */
+  lastSuccessUnix: number | null
+  /** Newest failure, unix seconds. */
+  lastFailureUnix: number | null
+  /** The service's own (sanitized) reason for that failure. */
+  lastFailureDetail: string | null
+  /** Session kill-switch tripped (ClubLog's 403 latch): every leg is being skipped. */
+  paused: boolean
 }
 
 /** Liveness of the background live feeds (DX cluster/RBN + PSK Reporter MQTT). */
@@ -2634,6 +2661,16 @@ export interface Settings {
   lotwUseAdifLocation: boolean
   /** Optional path to the tqsl binary (overrides auto-detect). */
   tqslPath: string
+  /** Hand the un-uploaded batch to TQSL on a timer instead of waiting for the Logbook's
+   *  "Upload to LoTW (N)" button. NOT a per-QSO push like the sibling upload toggles: one
+   *  batch, one TQSL run, one outcome. Refused outright while lotwUseAdifLocation is on. */
+  lotwAutoUpload: boolean
+  /** Hours between automatic batches (default 6). Settings-file only — no UI control,
+   *  exactly like qrzSyncHours. Clamped >= 1 at use. */
+  lotwAutoUploadHours: number
+  /** Unix seconds of the last automatic batch attempt; 0 = never. A rate limiter, not a
+   *  sync cursor. Managed by the app; not user-edited. */
+  lotwLastAutoUploadUnix: number
   /** eQSL account username (callsign or login). Password is in the OS keychain
    *  (set via setEqslPassword). */
   eqslUsername: string

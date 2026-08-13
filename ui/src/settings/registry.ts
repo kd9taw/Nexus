@@ -300,7 +300,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'connections',
     label: 'Connections',
     tab: 'logging',
-    keywords: ['status', 'connector', 'health', 'log', 'connection log', 'test'],
+    keywords: ['status', 'connector', 'health', 'log', 'connection log', 'test', 'upload',
+      'not uploading', 'last upload', 'failing', 'revoked', 'wrong password', 'green'],
   },
   {
     id: 'integrations-feeds',
@@ -354,8 +355,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'logging',
     neededInHourOne: true,
     keywords: ['lotw', 'eqsl', 'qrz', 'clublog', 'club log', 'hrdlog', 'cloudlog', 'wavelog',
-      'hamqth', 'qsl', 'upload', 'password', 'api key', 'credential', 'login', 'callbook',
-      'repeaterbook', 'tqsl', 'station location'],
+      'hamqth', 'qsl', 'upload', 'auto-upload', 'password', 'api key', 'credential', 'login',
+      'callbook', 'repeaterbook', 'tqsl', 'station location'],
   },
 
   // ---- Contesting --------------------------------------------------------------

@@ -88,6 +88,7 @@ describe('mergeProfile — the profile-load contract', () => {
     activeRadio: 1,
     radios: [{ id: 0 }, { id: 1 }],
     qrzLastSyncUnix: 1_753_000_000,
+    lotwLastQsl: '2025-01-15',
   } as unknown as Settings
 
   it('a key the profile predates keeps the CURRENT value — never the default', () => {
@@ -116,6 +117,19 @@ describe('mergeProfile — the profile-load contract', () => {
     expect((merged.radios as { id: number }[])[0].id).toBe(0)
     expect(merged.qrzLastSyncUnix).toBe(1_753_000_000)
     expect(merged.band).toBe('40m')
+  })
+
+  it('the LoTW download cursor never imports either', () => {
+    // Same class as `qrzLastSyncUnix` and `eqslLastSync`, and it was the one missing from the
+    // list. A cursor says "I have already fetched everything up to here" — true of the machine
+    // that wrote the profile, not of this one. Importing a NEWER stamp makes Nexus skip the
+    // confirmations between the two, and they never come back on their own: the next sync asks
+    // only for records after the borrowed date. Silent, and it costs award credit the operator
+    // has already earned.
+    const foreign = { lotwLastQsl: '2026-08-01', band: '40m' } as unknown as Settings
+    const merged = mergeProfile(current, foreign) as unknown as Record<string, unknown>
+    expect(merged.lotwLastQsl).toBe('2025-01-15')
+    expect(merged.band).toBe('40m') // control: the profile's real settings still apply
   })
 
   it('a profile value the operator set DOES override the current one', () => {

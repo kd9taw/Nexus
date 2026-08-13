@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus can hand your log to TQSL on a timer.** Settings ▸ Confirmations ▸ LoTW gained
+  **Upload to LoTW automatically** — every few hours it runs the same batch the Logbook's
+  "Upload to LoTW" button runs, signed by your own TQSL. It is off until you turn it on, and
+  it is deliberately not a per-QSO push like the other services: LoTW takes one signed batch
+  and gives back one result for all of it. Two things it will not do. It refuses to run at
+  all while **Sign from ADIF location** is on — that mode signs the whole batch from wherever
+  you are *now*, so a timer that fired after you moved would sign last week's contacts with
+  this week's grid, and there is no undoing that at ARRL. And if a batch is ever refused —
+  no certificate, wrong Station Location, one bad record — it stops and says so once, rather
+  than re-signing and re-sending the same batch every six hours forever. Save any LoTW
+  setting to start it again.
+
+### Changed
+
+- **The connector dots tell you whether your contacts are actually getting out.** Settings ▸
+  Connections painted every dot from "is a password saved?", which is not the question anyone
+  opens that panel to ask. Revoke your ClubLog app-password, rotate a QRZ Logbook key, mistype
+  an HRDLog upload code — the secret is still in your keychain, so the dot stayed green while
+  nothing reached the service. Each row now reports the last time Nexus really talked to that
+  service: **working** with when it last got through, **failing** with the service's own
+  reason, **paused** when ClubLog's auth kill-switch has tripped (which until now only ever
+  appeared as one line in a log you had probably scrolled past), and **stored — not verified
+  yet** in amber for a credential nothing has been sent through. That last one is the point:
+  no news is not good news, and it no longer pretends to be. For LoTW, eQSL, QRZ Logbook and
+  ClubLog the history comes out of your own log file, so it survives a restart — the panel has
+  real history the moment you upgrade. HRDLog.net and Cloudlog leave no such trace, so they
+  read "not verified yet" after each restart until your next contact goes out.
+- **"Sync LoTW now" said the wrong thing and is now "Download confirmations".** It only ever
+  pulled confirmations *down*; operators reasonably read "sync" as two-way and believed their
+  contacts had gone to ARRL when they had not. The button now says which direction it goes,
+  and points at **Upload to LoTW (N)** in the Logbook for the other one.
+
 - **SSTV now respects your high-duty power cap, not your SSB one.** SSTV has no operating mode
   of its own — it runs as Phone — so its power ceiling came from **Max power ▸ Phone**, the cap
   you set for speech. An SSTV frame keys continuously for up to 290 seconds at close to 100%

@@ -301,6 +301,28 @@ pub struct UploadStatus {
     pub detail: Option<String>,
 }
 
+/// One connector's last real outcome, read back off the persisted per-QSO stamps.
+/// All-`None` = this connector has never been exercised, which is NOT the same as
+/// healthy — the panel must show it as unverified rather than green.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceHealth {
+    pub last_success_unix: Option<i64>,
+    pub last_failure_unix: Option<i64>,
+    /// Sanitized service message for the failure above (never a raw path/secret).
+    pub last_failure_detail: Option<String>,
+}
+
+/// [`Logbook::upload_health`] for the four connectors that leave a per-QSO stamp.
+/// HRDLog.net and Cloudlog are not here: they have no `UploadState` field, so their
+/// health is session-only and lives in the orchestration layer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UploadHealth {
+    pub lotw: SourceHealth,
+    pub eqsl: SourceHealth,
+    pub qrz: SourceHealth,
+    pub clublog: SourceHealth,
+}
+
 /// Per-source outbound upload state. Absent (`None`) = never attempted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UploadState {
@@ -882,6 +904,49 @@ impl Logbook {
             }
             None => false,
         }
+    }
+
+    /// What actually happened, per connector, the last time Nexus talked to it.
+    ///
+    /// The Settings ▸ Connections panel used to answer a different question than the one
+    /// it was built for: its dot came from a keychain read, so a revoked ClubLog password
+    /// or a rotated QRZ key stayed green forever — the secret was still there. This is the
+    /// answer it should always have been reading, and it costs nothing: the per-QSO
+    /// `APP_TEMPO_UL_*` stamps are already written on every push and already round-trip
+    /// through `log.adi`, so the history SURVIVES A RESTART and an upgrading operator sees
+    /// real history immediately rather than a blank panel.
+    ///
+    /// One pass, borrowed — never clone the record vector for this; the panel polls it
+    /// every 5 s under the engine lock.
+    pub fn upload_health(&self) -> UploadHealth {
+        let mut h = UploadHealth::default();
+        for r in &self.records {
+            for (src, status) in [
+                (&mut h.lotw, &r.upload.lotw),
+                (&mut h.eqsl, &r.upload.eqsl),
+                (&mut h.qrz, &r.upload.qrz),
+                (&mut h.clublog, &r.upload.clublog),
+            ] {
+                // `when_unix == 0` is not a date. The ADIF reader synthesises an
+                // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`,
+                // with no time to give it — counting those would tell every operator with
+                // an imported legacy log that their last LoTW upload was 1 Jan 1970.
+                let Some(s) = status.as_ref().filter(|s| s.when_unix > 0) else {
+                    continue;
+                };
+                if s.outcome.is_sent() {
+                    // `Duplicate` counts as a success on purpose: the service telling us
+                    // it already has the QSO proves both the credentials and the record.
+                    if src.last_success_unix.is_none_or(|w| s.when_unix > w) {
+                        src.last_success_unix = Some(s.when_unix);
+                    }
+                } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
+                    src.last_failure_unix = Some(s.when_unix);
+                    src.last_failure_detail = s.detail.clone();
+                }
+            }
+        }
+        h
     }
 
     /// UTC date (`YYYY-MM-DD`) of the oldest QSO whose LoTW upload is awaiting the
@@ -2358,6 +2423,71 @@ mod tests {
         assert!(
             unsent.upload.lotw.is_none(),
             "no field → still needs uploading"
+        );
+    }
+
+    /// ⭐ THE CONNECTOR-HEALTH SOURCE. The Connections panel's dot used to come from a
+    /// keychain read, so a revoked password stayed green forever. These stamps are what it
+    /// should have been reading — and unlike the keychain they are per-connector, dated,
+    /// and carry the service's own reason.
+    #[test]
+    fn upload_health_reads_the_last_real_outcome_per_connector() {
+        fn stamped(call: &str, when: u64, outcome: UploadOutcome, at: i64) -> QsoRecord {
+            let mut r = rec(call, "20m", when);
+            r.upload.lotw = Some(UploadStatus {
+                outcome,
+                when_unix: at,
+                detail: Some("station location not found".into()),
+            });
+            r
+        }
+        let mut lb = Logbook::new();
+        // Never touched: all-None. This is the case the panel used to render GREEN.
+        assert_eq!(lb.upload_health().lotw, SourceHealth::default());
+        assert_eq!(lb.upload_health().qrz, SourceHealth::default());
+
+        // Newest wins, per half, and the two halves are independent — a later failure must
+        // not erase the earlier success, or "working until 3pm, broken since" is unsayable.
+        lb.add(stamped("W1AW", 1_700_000_000, UploadOutcome::Accepted, 100));
+        lb.add(stamped("W2AAA", 1_700_000_100, UploadOutcome::Duplicate, 300));
+        lb.add(stamped("W3BBB", 1_700_000_200, UploadOutcome::AuthFail, 200));
+        let h = lb.upload_health();
+        assert_eq!(
+            h.lotw.last_success_unix,
+            Some(300),
+            "Duplicate is a SUCCESS — the service confirming it already holds the QSO \
+             proves both the credentials and the record"
+        );
+        assert_eq!(h.lotw.last_failure_unix, Some(200));
+        assert_eq!(
+            h.lotw.last_failure_detail.as_deref(),
+            Some("station location not found"),
+            "the service's own reason rides along, or the operator is sent to the log to guess"
+        );
+        // Untouched connectors stay untouched — one connector's history is not another's.
+        assert_eq!(h.eqsl, SourceHealth::default());
+
+        // THE 1970 TRAP. An imported legacy log carrying LOTW_QSL_SENT=Y synthesises a
+        // stamp with when_unix = 0 (see the ADIF reader). Counting it would tell every
+        // operator with an imported log that their last LoTW upload was 1 Jan 1970.
+        let mut imported = Logbook::new();
+        imported.import_adif(
+            "<CALL:5>W1ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>120000\
+             <LOTW_QSL_SENT:1>Y<EOR>\n",
+        );
+        assert!(
+            imported.records()[0]
+                .upload
+                .lotw
+                .as_ref()
+                .is_some_and(|s| s.when_unix == 0),
+            "control: the import really does synthesise a zero-dated stamp, so the \
+             assertion below is testing something"
+        );
+        assert_eq!(
+            imported.upload_health().lotw.last_success_unix,
+            None,
+            "an undated import is not evidence that an upload ever happened"
         );
     }
 

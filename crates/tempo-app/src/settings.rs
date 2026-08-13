@@ -1532,6 +1532,32 @@ pub struct Settings {
     /// Optional path to the `tqsl` binary (overrides auto-detect). Empty = search
     /// the OS default locations + PATH.
     pub tqsl_path: String,
+    /// Hand the un-uploaded batch to TQSL on a timer, instead of waiting for the
+    /// Logbook's "Upload to LoTW (N)" button.
+    ///
+    /// Deliberately NOT the same shape as the four per-QSO upload toggles beside it
+    /// (`qrz_logbook_upload`/`clublog_upload`/`eqsl_upload`/`hrdlog_upload`): those push
+    /// ONE record over HTTP as it is logged, this signs a whole batch through an external
+    /// GUI-linked binary and gets back a single exit code for all of it. Off by default,
+    /// harder than the siblings: it spawns a process and pushes to ARRL unattended.
+    ///
+    /// Refused outright while [`Self::lotw_use_adif_location`] is set — see
+    /// [`crate::engine::lotw_auto_upload_due`], which is the gate that matters.
+    #[serde(default)]
+    pub lotw_auto_upload: bool,
+    /// Hours between automatic LoTW batches. Six, NOT the QRZ one: each run spawns TQSL
+    /// and pushes to ARRL's server, and partner confirmations take days to appear — an
+    /// hourly cadence buys the operator nothing and multiplies load across every install.
+    /// Settings-file only; there is no UI control, exactly like `qrz_sync_hours`.
+    /// Clamped ≥ 1 at use.
+    #[serde(default = "default_lotw_auto_upload_hours")]
+    pub lotw_auto_upload_hours: u32,
+    /// Unix seconds of the last automatic batch ATTEMPT — a rate limiter, not a delta
+    /// high-water (see the cursor policy in the auto-upload worker). Persisted so the
+    /// interval survives a restart; without it an operator who relaunches often would
+    /// spawn TQSL every launch. 0 = never run, so the first tick after enabling is due.
+    #[serde(default)]
+    pub lotw_last_auto_upload_unix: u64,
     /// eQSL account **username** (callsign or account login). The password lives in
     /// the OS keychain (set via `set_eqsl_password`), never here. Empty = not set.
     pub eqsl_username: String,
@@ -1768,6 +1794,10 @@ fn default_prop_engine() -> String {
 
 fn default_qrz_sync_hours() -> u32 {
     1
+}
+
+fn default_lotw_auto_upload_hours() -> u32 {
+    6
 }
 
 fn default_fd_power() -> u32 {
@@ -2675,6 +2705,9 @@ impl Default for Settings {
             lotw_station_location: String::new(),
             lotw_use_adif_location: false,
             tqsl_path: String::new(),
+            lotw_auto_upload: false,
+            lotw_auto_upload_hours: default_lotw_auto_upload_hours(),
+            lotw_last_auto_upload_unix: 0,
             eqsl_username: String::new(),
             eqsl_last_sync: String::new(),
             qrz_username: String::new(),
@@ -4538,6 +4571,36 @@ mod tests {
         ] {
             assert!(json.contains(key), "missing wire key {key} in {json}");
         }
+    }
+
+    #[test]
+    fn lotw_auto_upload_settings_use_the_exact_wire_keys_the_ui_writes() {
+        // Same invisible failure as the APRS keys above, with one token that is genuinely
+        // contestable: serde emits the acronym ALL LOWERCASE, so `lotw…`. A TS author
+        // writing `loTWAutoUpload` or `lotWAutoUpload` by ear would get a key that never
+        // matches, a backend that silently keeps the default `false`, and a switch that
+        // flips on screen and does nothing. The four shipped LoTW keys (`lotwUsername`,
+        // `lotwLastQsl`, `lotwStationLocation`, `lotwUseAdifLocation`) fix the form.
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "\"lotwAutoUpload\":false",
+            "\"lotwAutoUploadHours\":6",
+            "\"lotwLastAutoUploadUnix\":0",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+    }
+
+    /// The upgrade path: no shipped settings.json carries these keys, so every existing
+    /// operator must land on "off" — an unattended push to ARRL is never something an
+    /// upgrade decides on the operator's behalf.
+    #[test]
+    fn an_old_settings_file_has_lotw_auto_upload_off() {
+        let old: Settings =
+            serde_json::from_str(r#"{"mycall":"KD9TAW","lotwStationLocation":"HOME"}"#).unwrap();
+        assert!(!old.lotw_auto_upload, "must default OFF on upgrade");
+        assert_eq!(old.lotw_auto_upload_hours, 6);
+        assert_eq!(old.lotw_last_auto_upload_unix, 0, "0 = never run");
     }
 
     /// ⭐ THE UPGRADE PATH FOR THE APRS RF SETTINGS, and the digipeater path is why it

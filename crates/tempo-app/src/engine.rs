@@ -959,6 +959,43 @@ pub fn n1mm_broadcast_target(s: &Settings) -> Option<String> {
     (s.n1mm_upload && !addr.is_empty()).then(|| addr.to_string())
 }
 
+/// Is an automatic LoTW batch upload due right now?
+///
+/// Pure and testable for the same reason as [`n1mm_broadcast_target`] above: the
+/// question "should Nexus hand the operator's log to TQSL unattended?" is worth more
+/// than a condition buried in a worker thread. Five separate refusals, and two of them
+/// are safety rather than housekeeping:
+///
+/// * **`lotw_use_adif_location`** — in that mode [`Engine::lotw_upload_adif`] stamps the
+///   CURRENT mycall/mygrid onto *every record in the batch*, so the whole batch is signed
+///   from wherever the operator is now. That is only ever correct when a human picks the
+///   moment ("upload before you move"); a timer eventually fires after the move and signs
+///   older contacts with the new grid — permanently wrong data at ARRL. The UI disables
+///   the switch too, but THIS is the gate that holds: a hand-edited settings.json or a
+///   config profile carried from another machine can set both flags at once.
+/// * **`suspended`** — the caller's session latch. `UploadOutcome::is_sent()` excludes
+///   `Rejected` and `AuthFail`, so `lotw_unsent_indices()` keeps re-offering a batch that
+///   failed. Without the latch a missing certificate or one malformed record would re-sign
+///   and re-upload the entire batch every interval, spawning TQSL each time — the F4MQS
+///   ClubLog storm class, with a GUI-linked binary in place of an HTTP POST.
+///
+/// The remaining three are the operator's own switch, a configured Station Location
+/// (required by TQSL unless signing from the ADIF, which is already refused above), and
+/// the interval itself.
+pub fn lotw_auto_upload_due(s: &Settings, suspended: bool, now_unix: u64) -> bool {
+    if !s.lotw_auto_upload || suspended {
+        return false;
+    }
+    if s.lotw_use_adif_location || s.lotw_station_location.trim().is_empty() {
+        return false;
+    }
+    // Interval, clamped like the QRZ worker's: a 0 in the settings file must not become a
+    // spawn every tick.
+    let every = u64::from(s.lotw_auto_upload_hours.max(1)) * 3_600;
+    s.lotw_last_auto_upload_unix == 0
+        || now_unix.saturating_sub(s.lotw_last_auto_upload_unix) >= every
+}
+
 /// Fill an N1MM `<contactinfo>` for an ORDINARY logged QSO.
 ///
 /// The Field Day emitter in the radio loop fills the contest fields (class,
@@ -3526,6 +3563,13 @@ impl Engine {
     /// 1.0.5 "intermittent mode drift" field report).
     pub fn set_qrz_sync_cursor(&mut self, unix: u64) {
         self.settings.qrz_last_sync_unix = unix;
+    }
+
+    /// Advance the automatic-LoTW-upload cursor (persisted by the caller). Same narrow
+    /// write and the same #54 reasoning as [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
+    /// above — never `apply_settings` for one field.
+    pub fn set_lotw_auto_upload_cursor(&mut self, unix: u64) {
+        self.settings.lotw_last_auto_upload_unix = unix;
     }
 
     /// Replace the blocked-callsigns list — a NARROW write for the Alt-double-click
@@ -13692,6 +13736,13 @@ impl Engine {
             .stamp_eqsl_upload(pushed, outcome, when_unix, detail)
     }
 
+    /// See [`StationCore::upload_health`]. Cheap and read-only — the Settings panel polls
+    /// it every 5 s under this lock, so it must never clone the record vector (which is
+    /// what [`Self::get_log`] does).
+    pub fn upload_health(&self) -> tempo_core::logbook::UploadHealth {
+        self.station.upload_health()
+    }
+
     /// See [`StationCore::merge_eqsl_report`].
     pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
         self.station.merge_eqsl_report(text)
@@ -19420,6 +19471,98 @@ mod tests {
         // On, but nowhere to send.
         s.n1mm_addr = "   ".into();
         assert_eq!(n1mm_broadcast_target(&s), None);
+    }
+
+    /// The automatic LoTW batch, refusal by refusal. A gate shown only to FIRE is half a
+    /// test, so each of the five is checked against a configuration that is otherwise
+    /// ready — flip one thing, the answer must be no.
+    #[test]
+    fn the_automatic_lotw_batch_refuses_every_way_it_should() {
+        const HOUR: u64 = 3_600;
+        let ready = Settings {
+            lotw_auto_upload: true,
+            lotw_station_location: "HOME".into(),
+            lotw_auto_upload_hours: 6,
+            lotw_last_auto_upload_unix: 0,
+            ..Default::default()
+        };
+        // The positive control. Without this passing, every assertion below proves nothing:
+        // a gate that always says no would satisfy all five refusals.
+        assert!(
+            lotw_auto_upload_due(&ready, false, 1_754_700_000),
+            "control: a configured, never-run, un-suspended setup MUST be due"
+        );
+
+        // 1. The operator's own switch.
+        let mut s = ready.clone();
+        s.lotw_auto_upload = false;
+        assert!(!lotw_auto_upload_due(&s, false, 1_754_700_000), "off is off");
+
+        // 2. TRAVELER MODE — the refusal that protects the operator's ARRL record. In this
+        //    mode the whole batch is signed from the CURRENT grid, so an unattended run
+        //    after a move stamps old contacts with the new location.
+        let mut s = ready.clone();
+        s.lotw_use_adif_location = true;
+        assert!(
+            !lotw_auto_upload_due(&s, false, 1_754_700_000),
+            "signing from the ADIF location must never happen on a timer"
+        );
+
+        // 3. No Station Location: TQSL has nothing to sign against.
+        let mut s = ready.clone();
+        s.lotw_station_location = "   ".into();
+        assert!(
+            !lotw_auto_upload_due(&s, false, 1_754_700_000),
+            "a blank (or whitespace) Station Location is not configured"
+        );
+
+        // 4. SUSPENDED — the session latch after a rejection. Without it a bad certificate
+        //    re-signs and re-uploads the same batch every interval, forever.
+        assert!(
+            !lotw_auto_upload_due(&ready, true, 1_754_700_000),
+            "a suspended connector must not re-arm itself"
+        );
+
+        // 5. The interval, from both sides of the boundary.
+        let mut s = ready.clone();
+        s.lotw_last_auto_upload_unix = 1_754_700_000;
+        assert!(
+            !lotw_auto_upload_due(&s, false, 1_754_700_000 + 6 * HOUR - 1),
+            "one second early is not due"
+        );
+        assert!(
+            lotw_auto_upload_due(&s, false, 1_754_700_000 + 6 * HOUR),
+            "exactly on the interval is due"
+        );
+        // A 0 in the settings file must not become a spawn every tick.
+        s.lotw_auto_upload_hours = 0;
+        assert!(
+            !lotw_auto_upload_due(&s, false, 1_754_700_000 + 3_599),
+            "hours=0 clamps to 1, it does not mean 'always'"
+        );
+        assert!(lotw_auto_upload_due(&s, false, 1_754_700_000 + HOUR));
+        // A clock that walked backwards must not wrap into a permanent 'due'.
+        s.lotw_auto_upload_hours = 6;
+        assert!(
+            !lotw_auto_upload_due(&s, false, 1_754_600_000),
+            "a backwards clock saturates to 'not due', never to a spawn loop"
+        );
+    }
+
+    /// The cursor is a NARROW write, for the same #54 reason as the QRZ one: the worker
+    /// persists it on a timer, and the heavyweight path would drop an in-flight QSO.
+    #[test]
+    fn advancing_the_lotw_upload_cursor_does_not_disturb_a_qso() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        e.call_station("PJ4DX");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
+        e.set_lotw_auto_upload_cursor(1_754_700_000);
+        assert_eq!(e.settings().lotw_last_auto_upload_unix, 1_754_700_000);
+        assert!(
+            e.snapshot().qso.is_some(),
+            "advancing the upload cursor must not evaporate an in-flight QSO"
+        );
     }
 
     /// What a map consumer (OpenHamClock / GridTracker) actually needs off an

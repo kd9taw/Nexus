@@ -1032,6 +1032,20 @@ impl StationCore {
         changed
     }
 
+    /// Last real outcome per connector, off the persisted per-QSO upload stamps —
+    /// see [`tempo_core::logbook::Logbook::upload_health`].
+    ///
+    /// This hop is a style rule, not a borrow-checker requirement: `logbook` is
+    /// `pub(crate)` and `Engine` is in this crate, so Engine *could* reach through it. It
+    /// stays because it mirrors the `stamp_lotw_upload`/`stamp_eqsl_upload` chain and
+    /// keeps every `Logbook` access behind `StationCore`, which owns `save_log` and
+    /// `recover_external_appends` — the invariants a reach-through would eventually skip.
+    /// (Read-only, so it deliberately does NOT call `recover_external_appends`: this is
+    /// polled every 5 s by the Settings panel and must not touch the disk.)
+    pub fn upload_health(&self) -> tempo_core::logbook::UploadHealth {
+        self.logbook.upload_health()
+    }
+
     /// Merge an eQSL confirmation report into the log. Same generic reconcile path
     /// as [`Self::merge_lotw_report`]; the award-grade distinction lives in the
     /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an

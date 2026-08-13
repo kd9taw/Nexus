@@ -743,10 +743,31 @@ and **Forget** removes it.
 
 ### Connections
 
-A status grid of every connector — a dot for "credential stored", plus the stored
-identity — and a **Test** button on QRZ Logbook that round-trips the API without
-logging anything. Below it, a session **Connection log**: "every save, sync,
-push, and failure lands here."
+A status grid of every connector, and a **Test** button on QRZ Logbook that
+round-trips the API without logging anything. Below it, a session **Connection
+log**: "every save, sync, push, and failure lands here."
+
+The dot reports the **last time Nexus actually talked to the service**, not
+whether a password is on file. That distinction is the point: a revoked ClubLog
+app-password or a rotated QRZ Logbook key leaves the secret sitting in your
+keychain, so a "credential stored" dot stays green while nothing is getting out.
+What you see instead:
+
+- **working** (green) — an upload got through; the row says when.
+- **failing** (red) — the last attempt bounced, with the service's own reason.
+- **paused** (red) — ClubLog's auth kill-switch has tripped and every upload is
+  being skipped until you fix the credentials.
+- **stored — not verified yet** (amber) — a credential is saved but nothing has
+  been sent through it yet. Not a fault, and deliberately not green.
+- **auto-upload off** / **no credential** / **lookup only** (grey) — nothing is
+  expected of this row.
+
+LoTW, eQSL, QRZ Logbook and ClubLog read their history from the per-QSO stamps in
+your log file, so it **survives a restart** — right after upgrading you will see
+real history rather than a blank panel. HRDLog.net and Cloudlog leave no per-QSO
+stamp, so they read "not verified yet" after each restart until the next contact
+goes out. The QRZ callbook and RepeaterBook only ever look things up, so they
+carry no upload history at all.
 
 ### Integrations & Feeds
 
@@ -866,10 +887,12 @@ master computer and point Nexus at its IP and port.
   account login."
 - **LoTW password** — your LoTW **website** password, not your TQSL certificate
   password.
-- **LoTW sync** — **Sync LoTW now** "pulls new confirmations into your log and
-  marks which of your uploads LoTW now holds on file (so they read 'waiting on
-  the other op,' not 'never uploaded')." The first sync pulls your whole history
-  and can be slow; later syncs are incremental.
+- **LoTW confirmations** — **Download confirmations** "pulls new confirmations
+  into your log and marks which of your uploads LoTW now holds on file (so they
+  read 'waiting on the other op,' not 'never uploaded')." This only goes **one
+  way, down**; to send your contacts *to* LoTW use **Upload to LoTW (N)** in the
+  Logbook. The first pull covers your whole history and can be slow; later ones
+  are incremental.
 - **LoTW Station Location** — for **uploading**. Signing is done by your
   installed **TQSL** against this named Station Location — set it up in TQSL
   first; the name must match exactly. **No certificate or password is stored by
@@ -881,6 +904,15 @@ master computer and point Nexus at its IP and port.
   location, upload *before* you move.
 - **TQSL path (optional)** — "Only if TQSL is installed somewhere non-standard;
   otherwise leave blank to auto-detect."
+- **Upload to LoTW automatically** — every few hours, hand your un-uploaded
+  contacts to TQSL in one batch: the same thing the Logbook's **Upload to LoTW**
+  button does, on a timer. Not a per-QSO push like the auto-upload switches on
+  the other services — one batch, one TQSL run, one result for all of it. Needs
+  TQSL installed and a **Station Location** set. If a batch is refused it
+  **stops and waits for you** rather than retrying; saving any LoTW setting
+  starts it again. **Unavailable while "Sign from ADIF location" is on** — that
+  mode signs the whole batch from wherever you are *now*, which is only ever
+  right when you pick the moment yourself.
 
 **eQSL**
 

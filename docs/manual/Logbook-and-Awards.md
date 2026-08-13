@@ -84,7 +84,7 @@ Award tracking is computed entirely offline from the logbook using cty.dat entit
 
 CQ zone (WAZ) is derived from cty.dat entity resolution. Contacts whose callsign cannot be resolved to a DXCC entity do not advance WAZ. No IOTA, WWFF, or Worked-All-Grids tracking is present.
 
-The Awards view includes a per-QSO confirmation diagnostics panel. It lists the reason each contact is not yet credited (not uploaded, waiting on partner, recently worked, mode-class mismatch, etc.) and provides action affordances: LoTW contacts get a live one-click Upload / Re-upload button (shelling out to TQSL); QRZ, ClubLog, and eQSL contacts show guidance chips but no in-app bulk-upload path.
+The Awards view includes a per-QSO confirmation diagnostics panel. It lists the reason each contact is not yet credited (not uploaded, waiting on partner, recently worked, mode-class mismatch, etc.) and provides action affordances: LoTW contacts get a live one-click Upload / Re-upload button (shelling out to TQSL) — and the same batch can be run on a timer with **Upload to LoTW automatically** in Settings; QRZ, ClubLog, and eQSL contacts show guidance chips but no in-app bulk-upload path.
 
 ---
 
@@ -241,7 +241,7 @@ Journey is deliberately white-hat: there are no decaying streaks (the streak wid
 - **QRZ grid and state** are subscriber-only on the free QRZ XML tier and will be absent for non-subscribers.
 - **ClubLog developer API key** is baked into official installer builds but never committed to the public GPLv3 source. Operators building from source must supply their own key via the build environment or Settings.
 - **eQSL InBox download** is a page-scrape that depends on the "Your ADIF log file has been built" HTML marker. A change in eQSL's page structure will break the extractor until an update ships.
-- **No background periodic sync.** LoTW, eQSL, QRZ, and ClubLog syncs are triggered manually or on log entry (for outbound auto-push); there is no automatic scheduled pull.
+- **Background timers are opt-in and few.** LoTW, eQSL, QRZ, and ClubLog syncs are triggered manually or on log entry (for outbound auto-push). The two exceptions are both off by default and both switched on in Settings: the QRZ delta pull (**Pull confirmations automatically**) and the LoTW batch upload (**Upload to LoTW automatically**). There is no automatic scheduled pull for eQSL or ClubLog.
 - **WAZ** does not advance for contacts whose callsign cannot be resolved to a DXCC entity by cty.dat.
 - **No IOTA, WWFF, or Worked-All-Grids award tracking** in the current awards engine.
 - **Journey streak** is opt-in; the widget is hidden until you enable `journey_streak_enabled` in Settings.

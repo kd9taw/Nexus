@@ -43,6 +43,17 @@ const NEVER_IMPORT: readonly string[] = [
   'activeRadio',
   'qrzLastSyncUnix',
   'eqslLastSync',
+  // The LoTW DOWNLOAD cursor — the third of the same family, and the one that was missing.
+  // A cursor means "I already have everything up to here", which is true of the machine that
+  // saved the profile and not of this one. Import a NEWER stamp and Nexus skips every
+  // confirmation between the two dates, permanently: the next sync asks only for records after
+  // the borrowed date, so they never come back on their own. Silent, and it costs award credit
+  // the operator already earned.
+  'lotwLastQsl',
+  // Not a sync cursor but the same hazard: importing a stale "last automatic upload"
+  // stamp from another machine makes the next tick immediately due, so loading a profile
+  // would fire an unattended TQSL run the operator did not ask for.
+  'lotwLastAutoUploadUnix',
   'satVfoMap',
   'satUplinkRadios',
 ]
