@@ -14677,7 +14677,10 @@ mod tests {
     #[test]
     fn the_settings_opt_out_stops_the_view_from_arming_but_not_the_operator() {
         let mut on = Engine::new("W9XYZ", "EN61", 0);
-        assert!(on.sstv_auto_arm(), "default: opening the view arms the receiver");
+        assert!(
+            on.sstv_auto_arm(),
+            "default: opening the view arms the receiver"
+        );
 
         let mut off = Engine::with_settings(Settings {
             sstv_rx_auto_arm: false,
@@ -14686,7 +14689,10 @@ mod tests {
         assert!(!off.sstv_auto_arm(), "opted out: the view does not arm it");
         assert!(!off.sstv_armed());
         off.set_sstv_armed(true);
-        assert!(off.sstv_armed(), "the Arm button and the ISS pass arm still work");
+        assert!(
+            off.sstv_armed(),
+            "the Arm button and the ISS pass arm still work"
+        );
     }
 
     /// An explicit Arm is the operator's latest word, so it retires an earlier Stop.
@@ -18439,7 +18445,11 @@ mod tests {
 
         // Not sending: ordinary phone keeps the phone cap.
         e.set_rf_power(1.0);
-        assert_eq!(e.rf_power(), Some(0.80), "plain phone still takes the phone cap");
+        assert_eq!(
+            e.rf_power(),
+            Some(0.80),
+            "plain phone still takes the phone cap"
+        );
 
         // Sending SSTV: the high-duty cap applies.
         e.set_sstv_sending(true);
@@ -18464,7 +18474,11 @@ mod tests {
         e.set_sstv_sending(false);
         e.settings.max_power_digital = Some(0.30);
         e.set_rf_power(1.0);
-        assert_eq!(e.rf_power(), Some(0.80), "off the air, phone is phone again");
+        assert_eq!(
+            e.rf_power(),
+            Some(0.80),
+            "off the air, phone is phone again"
+        );
     }
 
     #[test]
@@ -19496,7 +19510,10 @@ mod tests {
         // 1. The operator's own switch.
         let mut s = ready.clone();
         s.lotw_auto_upload = false;
-        assert!(!lotw_auto_upload_due(&s, false, 1_754_700_000), "off is off");
+        assert!(
+            !lotw_auto_upload_due(&s, false, 1_754_700_000),
+            "off is off"
+        );
 
         // 2. TRAVELER MODE — the refusal that protects the operator's ARRL record. In this
         //    mode the whole batch is signed from the CURRENT grid, so an unattended run
@@ -23794,7 +23811,10 @@ mod tests {
         });
         let src = e.aprs_source().expect("a valid call parses");
         assert_eq!(src.call, "KD9TAW");
-        assert_eq!(src.ssid, 9, "the SSID already in mycall must survive the upgrade");
+        assert_eq!(
+            src.ssid, 9,
+            "the SSID already in mycall must survive the upgrade"
+        );
 
         // An explicit pick overrides it — including an explicit 0, which is a real choice.
         e.settings.aprs_ssid = Some(10);

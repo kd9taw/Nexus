@@ -4630,7 +4630,10 @@ mod tests {
             r##"{"aprsPath":[],"aprsChannelMhz":144.8,"aprsSsid":9,"aprsSymbolTable":"\\","aprsSymbolCode":"#"}"##,
         )
         .unwrap();
-        assert!(set.aprs_path.is_empty(), "an explicit empty path means direct");
+        assert!(
+            set.aprs_path.is_empty(),
+            "an explicit empty path means direct"
+        );
         assert_eq!(set.aprs_channel_mhz, Some(144.8));
         assert_eq!(set.aprs_ssid, Some(9));
         assert_eq!(set.aprs_symbol_table, "\\");
@@ -4715,9 +4718,15 @@ mod tests {
     #[test]
     fn sstv_settings_defaults_and_wire_keys() {
         let s = Settings::default();
-        assert!(s.sstv_rx_auto_arm, "opening the SSTV view arms the receiver — today's behaviour");
+        assert!(
+            s.sstv_rx_auto_arm,
+            "opening the SSTV view arms the receiver — today's behaviour"
+        );
         assert_eq!(s.sstv_default_tx_mode, "auto");
-        assert_eq!(s.sstv_tx_power_pct, None, "None = never touch the operator's power");
+        assert_eq!(
+            s.sstv_tx_power_pct, None,
+            "None = never touch the operator's power"
+        );
 
         let json = serde_json::to_string(&s).unwrap();
         for key in [

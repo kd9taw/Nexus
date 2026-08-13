@@ -2449,8 +2449,18 @@ mod tests {
         // Newest wins, per half, and the two halves are independent — a later failure must
         // not erase the earlier success, or "working until 3pm, broken since" is unsayable.
         lb.add(stamped("W1AW", 1_700_000_000, UploadOutcome::Accepted, 100));
-        lb.add(stamped("W2AAA", 1_700_000_100, UploadOutcome::Duplicate, 300));
-        lb.add(stamped("W3BBB", 1_700_000_200, UploadOutcome::AuthFail, 200));
+        lb.add(stamped(
+            "W2AAA",
+            1_700_000_100,
+            UploadOutcome::Duplicate,
+            300,
+        ));
+        lb.add(stamped(
+            "W3BBB",
+            1_700_000_200,
+            UploadOutcome::AuthFail,
+            200,
+        ));
         let h = lb.upload_health();
         assert_eq!(
             h.lotw.last_success_unix,
