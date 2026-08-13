@@ -8862,6 +8862,84 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-faint);
   font-family: var(--font-mono);
 }
+/* Find-a-setting search (settings header). Uses only theme variables so it follows both
+   themes without a second rule block — see the responsive/theming contract. */
+.settings-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  margin-right: var(--space-2);
+}
+.settings-search-icon {
+  position: absolute;
+  left: 6px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.settings-search-input {
+  width: 190px;
+  /* the header must not push the build stamp off a 1024-wide window; --vw-eff, not raw
+     vw, because raw viewport units are zoom-blind inside .app */
+  max-width: calc(var(--vw-eff) * 0.3);
+  font-size: 11px;
+  padding: 3px var(--space-2) 3px 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, transparent);
+  color: var(--text);
+}
+.settings-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.settings-search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  width: 320px;
+  max-width: calc(var(--vw-eff) * 0.6);
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.settings-search-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 5px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-search-hit.active,
+.settings-search-hit:hover {
+  background: var(--bg-hover, var(--border));
+}
+.settings-search-hit-label {
+  font-size: 12px;
+}
+.settings-search-hit-why {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.settings-search-empty {
+  padding: 6px var(--space-2);
+  font-size: 11px;
+  color: var(--text-dim);
+}
 .settings-update-btn {
   margin-left: var(--space-2);
   font-size: 10px;

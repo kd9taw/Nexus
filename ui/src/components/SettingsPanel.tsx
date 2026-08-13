@@ -90,6 +90,7 @@ import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
+import { SettingsSearch } from './SettingsSearch'
 import { resolveTarget } from '../settings/registry'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
@@ -2064,6 +2065,17 @@ export function SettingsPanel({
       <div className="panel-header">
         <h2>Settings</h2>
         <span className="settings-sub">operator, rig &amp; network</span>
+        {/* Search sits in the HEADER, above the rail, because it is the way in that does not
+            require guessing which tab something is under — which is the whole failure it exists
+            to answer. Picking a result reuses the same deep-link machinery a pointer elsewhere
+            in the app uses: it opens the tab, scrolls the section in and expands it if it is a
+            collapsed disclosure. */}
+        <SettingsSearch onPick={(sectionId) => {
+          const t = resolveTarget(sectionId)
+          if (!t) return
+          setTab(t.tab)
+          setOpenTarget(t.section ?? null)
+        }} />
         <span className="settings-build" title="This install's build stamp — confirm a fresh install actually took">
           build {__BUILD_ID__}
         </span>

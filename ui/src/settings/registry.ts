@@ -539,3 +539,111 @@ export function resolveTarget(raw: string): SettingsTarget | null {
   }
   return null
 }
+
+// ---------------------------------------------------------------------------
+// Search — 0.17's item B6, three batches late.
+//
+// The audit that produced the 0.17 plan called 230 controls without search
+// "disqualifying"; it is 280-odd now. Two prior reorganisations shipped instead, and each
+// decayed, because rearranging is a way of hoping the operator guesses the same shape you did,
+// while search lets them say what they want in their own words.
+//
+// ⚠️ IT SEARCHES `keywords`, NOT JUST LABELS, AND THAT IS THE WHOLE POINT. Every persona
+// walkthrough found the vocabulary operators actually type lives in HINT text, not in headings:
+// nothing in "Rig & CAT" or "Audio" contains "COM port" or "sound card", and issue #62 was an
+// operator who could not find a toggle that had already shipped. The keyword lists exist to carry
+// those words, and `registry.test.ts` refuses a keyword that merely repeats its own label.
+// ---------------------------------------------------------------------------
+
+export interface SettingsHit {
+  section: SettingsSectionDef
+  /** What actually matched — the UI shows it so a result never looks arbitrary ("Audio —
+   * matched 'sound card'"). */
+  matched: string
+  /** Higher is better. Only the ordering matters; the numbers are not an API. */
+  score: number
+}
+
+/** Lowercase, with punctuation reduced to single spaces — the form used for word splitting. */
+const fold = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+
+/** Lowercase with punctuation REMOVED, so a hyphen the operator did or did not type stops
+ * mattering: `wsjt-x` ⇄ `wsjtx`, `ci-v` ⇄ `civ`, `pl-tone` ⇄ `pl tone`.
+ *
+ * ⚠️ BOTH FORMS ARE NEEDED, and the first version of this shipped only the space form while its
+ * comment claimed this behaviour. `fold('wsjt-x')` is `'wsjt x'`, which does NOT contain
+ * `'wsjtx'` — so the hyphen-insensitivity was a comment, not a feature. The test that was
+ * supposed to cover it passed anyway, because both spellings happened to be listed as keywords;
+ * it proved nothing until a deliberately-broken `fold` failed to break it. */
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '')
+
+/**
+ * Rank the settings sections against what the operator typed.
+ *
+ * Scoring, highest first: an exact label; a label that starts with the query; an exact keyword;
+ * a keyword that starts with the query; a label containing it; a keyword containing it. A
+ * multi-word query must match every word somewhere in the section (label, id or keywords), so
+ * "audio device" finds Audio while "audio contest" finds nothing rather than both.
+ *
+ * Returns `[]` for a blank query — the caller shows nothing rather than the whole panel.
+ */
+export function searchSettings(query: string, limit = 8): SettingsHit[] {
+  const q = fold(query)
+  if (!q) return []
+  const words = q.split(' ').filter(Boolean)
+
+  const hits: SettingsHit[] = []
+  for (const section of SETTINGS_SECTIONS) {
+    const label = fold(section.label)
+    const id = fold(section.id)
+    const keywords = section.keywords.map((k) => ({ raw: k, folded: fold(k), squashed: squash(k) }))
+    const labelSquashed = squash(section.label)
+    const qs = squash(query)
+    // Every word must land somewhere, or a two-word query would match on its weakest half.
+    const everyWordLands = words.every(
+      (w) =>
+        label.includes(w) ||
+        id.includes(w) ||
+        labelSquashed.includes(squash(w)) ||
+        keywords.some((k) => k.folded.includes(w) || k.squashed.includes(squash(w))),
+    )
+    if (!everyWordLands) continue
+
+    let score = 0
+    let matched = section.label
+    if (label === q) score = 100
+    else if (label.startsWith(q)) score = 90
+    else {
+      // Each tier checks the spaced form first, then the punctuation-free one, so a query
+      // typed with or without the hyphen lands identically.
+      const exactKw = keywords.find((k) => k.folded === q || k.squashed === qs)
+      const prefixKw = keywords.find((k) => k.folded.startsWith(q) || k.squashed.startsWith(qs))
+      const containsKw = keywords.find((k) => k.folded.includes(q) || k.squashed.includes(qs))
+      if (exactKw) {
+        score = 80
+        matched = exactKw.raw
+      } else if (label.includes(q) || labelSquashed.includes(qs)) score = 70
+      else if (prefixKw) {
+        score = 60
+        matched = prefixKw.raw
+      } else if (containsKw) {
+        score = 50
+        matched = containsKw.raw
+      } else {
+        // Only the all-words-land path got us here — name the keyword carrying the first word
+        // so the row still explains itself.
+        score = 40
+        matched = keywords.find((k) => k.folded.includes(words[0]))?.raw ?? section.label
+      }
+    }
+    // A first-hour setting outranks a tie, and something buried in a disclosure is nudged UP:
+    // being hard to see by eye is precisely why someone is searching for it.
+    if (section.neededInHourOne) score += 3
+    if (section.advanced) score += 2
+    hits.push({ section, matched, score })
+  }
+
+  return hits
+    .sort((a, b) => b.score - a.score || a.section.label.localeCompare(b.section.label))
+    .slice(0, limit)
+}

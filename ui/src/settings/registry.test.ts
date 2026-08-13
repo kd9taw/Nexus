@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  searchSettings,
   SETTINGS_TABS,
   SETTINGS_SECTIONS,
   TAB_ALIASES,
@@ -312,5 +313,77 @@ describe('slugs agree with the generated manual', () => {
     const slugs = SETTINGS_SECTIONS.map((s) => sectionSlug(s.label))
     const dupes = slugs.filter((s, i) => slugs.indexOf(s) !== i)
     expect(dupes, 'two sections sharing a slug collide as doc anchors').toEqual([])
+  })
+})
+
+describe('searchSettings — the operator types their own words', () => {
+  const ids = (q: string) => searchSettings(q).map((h) => h.section.id)
+
+  it('finds a section by the words that are NOT in its label', () => {
+    // The whole reason this searches keywords. None of these strings appear in the heading the
+    // operator would have to guess, and each is what a real report called the thing.
+    expect(ids('com port')).toContain('rig-control') // heading says "Rig & CAT"
+    expect(ids('sound card')).toContain('audio') // heading says "Audio"
+    expect(ids('pl tone')).toContain('phone') // heading says "Phone (SSB / FM)"
+    expect(ids('wpm')).toContain('cw')
+    expect(ids('keps')).toContain('orbital-elements')
+    expect(ids('atno')).toContain('pounce')
+    expect(ids('text size')).toContain('workspace')
+  })
+
+  it('finds the toggle from issue #62 by the words that report used', () => {
+    // An FT-991A owner could not find "Data modes use plain SSB" — it was folded inside the
+    // collapsed Advanced group — and filed a feature request for a capability that had already
+    // shipped. It was closed with a hint rewrite; the findability cause is what this fixes.
+    for (const q of ['plain ssb', 'data modes', 'no rf', 'rigblaster', 'mic jack']) {
+      expect(ids(q), `"${q}" must reach the Advanced group`).toContain('rig-advanced')
+    }
+  })
+
+  it('is punctuation- and case-blind, the way an operator types', () => {
+    // ⚠️ THESE QUERIES ARE CHOSEN SO ONLY THE CODE CAN SATISFY THEM. The first version of this
+    // test used 'CI-V' and 'civ', both of which are LISTED KEYWORDS — so it passed with the
+    // punctuation handling deliberately removed, and proved nothing. Every spelling below is
+    // absent from `keywords`, so each one fails unless the search really is punctuation-blind.
+    expect(ids('wsjtx')).toContain('integrations-feeds') // keyword is 'wsjt-x'
+    expect(ids('civ')).toContain('rig-control') // (a listed keyword, but see 'ciV' below)
+    expect(ids('ciV')).toContain('rig-control') // case-blind
+    expect(ids('pltone')).toContain('phone') // keyword is 'pl tone'
+    expect(ids('soundcard')).toContain('audio') // matches 'sound card' either way
+    expect(ids('comport')).toContain('rig-control') // keyword is 'com port'
+    expect(ids('stopbits')).toContain('rig-control') // keyword is 'stop bits'
+  })
+
+  it('requires every word of a multi-word query to land', () => {
+    // Otherwise the weaker half drags in everything: "audio contest" would return Audio.
+    expect(ids('audio device')).toContain('audio')
+    expect(ids('audio contest')).toEqual([])
+  })
+
+  it('ranks an exact label above a mere keyword mention', () => {
+    // "CW" is the CW section's whole label and also a keyword elsewhere.
+    expect(searchSettings('cw')[0].section.id).toBe('cw')
+  })
+
+  it('says WHAT matched, so a result never looks arbitrary', () => {
+    const hit = searchSettings('sound card').find((h) => h.section.id === 'audio')
+    expect(hit?.matched).toBe('sound card')
+  })
+
+  it('returns nothing for a blank query, and for a word nobody uses', () => {
+    expect(searchSettings('')).toEqual([])
+    expect(searchSettings('   ')).toEqual([])
+    expect(searchSettings('zzzznotasetting')).toEqual([])
+  })
+
+  it('every hit resolves to a real landing place', () => {
+    // Search that finds a section it cannot navigate to is worse than no search.
+    for (const q of ['com port', 'sound card', 'plain ssb', 'aprs', 'lotw', 'keyer']) {
+      for (const h of searchSettings(q)) {
+        const t = resolveTarget(h.section.id)
+        expect(t, `${q} -> ${h.section.id} must resolve`).not.toBeNull()
+        expect(t?.section).toBe(h.section.id)
+      }
+    }
   })
 })
