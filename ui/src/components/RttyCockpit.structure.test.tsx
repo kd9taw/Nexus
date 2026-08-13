@@ -33,6 +33,7 @@ const state: { current: RttyState } = {
     markHz: 2125,
     spaceHz: 2295,
     sending: false,
+    latched: false,
     backend: 'afsk',
     keyerError: null,
     auto: false,

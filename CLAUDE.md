@@ -154,9 +154,21 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   key it holds), Stop TX (header → `halt_tx`), Tune (the tune carrier only), Space (window keyup =
   PTT-release, and only while Lock is off); CW — Stop TX (→ `stopCw`+`haltTx`), Tune, Esc; Operate —
   Stop TX (`.op-btn.stop` in `.cockpit-qso` → `halt_tx`, the only control here that cuts an over in
-  flight), Tune, Esc; RTTY — Stop TX (never disabled), the dock's Esc/Stop macro (`disabled={!sending}`,
-  live exactly while an over is on the air), the TX-enable latch and the sequencer's Abort (rendered
-  only while auto runs); SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch. **Operate's TX On/Off and
+  flight), Tune, Esc; RTTY — Stop TX (never disabled), the dock's Esc/Stop macro
+  (`disabled={!(sending || latched)}`, live exactly while an over is on the air **or** continuous TX
+  is latched), Esc (a window `keydown` bound only while RTTY is the visible view), the TX-enable
+  latch and the sequencer's Abort (rendered only while auto runs); SSTV — Stop (`.sstv-tx-bar`) +
+  the TX-enable latch.
+  **RTTY's continuous-TX ("TX") button is a SENDER, not a stop** — clicking it off stops accepting
+  characters and lets what was already typed finish keying, so it must never be added to the sweep's
+  `stopControls`. It is also the one transmission in the app with no precomputed end, so it carries
+  a stop the others do not need and no button can express: `Engine::poll_rtty_stream` re-checks every
+  TX gate on EVERY radio-loop tick and drops the latch (not merely the feed) when one goes down, so a
+  section change, a QSY out of privileges, a tune or a radio handoff unkeys within one tick. Two wall
+  clocks bound it — the ordinary TX watchdog (restarted by a keystroke exactly as by a send) and
+  `Engine::RTTY_MAX_LATCH_MS`, a hard per-over ceiling no typing can extend (the `MAX_TUNE_MS`
+  pattern) — and the loop renders at most `RTTY_STREAM_AHEAD_CHARS` of audio ahead, so a wedged loop
+  expires into an unkey instead of holding PTT. **Operate's TX On/Off and
   S&P are NOT stop controls and were removed from this list:** `set_tx_enabled` deliberately does not
   arm `slot_tx_abort` (operator 2026-07-31 — the FT over in flight completes; the button's own tooltip
   says so), and `onSetMode('qso-monitor')` ends the CQ run and drops the queue without arming anything.

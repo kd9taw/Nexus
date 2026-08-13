@@ -1722,6 +1722,29 @@ pub struct Engine {
     /// One-shot: abort the RTTY transmission in progress (the loop stops the FSK
     /// keying thread / flushes the AFSK audio ring and unkeys PTT).
     rtty_abort: bool,
+    /// CONTINUOUS-TX LATCH (the MMTTY "TX" button): the operator has asked to
+    /// stay keyed and type into a live transmission, instead of one keyed over
+    /// per Enter. Set ONLY by [`Engine::set_rtty_latched`] — never on arm, never
+    /// on launch, never by a decode.
+    ///
+    /// ⚠️ THIS FLAG IS NOT PERMISSION TO KEY, and nothing may treat it as such.
+    /// It is the operator's INTENT; the permission is re-derived from every gate
+    /// on EVERY radio-loop tick in [`Engine::poll_rtty_stream`], which drops the
+    /// latch outright the moment any of them goes down. A latched transmitter
+    /// that outlived a gate check would be the stuck-carrier incident this whole
+    /// design is arranged to prevent — so the rule is: the latch is a per-tick
+    /// PREDICATE, never a stored authorisation.
+    rtty_latched: bool,
+    /// Characters the operator has typed that have not yet been keyed, in order.
+    /// Filled by [`Engine::rtty_type`] (one insertion at a time from the compose
+    /// field — RTTY has no un-send, so nothing here can be edited or withdrawn)
+    /// and drained a chunk at a time by [`Engine::poll_rtty_stream`]. Empty means
+    /// the latched stream idles on DIDDLE (LTRS), not silence and not an unkey.
+    rtty_type_buf: VecDeque<char>,
+    /// Unix-ms when the current latch went up — the anchor for
+    /// [`RTTY_MAX_LATCH_MS`], the HARD ceiling on one continuous over. `None`
+    /// when not latched.
+    rtty_latch_start_ms: Option<u64>,
     /// True while the radio loop is keying an RTTY over (stamped by the loop each
     /// tick; the cockpit's sending indicator).
     rtty_sending: bool,
@@ -2540,6 +2563,13 @@ pub struct RttyRxState {
     pub shift_hz: u32,
     pub backend: String,
     pub sending: bool,
+    /// Continuous TX is latched (the cockpit's TX button) — the operator is keyed
+    /// and typing into a live transmission. Reported SEPARATELY from `sending`
+    /// and never folded into it: `sending` is "an over is on the air", which the
+    /// radio loop stamps from the audio actually in flight, and the cockpit needs
+    /// to know the latch is up even in the tick before the first chunk is keyed
+    /// (that is when its Stop control must already be live).
+    pub latched: bool,
     pub keyer_error: Option<String>,
     // --- Auto-sequencer surface (meaningful only while `auto` is true) ---
     /// The RTTY auto-sequencer is active (the operator's Auto toggle is on).
@@ -2569,6 +2599,41 @@ enum RttyOp {
     Tick,
     /// The engine finished keying the last over (restarts the reply timer).
     TxComplete,
+}
+
+/// Uppercase + drop anything with no ITA2 mapping — the ONE filter every RTTY TX
+/// path runs, so what is queued (or typed into a latched stream) is exactly what
+/// keys, and the two paths can never disagree about which characters exist.
+fn rtty_filter(text: &str) -> String {
+    text.chars()
+        .map(|c| c.to_ascii_uppercase())
+        .filter(|&c| tempo_core::rtty::encodable(c))
+        .collect()
+}
+
+/// What the radio loop should key this tick on behalf of the continuous-TX latch
+/// ([`Engine::poll_rtty_stream`]).
+///
+/// Three explicit answers rather than an empty-string sentinel: "nothing typed"
+/// and "not transmitting" are opposite instructions to a keyed transmitter, and a
+/// consumer that had to infer the difference from an empty buffer would sooner or
+/// later infer it wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RttyStreamTick {
+    /// Not streaming. The loop must not key on the latch's behalf — and if it was,
+    /// the latch has just been dropped and the abort armed, so it unkeys.
+    Idle,
+    /// Streaming and every gate is up, but the loop asked for no characters this
+    /// tick because its audio look-ahead is already full. Stay keyed, key nothing.
+    /// This exists so the loop can run the gate re-check on EVERY tick without
+    /// having to feed on every tick — the predicate is the safety, the feeding is
+    /// only the feature.
+    Ahead,
+    /// Key these typed characters (never empty).
+    Text(String),
+    /// Latched with nothing typed: key the RTTY IDLE (a LTRS diddle) to hold the
+    /// carrier and the far end's sync. Never silence under a held PTT.
+    Diddle,
 }
 
 /// The `rtty_state` seq-state string the UI switches on.
@@ -3079,6 +3144,9 @@ impl Engine {
             rtty_center: None,
             rtty_queue: VecDeque::new(),
             rtty_abort: false,
+            rtty_latched: false,
+            rtty_type_buf: VecDeque::new(),
+            rtty_latch_start_ms: None,
             rtty_sending: false,
             rtty_keyer_error: None,
             rtty_seq: None,
@@ -4533,6 +4601,13 @@ impl Engine {
         };
         // A mode change invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        // …and it ends RTTY's continuous-TX latch. Leaving the section is what
+        // stops RTTY today — `poll_rtty_one` simply stops being called, so the
+        // queue is held and nothing keys. A LATCHED transmitter is already keyed,
+        // so "stop being polled" is not enough: it has to be dropped and unkeyed.
+        // The per-tick predicate in `poll_rtty_stream` catches this too; this is
+        // the explicit half, so the kill does not depend on a tick arriving.
+        self.drop_rtty_latch();
         self.settings.operating_mode = om;
         // SAFETY re-clamp: entering a mode with a lower power ceiling (SSB → FT8) must bring the
         // rig DOWN to the cap now, not wait for the operator to touch the power slider. If a cap
@@ -7591,9 +7666,11 @@ impl Engine {
         self.cw_abort = true;
         // Cut any in-progress RTTY the same way: drop every queued message and arm
         // the one-shot abort so the radio loop stops the FSK keying thread / flushes
-        // the AFSK audio ring and unkeys on its next tick.
+        // the AFSK audio ring and unkeys on its next tick. `drop_rtty_latch` adds
+        // continuous TX — a halt that left the latch up would unkey and re-key.
         self.rtty_queue.clear();
         self.rtty_abort = true;
+        self.drop_rtty_latch();
         self.aprs_tx_queue.clear(); // drop any queued APRS beacon so Stop TX cancels it
         self.voice_tx = None; // drop any queued voice-keyer audio too
                               // Cut any in-progress SSTV image the same way: drop the queued job and arm the
@@ -7863,9 +7940,13 @@ impl Engine {
             self.cw_queue.clear();
             self.cw_abort = true;
             // Same for RTTY: a disarm must abort the over in flight AND drop the
-            // queue, so nothing keys on a later re-enable.
+            // queue, so nothing keys on a later re-enable. Continuous TX goes with
+            // it — the TX-enable latch is one of RTTY's stop controls precisely
+            // because it arms `rtty_abort`, and a latch that survived it would be
+            // keyed with the arm switch off.
             self.rtty_queue.clear();
             self.rtty_abort = true;
+            self.drop_rtty_latch();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -9958,7 +10039,11 @@ impl Engine {
             Some(TxOwner::Voice)
         } else if !self.cw_queue.is_empty() {
             Some(TxOwner::Cw)
-        } else if self.rtty_sending || !self.rtty_queue.is_empty() {
+        } else if self.rtty_sending || !self.rtty_queue.is_empty() || self.rtty_streaming() {
+            // `rtty_streaming` is the continuous-TX latch: it owns the
+            // transmitter from the instant the operator presses TX, before the
+            // first chunk has been keyed and `rtty_sending` stamped — otherwise a
+            // tune, a beacon or a voice message could grab the rig in that gap.
             Some(TxOwner::Rtty)
         } else if self.sstv_tx.is_some() || self.sstv_sending {
             Some(TxOwner::Sstv)
@@ -10028,7 +10113,8 @@ impl Engine {
             backend: if self.rtty_fsk() { "fsk" } else { "afsk" }.to_string(),
             // Sending = an over on the air (stamped by the loop) OR messages still
             // queued behind it — the cockpit's TX indicator.
-            sending: self.rtty_sending || !self.rtty_queue.is_empty(),
+            sending: self.rtty_sending || !self.rtty_queue.is_empty() || self.rtty_streaming(),
+            latched: self.rtty_latched,
             keyer_error: self.rtty_keyer_error.clone(),
             text,
             auto,
@@ -10094,7 +10180,37 @@ impl Engine {
     /// Stop TX / halt drops the whole queue.
     pub fn rtty_send_text(&mut self, text: &str) -> Result<(), String> {
         self.rtty_tx_gate()?;
+        // Continuous TX up: a macro TYPES INTO the live transmission instead of
+        // queueing a separate over behind it (MMTTY's F-keys work exactly this
+        // way). Not a convenience — the latched stream holds the message queue,
+        // so an enqueue here would be a silent hold: the operator would press F1
+        // and hear nothing until they unlatched.
+        if self.rtty_latched {
+            let up = rtty_filter(text);
+            if up.trim().is_empty() {
+                return Err(
+                    "Nothing to send — RTTY carries A–Z, 0–9 and basic punctuation".to_string(),
+                );
+            }
+            return self.rtty_type(&up);
+        }
         self.rtty_enqueue(text, true)
+    }
+
+    /// The auto-sequencer's extra gate: it may not start a QSO while continuous
+    /// TX is latched. The two own the transmitter in incompatible ways — the
+    /// sequencer keys whole overs through the message queue and needs the
+    /// transmitter to DROP between them (that drop is the edge `rtty_auto_service`
+    /// turns into `on_tx_complete`), which is exactly what a latch prevents. The
+    /// mirror of the refusal in [`Self::set_rtty_latched`], so neither can be
+    /// entered from the other's state.
+    fn rtty_no_latch_gate(&self) -> Result<(), String> {
+        if self.rtty_latched {
+            return Err(
+                "Continuous TX is on — click TX off before starting an auto QSO".to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// The up-front RTTY TX gate: every reason a send would be refused, checked
@@ -10154,11 +10270,7 @@ impl Engine {
     /// an auto-over that merely repeats, so an unanswered auto-CQ still trips the
     /// watchdog ceiling. Assumes [`Engine::rtty_tx_gate`] has already passed.
     fn rtty_enqueue(&mut self, text: &str, reset_watchdog: bool) -> Result<(), String> {
-        let up: String = text
-            .chars()
-            .map(|c| c.to_ascii_uppercase())
-            .filter(|&c| tempo_core::rtty::encodable(c))
-            .collect();
+        let up = rtty_filter(text);
         if up.trim().is_empty() {
             return Err(
                 "Nothing to send — RTTY carries A–Z, 0–9 and basic punctuation".to_string(),
@@ -10189,7 +10301,12 @@ impl Engine {
     pub fn rtty_stop(&mut self) {
         self.rtty_queue.clear();
         self.rtty_abort = true;
-        self.slot_tx_abort = true; // and the PTT tail past rtty_busy_until (see stop_cw)
+        // …and the PTT tail past rtty_busy_until (see stop_cw).
+        self.slot_tx_abort = true;
+        // …and continuous TX, which is the one RTTY transmission with no
+        // precomputed end: without this, Stop TX would drop the queue and the
+        // over in flight and the latch would key straight back up next tick.
+        self.drop_rtty_latch();
     }
 
     /// Pop the next queued RTTY MESSAGE for the radio loop to key, or `None` while
@@ -10238,6 +10355,234 @@ impl Engine {
         std::mem::take(&mut self.rtty_abort)
     }
 
+    // ----- RTTY continuous TX (the MMTTY "TX" latch) — stay keyed and type into
+    // a live transmission, instead of one keyed over per Enter. -----
+    //
+    // THE SAFETY MODEL, because a latched transmitter is the one thing in this
+    // app that keys with no precomputed end:
+    //
+    // 1. The latch is a PER-TICK PREDICATE, not a stored authorisation.
+    //    `poll_rtty_stream` re-checks every gate `rtty_send_text` checks — TX
+    //    armed, inside privileges, RTTY owns the section, no tune carrier — on
+    //    EVERY tick, and drops the latch (not merely the feed) when any goes
+    //    down. The radio loop adds the one gate the engine cannot see
+    //    (`may_key`: not onto a radio the loop doesn't own) and calls
+    //    `drop_rtty_latch` for it. Leaving a section or losing privileges on a
+    //    QSY therefore UNKEYS within one tick — neither is an explicit "stop
+    //    RTTY" call, and before the latch neither needed to be, because
+    //    `poll_rtty_one` simply stopped being called and the queue just waited.
+    //    A keyed transmitter cannot wait, which is the whole difference.
+    // 2. Every explicit stop drops it: `rtty_stop` (Stop TX + the dock's Esc/Stop
+    //    macro), `halt_tx`, `set_tx_enabled(false)` (the TX-enable latch),
+    //    `set_operating_mode` and the auto-sequencer's Abort. A radio switch and
+    //    a Test-CAT port hold reach `halt_tx` through
+    //    `halt_tx_for_context_change`, so those are covered here rather than by
+    //    the loop's `may_key` drop, which is belt-and-braces on both (the tests
+    //    say which is which — see `a_cat_port_hold_drops_a_latched_rtty_over`).
+    // 3. TWO independent wall clocks bound it, and neither may be weakened. The
+    //    ordinary TX watchdog runs here exactly as it does in `poll_rtty_one`
+    //    (a walk-away trips it: no typing, no reset, TX disarms). Above it sits
+    //    [`RTTY_MAX_LATCH_MS`], a hard per-over ceiling that no amount of typing
+    //    can extend — the [`MAX_TUNE_MS`] pattern, and for the same reason: a
+    //    stuck key or a wedged UI must not buy an unattended carrier.
+    // 4. The loop only ever renders a bounded LOOK-AHEAD (see
+    //    `RTTY_STREAM_AHEAD_CHARS` in tempo-audio), so `tx_until_ms` is never
+    //    extended more than a fraction of a second past now: a loop that wedges
+    //    expires into an unkey by default rather than holding PTT.
+
+    /// HARD CEILING on one continuous latched over (ms), whatever the operator
+    /// types. 10 minutes is far past any human keyboard-RTTY over and well past
+    /// the 6-minute default watchdog, so in normal operating it is never the
+    /// thing that ends an over — it exists for the abnormal case the watchdog
+    /// cannot see, because typing resets the watchdog (see `rtty_type`): a stuck
+    /// key, an autorepeat, a wedged compose field. Mirrors [`MAX_TUNE_MS`]: a
+    /// latched carrier gets a ceiling that no setting and no input can raise.
+    pub const RTTY_MAX_LATCH_MS: u64 = 10 * 60 * 1000;
+
+    /// Cap on the un-keyed type-ahead buffer. A human types far slower than
+    /// 45.45 baud drains (6.6 char/s), so this only bites a runaway producer —
+    /// and it bounds how long a latch-off takes to drain.
+    const RTTY_TYPE_BUF_CAP: usize = 1000;
+
+    /// Turn continuous TX on/off — the cockpit's TX button.
+    ///
+    /// ON runs the SAME up-front gate as a send ([`Self::rtty_tx_gate`]), so the
+    /// latch can never key anywhere a send could not, and the operator is told
+    /// why it was refused instead of watching a button that does nothing. It is
+    /// additionally refused while the auto-sequencer is running a QSO: the
+    /// sequencer keys whole overs through the message queue and expects the
+    /// transmitter to drop between them (that drop is the edge `rtty_auto_service`
+    /// turns into `on_tx_complete`), so the two ways of owning the transmitter
+    /// are deliberately exclusive rather than subtly interleaved.
+    ///
+    /// OFF is the MMTTY semantic: stop accepting characters and let what the
+    /// operator already typed finish keying, then unkey (`poll_rtty_stream`
+    /// returns [`RttyStreamTick::Idle`] once the buffer drains, and the loop's
+    /// `tx_until_ms` unkeys as it does for any over). It is NOT the emergency
+    /// stop and does not pretend to be — Stop TX, the Esc/Stop macro and the
+    /// TX-enable latch all cut instantly, and every one of them also drops this.
+    pub fn set_rtty_latched(&mut self, on: bool) -> Result<(), String> {
+        if !on {
+            // Intent down; the typed buffer drains on the air. Every gate is
+            // still re-checked per tick while it does.
+            //
+            // `rtty_latch_start_ms` is deliberately LEFT SET: the drain is still a
+            // keyed transmission (up to the buffer cap, ~2.75 min at 45.45 baud),
+            // so the hard ceiling has to bound the whole keyed period and not just
+            // the part with the operator's intent still up. `drop_rtty_latch` is
+            // what clears it, together with everything else.
+            self.rtty_latched = false;
+            return Ok(());
+        }
+        if self.rtty_latched {
+            return Ok(()); // idempotent — re-latching must not restart the ceiling
+        }
+        self.rtty_tx_gate()?;
+        if self
+            .rtty_seq
+            .as_ref()
+            .is_some_and(|s| s.state() != tempo_core::rtty::SeqState::Idle)
+        {
+            return Err(
+                "The auto-sequencer is running this QSO — abort it first, or turn Auto off, \
+                 to type continuously"
+                    .to_string(),
+            );
+        }
+        self.rtty_latched = true;
+        self.rtty_latch_start_ms = Some(now_unix_millis());
+        // Keying up is an operator action, exactly like a send: restart the
+        // watchdog clock so the ceiling is measured from here.
+        self.reset_tx_watchdog();
+        Ok(())
+    }
+
+    /// Whether continuous TX is latched (the cockpit's TX button state).
+    pub fn rtty_latched(&self) -> bool {
+        self.rtty_latched
+    }
+
+    /// The latched stream is running: the operator is latched, or the latch is
+    /// down but what they typed is still going out.
+    fn rtty_streaming(&self) -> bool {
+        self.rtty_latched || !self.rtty_type_buf.is_empty()
+    }
+
+    /// Feed typed characters into the live transmission. Uppercased and filtered
+    /// to the ITA2 charset exactly as [`Self::rtty_enqueue`] does, so what the
+    /// operator sees is what goes on the air.
+    ///
+    /// Refused unless the latch is up — there is no path from a keystroke to the
+    /// transmitter that does not go through the operator having pressed TX.
+    ///
+    /// A typed character RESTARTS THE TX WATCHDOG, for the same reason pressing
+    /// Enter does (`rtty_enqueue`): the watchdog's job is catching an UNATTENDED
+    /// transmitter, and a keystroke is the same evidence of attendance that a
+    /// send is. What stops that from being a hole is [`Self::RTTY_MAX_LATCH_MS`]
+    /// above it, which no keystroke can extend.
+    pub fn rtty_type(&mut self, text: &str) -> Result<(), String> {
+        if !self.rtty_latched {
+            return Err("Continuous TX is off — click TX first".to_string());
+        }
+        let mut typed = 0usize;
+        for c in rtty_filter(text).chars() {
+            if self.rtty_type_buf.len() >= Self::RTTY_TYPE_BUF_CAP {
+                break;
+            }
+            self.rtty_type_buf.push_back(c);
+            typed += 1;
+        }
+        if typed > 0 {
+            self.reset_tx_watchdog();
+        }
+        Ok(())
+    }
+
+    /// Drop the latch NOW: clear the operator's intent AND the un-keyed
+    /// type-ahead, and arm the aborts that make the radio loop flush the audio
+    /// ring / stop the FSK keyer and unkey on its next tick.
+    ///
+    /// This is what every kill path calls. It is deliberately unconditional
+    /// about the intent and conditional only about the abort (arming a one-shot
+    /// abort when nothing was streaming would cut an unrelated over riding the
+    /// same PTT — the same care `set_tx_enabled(false)`'s RTTY arm takes).
+    pub fn drop_rtty_latch(&mut self) {
+        let was_streaming = self.rtty_streaming();
+        self.rtty_latched = false;
+        self.rtty_latch_start_ms = None;
+        self.rtty_type_buf.clear();
+        if was_streaming {
+            self.rtty_abort = true;
+            self.slot_tx_abort = true; // and the PTT tail (see rtty_stop)
+        }
+    }
+
+    /// One radio-loop tick of the latched character stream — the ONLY path from
+    /// the latch to the transmitter, and the per-tick gate re-check described
+    /// above. `max_chars` is the loop's look-ahead budget for this tick.
+    ///
+    /// Returns what to key: nothing at all, the operator's characters, or the
+    /// RTTY IDLE. Idle is [`RttyStreamTick::Diddle`] and not silence — between
+    /// keystrokes a latched RTTY signal carries LTRS fill, which is what holds
+    /// the far end's decoder in sync and what an MMTTY operator hears. Silence
+    /// under a held PTT would read as a dropout and lose the far end's clock.
+    pub fn poll_rtty_stream(&mut self, max_chars: usize) -> RttyStreamTick {
+        use crate::settings::OperatingMode;
+        if !self.rtty_streaming() {
+            return RttyStreamTick::Idle;
+        }
+        // ⚠️ THE PER-TICK PREDICATE. Every gate `rtty_tx_gate` checks before a
+        // send is re-checked here before every chunk, because a latch outlives
+        // the moment it was granted and the gates do not. `poll_rtty_one`'s
+        // equivalent gate merely HOLDS the queue; holding is not an option for a
+        // keyed transmitter, so each of these DROPS THE LATCH and unkeys.
+        if !self.tx_enabled
+            || !self.tx_allowed()
+            || self.tuning
+            || self.settings.operating_mode != OperatingMode::Rtty
+        {
+            self.drop_rtty_latch();
+            return RttyStreamTick::Idle;
+        }
+        let now = now_unix_millis();
+        // Ceiling 1 — the hard per-over cap no typing can extend.
+        if let Some(start) = self.rtty_latch_start_ms {
+            if now.saturating_sub(start) >= Self::RTTY_MAX_LATCH_MS {
+                self.drop_rtty_latch();
+                self.rtty_keyer_error = Some(format!(
+                    "Continuous TX unkeyed at its {}-minute ceiling — click TX again to carry on",
+                    Self::RTTY_MAX_LATCH_MS / 60_000
+                ));
+                return RttyStreamTick::Idle;
+            }
+        }
+        // Ceiling 2 — the ordinary wall-clock TX watchdog, identical to
+        // `poll_rtty_one`'s (a trip disarms TX, so it stays stopped). Typing
+        // restarts its clock; walking away does not.
+        let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
+        if limit_secs > 0 {
+            let now_s = now_unix_secs();
+            let start = *self.tx_watchdog_start.get_or_insert(now_s);
+            if now_s.saturating_sub(start) >= limit_secs {
+                self.tx_watchdog = true;
+                self.tx_enabled = false;
+                self.rtty_queue.clear();
+                self.drop_rtty_latch();
+                return RttyStreamTick::Idle;
+            }
+        }
+        // Every gate above has been re-checked; from here it is only about what
+        // to key. A zero budget means the loop is already fed far enough ahead.
+        if max_chars == 0 {
+            return RttyStreamTick::Ahead;
+        }
+        if self.rtty_type_buf.is_empty() {
+            return RttyStreamTick::Diddle;
+        }
+        let n = max_chars.min(self.rtty_type_buf.len());
+        RttyStreamTick::Text(self.rtty_type_buf.drain(..n).collect())
+    }
+
     // ----- RTTY auto-sequencer — the pure `tempo_core::rtty::RttySeq` state
     // machine wired to the live TX path + logbook, gated behind the operator's
     // Auto toggle and a human CQ/Answer initiate. It NEVER transmits on launch or
@@ -10282,6 +10627,7 @@ impl Engine {
         if self.rtty_seq.is_none() {
             return Err("Turn on Auto first".to_string());
         }
+        self.rtty_no_latch_gate()?;
         self.rtty_tx_gate()?;
         self.rtty_drive(RttyOp::StartCq);
         Ok(())
@@ -10293,6 +10639,7 @@ impl Engine {
         if self.rtty_seq.is_none() {
             return Err("Turn on Auto first".to_string());
         }
+        self.rtty_no_latch_gate()?;
         self.rtty_tx_gate()?;
         self.rtty_drive(RttyOp::Answer(call.to_string()));
         Ok(())
@@ -14360,6 +14707,338 @@ mod tests {
         assert_eq!(e.poll_rtty_one(), None, "nothing keys while disarmed");
         e.set_tx_enabled(true);
         assert_eq!(e.poll_rtty_one(), None, "halt dropped the queued messages");
+    }
+
+    // ----- Continuous TX (the MMTTY "TX" latch). A latched transmitter is the
+    // only thing in this app that keys with no precomputed end, so these tests
+    // are about the STOPS, not the feature. -----
+
+    /// A latched engine, keyed and ready to stream.
+    fn rtty_latched_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_latched(true).unwrap();
+        assert!(e.rtty_latched());
+        // The first tick of a latch with nothing typed is the RTTY idle.
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Diddle);
+        e
+    }
+
+    #[test]
+    fn rtty_latch_never_comes_up_on_its_own() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Launch: no latch, nothing to key, no abort pending.
+        assert!(!e.rtty_latched());
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        assert!(!e.take_rtty_abort());
+        // Arming the RX decoder is RX-only — it cannot key.
+        e.set_rtty_armed(true);
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        // Entering the section arms TX (a manual mode) but does NOT latch.
+        e.set_operating_mode("rtty", false);
+        assert!(e.tx_enabled());
+        assert!(!e.rtty_latched());
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        // And typing without the latch is refused outright: there is no path
+        // from a keystroke to the transmitter that skips the TX button.
+        assert!(e.rtty_type("CQ").is_err());
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+    }
+
+    #[test]
+    fn rtty_latch_inherits_every_gate_a_send_passes() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Not in the RTTY section → refused, same reason a send is refused.
+        assert!(e.set_rtty_latched(true).is_err());
+        e.set_operating_mode("rtty", false);
+        // TX disarmed → refused.
+        e.set_tx_enabled(false);
+        assert!(e.set_rtty_latched(true).unwrap_err().contains("TX is off"));
+        e.set_tx_enabled(true);
+        // Tune carrier up → refused (the tune owns the transmitter).
+        e.set_tune(true);
+        assert!(e.set_rtty_latched(true).unwrap_err().contains("Tune"));
+        e.set_tune(false);
+        // Outside license privileges → refused.
+        e.set_license_class("technician");
+        e.set_frequency(14.083, "20m", "LSB");
+        assert!(!e.tx_allowed());
+        assert!(e.set_rtty_latched(true).unwrap_err().contains("license"));
+        // Every refusal left the transmitter alone.
+        assert!(!e.rtty_latched());
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        // …and where a send would be allowed, so is the latch.
+        e.set_frequency(28.083, "10m", "LSB");
+        assert!(e.tx_allowed());
+        e.set_rtty_latched(true).unwrap();
+        assert!(e.rtty_latched());
+    }
+
+    #[test]
+    fn a_latched_stream_idles_on_diddle_and_keys_what_is_typed() {
+        let mut e = rtty_latched_engine();
+        // Nothing typed: the air carries the RTTY idle, NOT silence and NOT an
+        // unkey. This is the whole difference from send-and-done.
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Diddle);
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Diddle);
+        // Typed characters key in order, uppercased and ITA2-filtered exactly as
+        // a send filters them ('%' has no mapping).
+        e.rtty_type("de w9xyz 100%").unwrap();
+        let mut out = String::new();
+        loop {
+            match e.poll_rtty_stream(3) {
+                RttyStreamTick::Text(t) => out.push_str(&t),
+                RttyStreamTick::Diddle => break, // buffer drained → back to idle
+                RttyStreamTick::Idle => panic!("the latch dropped while streaming"),
+                // Only a ZERO budget means "fed far enough ahead"; we asked for 3.
+                RttyStreamTick::Ahead => panic!("asked for characters, told to wait"),
+            }
+        }
+        assert_eq!(out, "DE W9XYZ 100");
+        // The chunk budget is honoured (the loop's look-ahead bound).
+        e.rtty_type("ABCDEFG").unwrap();
+        assert_eq!(e.poll_rtty_stream(3), RttyStreamTick::Text("ABC".into()));
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Text("DE".into()));
+        // And the buffer is bounded, so a runaway producer cannot grow it.
+        e.rtty_type(&"A".repeat(5000)).unwrap();
+        let mut n = 2; // "FG" still pending
+        while let RttyStreamTick::Text(t) = e.poll_rtty_stream(100) {
+            n += t.len();
+        }
+        assert_eq!(n, Engine::RTTY_TYPE_BUF_CAP + 2);
+    }
+
+    /// EVERY KILL PATH, one assertion each. A latched transmitter that survived
+    /// any of these is the stuck-carrier incident the design exists to prevent —
+    /// so each case checks all three things that make the stop real: the intent
+    /// is gone, the un-keyed type-ahead is gone, and the abort the radio loop
+    /// turns into flush + unkey is armed.
+    #[test]
+    fn rtty_latch_drops_on_every_kill_path() {
+        // The kill under test is applied to a latched engine with characters
+        // still buffered, so a path that dropped only the intent would be caught.
+        fn killed(kill: impl FnOnce(&mut Engine)) -> Engine {
+            let mut e = rtty_latched_engine();
+            e.rtty_type("STILL TYPING").unwrap();
+            kill(&mut e);
+            assert!(!e.rtty_latched(), "the latch survived");
+            assert!(
+                e.take_rtty_abort(),
+                "no abort armed — the loop would keep keying to the end of the ring"
+            );
+            assert_eq!(
+                e.poll_rtty_stream(2),
+                RttyStreamTick::Idle,
+                "the stream kept feeding after the kill"
+            );
+            e
+        }
+
+        // 1. Stop TX / the dock's Esc-Stop macro (both route to rtty_stop).
+        killed(|e| e.rtty_stop());
+        // 2. halt_tx — the universal stop (header Stop TX, the UDP HaltTx).
+        let e = killed(|e| e.halt_tx());
+        assert!(!e.tx_enabled(), "halt disarms TX — stopped stays stopped");
+        // 3. The TX-enable latch, which is one of RTTY's census stop controls.
+        killed(|e| e.set_tx_enabled(false));
+        // 4. Leaving the section. This is the one the old design got for free —
+        //    poll_rtty_one simply stopped being called and the queue was HELD.
+        //    A keyed transmitter cannot be "held", so it must be dropped.
+        killed(|e| e.set_operating_mode("phone", false));
+        // 5. The auto-sequencer's Abort (rtty_auto_abort → rtty_stop).
+        killed(|e| e.rtty_auto_abort());
+        // 6. A tune carrier taking the transmitter — caught by the PER-TICK
+        //    predicate, with no explicit RTTY call anywhere in set_tune.
+        killed(|e| {
+            e.set_tune(true);
+            assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        });
+        // 7. A QSY out of privileges — likewise per-tick only. The dial can move
+        //    under a latched transmitter from a spot click, a memory recall or a
+        //    rotator-follow, none of which knows RTTY exists.
+        killed(|e| {
+            e.set_license_class("technician");
+            e.set_frequency(14.083, "20m", "LSB");
+            assert!(!e.tx_allowed());
+            assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        });
+        // 8. The loop's own gate: not onto a radio it doesn't own (may_key is
+        //    the radio loop's state, so the loop calls this directly).
+        killed(|e| e.drop_rtty_latch());
+    }
+
+    /// The per-tick predicate is a GUARD, so it has to be shown not firing too —
+    /// otherwise "everything drops the latch" would pass with a predicate that
+    /// simply always drops it, and continuous TX would not exist.
+    #[test]
+    fn the_latch_predicate_holds_while_every_gate_is_up() {
+        let mut e = rtty_latched_engine();
+        for _ in 0..50 {
+            assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Diddle);
+        }
+        assert!(e.rtty_latched(), "the latch dropped with every gate up");
+        assert!(
+            !e.take_rtty_abort(),
+            "an abort was armed with nothing wrong"
+        );
+    }
+
+    #[test]
+    fn a_latched_over_is_bounded_by_the_wall_clock_watchdog() {
+        let mut e = rtty_latched_engine();
+        let mut s = e.settings().clone();
+        s.tx_watchdog_min = 1;
+        e.apply_settings(s);
+        // Typing restarts the clock, exactly as pressing Enter does — a keystroke
+        // is the same evidence of an attended transmitter that a send is.
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        e.rtty_type("STILL HERE").unwrap();
+        assert!(
+            e.tx_watchdog_start.is_none(),
+            "a typed character must restart the watchdog clock"
+        );
+        // Walking away does not: the clock runs out and the watchdog trips
+        // BEFORE the next chunk, disarming TX and dropping the latch.
+        while let RttyStreamTick::Text(_) = e.poll_rtty_stream(100) {}
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        assert!(e.tx_watchdog, "the watchdog did not trip on a latched over");
+        assert!(!e.tx_enabled(), "a trip disarms TX");
+        assert!(!e.rtty_latched(), "a trip must drop the latch");
+        assert!(e.take_rtty_abort(), "a trip must unkey");
+    }
+
+    #[test]
+    fn a_latched_over_is_bounded_by_its_own_ceiling_that_typing_cannot_extend() {
+        let mut e = rtty_latched_engine();
+        // No ordinary watchdog at all — this ceiling stands on its own, which is
+        // the point: it covers what the watchdog cannot see, because typing
+        // restarts the watchdog and a stuck key types forever.
+        let mut s = e.settings().clone();
+        s.tx_watchdog_min = 0;
+        e.apply_settings(s);
+        e.rtty_latch_start_ms =
+            Some(now_unix_millis().saturating_sub(Engine::RTTY_MAX_LATCH_MS + 1));
+        // Type at the moment of the check — the ceiling must not care.
+        e.rtty_type("AAAA").unwrap();
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        assert!(!e.rtty_latched(), "the hard ceiling did not unkey");
+        assert!(e.take_rtty_abort());
+        assert!(
+            e.rtty_state()
+                .keyer_error
+                .is_some_and(|m| m.contains("ceiling")),
+            "an unexplained unkey reads as a fault — say why"
+        );
+        // The ceiling bounds the whole KEYED period, not just the part with the
+        // operator's intent up: clicking TX off leaves a buffer draining on the
+        // air, which is still a transmission and still has to end.
+        e.set_tx_enabled(true);
+        e.set_rtty_latched(true).unwrap();
+        e.rtty_type("A LONG TAIL").unwrap();
+        e.set_rtty_latched(false).unwrap(); // draining, intent already down
+        e.rtty_latch_start_ms =
+            Some(now_unix_millis().saturating_sub(Engine::RTTY_MAX_LATCH_MS + 1));
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Idle);
+        assert!(
+            e.take_rtty_abort(),
+            "the drain outran the ceiling unbounded"
+        );
+        // …and the ceiling is not restarted by re-latching within the same over:
+        // it is restarted by the operator deliberately keying up again.
+        e.set_tx_enabled(true);
+        e.set_rtty_latched(true).unwrap();
+        assert_eq!(e.poll_rtty_stream(2), RttyStreamTick::Diddle);
+    }
+
+    #[test]
+    fn the_latch_and_the_auto_sequencer_never_own_the_transmitter_together() {
+        // The sequencer's ONLY on_tx_complete edge is `rtty_auto_over &&
+        // !rtty_sending && rtty_queue.is_empty()` — a transmitter that never
+        // drops between overs would hang it mid-QSO with the rig keyed. The two
+        // are therefore exclusive, refused from BOTH directions.
+        let mut e = rtty_auto_engine();
+        e.rtty_auto_cq().unwrap();
+        assert_ne!(e.rtty_state().seq_state, "idle", "a QSO is running");
+        assert!(
+            e.set_rtty_latched(true)
+                .unwrap_err()
+                .contains("auto-sequencer"),
+            "the latch must not come up under a running sequencer"
+        );
+        assert!(!e.rtty_latched());
+        // The other direction: no auto QSO may start under a latch.
+        e.rtty_auto_abort();
+        e.set_rtty_latched(true).unwrap();
+        assert!(e.rtty_auto_cq().unwrap_err().contains("Continuous TX"));
+        assert!(e
+            .rtty_auto_answer("W1AW")
+            .unwrap_err()
+            .contains("Continuous TX"));
+        // REGRESSION GUARD for the way this feature was nearly built: the fix
+        // that reached for `rtty_sending` to keep the Stop macro enabled would
+        // have pinned that flag true for the whole latched period and killed the
+        // edge above. The latch does not touch it, so the sequencer still runs.
+        e.rtty_stop(); // drops the latch
+        assert!(!e.rtty_latched());
+        e.rtty_auto_cq().unwrap();
+        e.set_rtty_sending(true);
+        assert!(e.poll_rtty_one().is_some(), "the CQ over keys");
+        e.set_rtty_sending(false); // the over played out — the edge fires here
+        let before = e.rtty_state().seq_state;
+        e.rtty_auto_service();
+        assert_eq!(before, "calling_cq");
+        assert!(
+            e.rtty_state().auto,
+            "the sequencer survived the latch feature"
+        );
+    }
+
+    #[test]
+    fn latching_off_finishes_what_was_typed_then_stops_feeding() {
+        let mut e = rtty_latched_engine();
+        e.rtty_type("73 SK").unwrap();
+        // Click TX again: intent down, but what the operator already typed still
+        // goes out — it is a mode toggle, not the emergency stop, and RTTY has
+        // no un-send. Nothing is aborted here.
+        e.set_rtty_latched(false).unwrap();
+        assert!(!e.rtty_latched());
+        assert!(!e.take_rtty_abort(), "a clean latch-off is not an abort");
+        assert_eq!(e.poll_rtty_stream(9), RttyStreamTick::Text("73 SK".into()));
+        // Drained → the stream ends and the loop's tx_until_ms unkeys.
+        assert_eq!(e.poll_rtty_stream(9), RttyStreamTick::Idle);
+        // …and a stop DURING the drain still cuts it, so the drain is never a
+        // window where the operator cannot stop.
+        e.set_rtty_latched(true).unwrap();
+        e.rtty_type("A LONG MESSAGE").unwrap();
+        e.set_rtty_latched(false).unwrap();
+        e.rtty_stop();
+        assert!(e.take_rtty_abort());
+        assert_eq!(e.poll_rtty_stream(9), RttyStreamTick::Idle);
+    }
+
+    #[test]
+    fn a_macro_fired_while_latched_types_into_the_live_transmission() {
+        let mut e = rtty_latched_engine();
+        // The message queue is HELD while the latch streams, so an enqueue here
+        // would be a silent hold — the operator presses F1 and hears nothing.
+        // It goes into the stream instead (MMTTY's F-keys work this way).
+        e.rtty_send_text("CQ DE W9XYZ K").unwrap();
+        assert_eq!(
+            e.poll_rtty_one(),
+            None,
+            "nothing was queued behind the latch"
+        );
+        assert_eq!(
+            e.poll_rtty_stream(99),
+            RttyStreamTick::Text("CQ DE W9XYZ K".into())
+        );
+        // Unmappable-only text still refuses, exactly as a send refuses it.
+        assert!(e.rtty_send_text("%*+=").is_err());
+        // Unlatched, sends go back to being whole queued overs.
+        e.set_rtty_latched(false).unwrap();
+        e.rtty_send_text("TEST").unwrap();
+        assert_eq!(e.poll_rtty_one(), Some("TEST".to_string()));
     }
 
     #[test]

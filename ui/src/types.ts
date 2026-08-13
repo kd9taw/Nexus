@@ -1210,6 +1210,10 @@ export interface RttyState {
   backend: string
   /** An RTTY over is on the air or queued behind one (the TX indicator). */
   sending: boolean
+  /** Continuous TX is latched (the TX button) — keyed, idling on diddle between
+   * keystrokes. Separate from `sending` so the Stop control is live from the
+   * instant the latch goes up, one tick before the first chunk is keyed. */
+  latched: boolean
   /** A keyer failure to surface (FSK port wouldn't open / rig refused PTT), else null. */
   keyerError: string | null
   /** The RTTY auto-sequencer is active (the operator's Auto toggle is on). */

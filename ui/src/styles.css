@@ -18892,6 +18892,22 @@ button.sat-chip:disabled {
   padding: 2px 10px;
   margin-left: var(--space-2);
 }
+/* RTTY continuous-TX ("TX") latch, in the dock beside Stop. Latched, the transmitter is
+   KEYED and stays keyed — so the on-state reads in the same danger red as `.rtty-tx-pill`
+   above (and with the same literal fallback: `--danger` is not a defined variable, it is
+   this file's convention for the on-air red). A latched transmitter the operator cannot
+   see is the whole hazard of the feature; this must never be a subtle state change. */
+.rtty-tx-latch.on {
+  color: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+}
+.rtty-tx-latch.on .cw-macro-key,
+.rtty-tx-latch.on .cw-macro-label {
+  /* `.cw-macro-key` sets its own color explicitly (see the note by `.cw-macro-label`),
+     so the on-state has to reach the spans or only the border would change. */
+  color: var(--danger, #e5484d);
+}
+
 /* Their-call field in the macro row — feeds the {CALL} macro token. */
 .rtty-hiscall {
   width: 9em;

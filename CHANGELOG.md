@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **RTTY has a TX button now, like MMTTY — key up once and type.** The RTTY dock gained a **TX**
+  button. Click it and the transmitter comes up and stays up: type and the characters go out as
+  you type them, and between keystrokes the air carries diddle (the LTRS idle every RTTY station
+  sends), so the far end holds sync instead of hearing you drop out at the end of every line.
+  Click TX again and it sends the rest of what you typed and unkeys. No more pressing Enter for
+  every line, which is what this was reported for. The F-key macros type into the live
+  transmission while it is up rather than queueing a separate over behind it, and Enter puts a
+  new line on the air instead of sending. Enter-per-line still works exactly as before when the
+  TX button is off — nothing about the old way changed.
+
+  Because this is the one transmission in Nexus that keys with no fixed end, it is wrapped in
+  more stops than anything else, not fewer. Stop TX, the dock's Esc/Stop macro, the TX-enable
+  switch and **Esc** (RTTY now has the keyboard shortcut CW always had) each cut it instantly.
+  So does anything that takes RTTY off the rig without you pressing a stop at all — leaving the
+  RTTY section, tuning to a frequency you are not licensed for, starting a tune carrier, or
+  switching radios — each of which unkeys within about a fiftieth of a second. Your TX watchdog
+  applies exactly as it does to any other over (typing keeps it happy, walking away does not),
+  and above it sits a hard ten-minute ceiling on a single continuous over that nothing can
+  extend, so a stuck key cannot buy an unattended carrier. If the app itself locks up, the
+  transmitter unkeys on its own within about a second rather than staying keyed. Continuous TX
+  and the auto-sequencer will not run at the same time, and each says so if you try.
+
 - **A beam heading next to the country, everywhere the country appears.** Band Activity, the
   Call Roster, the Tempo roster, the Needed board, Spots, the chase panes, the pounce banner,
   the selected-station card, the DXpedition views and the map's tooltips all print the short-path

@@ -27,8 +27,17 @@
 //!   receive path IS ported from fldigi — see NOTICE.
 //!
 //! The ITA2/Baudot encoding itself (LTRS/FIGS, USOS, diddle) lives in
-//! `tempo_core::rtty`; this module takes the already-encoded 5-bit stream. Like
-//! `tempo_core::cw::morse_samples`, rendering is one-shot per transmission.
+//! `tempo_core::rtty`; this module takes the already-encoded 5-bit stream.
+//!
+//! TWO ENTRY POINTS, and the difference is which transmissions each can render.
+//! [`afsk_samples`] renders a whole transmission at once — the Enter/macro path,
+//! like `tempo_core::cw::morse_samples`, and the one that has been on the air
+//! since v1. [`AfskStream`] renders the SAME waveform a chunk at a time, carrying
+//! the oscillator phase, the cross-fade weight and the fractional bit clock across
+//! calls, because continuous ("latched") TX types into a transmission whose end is
+//! not known when it starts. Chunking is invisible: the two agree sample for
+//! sample on the same bits, which is the contract
+//! `a_latched_stream_renders_exactly_what_one_long_transmission_would` pins.
 
 /// Standard mark tone (Hz): the LOWER audio tone, which on LSB lands as the HIGHER RF —
 /// the on-air RTTY convention.
@@ -160,6 +169,139 @@ pub fn afsk_samples(levels: &[(bool, f64)], cfg: &AfskConfig) -> Vec<f32> {
     out
 }
 
+/// A RESUMABLE AFSK generator — the same waveform as [`afsk_samples`], rendered a
+/// chunk at a time instead of all at once.
+///
+/// WHY THIS EXISTS: continuous ("latched") RTTY keys characters as the operator
+/// types them, so the generator cannot know the whole transmission up front. It
+/// cannot simply be called per character either — everything that makes
+/// [`afsk_samples`] correct is a LOCAL that re-initialises on every call:
+/// - `pm`/`ps`, the two NCO phases: a fresh call restarts both at 0, so every
+///   chunk seam is a phase step — exactly the keying sidebands the W7AY
+///   cross-fade in this module exists to prevent;
+/// - `w_lin`, the cross-fade weight: restarting it mid-tone is a second step;
+/// - the raised-cosine KEY envelope, which ramps both ends of whatever buffer it
+///   is given — per character that is a 4 ms hole in the carrier every 165 ms,
+///   which reads on the air as a dropout and destroys the far end's clock;
+/// - the fractional bit accumulator, which re-rounds 264.026… samples/bit at
+///   every call (measured: 8 samples of drift in 10 characters).
+///
+/// So the state lives here and the arithmetic is unchanged. The contract, pinned
+/// by `a_latched_stream_renders_exactly_what_one_long_transmission_would`, is
+/// that CHUNKING IS INVISIBLE: chunks concatenated are sample-for-sample the
+/// one-shot render of the same bits. The key envelope belongs to the STREAM, not
+/// the chunk — ramp up on the first samples emitted, ramp down only on the chunk
+/// the caller marks `tail`.
+///
+/// [`afsk_samples`] is deliberately left alone: the one-shot Enter/macro path is
+/// the shipped, on-air-proven TX path and a latch bug must not be able to reach
+/// it.
+pub struct AfskStream {
+    cfg: AfskConfig,
+    /// Mark/space NCO phases (rad), carried across chunks — the phase continuity.
+    pm: f64,
+    ps: f64,
+    /// Cross-fade weight walking toward the current bit's tone, carried so a
+    /// chunk boundary inside a bit is not an edge.
+    w_lin: f64,
+    /// EXACT cumulative bit position of the whole stream (never per-chunk), and
+    /// the samples emitted for it. Together these are the fractional bit clock:
+    /// each chunk fills to `t_bits * spb`, so rounding never accumulates.
+    t_bits: f64,
+    n_out: u64,
+    /// False until the first chunk has picked the starting tone (`afsk_samples`
+    /// seeds `w_lin` from its first bit; the stream seeds from its first bit).
+    started: bool,
+}
+
+impl AfskStream {
+    pub fn new(cfg: AfskConfig) -> Self {
+        Self {
+            cfg,
+            pm: 0.0,
+            ps: 0.0,
+            w_lin: 0.0,
+            t_bits: 0.0,
+            n_out: 0,
+            started: false,
+        }
+    }
+
+    /// Render the next framed character chunk (groups of 5 data bits, see
+    /// [`baudot_frame`]). `tail` = this is the last chunk of the transmission, so
+    /// close it with the key-down ramp.
+    pub fn char_chunk(&mut self, data_bits: &[bool], tail: bool) -> Vec<f32> {
+        self.chunk(&baudot_frame(data_bits), tail)
+    }
+
+    /// Render the next raw `(mark_level, width_in_bits)` chunk — the seam under
+    /// [`Self::char_chunk`], mirroring [`afsk_samples`].
+    pub fn chunk(&mut self, levels: &[(bool, f64)], tail: bool) -> Vec<f32> {
+        use std::f64::consts::{PI, TAU};
+        debug_assert!(self.cfg.baud > 0.0);
+        let fs = self.cfg.sample_rate.max(1) as f64;
+        let spb = fs / self.cfg.baud;
+
+        // Pass 1, as in `afsk_samples` — except `t_bits` and the emitted-sample
+        // count are the STREAM's, so a chunk fills to the exact fractional
+        // boundary the whole transmission is at, not to its own rounded one.
+        let mut tone_mark: Vec<bool> = Vec::new();
+        for &(mark, width) in levels {
+            self.t_bits += width;
+            let target = self.t_bits * spb;
+            while ((self.n_out + tone_mark.len() as u64) as f64) < target {
+                tone_mark.push(mark);
+            }
+        }
+        let n = tone_mark.len();
+        if n == 0 {
+            return Vec::new();
+        }
+
+        // Pass 2: the same dual-NCO cross-fade, reading and writing the carried
+        // oscillator state instead of locals.
+        let (f_mark, f_space) = if self.cfg.reverse {
+            (self.cfg.space_hz as f64, self.cfg.mark_hz as f64)
+        } else {
+            (self.cfg.mark_hz as f64, self.cfg.space_hz as f64)
+        };
+        let dm = TAU * f_mark / fs;
+        let ds = TAU * f_space / fs;
+        let ramp_n = ((fs * EDGE_RAMP_S) as usize).max(1);
+        let step = 1.0 / ramp_n as f64;
+        if !self.started {
+            self.w_lin = if tone_mark[0] { 1.0 } else { 0.0 };
+            self.started = true;
+        }
+        let mut out = Vec::with_capacity(n);
+        for (i, &mark) in tone_mark.iter().enumerate() {
+            self.pm = (self.pm + dm) % TAU;
+            self.ps = (self.ps + ds) % TAU;
+            self.w_lin = if mark {
+                (self.w_lin + step).min(1.0)
+            } else {
+                (self.w_lin - step).max(0.0)
+            };
+            let wm = 0.5 * (1.0 - (PI * self.w_lin).cos());
+            // The key envelope is the STREAM's: ramp up over the first samples
+            // ever emitted, ramp down only out of the chunk that ends the
+            // transmission. Interior chunk boundaries get neither — that is the
+            // whole difference from calling `afsk_samples` per character.
+            let k = self.n_out + i as u64; // absolute sample index in the stream
+            let mut env = 1.0;
+            if k < ramp_n as u64 {
+                env = 0.5 * (1.0 - (PI * (k + 1) as f64 / ramp_n as f64).cos());
+            }
+            if tail && i + ramp_n >= n {
+                env = env.min(0.5 * (1.0 - (PI * (n - i) as f64 / ramp_n as f64).cos()));
+            }
+            out.push((env * (wm * self.pm.sin() + (1.0 - wm) * self.ps.sin())) as f32);
+        }
+        self.n_out += n as u64;
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +357,108 @@ mod tests {
         let space = afsk_samples(&[(false, 400.0)], &cfg);
         assert!((measured_hz(&mark, 12000.0) - 2295.0).abs() < 5.0);
         assert!((measured_hz(&space, 12000.0) - 2125.0).abs() < 5.0);
+    }
+
+    /// Render `chars` one character per call and concatenate — the naive way to
+    /// "stream" with the one-shot generator, and the POSITIVE CONTROL for the
+    /// stream test below: every measurement that must pass on `AfskStream` has to
+    /// FAIL here, or the measurement is not measuring anything.
+    fn naive_per_char(chars: usize, cfg: &AfskConfig) -> Vec<f32> {
+        let mut out = Vec::new();
+        for _ in 0..chars {
+            out.extend_from_slice(&afsk_char_samples(&[true; 5], cfg));
+        }
+        out
+    }
+
+    /// Worst sample-for-sample disagreement between two renderings of the same
+    /// bits (shorter length counts as total disagreement).
+    fn max_diff(a: &[f32], b: &[f32]) -> f64 {
+        if a.len() != b.len() {
+            return f64::INFINITY;
+        }
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max) as f64
+    }
+
+    #[test]
+    fn a_latched_stream_renders_exactly_what_one_long_transmission_would() {
+        // THE FEATURE THIS EXISTS FOR: continuous ("latched") RTTY keys character
+        // by character as the operator types, so the generator must be RESUMABLE.
+        // The contract is the strongest one available and needs no new metric —
+        // chunking must be invisible: N characters rendered one chunk at a time
+        // must come out SAMPLE FOR SAMPLE identical to the one-shot render of the
+        // same N characters, which is the waveform this app already ships and the
+        // four tests above already pin. Anything that differs — a phase step, a
+        // re-applied envelope, a re-rounded bit clock — shows up here.
+        let cfg = AfskConfig::default();
+        let mut bits = Vec::new();
+        for _ in 0..10 {
+            bits.extend_from_slice(&[true; 5]); // LTRS ×10 — the diddle idle stream
+        }
+        let one_shot = afsk_char_samples(&bits, &cfg);
+
+        // POSITIVE CONTROL: the one-shot generator called ONCE PER CHARACTER — the
+        // naive way to stream, and the reason this struct exists. It re-initialises
+        // `pm`/`ps`/`w_lin` and re-ramps BOTH ends of every buffer, so it must
+        // disagree grossly. If this ever stops failing, the comparison is broken,
+        // not the world.
+        let naive = naive_per_char(10, &cfg);
+        assert!(
+            max_diff(&naive, &one_shot) > 0.5,
+            "the per-character control must NOT match one long transmission — it \
+             re-inits the oscillators and re-ramps every buffer (diff={})",
+            max_diff(&naive, &one_shot)
+        );
+
+        // THE STREAM: the same ten characters, one chunk each, one carrier. `tail`
+        // on the last chunk is the key-DOWN ramp — the stream's own end.
+        let mut s = AfskStream::new(cfg.clone());
+        let mut streamed = Vec::new();
+        for i in 0..10 {
+            streamed.extend_from_slice(&s.char_chunk(&[true; 5], i == 9));
+        }
+        assert_eq!(
+            streamed.len(),
+            one_shot.len(),
+            "chunking changed the duration"
+        );
+        assert!(
+            max_diff(&streamed, &one_shot) < 1e-6,
+            "chunking is not invisible: worst sample disagreement={}",
+            max_diff(&streamed, &one_shot)
+        );
+
+        // …and chunk boundaries that do NOT fall on character boundaries are just
+        // as invisible: the same bits split 3 + 7 must render the same waveform.
+        let mut s2 = AfskStream::new(cfg);
+        let mut split = s2.char_chunk(&bits[..15], false);
+        split.extend_from_slice(&s2.char_chunk(&bits[15..], true));
+        assert!(
+            max_diff(&split, &one_shot) < 1e-6,
+            "an uneven chunk split is visible in the waveform"
+        );
+    }
+
+    #[test]
+    fn a_streamed_bit_clock_never_drifts_more_than_one_sample() {
+        // The fractional accumulator must survive CHUNKING: re-rounding 264.026…
+        // samples/bit at every chunk boundary is the drift `afsk_samples` was
+        // written to avoid, and a latched over is far longer than a one-shot one.
+        let cfg = AfskConfig::default();
+        let spb = 12000.0 / BAUD_45;
+        let mut s = AfskStream::new(cfg);
+        let mut n = 0usize;
+        for k in 1..=200 {
+            n += s.char_chunk(&[true; 5], false).len();
+            // 7.5 bits per framed character, k characters in.
+            assert!(
+                (n as f64 - k as f64 * 7.5 * spb).abs() < 1.0,
+                "drift at char {k}: n={n}"
+            );
+        }
     }
 
     #[test]

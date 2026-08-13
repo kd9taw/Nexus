@@ -22,7 +22,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::{
-    engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine, SatCatBackend,
+    engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine, RttyStreamTick,
+    SatCatBackend,
 };
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
@@ -901,6 +902,9 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // dumped its queued audio and ptt(false) unkeyed the carrier — this is
             // symmetry with the CW/RTTY cuts below).
             state.sstv_feed = None;
+            // …and the continuous-TX generator, for the same symmetry: the flush and
+            // unkey above are what actually take a latched over off the air.
+            state.rtty_stream = None;
             // Cut any in-progress CW too: stop a CAT `send_morse` and flush a
             // WinKeyer's hardware buffer NOW, deterministically, rather than
             // relying on Drop running before the process is killed (a half-sent
@@ -1556,6 +1560,60 @@ const SSTV_CHUNK_SAMPLES: usize = 24_000;
 /// loop stalls (shared CAT reads) without underrunning.
 const SSTV_FEED_AHEAD_MS: f64 = 10_000.0;
 
+/// How far ahead of real time the CONTINUOUS-TX (latched) RTTY stream may render
+/// audio, in character times. Two characters ≈ 330 ms at 45.45 baud.
+///
+/// ⚠️ THIS IS A SAFETY BOUND, not a buffer-tuning knob. A one-shot RTTY over keys
+/// against a deadline computed before a single bit goes out (`rtty_busy_until`),
+/// so `tx_until_ms` unkeys the rig even if the loop then dies. A LATCHED over has
+/// no such precomputed end — its deadline is one the loop must keep pushing
+/// forward — so the only thing standing between a wedged loop and a stuck carrier
+/// is how far forward each push may reach. At two characters, a loop that stops
+/// ticking unkeys within ~330 ms of audio + the 250 ms tail. Raising this raises
+/// the stuck-carrier window by exactly the same amount.
+///
+/// The floor is set by the loop's own 20 ms tick plus whatever a shared CAT read
+/// can stall it by; one character (165 ms) of margin over that is comfortable and
+/// the ring never underruns to silence (`device.rs` returns 0.0 when it does,
+/// which under a held PTT reads on the air as a dropout).
+const RTTY_STREAM_AHEAD_CHARS: f64 = 2.0;
+
+/// Most characters the latched stream may render in ONE tick, whatever the
+/// look-ahead deficit says. Bounds the work (and the audio) a single tick can
+/// commit when the loop has been stalled — a macro dropping 25 characters into
+/// the type buffer must not turn into 4 seconds of audio in the ring, because
+/// that is 4 seconds of `tx_until_ms` a wedged loop would then hold PTT for.
+const RTTY_STREAM_MAX_CHUNK: usize = 4;
+
+/// The live continuous-TX ("latched") RTTY stream — the generator state that has
+/// to survive across radio-loop ticks, which is the whole difference between a
+/// latched over and the send-and-done path beside it.
+///
+/// `None` whenever nothing is latched. Dropped on every abort, so a stop can
+/// never leave a half-shifted encoder or a mid-phase oscillator to be resumed
+/// into the NEXT transmission.
+struct RttyStream {
+    /// Baudot/ITA2 encoder carried across chunks — LTRS/FIGS shift state is a
+    /// property of the TRANSMISSION, not of a chunk. A fresh encoder per chunk
+    /// would silently drop the receiver's shift plane mid-word.
+    enc: tempo_core::rtty::BaudotEncoder,
+    /// Resumable AFSK generator (unused on the FSK backend, whose keyer thread
+    /// carries no state between batches). See [`crate::rtty_afsk::AfskStream`].
+    afsk: crate::rtty_afsk::AfskStream,
+    /// The keying config this stream was built for — baud, shift, reverse, and
+    /// whether it is the FSK backend. A settings change mid-over rebuilds it
+    /// rather than splicing two different waveforms into one carrier.
+    key_cfg: (f64, u32, bool, bool),
+    /// PTT has been asserted for this stream and the rig's dial/mode asserted with
+    /// it. A latched over feeds a chunk roughly every 165 ms and PTT is held
+    /// across them by `tx_until_ms`, so re-commanding it per chunk would put a
+    /// BLOCKING CAT round-trip in the loop six times a second for the length of
+    /// the over — on a slow-serial rig that is the loop stall, not a safety net.
+    /// Re-asserted only if the unkey has actually run underneath us
+    /// (`tx_until_ms == None`), which is the case that needs it.
+    keyed: bool,
+}
+
 /// The SSTV image currently streaming to the rig: the whole pre-encoded 12 kHz buffer,
 /// a feed cursor (how many samples have been handed to the backend), and timing.
 struct SstvFeed {
@@ -1837,6 +1895,9 @@ struct RadioLoop {
     /// (line back to mark) when the operator switches to AFSK.
     #[cfg(feature = "serial")]
     rtty_keyer: Option<(String, String, crate::rtty_fsk::FskKeyer)>,
+    /// The live continuous-TX stream, `None` when nothing is latched. See
+    /// [`RttyStream`].
+    rtty_stream: Option<RttyStream>,
     /// The SSTV image currently streaming to the rig (pre-encoded 12 kHz PCM + a feed
     /// cursor + timing), fed to the output ring in chunked look-ahead slices so a
     /// multi-minute image never dumps into the unbounded ring at once. `None` = no
@@ -2116,6 +2177,7 @@ impl RadioLoop {
             #[cfg(feature = "serial")]
             serial_keyer: None,
             rtty_busy_until: 0.0,
+            rtty_stream: None,
             #[cfg(feature = "serial")]
             rtty_keyer: None,
             sstv_feed: None,
@@ -2640,6 +2702,10 @@ impl RadioLoop {
         self.last_cw_wpm = 0;
         self.cw_busy_until = 0.0;
         self.rtty_busy_until = 0.0;
+        // The latched stream belongs to the radio it was keying. `halt_tx_for_context_change`
+        // drops the engine's latch across a handoff; this drops the generator with it, so a
+        // resumed chunk can never splice the old radio's carrier onto the new one.
+        self.rtty_stream = None;
         self.slot_tx_until_ms = 0.0; // the other radio's over is not ours to protect
         self.last_fm = None;
         self.manual_ptt_applied = false;
@@ -4371,19 +4437,39 @@ impl RadioLoop {
         // reaches the rig. Operator-initiated only: the engine's poll_rtty_one gates
         // on tx_enabled + privileges + the Rtty operating-mode ownership + not-tuning
         // (the FT8/FT1 slot sequencer is gated off for non-Digital the same way, so
-        // the two can never key together). Send-and-done — no diddle idle in v1: PTT
-        // drops when the stop bit ends (tx_until_ms expiry), on Stop/halt (the abort
-        // below), on the watchdog trip (poll_rtty_one arms the abort), and at app
-        // exit (the SHUTDOWN flush).
+        // the two can never key together). PTT drops when the stop bit ends
+        // (tx_until_ms expiry), on Stop/halt (the abort below), on the watchdog trip
+        // (poll_rtty_one arms the abort), and at app exit (the SHUTDOWN flush).
+        //
+        // CONTINUOUS TX (the MMTTY "TX" latch) is the second path through this block:
+        // instead of one keyed over per Enter, the operator stays keyed and types into
+        // a live transmission, which idles on DIDDLE (LTRS fill) between keystrokes.
+        // It shares every mechanism above — the same abort, the same tx_until_ms unkey,
+        // the same PTT — and differs in exactly one way that matters here: it has NO
+        // PRECOMPUTED END, so `tx_until_ms` is a deadline this loop must keep pushing
+        // forward instead of one it sets once. Two consequences, both deliberate:
+        //   * each push reaches only RTTY_STREAM_AHEAD_CHARS forward, so a loop that
+        //     wedges expires into an unkey rather than holding the transmitter;
+        //   * the ENGINE re-checks every TX gate on every tick (`poll_rtty_stream`) and
+        //     the loop adds `may_key` here, because a latch outlives the moment it was
+        //     granted and the gates do not.
         {
             // Same hold as the CW keyer: while the loop doesn't own the operator's radio
             // ([`Self::may_key`]) the queue is not polled, so the over waits instead of
             // going out on the outgoing rig.
             let ready = now >= self.rtty_busy_until && self.may_key();
-            let (abort, msg, baud, shift, reverse, fsk_port_line) = {
+            let (abort, msg, stream_tick, baud, shift, reverse, fsk_port_line) = {
                 let mut eng = engine_lock(engine);
                 // Keep the cockpit's sending indicator honest each tick: an over is
                 // "sending" until its computed duration has fully played out.
+                //
+                // ⚠️ DELIBERATELY NOT forced true for the latched period. This flag's
+                // falling edge is the ONLY thing that fires the auto-sequencer's
+                // `on_tx_complete` (`rtty_auto_service`), so pinning it true would hang
+                // a sequencer QSO with the rig keyed. The latch reports itself through
+                // its own flag (`rtty_state().latched`); the two are separate on
+                // purpose. A latched stream keeps this true anyway, without help,
+                // because the look-ahead keeps `rtty_busy_until` in the future.
                 eng.set_rtty_sending(now < self.rtty_busy_until);
                 // Service the RTTY auto-sequencer BEFORE poll_rtty_one, so any over it
                 // produces this tick (on_tx_complete → the next reply, or a silence
@@ -4391,10 +4477,51 @@ impl RadioLoop {
                 // fires exactly once per over, gated on the sending flag just stamped
                 // above — which shares one Unix-millis clock epoch with the RX feed.
                 eng.rtty_auto_service();
+                let baud = eng.rtty_baud();
+                // --- Continuous TX: the per-tick gate re-check + this tick's feed. ---
+                // `may_key` is the one gate the engine cannot see (a deferred handoff /
+                // a CAT hold means `rig` is not the operator's radio). For a QUEUE the
+                // loop holds the work; for a latched TRANSMITTER holding is not an
+                // option — it is already keyed — so this drops the latch outright.
+                let stream_tick = if self.may_key() {
+                    // Look-ahead budget: how many characters short of
+                    // RTTY_STREAM_AHEAD_CHARS the queued audio is. Zero when the ring is
+                    // already fed far enough — and the engine is still called, because
+                    // the GATE CHECK must run on every tick even when the feed does not.
+                    let char_ms = 7.5 * (1000.0 / baud);
+                    let ahead_ms = (self.rtty_busy_until - now).max(0.0);
+                    let deficit = RTTY_STREAM_AHEAD_CHARS * char_ms - ahead_ms;
+                    let want = if deficit <= 0.0 {
+                        0
+                    } else {
+                        ((deficit / char_ms).ceil() as usize).min(RTTY_STREAM_MAX_CHUNK)
+                    };
+                    eng.poll_rtty_stream(want)
+                } else {
+                    eng.drop_rtty_latch();
+                    RttyStreamTick::Idle
+                };
+                // The latch owns the transmitter from its first tick (before any
+                // generator exists) until its closing chunk has been rendered.
+                let latch_owns =
+                    !matches!(stream_tick, RttyStreamTick::Idle) || self.rtty_stream.is_some();
                 (
+                    // AFTER poll_rtty_stream, so an abort IT armed (a gate went down, a
+                    // ceiling tripped) is consumed on this same tick rather than one
+                    // tick later with the transmitter still up.
                     eng.take_rtty_abort(),
-                    if ready { eng.poll_rtty_one() } else { None },
-                    eng.rtty_baud(),
+                    // The message queue is HELD while the latch streams: two RTTY
+                    // transmitters on one rig is not a thing, and `rtty_send_text`
+                    // routes macros into the stream instead while latched. HELD, not
+                    // dropped — anything queued before the latch went up keys normally
+                    // once it comes down.
+                    if ready && !latch_owns {
+                        eng.poll_rtty_one()
+                    } else {
+                        None
+                    },
+                    stream_tick,
+                    baud,
                     eng.rtty_shift_hz(),
                     eng.rtty_reverse(),
                     eng.rtty_fsk_port().map(|p| (p, eng.rtty_fsk_line())),
@@ -4430,9 +4557,226 @@ impl RadioLoop {
                     self.tx_until_ms = None;
                 }
                 self.rtty_busy_until = 0.0; // a fresh send after Stop keys immediately
+                                            // The latched generator dies with the over it was rendering. Keeping
+                                            // it would resume the NEXT transmission mid-phase and mid-shift —
+                                            // and, worse, would make a stop look like a pause.
+                self.rtty_stream = None;
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_rtty_sending(false);
+                }
+            }
+            // --- Continuous TX: render and key this tick's chunk. ---
+            // Everything below is gated by `stream_tick`, which the engine only
+            // returns as something other than `Idle` with every TX gate re-checked
+            // THIS tick. The keying itself is deliberately the same as the one-shot
+            // path's — same PTT, same output ring, same tx_until_ms — because the
+            // parts of RTTY TX that are already proven on the air should not fork.
+            match &stream_tick {
+                RttyStreamTick::Idle => {
+                    // Not streaming. If a generator is still open, the stream just
+                    // ENDED CLEANLY (the operator clicked TX off and everything they
+                    // typed has been rendered) rather than being aborted — the abort
+                    // branch above already took that case and dropped the generator.
+                    // Close it with one diddle carrying the key-DOWN ramp: ending a
+                    // latched carrier at full amplitude is a key click, which is the
+                    // very thing this module's shaped envelope exists to prevent.
+                    // PTT then drops on the ordinary `tx_until_ms` expiry.
+                    //
+                    // ⚠️ `may_key` AGAIN, on the close. The two ways to get here are
+                    // not the same: a CLEAN end deserves the ramp, but a latch
+                    // dropped because the loop no longer owns the operator's radio
+                    // (a deferred handoff) must render NOTHING — `rig` is the other
+                    // radio by then, and this path plays audio without commanding
+                    // PTT, which on a VOX station keys whatever is listening. Drop
+                    // the generator and let the abort's flush be the whole ending.
+                    if let Some(mut st) = self.rtty_stream.take().filter(|_| self.may_key()) {
+                        let code = st.enc.diddle();
+                        let bits = tempo_core::rtty::code_bits(&[code]);
+                        let chunk_ms = 7.5 * (1000.0 / baud);
+                        if !st.key_cfg.3 {
+                            let buf = st.afsk.char_chunk(&bits, true);
+                            if !buf.is_empty() {
+                                backend.play(&buf);
+                            }
+                        }
+                        // FSK needs no closing ramp — its keyer thread parks the line
+                        // at mark between batches, which IS the idle condition — but it
+                        // gets the same trailing character so both backends unkey on
+                        // the same schedule.
+                        #[cfg(feature = "serial")]
+                        if st.key_cfg.3 {
+                            if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
+                                k.send(bits.clone(), baud);
+                            }
+                        }
+                        self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                        let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                }
+                // Keyed and fed far enough ahead: nothing to render this tick. The
+                // gates were still re-checked to get here.
+                RttyStreamTick::Ahead => {}
+                RttyStreamTick::Text(_) | RttyStreamTick::Diddle => {
+                    // Build (or rebuild, on a settings change mid-over) the generator.
+                    // A rebuild restarts the key envelope, so it is a seam the operator
+                    // can hear — which is correct: they changed the shift or the baud,
+                    // and splicing two different waveforms into one carrier would be
+                    // worse than a clean re-key.
+                    let key_cfg = (baud, shift, reverse, fsk_port_line.is_some());
+                    if self.rtty_stream.as_ref().map(|s| s.key_cfg) != Some(key_cfg) {
+                        self.rtty_stream = Some(RttyStream {
+                            enc: tempo_core::rtty::BaudotEncoder::new(true),
+                            afsk: crate::rtty_afsk::AfskStream::new(crate::rtty_afsk::AfskConfig {
+                                space_hz: crate::rtty_afsk::MARK_HZ + shift as f32,
+                                baud,
+                                reverse,
+                                ..crate::rtty_afsk::AfskConfig::default()
+                            }),
+                            key_cfg,
+                            keyed: false,
+                        });
+                    }
+                    // Assert the rig and PTT once per stream, not once per chunk (see
+                    // `RttyStream::keyed`) — but always after an unkey has run under us.
+                    let need_key = self.tx_until_ms.is_none()
+                        || !self.rtty_stream.as_ref().is_some_and(|s| s.keyed);
+                    // Characters → ITA2 codes through the CARRIED encoder, so LTRS/FIGS
+                    // shift state spans the whole latched over exactly as it spans a
+                    // one-shot message. Diddle is LTRS, the standard RTTY idle: it
+                    // holds the far end's decoder in sync and lands the shift plane in
+                    // letters, and it is what an MMTTY operator hears between words.
+                    //
+                    // Rendered inside a scope that ENDS the borrow of the generator,
+                    // because the keying below needs `self` (the rig assert, the PTT
+                    // publish, the keyer handle) while the generator lives on `self`.
+                    let (bits, chunk_ms, buf) = {
+                        let st = self.rtty_stream.as_mut().expect("just built");
+                        let codes = match &stream_tick {
+                            RttyStreamTick::Text(t) => st.enc.encode(t),
+                            _ => vec![st.enc.diddle()],
+                        };
+                        let bits = tempo_core::rtty::code_bits(&codes);
+                        let chunk_ms = (codes.len() as f64) * 7.5 * (1000.0 / baud);
+                        // The AFSK waveform is rendered here, from the RESUMABLE
+                        // generator that carries the oscillator phase, the cross-fade
+                        // weight and the fractional bit clock across chunks. Calling
+                        // the one-shot generator per character instead would put a
+                        // phase step and a 4 ms hole in the carrier every 165 ms — see
+                        // `AfskStream`. Skipped entirely on the FSK backend, whose bits
+                        // ride the keyline and never become audio.
+                        let buf = if key_cfg.3 {
+                            Vec::new()
+                        } else {
+                            st.afsk.char_chunk(&bits, false)
+                        };
+                        (bits, chunk_ms, buf)
+                    };
+                    if chunk_ms > 0.0 {
+                        // Chunks are contiguous in AUDIO time, so the deadline advances
+                        // from wherever the queued audio ends — `.max(now)` only
+                        // re-bases it after a ring underrun, never extends it further
+                        // than one chunk beyond what is already queued. THIS is the
+                        // bound that makes a wedged loop unkey instead of sticking.
+                        let mut handled = false;
+                        #[cfg(feature = "serial")]
+                        if let Some((port, line)) = &fsk_port_line {
+                            let reopen = self
+                                .rtty_keyer
+                                .as_ref()
+                                .map(|(p, l, _)| p != port || l != line)
+                                .unwrap_or(true);
+                            let mut open_err_msg = None;
+                            if reopen {
+                                match crate::rtty_fsk::FskKeyer::open(
+                                    port,
+                                    crate::rtty_fsk::KeyLine::parse(line),
+                                ) {
+                                    Ok(k) => {
+                                        self.rtty_keyer = Some((port.clone(), line.clone(), k))
+                                    }
+                                    Err(e) => {
+                                        self.rtty_keyer = None;
+                                        open_err_msg = Some(format!(
+                                            "FSK keyline: {e}. If the port name is right, check \
+                                             that nothing else (CAT, another app) has it open — \
+                                             or use the AFSK backend."
+                                        ));
+                                    }
+                                }
+                            }
+                            let open_err = self.rtty_keyer.is_none();
+                            let mut ptt_err = false;
+                            if !open_err && need_key {
+                                self.ensure_commanded(rig); // assert dial/mode before the key
+                            }
+                            if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
+                                if need_key {
+                                    self.publish_tx_intent_now(); // before keying
+                                    ptt_err = rig.ptt(true).is_err();
+                                }
+                                k.send(bits.clone(), baud);
+                                self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                self.tx_until_ms =
+                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            }
+                            {
+                                let mut eng = engine_lock(engine);
+                                if open_err {
+                                    // Nothing can key on this backend, so the latch is
+                                    // a lie — drop it rather than leave the operator
+                                    // looking at a lit TX button that transmits nothing.
+                                    eng.drop_rtty_latch();
+                                    self.rtty_stream = None;
+                                }
+                                eng.set_rtty_keyer_error(if open_err {
+                                    open_err_msg
+                                } else if ptt_err {
+                                    Some(
+                                        "FSK keyer: the rig didn't accept PTT. Check your PTT \
+                                         method (CAT, or the separate PTT line) — the FSK data \
+                                         line never doubles as PTT."
+                                            .to_string(),
+                                    )
+                                } else {
+                                    None
+                                });
+                            }
+                            handled = true;
+                        }
+                        if !handled {
+                            // Soundcard AFSK (rig in LSB): the same output ring the FT8
+                            // modem and the one-shot RTTY path use, so the operator's
+                            // tx_level / drive / ALC discipline applies unchanged.
+                            if !buf.is_empty() {
+                                let mut ptt_err = false;
+                                if need_key {
+                                    self.ensure_commanded(rig); // assert before key
+                                    self.publish_tx_intent_now(); // before keying
+                                    ptt_err = rig.ptt(true).is_err();
+                                }
+                                backend.play(&buf);
+                                self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                self.tx_until_ms =
+                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                if ptt_err {
+                                    let mut eng = engine_lock(engine);
+                                    eng.set_rtty_keyer_error(Some(
+                                        "AFSK keyer: the rig didn't accept PTT. Check your PTT \
+                                         method + that Nexus's audio output is routed to the rig \
+                                         (like FT8)."
+                                            .to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                        if let Some(st) = self.rtty_stream.as_mut() {
+                            st.keyed = true;
+                        }
+                    }
                 }
             }
             if let Some(text) = msg {
@@ -10259,6 +10603,119 @@ mod tests {
     }
 
     #[test]
+    fn a_cat_port_hold_drops_a_latched_rtty_over() {
+        // The second route by which the loop stops owning the operator's radio: the
+        // Test-CAT probe takes the serial port and `rig` becomes `Rig::vox()`, which
+        // has no control channel — so a latch that kept feeding would be a keyed
+        // transmitter with nothing able to unkey it.
+        //
+        // WHAT DROPS IT, stated honestly because it is not what it looks like:
+        // `halt_tx_for_context_change` → `halt_tx` → `drop_rtty_latch`, which BOTH
+        // edges of the hold run (taking the port, and resuming from it), exactly as
+        // the radio-switch scene below runs it. The loop's own `may_key` drop is
+        // belt-and-braces on both routes and NO test here isolates it — verified by
+        // mutation: removing it leaves this test and the switch scene green, because
+        // the halt got there first. It is kept because it is the guard that does not
+        // depend on every future route into `!may_key()` remembering to halt TX, and
+        // because a latch is the one transmission for which "hold the work" is not a
+        // safe default. What this test pins is the OUTCOME, which is what matters on
+        // the air: a CAT hold never leaves a latched carrier up.
+        let (engine, mut state, mut backend, mut rig, t) = latched_rtty_scene();
+        assert!(rig.keyed, "scene guard: the latch is keying");
+        assert!(state.rtty_stream.is_some());
+        state.cat_hold_active = true; // the probe has taken the port
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            !engine.lock().unwrap().rtty_latched(),
+            "a CAT port hold must DROP a latched transmitter — the loop cannot unkey \
+             through a port it has handed away, so holding the feed is not an option"
+        );
+        assert!(!rig.keyed, "…and it must unkey within the same tick");
+        assert!(
+            state.rtty_stream.is_none(),
+            "…and drop the generator with it"
+        );
+    }
+
+    #[test]
+    fn a_contended_switch_drops_a_latched_rtty_over_rather_than_holding_it() {
+        // The CONTINUOUS-TX version of the scene below, and it needs a different
+        // answer. A queued over is HELD across a contended switch — not polled, so
+        // not keyed, and it waits. A LATCHED over cannot be held: it is already
+        // keyed, and `rig` is the radio the operator switched AWAY from, so it is
+        // dropped instead.
+        //
+        // THREE INDEPENDENT THINGS drop it here, which is why this scene survives
+        // the removal of any one of them (all three checked by mutation):
+        // `set_active_radio` → `halt_tx_for_context_change` → `halt_tx` →
+        // `drop_rtty_latch`, synchronously before the loop ticks at all; the
+        // per-tick predicate, because that same `halt_tx` leaves `tx_enabled`
+        // false; and the loop's `may_key` guard. So this test does NOT isolate a
+        // mechanism — it pins the END-TO-END claim, which is the one that matters
+        // on the air: a radio switch, however contended, never resumes a latched
+        // carrier onto whichever radio the loop finds when the pool frees up.
+        let mut sc = contended_switch_scene(|e| {
+            e.set_operating_mode("rtty", true);
+            e.set_frequency(14.085, "20m", "RTTY");
+        });
+        let pool = Arc::clone(&sc.pool);
+        {
+            let mut e = sc.engine.lock().unwrap();
+            e.set_rtty_latched(true)
+                .expect("scene guard: the engine accepted the latch");
+        }
+        // The latch is up and keying on the CURRENT radio…
+        sc.tick(20.0);
+        assert!(
+            sc.engine.lock().unwrap().rtty_latched(),
+            "scene guard: the latch is up before the switch"
+        );
+        // …then the operator switches radios and the pool is contended.
+        let guard = pool.lock().unwrap();
+        {
+            let mut e = sc.engine.lock().unwrap();
+            e.set_active_radio(sc.incoming);
+        }
+        for tick in 2..=5 {
+            sc.tick(f64::from(tick) * 20.0);
+            assert!(
+                sc.state.handoff_deferred,
+                "scene guard: the contended pool keeps the handoff deferred"
+            );
+        }
+        assert!(
+            !sc.engine.lock().unwrap().rtty_latched(),
+            "a latched transmitter must be DROPPED by a contended switch, never held — \
+             holding it means keying the radio the operator switched away from"
+        );
+        assert!(
+            sc.state.rtty_stream.is_none(),
+            "the generator must go with it, so nothing can be resumed onto the new radio"
+        );
+        drop(guard);
+        for tick in 6..=10 {
+            sc.tick(f64::from(tick) * 20.0);
+        }
+        assert!(
+            !sc.engine.lock().unwrap().rtty_latched(),
+            "…and it stays down once the switch lands: re-keying is the operator's call"
+        );
+    }
+
+    #[test]
     fn a_contended_switch_never_keys_an_rtty_over_on_the_outgoing_radio() {
         // RTTY's message pump is gated the same way as CW's — on the POLL, so an unpolled
         // over stays in the queue. The AFSK backend (the default: no FSK keyline port) keys
@@ -11416,6 +11873,243 @@ mod tests {
         assert!(!rig.keyed, "TX Off aborts the RTTY over in flight");
         assert!(state.tx_until_ms.is_none(), "TX hold cleared");
         assert!(backend.flush_calls > 0, "queued AFSK audio was flushed");
+    }
+
+    /// A radio loop with continuous RTTY TX latched and keying, plus the clock it
+    /// has reached. Ticks are 20 ms, the real loop rate.
+    fn latched_rtty_scene() -> (Arc<Mutex<Engine>>, RadioLoop, MockBackend, Rig, f64) {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("rtty", false); // arms TX, as a manual mode does
+            e.set_rtty_latched(true).unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 100.0;
+        for _ in 0..5 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            t += 20.0;
+        }
+        (engine, state, backend, rig, t)
+    }
+
+    #[test]
+    fn a_latched_rtty_over_keys_one_carrier_that_idles_on_diddle() {
+        // THE FEATURE, at the layer that actually keys: with continuous TX latched
+        // and NOTHING typed, the loop holds the transmitter up and keeps feeding it
+        // — the RTTY idle (LTRS diddle), not silence and not an unkey. Send-and-done
+        // would have dropped PTT ~415 ms after the last stop bit.
+        let (engine, mut state, mut backend, mut rig, mut t) = latched_rtty_scene();
+        assert!(rig.keyed, "the latch never keyed the rig");
+        assert!(
+            !backend.played.is_empty(),
+            "nothing went to the transmitter"
+        );
+        let after_latch = backend.played.len();
+
+        // Two seconds of ticks with no typing at all — well past the ~415 ms at
+        // which send-and-done unkeys, and past a whole character time many times.
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let char_ms = 7.5 * (1000.0 / 45.45);
+        for _ in 0..100 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            // ⚠️ THE STUCK-CARRIER BOUND, checked on EVERY tick. A latched over has
+            // no precomputed end, so the only thing between a wedged loop and a
+            // stuck transmitter is how far ahead the unkey deadline may be pushed:
+            // the look-ahead plus at most one over-sized chunk, plus the tail.
+            let ahead = state.tx_until_ms.unwrap_or(t) - t;
+            assert!(
+                ahead
+                    <= (RTTY_STREAM_AHEAD_CHARS + RTTY_STREAM_MAX_CHUNK as f64) * char_ms
+                        + crate::slot::TX_TAIL_MS,
+                "the unkey deadline was pushed {ahead:.0} ms ahead — a wedged loop would \
+                 hold PTT that long"
+            );
+            t += 20.0;
+        }
+        assert!(
+            rig.keyed,
+            "the carrier dropped while latched with nothing typed"
+        );
+        assert!(
+            backend.played.len() > after_latch,
+            "the transmitter is keyed but nothing is being fed — that is dead air under a \
+             held PTT, which reads on the air as a dropout"
+        );
+        // The idle is a real Baudot stream at the real rate, not a filler tone: two
+        // seconds of ticks must have produced ≈2 s of 12 kHz audio.
+        let fed_ms = backend.played.len() as f64 / 12.0;
+        assert!(
+            (1600.0..2600.0).contains(&fed_ms),
+            "fed {fed_ms:.0} ms of audio across 2 s of ticks — the look-ahead is not pacing"
+        );
+    }
+
+    #[test]
+    fn every_stop_unkeys_a_latched_rtty_over_within_one_tick() {
+        // ⭐ THE STOP LINE, at the transmitter. A latched over is the one RTTY
+        // transmission that is still keying when the operator reaches for a stop,
+        // and each of these is a control the cockpit actually renders. One tick is
+        // the whole budget: flush the queued audio (the only thing that stops a VOX
+        // rig), drop PTT, and stay stopped.
+        for (name, stop) in [
+            ("Stop TX / the dock's Esc-Stop macro", 0),
+            ("halt_tx (header Stop TX, UDP HaltTx)", 1),
+            ("the TX-enable latch", 2),
+            ("leaving the RTTY section", 3),
+        ] {
+            let (engine, mut state, mut backend, mut rig, t) = latched_rtty_scene();
+            assert!(rig.keyed, "{name}: the scene did not key");
+            assert!(
+                state.rtty_stream.is_some(),
+                "{name}: the scene is not streaming"
+            );
+            backend.flush_calls = 0;
+            let played_before = backend.played.len();
+            {
+                let mut e = engine.lock().unwrap();
+                match stop {
+                    0 => e.rtty_stop(),
+                    1 => e.halt_tx(),
+                    2 => e.set_tx_enabled(false),
+                    _ => e.set_operating_mode("phone", false),
+                }
+            }
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            assert!(
+                !rig.keyed,
+                "{name}: the transmitter was still keyed a tick later"
+            );
+            assert!(
+                backend.flush_calls > 0,
+                "{name}: the queued audio was not flushed — on a VOX rig the audio IS what \
+                 holds the transmitter up, so dropping CAT PTT alone stops nothing"
+            );
+            assert!(state.tx_until_ms.is_none(), "{name}: the TX hold survived");
+            // The GENERATOR dies with the over, and an abort renders no closing
+            // chunk: a stop CUTS a transmission, it does not end one politely.
+            //
+            // Checked on the loop's own state rather than only on the rig, because
+            // every stop here also arms `slot_tx_abort`, whose hard-stop later in
+            // this same tick (search `abort_has_something_to_cut`) unkeys and
+            // flushes a second time — so `!rig.keyed` alone passes even with this
+            // branch broken, and would leave a stale generator to key back up
+            // behind any future stop that did not happen to arm the slot abort.
+            assert!(
+                state.rtty_stream.is_none(),
+                "{name}: the latched generator survived the stop"
+            );
+            assert_eq!(
+                backend.played.len(),
+                played_before,
+                "{name}: the abort queued MORE audio instead of cutting"
+            );
+            // …and it STAYS stopped: nothing re-keys on the following ticks.
+            let played = backend.played.len();
+            let mut t2 = t + 20.0;
+            for _ in 0..10 {
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        t2,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+                t2 += 20.0;
+            }
+            assert!(!rig.keyed, "{name}: the latch keyed back up after the stop");
+            assert_eq!(
+                backend.played.len(),
+                played,
+                "{name}: audio kept being fed after the stop"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wedged_loop_unkeys_a_latched_over_instead_of_holding_it() {
+        // The failure mode a latch introduces that send-and-done does not have: the
+        // unkey deadline is one the loop must keep pushing forward, so a loop that
+        // STOPS TICKING must expire into an unkey rather than a stuck carrier.
+        // Simulated exactly: latch, key, then let the clock jump past the deadline
+        // with no ticks in between (a stalled CAT read, a wedged thread).
+        let (engine, mut state, mut backend, mut rig, t) = latched_rtty_scene();
+        assert!(rig.keyed);
+        let deadline = state
+            .tx_until_ms
+            .expect("a latched over holds PTT to a deadline");
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // The next tick lands after the deadline. Nothing was stopped, nothing was
+        // aborted — only time passed.
+        assert!(
+            deadline - t < 2_000.0,
+            "the deadline must be near, not minutes out"
+        );
+        {
+            // Wedge the ENGINE too: the loop resumes into a section change it never
+            // saw, which is the realistic version of this (the operator gave up and
+            // navigated away while the app was stuck).
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                deadline + 1.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "a wedged loop left the transmitter keyed");
+        assert!(state.tx_until_ms.is_none());
     }
 
     #[test]

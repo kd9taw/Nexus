@@ -125,6 +125,7 @@ const rttyState = {
   markHz: 2125,
   spaceHz: 2295,
   sending: false,
+  latched: false,
   backend: 'afsk',
   keyerError: null,
   auto: false,
@@ -378,6 +379,15 @@ const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
   // renders only inside `{auto && seqState !== 'idle'}` and the fixture above is idle, so
   // listing it would fail the baseline assertion ("not on screen with every panel SHOWN")
   // rather than prove anything. Census-only, said so in panelState.ts.
+  //
+  // AND NOT THE CONTINUOUS-TX ("TX") BUTTON, for the plainest reason of all: it is a SENDER.
+  // Clicking it off stops accepting characters and lets what was already typed finish keying —
+  // a mode toggle, deliberately not an immediate cut. The immediate cuts for a latched over are
+  // the two swept below plus the TX-enable latch, and each of them drops the latch as well as
+  // the over. Its `disabled={!(sending || latched)}` sibling — the Esc/Stop macro — is swept,
+  // and that predicate is what keeps it live in the tick between the latch going up and the
+  // first chunk being keyed; `RttyCockpit.test.tsx` pins that case directly, because this sweep
+  // renders a fixture that is neither sending nor latched and so can only see the baseline.
   stopControls: [
     ['Stop TX', /^stop tx$/i],
     ['Stop (RTTY abort)', /^esc\s*stop$/i],

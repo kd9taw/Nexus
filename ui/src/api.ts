@@ -1671,6 +1671,20 @@ export async function rttySend(text: string): Promise<RttyState> {
   return invoke<RttyState>('rtty_send', { text })
 }
 
+/** Continuous TX on/off (the MMTTY "TX" latch): stay keyed and type into a live
+ * transmission instead of one keyed over per Enter. ON runs the same gate a send
+ * runs; OFF lets what was already typed finish keying, then unkeys — it is a mode
+ * toggle, not the emergency stop (Stop TX and the TX-enable latch are). */
+export async function rttySetLatched(on: boolean): Promise<RttyState> {
+  return invoke<RttyState>('rtty_set_latched', { on })
+}
+
+/** Feed typed characters into the live latched transmission. One insertion at a
+ * time — RTTY has no un-send, so what reaches here has already gone on the air. */
+export async function rttyType(text: string): Promise<RttyState> {
+  return invoke<RttyState>('rtty_type', { text })
+}
+
 /** Stop RTTY now: abort the over in progress, drop the queue, unkey. */
 export async function rttyStop(): Promise<RttyState> {
   return invoke<RttyState>('rtty_stop')

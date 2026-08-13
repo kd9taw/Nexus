@@ -11,6 +11,8 @@ vi.mock('../api', () => ({
   rttyArm: vi.fn(),
   getLicensedBandPlan: vi.fn(),
   rttySend: vi.fn(),
+  rttySetLatched: vi.fn(),
+  rttyType: vi.fn(),
   rttyStop: vi.fn(),
   rttyClear: vi.fn(),
   rttyAfcReset: vi.fn(),
@@ -33,6 +35,8 @@ const rttyArm = api.rttyArm as ReturnType<typeof vi.fn>
 const getLicensedBandPlan = api.getLicensedBandPlan as ReturnType<typeof vi.fn>
 const rttySend = api.rttySend as ReturnType<typeof vi.fn>
 const rttyStop = api.rttyStop as ReturnType<typeof vi.fn>
+const rttySetLatched = api.rttySetLatched as ReturnType<typeof vi.fn>
+const rttyType = api.rttyType as ReturnType<typeof vi.fn>
 const haltTx = api.haltTx as ReturnType<typeof vi.fn>
 const pushToast = toast.pushToast as ReturnType<typeof vi.fn>
 
@@ -60,6 +64,7 @@ const IDLE: RttyState = {
   shiftHz: 170,
   backend: 'afsk',
   sending: false,
+  latched: false,
   keyerError: null,
   markHz: 2125,
   spaceHz: 2295,
@@ -76,6 +81,8 @@ beforeEach(() => {
   getLicensedBandPlan.mockReset().mockResolvedValue([])
   rttySend.mockReset().mockResolvedValue({ ...IDLE, sending: true })
   rttyStop.mockReset().mockResolvedValue(IDLE)
+  rttySetLatched.mockReset().mockResolvedValue({ ...IDLE, latched: true, sending: true })
+  rttyType.mockReset().mockResolvedValue({ ...IDLE, latched: true, sending: true })
   haltTx.mockReset().mockResolvedValue(snap)
   pushToast.mockReset()
 })
@@ -213,6 +220,113 @@ describe('RttyCockpit TX wiring', () => {
     const stop = screen.getByText('Stop').closest('button') as HTMLButtonElement
     expect(stop.disabled).toBe(false)
     fireEvent.click(stop)
+    expect(rttyStop).toHaveBeenCalled()
+    expect(haltTx).toHaveBeenCalled()
+  })
+
+  it('latches continuous TX through rtty_set_latched and reflects it on the button', async () => {
+    render(<RttyCockpit snap={snap} />)
+    const tx = (await screen.findByText('Continuous')).closest('button') as HTMLButtonElement
+    expect(tx.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(tx)
+    expect(rttySetLatched).toHaveBeenCalledWith(true)
+    await screen.findByText('On air')
+    fireEvent.click(screen.getByText('On air').closest('button') as HTMLButtonElement)
+    expect(rttySetLatched).toHaveBeenLastCalledWith(false)
+  })
+
+  it('keeps Stop live the instant the latch is up, before anything is on the air', async () => {
+    // ⭐ THE AUDIT'S FINDING. Stop is on RTTY's stop-line census, and `sending` is
+    // stamped by the radio loop from the audio ACTUALLY in flight — so it is false
+    // for the tick between the latch going up and the first chunk being keyed, and
+    // false for good if the FSK keyline never opens. Gating Stop on `sending`
+    // alone leaves a keyed transmitter whose Stop button is mounted and dead,
+    // which the stop line counts as the same loss as one that is gone.
+    getRttyState.mockResolvedValue({ ...IDLE, latched: true, sending: false })
+    render(<RttyCockpit snap={snap} />)
+    await screen.findByText('On air')
+    const stop = screen.getByText('Stop').closest('button') as HTMLButtonElement
+    expect(stop.disabled).toBe(false)
+    fireEvent.click(stop)
+    expect(rttyStop).toHaveBeenCalled()
+    expect(haltTx).toHaveBeenCalled()
+  })
+
+  it('streams typed characters one insertion at a time and refuses every edit', async () => {
+    // RTTY HAS NO UN-SEND. A character that reaches rttyType is already on the
+    // air, so while latched the field is append-only: an insertion is streamed,
+    // and a backspace, a paste or a drop cannot touch what was sent.
+    getRttyState.mockResolvedValue({ ...IDLE, latched: true, sending: true })
+    render(<RttyCockpit snap={snap} />)
+    await screen.findByText('On air')
+    const input = screen.getByLabelText('RTTY compose') as HTMLInputElement
+
+    const insert = (data: string) =>
+      input.dispatchEvent(
+        new (window as any).InputEvent('beforeinput', {
+          inputType: 'insertText',
+          data,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+    insert('C')
+    insert('Q')
+    expect(rttyType.mock.calls.map((c: unknown[]) => c[0])).toEqual(['C', 'Q'])
+    await waitFor(() => expect(input.value).toBe('CQ'))
+
+    // Anything that is not a single-character insertion is cancelled outright and
+    // never reaches the transmitter.
+    rttyType.mockClear()
+    for (const inputType of [
+      'deleteContentBackward',
+      'insertFromPaste',
+      'insertFromDrop',
+      'deleteWordBackward',
+      'insertLineBreak',
+    ]) {
+      const ev = new (window as any).InputEvent('beforeinput', {
+        inputType,
+        data: 'XXX',
+        bubbles: true,
+        cancelable: true,
+      })
+      input.dispatchEvent(ev)
+      expect(ev.defaultPrevented).toBe(true)
+    }
+    expect(rttyType).not.toHaveBeenCalled()
+    expect(input.value).toBe('CQ')
+
+    // Enter is a NEW LINE on the air while latched, never a send: the transmitter
+    // is already up, so there is nothing to send.
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(rttyType).toHaveBeenCalledWith('\r\n')
+    expect(rttySend).not.toHaveBeenCalled()
+  })
+
+  it('leaves the unlatched compose bar exactly as it was — Enter still sends a line', async () => {
+    // The regression guard for every operator who does NOT use continuous TX: the
+    // send-and-done path is untouched, and the streaming interception is bound
+    // only while latched.
+    render(<RttyCockpit snap={snap} />)
+    const input = (await screen.findByLabelText('RTTY compose')) as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'CQ TEST' } })
+    expect(input.value).toBe('CQ TEST')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(rttySend).toHaveBeenCalledWith('CQ TEST')
+    expect(rttyType).not.toHaveBeenCalled()
+  })
+
+  it('binds Esc to Stop, and only while this is the visible view', async () => {
+    // RTTY had no keyboard handler at all — the "Esc" glyph on the Stop macro was
+    // decoration. A latched transmitter is what makes that gap matter. The cockpit
+    // stays MOUNTED in the keep-alive host, so an unconditional listener would
+    // fire Stop TX from inside another section.
+    const { rerender } = render(<RttyCockpit snap={snap} active={false} />)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(rttyStop).not.toHaveBeenCalled()
+    rerender(<RttyCockpit snap={snap} active />)
+    fireEvent.keyDown(window, { key: 'Escape' })
     expect(rttyStop).toHaveBeenCalled()
     expect(haltTx).toHaveBeenCalled()
   })

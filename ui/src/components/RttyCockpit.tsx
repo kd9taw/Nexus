@@ -20,7 +20,9 @@ import {
   rttyNet,
   rttySend,
   rttySetAuto,
+  rttySetLatched,
   rttyStop,
+  rttyType,
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
@@ -300,6 +302,72 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const sending = rtty?.sending === true
   const backend = (rtty?.backend ?? 'afsk').toUpperCase()
 
+  // --- CONTINUOUS TX (the MMTTY "TX" latch) -----------------------------------
+  // Stay keyed and type into a live transmission (the air carries LTRS diddle
+  // between keystrokes) instead of one keyed over per Enter. The engine owns all
+  // of the safety: it runs the same gate a send runs before the latch comes up,
+  // re-checks every TX gate on every radio-loop tick while it is up, and drops
+  // the latch the moment one goes down. This component only asks.
+  const latched = rtty?.latched === true
+  const latchedRef = useRef(latched)
+  latchedRef.current = latched
+  const toggleLatch = () => {
+    void withErrorToast(() => rttySetLatched(!latched), 'Continuous TX refused').then((s) => {
+      if (s) setRtty(s)
+    })
+    // Latching off leaves the compose field holding text that has already been
+    // transmitted; start the next over clean.
+    if (latched) setText('')
+  }
+  // Stream ONE INSERTION AT A TIME, and never a diff of the field's value. A diff
+  // cannot tell a paste from a caret move from a backspace, and RTTY HAS NO
+  // UN-SEND: a wrong diff is a wrong transmission. So while latched the field is
+  // append-only — the insertion is cancelled, appended by us, and handed to the
+  // engine, which keeps the field and what went on the air identical by
+  // construction rather than by agreement.
+  const composeRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    const el = composeRef.current
+    if (!el || !latched) return
+    const onBeforeInput = (e: Event) => {
+      const ev = e as InputEvent
+      if (!latchedRef.current) return
+      if (ev.inputType === 'insertText' && ev.data) {
+        ev.preventDefault()
+        const t = ev.data
+        setText((prev) => prev + t)
+        void withErrorToast(() => rttyType(t), 'RTTY typing refused').then((s) => {
+          if (s) setRtty(s)
+        })
+      } else {
+        // Backspace, paste, a drop, an IME commit — none of them can un-send
+        // what is already on the air, so none of them may touch the field.
+        ev.preventDefault()
+      }
+    }
+    // A native listener, not React's onBeforeInput: the synthetic event does not
+    // carry a reliable `inputType`, and `inputType` is the whole discrimination.
+    el.addEventListener('beforeinput', onBeforeInput)
+    return () => el.removeEventListener('beforeinput', onBeforeInput)
+  }, [latched])
+  // Esc stops RTTY from anywhere in the cockpit. RTTY had no keyboard binding at
+  // all (the Stop macro's "Esc" glyph was decoration); a latched transmitter is
+  // what makes that gap matter. Bound only while this is the VISIBLE view — the
+  // cockpit stays mounted in the keep-alive host, so an unconditional listener
+  // would fire Stop TX from inside another section.
+  useEffect(() => {
+    if (!active) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        stop()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active])
+
   const text_rx = rtty?.text ?? ''
   // Only re-walk the ring when the transcript itself changed. App re-renders
   // unconditionally every 400 ms and this cockpit stays MOUNTED in the
@@ -418,7 +486,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           dock, none of them with a ⊞ id. A pane's own stop is a convenience; those four are
           what hold the guarantee up — and while an over is actually keying outside an auto
           sequence, THREE of the four are live: Stop TX (never disabled), the Esc/Stop macro
-          (disabled={!sending}, so enabled exactly then) and the latch (a button, because
+          (disabled={!(sending || latched)}, so enabled exactly then — and, since continuous TX
+          landed, from the instant the TX latch goes up rather than from the first keyed chunk)
+          and the latch (a button, because
           radio.transmitting is the slot-TX indicator and is false here). The sequencer's Abort
           is not rendered then. This pane is the second of exactly two like it in the app
           (Phone's voice keyer is the other) and the reason the FOURTH wording of the rule was
@@ -519,16 +589,31 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       </CockpitPaneFrame>
       )}
 
-      {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), Stop
-          and the compose bar, pinned OUTSIDE any pane so nothing can scroll them out of
-          reach. None of these has an id in the RTTY panel vocabulary ('stream' is the only
-          entry). For the sequencer's Abort, the Esc/Stop macro and the header's Stop TX /
-          TX-arm that is THE STOP LINE — those four render outside every ⊞-removable pane, so
-          unticking 'stream' (which takes its own Auto-toggle stop with it) cannot take any of
-          them away. FOUR IS THE LIST, NOT THE LIVE COUNT: mid-over outside an auto sequence
-          three are operable (Stop TX, the Esc/Stop macro, the latch) and the Abort below is
-          not on screen at all; inside an auto sequence all four are. For the macros and the
-          compose bar it is this cockpit's own choice: the rule is indifferent to senders. */}
+      {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), the
+          continuous-TX latch, Stop and the compose bar, pinned OUTSIDE any pane so nothing
+          can scroll them out of reach. None of these has an id in the RTTY panel vocabulary
+          ('stream' is the only entry). For the sequencer's Abort, the Esc/Stop macro and the
+          header's Stop TX / TX-arm that is THE STOP LINE — those four render outside every
+          ⊞-removable pane, so unticking 'stream' (which takes its own Auto-toggle stop with
+          it) cannot take any of them away. FOUR IS THE LIST, NOT THE LIVE COUNT: mid-over
+          outside an auto sequence three are operable (Stop TX, the Esc/Stop macro, the latch)
+          and the Abort below is not on screen at all; inside an auto sequence all four are.
+          For the macros and the compose bar it is this cockpit's own choice: the rule is
+          indifferent to senders.
+
+          THE CONTINUOUS-TX (TX) BUTTON IS A SENDER, NOT A STOP, and must not be added to
+          stop-line.test.tsx's RTTY stopControls. Clicking it off stops ACCEPTING characters
+          and lets what was already typed finish keying — a mode toggle, deliberately not an
+          immediate cut. The immediate cuts are unchanged and each of them also drops the
+          latch: Stop TX, the Esc/Stop macro (now `disabled={!(sending || latched)}` so it is
+          live from the instant the latch goes up, not from the first keyed chunk), the
+          TX-enable latch, and Esc — which this cockpit now actually binds (it had no keyboard
+          handler at all; the "Esc" glyph on the Stop macro was decoration). Esc is
+          keyboard-only, so like Phone's Space and CW's Esc it is census-only and outside both
+          sweeps by construction. A FIFTH stop reaches a latched over that reaches no other
+          over: the engine's per-tick gate re-check, which unkeys within one tick on a section
+          change, a QSY out of privileges, a tune, or a radio handoff — none of which is a
+          control the operator pressed. */}
       <div className="cockpit-txdock">
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">
@@ -609,9 +694,29 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         ))}
         <button
           type="button"
+          className={`cw-macro rtty-tx-latch${latched ? ' on' : ''}`}
+          aria-pressed={latched}
+          onClick={toggleLatch}
+          title={
+            latched
+              ? 'Continuous TX ON — the transmitter stays keyed and idles on diddle; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
+              : 'Continuous TX — key up and stay keyed, then type into the live transmission (MMTTY-style), instead of pressing Enter for every line'
+          }
+        >
+          <span className="cw-macro-key">TX</span>
+          <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
+        </button>
+        <button
+          type="button"
           className="cw-macro rtty-stop"
           onClick={stop}
-          disabled={!sending}
+          // `sending || latched`, NOT `sending` alone. `sending` is stamped by the
+          // radio loop from the audio actually in flight, so it is false for the
+          // tick between the latch going up and the first chunk being keyed — and
+          // false for good if the FSK keyline never opens. This control is on
+          // RTTY's stop-line census; a census stop control that is mounted and
+          // disabled is the same loss as one that is gone.
+          disabled={!(sending || latched)}
           title="Stop RTTY — abort the transmission in progress, drop anything queued, unkey"
         >
           <span className="cw-macro-key">Esc</span>
@@ -621,21 +726,43 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
 
       <div className="cw-send">
         <input
+          ref={composeRef}
           className="settings-input cw-type"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          // Unlatched this is an ordinary field: type a line, press Enter, one
+          // keyed over. Latched, every insertion is intercepted in `beforeinput`
+          // above and this never fires — but it stays wired so nothing depends on
+          // the interception to keep the field consistent.
+          onChange={(e) => {
+            if (!latched) setText(e.target.value)
+          }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
+            if (e.key !== 'Enter') return
+            e.preventDefault()
+            if (latched) {
+              // Latched, Enter is a NEW LINE on the air (CR LF — both live in
+              // both ITA2 planes), not a send: the transmitter is already up.
+              setText('')
+              void withErrorToast(() => rttyType('\r\n'), 'RTTY typing refused').then((s) => {
+                if (s) setRtty(s)
+              })
+            } else {
               sendTyped()
             }
           }}
-          placeholder="Type RTTY to send… (Enter)"
+          placeholder={latched ? 'Typing on the air…' : 'Type RTTY to send… (Enter)'}
           autoComplete="off"
           spellCheck={false}
           aria-label="RTTY compose"
         />
-        <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!text.trim()}>
+        <button
+          type="button"
+          className="cw-send-btn"
+          onClick={sendTyped}
+          // Latched, there is nothing to "send": characters go out as they are
+          // typed and the macros type into the live transmission too.
+          disabled={latched || !text.trim()}
+        >
           Send
         </button>
       </div>
