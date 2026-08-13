@@ -4494,7 +4494,7 @@ impl Engine {
         // rig DOWN to the cap now, not wait for the operator to touch the power slider. If a cap
         // exists for the new mode, command at most the cap — carrying the current level when it's
         // already under it. No cap ⇒ leave the commanded power untouched.
-        let ceiling = self.settings.rf_power_ceiling();
+        let ceiling = self.active_power_ceiling();
         if ceiling < 1.0 {
             let cur = self.rf_power.or(self.rig_rf_power).unwrap_or(ceiling);
             self.rf_power = Some(cur.min(ceiling));
@@ -5319,11 +5319,32 @@ impl Engine {
     }
 
     /// Set desired RF output power (0.0–1.0). The radio loop applies it via the rig.
+    /// The power ceiling in force RIGHT NOW — the mode's own cap, except while an SSTV frame is
+    /// on the air, when the high-duty cap applies instead.
+    ///
+    /// SSTV rides Phone (it has no `OperatingMode`), so without this it was capped by the SSB
+    /// setting while keying continuously for up to 290 s at ~100% duty. See
+    /// [`Settings::rf_power_ceiling_high_duty`] for why the rule is the LOWER of the two caps.
+    ///
+    /// Every ceiling reader goes through here — the mode-entry re-clamp, the `set_rf_power`
+    /// chokepoint, and the loop's continuous re-assertion — so an SSTV transmission cannot pick
+    /// up the phone cap by whichever path happens to run first.
+    ///
+    /// ⚠️ NEEDS-BENCH: verified by unit test only. There is no rig on the dev box, so the
+    /// commanded level has not been read back off real hardware.
+    fn active_power_ceiling(&self) -> f32 {
+        if self.sstv_sending || self.sstv_tx.is_some() {
+            self.settings.rf_power_ceiling_high_duty()
+        } else {
+            self.settings.rf_power_ceiling()
+        }
+    }
+
     pub fn set_rf_power(&mut self, frac: f32) {
         // SAFETY CEILING: never command the rig above the current mode's per-mode cap (FT8/FT4/
         // RTTY duty-cycle protection). The single chokepoint — every power set, from any UI path,
         // passes through here — so the cap cannot be bypassed.
-        let ceiling = self.settings.rf_power_ceiling();
+        let ceiling = self.active_power_ceiling();
         self.rf_power = Some(frac.clamp(0.0, ceiling));
     }
 
@@ -5336,7 +5357,7 @@ impl Engine {
     /// clamped the commanded value but never re-asserted against the rig's actual level. Enforcement
     /// only ever LOWERS power, so it is safe-direction. Called each radio-loop tick.
     pub fn rf_power_to_command(&mut self) -> Option<(f32, bool)> {
-        let ceiling = self.settings.rf_power_ceiling();
+        let ceiling = self.active_power_ceiling();
         let mut force = false;
         if ceiling < 1.0 {
             // 0.02 epsilon absorbs rig readback rounding so a settled cap doesn't re-command.
@@ -18347,6 +18368,52 @@ mod tests {
         let qso = snap.qso.expect("QSO status present after call_station");
         assert_eq!(qso.dxcall.as_deref(), Some("W9XYZ"));
         assert!(qso.running, "directed call runs the responder side");
+    }
+
+    #[test]
+    fn sstv_takes_the_high_duty_cap_even_though_it_rides_phone() {
+        // SAFETY. SSTV has no `OperatingMode` of its own — it rides Phone (settings.rs documents
+        // this) — so `rf_power_ceiling()` handed it `max_power_phone`, the SSB cap. But an SSTV
+        // frame is ~100% duty for up to 290 s of CONTINUOUS key-down, which is the duty shape the
+        // digital cap exists for. RTTY, the same shape, already takes the digital cap. So the one
+        // mode that keys hardest for longest was capped as though it were speech.
+        //
+        // The rule is the LOWER of the two caps, never the digital one alone: an operator who set
+        // digital ABOVE phone must not have SSTV raise their power above what the phone cap
+        // allows while the rig is in a phone mode. Enforcement may only ever lower power.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.max_power_phone = Some(0.80); // fine for SSB's low duty
+        e.settings.max_power_digital = Some(0.30); // the high-duty cap
+        e.set_operating_mode("phone", false); // SSTV runs here
+
+        // Not sending: ordinary phone keeps the phone cap.
+        e.set_rf_power(1.0);
+        assert_eq!(e.rf_power(), Some(0.80), "plain phone still takes the phone cap");
+
+        // Sending SSTV: the high-duty cap applies.
+        e.set_sstv_sending(true);
+        e.set_rf_power(1.0);
+        assert_eq!(
+            e.rf_power(),
+            Some(0.30),
+            "an SSTV frame is high-duty and must take the digital cap, not the SSB one"
+        );
+
+        // …and it is the LOWER of the two, so a digital cap set above phone cannot raise power.
+        e.settings.max_power_digital = Some(0.95);
+        e.set_rf_power(1.0);
+        assert_eq!(
+            e.rf_power(),
+            Some(0.80),
+            "the high-duty rule may only ever LOWER power, never lift the phone cap"
+        );
+
+        // Control: releasing SSTV returns the ordinary phone ceiling, so this is scoped to the
+        // transmission and not a permanent de-rate.
+        e.set_sstv_sending(false);
+        e.settings.max_power_digital = Some(0.30);
+        e.set_rf_power(1.0);
+        assert_eq!(e.rf_power(), Some(0.80), "off the air, phone is phone again");
     }
 
     #[test]

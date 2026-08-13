@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SSTV now respects your high-duty power cap, not your SSB one.** SSTV has no operating mode
+  of its own — it runs as Phone — so its power ceiling came from **Max power ▸ Phone**, the cap
+  you set for speech. An SSTV frame keys continuously for up to 290 seconds at close to 100%
+  duty, which is exactly what the digital cap is for, and RTTY already used it. SSTV now takes
+  the **lower** of your digital and phone caps, so it can only ever come down, never up.
+  ⚠️ Verified by test only — there is no rig on the build machine. Worth watching your PA the
+  first time you send a picture.
+- **Japan's APRS channel wants a local check.** Nexus derives your APRS channel from your grid,
+  and ships 144.660 for Japan while its own band-pack data says 144.640/660. If you're in JA,
+  confirm the channel before you beacon — the picker changes it in one click.
 - **SSTV has a Settings section.** It was the only mode with a cockpit and no settings, so
   every choice you made — transmit mode, drive — was gone by the next launch, and the one
   thing that did persist (the ISS pass auto-arm) was filed under Rig & CAT, where nothing else

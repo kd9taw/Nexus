@@ -18,6 +18,12 @@ export const NORTH_AMERICA = 144.39
 export const EUROPE_AFRICA = 144.8
 export const AUSTRALIA = 145.175
 export const NEW_ZEALAND = 144.575
+/** ⚠️ UNCONFIRMED, and it now auto-tunes a JA operator's rig, so it is flagged rather than
+ * quietly carried. The app has shipped 144.660 for Japan since before this derivation existed,
+ * but its own starter-pack data disagrees — `features/packs.ts` reads "Japan 144.640/660". We
+ * could not settle which is current from inside the tree and deliberately did not re-type an
+ * on-air frequency on a guess, so the shipped value stands and a JA operator is asked to confirm
+ * in the release notes. The channel picker overrides it in one click either way. */
 export const JAPAN = 144.66
 export const ARGENTINA = 144.93
 export const BRAZIL = 145.57

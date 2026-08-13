@@ -3419,6 +3419,26 @@ impl Settings {
         cap.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0)
     }
 
+    /// The ceiling for a HIGH-DUTY transmission, whatever operating mode is nominally selected.
+    ///
+    /// ⚠️ THIS EXISTS BECAUSE SSTV HAS NO `OperatingMode` OF ITS OWN. It rides Phone (see the
+    /// `RouteMode` notes), so [`Self::rf_power_ceiling`] handed it `max_power_phone` — the SSB
+    /// cap — while an SSTV frame keys CONTINUOUSLY for up to 290 s at ~100% duty. That is the
+    /// duty shape `max_power_digital` exists for, and RTTY (the same shape) already takes it.
+    /// The one mode that keys hardest for longest was capped as though it were speech.
+    ///
+    /// The result is the LOWER of the digital cap and the selected mode's own cap, never the
+    /// digital one alone: an operator who set digital ABOVE phone must not have SSTV lift their
+    /// power past what the phone cap allows while the rig sits in a phone mode. Enforcement here
+    /// may only ever LOWER power — which is what makes it safe to apply without bench proof.
+    pub fn rf_power_ceiling_high_duty(&self) -> f32 {
+        let digital = self
+            .max_power_digital
+            .map(|c| c.clamp(0.0, 1.0))
+            .unwrap_or(1.0);
+        digital.min(self.rf_power_ceiling())
+    }
+
     pub fn rig_mode(&self) -> String {
         // FM is BAND-GATED, and that gate is a bug fix, not a preference. `phone_mode`
         // is one station-wide field: nothing resets it when the operator changes band or
