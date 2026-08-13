@@ -2469,6 +2469,26 @@ impl RadioLoop {
         if md.trim().is_empty() {
             return;
         }
+        // Only re-assert a mode we believe actually REACHED the rig. `last_mode` holds an
+        // applied mode and nothing else — a failed set leaves it alone, and a give-up leaves
+        // the plain-sideband fallback — so a disagreement here means this loop has ALREADY
+        // established that the radio will not take `md`: either the force path's own attempt
+        // failed on this very tick, or the ladder gave up on it ticks ago. Re-asking is then
+        // guaranteed to fail, and it costs an `m` read plus an `M` write inside the rig's
+        // band-change settling window, which is the worst moment to spend them. Observed on
+        // the wire for the FT-950 report: `M PKTUSB 3000` (refused) → `F 21074000` → `m` →
+        // `M PKTUSB 3000` (refused again), all on one tick.
+        //
+        // Testing `mode_giveup` here instead would be DEAD CODE on the path that matters:
+        // the force path clears the give-up before it retunes, so on an operator's band pick
+        // — the gesture that actually crosses a band — it is always `None`.
+        //
+        // The FTDX10 band-stacking fix this function exists for is untouched: there the mode
+        // set SUCCEEDED, so `last_mode == md` and the re-assert still runs.
+        // Pinned by `a_band_cross_never_re_asks_for_a_mode_the_rig_just_refused`.
+        if !self.last_mode.trim().eq_ignore_ascii_case(md.trim()) {
+            return;
+        }
         let band_of = |hz: u64| tempo_app::bandplan::band_for_dial(hz as f64 / 1e6);
         // ⚠️ `None == None` is NOT "in-band": two dials the table cannot name (47 GHz+,
         // or one named and one not) may sit on different rig band registers, and reading
@@ -3278,11 +3298,27 @@ impl RadioLoop {
                     // `mode_giveup` below.
                     // MODE FIRST HERE TOO — same reason as the force path above: a dial written
                     // in the outgoing mode's convention is reinterpreted when the mode lands.
-                    let mode_changed = md != self.last_mode;
-                    // Apply the section's mode — unless it's the one we already gave up on
-                    // (rig kept rejecting it). `last_mode` only ever holds a mode actually
+                    // A mode we have GIVEN UP on is not "changed" — it is ABANDONED, and the
+                    // give-up belongs in the predicate itself rather than only on the mode
+                    // set below. Field report (FT-950, 2026-08-12): "whenever I click on the
+                    // frequency in dxspot, my radio goes haywire." A spot click lands the
+                    // Digital section, whose mode is PKTUSB; a rig with no DATA-USB submode
+                    // refuses it, the ladder gives up, and from then on `md` is forever
+                    // "PKTUSB" while `last_mode` is forever the "USB" fallback — so a bare
+                    // `md != last_mode` is PERMANENTLY true. The `|| mode_changed` term on
+                    // the dial re-push below then fired a real `F <hz>` round-trip every
+                    // 20 ms tick for as long as the operator stayed in the section, and each
+                    // push deferred `last_rig_poll`/`last_freq_poll`, so the dial mirror and
+                    // the heavy poll never came due again (frozen S-meter, a readout that
+                    // stopped following the VFO, hand-tuning stomped back within one tick).
+                    // The pitch-walk fix is untouched: a mode that ACTUALLY reached the rig
+                    // still re-asserts the dial in the destination mode's convention.
+                    // Pinned by `a_given_up_mode_stops_the_per_tick_dial_storm`.
+                    let mode_changed =
+                        md != self.last_mode && self.mode_giveup.as_deref() != Some(md.as_str());
+                    // Apply the section's mode. `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
-                    if mode_changed && self.mode_giveup.as_deref() != Some(md.as_str()) {
+                    if mode_changed {
                         match rig.set_mode(&md, retry_passband(&md, self.mode_fail_count)) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
@@ -13185,6 +13221,272 @@ mod tests {
         assert_eq!(
             state.last_mode, "USB",
             "last_mode tracks what was actually applied (the fallback)"
+        );
+    }
+
+    // ---- the DX-spot click storm (operator report, FT-950, 2026-08-12) ----
+
+    /// A rigctld shaped like the FT-950: it has NO DATA-USB submode, so every `M PKT*` is
+    /// refused (`RPRT -1`) and the rig's live mode is left alone — but it answers `m` and
+    /// `f` TRUTHFULLY, which is what [`mock_pkt_rejecting_rigctld`] deliberately does not
+    /// (it replies `RPRT 0` to `m`, and the band-cross re-assert correctly reads that as
+    /// "no evidence" and stands down). A truthful `m` is the whole point here: it is what
+    /// lets `reassert_mode_after_band_cross` see a mode that disagrees with `md` and act
+    /// on it.
+    fn mock_pkt_rejecting_rig_with_mode_read(start_hz: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let rec = Arc::clone(&log);
+        std::thread::spawn(move || {
+            let mut cur_hz = start_hz;
+            let mut live_mode = "USB".to_string();
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut out = match stream.try_clone() {
+                    Ok(o) => o,
+                    Err(_) => return,
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let mut p = line.split_whitespace();
+                    let reply: String = match p.next() {
+                        Some("M") => {
+                            let m = p.next().unwrap_or("USB");
+                            if m.starts_with("PKT") {
+                                // No DATA submode on this radio — refuse, mode unchanged.
+                                "RPRT -1\n".into()
+                            } else {
+                                live_mode = m.to_string();
+                                "RPRT 0\n".into()
+                            }
+                        }
+                        Some("F") => {
+                            cur_hz = p
+                                .next()
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .unwrap_or(cur_hz);
+                            "RPRT 0\n".into()
+                        }
+                        Some("f") => format!("{cur_hz}\n"),
+                        Some("m") => format!("{live_mode}\n2400\n"),
+                        _ => "RPRT 0\n".into(),
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// Count the command lines in a recording rigctld's log that start with `pfx`, from
+    /// `from` onward — so a test can measure a WINDOW of the wire rather than a total.
+    fn count_from(log: &Arc<Mutex<Vec<String>>>, from: usize, pfx: &str) -> usize {
+        log.lock().unwrap()[from..]
+            .iter()
+            .filter(|c| c.starts_with(pfx))
+            .count()
+    }
+
+    /// ⭐ FIELD REPORT (FT-950, 2026-08-12): "whenever I click on the frequency in dxspot,
+    /// my radio goes haywire."
+    ///
+    /// A spot click is the one gesture that changes SECTION MODE + BAND + DIAL at once
+    /// (`Engine::work_spot_split` = `set_operating_mode` then `set_frequency`), and a spot
+    /// in a band's data segment is routed to the Digital section, whose commanded mode is
+    /// `PKTUSB`. On a rig with no DATA-USB submode — the FT-950's `MD0n;` table has DATA-LSB
+    /// but no DATA-USB — the bounded ladder runs its 30 attempts and latches
+    /// `mode_giveup = "PKTUSB"`, landing the radio on plain USB (`last_mode = "USB"`).
+    ///
+    /// THE DEFECT: the steady-state retune computed `mode_changed = md != self.last_mode`
+    /// WITHOUT consulting the give-up. Past the give-up `md` is forever "PKTUSB" and
+    /// `last_mode` is forever "USB", so `mode_changed` was permanently true — and the
+    /// `|| mode_changed` term on the dial re-push (the FTDX10 pitch-walk fix, which must
+    /// stay) therefore fired `F <hz>` on EVERY 20 ms tick, for as long as the section
+    /// stayed Digital. `Rig::set_freq` has no dedupe, so each one is a real round-trip.
+    ///
+    /// It also BLINDS the app, which is the other half of "haywire": every successful push
+    /// sets `retuned`, and `retuned` pushes `last_rig_poll`/`last_freq_poll` forward — so
+    /// the fast dial mirror and the 750 ms heavy poll never come due again. The S-meter
+    /// freezes, the readout stops following the VFO, and a hand-tune is stomped back within
+    /// one tick.
+    ///
+    /// Measured on the wire, not inferred: `F ` lines in the steady window past the give-up.
+    #[test]
+    fn a_given_up_mode_stops_the_per_tick_dial_storm() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        let (addr, log) = mock_pkt_rejecting_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // The real loop's tick, so the READ-BACK deadlines below are the real ones.
+        const TICK_MS: f64 = 20.0;
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, &mut backend, t); // settle Phone / 20 m
+        t += TICK_MS;
+
+        // THE CLICK: an FT8-segment spot, i.e. the Digital section on a new dial.
+        engine.lock().unwrap().work_spot("digital", 14.074, "20m");
+
+        // Run the ladder out. Generous cap; the assertion below is that we really landed in
+        // the post-give-up state, not that it took a particular number of ticks.
+        for _ in 0..(MODE_SET_MAX_TRIES + 8) {
+            run(&mut state, &mut rig, &mut backend, t);
+            t += TICK_MS;
+        }
+        assert_eq!(
+            state.mode_giveup.as_deref(),
+            Some("PKTUSB"),
+            "precondition: the rig refused the DATA submode and the ladder gave up"
+        );
+        assert_eq!(
+            state.last_mode, "USB",
+            "precondition: the radio was left on the plain-sideband fallback"
+        );
+
+        let mark = log.lock().unwrap().len();
+        // POSITIVE CONTROL for the counter and the mock: the ladder window MUST contain dial
+        // writes, or a zero below would prove nothing about the fix (a log that records no
+        // `F ` at all, or a loop that stopped stepping, would read as a pass).
+        assert!(
+            count_from(&log, 0, "F ") > 0,
+            "control: the click itself must have written the dial — {:?}",
+            log.lock().unwrap()
+        );
+
+        // THE STEADY WINDOW. Nothing changes: no click, no QSY, no band change. The operator
+        // is just sitting there. 60 ticks = 1.2 s, long enough for the deferred fast dial
+        // mirror (570 ms + 180 ms) and the 750 ms heavy poll to come due.
+        const STEADY_TICKS: usize = 60;
+        for _ in 0..STEADY_TICKS {
+            run(&mut state, &mut rig, &mut backend, t);
+            t += TICK_MS;
+        }
+
+        // Both symptoms are counted BEFORE either is asserted, so a failure reports the
+        // whole picture rather than stopping at the first one.
+        let (writes, reads) = (count_from(&log, mark, "F "), count_from(&log, mark, "f"));
+        assert_eq!(
+            writes, 0,
+            "a mode the rig has been GIVEN UP on must not keep claiming the dial re-push: \
+             {STEADY_TICKS} idle ticks past the give-up wrote the dial {writes} times \
+             (pre-fix: one per tick, forever) and read it back {reads} times"
+        );
+        // The other half of the report — the starved read-backs. With the storm running,
+        // every push set `retuned`, which deferred `last_rig_poll`/`last_freq_poll` past the
+        // next tick's deadline every single tick, so this was 0: the frozen S-meter and the
+        // readout that stops following the VFO.
+        assert!(
+            reads > 0,
+            "the dial read-back must come due again once the storm stops (a frozen S-meter / \
+             a readout that no longer follows the VFO is the same defect): {reads} reads in \
+             {STEADY_TICKS} ticks — {:?}",
+            log.lock().unwrap()[mark..].to_vec()
+        );
+    }
+
+    /// The band-cross half of the same report, from the adversarial audit.
+    ///
+    /// `reassert_mode_after_band_cross` exists for the FTDX10 band-stacking window: after a
+    /// dial write that crosses a band, read the rig's REAL mode back and re-assert once if
+    /// the rig's own band register overrode us. It consulted nothing about whether the mode
+    /// it is re-asserting ever reached the rig in the first place — so on a radio that
+    /// refuses `PKTUSB`, the read-back reports "USB", disagrees with `md`, and it sends a
+    /// SECOND doomed `M PKTUSB 3000` on the very tick the ladder's own attempt already
+    /// failed. Bounded rather than a storm, but it is pure waste inside the rig's band-change
+    /// settling window, which is the worst possible moment.
+    ///
+    /// NOTE the guard this needs is NOT `mode_giveup == md` (the audit's suggestion): the
+    /// force path CLEARS `mode_giveup` before it retunes, so that test is false exactly here.
+    /// The invariant that holds on both paths is `last_mode` — which by construction only
+    /// ever holds a mode the rig actually took.
+    #[test]
+    fn a_band_cross_never_re_asks_for_a_mode_the_rig_just_refused() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("digital", true);
+            e.set_frequency(14.074, "20m", "USB");
+        }
+        let (addr, log) = mock_pkt_rejecting_rig_with_mode_read(14_074_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        // Settle on 20 m digital and run the ladder out, so the radio is parked on plain USB.
+        for _ in 0..(MODE_SET_MAX_TRIES + 8) {
+            run(&mut state, &mut rig, &mut backend, t);
+            t += 20.0;
+        }
+        assert_eq!(
+            state.mode_giveup.as_deref(),
+            Some("PKTUSB"),
+            "precondition: the rig refused the DATA submode and the ladder gave up"
+        );
+
+        // THE BAND-CROSSING QSY: the operator picks 15 m. This is a FORCE retune, so the
+        // give-up is cleared and the ladder is entitled to ONE fresh attempt this tick.
+        let mark = log.lock().unwrap().len();
+        engine.lock().unwrap().pick_band("15m", None);
+        run(&mut state, &mut rig, &mut backend, t);
+
+        let pkt = count_from(&log, mark, "M PKTUSB");
+        // POSITIVE CONTROL: the tick must have tried the mode at all, or "not twice" is
+        // vacuous — a tick that commanded nothing would pass the real assertion below.
+        assert!(
+            pkt > 0,
+            "control: the band pick must command the section's mode: {:?}",
+            log.lock().unwrap()[mark..].to_vec()
+        );
+        assert_eq!(
+            pkt,
+            1,
+            "the band-cross re-assert must not re-ask for a mode this same tick already \
+             proved the rig refuses — one attempt per tick, not two: {:?}",
+            log.lock().unwrap()[mark..].to_vec()
         );
     }
 
