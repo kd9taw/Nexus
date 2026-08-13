@@ -138,6 +138,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tuning off the ham bands no longer wipes what you were working.** On a general-coverage
+  radio, spinning the VFO to WWV, to a shortwave broadcaster, or to any frequency in the gap
+  between two band edges cleared the station roster and the decode history, wiped the CW copy,
+  dropped your sideband pick and took FT8 out of transmit — and tuning back did it all again.
+  The check behind it was written for a dial above the top of the band table; in practice every
+  ordinary listen off the bands went through it. Leaving the bands is now treated as what it
+  usually is — a listen — so the context for the band you came from is still there when you tune
+  back. What has not changed: the band label still goes blank while you are off the bands, so
+  nothing is logged or remembered under a band the radio was not on, and transmit is still cut
+  the moment the knob leaves the bands. Going off the bands and coming back onto a *different*
+  band is still a band change, and still clears. Reported on an FTDX10; an IC-9700 never showed
+  it, because every frequency it can tune has a band name.
 - **Every "Settings ▸ …" pointer in the app now takes you there.** The app named a Settings path
   in about 228 places and none of them were clickable — including several that named tabs which
   no longer existed. Setup health's own "no RX audio" light said to check the audio device

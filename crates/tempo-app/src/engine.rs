@@ -1491,6 +1491,20 @@ pub struct Engine {
     /// Holds the BAND, not a span: off that band the park says nothing and the knob is an
     /// ordinary QSY (which then clears it). Session-only, like the memory it guards.
     machinery_park: Option<String>,
+    /// The named band the knob left when it took the dial OFF the bands — the one thing the
+    /// blanked `settings.band` cannot say. `None` = the dial is on a band, or we do not know
+    /// which band an unlabeled dial came from (a boot seed).
+    ///
+    /// WHY IT EXISTS: leaving the bands is not a QSY, and neither is coming back. Off the
+    /// bands the label must be absent (see the arm in [`Engine::observe_rig_freq`] that sets
+    /// this), so without a memory the return would read `"" -> "40m"` as a band CHANGE and
+    /// throw away the 40 m context on the way in — the same wipe the excursion itself used to
+    /// do, one knob turn later. With it, a WWV check is a round trip and a 20 m → gap → 40 m
+    /// excursion is still the cross-band QSY it really is.
+    ///
+    /// Read in ONE place, and only while `settings.band` is empty; spent (`take`) by the
+    /// first return to any named band. Session-only, like the dial memory it sits beside.
+    off_band_from: Option<String>,
     /// Has the CAT link told us where the rig is yet, THIS session? Set by the boot seed
     /// ([`Engine::seed_rig_dial`]) and by the first [`Engine::observe_rig_freq`], never
     /// cleared.
@@ -3076,6 +3090,7 @@ impl Engine {
             // themselves tunes this session opens the first residency.
             dial_residency: None,
             machinery_park: None,
+            off_band_from: None,
             rig_dial_seen: false,
             cw_queue: VecDeque::new(),
             cw_sent: VecDeque::new(),
@@ -4122,10 +4137,22 @@ impl Engine {
         }
         self.settings.dial_mhz = mhz;
         if let Some(band) = crate::bandplan::band_for_dial(mhz) {
+            // The band the CONTEXT belongs to. Normally the live label — but off the bands
+            // there is no live label (the arm below blanks it, deliberately), and the roster
+            // and decode history still belong to the band the knob left. Spent here whichever
+            // answer it gives: from this dial on, the context's band is the one we just landed
+            // on. `""` when nothing knows (a boot seed off the bands) — which differs from
+            // every band name, so the clears fire, which is the safe direction.
+            let left = self.off_band_from.take();
+            let context_band = if self.settings.band.is_empty() {
+                left.unwrap_or_default()
+            } else {
+                self.settings.band.clone()
+            };
             // Knob QSY across bands invalidates the decode context + roster too —
             // and halts TX for the same reason as set_frequency: the sequencer
             // must never keep calling across a band switch, however it happened.
-            if !self.settings.band.eq_ignore_ascii_case(band) {
+            if !context_band.eq_ignore_ascii_case(band) {
                 self.clear_decode_context();
                 self.app.clear_stations();
                 // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
@@ -4142,19 +4169,41 @@ impl Engine {
             }
             self.settings.band = band.to_string();
         } else if !self.settings.band.is_empty() {
-            // OFF THE TABLE (47 GHz+): the knob left every named band, and keeping the
-            // OLD label would poison everything keyed on it — the per-(band, mode) dial
-            // memory would bank a 47 GHz dial under "3cm", the log would claim a band
-            // the RF was not on, and the roster would keep an unrelated band's stations.
-            // Absent, not guessed — the sat path's `""` convention (Batch 3; the same
-            // context-change clears as a named cross-band QSY, because it IS one).
-            self.clear_decode_context();
-            self.app.clear_stations();
-            modes::reset_ft8_a7();
+            // OFF THE BANDS — and that is ORDINARY, which is what this arm originally got
+            // wrong. `band_for_dial` names the ham bands and nothing else, so WWV at 5/10/15
+            // MHz, a shortwave broadcast, CB, a marine channel and the gap between two band
+            // edges ALL land here — not just the microwave dials above the top of the table
+            // the "47 GHz+" wording was written for. On a general-coverage rig this is a
+            // routine listen (tester report, 1.2.2, FTdx10; an IC-9700 never sees it because
+            // every dial it can reach is named).
+            //
+            // Two things follow, and they are NOT the same thing:
+            //
+            // THE LABEL GOES. Keeping the old one poisons everything keyed on it — the
+            // per-(band, mode) dial memory would bank a 5 MHz dial in the "40m" cell, and the
+            // log/ADIF would claim a band the RF was not on. Absent, not guessed: the sat
+            // path's `""` convention. The band we LEFT is remembered in `off_band_from`
+            // instead, where only the return arm above reads it, so tuning back is a return
+            // rather than a QSY onto a band whose context was just thrown away.
+            //
+            // THE CONTEXT STAYS. Leaving the bands to listen is not a cross-band QSY — the
+            // roster, the decode history, the a7 AP table and the CW copy all still describe
+            // the band the operator is coming back to, usually within a minute. Clearing them
+            // here (and again on the way back) is what wiped a populated 40 m roster because
+            // the operator checked propagation on WWV.
+            //
+            // ⚠️ THE TX HALT STAYS, and it is NOT redundant with the dial-based TX gate:
+            // `Engine::tx_allowed` judges the dial, but `privileges::tx_allowed`
+            // short-circuits `LicenseClass::Open` — the DEFAULT, and the class of every
+            // operator who never declared a US one — to `true` at any frequency. Off the
+            // bands that gate therefore permits, so this halt is the only thing that cuts an
+            // over in flight and drops a latched key when the knob leaves the bands. It is
+            // load-bearing for exactly the operators least likely to notice. Do not simplify
+            // it away on the strength of the gate — see
+            // `a_knob_qsy_off_the_bands_still_cuts_transmit`, which states the premise as a
+            // paired check.
+            self.off_band_from = Some(std::mem::take(&mut self.settings.band));
             self.halt_tx_for_context_change();
-            self.clear_cw_decode();
-            self.sideband_override = None;
-            self.settings.band = String::new();
         }
         // Declare the knob's provenance after the band write, so whichever answer it is
         // names the cell the dial landed in. The hand on the knob is always the operator's,
@@ -4209,11 +4258,17 @@ impl Engine {
         let mhz = hz as f64 / 1_000_000.0;
         self.rig_dial_seen = true;
         self.settings.dial_mhz = mhz;
+        // A seed says where the rig IS and never where it came from, so it can leave no
+        // band behind: whatever earlier excursion this field described, it does not describe
+        // the dial being seeded now (and only a seed can blank the label without going
+        // through the knob arm, which is why this is the one other line that touches it).
+        self.off_band_from = None;
         if let Some(band) = crate::bandplan::band_for_dial(mhz) {
             self.settings.band = band.to_string();
         } else {
-            // A rig that boots off the table (47 GHz transverter IF setups) must not
-            // inherit the settings file's stale band label — absent, not guessed.
+            // A rig that boots OFF THE BANDS — parked on a shortwave broadcast or WWV from
+            // last night, or a transverter IF — must not inherit the settings file's stale
+            // band label. Absent, not guessed.
             self.settings.band = String::new();
         }
         self.app.set_radio(
@@ -4432,8 +4487,9 @@ impl Engine {
     /// stays out of the memory whatever the hold flags say at the time.
     fn bank_dial_memory(&mut self) {
         if let Some(r) = self.dial_residency.take() {
-            // A residency with no band label (an off-table dial, 47 GHz+) has no cell to
-            // bank into — a ("", mode) key would be recalled by nothing and merely leak.
+            // A residency with no band label (any dial off the bands — WWV, shortwave, a
+            // gap between two band edges, a microwave IF) has no cell to bank into: a
+            // ("", mode) key would be recalled by nothing and merely leak.
             if r.band.is_empty() {
                 return;
             }
@@ -15970,6 +16026,130 @@ mod tests {
             e.settings().dial_hz(),
             14_213_000,
             "dial_hz round-trips exactly"
+        );
+    }
+
+    /// THE GENERAL-COVERAGE LISTEN (tester report, 1.2.2, FTdx10 — it reads as Yaesu-only
+    /// because an IC-9700 cannot reach an unnamed dial: 2 m, 70 cm and 23 cm are all named).
+    ///
+    /// `bandplan::band_for_dial` answers `None` for EVERY dial outside a ham band — WWV at
+    /// 5/10/15 MHz, shortwave broadcast, CB, the gap between two band edges — not merely for
+    /// the microwave dials above the table that the knob path was written for. Spinning the
+    /// VFO down to WWV for a propagation check is leaving the bands to LISTEN, not a QSY:
+    /// nothing about the 40 m context the operator is coming back to has been invalidated.
+    #[test]
+    fn a_listen_off_the_bands_keeps_the_context_it_never_left() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(7.074, "40m", "USB"); // 40 m FT8 — the band the context belongs to
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        e.ai_cw_text = "W1AW 599 599".into();
+        e.request_sideband_override(Some("LSB"));
+        // Harness controls: every survival assertion below is worthless unless the state it
+        // names was really populated in the first place.
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "control: the decode reached the roster"
+        );
+        assert!(
+            !e.decode_history.is_empty(),
+            "control: …and the decode context"
+        );
+
+        // 5.000 MHz — WWV. No named band contains it, so the knob path sees `None`.
+        e.observe_rig_freq(5_000_000);
+        assert_eq!(
+            e.settings.band, "",
+            "off the bands the label is ABSENT, not guessed — that part is right, and it \
+             is what keeps a 5 MHz dial out of the 40 m dial-memory cell and out of ADIF"
+        );
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "the 40 m roster must survive a listen off the bands — the stations are still \
+             there and the operator is coming straight back"
+        );
+        assert!(
+            !e.decode_history.is_empty(),
+            "…and so must the decode context"
+        );
+        assert_eq!(e.ai_cw_text, "W1AW 599 599", "…and the CW copy");
+        assert_eq!(
+            e.sideband_override().as_deref(),
+            Some("LSB"),
+            "…and the operator's mode pick: dropping it re-commands the rig's mode \
+             mid-listen (`rig_mode_effective` reads it), which is a knob turning itself"
+        );
+
+        // …and back onto the band it never really left. The label was blanked, so this is
+        // the arm that fires — it must recognise the return as a return, not as a QSY onto
+        // a band the context is stale for.
+        e.observe_rig_freq(7_074_000);
+        assert_eq!(e.settings.band, "40m", "the label comes back with the dial");
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "the ROUND TRIP is what the operator actually does — clearing on the way back \
+             in loses exactly as much as clearing on the way out did"
+        );
+    }
+
+    /// The other direction, and it is the positive control for the test above: an excursion
+    /// off the bands that ENDS on a different band is a genuine cross-band QSY, and every
+    /// clear a direct 20 m → 40 m knob turn performs must still happen through the gap.
+    #[test]
+    fn a_cross_band_qsy_through_the_gap_still_clears_the_context() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(14.074, "20m", "USB");
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        e.ai_cw_text = "W1AW 599 599".into();
+        e.request_sideband_override(Some("LSB"));
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "control: the decode reached the roster"
+        );
+
+        e.observe_rig_freq(5_000_000); // off the bands…
+        e.observe_rig_freq(7_074_000); // …and out onto 40 m: a real band change
+
+        assert_eq!(e.settings.band, "40m");
+        assert!(
+            e.app.inbox.roster.is_empty(),
+            "20 m stations are not on 40 m — the roster must not survive the crossing"
+        );
+        assert!(e.decode_history.is_empty(), "…nor the 20 m decode context");
+        assert!(e.ai_cw_text.is_empty(), "…nor the 20 m CW copy");
+        assert!(
+            e.sideband_override().is_none(),
+            "…and the mode override still ends at a band change, as its tooltip says"
+        );
+    }
+
+    /// The TX halt STAYS, and this is why: `Engine::tx_allowed` keys on the dial, but
+    /// `privileges::tx_allowed` short-circuits `LicenseClass::Open` — the DEFAULT, and the
+    /// class every non-US operator and every operator who never opened Settings is on — to
+    /// `true` at any frequency. So for them the dial gate does not fail closed off the
+    /// bands, and this halt is the only thing that stops the sequencer keying there.
+    #[test]
+    fn a_knob_qsy_off_the_bands_still_cuts_transmit() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(7.074, "40m", "USB");
+        e.set_tx_enabled(true);
+        assert!(e.tx_enabled, "control: armed on 40 m");
+
+        e.observe_rig_freq(5_000_000); // WWV — outside every ham band
+        assert!(
+            !e.tx_enabled,
+            "the knob leaving the bands must halt TX: nothing else will"
+        );
+        assert!(
+            e.tx_allowed(),
+            "…and the premise, stated as a check: Open class PERMITS 5 MHz, so the dial \
+             gate is not the thing protecting this"
+        );
+        // Paired control for that premise — a US class really does fail closed here, which
+        // is precisely why the hole is invisible unless you test the default class.
+        e.set_license_class("general");
+        assert!(
+            !e.tx_allowed(),
+            "control: a declared US class has no 5 MHz segment and fails closed"
         );
     }
 
