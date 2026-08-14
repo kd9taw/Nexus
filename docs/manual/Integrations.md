@@ -75,7 +75,7 @@ Companion-mode limitations to know:
 
 The CAT broker exposes Nexus's internal rigctld connection as a secondary TCP server so another application — WSJT-X, N1MM, HRD — can share the same rig without a hardware splitter or a second CAT cable.
 
-The broker is **off by default**. Enable it in **Settings › Radio › Transmit limits & sharing** and set the listen port (default `4532`, matching the Hamlib NET rigctl default). Both Nexus and the attached client see consistent VFO, mode, and PTT state through the same serialized Hamlib session.
+The broker is **off by default**. Turn it on with **Share this radio with other programs**, under **Settings › Radio › Transmit limits & sharing**. The port it listens on is a separate control — **Sharing port**, under **Settings › Radio › Rig & CAT** — and it defaults to `4532`, matching the Hamlib NET rigctl default; change it only if something else on the machine already owns that port. Both Nexus and the attached client see consistent VFO, mode, and PTT state through the same serialized Hamlib session.
 
 Commands served: frequency read/set (`f`/`F`), mode read/set (`m`/`M`), PTT read/set (`t`/`T`), VFO read/set (`v`/`V`), split query (`s`), plus `\dump_state`, `\chk_vfo`, `\get_powerstat`, and `q`. An `L RFPOWER` command returns `RPRT -11` (not implemented). The broker does not multiplex PTT — if WSJT-X and Nexus both attempt TX simultaneously, the last-write wins. Coordinate TX scheduling at the application level (e.g. use Companion mode so only one app is transmitting).
 

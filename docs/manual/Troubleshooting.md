@@ -229,7 +229,7 @@ If downstream apps receive nothing:
 
 N3FJP TCP push (ADDDIRECT + CHECKLOG) requires:
 - N3FJP running with its TCP API enabled (Settings → Application Program Interface in N3FJP).
-- N3FJP host and port (`1100` default) configured in Nexus Settings → Contesting ▸ Field Day Setup.
+- N3FJP host and port (`1100` default) configured in Nexus Settings → Logging & Connectors ▸ N3FJP Integration.
 - The host reachable on your LAN — firewall between the two machines will block it.
 
 Use the **Test N3FJP** button in Settings to send the `<CMD><PROGRAM></CMD>` handshake and confirm the connection before the event starts. Push failures are logged to stderr and the Connector log, not surfaced as a UI toast after the initial Test.

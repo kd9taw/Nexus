@@ -163,7 +163,7 @@ N3FJP Field Day Contest Log is widely used by clubs as the master log. Nexus pus
 
 **In Nexus:**
 
-1. Open **Settings → Contesting ▸ Field Day Setup > N3FJP**.
+1. Open **Settings → Logging & Connectors ▸ N3FJP Integration**.
 2. Enter the N3FJP host (e.g. `192.168.1.50` or `localhost` if co-located).
 3. Leave the port at **1100** unless you changed it in N3FJP.
 4. Press **Test**. A successful test returns the program name and version string (e.g. `N3FJP Field Day Contest Log v6.6`). The button is disabled when the host field is blank.
@@ -178,7 +178,7 @@ Nexus emits a `<contactinfo>` XML UDP datagram for each new FD QSO, compatible w
 
 **Setup:**
 
-1. In **Settings → Contesting ▸ Field Day Setup > N1MM Address**, enter the broadcast target, e.g. `192.168.1.255` or `192.168.1.50`.
+1. In **Settings → Logging & Connectors ▸ N1MM+ Integration**, enter the broadcast target, e.g. `192.168.1.255` or `192.168.1.50`.
 2. If you omit the port, Nexus defaults to **port 12060** (the N1MM+ contactinfo default).
 3. Broadcast is disabled when the address field is empty.
 

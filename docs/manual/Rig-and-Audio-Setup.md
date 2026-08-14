@@ -109,7 +109,7 @@ If your rig rejects `PKTUSB`/`PKTLSB` (returns `RPRT -1`), the radio loop perfor
 
 ## The CAT Broker
 
-The CAT broker (Settings → Radio ▸ Rig & CAT → CAT Broker, **off by default**) makes Nexus act as a rigctld-compatible TCP server so WSJT-X, N1MM+, and other loggers can share the radio through Nexus without competing on the serial port.
+The CAT broker (Settings → Radio ▸ Transmit limits & sharing ▸ Share this radio with other programs, **off by default**) makes Nexus act as a rigctld-compatible TCP server so WSJT-X, N1MM+, and other loggers can share the radio through Nexus without competing on the serial port.
 
 - **Broker listen port:** default **4532** (configurable)
 - Commands handled: `f`/`F` (frequency), `m`/`M` (mode), `t`/`T` (PTT), `v`/`V` (VFO), `s` (split), `\dump_state`, `\chk_vfo`, `\get_powerstat`, `q`

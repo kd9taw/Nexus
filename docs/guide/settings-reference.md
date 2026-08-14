@@ -295,13 +295,18 @@ the bottom of Rig & CAT.
   capping Digital (e.g. 30%) protects your finals and any amplifier. The rig is
   brought down to the cap the moment you enter a capped mode, not only when you
   touch the power slider.
-- **Share my radio (CAT broker)** — "Run a rigctld-compatible server so WSJT-X /
-  N1MM / loggers share this radio THROUGH Nexus." Takes effect right away, no
-  restart, and works even when Nexus is sharing an external rigctld. When on:
-  - **CAT broker port** — "Other apps connect here (Hamlib NET rigctl default
-    4532)."
-  - **Broker PTT** — "Let the connected app key transmit when Nexus is idle. Off
-    = other apps control the rig but never key it (Nexus owns TX)." Default off.
+- **Share this radio with other programs** — the CAT broker: "Run a
+  rigctld-compatible server so WSJT-X / N1MM / loggers share this radio THROUGH
+  Nexus." Takes effect right away, no restart, and works even when Nexus is
+  sharing an external rigctld. When on, it prints the address other programs
+  connect to, and:
+  - **Other programs may key transmit** — "Let the connected app key transmit
+    when Nexus is idle. Off = other apps control the rig but never key it (Nexus
+    owns TX)." Default off.
+  - **Sharing port** — the one control of this group that stays on **Rig & CAT**,
+    beside the other port settings, and appears only once sharing is on. Hamlib
+    NET rigctl default 4532; change it only if something else on this computer
+    already owns the port.
 
 <!-- TODO(settings-reference): the setup-backup control on this section has no
      prose yet — describe it once its behaviour is confirmed against the panel. -->
