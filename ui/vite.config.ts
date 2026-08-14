@@ -1,4 +1,7 @@
-import { defineConfig } from 'vite'
+// `vitest/config` re-exports Vite's defineConfig with the `test` key added to the type.
+// Importing it from 'vite' typechecks everything EXCEPT `test`, so `tsc -b` fails with
+// TS2769 — and `npm run build` is `tsc -b && vite build`, which four CI jobs run.
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { execSync } from 'node:child_process'
 
