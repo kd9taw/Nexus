@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full of configured ones. Every text box in the app now draws its hint in the same faint ink
   the rest of the interface uses for secondary text, in all four themes, so an empty field looks
   empty at a glance.
+- **Your RX filter stays where you put it when you change frequency.** In the data modes Nexus
+  sends the mode and a 3 kHz width together, so a rig that recalls a narrow DATA filter cannot
+  clip FT8. It was sending that width on *every* frequency change — so each spot click, Needed
+  pick or in-band QSY reset the filter and popped the rig's Width display, undoing anything you
+  had set by hand. Now the width only goes out when the mode or the band actually changed, which
+  is when the rig might have recalled a filter of its own. Move around inside a band and Nexus
+  leaves the filter alone. (#67)
 
 ## [1.3.0] — 2026-08-13
 

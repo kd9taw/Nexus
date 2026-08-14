@@ -2551,16 +2551,10 @@ impl RadioLoop {
         if !self.last_mode.trim().eq_ignore_ascii_case(md.trim()) {
             return;
         }
-        let band_of = |hz: u64| tempo_app::bandplan::band_for_dial(hz as f64 / 1e6);
-        // ⚠️ `None == None` is NOT "in-band": two dials the table cannot name (47 GHz+,
-        // or one named and one not) may sit on different rig band registers, and reading
-        // the equality as same-band skipped the mode re-assert exactly where the rig's
-        // band-stacking memory is least predictable. Only two EQUAL NAMED bands skip.
-        let same_named_band = matches!(
-            (band_of(prev_dial), band_of(dial)),
-            (Some(a), Some(b)) if a == b
-        );
-        if prev_dial == 0 || same_named_band {
+        // `same_named_band` carries the ⚠️ here: `None == None` is NOT "in-band", so only two
+        // EQUAL NAMED bands skip the re-assert. (The same question the force path's passband
+        // gate asks — one answer, one place.)
+        if prev_dial == 0 || same_named_band(prev_dial, dial) {
             return; // in-band: the a85f39ac order alone is complete
         }
         let Some(reported) = rig.read_mode() else {
@@ -3363,7 +3357,13 @@ impl RadioLoop {
                         // skip the diagnostic mode read-back then, so continuous wheel-tuning doesn't
                         // fire an extra `w MD0;` round-trip per ~120 ms flush. The mode is still
                         // re-asserted (an explicit same-mode re-click must still command the rig).
-                        match rig.set_mode(&md, passband_for(&md)) {
+                        // …and it is re-asserted WITHOUT re-commanding the width when neither the
+                        // mode nor the band moved — see `retune_passband` for why that gate is not
+                        // `mode_changed` alone (#67).
+                        match rig.set_mode(
+                            &md,
+                            retune_passband(&md, mode_changed, self.last_dial, dial),
+                        ) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
                                 self.rig_asserted = true; // a real assert — credit the latch
@@ -7045,6 +7045,42 @@ fn passband_for(md: &str) -> i32 {
     }
 }
 
+/// Are `a` and `b` (Hz) on the SAME NAMED amateur band — i.e. does a retune between them
+/// cross no band boundary?
+///
+/// ⚠️ `None == None` is NOT "in-band": two dials the band plan cannot name (47 GHz+, or one
+/// named and one not) may sit on different band registers inside the rig, and reading that
+/// equality as same-band is how a band-dependent correction gets skipped exactly where the
+/// rig's band memory is least predictable. Only two EQUAL NAMED bands count. A `0` — the
+/// "no dial pushed yet" sentinel — is unnamed, so it is never the same band as anything.
+fn same_named_band(a: u64, b: u64) -> bool {
+    let band_of = |hz: u64| tempo_app::bandplan::band_for_dial(hz as f64 / 1e6);
+    matches!((band_of(a), band_of(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// The passband to send WITH the mode on an operator force retune: does this retune have to
+/// re-command the width, or may it leave the rig's filter where the operator put it?
+///
+/// THE BUG (#67). The force path sent [`passband_for`]'s width on EVERY retune — it consulted
+/// only "is `md` non-empty", never whether anything about the mode or the band had actually
+/// changed. So in FT8, where `passband_for` deliberately forces 3 kHz, every plain dial move
+/// (a spot click, a Needed pick, a section QSY) re-sent `M PKTUSB 3000`: a DATA-filter switch
+/// and a Width-display pop per QSY, on a rig that was already exactly where we wanted it.
+///
+/// The 3 kHz force itself is NOT removable and this must not be gated on `mode_changed` alone.
+/// It exists because a rig recalls a narrow per-band DATA filter — 600 Hz on the FTDX10 that
+/// prompted it, which clips FT8 — and it recalls it on a BAND change, which routinely arrives
+/// with the mode UNCHANGED. So the gate is "in-band, dial-only": send `-1`
+/// (`RIG_PASSBAND_NOCHANGE`) only when the mode did not change AND the band did not change;
+/// keep the width in every other case.
+fn retune_passband(md: &str, mode_changed: bool, prev_dial: u64, dial: u64) -> i32 {
+    if !mode_changed && same_named_band(prev_dial, dial) {
+        -1
+    } else {
+        passband_for(md)
+    }
+}
+
 /// The passband for attempt `prior_fails + 1` of the bounded mode-set retry — the middle
 /// rung of the resilience ladder. DATA modes start with the full 3 kHz passband
 /// ([`passband_for`]); once a run keeps failing past [`MODE_SET_PASSBAND0_AFTER`], later
@@ -8006,6 +8042,37 @@ mod tests {
         // width and pop the rig's Width display — the bug passband_for exists to avoid.
         assert_eq!(retry_passband("USB", 0), -1);
         assert_eq!(retry_passband("CW", MODE_SET_MAX_TRIES), -1);
+    }
+
+    /// #67 at the decision itself. The wire test pins the behaviour end to end; this pins the
+    /// three inputs the gate is made of, including the two that must NOT relax it.
+    #[test]
+    fn a_force_retune_re_commands_the_width_only_on_a_mode_or_band_change() {
+        const A: u64 = 14_074_000; // 20 m
+        const B: u64 = 14_090_000; // 20 m, a dial move away
+        const C: u64 = 21_074_000; // 15 m
+
+        // THE BUG: an in-band dial move with the mode unchanged used to re-send 3000.
+        assert_eq!(retune_passband("PKTUSB", false, A, B), -1);
+        assert_eq!(retune_passband("PKTUSB", false, A, A), -1);
+        // A mode change re-commands the width — the FTDX10 600 Hz DATA filter this exists for.
+        assert_eq!(retune_passband("PKTUSB", true, A, B), 3000);
+        // …and so does a BAND change with the mode UNCHANGED, which is the case a
+        // `mode_changed`-only gate would have missed: the rig recalls a per-band DATA filter.
+        assert_eq!(retune_passband("PKTUSB", false, A, C), 3000);
+        assert_eq!(retune_passband("PKTLSB", false, 3_580_000, 7_040_000), 3000);
+        // No dial pushed yet (the `last_dial` sentinel) is not "same band" — force the width.
+        assert_eq!(retune_passband("PKTUSB", false, 0, A), 3000);
+        // Two dials the band plan cannot name are NOT in-band together: they may sit on
+        // different band registers inside the rig. `None == None` must not relax the gate.
+        assert_eq!(
+            retune_passband("PKTUSB", false, 47_000_000_000, 47_100_000_000),
+            3000
+        );
+        // Voice/CW never had a width to re-command — every combination stays NOCHANGE.
+        for (changed, from, to) in [(false, A, B), (true, A, B), (false, A, C)] {
+            assert_eq!(retune_passband("USB", changed, from, to), -1);
+        }
     }
 
     #[test]
@@ -14378,14 +14445,17 @@ mod tests {
 
     // ---- the DX-spot click storm (operator report, FT-950, 2026-08-12) ----
 
-    /// A rigctld shaped like the FT-950: it has NO DATA-USB submode, so every `M PKT*` is
-    /// refused (`RPRT -1`) and the rig's live mode is left alone — but it answers `m` and
-    /// `f` TRUTHFULLY, which is what [`mock_pkt_rejecting_rigctld`] deliberately does not
-    /// (it replies `RPRT 0` to `m`, and the band-cross re-assert correctly reads that as
-    /// "no evidence" and stands down). A truthful `m` is the whole point here: it is what
-    /// lets `reassert_mode_after_band_cross` see a mode that disagrees with `md` and act
-    /// on it.
-    fn mock_pkt_rejecting_rig_with_mode_read(start_hz: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+    /// A rigctld that REMEMBERS what it was told: `F` moves its dial, an accepted `M` moves
+    /// its mode, and `f`/`m` answer TRUTHFULLY — which is what [`mock_pkt_rejecting_rigctld`]
+    /// and [`mock_rigctld_on`] deliberately do not do (they reply `RPRT 0` to `m` and a fixed
+    /// dial to `f`). A truthful `m` is what lets `reassert_mode_after_band_cross` see a mode
+    /// that disagrees with `md`, and a truthful `f` is what stops the loop's own read-back
+    /// from adopting a stale dial as an operator knob QSY across a multi-QSY scene.
+    ///
+    /// `reject_pkt` shapes it like the FT-950: no DATA-USB submode, so every `M PKT*` is
+    /// refused (`RPRT -1`) and the live mode is left alone. `false` is an ordinary DATA-capable
+    /// radio that takes everything.
+    fn mock_stateful_rigctld(start_hz: u64, reject_pkt: bool) -> (String, Arc<Mutex<Vec<String>>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
@@ -14407,7 +14477,7 @@ mod tests {
                     let reply: String = match p.next() {
                         Some("M") => {
                             let m = p.next().unwrap_or("USB");
-                            if m.starts_with("PKT") {
+                            if reject_pkt && m.starts_with("PKT") {
                                 // No DATA submode on this radio — refuse, mode unchanged.
                                 "RPRT -1\n".into()
                             } else {
@@ -14587,7 +14657,7 @@ mod tests {
             e.set_operating_mode("digital", true);
             e.set_frequency(14.074, "20m", "USB");
         }
-        let (addr, log) = mock_pkt_rejecting_rig_with_mode_read(14_074_000);
+        let (addr, log) = mock_stateful_rigctld(14_074_000, true);
         let mut rig = Rig::rigctld(&addr);
         let mut backend = MockBackend::new();
         let mut state = loop_state_for(&engine);
@@ -14639,6 +14709,88 @@ mod tests {
             "the band-cross re-assert must not re-ask for a mode this same tick already \
              proved the rig refuses — one attempt per tick, not two: {:?}",
             log.lock().unwrap()[mark..].to_vec()
+        );
+    }
+
+    /// ⭐ ISSUE #67: *the rig's RX filter is re-commanded on every frequency change.*
+    ///
+    /// `passband_for` forces 3 kHz on the DATA submodes on purpose (an FTDX10 recalls a
+    /// 600 Hz DATA filter and clips FT8), but the force retune sent that width on EVERY
+    /// retune — gated on nothing but "the mode word is non-empty". In FT8 the mode word never
+    /// changes, so every spot click, Needed pick and in-band QSY re-commanded the filter:
+    /// a DATA-filter switch and a Width-display pop per frequency change, on a radio already
+    /// set exactly the way the operator set it.
+    ///
+    /// Measured as the `M` lines WITH their passband, because the width IS the subject —
+    /// asserting mode words alone would pass either way.
+    ///
+    /// The band-crossing leg is not decoration, it is why this is NOT gated on `mode_changed`
+    /// alone: a band change routinely arrives with the mode unchanged, and a band change is
+    /// exactly when the rig recalls its narrow per-band DATA filter. Drop that leg and the
+    /// FT8-clipping bug the 3 kHz force exists for comes straight back.
+    #[test]
+    fn an_in_band_qsy_leaves_the_rig_filter_alone_but_a_band_change_still_forces_3_khz() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("digital", true);
+            e.set_frequency(14.074, "20m", "USB");
+        }
+        // A DATA-capable radio that takes PKTUSB and remembers its dial, so the loop's own
+        // read-back never mistakes a stale `f` for an operator knob QSY mid-scene.
+        let (addr, log) = mock_stateful_rigctld(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+
+        // Settle onto the digital section: the mode really does change here (the loop opens
+        // on plain USB), so the width must go out.
+        run(&mut state, &mut rig, &mut backend, t);
+        // Two in-band QSYs — a spot click and a Needed pick inside 20 m. Same mode, same band.
+        for hz in [14.080, 14.090] {
+            t += 20.0;
+            engine.lock().unwrap().set_frequency(hz, "20m", "USB");
+            run(&mut state, &mut rig, &mut backend, t);
+        }
+        // …then 20 m → 15 m with the mode UNCHANGED: the band-stack case the force exists for.
+        t += 20.0;
+        engine.lock().unwrap().set_frequency(21.074, "15m", "USB");
+        run(&mut state, &mut rig, &mut backend, t);
+
+        let modes: Vec<String> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with("M "))
+            .cloned()
+            .collect();
+        assert_eq!(
+            modes,
+            vec![
+                "M PKTUSB 3000", // the mode change onto the digital section
+                "M PKTUSB -1",   // in-band dial move — NOCHANGE, hands off the operator's filter
+                "M PKTUSB -1",
+                "M PKTUSB 3000", // band change: the rig may have just recalled a 600 Hz DATA filter
+            ],
+            "the width may only be re-commanded when the mode or the band moved"
         );
     }
 
