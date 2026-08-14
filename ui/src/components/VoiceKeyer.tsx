@@ -156,7 +156,12 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
       return
     }
     if (!txEnabled) {
-      pushToast('TX is off (Monitor) — enable transmit to play a message', 'info', 3000)
+      // NAME THE CONTROL THAT IS ON THIS SCREEN (#81). "enable transmit" was honest and
+      // useless: the Phone cockpit shows no Enable-Tx button — App hides the TopBar's TX
+      // cluster in this view and the header's TX pill is display-only — so the operator was
+      // told to flip a switch he could not find. PTT is that switch when TX is off (it reads
+      // "■ TX OFF — CLICK TO ENABLE" and arms transmit on the press).
+      pushToast('TX is off — click PTT once to turn it back on, then play the message', 'info', 3500)
       return
     }
     playingRef.current = slot

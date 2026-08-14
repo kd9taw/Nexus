@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Push to Talk tells you when transmit is switched off instead of doing nothing.** Reported on
+  an FTdx10: clicking Push to Talk did not key the rig, and nothing on screen said why. Nexus
+  drops a mic key for two different reasons — you are outside your licence privileges, or
+  transmit is simply switched off — and the button only ever showed the first. With transmit off
+  (Stop TX, the transmit watchdog, or a logger sending Halt Tx all switch it off) the button
+  still read PUSH TO TALK, and pressing it turned the button red and said ON AIR over a rig that
+  was not keyed. From the operator's chair that is indistinguishable from a bad PTT cable. The
+  button now reads **■ TX OFF — CLICK TO ENABLE**, does not pretend to be on the air, and that
+  click turns transmit back on — press it again and you talk. The Phone screen had no other
+  transmit-enable control on it, so the only way out used to be leaving the screen and coming
+  back. The voice keyer's message says the same thing now. (#81)
 - **Hints in text boxes stop looking like settings you already entered.** Reported on dark mode:
   the grey example text in an empty box — `127.0.0.1:5002`, `COM16`, `Radio name` — rendered at
   nearly the brightness of a real entry, so a Settings page full of empty fields read as a page

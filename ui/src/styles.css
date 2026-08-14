@@ -8029,6 +8029,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-color: var(--state-weak);
   box-shadow: 0 0 18px color-mix(in srgb, var(--state-weak) 60%, transparent);
 }
+/* TX switched off (#81): the button is still LIVE — clicking it turns transmit back on — but
+   it must not wear the accent, which is this cockpit's "ready to key" colour. An operator who
+   reads colour before text saw a ready button over a rig that could not be keyed. Not the
+   `:disabled` styling either: that says "there is nothing you can do here", and there is. */
+.ph-ptt.txoff {
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border-color: var(--border);
+}
 .ph-lock {
   display: inline-flex;
   align-items: center;

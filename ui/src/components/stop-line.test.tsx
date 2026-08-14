@@ -324,7 +324,12 @@ const phone: Case<(typeof PHONE_PANEL_IDS)[number]> = {
   // away with it — a convenience, not what the guarantee rests on. Listing it here would make
   // this sweep forbid the very ⊞ entry this batch was about.
   stopControls: [
-    ['PTT', /push to talk|on air — release to stop|tx locked/i],
+    // The alternation is the PTT button's FULL label set, not a sample of it — the sweep
+    // finds this control by accessible name and nothing else, so a label the button can
+    // render and this regex cannot match is a hole the sweep reports as a missing control.
+    // Four states since #81: the two live ones, the licence lock, and TX-switched-off
+    // (PhoneCockpit.txoff.test.tsx owns what each one SAYS; this only has to find it).
+    ['PTT', /push to talk|on air — release to stop|tx locked|tx off — click to enable/i],
     ['Stop TX', /^stop tx$/i],
     ['Tune', /^tune$|^tuning…$/i],
   ],
