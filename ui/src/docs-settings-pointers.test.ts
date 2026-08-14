@@ -321,4 +321,33 @@ describe('doc prose names only Settings tabs and sections that exist', () => {
 //   after it describes a field that moved to Phone. Only the name is compared.
 // - A pointer split across a line break. The doc set hard-wraps, and "Settings ▸\nModes" would
 //   pass; scanning per line is what keeps the reported line number true.
+//
+// ⭐ THE BIGGEST GAP, AND IT IS THE DOMINANT FAILURE MODE OF A REORG — read this before
+// trusting a green run. This guard only knows whether a NAME is alive. It cannot see a pointer
+// naming a section that is alive but no longer HOLDS the control the sentence is about, because
+// the registry stops at sections and controls are not registry data. A reorg that moves controls
+// between LIVE sections is therefore completely invisible here, and 1.3.0 was exactly that reorg.
+// Four such pointers were green under this guard and wrong on the page:
+//   - the CAT broker, cited as `Rig & CAT ▸ CAT Broker` in three places. It moved to
+//     `Transmit limits & sharing ▸ Share this radio with other programs`; only a residual
+//     "Sharing port" field stays on Rig & CAT, and no control is called "CAT Broker" any more.
+//   - N3FJP host/port and the N1MM address, aimed at `Contesting ▸ Field Day Setup`. That
+//     section holds only the Field Day fields; both integrations live under
+//     `Logging & Connectors ▸ N3FJP Integration` / `N1MM+ Integration`.
+//
+// ⚠️ DO NOT REDO THE OBVIOUS MECHANISATION — it was tried and MEASURED, and it does not work.
+// The idea: take the segment after the last live section as a CONTROL name and require it to
+// appear as text in SettingsPanel.tsx (comments stripped, so the code comment recording the move
+// cannot vouch for the old name). Two measurements killed it:
+//   1. THE POSITIVE CONTROL FAILED. Run against the pre-sweep doc corpus at 7e88d120 it flagged
+//      ZERO and never reached "CAT Broker" — in that instance the PARENT was a dead name, so the
+//      walk had already stopped, and the live-parent instances are precisely the ones with no
+//      dead name to key on.
+//   2. On the current corpus it flagged 10, ALL false, ALL the same shape: "Decode depth ▸ Fast"
+//      is a control whose own value syntax contains the separator, so the segment slicer cuts it
+//      apart. Line-wrapped pointers add more of the same — "Detect my radio", "Test CAT" and
+//      "Re-run setup…" are real controls that are button text, not `settings-label` spans.
+// Sixteen control names in the whole corpus are even reachable this way. A check with a failing
+// control, ten false positives and no true ones is broken, not strict. Closing this gap properly
+// needs the panel's controls to become declared data the way sections did — not a better regex.
 // ---------------------------------------------------------------------------

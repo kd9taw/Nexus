@@ -99,6 +99,19 @@ hides.
 - **A rename the registry never declared.** `docs-settings-pointers.test.ts` flags only names
   `TAB_ALIASES`/`SECTION_ALIASES` declare dead — which is what keeps it from firing on Windows'
   or N3FJP's Settings menus, and what makes it blind to a rename nobody wrote down.
+- **A control that MOVED between two live sections.** This is the biggest gap and the dominant
+  failure mode of a reorg, so treat it as a manual pass every time Settings is rearranged: read
+  the release's own "moved X to Y" CHANGELOG lines and grep the doc set for the old home. In
+  1.3.0 four pointers were green and wrong — the CAT broker cited under `Rig & CAT` (it is now
+  `Transmit limits & sharing ▸ Share this radio with other programs`), and N3FJP/N1MM host and
+  port cited under `Contesting ▸ Field Day Setup` (they are under `Logging & Connectors`). The
+  guard cannot see these: it knows whether a NAME is alive, not whether that section still holds
+  the control. The obvious mechanisation was tried and measured and does not work — the reasons
+  are recorded at the bottom of `ui/src/docs-settings-pointers.test.ts`, read them before
+  attempting it again.
+- **Field labels inside `settings-reference.md`.** `gen-settings-reference.mjs` owns STRUCTURE
+  only; the ~90 `###` field blocks are compared against nothing. 1.3.0 published three field
+  names that do not exist ("Share my radio (CAT broker)", "CAT broker port", "Broker PTT").
 - **Whether the paste actually happened.** Nothing in this repo can see the SourceForge or GitHub
   wiki. Verify by loading the page.
 
