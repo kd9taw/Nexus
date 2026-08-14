@@ -69,8 +69,11 @@ impl DummyRig {
     }
 
     /// Spawn with extra rigctld args prepended to the standard dummy set.
-    /// -P RIG matters: the dummy's caps default to PTT_NONE, so without it
-    /// every `T` returns RPRT -1 and `t` returns -11 (measured, Hamlib 4.5.5).
+    /// ⚠️ VERSION-DEPENDENT, and this file asserts the newer behaviour: on Hamlib
+    /// 4.5.5 a dummy without `-P RIG` rejected PTT (`T` → RPRT -1, `t` → -11), but
+    /// on 4.6.5 / 4.7.0~rc it ACCEPTS it (`T 1` → RPRT 0). Do not reintroduce a test
+    /// that keys a PTT-less dummy expecting a rejection — see the measurement table
+    /// on the rejection-framing test below.
     fn spawn_with(bin: &str, extra: &[&str]) -> DummyRig {
         // A port from the counter can still collide with an unrelated service
         // (measured once in 20 runs: rigctld exits 1 on a taken port). The
