@@ -348,14 +348,24 @@ export default function App() {
       return
     }
     opModeSeeded.current = true // an explicit view change outranks the booted-mode seed
-    const operating =
-      !!featureById(view as FeatureId)?.workspace ||
-      view === 'cw' ||
-      view === 'phone' ||
-      view === 'rtty'
-    if (!operating) return
-    const mode =
-      view === 'cw' ? 'cw' : view === 'phone' ? 'phone' : view === 'rtty' ? 'rtty' : 'digital'
+    // ⚠️ AN EXPLICIT MAP, NOT A FALLTHROUGH. This used to be
+    //   `featureById(view)?.workspace || view === 'cw' | 'phone' | 'rtty'`, then
+    //   `… : 'digital'` for everything else — so ANY view carrying a `workspace` that was not
+    //   one of the three named modes silently commanded the rig into DATA. POTA/SOTA declares
+    //   `workspace: 'dx'` for LAYOUT reasons and is not a mode at all: it is a hunting board,
+    //   and you work a park on whatever the activator is running. Opening it flipped an FT-991A
+    //   from USB to D-U with no operator action and no way to tell why (#80).
+    //   Listing the views that OWN a rig mode makes that class of bug unrepresentable: a new
+    //   workspace view now asserts NOTHING until someone deliberately adds it here.
+    const RIG_MODE_BY_VIEW: Partial<Record<string, 'cw' | 'phone' | 'rtty' | 'digital'>> = {
+      cw: 'cw',
+      phone: 'phone',
+      rtty: 'rtty',
+      operate: 'digital', // the FT8/FT4 cockpit
+      chat: 'digital', // Tempo is a digital mode
+    }
+    const mode = RIG_MODE_BY_VIEW[view]
+    if (!mode) return
     // ALWAYS (re)assert the rig mode on entering an operating view. We must NOT skip it with a
     // same-value guard: the guard ref drifts out of sync with the real rig (handleDigitalMode
     // and the Needed click set the mode without going through here), which left the rig stuck
@@ -1694,10 +1704,21 @@ export default function App() {
   // the entire view unmounted. Operator report 2026-07-25: "the whole window with those two
   // things gets removed from the primary window and they disappear" — that was the Phone cockpit
   // being replaced, not a layout fault. Three layout fixes chased it before this was found.
+  // ⚠️ TAKES THE COCKPIT'S OWN MODE. This used to read the mode off the SPOT
+  // (`s.mode === 'CW' ? 'cw' : … : 'digital'`), which meant clicking an FT8 spot from the
+  // Phone cockpit — and a cluster feed is mostly FT8 spots — commanded the rig into DATA-USB
+  // while deliberately leaving the operator on the Phone screen. On an FT-991A that is D-U:
+  // rear-panel audio in place of the microphone. It also disarmed the mic, because
+  // `work_spot_split` sets operating_mode=Digital and the next context change then fails
+  // `halt_tx_for_context_change`'s Phone|Cw|Rtty restore gate and lands a plain `halt_tx`.
+  // So the operator sat on the Phone screen with a data-mode rig, a mic that was out of
+  // circuit, and a PTT that did nothing (#81, path B; #80 is the same fault from the nav side).
+  // "QSY to it and stay put" means stay in YOUR mode — that is the whole difference between
+  // this and `handleWorkSpot`, which navigates. Working it on the spot's mode is a deliberate
+  // act: go to that cockpit.
   const handleWorkSpotHere = useCallback(
-    (s: SpotRow) => {
-      const kind =
-        s.mode === 'CW' ? 'cw' : s.mode === 'Phone' ? 'phone' : ('digital' as const)
+    (cockpit: 'phone' | 'cw') => (s: SpotRow) => {
+      const kind = cockpit
       void withErrorToast(
         () => workSpot(kind as 'digital' | 'phone' | 'cw', s.freqMhz, s.band, s.call),
         `Could not work ${s.call} — check CAT`,
@@ -1709,6 +1730,8 @@ export default function App() {
     },
     [],
   )
+  const workSpotHerePhone = useMemo(() => handleWorkSpotHere('phone'), [handleWorkSpotHere])
+  const workSpotHereCw = useMemo(() => handleWorkSpotHere('cw'), [handleWorkSpotHere])
 
   const handleWorkSpot = useCallback(
     (s: SpotRow) => {
@@ -2275,7 +2298,7 @@ export default function App() {
           spots={allSpots}
           needByCall={needByCall}
           typeByCall={typeByCall}
-          onWorkSpot={handleWorkSpotHere}
+          onWorkSpot={workSpotHereCw}
           onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
           onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
           onOpenSettings={openSettingsAt}
@@ -2298,7 +2321,7 @@ export default function App() {
           spots={allSpots}
           needByCall={needByCall}
           typeByCall={typeByCall}
-          onWorkSpot={handleWorkSpotHere}
+          onWorkSpot={workSpotHerePhone}
           onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
           onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
           onOpenSettings={openSettingsAt}
