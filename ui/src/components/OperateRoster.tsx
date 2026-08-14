@@ -1,5 +1,5 @@
 // A WSJT-X / GridTracker-style Call Roster: one row per heard station as aligned,
-// sortable columns (Call · Need · Country · Grid · Dist · Brg · SNR · Age) with
+// sortable columns (Call · Calling · Need · Country · State · Grid · Dist · Brg · SNR · Age) with
 // roster filters (Needed-only, Hide-worked) and double-click-to-work. This is the
 // "Roster" cockpit layout's primary surface — distinct from the waterfall-first
 // "Classic" layout, not just a reshaped pane.
@@ -67,7 +67,17 @@ interface Props {
   onSpot?: (call: string) => void
 }
 
-type SortKey = 'need' | 'call' | 'country' | 'grid' | 'dist' | 'bearing' | 'snr' | 'age'
+type SortKey =
+  | 'need'
+  | 'call'
+  | 'calling'
+  | 'country'
+  | 'state'
+  | 'grid'
+  | 'dist'
+  | 'bearing'
+  | 'snr'
+  | 'age'
 
 // The call roster shows only ACTIVELY-heard stations: a station drops off once
 // it hasn't been decoded for this many T/R cycles, so the list reflects who's
@@ -89,6 +99,12 @@ export function freshness(age: number): number {
 }
 
 const snrClass = (snr: number) => (snr >= -10 ? 'good' : snr >= -18 ? 'ok' : 'weak')
+/** Text-column compare that parks the EMPTY cells last in the ascending sense. Explicit
+ * rather than the `?? '~'` sentinel used by the older columns, because that sentinel does
+ * not do it: ICU collation orders punctuation BEFORE letters, so `'~'.localeCompare('CT')`
+ * is -1 and the blanks come out on top. */
+const byText = (a: string | null | undefined, b: string | null | undefined) =>
+  a ? (b ? a.localeCompare(b) : -1) : b ? 1 : 0
 /** Shared empty set so the ignore checks stay allocation-free per render. */
 const EMPTY_IGNORES: ReadonlySet<string> = new Set()
 function ageLabel(slots: number): string {
@@ -238,8 +254,16 @@ export function OperateRoster({
         case 'call':
           c = a.s.call.localeCompare(b.s.call)
           break
+        case 'calling':
+          // The CQ-ing stations (calling nobody) group at the end — which is the reason to
+          // sort this column at all: who is free to answer.
+          c = byText(a.s.calling, b.s.calling)
+          break
         case 'country':
           c = (a.s.country ?? '~').localeCompare(b.s.country ?? '~')
+          break
+        case 'state':
+          c = byText(a.s.usState, b.s.usState)
           break
         case 'grid':
           // '~' sorts the grid-less to the end in both directions' ascending sense.
@@ -305,7 +329,18 @@ export function OperateRoster({
         setSort((p) =>
           p.key === key
             ? { key, dir: p.dir === 'asc' ? 'desc' : 'asc' }
-            : { key, dir: key === 'call' || key === 'country' || key === 'grid' || key === 'dist' ? 'asc' : 'desc' },
+            : {
+                key,
+                dir:
+                  key === 'call' ||
+                  key === 'calling' ||
+                  key === 'country' ||
+                  key === 'state' ||
+                  key === 'grid' ||
+                  key === 'dist'
+                    ? 'asc'
+                    : 'desc',
+              },
         )
       }
     >
@@ -372,8 +407,10 @@ export function OperateRoster({
       >
         <div className="or-row or-header" role="row">
           {th('call', 'Call')}
+          {th('calling', 'Calling', 'Sort by who each station is calling (CQ = calling nobody)')}
           {th('need', 'Need')}
           {th('country', 'Country')}
+          {th('state', 'State', 'Sort by US state (from the callsign, or the heard grid)')}
           {th('grid', 'Grid')}
           {th('dist', 'Dist')}
           {th('bearing', 'Brg')}
@@ -445,6 +482,14 @@ export function OperateRoster({
                     ↗
                   </button>
                 </span>
+                {/* Who they are working right now — a station mid-exchange will not answer a
+                    call, and "CQ" (addressing nobody) is the row to double-click. */}
+                <span
+                  className={`or-calling${s.calling ? '' : ' cq'}`}
+                  title={s.calling ? `Working ${s.calling}` : 'Calling CQ — not in a QSO'}
+                >
+                  {s.calling ?? 'CQ'}
+                </span>
                 <span
                   className="or-need"
                   /* The cell clips chips (deliberate — stops the Zone chip overlapping the Call);
@@ -466,6 +511,9 @@ export function OperateRoster({
                   <RarityChip rarity={s.gridRarity} />
                 </span>
                 <span className="or-country">{s.country ?? '—'}</span>
+                {/* US state from the callsign (FCC index) or the heard grid — the same hint the
+                    needed board resolves with, so a WAS chaser reads one answer, not two. */}
+                <span className="or-state">{s.usState ?? '—'}</span>
                 <span className="or-gridc">{s.grid ?? '—'}</span>
                 <span className="or-dist">{distanceLabel(myGrid, s.grid, units) ?? '—'}</span>
                 {/* Brg falls back to the entity centre (shown `~`) when the station

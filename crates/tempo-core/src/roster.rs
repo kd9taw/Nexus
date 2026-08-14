@@ -28,6 +28,14 @@ pub struct HeardStation {
     /// known only from free-text attribution ([`mark_heard`](Roster::mark_heard) carries
     /// no frequency).
     pub freq_hz: Option<i32>,
+    /// Who this station was last heard CALLING — the addressee of its last structured
+    /// frame, so it follows the exchange (`W1ABC` while working W1ABC, back to `None`
+    /// on their next CQ). `None` means "addressed nobody": a CQ or beacon, which the
+    /// roster renders as "CQ" the way GridTracker does. A station known ONLY from
+    /// free-text attribution is also `None` — `mark_heard` carries no addressee, the
+    /// same treatment `freq_hz` gets — so it reads as CQ until a structured frame
+    /// says otherwise.
+    pub calling: Option<String>,
 }
 
 /// Roster of heard stations, keyed by callsign.
@@ -68,10 +76,14 @@ impl Roster {
                 heard_count: 0,
                 mode: d.mode,
                 freq_hz: None,
+                calling: None,
             });
         entry.snr = d.snr;
         entry.last_heard_slot = slot;
         entry.heard_count += 1;
+        // Last frame wins, INCLUDING back to None: a station that finished its QSO and is
+        // calling CQ again must stop showing the call it was working.
+        entry.calling = m.addressee().map(str::to_string);
         entry.mode = d.mode; // last-heard protocol wins (FT8→FT1 re-tags as Tempo)
         entry.freq_hz = Some(d.freq.round() as i32); // last heard HERE on the waterfall
         if grid.is_some() {
@@ -99,12 +111,14 @@ impl Roster {
                 heard_count: 0,
                 mode,
                 freq_hz: None,
+                calling: None,
             });
         entry.snr = snr;
         entry.last_heard_slot = slot;
         entry.heard_count += 1;
         entry.mode = mode;
-        // No freq: free text carries none — keep the offset from the last structured decode.
+        // No freq and no addressee: free text carries neither — keep both from the last
+        // structured decode.
     }
 
     pub fn get(&self, call: &str) -> Option<&HeardStation> {
@@ -196,6 +210,26 @@ mod tests {
         // A station never heard structurally has no offset to claim.
         r.mark_heard("K2DEF", 3, -9, None);
         assert_eq!(r.get("K2DEF").unwrap().freq_hz, None);
+    }
+
+    #[test]
+    fn records_who_a_station_is_calling() {
+        // The roster's Calling column (GridTracker parity): who is this station working?
+        // The addressee of its LAST structured frame, so it tracks the exchange; a CQ
+        // addresses nobody, which the roster renders as "CQ".
+        let mut r = Roster::new();
+        r.observe(&dec("W9XYZ K2DEF FN31", -12), 1);
+        assert_eq!(r.get("K2DEF").unwrap().calling.as_deref(), Some("W9XYZ"));
+        // Still in the exchange — the report frame carries the same addressee.
+        r.observe(&dec("W9XYZ K2DEF -07", -12), 2);
+        assert_eq!(r.get("K2DEF").unwrap().calling.as_deref(), Some("W9XYZ"));
+        // Done: back to CQ, so the old addressee must NOT linger.
+        r.observe(&dec("CQ K2DEF FN31", -12), 4);
+        assert_eq!(r.get("K2DEF").unwrap().calling, None);
+        // Free-text attribution carries no addressee — it leaves the field alone.
+        r.observe(&dec("W1ABC K2DEF RR73", -12), 5);
+        r.mark_heard("K2DEF", 6, -9, None);
+        assert_eq!(r.get("K2DEF").unwrap().calling.as_deref(), Some("W1ABC"));
     }
 
     #[test]

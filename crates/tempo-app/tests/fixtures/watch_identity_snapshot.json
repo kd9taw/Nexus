@@ -125,6 +125,7 @@
   "stations": [
     {
       "call": "N7GHI",
+      "calling": null,
       "country": null,
       "freqHz": 1500,
       "grid": "DM79",
@@ -135,6 +136,7 @@
       "presence": "active",
       "snr": 72,
       "tier": "FT4",
+      "usState": null,
       "worked": false
     }
   ],

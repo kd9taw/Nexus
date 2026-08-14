@@ -322,3 +322,56 @@ describe('the station being worked is visible in the roster', () => {
     expect(row('K1ABC').className).not.toContain('working')
   })
 })
+
+describe('the roster says who each station is calling, and what state they are in', () => {
+  // ISSUE #40: GridTracker's roster shows both, and an operator scanning a busy band wants to
+  // know who is already engaged (and with whom) before double-clicking a row. Both facts ride
+  // the decode itself — the addressee of the frame, and the FCC callsign→state hint the needed
+  // board already resolves. Neither is a callbook lookup.
+  const withCols = (extra: Partial<Station>[]) =>
+    render(
+      <OperateRoster
+        stations={extra.map((e, i) => ({ ...station(`W${i}CAL`, 100), ...e }))}
+        myGrid="EN52"
+        currentSlot={100}
+        needByCall={new Map()}
+        selectedCall={null}
+        onSelect={() => {}}
+        onCall={() => {}}
+      />,
+    )
+  const cell = (call: string, cls: string) =>
+    screen.getByRole('row', { name: new RegExp(`^${call}`) }).querySelector(cls)?.textContent
+
+  it('shows the call being worked, and CQ when the station is calling nobody', () => {
+    withCols([
+      { call: 'BUSY', calling: 'K1ABC' },
+      { call: 'FREE', calling: null },
+    ])
+    expect(cell('BUSY', '.or-calling')).toBe('K1ABC')
+    expect(cell('FREE', '.or-calling')).toBe('CQ')
+  })
+
+  it('shows the US state, and an em dash for a station outside the US', () => {
+    withCols([
+      { call: 'USSTA', usState: 'VT' },
+      { call: 'DXSTA', usState: null },
+    ])
+    expect(cell('USSTA', '.or-state')).toBe('VT')
+    expect(cell('DXSTA', '.or-state')).toBe('—')
+  })
+
+  it('sorts by state, parking the state-less at the end', () => {
+    withCols([
+      { call: 'AAA', usState: 'VT' },
+      { call: 'BBB', usState: null },
+      { call: 'CCC', usState: 'CT' },
+    ])
+    fireEvent.click(screen.getByRole('button', { name: /^State/ }))
+    const calls = screen
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.querySelector('.or-call')?.textContent?.replace('↗', ''))
+    expect(calls).toEqual(['CCC', 'AAA', 'BBB'])
+  })
+})

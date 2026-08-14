@@ -11783,6 +11783,11 @@ impl Engine {
             }
             st.grid_rarity = self.station.rarity_of(st.grid.as_deref());
             st.lotw_user = self.station.lotw_user(Some(st.call.as_str()));
+            // Same (call, heard grid) inputs the needed board resolves with, so the roster's
+            // State column and a NewState pill can never name different states.
+            if let Some(resolve) = &self.station.state_resolve {
+                st.us_state = resolve(&st.call, st.grid.as_deref());
+            }
         }
         // Reflect transmit-enable / tuning / watchdog and the DT-derived
         // time-sync health into the radio status the UI renders.
@@ -20167,6 +20172,34 @@ mod tests {
             e.get_log()
         );
         assert!(!e.log_current_qso(), "…and Log QSO refuses it too");
+    }
+
+    /// Feature #40 — the Call Roster's Calling and State columns. Both facts already existed
+    /// (`Msg::addressee()` on the way in, the injected US-state resolver beside country/rarity);
+    /// the roster projection simply dropped them, so the UI had nothing to render.
+    #[test]
+    fn roster_stations_carry_who_they_call_and_their_state() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_state_resolver(|call, _grid| (call == "W9XYZ").then(|| "VT".to_string()));
+        e.ingest_decodes_for_test(&[dec_snr("W1ABC W9XYZ EM48", -7)], 1);
+
+        let snap = e.snapshot();
+        let st = snap
+            .stations
+            .iter()
+            .find(|s| s.call == "W9XYZ")
+            .expect("the decoded station is in the roster");
+        assert_eq!(
+            st.calling.as_deref(),
+            Some("W1ABC"),
+            "the roster row must say who the station is working"
+        );
+        assert_eq!(
+            st.us_state.as_deref(),
+            Some("VT"),
+            "state is stamped from the SAME resolver the needed board uses — no lookup here"
+        );
     }
 
     #[test]

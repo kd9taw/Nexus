@@ -78,6 +78,16 @@ pub struct Station {
     /// station is known only from free-text attribution.
     #[serde(default)]
     pub freq_hz: Option<i32>,
+    /// Who this station is calling — the addressee of its last structured frame. `None`
+    /// means it addressed nobody (a CQ), which the roster renders as "CQ". Lets the
+    /// operator see who is already engaged before double-clicking a row.
+    #[serde(default)]
+    pub calling: Option<String>,
+    /// US state, from the callsign (FCC index) or the heard grid — the SAME hint the
+    /// needed board and WAS use, never a callbook lookup. `None` for a non-US station or
+    /// when no resolver is wired. Stamped by the engine snapshot loop (resolver lives there).
+    #[serde(default)]
+    pub us_state: Option<String>,
 }
 
 /// A single decoded signal from the most recent RX slot, for the live decode

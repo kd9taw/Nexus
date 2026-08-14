@@ -936,6 +936,12 @@ export interface Station {
    * waterfall. A roster click passes it so RX/TX move there like a Band Activity
    * double-click. Null for stations known only from free-text attribution. */
   freqHz?: number | null
+  /** Who this station is calling — the addressee of its last decoded frame. Null when
+   * it addressed nobody, i.e. it is calling CQ (the roster renders that as "CQ"). */
+  calling?: string | null
+  /** US state from the callsign (FCC index) or the heard grid — the same hint the
+   * needed board uses. Null for a non-US station, or when the index isn't loaded. */
+  usState?: string | null
 }
 
 export interface ContestEvent {

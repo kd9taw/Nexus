@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays off a US-licensed operator's dropdown, exactly as the transmit lockout has always
   treated it. National 4 m edges differ by tens of kHz inside 70.0–70.5; check yours before you
   key.
+### Added
+
+- **The Call Roster shows who each station is calling, and what state they are in.** Two more
+  columns on the FT8/FT4 roster, sortable like the rest, as GridTracker has them. **Calling** is
+  the callsign from that station's last decode — who they are working right now — or **CQ** when
+  they are calling nobody, which is the row worth double-clicking. **State** is the US state,
+  read from the FCC callsign index, or from the grid they sent when the index has no record for
+  them. It is the same answer the Needed board uses to decide "new state", so the two can never
+  disagree with each other. Neither column is a callbook lookup: both come off decodes you have
+  already heard, so there is nothing to set up and nothing leaves the machine.
 
 ## [1.3.0] — 2026-08-13
 
