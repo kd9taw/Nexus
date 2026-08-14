@@ -564,15 +564,13 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // Commit a typed dial from the shared header readout; rejects out-of-plan
   // frequencies with a toast (same as the other cockpits).
   const commitDial = (mhz: number) => {
-    const band = bandLabelForMhz(mhz)
-    if (!band) {
-      pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
-      return
-    }
+    // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
+    // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
+    // "outside the band plan" and discard the entry.
     // #45: the CURRENT sideband is right for a retune inside a band and wrong the moment the
     // band changes — picking 20 m from 40 m carried LSB across, so the menu offered USB and the
     // rig went to 14.230 LSB. `sidebandForQsy` corrects only across the 10 MHz boundary.
-    onSetFrequency?.(mhz, band, sidebandForQsy(mhz, snap?.radio.dialMhz ?? mhz, snap?.radio.sideband))
+    onSetFrequency?.(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap?.radio.dialMhz ?? mhz, snap?.radio.sideband))
   }
 
   // In-flight preview → canvas at the preview's NATIVE size; CSS upscales it

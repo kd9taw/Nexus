@@ -42,9 +42,13 @@ export function useScopeTune(opts: ScopeTuneOpts): (t: ScopeTuneRequest) => void
     const send = (hz: number) => {
       const { sideband, onSnap } = stateRef.current
       const mhz = Math.round(hz) / 1e6
-      const band = bandLabelForMhz(mhz)
-      if (!band) return // outside any band (dragged past an edge) — stop silently
-      void setFrequency(mhz, band, sideband || 'USB')
+      // A dial has to BE one — the band lookup was doing this job too (it answers '' for NaN),
+      // and a degenerate scope span must not put NaN or a negative frequency on the wire.
+      if (!Number.isFinite(mhz) || mhz <= 0) return
+      // An EMPTY band label is fine: listening off the ham bands is first-class (operator,
+      // 2026-08-13), so a click on the part of a band map that names no band tunes there instead
+      // of doing nothing at all. The engine routes a bandless dial.
+      void setFrequency(mhz, bandLabelForMhz(mhz), sideband || 'USB')
         .then((s) => s && onSnap?.(s))
         .catch(() => {})
     }

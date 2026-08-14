@@ -46,9 +46,14 @@ interface WheelTuneOpts {
    * unrepresentable: the digit under the pointer only changes the INCREMENT on the same target,
    * so carry still falls out of `target += 10**n`. */
   resolveStepHz?: (target: EventTarget | null) => number | null
-  /** The flush refused a target that is off the band plan. Fires ONCE per burst (not once per
-   * ~120 ms flush against the edge), so the caller can SAY so: silence was right for a 100 Hz
-   * creep and is wrong for a 1 MHz digit notch, which lands here on the first click. */
+  /** A burst reached the edge of the band it started in and was PARKED there. Fires ONCE per
+   * burst (not once per ~120 ms flush against the edge), so the caller can SAY so: silence was
+   * right for a 100 Hz creep and is wrong for a 1 MHz digit notch, which lands here on the first
+   * click.
+   *
+   * ⚠️ It no longer means "refused" — the dial is not walled in at the band edge any more (see
+   * `clampToBand`). It means the burst STOPPED here rather than carrying past; another notch from
+   * this dial goes off the plan. */
   onEdge?: (mhz: number) => void
 }
 
@@ -60,8 +65,9 @@ interface WheelTuneOpts {
  * dial. Rapid input is COALESCED — steps accumulate against an optimistic target and a single CAT
  * `set_frequency` is flushed at most every ~120 ms — so fast scrolling never queues a backlog of
  * slow CAT writes. The optimistic target self-corrects from the snapshot dial whenever wheeling
- * pauses, and stops at a band edge — reported once per burst through `onEdge`, never once per
- * flush. NON-passive listener so it can `preventDefault()` the page scroll (React's `onWheel` is
+ * pauses, and PARKS at a band edge — reported once per burst through `onEdge`, never once per
+ * flush — from where a further notch carries on off the band plan (see `clampToBand`).
+ * NON-passive listener so it can `preventDefault()` the page scroll (React's `onWheel` is
  * passive).
  *
  * `resolveStepHz` lets ONE listener serve two mechanisms (the selected step and per-digit
@@ -86,6 +92,10 @@ export function useWheelTune(
   const lastWheelRef = useRef(0)
   const timerRef = useRef<number | null>(null)
   const edgeSaidRef = useRef(false) // band edge already reported for THIS burst
+  /** Where the RIG actually is, in Hz: the live snapshot we seeded a burst from, or the target the
+   *  coalescer last flushed. A step OFF the band plan is allowed only from here — see
+   *  `clampToBand`, which is the whole of what keeps the runaway guard alive. */
+  const committedHzRef = useRef<number | null>(null)
 
   // Hoisted out of the effect so the keyboard applier below shares the ONE flush — a second
   // copy is a second coalescer, which is the whole failure mode this hook exists to avoid.
@@ -93,7 +103,7 @@ export function useWheelTune(
     timerRef.current = null
     const t = targetHzRef.current
     if (t == null) return
-    const { sideband, onSnap, enabled, onEdge } = stateRef.current
+    const { sideband, onSnap, enabled } = stateRef.current
     // Re-check the gate HERE, not only at event time. The flush lands up to FLUSH_MS after the
     // last notch, so a burst that ends just as the operator keys up would otherwise put a CAT
     // set_frequency out DURING a live over — and with a digit step that can be a band change,
@@ -102,21 +112,14 @@ export function useWheelTune(
       targetHzRef.current = null
       return
     }
+    committedHzRef.current = Math.round(t)
     const mhz = Math.round(t) / 1e6
-    const band = bandLabelForMhz(mhz)
-    if (!band) {
-      // Wheeled past a band edge — stop there and re-seed from the live dial on the next burst,
-      // rather than issuing CAT writes every ~120 ms against the edge. REPORTED once per burst
-      // (never once per flush, which is the toast spam the silence was protecting against): the
-      // operator accepted VFO carry on the condition that the edge is visible.
-      targetHzRef.current = null
-      if (!edgeSaidRef.current) {
-        edgeSaidRef.current = true
-        onEdge?.(mhz)
-      }
-      return
-    }
-    void setFrequency(mhz, band, sideband || 'USB')
+    // An EMPTY band label is an ANSWER, not a refusal: listening off the ham bands is first-class
+    // (operator, 2026-08-13) — WWV, a shortwave broadcaster, the gap between two allocations — and
+    // the engine routes a bandless dial without wiping the decode context. This used to drop the
+    // target and report the edge instead, which is why the only way out of a band was the rig's
+    // own knob. What still bounds a burst is `clampToBand`, not this.
+    void setFrequency(mhz, bandLabelForMhz(mhz), sideband || 'USB')
       .then((s) => s && onSnap?.(s))
       .catch(() => {})
   }, [])
@@ -132,6 +135,7 @@ export function useWheelTune(
     lastWheelRef.current = now
     if (targetHzRef.current == null || idle) {
       targetHzRef.current = Math.round(stateRef.current.dialMhz * 1e6)
+      committedHzRef.current = targetHzRef.current // the live dial IS where the rig is
       accumRef.current = 0
       accumStepRef.current = null
       if (idle) edgeSaidRef.current = false
@@ -151,15 +155,24 @@ export function useWheelTune(
    *  Clamping rather than discarding also fixes the sibling defect: a flick that overshoots the
    *  edge used to throw the WHOLE burst away, so a quick three notches toward the top of the band
    *  moved the dial nowhere while the same three delivered slowly moved it to the edge.
-   *  Returns the clamped Hz and whether the edge was hit. */
+   *  Returns the clamped Hz and whether the edge was hit.
+   *
+   *  ⚠️ THE EDGE IS A STOP, NOT A WALL (operator, 2026-08-13). Listening off the ham bands is
+   *  first-class, so a notch taken from a dial that is REALLY on the edge — the snapshot we seeded
+   *  from, or the Hz we just flushed — carries straight on off the plan. That is what makes WWV
+   *  and everything between two allocations reachable with the wheel, and it costs the runaway
+   *  guard nothing: inside one 120 ms window nothing is committed, so the seven-notch burst above
+   *  still parks on 7.3 instead of landing on 14.074. Leaving the band takes a second gesture, at
+   *  a dial the operator can see. */
   const clampToBand = useCallback((hz: number, fromHz: number): { hz: number; hitEdge: boolean } => {
     const range = bandRangeForLabel(bandLabelForMhz(fromHz / 1e6))
-    if (!range) return { hz, hitEdge: false } // started off-plan (60 m channels, out-of-band RX)
+    if (!range) return { hz, hitEdge: false } // already off-plan (60 m channels, out-of-band RX)
     const lo = Math.round(range.lo * 1e6)
     const hi = Math.round(range.hi * 1e6)
-    if (hz < lo) return { hz: lo, hitEdge: true }
-    if (hz > hi) return { hz: hi, hitEdge: true }
-    return { hz, hitEdge: false }
+    const edge = hz < lo ? lo : hz > hi ? hi : null
+    if (edge == null) return { hz, hitEdge: false }
+    if (fromHz === edge && fromHz === committedHzRef.current) return { hz, hitEdge: false }
+    return { hz: edge, hitEdge: true }
   }, [])
 
   /** Say the edge ONCE per arrival at it, and only when the dial actually MOVED there.

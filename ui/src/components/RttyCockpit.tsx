@@ -245,12 +245,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // Commit a typed dial from the shared header readout (same path as the
   // band-plan QSY); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    const band = bandLabelForMhz(mhz)
-    if (!band) {
-      pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
-      return
-    }
-    onSetFrequency?.(mhz, band, snap?.radio.sideband || 'USB')
+    // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
+    // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
+    // "outside the band plan" and discard the entry.
+    onSetFrequency?.(mhz, bandLabelForMhz(mhz), snap?.radio.sideband || 'USB')
   }
 
   // --- TX: compose + macros. Simple {MYCALL}/{CALL} substitution for now (the

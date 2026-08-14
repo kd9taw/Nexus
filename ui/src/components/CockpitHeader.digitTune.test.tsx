@@ -121,9 +121,16 @@ describe('per-digit wheel tuning on the shared main dial', () => {
     // and still asserted.
     expect(mockSetFreq).toHaveBeenCalledTimes(1)
     expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.35, 6)
+    // ⚠️ SEVERITY CHANGED 2026-08-13, and the reason is the ruling that listening off the ham
+    // bands is first-class. When this line was written the wheel REFUSED an off-plan target,
+    // so `error` described what had happened. It no longer refuses — the dial still stops AT
+    // the edge (the runaway guard, asserted above), but one more deliberate notch goes past it,
+    // and calling a reachable destination an error announced a failure that did not occur
+    // (`error` is also routed to the assertive live region, so it was spoken). The operator's
+    // condition — the edge is never silent, and it is NAMED — is unchanged and still asserted.
     expect(mockToast).toHaveBeenCalledTimes(1)
     expect(String(mockToast.mock.calls[0][0])).toContain('14.3500')
-    expect(mockToast.mock.calls[0][1]).toBe('error')
+    expect(mockToast.mock.calls[0][1]).toBe('info')
   })
 
   it('names the EDGE, not just the refusal — the condition was that the edge is visible', () => {

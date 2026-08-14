@@ -683,12 +683,10 @@ export function OperateCockpit({
   // app's setFrequency handler (same path the old global TopBar readout used);
   // rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    const band = bandLabelForMhz(mhz)
-    if (!band) {
-      pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
-      return
-    }
-    onSetFrequency(mhz, band, snap.radio.sideband || 'USB')
+    // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
+    // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
+    // "outside the band plan" and discard the entry.
+    onSetFrequency(mhz, bandLabelForMhz(mhz), snap.radio.sideband || 'USB')
   }
 
   return (

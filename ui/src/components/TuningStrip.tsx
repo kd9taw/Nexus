@@ -2,7 +2,6 @@ import { useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { setFrequency, setRit, setXit, setVfo } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
-import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
 
@@ -51,14 +50,16 @@ export function TuningStrip({
   const fmtOffset = (hz: number) => (hz > 0 ? `+${hz}` : `${hz}`)
 
   const tuneTo = async (mhz: number) => {
-    const band = bandLabelForMhz(mhz)
-    if (!band) {
-      pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
-      return
-    }
-    // Keep the current sideband so an in-band nudge/entry never flips the mode.
+    // A dial has to BE one. The band lookup used to double as this check (it answers '' for a
+    // NaN or an absurd value), so it stays here on its own now that band membership no longer
+    // refuses anything.
+    if (!Number.isFinite(mhz) || mhz <= 0) return
+    // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
+    // 2026-08-13) — WWV, a shortwave broadcaster, the gap between two allocations. This used to
+    // toast "outside the band plan" and return, which is what made every ◄/► nudge and every
+    // typed entry stop dead at a band edge.
     // In-band keeps the current sideband; crossing 10 MHz follows the band convention (#45).
-    const s = await setFrequency(mhz, band, sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband)).catch(() => null)
+    const s = await setFrequency(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband)).catch(() => null)
     if (s) onSnap?.(s)
   }
   // Round to the nearest Hz to avoid float drift accumulating on repeated nudges.
@@ -111,7 +112,10 @@ export function TuningStrip({
             editable
             disabled={!catOk}
             onCommit={(mhz) => void tuneTo(mhz)}
-            txBlocked={!bandLabelForMhz(dial)}
+            // The ENGINE's privilege answer, not the UI's band table. Off-band RX is legal
+            // listening, not a transmit block, and `!bandLabelForMhz(dial)` painted every
+            // out-of-band dial TX-red on the strength of a band-plan miss (operator, 2026-08-13).
+            txBlocked={!snap.radio.txAllowed}
           />
         </span>
       )}

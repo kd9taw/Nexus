@@ -120,10 +120,26 @@ export function orderEntries(list: DecodeEntry[], sort: DecodeSort): DecodeEntry
 export class DecodeHistory {
   private map = new Map<string, DecodeEntry>()
   private scope: string | null = null
+  /** The last NAMED band this pane was bound to — what an off-band dial keeps pointing at. */
+  private lastBand = ''
 
-  /** Bind the history to a band+tier; a change WIPES it. Returns true if reset. */
+  /**
+   * Bind the history to a band+tier; a change WIPES it. Returns true if reset.
+   *
+   * AN OFF-BAND EXCURSION IS NOT A BAND CHANGE (operator ruling 2026-08-13: listening off the
+   * ham bands is a first-class use case). Off the bands the backend sends `radio.band` as the
+   * empty string — "no ham-band claim" — and keyed raw that empty label was a band NAME: a
+   * twenty-second listen to WWV off the edge of 40m wiped the pane on the way out AND again on
+   * the way back, undoing at the UI layer the backend's own rule that remembers the band it left
+   * (`off_band_from`) so returning to it is a return, not a QSY. So the band component ignores an
+   * empty label and keeps the last named band, which makes every off-band frequency one scope —
+   * the same treatment tuning WITHIN a band already gets, and an off-band excursion is the same
+   * kind of move. A TIER change still wipes regardless of where the dial is.
+   */
   setScope(band: string, tier: Tier): boolean {
-    const key = `${band}|${tier}`
+    const named = band.trim() ? band : this.lastBand
+    this.lastBand = named
+    const key = `${named}|${tier}`
     if (this.scope === key) return false
     this.scope = key
     this.map.clear()

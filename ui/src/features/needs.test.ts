@@ -4,6 +4,7 @@ import {
   alertsForSurface,
   chaseRank,
   modeClassOf,
+  sameBand,
   strongestNeed,
   tagsForSurface,
   topNeedByCall,
@@ -440,6 +441,89 @@ describe('alertsForSurface (gate, then rank)', () => {
     const gated = alertsForSurface(alerts, '30m', 'FT8')
     expect(strongestNeed(gated)?.tags[0]).toBe('NewEntity')
     expect(chaseRank(gated, 'NewEntity')).toBe(100)
+  })
+})
+
+// ── Off the ham bands ────────────────────────────────────────────────────────────────
+// Operator ruling 2026-08-13: listening off the bands (WWV, shortwave, CB, marine, the
+// gaps between band edges) is a first-class use case, and the backend says so honestly by
+// sending `radio.band` as the EMPTY STRING — "no ham-band claim", not a band whose name
+// happens to be blank. `sameBand` read it as a name, so '' === '' was a MATCH: every alert
+// carrying no band passed the per-band gate as a fully-qualified per-band claim and painted
+// NewBand/NewZone/NewGrid/NewState/Confirm chips onto every roster row, choosing the row
+// colour and its place in "sort by need". Unknown cannot equal a band, and it cannot equal
+// another unknown either.
+describe('an empty band label is UNKNOWN, not a band (operator ruling 2026-08-13)', () => {
+  const off = (tags: NeedTag[], band = '', mode = 'FT8'): NeedAlert => ({
+    call: 'WWV',
+    entity: 'United States',
+    band,
+    zone: 4,
+    tags,
+    priority: 50,
+    headline: '',
+    mode,
+    freqMhz: null,
+  })
+
+  it('sameBand: unknown matches nothing — not a band, and not another unknown', () => {
+    expect(sameBand('', '')).toBe(false)
+    expect(sameBand('20m', '')).toBe(false)
+    expect(sameBand('', '20m')).toBe(false)
+    expect(sameBand(null, undefined)).toBe(false)
+    expect(sameBand('  ', '20m')).toBe(false)
+    // …and the controls that MUST still fire: a real match, the case/whitespace fold it
+    // exists for, and a real mismatch.
+    expect(sameBand('20m', '20m')).toBe(true)
+    expect(sameBand(' 30M ', '30m')).toBe(true)
+    expect(sameBand('20m', '40m')).toBe(false)
+  })
+
+  it('off band, an alert with no band of its own claims nothing per-band', () => {
+    // THE FIELD SHAPE: dial on 5 MHz (WWV), surface band ''. Before the fix both sides were
+    // '' so the gate passed every one of these as if it had been judged.
+    for (const t of ['NewBand', 'NewZone', 'NewGrid', 'NewState', 'Confirm'] as NeedTag[]) {
+      expect(tagsForSurface(off([t]), '', 'FT8'), `${t} must go quiet off band`).toEqual([])
+    }
+  })
+
+  it('…while the band-agnostic needs keep working off band — "a new one" needs no band', () => {
+    expect(tagsForSurface(off(['NewEntity', 'Dxped']), '', 'FT8')).toEqual(['NewEntity', 'Dxped'])
+    expect(tagsForSurface(off(['Wanted']), '', 'FT8')).toEqual(['Wanted'])
+    expect(tagsForSurface(off(['NewMode'], '', 'FT8'), '', 'FT8')).toEqual(['NewMode'])
+    expect(tagsForSurface(off(['Pota', 'Sota']), '', 'FT8')).toEqual(['Pota', 'Sota'])
+  })
+
+  it('a genuine 20m alert still claims its per-band tags ON 20m (the control)', () => {
+    expect(tagsForSurface(off(['NewBand'], '20m'), '20m', 'FT8')).toEqual(['NewBand'])
+    expect(tagsForSurface(off(['Confirm'], '20m'), '20m', 'FT8')).toEqual(['Confirm'])
+  })
+
+  it('an alert with no band never claims a per-band tag on a KNOWN band either', () => {
+    // The other half of "unknown cannot be judged": the surface knows it is 20m, but the
+    // alert makes no band claim, so its per-band tags are unanswerable here too.
+    expect(tagsForSurface(off(['NewBand']), '20m', 'FT8')).toEqual([])
+    expect(tagsForSurface(off(['NewEntity']), '20m', 'FT8')).toEqual(['NewEntity'])
+  })
+
+  it('alertsForSurface drops an off-band alert whose every tag was per-band', () => {
+    expect(alertsForSurface([off(['NewBand', 'Confirm'])], '', 'FT8')).toEqual([])
+    // …and keeps the one that is still answerable, re-priced from its surviving lead tag.
+    const got = alertsForSurface([off(['NewBand', 'NewEntity'])], '', 'FT8')
+    expect(got).toHaveLength(1)
+    expect(got[0].tags).toEqual(['NewEntity'])
+    expect(got[0].priority).toBe(NEED_TIER.NewEntity)
+  })
+
+  it('off band, an unjudgeable claim cannot pick a roster row colour or its chase rank', () => {
+    // End to end, the roster shape: dial on 11m CB, one call carrying a bandless NewBand claim
+    // and an all-time-new entity. Before the fix the bandless claim read as fully qualified, so
+    // a chip nothing had judged sat on the row beside the one real reason to work the station.
+    const bandClaim = { ...off(['NewBand']), priority: NEED_TIER.NewBand }
+    const entity = { ...off(['NewEntity']), priority: NEED_TIER.NewEntity }
+    const gated = alertsForSurface([bandClaim, entity], '', 'FT8')
+    expect(gated.map((a) => a.tags[0])).toEqual(['NewEntity'])
+    expect(chaseRank(gated, null)).toBe(NEED_TIER.NewEntity)
   })
 })
 

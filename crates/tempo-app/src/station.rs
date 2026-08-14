@@ -45,8 +45,21 @@ fn log_file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
 /// byte-identical to `propagation::Band::label()` for every band that crate models,
 /// so this side and the awards/needs side agree on what "2 m" is without tempo-app
 /// having to depend on the propagation crate (it deliberately does not — see
-/// [`StationCore::set_dxcc_resolver`]). A record with no BAND keys as "", which
-/// matches no live band and so never suppresses a need.
+/// [`StationCore::set_dxcc_resolver`]). A record with no BAND keys as `""`.
+///
+/// ⚠️ `""` IS A KEY IN THE INDEX, AND IT IS NOT A BAND. It arrives from any log row with no
+/// BAND field — an ADIF import (`logbook.rs`: `f.remove("BAND").unwrap_or_default()`) is the
+/// common source. The old wording here claimed it "matches no live band and so never
+/// suppresses a need", and that was true only while the LIVE band was always a real label.
+/// It is not: off the ham bands `settings.band` is `""` too, so asking a per-band question
+/// with an empty band would match those phantom rows and answer CONFIRMED for a station the
+/// operator has never worked on any band anyone can name.
+///
+/// The contract, therefore: **the per-band lookups are only ever ASKED with a named band.**
+/// The one production caller (the decode-feed badges in `Engine::snapshot`) holds an
+/// `Option<&str>` that is `None` off the bands and does not ask at all. Keep it that way —
+/// a guard inside these methods cannot work, because their consumers want opposite
+/// polarities of the answer (see the comment at that call site).
 fn band_key(band: &str) -> String {
     // THE canonicaliser (bandplan::canonical_band), then lower-cased: the old
     // hand-rolled strip here handled only "-fm", so a legacy "6m-2"/"2m-call"

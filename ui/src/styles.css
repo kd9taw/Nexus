@@ -9859,6 +9859,19 @@ select.settings-input {
   border: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--text) 4%, var(--bg));
 }
+/* "no band-plan data for …" — the honest empty track when the dial is off the band plan
+   (listening off the ham bands is supported; operator ruling 2026-08-13). Same treatment as
+   the band map's `.bandmap-empty`, because it is the same sentence in the same situation. */
+.bandstrip-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-style: italic;
+  font-size: 12px;
+}
 .bandstrip-shade {
   position: absolute;
   top: 0;

@@ -259,6 +259,19 @@ pub fn score_slots(
     // proven worked on a band we can't name, so those needs fail OPEN and still
     // alert — the same absence-means-needed rule [`crate::dxped::LogNeeds`] answers by.
     let heard_on = Band::from_band_token(band);
+    // ⚠️ `heard_on == None` HAS TWO MEANINGS, and until 2026-08-13 they shared one arm.
+    // * UNMODELLED — a real band this crate does not model ("70cm"). We cannot prove the
+    //   station is worked there, and staying silent would swallow a genuine new grid, so
+    //   those needs fail OPEN (the paragraph above, and the two tests it names).
+    // * ABSENT — `""`, which is what `settings.band` carries whenever the dial is off the
+    //   ham bands: WWV, shortwave, CB, marine, the gap between two band edges. Nothing was
+    //   claimed, so there is nothing to fail open ABOUT. Failing open here does not risk a
+    //   dismissible extra alert — it asserts a new zone, grid and state for EVERY station
+    //   heard, however many times the operator has worked them, and it fires on the whole
+    //   roster at once. Listening off the bands is first-class (operator, 2026-08-13), so
+    //   the per-band axes go quiet instead of lying. The all-time axes are unaffected:
+    //   "worked this entity EVER" needs no band.
+    let band_named = !band.trim().is_empty();
 
     // DXCC need — ARRL DXCC entities only (WAE/CQ-only entities earn no DXCC tag).
     if info.is_dxcc {
@@ -286,6 +299,8 @@ pub fn score_slots(
             }
             // WAZ complete → this zone is worked on some band, so it's not a new zone.
             _ if slots.waz_complete() => {}
+            // No band was claimed at all (off the ham bands) → say nothing; see `band_named`.
+            _ if !band_named => {}
             // Worked-but-not-on-this-band, or an unparseable band → fail open (a new zone).
             _ => tags.push(NeedTag::NewZone),
         }
@@ -310,6 +325,8 @@ pub fn score_slots(
                     wants_confirm = true;
                 }
             }
+            // No band claimed → no per-band grid slot to be new in; see `band_named`.
+            _ if !band_named => {}
             _ => tags.push(NeedTag::NewGrid),
         }
     }
@@ -326,6 +343,8 @@ pub fn score_slots(
                         wants_confirm = true;
                     }
                 }
+                // No band claimed → no WAS band slot to be new in; see `band_named`.
+                _ if !band_named => {}
                 _ => tags.push(NeedTag::NewState),
             }
         }
@@ -2356,6 +2375,39 @@ mod tests {
         )
         .expect("70cm is still a chase, not a silent band");
         assert!(a.tags.contains(&NeedTag::NewGrid), "{:?}", a.tags);
+    }
+
+    /// …and the OTHER `None`, which until now shared its arm: an ABSENT band. Off the ham
+    /// bands — WWV, a shortwave broadcaster, the gap between two band edges — the live band
+    /// label is `""`. That is not "a band we cannot model", it is "no band claim at all", and
+    /// the two must not answer the same way. Fail-open is honest for 70 cm ("we cannot prove
+    /// this is worked, so say so"); here it is a fabricated claim, and it fires on every
+    /// station in the roster at once (operator ruling 2026-08-13: listening off the bands is
+    /// first-class, so the board must not fill with needs the operator cannot act on).
+    #[test]
+    fn an_absent_band_says_nothing_rather_than_claiming_a_need() {
+        let mut n = LogNeeds::new();
+        n.add("W1AW", "20m", "FT8", Some("FN31"), None, true);
+        let a = score(
+            "K1ABC",
+            "", // the dial is off the bands
+            "FT8",
+            Some("FN31"),
+            None,
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+            &HashSet::new(),
+        );
+        let tags = a.map(|a| a.tags).unwrap_or_default();
+        assert!(
+            !tags.contains(&NeedTag::NewGrid),
+            "a grid need is a per-BAND claim; with no band there is no slot to be new in: {tags:?}"
+        );
+        assert!(
+            !tags.contains(&NeedTag::NewZone),
+            "same for the zone need: {tags:?}"
+        );
     }
 
     /// The log and the air must canonicalize a band identically: a contact logged on

@@ -142,6 +142,53 @@ describe('band / tier scope wipe', () => {
   })
 })
 
+describe('off-band excursions are not a band change (operator ruling 2026-08-13)', () => {
+  // Listening off the ham bands is a supported use case, and the backend says so by sending
+  // `radio.band` as the EMPTY STRING — "no ham-band claim". Keyed raw, that empty label was a
+  // band NAME: leaving 40m for WWV wiped the pane, and coming back wiped it again, so a
+  // 20-second listen off the band edge cost the whole band's history twice. It also undid at
+  // the UI layer the backend's own rule that an off-band excursion is a round trip
+  // (`off_band_from` remembers the band it left), not a QSY.
+  const cq = () => [row({ message: 'CQ W9XYZ EN52', freqHz: 1200 })]
+
+  it('a trip off the band and back is a round trip — the pane survives both moves', () => {
+    const h = new DecodeHistory()
+    h.setScope('40m', 'FT8')
+    h.ingest(cq(), 100, 1_000)
+    expect(h.setScope('', 'FT8')).toBe(false) // dial to WWV on 5 MHz — unknown, not a new band
+    expect(h.entries()).toHaveLength(1)
+    expect(h.setScope('40m', 'FT8')).toBe(false) // …and back to where we were
+    expect(h.entries()).toHaveLength(1)
+  })
+
+  it('every off-band frequency is ONE scope — 5 → 11 → 27 MHz never re-wipes', () => {
+    // Deliberate, and the same rule as tuning WITHIN a band: moving the dial around off the
+    // band plan is the same kind of move, so it does not throw the pane away.
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest(cq(), 100, 1_000)
+    for (let i = 0; i < 3; i++) expect(h.setScope('', 'FT8')).toBe(false)
+    expect(h.entries()).toHaveLength(1)
+  })
+
+  it('a GENUINE band change still wipes, even reached through an off-band excursion', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest(cq(), 100, 1_000)
+    expect(h.setScope('', 'FT8')).toBe(false)
+    expect(h.setScope('40m', 'FT8')).toBe(true) // 20m → 40m is a QSY however you got there
+    expect(h.entries()).toHaveLength(0)
+  })
+
+  it('a TIER change wipes regardless — including while the dial is off the bands', () => {
+    const h = new DecodeHistory()
+    h.setScope('', 'FT8')
+    h.ingest(cq(), 100, 1_000)
+    expect(h.setScope('', 'FT4')).toBe(true)
+    expect(h.entries()).toHaveLength(0)
+  })
+})
+
 describe('period separator UTC', () => {
   it('derives the period start from slot × period (engine slots count from the epoch)', () => {
     // FT8 slot 4 = 60 s after the epoch = 00:01:00 UTC.

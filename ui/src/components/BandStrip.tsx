@@ -77,8 +77,36 @@ export function BandStrip({
   const cwRange = spotMode === 'CW' ? cwRangeForLabel(band) : null
   const dialInCw = cwRange != null && dialMhz >= cwRange.lo && dialMhz <= cwRange.hi
   const range = (dialInCw ? cwRange : null) ?? bandRangeForLabel(band)
-  if (!range) return null
   const modeLabel = spotMode === 'CW' ? 'CW' : 'SSB'
+
+  // Dial off the UI band plan — either a band we have no range for, or (listening off the ham
+  // bands, a first-class use case per the operator ruling 2026-08-13) the backend's honest empty
+  // band label. This used to `return null`, which left the pane frame around it still titled
+  // "Band activity" with nothing inside and no word about why. Say what BandMap says in the
+  // identical case (BandMap.tsx) — one condition, one vocabulary — keeping the pop-out, which is
+  // how the operator reaches the map that plots what IS spotted.
+  if (!range) {
+    return (
+      <div className="bandstrip">
+        <div className="bandstrip-head">
+          <span className="bandstrip-count">{band || '—'} — off the band plan</span>
+          {onPopOut && (
+            <button
+              type="button"
+              className="bandstrip-popout"
+              onClick={onPopOut}
+              title="Open the vertical band map in its own window"
+            >
+              ⧉ Band map
+            </button>
+          )}
+        </div>
+        <div className="bandstrip-track">
+          <div className="bandstrip-empty">no band-plan data for {band || 'this frequency'}</div>
+        </div>
+      </div>
+    )
+  }
 
   const phone = spots
     .filter((s) => s.mode === spotMode && s.band === band)

@@ -608,13 +608,11 @@ export function CwCockpit({
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
   // never flips the mode); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    const band = bandLabelForMhz(mhz)
-    if (!band) {
-      pushToast(`${mhz.toFixed(4)} MHz is outside the band plan`, 'error', 3000)
-      return
-    }
+    // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
+    // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
+    // "outside the band plan" and discard the entry.
     // In-band keeps the current sideband; crossing 10 MHz follows the band convention (#45).
-    void setFrequency(mhz, band, sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband))
+    void setFrequency(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband))
       .then((s) => s && onSnap?.(s))
       .catch(() => {})
   }

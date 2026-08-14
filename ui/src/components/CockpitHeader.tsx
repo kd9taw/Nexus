@@ -78,16 +78,27 @@ export interface CockpitHeaderProps {
   catStatus?: ReactNode
 }
 
-/** The refusal message for a wheeled target off the band plan, naming the edge it hit — the
- *  direction of travel picks which end of the CURRENT band to quote. Falls back to the bare
- *  refusal when the dial is already off-plan (there is no "current band" to name an edge of). */
+/** What to say when a wheel burst PARKS on a band edge, naming the edge it stopped at — the
+ *  direction of travel picks which end of the CURRENT band to quote. Empty when the dial is
+ *  already off-plan (there is no "current band" to name an edge of, and nothing was stopped).
+ *
+ *  ⚠️ NOT A REFUSAL ANY MORE, and the wording carries the difference. It used to be one: the
+ *  wheel would not write a target off the band plan, so "outside the band plan" at `error`
+ *  severity described what had just happened. Since the 2026-08-13 ruling — listening off the
+ *  ham bands is first-class — the wheel tunes anywhere; what remains is the runaway guard,
+ *  which stops a fast burst ON the edge so a single flick cannot carry the dial off the band
+ *  by accident. One more deliberate gesture goes straight past. Calling that an error told the
+ *  operator they had been refused when they had not, and `error` speaks it into the assertive
+ *  live region on top. */
 function edgeMessage(dialMhz: number, targetMhz: number): string {
-  const bare = `${targetMhz.toFixed(4)} MHz is outside the band plan`
   const label = bandLabelForMhz(dialMhz)
   const range = label ? bandRangeForLabel(label) : null
-  if (!range) return bare
-  const edge = targetMhz > dialMhz ? range.hi : range.lo
-  return `${bare} — ${label} ${targetMhz > dialMhz ? 'ends' : 'starts'} at ${edge.toFixed(4)} MHz`
+  if (!range) return ''
+  const up = targetMhz > dialMhz
+  const edge = up ? range.hi : range.lo
+  return `Stopped at the ${label} band edge, ${edge.toFixed(4)} MHz — scroll again to keep tuning ${
+    up ? 'up' : 'down'
+  }`
 }
 
 export function CockpitHeader({
@@ -163,11 +174,15 @@ export function CockpitHeader({
         }
       : undefined,
     // The operator accepted VFO carry past a band edge ON THE CONDITION that the edge is visible.
-    // Refusing in silence was right for a 100 Hz creep and wrong for a 1 MHz digit notch, which
-    // lands off the plan on the first click — say it, as the nudge buttons and typed entry already
-    // do (Radix routes an error toast to the assertive live region, so it is spoken too), and NAME
-    // THE EDGE he hit: "you cannot go to 15.0740" alone leaves him guessing where the wall is.
-    onEdge: (mhz) => pushToast(edgeMessage(dial, mhz), 'error', 3000),
+    // Stopping in silence was right for a 100 Hz creep and wrong for a 1 MHz digit notch, which
+    // reaches the edge on the first click — so say where the dial parked, and NAME THE EDGE:
+    // "stopped at 7.3000" alone leaves the operator guessing which wall they met. `info`, not
+    // `error`: nothing was refused, and an error toast is routed to the assertive live region
+    // (i.e. spoken), which would announce a supported destination as a failure.
+    onEdge: (mhz) => {
+      const said = edgeMessage(dial, mhz)
+      if (said) pushToast(said, 'info', 3000)
+    },
     onSnap,
   })
 
@@ -196,7 +211,14 @@ export function CockpitHeader({
             size="hero"
             editable={onCommitDial != null}
             disabled={!catOk}
-            txBlocked={!bandLabelForMhz(dial)}
+            // TX-red means "you must not key here", so it is the LICENCE's answer, not the UI
+            // band table's. Derived from `!bandLabelForMhz(dial)` it alarm-coloured the readout
+            // for a whole off-band session — and receiving off the ham bands (WWV, shortwave,
+            // CB, marine, the gaps between band edges) is a supported use case, operator ruling
+            // 2026-08-13. `radio.txAllowed` is the backend's privileges answer for this dial AND
+            // mode: it knows the non-US `Open` class, and the no-privilege gaps INSIDE a band
+            // that a frequency table cannot see (a General on 14.010 read as fine before).
+            txBlocked={!radio.txAllowed}
             onCommit={onCommitDial}
             digitTune={digitTune}
             onTuneHz={tuneBy}

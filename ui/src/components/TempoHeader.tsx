@@ -50,9 +50,10 @@ export function TempoHeader({
   const cq = snap.chatCq ?? 'off'
   const [tuneStep, setTuneStep] = useState(100)
   const commitDial = (mhz: number) => {
-    const band = bandLabelForMhz(mhz)
-    if (!band) return
-    onSetFrequency(mhz, band, snap.radio.sideband || 'USB')
+    // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
+    // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to
+    // discard the typed value in SILENCE — the worst of the six, because nothing said why.
+    onSetFrequency(mhz, bandLabelForMhz(mhz), snap.radio.sideband || 'USB')
   }
   return (
     <CockpitHeader

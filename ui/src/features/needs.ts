@@ -176,9 +176,23 @@ export function modeClassOf(mode: string | null | undefined): 'CW' | 'Phone' | '
 /** Band labels compare case- and whitespace-insensitively. A real logbook carries both
  * `30m` and `30M` (the operator's audited log has 699 of one and 212 of the other), and a
  * spot's label is canonicalised by the backend while the radio's comes from settings — a
- * raw `===` between the two silently drops every need on the band. */
+ * raw `===` between the two silently drops every need on the band.
+ *
+ * An ABSENT band on either side is UNKNOWN, and unknown matches nothing — not a band, and
+ * not another unknown. Off the ham bands (WWV, shortwave, CB, marine, the gaps between band
+ * edges — a first-class supported use case, operator ruling 2026-08-13) the backend states
+ * "no ham-band claim" by sending `radio.band` as the empty string. Read as a NAME, `'' === ''`
+ * was a match, so every alert that carried no band of its own passed the per-band gate below
+ * as a fully-qualified per-band claim: NewBand/NewZone/NewGrid/NewState/Confirm chips painted
+ * on every roster row off band, choosing the row colour and its place in "sort by need". The
+ * honest answer to "is this claim about the band in front of me?" with either side unknown is
+ * no — which withholds the per-band claims and leaves the band-agnostic ones (an all-time-new
+ * entity is new wherever you hear it) working exactly as they did. */
 export function sameBand(a: string | null | undefined, b: string | null | undefined): boolean {
-  return (a ?? '').trim().toUpperCase() === (b ?? '').trim().toUpperCase()
+  const x = (a ?? '').trim().toUpperCase()
+  const y = (b ?? '').trim().toUpperCase()
+  if (!x || !y) return false
+  return x === y
 }
 
 /** Need tags that survive on ANY band, because the predicate behind them carries no band:
@@ -214,6 +228,11 @@ const MODE_GATED_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>(['NewMode', 'Conf
  * through `modeClassOf` because the backend sends the specific submode (`FT8`/`FT4`/
  * `RTTY`) as a display label while a feed describes itself by class (`Digital`) — a raw
  * `===` between those two is never true, which dropped real pills on the decode feed.
+ *
+ * Off the ham bands the surface's `band` is `''` — unknown, not a band — so `sameBand` returns
+ * false for every per-band claim and only the band-agnostic tags survive. That is the ruling
+ * (2026-08-13): "an all-time new one" is answerable without knowing the band; "new on this
+ * band" is not.
  */
 export function tagsForSurface(alert: NeedAlert, band: string, feedMode: string): NeedTag[] {
   const sameModeClass = modeClassOf(alert.mode) === modeClassOf(feedMode)

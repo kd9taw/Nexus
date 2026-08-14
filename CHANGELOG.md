@@ -150,6 +150,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the moment the knob leaves the bands. Going off the bands and coming back onto a *different*
   band is still a band change, and still clears. Reported on an FTDX10; an IC-9700 never showed
   it, because every frequency it can tune has a band name.
+- **You can now tune off the ham bands from the app, and receiving there works properly.** Two
+  things were wrong once you got off-band, and both are fixed. First, you could not get there:
+  the wheel, the scope click, the ◄/► buttons and typing a frequency all refused anything
+  outside the band plan, some with an "outside the band plan" error and one silently — so WWV or
+  a shortwave broadcaster could only be reached by turning the knob on the radio. They all tune
+  anywhere now. A fast wheel flick still stops at the band edge so you cannot leave a band by
+  accident, and it tells you where it stopped instead of calling it an error; one more scroll
+  goes past. Second, the parts of the app that ask "is this station new *on this band*" were
+  answering as if the empty band were a band nobody had ever worked: every decode lit up as a
+  new grid and a new band-slot, the Needed board filled with a new zone, grid and state for
+  every station it heard, and "hide confirmed" stopped hiding. Those questions now stay quiet
+  when there is no band to ask about — while the all-time ones still answer, so an entity you
+  have never worked anywhere is still flagged as new wherever you hear it. The Band Activity
+  pane says "off the band plan" instead of going blank, the decode pane no longer clears itself
+  when you tune back to the band you came from, and the frequency readout only turns TX-red when
+  your licence actually says so, rather than whenever the dial leaves the band plan.
+
+  Transmitting is deliberately unchanged. Nexus does not refuse to transmit merely because a
+  frequency is off *its* band table — that table is written around the US allocations, and the
+  table is not the law everywhere. The UK 60 m allocation starts at 5.2585 MHz, below the 5.3
+  the table calls the bottom of 60 m, so a blanket refusal would have blocked operators working
+  their own legal frequencies. If you have told Nexus your US licence class it still fails
+  closed off-band, exactly as before; if you have not, it trusts you, exactly as before. Leaving
+  the bands still cuts a transmission that is in progress.
 - **Every "Settings ▸ …" pointer in the app now takes you there.** The app named a Settings path
   in about 228 places and none of them were clickable — including several that named tabs which
   no longer existed. Setup health's own "no RX audio" light said to check the audio device

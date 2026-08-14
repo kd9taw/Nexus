@@ -11,9 +11,12 @@ const BANDS: Record<string, { lo: number; hi: number }> = {
   '40m': { lo: 7, hi: 7.3 },
   '20m': { lo: 14, hi: 14.35 },
 }
+// ⚠️ Off-plan returns '' — the EMPTY STRING the real `bandLabelForMhz` returns, not null. The
+// stub used to say null, which reads identically through `if (!band)` and hid what the flush now
+// actually puts on the wire for an off-band dial (see the off-band suite at the foot of this file).
 vi.mock('./band', () => ({
   bandLabelForMhz: (mhz: number) =>
-    mhz >= 7 && mhz <= 7.3 ? '40m' : mhz >= 14 && mhz <= 14.35 ? '20m' : null,
+    mhz >= 7 && mhz <= 7.3 ? '40m' : mhz >= 14 && mhz <= 14.35 ? '20m' : '',
   bandRangeForLabel: (label: string) =>
     label === '40m' ? { lo: 7, hi: 7.3 } : label === '20m' ? { lo: 14, hi: 14.35 } : null,
 }))
@@ -223,18 +226,19 @@ describe('useWheelTune — the caps and gates a 10 MHz step makes reachable', ()
     // and the cap is what this test exists for. Off-plan the clamp is a deliberate no-op (an
     // operator listening outside a ham band must still be able to tune), so one 10 MHz step
     // lands at 20 MHz and eight would land at 90.
-    const edges: number[] = []
     const el = mountHook({
       dialMhz: 10,
       sideband: 'USB',
       enabled: true,
       stepHz: 100,
       resolveStepHz: () => 1e7,
-      onEdge: (mhz) => edges.push(mhz),
     })
     wheel(el, { deltaY: -900 })
     vi.advanceTimersByTime(120)
-    expect(edges).toEqual([20]) // 10 + ONE × 10 MHz — not 90
+    // Read off the WRITE, which is where the cap is now observable: this used to be read off
+    // `onEdge`, because an off-plan target was refused by the flush and only reported. It is not
+    // refused any more (off-band RX is first-class), so the landing itself is the evidence.
+    expect(mockSetFreq.mock.calls[0][0]).toBe(20) // 10 + ONE × 10 MHz — not 90
   })
 
   it('a target off the band plan is REPORTED, once per burst — the edge is not silent', () => {
@@ -381,5 +385,61 @@ describe('useWheelTune — the two HIGH findings from the per-digit adversarial 
     const mhz = mockSetFreq.mock.calls[0][0] as number
     expect(mhz).toBeGreaterThan(14.174)
     expect(mhz).toBeLessThanOrEqual(14.35)
+  })
+})
+
+// ── LISTENING OFF THE HAM BANDS IS FIRST-CLASS (operator, 2026-08-13) ──────────────────────────
+// WWV on 10.000, a shortwave broadcaster, the gap between two band edges: the wheel has to be
+// able to GO there. It could not — the flush refused every target the band table did not name, so
+// the only way out of a band was the rig's own knob.
+//
+// The band clamp STAYS, because it answers a different question. It is what stops one 120 ms
+// window of a violent spin walking THROUGH the plan (F2 above: 7.074 → 14.074 in a single write,
+// carrying 40 m's sideband into 20 m). So the edge became a STOP rather than a wall: a burst
+// parks on it, that park is written to the rig, and the next notch taken from a dial that is
+// REALLY on the edge carries on off the plan.
+describe('useWheelTune — a deliberate notch off the band plan', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    mockSetFreq.mockClear()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('parks on the edge, then the NEXT notch leaves the band with an empty band label', () => {
+    const el = mountHook({ dialMhz: 7.0005, sideband: 'LSB', enabled: true, stepHz: 1000 })
+    wheel(el, { deltaY: 100 }) // −1 kHz → 6.9995, below the 40 m bottom
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq.mock.calls[0]).toEqual([7, '40m', 'LSB']) // parked ON the edge
+    wheel(el, { deltaY: 100 }) // …and again, this time FROM the edge — deliberate
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq).toHaveBeenCalledTimes(2)
+    // The empty band label is the point: the engine routes a bandless dial, so the UI stops
+    // pretending the band table is the set of frequencies a receiver may sit on.
+    expect(mockSetFreq.mock.calls[1]).toEqual([6.999, '', 'LSB'])
+  })
+
+  it('keeps going once off-plan — nothing pulls the dial back to a band', () => {
+    const el = mountHook({ dialMhz: 5, sideband: 'LSB', enabled: true, stepHz: 100_000 })
+    wheel(el, { deltaY: -100 }) // 5.0 → 5.1 MHz, off-plan the whole way
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq.mock.calls[0]).toEqual([5.1, '', 'LSB'])
+  })
+
+  it('POSITIVE CONTROL — a fast burst still parks ON the edge, it does not walk through the plan', () => {
+    // The F2 guard, unchanged: seven 1 MHz notches inside ONE 120 ms window still land on 7.3,
+    // not on 14.074. Without this the change above would just be a re-run of the 2026-08-05 bug.
+    const el = mountHook({ dialMhz: 7.074, sideband: 'LSB', enabled: true, stepHz: 1_000_000 })
+    for (let i = 0; i < 7; i++) wheel(el, { deltaY: -100 })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq).toHaveBeenCalledTimes(1)
+    expect(mockSetFreq.mock.calls[0]).toEqual([7.3, '40m', 'LSB'])
+  })
+
+  it('POSITIVE CONTROL — the TX/CAT gate still refuses an off-band target', () => {
+    // Off-band is not a licence to move the VFO under a live over.
+    const el = mountHook({ dialMhz: 5, sideband: 'LSB', enabled: false, stepHz: 100_000 })
+    wheel(el, { deltaY: -100 })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq).not.toHaveBeenCalled()
   })
 })

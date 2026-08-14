@@ -3975,9 +3975,20 @@ impl Engine {
         // resolver, so a recompute would re-route a satellite QSY on the mode rules.
         let route_target = self.route_target.take();
         if !self.settings.radio_pegged {
-            if let Some(id) =
-                route_target.unwrap_or_else(|| self.settings.route_radio(band, route_mode))
-            {
+            if let Some(id) = route_target.unwrap_or_else(|| {
+                // NO BAND TO ROUTE ON — ask only the tiers that never read one, exactly as
+                // the satellite bandless path does (see `sat_tune_nominal`). Routing on `""`
+                // is not merely useless, it actively misroutes: `radio_for_band` ranks a
+                // catch-all coverage list (1) ABOVE an explicit list that does not contain
+                // the band (0), and no explicit list contains the empty string — so an
+                // operator tuning to WWV would be walked off their configured HF rig onto
+                // whichever rig has no band list, purely for having left the band plan.
+                if band.is_empty() {
+                    self.settings.route_radio_bandless(route_mode)
+                } else {
+                    self.settings.route_radio(band, route_mode)
+                }
+            }) {
                 self.set_active_radio(id);
             }
         }
@@ -3999,7 +4010,26 @@ impl Engine {
         // activity, and before band canonicalisation the differing channel
         // labels tripped this block. The stored band no longer distinguishes
         // channels, so the FM/SSB family line carries that signal.
-        let band_changed = !self.settings.band.eq_ignore_ascii_case(band);
+        //
+        // ⚠️ AN EMPTY `band` REACHES HERE WITH TWO DIFFERENT MEANINGS, and they must not be
+        // answered the same way:
+        // * the OPERATOR asked for a dial off the ham bands — WWV, a shortwave broadcaster,
+        //   the gap between two edges. That is a listen, not a QSY (operator ruling
+        //   2026-08-13), and the context belongs to the band being come back to. Answered by
+        //   `context_band_changed`, which also makes the way back a return rather than a
+        //   fresh band change — the knob path's semantics, shared rather than copied, because
+        //   typing 5.000 and spinning the VFO to 5.000 must not differ.
+        // * MACHINERY reached a dial we cannot name — a QO-100 transponder pick at
+        //   10.489 GHz. That IS a cross-band move and its context must still clear, so it
+        //   keeps the plain comparison it has always had.
+        let band_changed = match origin {
+            DialOrigin::Operator | DialOrigin::OperatorKnob => self.context_band_changed(band),
+            DialOrigin::Machinery => !self.settings.band.eq_ignore_ascii_case(band),
+        };
+        // Leaving the bands cuts transmit even though it is not a band change, for the reason
+        // spelled out in `observe_rig_freq`: the dial gate does not fail closed for
+        // `LicenseClass::Open`, so this halt is the only thing that stops an over in flight.
+        let leaving_the_bands = band.is_empty() && !self.settings.band.is_empty();
         // A channel-CLASS hop on ONE band is a context change too: 2 m USB
         // weak-signal → 2 m FM simplex is a 1.3 MHz move into different
         // activity. Before band canonicalisation the differing channel labels
@@ -4033,18 +4063,20 @@ impl Engine {
             // they were already holding (see `halt_tx_for_context_change`) — Digital
             // is untouched, which is what the paragraph above is about.
             self.halt_tx_for_context_change();
+        } else if leaving_the_bands {
+            self.halt_tx_for_context_change();
         }
         // A band change drops the transient mode override, so a QSY re-asserts the auto sideband
         // (LSB <10 MHz / USB above) — "manual mode, but don't impede band auto-select".
-        if !self.settings.band.eq_ignore_ascii_case(band) {
+        // Reads the SAME verdict as the clears above rather than recomputing it: an off-band
+        // listen keeps the operator's mode pick, exactly as it does on the knob path.
+        if band_changed {
             self.sideband_override = None;
         }
         // A QSY — band change OR a same-band dial move (band picker, MHz entry, or
         // working a needed spot, which funnels through here) — lands on a different
         // signal, so the CW copy from the old frequency is stale. Clear it.
-        if !self.settings.band.eq_ignore_ascii_case(band)
-            || (self.settings.dial_mhz - dial_mhz).abs() > 1e-9
-        {
+        if band_changed || (self.settings.dial_mhz - dial_mhz).abs() > 1e-9 {
             self.clear_cw_decode();
         }
         // ANY QSY — band change or in-band dial move — invalidates an over planned
@@ -4067,6 +4099,40 @@ impl Engine {
             self.split_dirty = true;
         }
         self.sync_fd_band();
+    }
+
+    /// Is `band` a DIFFERENT band from the one the decode context belongs to — and keep the
+    /// off-the-bands memory ([`Engine::off_band_from`]) straight as the dial crosses in or out.
+    ///
+    /// THE ONE PLACE that question is answered, because the knob (`observe_rig_freq`) and the
+    /// app-commanded tune (`tune_dial`) must not grow two ideas of what "changed band" means —
+    /// the operator can type a frequency or turn the VFO to reach the same dial, and the
+    /// context has to survive both identically.
+    ///
+    /// Three cases, and the middle one is the whole point:
+    /// * **onto a named band** — changed if it differs from the context's band, which is the
+    ///   live label normally and the band we LEFT while the dial is off the bands. So
+    ///   40 m → WWV → 40 m is a return (false) and 20 m → WWV → 40 m is a QSY (true).
+    /// * **off the bands** (`band` empty) — never a change. Leaving the bands is a listen, not
+    ///   a QSY: the roster and decode history still describe the band being come back to.
+    ///   The band left is banked here so the return above can recognise itself.
+    /// * **nothing known** (empty context and no memory — a boot seed off the bands) — reads
+    ///   as changed, which clears. The safe direction: nothing is claimed to still be valid.
+    fn context_band_changed(&mut self, band: &str) -> bool {
+        // Spent on every crossing: from here on the context belongs to wherever we land.
+        let left = self.off_band_from.take();
+        let prev = if self.settings.band.is_empty() {
+            left.unwrap_or_default()
+        } else {
+            self.settings.band.clone()
+        };
+        if band.is_empty() {
+            // Off the bands (or still off them — a second off-band move must not forget the
+            // band the FIRST one left, or the way home stops being a way home).
+            self.off_band_from = (!prev.is_empty()).then_some(prev);
+            return false;
+        }
+        !prev.eq_ignore_ascii_case(band)
     }
 
     /// The rig reported a dial frequency we did NOT set — the operator turned the VFO knob
@@ -4136,23 +4202,16 @@ impl Engine {
             }
         }
         self.settings.dial_mhz = mhz;
-        if let Some(band) = crate::bandplan::band_for_dial(mhz) {
-            // The band the CONTEXT belongs to. Normally the live label — but off the bands
-            // there is no live label (the arm below blanks it, deliberately), and the roster
-            // and decode history still belong to the band the knob left. Spent here whichever
-            // answer it gives: from this dial on, the context's band is the one we just landed
-            // on. `""` when nothing knows (a boot seed off the bands) — which differs from
-            // every band name, so the clears fire, which is the safe direction.
-            let left = self.off_band_from.take();
-            let context_band = if self.settings.band.is_empty() {
-                left.unwrap_or_default()
-            } else {
-                self.settings.band.clone()
-            };
+        // `None` = the knob left the ham bands entirely; `context_band_changed` reads that as
+        // a listen rather than a QSY, and remembers the band being left.
+        let named = crate::bandplan::band_for_dial(mhz);
+        let leaving_the_bands = named.is_none() && !self.settings.band.is_empty();
+        let band_changed = self.context_band_changed(named.unwrap_or_default());
+        if let Some(band) = named {
             // Knob QSY across bands invalidates the decode context + roster too —
             // and halts TX for the same reason as set_frequency: the sequencer
             // must never keep calling across a band switch, however it happened.
-            if !context_band.eq_ignore_ascii_case(band) {
+            if band_changed {
                 self.clear_decode_context();
                 self.app.clear_stations();
                 // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
@@ -4168,7 +4227,7 @@ impl Engine {
                 self.sideband_override = None;
             }
             self.settings.band = band.to_string();
-        } else if !self.settings.band.is_empty() {
+        } else if leaving_the_bands {
             // OFF THE BANDS — and that is ORDINARY, which is what this arm originally got
             // wrong. `band_for_dial` names the ham bands and nothing else, so WWV at 5/10/15
             // MHz, a shortwave broadcast, CB, a marine channel and the gap between two band
@@ -4201,8 +4260,9 @@ impl Engine {
             // load-bearing for exactly the operators least likely to notice. Do not simplify
             // it away on the strength of the gate — see
             // `a_knob_qsy_off_the_bands_still_cuts_transmit`, which states the premise as a
-            // paired check.
-            self.off_band_from = Some(std::mem::take(&mut self.settings.band));
+            // paired check. (`context_band_changed` above has already banked the band being
+            // left; all that remains here is to blank the label and cut transmit.)
+            self.settings.band = String::new();
             self.halt_tx_for_context_change();
         }
         // Declare the knob's provenance after the band write, so whichever answer it is
@@ -11966,10 +12026,28 @@ impl Engine {
 
         // Project this slot's decodes into the live feed (alerts + coloring).
         let mycall = &self.settings.mycall;
-        // The band these decodes arrived on — new-grid / new-DXCC are per-band
-        // questions, and this chain's dial is the only honest answer to "on what
+        // The band these decodes arrived on — new-grid / new-band / confirmed-on-band are
+        // per-band questions, and this chain's dial is the only honest answer to "on what
         // band did I just hear this?".
-        let cur_band = self.settings.band.as_str();
+        //
+        // `None` OFF THE BANDS, and the Option is the whole point (operator ruling
+        // 2026-08-13: listening off the ham bands is first-class). `settings.band` is `""`
+        // there, and `""` is not a band — it is the ABSENCE of a band claim. Passing it down
+        // as if it were a band name is what made the decode feed lie: `station::band_key("")`
+        // matches nothing in the worked index, so every gridded decode came back NEW GRID and
+        // every already-worked entity came back a new BAND slot, on the whole roster at once.
+        //
+        // ⚠️ THE GUARD BELONGS HERE, NOT IN THE LOOKUPS. The three `station` methods answer
+        // "is it worked?", and the consumers want opposite polarities of that answer —
+        // `new_grid` is `!worked`, `confirmed_band` is `confirmed`. A blanket `false` inside
+        // the lookup would therefore SUPPRESS the hide-confirmed filter (right) and FABRICATE
+        // a new-grid badge (wrong) from the same line. Asking the question only when there is
+        // a band to ask about is the version that cannot be half-right.
+        //
+        // The ALL-TIME axis (`entity_worked_ever`, which drives `new_dxcc`) is deliberately
+        // NOT gated: "have I ever worked this entity, on any band" needs no band label, and an
+        // ATNO heard while tuning past on 5 MHz is still an ATNO.
+        let cur_band = (!self.settings.band.is_empty()).then_some(self.settings.band.as_str());
         s.recent_decodes = self
             .last_decodes
             .iter()
@@ -12029,9 +12107,11 @@ impl Engine {
                         _ => None,
                     },
                 };
-                let new_grid = grid
-                    .map(|g| !g.is_empty() && !self.station.grid_worked_on(g, cur_band))
-                    .unwrap_or(false);
+                let new_grid = match (cur_band, grid) {
+                    (Some(b), Some(g)) => !g.is_empty() && !self.station.grid_worked_on(g, b),
+                    // No band claimed (off the bands), or the frame carried no grid.
+                    _ => false,
+                };
                 // Country + New-DXCC (B3): resolve the sender's DXCC entity once.
                 // `country` rides every decode (DX chasers scan by country); the
                 // entity also drives new-DXCC. Needs the injected resolver; both
@@ -12049,16 +12129,25 @@ impl Engine {
                 let (new_dxcc, new_band) = match &entity {
                     Some(e) => {
                         let ever = self.station.entity_worked_ever(e);
-                        (!ever, ever && !self.station.entity_worked_on(e, cur_band))
+                        // ATNO is all-time and stays answerable off the bands; the band slot
+                        // is not — with no band there is no slot for it to be new in.
+                        (
+                            !ever,
+                            ever && cur_band.is_some_and(|b| !self.station.entity_worked_on(e, b)),
+                        )
                     }
                     None => (false, false),
                 };
                 // Confirmed (award-grade) on THIS band — for the hide-confirmed filter.
                 // A still-new-on-band station is never marked confirmed (mutually exclusive
                 // by construction), so the filter can never hide a slot that's still open.
-                let confirmed_band = entity
-                    .as_deref()
-                    .is_some_and(|e| self.station.entity_confirmed_on(e, cur_band));
+                // Off the bands this stays false, which is the safe direction for a FILTER:
+                // "hide what is confirmed here" hides nothing rather than hiding rows on the
+                // strength of a band that does not exist.
+                let confirmed_band = match (cur_band, entity.as_deref()) {
+                    (Some(b), Some(e)) => self.station.entity_confirmed_on(e, b),
+                    _ => false,
+                };
                 // Rarity: prefer the grid on THIS frame, but on report/R/RR73/73
                 // frames (which carry no grid) fall back to the sender's grid
                 // remembered in the roster — so an ULTRA-rare station keeps its
@@ -16119,6 +16208,115 @@ mod tests {
         assert!(
             e.sideband_override().is_none(),
             "…and the mode override still ends at a band change, as its tooltip says"
+        );
+    }
+
+    /// RECEIVE IS FIRST CLASS OFF THE BANDS (operator, 2026-08-13: "many people will want to
+    /// receive and listen off of the TX bands, and that should be fully allowed"). A decode
+    /// that arrives while the dial is off the bands must be processed and displayed exactly
+    /// like any other — the decode pipeline is dial-driven and must not be band-gated.
+    #[test]
+    fn decoding_continues_off_the_bands() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(7.074, "40m", "USB");
+        e.observe_rig_freq(5_000_000); // off the bands, listening
+        assert_eq!(e.settings.band, "", "premise: the dial is off the bands");
+
+        // A decode arrives while off-band — from a shortwave-band FT8 experiment, a
+        // transverter IF, or simply the operator parked between two band edges.
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+
+        assert!(
+            !e.decode_history.is_empty(),
+            "an off-band decode still enters the decode context"
+        );
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "…and still reaches the roster"
+        );
+        let rows = e.snapshot().recent_decodes;
+        assert!(
+            rows.iter().any(|r| r.from.as_deref() == Some("PJ4DX")),
+            "…and is still projected into the live decode feed the cockpit renders"
+        );
+    }
+
+    /// The APP-COMMANDED half of the same line. The knob path was fixed first, but the UI
+    /// now lets the operator TYPE an off-band frequency (or click one on the scope), and
+    /// `tune_dial` must answer the same way the knob does: going off the bands is a listen,
+    /// not a QSY, and coming back to the band you left is a return. Without this the fix
+    /// held only for people who reach for the rig instead of the keyboard.
+    #[test]
+    fn a_typed_off_band_qsy_keeps_the_context_like_the_knob_does() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(7.074, "40m", "USB");
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "control: the decode reached the roster"
+        );
+
+        // Typing 5.000 into the readout — the UI hands the engine an empty band label,
+        // because there is no band there to name.
+        e.set_frequency(5.000, "", "USB");
+        assert_eq!(e.settings.band, "", "the label is absent, not guessed");
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "a typed off-band listen must not wipe the 40 m roster either"
+        );
+
+        // …and typing your way back.
+        e.set_frequency(7.074, "40m", "USB");
+        assert!(
+            !e.app.inbox.roster.is_empty(),
+            "the typed round trip is a round trip"
+        );
+    }
+
+    /// Positive control for the test above — the clears must still fire when the excursion
+    /// genuinely ends somewhere else, exactly as for the knob.
+    #[test]
+    fn a_typed_qsy_through_the_gap_onto_another_band_still_clears() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(14.074, "20m", "USB");
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        assert!(!e.app.inbox.roster.is_empty(), "control: populated");
+        e.set_frequency(5.000, "", "USB");
+        e.set_frequency(7.074, "40m", "USB");
+        assert!(
+            e.app.inbox.roster.is_empty(),
+            "20 m stations are not on 40 m — the crossing still clears"
+        );
+    }
+
+    /// An off-band tune must not HAND THE SESSION TO ANOTHER RADIO. `radio_for_band` ranks a
+    /// catch-all coverage list (1) above an explicit list that does not contain the band (0),
+    /// and an empty band label is contained by no explicit list — so routing on `""` would
+    /// walk an operator off their configured HF rig onto whatever rig has no band list, just
+    /// because they tuned to WWV. The bandless tiers are the existing answer to exactly this
+    /// (the QO-100 path already uses them).
+    #[test]
+    fn an_off_band_tune_stays_on_the_active_radio() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ensure_radio_profiles();
+        let other = e.add_radio(); // a second rig with NO band list = catch-all coverage
+        e.set_active_radio(0);
+        if let Some(p) = e.settings.radios.iter_mut().find(|p| p.id == 0) {
+            p.bands = vec!["40m".into(), "20m".into()]; // the operator's configured HF rig
+        }
+        if let Some(p) = e.settings.radios.iter_mut().find(|p| p.id == other) {
+            p.bands = vec![];
+        }
+        e.set_frequency(7.074, "40m", "USB");
+        assert_eq!(
+            e.settings.active_radio, 0,
+            "control: 40 m is this rig's band"
+        );
+
+        e.set_frequency(5.000, "", "USB"); // off the bands
+        assert_eq!(
+            e.settings.active_radio, 0,
+            "tuning off the bands is not a reason to switch radios"
         );
     }
 
@@ -21625,6 +21823,79 @@ mod tests {
         e.discard_pending_log();
         assert!(e.get_log().is_empty(), "discard logs nothing");
         assert!(e.snapshot().pending_log.is_none());
+    }
+
+    #[test]
+    fn off_band_decodes_are_not_badged_new_on_a_band_that_does_not_exist() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(|call| call.chars().next().map(|c| c.to_string()));
+        // W9XYZ / EN37 worked on 40 m: entity "W" and grid EN37 are on the books there.
+        e.log_qso(QsoRecord {
+            grid: Some("EN37".into()),
+            ..qrec("W9XYZ", "40m")
+        });
+
+        // POSITIVE CONTROL — on 40 m the badges are correctly silent for that grid+entity.
+        // Without this the test below could pass by never badging anything at all.
+        e.set_frequency(7.074, "40m", "USB");
+        e.ingest_decodes_for_test(&[dec_snr("CQ W1AW EN37", -5)], 0);
+        let on40 = e.snapshot().recent_decodes;
+        let r40 = on40
+            .iter()
+            .find(|r| r.from.as_deref() == Some("W1AW"))
+            .unwrap();
+        assert!(
+            !r40.new_grid && !r40.new_band,
+            "control: EN37 and entity W ARE worked on 40 m, so neither badge belongs here"
+        );
+
+        // Now spin the knob to WWV. Nothing about the log changed; the operator is
+        // listening. The per-band lookups key on `band_key("")`, which matches nothing in
+        // the worked index — so before this fix EVERY gridded decode came back NEW GRID and
+        // every worked entity came back a new BAND slot.
+        e.observe_rig_freq(5_000_000);
+        e.ingest_decodes_for_test(&[dec_snr("CQ W1AW EN37", -5)], 1);
+        let off = e.snapshot().recent_decodes;
+        let roff = off
+            .iter()
+            .find(|r| r.from.as_deref() == Some("W1AW"))
+            .unwrap();
+        assert!(
+            !roff.new_grid,
+            "EN37 is worked; off the bands there is no band slot for it to be new in, and \
+             claiming one badges the whole roster as new"
+        );
+        assert!(!roff.new_band, "…and the same for the entity's band slot");
+    }
+
+    /// The other half of that line, and the control for it: the ALL-TIME question is still
+    /// answerable off the bands, so a genuinely-new-one heard on WWV must still read as a
+    /// new DXCC entity. Suppressing the per-band claims must not go so far as to blind the
+    /// operator to an ATNO.
+    #[test]
+    fn an_all_time_new_entity_is_still_flagged_off_the_bands() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(|call| call.chars().next().map(|c| c.to_string()));
+        e.log_qso(QsoRecord {
+            grid: Some("EN37".into()),
+            ..qrec("W9XYZ", "40m")
+        });
+        e.set_frequency(7.074, "40m", "USB");
+        e.observe_rig_freq(5_000_000);
+        e.ingest_decodes_for_test(&[dec_snr("CQ DL1XYZ JO31", -9)], 1);
+        let rows = e.snapshot().recent_decodes;
+        let r = rows
+            .iter()
+            .find(|r| r.from.as_deref() == Some("DL1XYZ"))
+            .unwrap();
+        assert!(
+            r.new_dxcc,
+            "entity D has never been worked on ANY band — that answer needs no band label"
+        );
+        assert!(
+            !r.new_band,
+            "…and an all-time new one is never also a band slot (mutually exclusive)"
+        );
     }
 
     #[test]

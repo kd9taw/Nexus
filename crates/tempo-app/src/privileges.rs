@@ -156,6 +156,26 @@ fn allows(seg: &Seg, mode: OperatingMode) -> bool {
 
 /// May this class transmit `mode` at `emission_mhz` (the EMITTED RF, not the dial)? `Open`
 /// always may. US classes: the emission must fall in a segment that authorizes the mode.
+///
+/// ⚠️ `Open` RETURNING `true` OFF EVERY NAMED BAND IS DELIBERATE — POLICY, NOT AN OVERSIGHT
+/// (operator ruling, 2026-08-13; it has now been "corrected" toward a blanket off-band
+/// refusal twice in review, so the reasoning lives here rather than in a thread).
+///
+/// The tempting change is "if the dial is off the band plan, refuse". It is wrong, and the
+/// UK settles it: the UK 60 m allocation starts at **5.2585 MHz**, while `bandplan::
+/// band_for_dial` names only 5.3–5.5 as "60m" — so a UK operator working their own legal
+/// allocation is, by our table, off-band. The table is US-centric by construction (it is
+/// built from 47 CFR 97.301 and ADIF's registered band names), and `Open` exists precisely
+/// for the operators that table does not describe: every non-US licensee, plus anyone who
+/// has not declared a class. Refusing off-band TX would block exactly them, on their own
+/// legal frequencies, while protecting nobody — a US class already fails closed here on the
+/// dial, because no segment matches.
+///
+/// So the division of labour is: **US classes are gated by this function; `Open` is trusted.**
+/// What still protects an `Open` operator from an accidental off-band over is behavioural,
+/// not this gate — `Engine::observe_rig_freq` halts transmit when the knob leaves the bands
+/// (cutting an over in flight and dropping a latched key). That halt CUTS a transmission; it
+/// does not prevent the next one, and it is not supposed to.
 pub fn tx_allowed(class: LicenseClass, emission_mhz: f64, mode: OperatingMode) -> bool {
     if matches!(class, LicenseClass::Open) {
         return true;
