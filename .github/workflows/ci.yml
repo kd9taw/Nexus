@@ -204,6 +204,24 @@ jobs:
       - name: Test the TLE mirror generator
         run: node --test scripts/gen-tles.test.mjs
 
+      # The two doc generators, in --check mode: they write nothing, they exit 1
+      # when the committed page is behind the source it is derived from.
+      #
+      # WHY THEY ARE HERE. Both existed for weeks with nothing invoking them, and
+      # that is exactly how they failed. gen-wiki.mjs THREW on every run from
+      # a6097c92 (2026-08-09) onward — docs/install.md stopped containing the text
+      # one of its required replacements is keyed on — and three releases shipped
+      # over the top of a generator that could not run, because nobody ran it. A
+      # tool whose only trigger is somebody remembering is not a gate.
+      #
+      # Both are deterministic and offline. When one goes red the fix is to re-run
+      # it without --check and commit what moved, or to repair the rule it names.
+      - name: docs/guide/settings-reference.md is generated from the registry
+        run: node scripts/gen-settings-reference.mjs --check
+
+      - name: docs/launch/wiki/ is generated from docs/
+        run: node scripts/gen-wiki.mjs --check
+
   # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
   # (Cargo.toml [workspace.package] rust-version = "1.91"). Build-only check,
   # incl. the propagation `live` feature (the heaviest dep set).

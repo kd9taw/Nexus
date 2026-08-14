@@ -75,7 +75,7 @@ Companion-mode limitations to know:
 
 The CAT broker exposes Nexus's internal rigctld connection as a secondary TCP server so another application — WSJT-X, N1MM, HRD — can share the same rig without a hardware splitter or a second CAT cable.
 
-The broker is **off by default**. Enable it in **Settings › Rig › CAT Broker** and set the listen port (default `4532`, matching the Hamlib NET rigctl default). Both Nexus and the attached client see consistent VFO, mode, and PTT state through the same serialized Hamlib session.
+The broker is **off by default**. Enable it in **Settings › Radio › Transmit limits & sharing** and set the listen port (default `4532`, matching the Hamlib NET rigctl default). Both Nexus and the attached client see consistent VFO, mode, and PTT state through the same serialized Hamlib session.
 
 Commands served: frequency read/set (`f`/`F`), mode read/set (`m`/`M`), PTT read/set (`t`/`T`), VFO read/set (`v`/`V`), split query (`s`), plus `\dump_state`, `\chk_vfo`, `\get_powerstat`, and `q`. An `L RFPOWER` command returns `RPRT -11` (not implemented). The broker does not multiplex PTT — if WSJT-X and Nexus both attempt TX simultaneously, the last-write wins. Coordinate TX scheduling at the application level (e.g. use Companion mode so only one app is transmitting).
 
@@ -85,7 +85,7 @@ Commands served: frequency read/set (`f`/`F`), mode read/set (`m`/`M`), PTT read
 
 During a Field Day session, Nexus pushes each newly logged QSO to N3FJP over TCP using the documented N3FJP API (ADDDIRECT + CHECKLOG). The push is fire-and-forget from a spawned thread so a slow or parked N3FJP host never stalls the decode loop.
 
-**Default port: 1100** (N3FJP's documented API default). Configure host and port in **Settings › Field Day › N3FJP**.
+**Default port: 1100** (N3FJP's documented API default). Configure host and port in **Settings › Logging & Connectors › N3FJP Integration**.
 
 The **Test N3FJP** button in Settings sends the `<CMD><PROGRAM></CMD>` handshake and returns the program name and version string (e.g. `N3FJP Field Day Contest Log v6.6`). It is disabled when the host field is blank.
 
@@ -102,7 +102,7 @@ This path replaces the WSJT-X → JTAlert → N3FJP bridge entirely. No JTAlert 
 
 Each new Field Day QSO emits an N1MM-format `<contactinfo>` XML datagram. N1MM dashboards and GridTracker see Nexus as a first-class network station.
 
-**Default port: 12060.** Set the destination address in **Settings › Field Day › N1MM Address**. If you specify a host with no port (e.g. `192.168.1.50`), Nexus appends `:12060` automatically.
+**Default port: 12060.** Set the destination address in **Settings › Logging & Connectors › N1MM+ Integration**. If you specify a host with no port (e.g. `192.168.1.50`), Nexus appends `:12060` automatically.
 
 The datagram carries: `mycall`, `call`, `band`, `mode`, `timestamp`, `section`, `points`, `contestname`, `rxfreq`/`txfreq` (in 10 Hz units), the sent exchange, and a 32-hex per-QSO dedup ID. Nexus sends only; it does not receive or aggregate inbound N1MM contactinfo from other stations.
 
@@ -112,7 +112,7 @@ The datagram carries: `mycall`, `call`, `band`, `mode`, `timestamp`, `section`, 
 
 Nexus connects to a human DX-cluster node via a standard telnet session; the RBN CW and digital skimmer feeds are wired in automatically alongside it.
 
-**Default host: `ve7cc.net:23`** (the CC-Cluster community node, which carries human-posted spots including SSB/phone), with `dxc.wa9pie.net:8000` as a fallback. Change it in **Settings › Connect › Cluster Host** to reach a private cluster or a regional node. The RBN CW/digital skimmer feeds (`reversebeacon.net:7000` / `:7001`) are auto-wired separately and should **not** be entered as the Cluster Host — the RBN skimmer network carries no human SSB/phone spots, so pointing the Cluster Host at it empties the Phone rows of the Needed board.
+**Default host: `ve7cc.net:23`** (the CC-Cluster community node, which carries human-posted spots including SSB/phone), with `dxc.wa9pie.net:8000` as a fallback. Change it in **Settings › Logging & Connectors › Integrations & Feeds** to reach a private cluster or a regional node. The RBN CW/digital skimmer feeds (`reversebeacon.net:7000` / `:7001`) are auto-wired separately and should **not** be entered as the Cluster Host — the RBN skimmer network carries no human SSB/phone spots, so pointing the Cluster Host at it empties the Phone rows of the Needed board.
 
 Spots admitted to the Needed board must be within 900 seconds old (15 minutes). The spot buffer holds 200 spots by default; high-activity periods can push older spots out faster than the admission window.
 

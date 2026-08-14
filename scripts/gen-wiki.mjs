@@ -154,8 +154,16 @@ const PAGES = [
     head: `[**⬇ Download the latest release**](${RELEASES})\n\n`,
     replacements: [
       {
-        find: `- **SourceForge (primary):** <${SF_FILES}latest/download>
-- **SourceForge (mirror):** the Nexus project files section`,
+        // ⚠️ REKEYED 2026-08-14. a6097c92 (2026-08-09) rewrote this block in
+        // docs/install.md — it used to name SourceForge primary and describe the
+        // mirror in prose; it now lists GitHub and SourceForge neutrally. The old
+        // `find` matched nothing from that commit on, so this generator THREW on
+        // every run and three releases shipped over a wiki nobody could rebuild.
+        // Nothing was red because nothing invoked it — which is why it is a CI
+        // step now. The INTENT is unchanged: the wiki ranks GitHub first and
+        // points its SourceForge link at the files section, not at latest/download.
+        find: `- **GitHub Releases:** <${RELEASES}>
+- **SourceForge:** <${SF_FILES}latest/download>`,
         replace: `- **GitHub Releases (primary):** <${RELEASES}>
 - **SourceForge (mirror):** <${SF_FILES}>`,
       },
