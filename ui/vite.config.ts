@@ -20,7 +20,15 @@ function buildId(): string {
   // topic branch: two builds of different branches at the same commit-less version
   // are otherwise indistinguishable, and "which branch is this?" is the first
   // question asked of a bug report from a self-built binary.
-  const branch = git('rev-parse --abbrev-ref HEAD') ?? 'detached'
+  // ⚠️ NOT `rev-parse --abbrev-ref HEAD`: on a DETACHED head that prints the literal
+  // string "HEAD" and exits 0, so a `?? 'detached'` fallback is unreachable (measured).
+  // release.yml triggers on `tags: ['v*']` and actions/checkout leaves HEAD detached, so
+  // every published release would have named its branch "HEAD" — the exact field this
+  // stamp exists to add. `symbolic-ref --short` exits 128 with empty output when detached,
+  // so the helper's null path fires. A tag build names its tag, which is what you want on
+  // a release artifact.
+  const branch =
+    git('describe --tags --exact-match HEAD') ?? git('symbolic-ref --short HEAD') ?? 'detached'
   const repo = (() => {
     const url = git('remote get-url origin')
     if (!url) return null
@@ -28,7 +36,10 @@ function buildId(): string {
     return tail.length === 2 ? tail.join('/') : null
   })()
   // A working tree with uncommitted changes is NOT the commit it names.
-  const dirty = git('status --porcelain') ? '-dirty' : ''
+  // Tracked source only. `status --porcelain` counts refreshed data resources and any
+  // untracked scratch file, and this repo's checkout is shared by several agents — an
+  // unconditional probe leaves `-dirty` permanently on, which stops it being a signal.
+  const dirty = git('status --porcelain --untracked-files=no') ? '-dirty' : ''
 
   const now = new Date().toISOString().slice(0, 16).replace('T', ' ')
   const where = repo ? `${repo} ${branch}` : branch
