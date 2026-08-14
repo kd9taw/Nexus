@@ -1340,9 +1340,9 @@ fn adif_submode(mode: &str) -> Option<&'static str> {
 /// SUBMODE). Returns the canonical in-app spelling.
 ///
 /// Deliberately NOT every SUBMODE: Log4OM-style phone submodes (SSB+USB/LSB)
-/// must not rename phone rows — the import dedup key is the RAW mode + exact
-/// second, so a promotion there would duplicate every phone row on the next
-/// re-import of the same log.
+/// must not rename phone rows — SSB is the mode the log carries and the one we
+/// should keep storing, and the sideband spellings already meet each other in
+/// [`dedup_mode`], so promoting them would buy nothing.
 fn promoted_submode(sub: &str) -> Option<&'static str> {
     match sub.trim().to_ascii_uppercase().as_str() {
         "TEMPOFAST" => Some("TempoFast"),
@@ -1388,7 +1388,8 @@ fn csv_cell(s: &str) -> String {
     }
 }
 
-/// Import dedup identity: call (upper) + band (lower) + mode (upper) + UTC day.
+/// Import dedup identity: call (upper) + band (lower) + mode (canonical spelling,
+/// see [`dedup_mode`]) + the exact contact second.
 /// Needs-grade (preserves distinct QSOs, ignores re-imports), not award-grade.
 type DedupKey = (String, String, String, u64);
 /// Import-dedup identity: call + band + mode + the EXACT contact time. It once keyed
@@ -1403,9 +1404,31 @@ fn dedup_key(r: &QsoRecord) -> DedupKey {
     (
         r.call.to_ascii_uppercase(),
         r.band.to_ascii_lowercase(),
-        r.mode.to_ascii_uppercase(),
+        dedup_mode(&r.mode),
         r.when_unix,
     )
+}
+
+/// Canonical mode SPELLING for [`dedup_key`] — the sideband names USB and LSB are
+/// spellings of one mode, not modes of their own. ADIF says phone is `MODE=SSB` with
+/// the sideband as a SUBMODE, but plenty of loggers write USB/LSB in the MODE field,
+/// so a log round-tripped through one of them came back as a second copy of every
+/// phone QSO. Folding them costs no discrimination: the key already carries the exact
+/// second, and one station cannot be worked twice on one band in one second.
+///
+/// Nothing else is folded, on purpose. AM/FM/digital voice are genuinely different
+/// modes, and the data modes are handled by the legacy-MFSK bridge in
+/// [`Logbook::import_adif`] — keying on [`crate::reconcile::mode_class`] instead would
+/// make every data mode one token, and since a row with no `TIME_ON` parks at
+/// 00:00:00, two distinct digital QSOs with one station on one band on one date would
+/// collapse and one real contact would vanish. Over-retention is the failure this
+/// module prefers.
+fn dedup_mode(mode: &str) -> String {
+    let m = mode.trim().to_ascii_uppercase();
+    match m.as_str() {
+        "USB" | "LSB" => "SSB".to_string(),
+        _ => m,
+    }
 }
 
 /// Minimal ADIF parser: reads `<NAME:len>value` tags, splitting records on
@@ -2697,6 +2720,57 @@ mod tests {
         assert!(added.is_empty(), "the promoted twin is the same QSO");
         assert_eq!(skipped, 1);
         assert_eq!(lb.records().len(), 1);
+    }
+
+    #[test]
+    fn reimporting_a_phone_qso_under_another_sideband_spelling_adds_no_duplicate() {
+        // One contact, two loggers: ADIF says the mode is SSB and the sideband is a
+        // SUBMODE, but plenty of programs write USB/LSB as the MODE. Round-tripping a
+        // log through one of them re-imported a second copy of every phone QSO.
+        let row = |mode: &str| {
+            format!(
+                "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m<MODE:{}>{mode}<EOR>",
+                mode.len()
+            )
+        };
+        for (first, second) in [("USB", "SSB"), ("SSB", "USB"), ("LSB", "SSB")] {
+            let mut lb = Logbook::new();
+            lb.import_adif(&(adif_header() + &row(first)));
+            let (added, skipped, _) = lb.import_adif(&(adif_header() + &row(second)));
+            assert!(
+                added.is_empty(),
+                "{first} then {second} is one QSO, not two"
+            );
+            assert_eq!(skipped, 1, "{first} then {second}");
+            assert_eq!(lb.records().len(), 1, "{first} then {second}");
+        }
+        // The fold is the sideband spellings only — FM is a different mode, and
+        // collapsing it into phone would lose a real contact.
+        let mut lb = Logbook::new();
+        lb.import_adif(&(adif_header() + &row("SSB")));
+        let (added, _, _) = lb.import_adif(&(adif_header() + &row("FM")));
+        assert_eq!(added.len(), 1, "FM is not a spelling of SSB");
+    }
+
+    #[test]
+    fn import_keeps_two_distinct_digital_qsos_that_share_a_date_only_stamp() {
+        // Why the dedup key must NOT be rebuilt on `reconcile::mode_class`: it calls
+        // every data mode "Digital", and a row with no TIME_ON parks at 00:00:00, so
+        // an FT8 and an RTTY contact with one station on one band on one date would
+        // share a key and one real QSO would disappear on import.
+        let row = |mode: &str| {
+            format!(
+                "<CALL:4>K1JT<QSO_DATE:8>20260701<BAND:3>20m<MODE:{}>{mode}<EOR>",
+                mode.len()
+            )
+        };
+        let mut lb = Logbook::new();
+        let (added, skipped, _) = lb.import_adif(&(adif_header() + &row("FT8") + &row("RTTY")));
+        assert_eq!(added.len(), 2, "two modes, two contacts");
+        assert_eq!(skipped, 0);
+        // The premise these two rows rest on: both parked at the same second.
+        assert_eq!(lb.records()[0].when_unix, lb.records()[1].when_unix);
+        assert!(lb.records().iter().all(|r| !r.time_known));
     }
 
     #[test]
