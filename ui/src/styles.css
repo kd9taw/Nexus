@@ -9081,14 +9081,25 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    920px ones, which is worse than the scrolling it was meant to fix.
 
    auto-fill keeps the empty tracks, so a field is ONE column wide regardless of how many
-   fields its section happens to have, and the room goes where the operator asked for it:
-   the 12-field sections go from 4 columns to 7. It is scoped to the widened tiers because
-   at xs/sm the panel is still capped and auto-fit's stretch is the layout that shipped —
-   changing it there would move the 1024×768 floor for no reason. */
+   fields its section happens to have, and the room goes where the operator asked for it.
+   It is scoped to the widened tiers because at xs/sm the panel is still capped and
+   auto-fit's stretch is the layout that shipped — changing it there would move the
+   1024×768 floor for no reason.
+
+   ⚠️ AND THE FLOOR IS 300px, NOT THE 220px THE BASE RULE USES. This is the second half of
+   the same trap and it only shows up in a browser. auto-fill packs to the MINIMUM track,
+   so a wider panel buys MORE columns rather than wider ones — at 220px the tracks came out
+   NARROWER above the fold than at the 1024 floor (222-254px vs 452px), and the control that
+   paid for it was the Serial Port combobox, which shares its row with Refresh and Auto-test:
+   measured 106px at 1024, then 30px at 1280 and 54px at 1920. A 30px text input cannot show
+   "COM16", and this is the exact setup surface the whole reorg was for. 300px holds tracks
+   at 319-361px and the port input at 127-170px from 1100 all the way to 3440, while still
+   giving 3 columns at 1280 and 10 at 3440. Raise this floor, never re-cap the panel, if a
+   row is ever cramped again. */
 [data-viewport='md'] .settings-grid,
 [data-viewport='lg'] .settings-grid,
 [data-viewport='xl'] .settings-grid {
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 }
 
 /* ── THE PROSE AUDIT (2026-08-12) ──────────────────────────────────────────────────────
@@ -9102,12 +9113,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
       the panel edge. 72ch sits inside the range the rest of this sheet already uses for
       readable text (62ch, 64ch, 78ch).
 
-   2. LONE CONTROLS. A `.settings-field` that is a direct child of `.settings-section`
-      rather than of a grid gets no track to sit in, so its `<select>`/`.settings-input`
-      would be as wide as the window. Worse, `.settings-toggle` is
-      `justify-content: space-between`: unbounded, the switch parts company with its own
+   2. LONE CONTROLS. A `.settings-field` with no grid track to sit in gets no bound, so its
+      `<select>`/`.settings-input` would be as wide as the window. Worse, `.settings-toggle`
+      is `justify-content: space-between`: unbounded, the switch parts company with its own
       label and ends up an eye-track away at the far right. 520px matches `.freq-table`,
       the one measure this panel already had, so standalone controls line up with it.
+      ⚠️ SCOPED TO ALL `.settings-field`, NOT just direct children of `.settings-section`.
+      The direct-child form was the first cut and it MEASURED WRONG: a browser sweep of all
+      nine tabs at 2560 found eight more selects at 2454-2464px (Phone mode, Voice mic,
+      Keying backend, Baud rate, Shift, SSTV transmit mode) and two at 1028 (Keyer backend,
+      Sidetone pitch) sitting one level deeper than `>` reaches. Inside a grid cell the cap
+      is inert — a track is ~220px, well under 520 — so the broad selector costs nothing
+      and is the only form that actually catches them.
 
    3. THE AUDIO SCOPE. `.settings-audio-scope` spans `1 / -1` and holds MiniSpectrum,
       whose canvas is `width: 100%` with a backing store of clientWidth × DPR — so a
@@ -9128,9 +9145,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 [data-viewport='xl'] .settings-note {
   max-width: 72ch;
 }
-[data-viewport='md'] .settings-section > .settings-field,
-[data-viewport='lg'] .settings-section > .settings-field,
-[data-viewport='xl'] .settings-section > .settings-field {
+[data-viewport='md'] .settings-field,
+[data-viewport='lg'] .settings-field,
+[data-viewport='xl'] .settings-field {
+  max-width: 520px;
+}
+/* The radios roster stays unbounded (it is a list of rows), but the row's NAME input is
+   `flex: 1 1 auto` with nothing else in the row to absorb the slack, so it took the whole
+   window: measured 1715px at 1920 and 3235px at 3440. A radio name is "Radio 1" or
+   "FT-710 shack". Capping it also brings the ACTIVE badge back beside the name instead of
+   stranding it against the far edge. md+ only — at 1024 it is 824px and unchanged. */
+[data-viewport='md'] .radio-name-input,
+[data-viewport='lg'] .radio-name-input,
+[data-viewport='xl'] .radio-name-input {
   max-width: 520px;
 }
 /* Features section: profile chips wrap; each category group gets a subheading. */

@@ -192,6 +192,8 @@ interface Boxes {
   note: HTMLElement
   connLog: HTMLElement
   roster: HTMLElement
+  nestedField: HTMLElement
+  rosterName: HTMLElement
 }
 
 function el(tag: string, cls: string, parent?: HTMLElement): HTMLElement {
@@ -226,7 +228,22 @@ function mount(): Boxes {
   const connLog = el('div', 'conn-log', section)
   const roster = el('div', 'radios-manager', section)
 
-  return { panel, grid, griddedField, griddedHint, scope, loneField, loneHint, note, connLog, roster }
+  // A `.settings-field` ONE LEVEL DEEPER than the section — the shape Phone / CW / Digital
+  // actually use. A browser sweep at 2560 caught eight selects here at 2454-2464px while a
+  // `.settings-section > .settings-field` cap resolved green, because `>` never reached them.
+  const featgroup = el('div', 'settings-featgroup', section)
+  const nestedField = el('div', 'settings-field', featgroup)
+
+  // The roster row's name input: `flex: 1 1 auto` with only a badge beside it, so it takes
+  // the whole row. Measured 3235px at 3440 before the cap.
+  const card = el('div', 'radio-card', roster)
+  const head = el('div', 'radio-card-head', card)
+  const rosterName = el('input', 'settings-input radio-name-input', head)
+
+  return {
+    panel, grid, griddedField, griddedHint, scope, loneField, loneHint, note, connLog, roster,
+    nestedField, rosterName,
+  }
 }
 
 function at(tier: Tier): Boxes {
@@ -321,7 +338,7 @@ describe('what the width reaches inside Settings', () => {
         `[data-viewport='${t}']: .settings-grid still auto-FITs inside an unbounded panel. ` +
           'The 4 single-field and 8 two-field sections will stretch one control across the ' +
           'whole window instead of adding columns.',
-      ).toBe('repeat(auto-fill, minmax(220px, 1fr))')
+      ).toBe('repeat(auto-fill, minmax(300px, 1fr))')
     }
     for (const t of NARROW) {
       expect(
@@ -329,6 +346,27 @@ describe('what the width reaches inside Settings', () => {
         `[data-viewport='${t}']: the track-sizing change reached a tier whose panel is still ` +
           'capped — that moves the 1024×768 layout for no reason.',
       ).toBe('repeat(auto-fit, minmax(220px, 1fr))')
+    }
+  })
+
+  it('the widened track floor is WIDER than the capped one, not the same 220px', () => {
+    // auto-fill packs to the MINIMUM track, so a wider panel buys more columns rather than
+    // wider ones. Reusing the base 220px floor made every track NARROWER above the fold than
+    // at the 1024 floor, and the Serial Port combobox — which shares its row with Refresh and
+    // Auto-test — measured 30px at 1280 (it was 106px at 1024). Chrome, not jsdom: nothing in
+    // a layout-free environment can see a 30px input, which is why this is pinned as a number.
+    const floorOf = (t: Tier): number => {
+      const m = /minmax\((\d+)px/.exec(applied(at(t).grid, 'grid-template-columns') ?? '')
+      return m ? Number(m[1]) : NaN
+    }
+    const narrow = Math.max(...NARROW.map(floorOf))
+    for (const t of WIDE) {
+      expect(
+        floorOf(t),
+        `[data-viewport='${t}']: the widened grid reuses the ${narrow}px floor. That packs the ` +
+          'extra width into MORE, NARROWER columns and squeezes every input that shares its ' +
+          'row with a button — the port picker collapses to unusable.',
+      ).toBeGreaterThan(narrow)
     }
   })
 
@@ -348,6 +386,31 @@ describe('what the width reaches inside Settings', () => {
       }
     }
     expect(wrong, `unbounded inside an unbounded panel:\n  ${wrong.join('\n  ')}\n`).toEqual([])
+  })
+
+  it('reaches a .settings-field nested below the section, not just a direct child', () => {
+    // The regression this exists for: the first cut used `.settings-section > .settings-field`
+    // and every test passed, because every fixture field was a direct child. In the real panel
+    // Phone / CW / Digital nest theirs inside `.settings-featgroup`, so eight selects stayed
+    // window-wide (2454-2464px at 2560) with a green suite. Measured in Chrome, not inferred.
+    const missed = WIDE.filter((t) => maxWidth(at(t).nestedField) !== '520px')
+      .map((t) => `${t} → ${maxWidth(at(t).nestedField)}`)
+    expect(
+      missed,
+      'a .settings-field one level below .settings-section is uncapped: this is exactly the ' +
+        'Phone/CW/Digital shape, where the select stretches to the full window width.',
+    ).toEqual([])
+  })
+
+  it('caps the roster row NAME input while leaving the roster itself unbounded', () => {
+    // Both halves matter. The roster is a list of rows and must keep the width; the name
+    // input inside it is the only flexible thing in its row, so it absorbed all of it.
+    const uncapped = WIDE.filter((t) => maxWidth(at(t).rosterName) !== '520px')
+      .map((t) => `${t} → ${maxWidth(at(t).rosterName)}`)
+    expect(uncapped, 'a radio NAME field ("Radio 1") was 3235px at 3440').toEqual([])
+    const shrunk = WIDE.filter((t) => maxWidth(at(t).roster) !== 'none')
+      .map((t) => `${t} → ${maxWidth(at(t).roster)}`)
+    expect(shrunk, 'the roster is rows — capping it would waste the width the rows want').toEqual([])
   })
 
   it('none of the caps are live below the widening', () => {
