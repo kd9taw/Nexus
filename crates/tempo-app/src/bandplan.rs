@@ -374,6 +374,10 @@ pub fn cw_activity_mhz(band: &str) -> Option<f64> {
         "12m" => 24.900,
         "10m" => 28.030,
         "6m" => 50.090, // 6 m CW calling frequency
+        // 4 m is IARU Region 1 only (no US allocation — only the `Open` class is offered the
+        // band at all). 70.100–70.250 is the narrowband window; 70.200 is its SSB/CW calling
+        // frequency, and the R1 4 m operator's dial.
+        "4m" => 70.200,
         "2m" => 144.050,
         "1.25m" => 222.050,
         "70cm" => 432.050,
@@ -509,6 +513,42 @@ mod tests {
             70.154 + off,
             OperatingMode::Digital
         ));
+    }
+
+    /// The other half of that pair: the operator the 4 m channels ARE for. Keying it is not
+    /// enough — every picker has to be able to PARK on it, or 4 m is an FT-only band that
+    /// disappears the moment its Region-1 owner switches to SSB or CW (#75). The homes come
+    /// from a Region-1 segment list `Open` alone carries; `extra()` must never gain it, or
+    /// the test above goes red on a US privilege that does not exist.
+    #[test]
+    fn the_region_1_operator_gets_a_4m_home_in_every_mode() {
+        use crate::privileges::{phone_home, segment_start};
+        use crate::settings::{LicenseClass::Open, OperatingMode};
+        // 70.000–70.100 is the beacon/narrowband slice (WSPR sits at 70.091), so phone
+        // starts at 70.100 — the same shape as 6 m's CW-only 50.0–50.1 below 50.100.
+        assert_eq!(phone_home(Open, "4m"), Some((70.100, "USB")));
+        assert_eq!(
+            segment_start(Open, "4m", OperatingMode::Phone),
+            Some(70.100)
+        );
+        // CW and data reach the whole band, and a CW pick then lifts off the dead 70.000
+        // edge onto the R1 SSB/CW calling frequency — the 14.000 → 14.030 move.
+        for m in [OperatingMode::Cw, OperatingMode::Digital] {
+            assert_eq!(segment_start(Open, "4m", m), Some(70.000), "{m:?}");
+        }
+        let lo = segment_start(Open, "4m", OperatingMode::Cw).unwrap();
+        let cw = cw_activity_mhz("4m").map(|a| a.max(lo));
+        assert_eq!(
+            cw,
+            Some(70.200),
+            "the CW pick parks on the 4 m calling frequency, not the band edge"
+        );
+        // Both homes must name themselves back as 4 m, or a picker parks the rig on a dial
+        // the rest of the app — the log, the ADIF file, the interop wire — calls something
+        // else. The FT8 dial the other dropdown publishes is checked the same way above.
+        for f in [phone_home(Open, "4m").unwrap().0, cw.unwrap()] {
+            assert_eq!(band_for_dial(f), Some("4m"), "{f} MHz");
+        }
     }
 
     #[test]

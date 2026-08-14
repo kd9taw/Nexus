@@ -9,7 +9,9 @@
 //!   band-wide above 50 MHz (and on 30 m, all-data).
 //! - PHONE/image is allowed only in the phone segments.
 //!
-//! `Open` = no restrictions (non-US operators); `tx_allowed` short-circuits to true.
+//! `Open` = no restrictions (non-US operators); `tx_allowed` short-circuits to true. Its rows
+//! are therefore a PARKING table, not a privilege one — which is why `Open` alone also carries
+//! [`REGION1`], the 4 m band the US table has no way to describe.
 
 use crate::settings::{LicenseClass, OperatingMode};
 
@@ -58,6 +60,23 @@ const VHF: &[Seg] = &[
     s(5650.0, 5925.0, true, true, true),     // 6 cm all-mode
     s(10_000.0, 10_500.0, true, true, true), // 3 cm all-mode (QO-100 downlink territory)
     s(24_000.0, 24_250.0, true, true, true), // 1.25 cm all-mode
+];
+
+// IARU Region 1's 4 m band (69.9–70.5 MHz on a CEPT secondary basis, footnote ECA9), shaped
+// like the 6 m and 2 m rows above: a narrowband bottom slice — beacons, and WSPR at 70.091 —
+// under the all-mode segment.
+//
+// ⚠️ FOR `Open` ONLY, AND IT IS A PARKING TABLE, NOT A PRIVILEGE CLAIM. The US has no 4 m
+// allocation at any class, so this must never be folded into `extra()`: `Open` borrows
+// Extra's rows, and a Seg there would assert a US privilege that does not exist and turn
+// `bandplan::no_us_license_class_may_key_a_4m_channel` red. `tx_allowed` short-circuits
+// `Open` before it ever reads this list, so all these rows decide is where a band pick parks
+// the dial — 70.100 for phone, and CW lifts to the 70.200 SSB/CW calling frequency through
+// `bandplan::cw_activity_mhz`. National 4 m edges vary by tens of kHz inside this span (DL is
+// 70.150–70.210); the band-plan notes carry that warning to the operator, this table cannot.
+const REGION1: &[Seg] = &[
+    s(70.0, 70.1, true, true, false), // 4 m beacons / narrowband bottom (no phone)
+    s(70.1, 70.5, true, true, true),  // 4 m all-mode; SSB/CW calling 70.200
 ];
 
 // 60 m (General/Extra): the 5.3515–5.3665 subband + 4 retained legacy channel centers
@@ -136,12 +155,19 @@ fn extra() -> Vec<Seg> {
 
 /// The privilege segments for a class. `Open` borrows Extra's segments so the band dropdown
 /// jumps to the conventional full-privilege segment starts (the lockout never consults them —
-/// it short-circuits Open to allowed).
+/// it short-circuits Open to allowed), PLUS [`REGION1`] — the bands the US table cannot
+/// describe at all. That extension is appended here rather than added to `extra()` for the
+/// reason spelled out on the constant: it is where a non-US pick parks, never a US privilege.
 fn segments(class: LicenseClass) -> Vec<Seg> {
     match class {
         LicenseClass::Technician => technician(),
         LicenseClass::General => general(),
-        LicenseClass::Extra | LicenseClass::Open => extra(),
+        LicenseClass::Extra => extra(),
+        LicenseClass::Open => {
+            let mut v = extra();
+            v.extend_from_slice(REGION1);
+            v
+        }
     }
 }
 

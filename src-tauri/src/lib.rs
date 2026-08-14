@@ -9524,15 +9524,14 @@ fn set_license_class(state: State<'_, SharedEngine>, class: String) -> Result<Ap
     Ok(eng.snapshot())
 }
 
-/// The bands the operator may use in the CURRENT operating mode, each parked at the START of
-/// their licensed segment (CW-segment start in CW, phone-segment start in Phone) — the
-/// per-cockpit band dropdown. Bands with no privilege for this class+mode are omitted; Open
-/// shows the conventional starts. (60 m is omitted — it's channelized; tune it manually.)
-#[tauri::command(async)]
-fn get_licensed_band_plan(
-    state: State<'_, SharedEngine>,
-    mode: String,
-) -> Result<Vec<tempo_app::bandplan::BandChannel>, String> {
+/// The bands the phone/CW dropdown offers `class` in `mode`, each parked at its licensed
+/// home dial. Split out of [`get_licensed_band_plan`] so the list and the privilege filter
+/// that trims it can be driven directly by a test, with no engine and no Tauri state — the
+/// band that is MISSING from a list is invisible to every test that goes through the command.
+fn licensed_bands(
+    class: tempo_app::settings::LicenseClass,
+    mode: tempo_app::settings::OperatingMode,
+) -> Vec<tempo_app::bandplan::BandChannel> {
     use tempo_app::bandplan::BandChannel;
     use tempo_app::settings::OperatingMode;
     const BANDS: &[(&str, &str)] = &[
@@ -9546,6 +9545,11 @@ fn get_licensed_band_plan(
         ("12m", "HF"),
         ("10m", "HF"),
         ("6m", "VHF"),
+        // 4 m is IARU Region 1 only — the US has no allocation at any class (#75). It sits
+        // here rather than being left to the FT dropdown because the privilege filter below
+        // is what decides who sees it: a US class holds no 4 m segment and never sees the
+        // row, while the non-US `Open` class does, in SSB and CW as well as in FT8.
+        ("4m", "VHF"),
         ("2m", "VHF"),
         ("1.25m", "VHF"),
         ("70cm", "UHF"),
@@ -9560,35 +9564,6 @@ fn get_licensed_band_plan(
         ("3cm", "UHF"),
         ("1.25cm", "UHF"),
     ];
-    let eng = engine_lock(&state);
-    let class = eng.settings().license_class;
-    // RTTY / SSTV: fixed standard watering-hole channels (like WSJT-X's per-mode
-    // dials), license-filtered per band — a Technician sees only the bands their
-    // class can key there (RTTY rides digital privileges, SSTV rides phone).
-    let lower = mode.to_ascii_lowercase();
-    if lower == "rtty" || lower == "sstv" {
-        let (plan, priv_mode) = if lower == "rtty" {
-            (tempo_app::bandplan::rtty_band_plan(), OperatingMode::Digital)
-        } else {
-            (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
-        };
-        return Ok(plan
-            .into_iter()
-            .filter(|c| {
-                // Channel band ids may carry a suffix ("2m-call") — privilege-check
-                // the base band, via THE canonicaliser (one home, not a hand-split).
-                let base = tempo_app::bandplan::canonical_band(&c.band);
-                tempo_app::privileges::segment_start(class, &base, priv_mode).is_some()
-            })
-            .collect());
-    }
-    // The caller (the cockpit) passes its mode explicitly — the engine's operating_mode is
-    // set asynchronously on section entry, so reading it here would race the first mount.
-    let mode = match lower.as_str() {
-        "phone" => OperatingMode::Phone,
-        "cw" => OperatingMode::Cw,
-        _ => OperatingMode::Digital,
-    };
     let mut out = Vec::new();
     for (band, group) in BANDS {
         // PHONE goes through THE phone home (`privileges::phone_home`), which lifts an LSB
@@ -9622,7 +9597,49 @@ fn get_licensed_band_plan(
             });
         }
     }
-    Ok(out)
+    out
+}
+
+/// The bands the operator may use in the CURRENT operating mode, each parked at the START of
+/// their licensed segment (CW-segment start in CW, phone-segment start in Phone) — the
+/// per-cockpit band dropdown. Bands with no privilege for this class+mode are omitted; Open
+/// shows the conventional starts. (60 m is omitted — it's channelized; tune it manually.)
+#[tauri::command(async)]
+fn get_licensed_band_plan(
+    state: State<'_, SharedEngine>,
+    mode: String,
+) -> Result<Vec<tempo_app::bandplan::BandChannel>, String> {
+    use tempo_app::settings::OperatingMode;
+    let eng = engine_lock(&state);
+    let class = eng.settings().license_class;
+    // RTTY / SSTV: fixed standard watering-hole channels (like WSJT-X's per-mode
+    // dials), license-filtered per band — a Technician sees only the bands their
+    // class can key there (RTTY rides digital privileges, SSTV rides phone).
+    let lower = mode.to_ascii_lowercase();
+    if lower == "rtty" || lower == "sstv" {
+        let (plan, priv_mode) = if lower == "rtty" {
+            (tempo_app::bandplan::rtty_band_plan(), OperatingMode::Digital)
+        } else {
+            (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
+        };
+        return Ok(plan
+            .into_iter()
+            .filter(|c| {
+                // Channel band ids may carry a suffix ("2m-call") — privilege-check
+                // the base band, via THE canonicaliser (one home, not a hand-split).
+                let base = tempo_app::bandplan::canonical_band(&c.band);
+                tempo_app::privileges::segment_start(class, &base, priv_mode).is_some()
+            })
+            .collect());
+    }
+    // The caller (the cockpit) passes its mode explicitly — the engine's operating_mode is
+    // set asynchronously on section entry, so reading it here would race the first mount.
+    let mode = match lower.as_str() {
+        "phone" => OperatingMode::Phone,
+        "cw" => OperatingMode::Cw,
+        _ => OperatingMode::Digital,
+    };
+    Ok(licensed_bands(class, mode))
 }
 
 /// Change band / dial frequency / mode live (does not reset the operating mode).
@@ -16498,6 +16515,54 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// #75: 4 m shipped in ONE of the two band dropdowns. The FT/digital cockpit reads
+    /// `Engine::band_plan` → `bandplan::ft8_band_plan`, which has 4 m at 70.154; the phone
+    /// and CW cockpits read THIS list, which did not. So a Region-1 operator could work
+    /// 4 m FT8 and then watch the band vanish the moment they switched to SSB or CW.
+    ///
+    /// Driving `licensed_bands` rather than the command is the point: the defect was a
+    /// band ABSENT from a hardcoded list, and nothing that asserts on the rows the command
+    /// returns can see a row that was never built.
+    #[test]
+    fn the_phone_and_cw_dropdowns_offer_4m_to_a_region_1_operator() {
+        use tempo_app::settings::LicenseClass::{Extra, General, Open, Technician};
+        use tempo_app::settings::OperatingMode::{Cw, Phone};
+        let ch = |class, mode| {
+            super::licensed_bands(class, mode)
+                .into_iter()
+                .find(|c| c.band == "4m")
+        };
+        // `Open` is the non-US class — the only licensee with a 4 m allocation, and the
+        // default class, so this is what an operator who never set one sees. Phone parks at
+        // the bottom of the all-mode segment (the 6 m 50.100 shape); CW lifts off the
+        // 70.000 band edge onto the R1 SSB/CW calling frequency, as 20 m CW lifts to 14.030.
+        let phone = ch(Open, Phone).expect("Open must be offered 4 m in the phone dropdown");
+        assert_eq!((phone.dial_mhz, phone.mode.as_str()), (70.100, "USB"));
+        assert_eq!(phone.group, "VHF");
+        assert_eq!(
+            ch(Open, Cw).map(|c| c.dial_mhz),
+            Some(70.200),
+            "a CW pick parks on the 4 m SSB/CW calling frequency"
+        );
+        // …and it stays unkeyable-by-omission for every US class: no FCC 4 m allocation
+        // exists, so the row must not reach their dropdown at all. The 2 m control is what
+        // makes each `None` evidence rather than an empty list.
+        for class in [Technician, General, Extra] {
+            for mode in [Phone, Cw] {
+                assert!(
+                    ch(class, mode).is_none(),
+                    "{class:?} {mode:?}: the US has no 4 m allocation"
+                );
+                assert!(
+                    super::licensed_bands(class, mode)
+                        .iter()
+                        .any(|c| c.band == "2m"),
+                    "control: {class:?} {mode:?} still gets the VHF bands they do hold"
+                );
+            }
+        }
+    }
+
     /// ⭐ THE SESSION HEALTH STORE KEEPS BOTH HALVES. HRDLog and Cloudlog leave no per-QSO
     /// stamp, so this map is the only health they will ever have — and the obvious shape
     /// for it (one slot: `(id, ok, when, detail)`) cannot hold what the panel needs. With

@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the next over went out in the same period as the station you were working. Nothing on screen
   said any of it had happened. A seat swap now writes only the operator's name; the contact in
   progress, the queue and your cycle are left exactly as they were. (#54)
+- **4 m is in the SSB and CW band pickers now, not only in FT8.** The FT dropdown has carried
+  4 m for a while — 70.154 for FT8, plus the JT65, MSK144 and WSPR dials — but the Phone and CW
+  cockpits read a different band list, and that one had never heard of the band. So you could
+  work 4 m FT8 and then watch the band vanish from the dropdown the moment you switched to SSB
+  or CW. Both pickers offer it now: a phone pick parks on 70.100 and a CW pick on 70.200, the
+  Region 1 SSB/CW calling frequency, rather than the dead 70.000 band edge. 4 m stays a Region 1
+  band — there is no US allocation at any class, so it appears for the non-US (Open) class and
+  stays off a US-licensed operator's dropdown, exactly as the transmit lockout has always
+  treated it. National 4 m edges differ by tens of kHz inside 70.0–70.5; check yours before you
+  key.
 
 ## [1.3.0] — 2026-08-13
 
