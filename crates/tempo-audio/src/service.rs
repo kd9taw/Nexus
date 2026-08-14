@@ -776,7 +776,35 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             if in_name.is_none() && out_name.is_none() {
                 return Err(e); // nothing was named — the machine has no usable sound card
             }
-            let b = CpalBackend::open(None, None)?;
+            // The fallback used to be ONE shot (`CpalBackend::open(None, None)?`), which handed
+            // back exactly the brick the paragraph above rejects. When the rig is switched on
+            // AFTER Nexus — the case named there as the commonest of all — the named codec and
+            // the system default can be missing in the SAME instant, because the USB device is
+            // still enumerating and has not become anyone's default yet. That `?` then killed
+            // the thread for the rest of the session, seconds before the device appeared, and
+            // `step`'s retry ladder below (`audio_retry_at` / `AUDIO_RETRY_MS`) never got to run
+            // because reaching it requires a backend. Retry on that same cadence instead: the
+            // operator keeps a banner naming both failures, and the loop starts the moment ANY
+            // device opens. Bounded by the operator, not by a counter — a dead radio thread is
+            // unrecoverable without a restart, while a retrying one heals itself.
+            let mut attempt = 0usize;
+            let b = loop {
+                match CpalBackend::open(None, None) {
+                    Ok(b) => break b,
+                    Err(fallback) => {
+                        attempt += 1;
+                        {
+                            let mut eng = engine_lock(&engine);
+                            eng.set_audio_error(Some(format!(
+                                "Sound card failed to open: {e} The system default failed too \
+                                 ({fallback}). Retrying every {}s — attempt {attempt}.",
+                                (AUDIO_RETRY_MS / 1000.0) as u64
+                            )));
+                        }
+                        std::thread::sleep(Duration::from_millis(AUDIO_RETRY_MS as u64));
+                    }
+                }
+            };
             // Record what is ACTUALLY open. The first loop tick then sees the live settings
             // still asking for the named device, differs, and re-attempts the strict open —
             // so a codec that was busy for a moment (PipeWire, another app) recovers by
@@ -3040,6 +3068,23 @@ impl RadioLoop {
                 }
             }
             let mut audio_rebuilt = false;
+            // A stream the OS KILLED can only re-enter the loop here. Nothing in `want` changed
+            // when a device vanishes, so `audio_differs` below is blind to it by construction,
+            // and before this the card simply stayed dead: no capture, no decodes, a blank
+            // waterfall and NO banner — the only trace was an `eprintln!` in `device.rs`, which
+            // a Finder-launched `.app` throws away. Treat it as exactly what it is, the same
+            // event as a failed open, so the operator gets the same banner and the same
+            // self-healing retry: a rig switched off and on, a Bluetooth headset reshuffling
+            // CoreAudio, or a flaky codec now recovers without restarting Nexus.
+            if let Some(dead) = backend.take_stream_error() {
+                {
+                    let mut eng = engine_lock(engine);
+                    eng.set_audio_error(Some(format!("Sound card stopped — {dead}. Reopening…")));
+                }
+                // A REAL device error owns the line, same as the open-failure arm below.
+                self.err_owner = ErrOwner::Device;
+                self.force_audio_rebuild = true;
+            }
             // A dual-radio switch forces the rebuild (a new radio's device must be opened even if the
             // name compares equal — e.g. two "system default"s); else rebuild only on a real change.
             // A due retry re-arms the rebuild without touching `applied` — the device name has
@@ -13845,6 +13890,137 @@ mod tests {
         assert!(
             reopened.get(),
             "a rig-affecting Settings change triggers reopen_rig"
+        );
+    }
+
+    /// A stream the OS KILLED must raise the banner and reopen the card, with NO settings change.
+    ///
+    /// The case this was written for: a USB codec that dropped off the bus 2.0-2.4 s after every
+    /// open. `device.rs`'s error callback only `eprintln!`ed, which a Finder-launched `.app`
+    /// discards, and `audio_differs` cannot see a device vanishing because nothing in the
+    /// transport changed — so Nexus ran on with a blank waterfall, no decodes and no banner, and
+    /// the fault read as "Nexus is broken" rather than "this dongle is". Both halves are asserted
+    /// here: the operator is TOLD, and the card is reopened so it heals itself when the device
+    /// returns.
+    #[test]
+    fn a_stream_killed_by_the_os_raises_the_banner_and_reopens_the_card() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+
+        // Settle first, so `applied == want` and nothing else can explain a rebuild.
+        let mut ra = mock_reopen_audio();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        engine.lock().unwrap().set_audio_error(None);
+
+        // The OS kills the capture stream. Nothing in Settings changes.
+        backend.stream_error = Some(
+            "capture stream: The requested device is no longer \
+                                     available. For example, it has been unplugged."
+                .to_string(),
+        );
+        let reopened = std::cell::Cell::new(false);
+        let mut ra_counting = |t: &Transport| {
+            reopened.set(true);
+            mock_reopen_audio()(t)
+        };
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra_counting,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        assert!(
+            reopened.get(),
+            "a dead stream must reopen the sound card — `audio_differs` is blind to a device \
+             vanishing, so without this the card stays dead for the rest of the session"
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.audio_error,
+            None,
+            "a reopen that SUCCEEDED means the card is back; the banner must clear itself rather \
+             than leave a stale scare on screen"
+        );
+
+        // Edge-triggered: one death, one reaction. A latched report would rebuild every tick.
+        let reopened_again = std::cell::Cell::new(false);
+        let mut ra_again = |t: &Transport| {
+            reopened_again.set(true);
+            mock_reopen_audio()(t)
+        };
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                40.0,
+                &mut ra_again,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            !reopened_again.get(),
+            "the report is drained, not latched — a single death must not rebuild every tick"
+        );
+
+        // The case that actually strands the operator: the stream died AND the device is still
+        // gone, so the reopen fails too. THAT is when a banner has to be on screen and stay
+        // there — this is what a codec dropping off the bus actually does, and the state the
+        // old code left completely undiagnosed.
+        backend.stream_error = Some(
+            "capture stream: The requested device is no longer \
+                                     available. For example, it has been unplugged."
+                .to_string(),
+        );
+        let mut ra_failing =
+            |_t: &Transport| Err("device \"USB Audio Device\" not available".to_string());
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                60.0,
+                &mut ra_failing,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let banner = engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .radio
+            .audio_error
+            .clone()
+            .expect("a dead stream whose reopen also fails MUST leave a banner up");
+        assert!(
+            banner.contains("USB Audio Device"),
+            "the banner must name the device that failed, got: {banner:?}"
         );
     }
 
