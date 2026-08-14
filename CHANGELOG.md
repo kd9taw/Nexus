@@ -5,6 +5,17 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Hints in text boxes stop looking like settings you already entered.** Reported on dark mode:
+  the grey example text in an empty box — `127.0.0.1:5002`, `COM16`, `Radio name` — rendered at
+  nearly the brightness of a real entry, so a Settings page full of empty fields read as a page
+  full of configured ones. Every text box in the app now draws its hint in the same faint ink
+  the rest of the interface uses for secondary text, in all four themes, so an empty field looks
+  empty at a glance.
+
 ## [1.3.0] — 2026-08-13
 
 ### Added

@@ -3320,6 +3320,27 @@ button {
   cursor: pointer;
 }
 
+/* A placeholder is a HINT, not a value (issue #76 — "placeholders read as entered values in
+   dark mode"). ::placeholder is a pseudo-element with its own cascade: given no rule of its
+   own it INHERITS `color` from the field, and Chromium derives its default placeholder ink
+   from that currentColor. Every input that sets `color: var(--text)` — `.settings-input` and
+   ~30 other classes, ~125 placeholder attributes — therefore drew its hint at very nearly the
+   brightness of a real entry, so "127.0.0.1:5002" read as a configured host on dark. One bare
+   selector fixes all of them at once; the two class-scoped placeholder rules further down
+   (.composer-input, .np-search input) are (0,1,1) and (0,1,2) against this (0,0,2), so they
+   still win and nothing they style changes.
+   Colour only, NO italic — deliberate: those two shipped rules set colour alone, so italic
+   here would restyle two working inputs for something nobody reported, and most of these
+   hints are literal machine text (COM16, 127.0.0.1:5002, W9XYZ-9) where italic at 11-14px
+   costs exactly the character-by-character legibility they exist to demonstrate.
+   `opacity: 1` because Firefox applies its own opacity to ::placeholder and would fade the
+   ink straight back out. Guard: styles-placeholder.test.tsx. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
+
 h2 {
   margin: 0;
   font-size: 13px;
