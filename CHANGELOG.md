@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] — 2026-08-13
 
 ### Added
 
@@ -51,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   though none of those phrases is a heading. Picking a result takes you there, and if the
   setting lives inside a collapsed **Advanced** group it opens the group with the control in
   view, so you arrive looking at the thing rather than at the heading above it.
+- **Every "Settings ▸ …" pointer in the app now takes you there.** The app named a Settings path
+  in about 228 places and none of them were clickable — including several that named tabs which
+  no longer existed. Setup health's own "no RX audio" light said to check the audio device
+  *below* and then left you to find it. Those are buttons now. The rotator's "not answering"
+  chip, for one, now opens the rotator settings — nearly always a wrong model or port — instead
+  of naming a location and leaving you to hunt for it.
 - **Nexus can hand your log to TQSL on a timer.** Settings ▸ Confirmations ▸ LoTW gained
   **Upload to LoTW automatically** — every few hours it runs the same batch the Logbook's
   "Upload to LoTW" button runs, signed by your own TQSL. It is off until you turn it on, and
@@ -62,6 +68,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no certificate, wrong Station Location, one bad record — it stops and says so once, rather
   than re-signing and re-sending the same batch every six hours forever. Save any LoTW
   setting to start it again.
+
+- **You can now tune off the ham bands from the app, and receiving there works properly.** Two
+  things were wrong once you got off-band, and both are fixed. First, you could not get there:
+  the wheel, the scope click, the ◄/► buttons and typing a frequency all refused anything
+  outside the band plan, some with an "outside the band plan" error and one silently — so WWV or
+  a shortwave broadcaster could only be reached by turning the knob on the radio. They all tune
+  anywhere now. A fast wheel flick still stops at the band edge so you cannot leave a band by
+  accident, and it tells you where it stopped instead of calling it an error; one more scroll
+  goes past. Second, the parts of the app that ask "is this station new *on this band*" stay
+  quiet while there is no band to ask about, rather than treating the empty band as one nobody
+  had ever worked. The all-time questions still answer, so an entity you have never worked
+  anywhere is still flagged as new wherever you hear it. The Band Activity pane says "off the
+  band plan" instead of going blank, the decode pane no longer clears itself when you tune back
+  to the band you came from, and the frequency readout only turns TX-red when your licence
+  actually says so, rather than whenever the dial leaves the band plan.
+
+  Transmitting is deliberately unchanged. Nexus does not refuse to transmit merely because a
+  frequency is off *its* band table — that table is written around the US allocations, and the
+  table is not the law everywhere. The UK 60 m allocation starts at 5.2585 MHz, below the 5.3
+  the table calls the bottom of 60 m, so a blanket refusal would have blocked operators working
+  their own legal frequencies. If you have told Nexus your US licence class it still fails
+  closed off-band, exactly as before; if you have not, it trusts you, exactly as before. Leaving
+  the bands still cuts a transmission that is in progress.
+- **SSTV can be told a custom frequency is FM.** The USB/FM pick is now in the SSTV cockpit's
+  band control on 10 m and up, so a local FM repeater or simplex channel you type in yourself
+  can be worked like the built-in ones. It is deliberately not offered below 29 MHz, where the
+  app does not command FM at all.
+- **One Units setting — metric or imperial, everywhere.** Distances, temperature and wind
+  speed now follow a single Units choice (Settings ▸ Station): automatic from your system's
+  region, or metric/imperial by hand. It covers the spots that were still imperial — the
+  station recall card, the roster distance column, Memories, the repeater search, and APRS
+  weather. Every transmitted value stays native; only the display converts. From F4MQS.
+- **Hide stations you've already confirmed on this band.** A new −Conf switch on Band
+  Activity drops stations you hold an award-grade confirmation from (LoTW or card) on the
+  current band, so you can chase what you still need — while a station that's still new on
+  the band always shows. Asked for by F4MQS.
+- **Hide callsigns by name or prefix.** A new "Hide calls" control on Band Activity takes a
+  list of callsigns or `VP8*`-style prefixes and drops them from the panes — a display
+  filter, separate from the block list your auto-CQ honors. From F4MQS.
+- **A real blocklist — and your auto-responder honors it.** Alt-double-click a decode or
+  roster row and the call goes on a persistent blocked list (it survives restarts; the
+  same list is editable under Settings ▸ Modes ▸ Auto-CQ & Caller Selection). While you
+  run CQ, a blocked station answering you is passed over for the next caller — with every
+  caller blocked, the run keeps calling. Base-call matched, so blocking PD2BS also covers
+  PD2BS/P. On screen, blocked calls render dimmed as before; a new "Hide blocked"
+  checkbox on the roster and a −Blk switch on Band Activity remove them entirely — except
+  the station you are actually working, which no filter ever hides. Asked for from the
+  field ("make sure that list is referenced when auto responding to my CQs").
+- **Pause the country filter without losing your ticks.** The Countries menu gains a Pause
+  switch: turn the whole exclusion off and back on without re-ticking your list.
+- **Hide any DXCC entity, not just the common 18.** The Countries menu gains an "Other
+  country…" search over the full entity table, alongside the quick-pick list. From F4MQS.
+
+- **The band system now reaches 24 GHz.** The band table, the frequency pickers, the
+  override editor and the typed-dial entry all know 33 cm, 13 cm, 9 cm, 6 cm, 3 cm and
+  1.25 cm — ADIF's registered names, so a QO-100 contact finally logs `BAND:3cm` instead
+  of an empty field LoTW rejects. US transmit privileges follow the regulation exactly:
+  Technician-and-above segments for 33 cm, both 13 cm segments (the 2310–2390 gap between
+  them stays locked — it isn't amateur spectrum), 6 cm, 3 cm and 1.25 cm; 9 cm carries a
+  band label but no US privileges (that allocation was removed), so it reads TX LOCKED for
+  US classes and works normally for Open-class operators. Each license class's band
+  dropdown shows only its own bands, exactly as on HF. The microwave bands also join the
+  per-band grid tracker as the real ARRL VUCC bands they are (5 grids each at 2.3 GHz and
+  up). A provably same-band 10 GHz satellite split is now allowed on the Main/Sub Icoms
+  (both legs are named and equal — the old refusal said "could not confirm", and now it
+  can); a cross-band or off-table split still refuses. Above 24.25 GHz everything still
+  fails closed. From the QO-100 field report.
+- **The Yaesu FT-890 is in the rig picker by name.** It worked before only if you knew to type
+  its Hamlib model number.
 
 ### Changed
 
@@ -88,8 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you set for speech. An SSTV frame keys continuously for up to 290 seconds at close to 100%
   duty, which is exactly what the digital cap is for, and RTTY already used it. SSTV now takes
   the **lower** of your digital and phone caps, so it can only ever come down, never up.
-  ⚠️ Verified by test only — there is no rig on the build machine. Worth watching your PA the
-  first time you send a picture.
+  Worth watching your PA the first time you send a picture.
 - **Japan's APRS channel wants a local check.** Nexus derives your APRS channel from your grid,
   and ships 144.660 for Japan while its own band-pack data says 144.640/660. If you're in JA,
   confirm the channel before you beacon — the picker changes it in one click.
@@ -113,9 +187,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handheld): leave it on **From my callsign** and Nexus sends exactly what your callsign
   already spells out, which is what it has always sent. Beaconing gains the two
   alternate-table symbols a fixed station wants, **digipeater** and **iGate**.
-
-### Changed
-
 - **Settings has a tab for each way you operate — Phone, CW and Digital.** The single Modes
   page held eleven sections, so the mode you came for sat behind every other mode's: a CW
   operator scrolled past the whole FT8 section and six weak-signal modes to reach their keyer.
@@ -135,51 +206,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Transmit limits & sharing** section. Nothing changed about what they do.
 - **Accessibility settings moved to Appearance**, beside text size and density, instead of
   living under Spots & Alerts.
+- **Settings uses the whole window.** It rendered in a 1100px column down the middle, so on any
+  ordinary monitor a page that would have fitted was scrolled instead, with half the screen
+  sitting empty beside it. Settings now fills the window and lays its sections out in columns as
+  the room allows. Controls that gain nothing from being wider — a rig name, a dropdown, a line
+  of explanation — are held to a readable width rather than stretched across the glass, and
+  nothing changes at all on a small laptop screen, where the column was never the constraint.
 
 ### Fixed
 
-- **Tuning off the ham bands no longer wipes what you were working.** On a general-coverage
-  radio, spinning the VFO to WWV, to a shortwave broadcaster, or to any frequency in the gap
-  between two band edges cleared the station roster and the decode history, wiped the CW copy,
-  dropped your sideband pick and took FT8 out of transmit — and tuning back did it all again.
-  The check behind it was written for a dial above the top of the band table; in practice every
-  ordinary listen off the bands went through it. Leaving the bands is now treated as what it
-  usually is — a listen — so the context for the band you came from is still there when you tune
-  back. What has not changed: the band label still goes blank while you are off the bands, so
-  nothing is logged or remembered under a band the radio was not on, and transmit is still cut
-  the moment the knob leaves the bands. Going off the bands and coming back onto a *different*
-  band is still a band change, and still clears. Reported on an FTDX10; an IC-9700 never showed
-  it, because every frequency it can tune has a band name.
-- **You can now tune off the ham bands from the app, and receiving there works properly.** Two
-  things were wrong once you got off-band, and both are fixed. First, you could not get there:
-  the wheel, the scope click, the ◄/► buttons and typing a frequency all refused anything
-  outside the band plan, some with an "outside the band plan" error and one silently — so WWV or
-  a shortwave broadcaster could only be reached by turning the knob on the radio. They all tune
-  anywhere now. A fast wheel flick still stops at the band edge so you cannot leave a band by
-  accident, and it tells you where it stopped instead of calling it an error; one more scroll
-  goes past. Second, the parts of the app that ask "is this station new *on this band*" were
-  answering as if the empty band were a band nobody had ever worked: every decode lit up as a
-  new grid and a new band-slot, the Needed board filled with a new zone, grid and state for
-  every station it heard, and "hide confirmed" stopped hiding. Those questions now stay quiet
-  when there is no band to ask about — while the all-time ones still answer, so an entity you
-  have never worked anywhere is still flagged as new wherever you hear it. The Band Activity
-  pane says "off the band plan" instead of going blank, the decode pane no longer clears itself
-  when you tune back to the band you came from, and the frequency readout only turns TX-red when
-  your licence actually says so, rather than whenever the dial leaves the band plan.
-
-  Transmitting is deliberately unchanged. Nexus does not refuse to transmit merely because a
-  frequency is off *its* band table — that table is written around the US allocations, and the
-  table is not the law everywhere. The UK 60 m allocation starts at 5.2585 MHz, below the 5.3
-  the table calls the bottom of 60 m, so a blanket refusal would have blocked operators working
-  their own legal frequencies. If you have told Nexus your US licence class it still fails
-  closed off-band, exactly as before; if you have not, it trusts you, exactly as before. Leaving
-  the bands still cuts a transmission that is in progress.
-- **Every "Settings ▸ …" pointer in the app now takes you there.** The app named a Settings path
-  in about 228 places and none of them were clickable — including several that named tabs which
-  no longer existed. Setup health's own "no RX audio" light said to check the audio device
-  *below* and then left you to find it. Those are buttons now, and one that lands on a setting
-  folded inside an Advanced group opens the group on the way, so you arrive looking at the
-  control instead of at the heading above it.
 - **SSTV on an FM channel now transmits in FM, not USB-D.** Reported from an FTDX10 and an
   IC-9700: pick the 144.500 SSTV channel and the radio goes to FM, then press Send and it jumps
   to USB-D — an SSB signal on an FM repeater. Two separate faults did that. Sending an image
@@ -188,41 +223,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now sent in the rig's FM data submode (FM-D / PKTFM), so the sound card still reaches the
   modulator and the emission stays FM, and the repeater shift and PL tone stay applied through
   the picture. A radio that does not have FM-D is left in plain FM — never a sideband.
-  **This one needs bench time on a real radio before release.**
-- **SSTV can be told a custom frequency is FM.** The USB/FM pick is now in the SSTV cockpit's
-  band control on 10 m and up, so a local FM repeater or simplex channel you type in yourself
-  can be worked like the built-in ones. It is deliberately not offered below 29 MHz, where the
-  app does not command FM at all.
 - **The line under the SSTV waterfall stops naming a frequency you are nowhere near.** Sitting on
   a 2 m repeater, it said "Images on this band appear at 145.800 FM" — the ISS downlink, most of
   a megahertz away. It now says that only when the calling channel is near enough to describe
   where you are.
 - **The SSTV status line names the control you actually have to find.** It said "Audio input";
   the setting is called "Input Device (RX)".
-- **The rotator's "not answering" chip goes to the rotator settings**, which is nearly always a
-  wrong model or port, instead of naming a location for you to go hunting.
-
-### Added
-
-- **One Units setting — metric or imperial, everywhere.** Distances, temperature and wind
-  speed now follow a single Units choice (Settings ▸ Station): automatic from your system's
-  region, or metric/imperial by hand. It covers the spots that were still imperial — the
-  station recall card, the roster distance column, Memories, the repeater search, and APRS
-  weather. Every transmitted value stays native; only the display converts. From F4MQS.
-- **Hide stations you've already confirmed on this band.** A new −Conf switch on Band
-  Activity drops stations you hold an award-grade confirmation from (LoTW or card) on the
-  current band, so you can chase what you still need — while a station that's still new on
-  the band always shows. Asked for by F4MQS.
-- **Pause the country filter without losing your ticks.** The Countries menu gains a Pause
-  switch: turn the whole exclusion off and back on without re-ticking your list.
-- **Hide any DXCC entity, not just the common 18.** The Countries menu gains an "Other
-  country…" search over the full entity table, alongside the quick-pick list. From F4MQS.
-- **Hide callsigns by name or prefix.** A new "Hide calls" control on Band Activity takes a
-  list of callsigns or `VP8*`-style prefixes and drops them from the panes — a display
-  filter, separate from the block list your auto-CQ honors. From F4MQS.
-
-### Fixed
-
 - **Test CAT now tells you when it couldn't run, instead of pointing at your settings.**
   Pressing Test CAT while the radio engine was down — its sound-card open failed at launch,
   which silently takes CAT down with it — reported "No CAT status yet — set your rig + PTT
@@ -230,6 +236,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no answer now says exactly what is known, including the engine's own error when it left one.
   A Test CAT pressed around a settings Save is no longer silently swallowed by the rebuild —
   it runs right after. From the QDX-on-Linux report.
+- **Linux: the sound card you picked actually opens now.** Since 1.0.1 the device menu
+  listed cards correctly, but the code that opened your pick checked it against the audio
+  library's probe list — and the probing held each card open, so a card's `plughw` entry
+  was "busy" against its own `hw` entry, your saved pick never matched, and Nexus silently
+  fell back to the default device (the capture loop akhepcat documented; the tune tone on
+  the PC headphones instead of the CM108 on mw0cqu's FT-847). Devices are now probed one
+  at a time and released between probes, and picking one card for both input and output
+  shares a single open instead of fighting itself. And when the menu saved a card's
+  `plughw:CARD=…` name but the audio library only ever offers that same card as
+  `hw:CARD=…` — a different access path to one physical device, which is what mw0cqu's
+  capture showed — Nexus now matches by the card itself and opens it anyway, instead of
+  reporting a card that is plainly there as "not available". (#2, #8)
 - **A DXpedition Fox's two-in-one message is recognized outside Hound mode.** A Fox packs two
   messages into one transmission — `KR4FQG RR73; W3DIY <YS/WE9G> -06`. In ordinary FT8
   that line never highlighted, even when the RR73 half was ending *your* QSO. It now lights up
@@ -256,48 +274,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a /P operator uploading against their base-call book has every contact rejected. Test
   Connection now compares the book's owner to your station callsign and warns plainly, and
   QRZ's terse "Unable to add QSO" errors get a plain-language explanation. From F4MQS.
-
-### Added — bands
-
-- **The band system now reaches 24 GHz.** The band table, the frequency pickers, the
-  override editor and the typed-dial entry all know 33 cm, 13 cm, 9 cm, 6 cm, 3 cm and
-  1.25 cm — ADIF's registered names, so a QO-100 contact finally logs `BAND:3cm` instead
-  of an empty field LoTW rejects. US transmit privileges follow the regulation exactly:
-  Technician-and-above segments for 33 cm, both 13 cm segments (the 2310–2390 gap between
-  them stays locked — it isn't amateur spectrum), 6 cm, 3 cm and 1.25 cm; 9 cm carries a
-  band label but no US privileges (that allocation was removed), so it reads TX LOCKED for
-  US classes and works normally for Open-class operators. Each license class's band
-  dropdown shows only its own bands, exactly as on HF. The microwave bands also join the
-  per-band grid tracker as the real ARRL VUCC bands they are (5 grids each at 2.3 GHz and
-  up). A provably same-band 10 GHz satellite split is now allowed on the Main/Sub Icoms
-  (both legs are named and equal — the old refusal said "could not confirm", and now it
-  can); a cross-band or off-table split still refuses. Above 24.25 GHz everything still
-  fails closed. From the QO-100 field report.
-
-- **A real blocklist — and your auto-responder honors it.** Alt-double-click a decode or
-  roster row and the call goes on a persistent blocked list (it survives restarts; the
-  same list is editable under Settings ▸ Modes ▸ Auto-CQ & Caller Selection). While you
-  run CQ, a blocked station answering you is passed over for the next caller — with every
-  caller blocked, the run keeps calling. Base-call matched, so blocking PD2BS also covers
-  PD2BS/P. On screen, blocked calls render dimmed as before; a new "Hide blocked"
-  checkbox on the roster and a −Blk switch on Band Activity remove them entirely — except
-  the station you are actually working, which no filter ever hides. Asked for from the
-  field ("make sure that list is referenced when auto responding to my CQs").
-
-### Fixed
-
-- **Linux: the sound card you picked actually opens now.** Since 1.0.1 the device menu
-  listed cards correctly, but the code that opened your pick checked it against the audio
-  library's probe list — and the probing held each card open, so a card's `plughw` entry
-  was "busy" against its own `hw` entry, your saved pick never matched, and Nexus silently
-  fell back to the default device (the capture loop akhepcat documented; the tune tone on
-  the PC headphones instead of the CM108 on mw0cqu's FT-847). Devices are now probed one
-  at a time and released between probes, and picking one card for both input and output
-  shares a single open instead of fighting itself. And when the menu saved a card's
-  `plughw:CARD=…` name but the audio library only ever offers that same card as
-  `hw:CARD=…` — a different access path to one physical device, which is what mw0cqu's
-  capture showed — Nexus now matches by the card itself and opens it anyway, instead of
-  reporting a card that is plainly there as "not available". (#2, #8)
+- **Clicking a spot no longer sends the radio haywire.** On a rig with no data submode — an
+  FT-950 was the report — clicking a spot asked for a mode the radio refused, and Nexus kept
+  asking: it re-commanded the dial about fifty times a second, indefinitely. The frequency
+  readout stopped following the VFO knob, the S-meter froze, and the radio fought you for the
+  dial. Nexus now stops re-asking once the rig has refused a mode, and changing band no longer
+  re-asks for a mode that was already refused. From the FT-950 report.
+- **Changing the audio device no longer risks taking the app down.** Swapping the sound backend
+  — an ordinary device change, or switching radios — could collide with the device enumeration
+  that runs whenever Settings opens or Detect is pressed, and the collision could kill the
+  process outright, with no error and nothing in a log. The two now take turns. This is not the
+  startup crash reported against 1.2.0, which is still open.
 
 ## [1.2.0] — 2026-08-10
 
