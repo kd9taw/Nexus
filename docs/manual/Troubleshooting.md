@@ -34,7 +34,7 @@ shows only the demo, update to the current release.
 
 ### No CAT response — Test CAT fails or times out
 
-**Test CAT** (Settings → Radio ▸ Rig Control) saves settings, restarts rigctld, waits 1300 ms, then reads the dial frequency. A failure means one of:
+**Test CAT** (Settings → Radio ▸ Rig & CAT) saves settings, restarts rigctld, waits 1300 ms, then reads the dial frequency. A failure means one of:
 
 1. **Wrong rig model** — confirm the Hamlib model number. The in-app list covers approximately 50 curated radios cross-referenced to Hamlib 4.7.1. For a rig that is not in the list, run an external `rigctld` for it and connect Nexus as **NET rigctl** (model 2).
 2. **Wrong COM port** — pick the correct serial port and hit **Refresh** to re-scan. Verify nothing else holds the port (WSJT-X, another logger, a leftover Nexus instance, a `rigctld.exe` from a previous session).
@@ -93,7 +93,7 @@ If you hear the band by ear but Nexus decodes nothing, check in order:
 ### TX won't arm / Enable TX has no effect
 
 - **tx_enabled latch** — Nexus (like WSJT-X) requires you to arm TX explicitly before any transmission. The Enable TX control is in the Operate cockpit top bar. Digital mode does not auto-arm on section entry; Phone and CW do.
-- **License class lockout** — if the dial is outside your declared license-class segment, the TX button shows a lock icon and the engine independently blocks keying. Check Settings → License Class. Default is **Open** (no lockout); US Technician licensees are segment-restricted on 80/40/15 m.
+- **License class lockout** — if the dial is outside your declared license-class segment, the TX button shows a lock icon and the engine independently blocks keying. Check Settings → Station. Default is **Open** (no lockout); US Technician licensees are segment-restricted on 80/40/15 m.
 - **TX watchdog fired** — after 6 minutes of continuous unattended TX (default `tx_watchdog_min: 6`) the engine auto-halts. A watchdog chip appears in the top bar. Re-arm Enable TX to clear it.
 
 ### TX won't stop / stuck PTT
@@ -198,13 +198,13 @@ Grid and state are subscriber-only on QRZ's free XML tier. The app shows a toast
 
 ### ClubLog — uploads stopped after working
 
-A 403 response from ClubLog triggers a session-level suspend flag that stops further auto-upload to avoid an IP ban. The flag clears only when you save new credentials. Check your ClubLog Application Password (not your main password) in Settings → Connectors.
+A 403 response from ClubLog triggers a session-level suspend flag that stops further auto-upload to avoid an IP ban. The flag clears only when you save new credentials. Check your ClubLog Application Password (not your main password) in Settings → Logging & Connectors ▸ Connections.
 
 ClubLog integration also requires a developer API key (`CLUBLOG_API_KEY`). Official installer builds bundle one; operators building from source must supply their own key — it is not in the public repo.
 
 ### eQSL InBox sync fails
 
-The InBox download is a two-step HTTP scrape that depends on the "Your ADIF log file has been built" marker on eQSL's DownloadInBox page. If eQSL changes their page structure, the extractor will fail. Check the **Connector log** (Settings → Connectors, last 200 events) for the actual HTTP response to distinguish a credential problem from a site change.
+The InBox download is a two-step HTTP scrape that depends on the "Your ADIF log file has been built" marker on eQSL's DownloadInBox page. If eQSL changes their page structure, the extractor will fail. Check the **Connector log** (Settings → Logging & Connectors ▸ Connections, last 200 events) for the actual HTTP response to distinguish a credential problem from a site change.
 
 All fetched URLs are pinned to `*.eqsl.cc` and forced to HTTPS, so a redirect to a non-eQSL host will be rejected as a safety measure.
 
@@ -254,7 +254,7 @@ Use the **Test N3FJP** button in Settings to send the `<CMD><PROGRAM></CMD>` han
 ## Still stuck?
 
 - Re-check the setup pages: [Getting Started](Getting-Started.md), [Rig and Audio Setup](Rig-and-Audio-Setup.md).
-- Review the Connector log (Settings → Connectors) for per-event detail on upload failures.
+- Review the Connector log (Settings → Logging & Connectors ▸ Connections) for per-event detail on upload failures.
 - File an issue with details (band, dial, mode, OS, rig model, what you saw vs. expected): <https://sourceforge.net/projects/nexus-ham-radio>.
 
 ---

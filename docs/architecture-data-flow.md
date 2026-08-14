@@ -106,8 +106,8 @@ deep-recovery passes. A native FT8/FT4 source runs the Rust modem kernel; a "com
 source drains decodes from an upstream WSJT-X UDP stream. The loop doesn't care which.
 
 > That same `ndepth` knob is the Raspberry Pi lever: a slow Pi 3 can't finish a deep decode
-> inside the slot, so `Settings ▸ Decode depth ▸ Fast` drops the heavy passes and keeps it
-> real-time. No new code path, just a lower setting.
+> inside the slot, so `Settings ▸ Digital ▸ Decode depth ▸ Fast` drops the heavy passes and
+> keeps it real-time. No new code path, just a lower setting.
 
 A decode isn't only text. The engine cross-references each against the log and the
 operator's needs (new DXCC, band-slot, mode, zone), tags it, and folds it into the roster,

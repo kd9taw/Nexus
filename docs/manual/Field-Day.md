@@ -35,7 +35,7 @@ Run through this before the weekend. Most problems are discovered Saturday at 17
 - [ ] **Set power multiplier**: x5 (QRP/battery), x2 (≤100 W, the default), or x1 (>100 W). The engine clamps illegal values to the nearest legal tier.
 - [ ] **Configure N3FJP** (see [N3FJP Setup](#n3fjp-setup) below) and press **Test** to confirm the handshake before the event.
 - [ ] **Configure N1MM address** if your club runs N1MM dashboards (see [N1MM Broadcast](#n1mm-broadcast)).
-- [ ] **Verify CAT / PTT** on all bands you plan to use. Use **Settings > Rig** and the Test Tone / key-up checks on [Rig and Audio Setup](Rig-and-Audio-Setup.md).
+- [ ] **Verify CAT / PTT** on all bands you plan to use. Use **Settings → Radio ▸ Rig & CAT** and the Test Tone / key-up checks on [Rig and Audio Setup](Rig-and-Audio-Setup.md).
 - [ ] **Test the Phone and CW cockpits** end-to-end: make a test QSO on a non-event day to confirm the FD log strip accepts a manual entry and that the dupe toast fires on a repeat.
 - [ ] **Claim bonuses** in the bonus checklist once they are achieved during the event (see [Bonus Checklist](#bonus-checklist)).
 

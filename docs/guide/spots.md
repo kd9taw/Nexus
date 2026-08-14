@@ -79,7 +79,7 @@ Comment don't sort.
   before). Selected chips mean *show only these*, and a spot whose state didn't
   resolve drops out while any state chip is on.
 - **My privileges** — "Show only spots you may transmit to under your license
-  class ([Settings ▸ license](settings-reference.md#station)). Open class sees
+  class ([Settings ▸ Station](settings-reference.md#station)). Open class sees
   everything either way." The flag is computed from the same tables as the
   transmit lockout, so what survives this filter is exactly what you can key on.
 - **Clear** wipes the chips and the privileges toggle. It does not touch the

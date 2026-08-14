@@ -72,7 +72,7 @@ Roster when you're scanning a busy band for the one call worth working.
    a bystander never advances your QSO, and portable suffixes are matched by
    base call.
 4. On the final 73, TX disarms (WSJT-X default — see "Disable TX after sending
-   73" in [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4)).
+   73" in [Settings ▸ Digital](settings-reference.md#digital-ft8ft4)).
    The QSO logs automatically if Auto-log is on.
 
 ### Run CQ (call and work the pileup)
@@ -82,13 +82,13 @@ Roster when you're scanning a busy band for the one call worth working.
 2. When a station answers, the sequencer works them, then **auto-returns to CQ**
    for the next caller.
 3. Optional guards in
-   [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4): "Stop CQ
+   [Settings ▸ Digital](settings-reference.md#digital-ft8ft4): "Stop CQ
    after N calls" ends an unanswered run; "Auto-CQ: drop a silent caller after N
    overs" abandons a station that answered then went quiet.
 
 Remember to pick your **transmit period** (Tx 1st / even, or Tx 2nd / odd) —
 the two stations in a QSO must be on opposite periods. The choice is on the top
-bar and in [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4).
+bar and in [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
 
 ### Work a needed station
 
@@ -100,7 +100,7 @@ double-clicking a spot on the [Connect map](connect.md).
 ### Hound a DXpedition (Fox/Hound)
 
 1. Turn on **DXpedition mode ▸ Hound** in
-   [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4) (or start
+   [Settings ▸ Digital](settings-reference.md#digital-ft8ft4) (or start
    it from a [DXpedition board](dxpeditions.md) row).
 2. Nexus spreads your initial calls above 1000 Hz (session-salted so callers
    don't stack) and **auto-moves your TX to the Fox's frequency** the moment
@@ -119,7 +119,7 @@ end) is not implemented.
   in 500 Hz steps for a cleaner signal).
 - **Decode depth** (Fast / Normal / Deep) and the **decoder passband**
   (default 200–2900 Hz) are in
-  [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4).
+  [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
 - **`F6`** re-decodes the retained last period and adds only what the first pass
   missed. **`Esc`** halts TX, **`F4`** clears the DX call, **`Alt+1`–`Alt+6`**
   fire the Tx slots.
@@ -176,7 +176,7 @@ On top of the waveform:
   retransmissions are joint-combined (RV0 → RV1 → RV2) until the message lands,
   for a simulated ~+2.5 dB / ~2× completion gain in the marginal zone. A session
   rescue counter in the UI shows how often it saved a frame. Toggle it in
-  [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4).
+  [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
 - **Coordinated QSY (Roam)** — an announced, plain-text, in-the-clear frequency
   move for keeping an off-grid net together, with deterministic timing and
   automatic return-home on lost sync. It is a net convenience, **not** privacy

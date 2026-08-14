@@ -96,7 +96,7 @@ keyer's F-keys are always reachable rather than rendered past the edge. **PTT**,
 ### Work FM and repeaters
 
 1. Set **Phone mode ▸ FM** in
-   [Settings ▸ Modes ▸ Phone](settings-reference.md#phone-ssb--fm). The cockpit's mode
+   [Settings ▸ Phone](settings-reference.md#phone-ssb--fm). The cockpit's mode
    badge switches to FM and the rig is driven to FM.
 2. For a repeater, set the **Repeater shift** (simplex / plus / minus — the
    offset is the band standard, e.g. 600 kHz on 2 m, 5 MHz on 70 cm) and the
@@ -110,7 +110,7 @@ The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
 
 1. **Record in-app** or **import any WAV** (Nexus resamples and downmixes
    automatically). Choose your recording mic in
-   [Settings ▸ Modes ▸ Phone](settings-reference.md#phone-ssb--fm) — on a
+   [Settings ▸ Phone](settings-reference.md#phone-ssb--fm) — on a
    digital setup the default input is the rig's RX audio, so point "Voice mic
    (recording)" at your actual microphone. Both controls that start a recording
    — the **●** button and an empty slot — carry that warning, so it reaches you

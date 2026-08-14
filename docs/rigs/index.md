@@ -34,7 +34,7 @@ brand-specific page yet. If you run one and want notes added, open an issue.
 
 ## The two connection types
 
-Everything in **Settings ▸ Radio ▸ Rig Control** comes down to one choice — the
+Everything in **Settings ▸ Radio ▸ Rig & CAT** comes down to one choice — the
 **Connection** dropdown:
 
 ### Serial (USB / COM) — most rigs
@@ -56,7 +56,7 @@ setup* button): one scan reads your USB devices, fills the model, port, and
 paired sound device, and — if Windows is missing a USB-serial driver — shows the
 exact download link. Review what it filled, then **Save**.
 
-<!-- TODO: capture screenshot — Settings ▸ Radio ▸ Rig Control with the Connection dropdown and Detect my radio button -->
+<!-- TODO: capture screenshot — Settings ▸ Radio ▸ Rig & CAT with the Connection dropdown and Detect my radio button -->
 
 ### Network (FlexRadio / remote)
 

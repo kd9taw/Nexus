@@ -38,7 +38,7 @@ installer). Run the installer again and let it complete.
 
 ### The radio isn't found by Detect
 
-**Detect my radio** (Settings ▸ Radio ▸ Rig Control, and in the wizard) enumerates USB
+**Detect my radio** (Settings ▸ Radio ▸ Rig & CAT, and in the wizard) enumerates USB
 devices and scans for FlexRadios on the LAN. If it finds nothing:
 
 - Make sure the rig is **plugged in and powered on**, then click Detect again.
@@ -87,7 +87,7 @@ waits ~1.3 s, and reads the dial frequency. A real frequency back (e.g.
    or start Nexus with the rig already powered on. Slow serial rigs are otherwise
    handled fine once connected.
 
-<!-- TODO: capture screenshot — Settings ▸ Radio ▸ Rig Control after a successful Test CAT, showing the read-back dial frequency -->
+<!-- TODO: capture screenshot — Settings ▸ Radio ▸ Rig & CAT after a successful Test CAT, showing the read-back dial frequency -->
 
 ### The rig won't change mode when I switch sections (FTDX10-class)
 
@@ -216,7 +216,7 @@ by NTP at all will eventually drift past the correction range.
   auto-arm on section entry; Phone and CW do.
 - **License-class lockout** — if the dial is outside your declared license
   segment, the TX button shows a lock and every TX path independently refuses to
-  key. Check Settings ▸ License Class (default **Open**, no lockout).
+  key. Check Settings ▸ Station (default **Open**, no lockout).
 - **TX watchdog** — after ~6 minutes of continuous unattended TX the engine
   auto-halts and shows a watchdog chip. Re-arm Enable TX to clear it.
 
@@ -265,12 +265,12 @@ them before assuming something's broken:
 ## Where the Connections log lives
 
 Connector activity — every LoTW/QRZ/ClubLog/eQSL/HRDLog push and its result — is
-recorded in the **Connections log** at **Settings ▸ Connectors** (the last 200
-events). When an upload "isn't working," this log shows the actual server response,
-which is what separates a credential problem from a service outage or a changed
-web page. Check it before assuming the worst.
+recorded in the **Connections log** at **Settings ▸ Logging & Connectors ▸
+Connections** (the last 200 events). When an upload "isn't working," this log
+shows the actual server response, which is what separates a credential problem
+from a service outage or a changed web page. Check it before assuming the worst.
 
-<!-- TODO: capture screenshot — Settings ▸ Connectors showing the Connections log with recent upload events and their outcomes -->
+<!-- TODO: capture screenshot — Settings ▸ Logging & Connectors ▸ Connections showing the Connections log with recent upload events and their outcomes -->
 
 ---
 

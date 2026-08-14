@@ -66,14 +66,14 @@ What's on the board:
 - **Collections and personal bests.**
 
 Some feats read your station power (from
-[Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4)) — set it to
+[Settings ▸ Digital](settings-reference.md#digital-ft8ft4)) — set it to
 unlock the miles-per-watt and QRP feats.
 
 ### Optional weekly streak
 
 Off by default: a gentle **"weeks on the air"** counter (never a daily streak,
 never a penalty for a break). Enable it under Journey in
-[Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4).
+[Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
 
 ### Share a card
 

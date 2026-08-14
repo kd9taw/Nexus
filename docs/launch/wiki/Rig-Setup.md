@@ -25,7 +25,7 @@ software guard in every TX path).
 
 ## The fast path: Detect my radio
 
-For almost every rig the quickest setup is **Settings ▸ Radio ▸ Rig Control ▸ Detect my
+For almost every rig the quickest setup is **Settings ▸ Radio ▸ Rig & CAT ▸ Detect my
 radio**. One scan reads your USB devices *and* finds FlexRadios on the LAN, then
 fills the model, port, and paired audio in one click — and if Windows is missing a
 USB-serial driver, it shows the exact download link. Review what it filled, then
@@ -118,7 +118,7 @@ and off by default**, and it is **not yet confirmed on hardware here** — if
 decodes stop after you switch it on, switch it back off and the Hamlib CAT path
 above is unchanged underneath.
 
-**rigctld TCP Port = 4532.** In **Settings ▸ Radio ▸ Rig Control ▸ Advanced** (a
+**rigctld TCP Port = 4532.** In **Settings ▸ Radio ▸ Rig & CAT ▸ Advanced** (a
 collapsed group), the **rigctld TCP Port** should be the default **4532** (Hamlib's
 standard). If a Flex connects for
 one operator but not another — a "can't reach the radio's CAT link" error — check
@@ -151,7 +151,7 @@ field reports genuinely valuable.
 ## Rotators
 
 Nexus drives rotators through Hamlib's `rotctld` — bundled and launched for you,
-the same way CAT is. In **Settings ▸ Radio ▸ Rig Control ▸ Antenna rotator**, pick the model,
+the same way CAT is. In **Settings ▸ Radio ▸ Rig & CAT ▸ Antenna rotator**, pick the model,
 set the serial port and baud (GS-232 defaults to 9600), and **Save**. Curated
 models include Yaesu GS-232A/B, SPID Rot2Prog, EasyComm II/III, Hy-Gain, Green
 Heron RT-21, M2 RC2800, and more.

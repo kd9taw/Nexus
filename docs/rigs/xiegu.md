@@ -21,7 +21,7 @@ reads the model from the USB descriptor and pairs the built-in audio codec —
 much like a modern Icom.
 
 1. Plug in over USB-C and power on.
-2. **Settings ▸ Radio ▸ Rig Control ▸ Detect my radio** — it should fill the model, port,
+2. **Settings ▸ Radio ▸ Rig & CAT ▸ Detect my radio** — it should fill the model, port,
    and the radio's built-in audio device.
 3. Set **Baud** to match the rig's CI-V / CAT menu.
 4. **Save**, then **Test CAT**.

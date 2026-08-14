@@ -9,7 +9,7 @@ string, so **Detect my radio** usually identifies the exact radio in one scan.
 ## Quick setup
 
 1. Plug the rig into USB and power it on.
-2. **Settings ▸ Radio ▸ Rig Control ▸ Detect my radio.** For a radio that embeds its model
+2. **Settings ▸ Radio ▸ Rig & CAT ▸ Detect my radio.** For a radio that embeds its model
    in the USB descriptor (IC-705, IC-7300, IC-9700, and similar), Nexus fills the
    **Rig Model**, the serial port, and the paired USB Audio Codec in one click.
 3. On Windows, if the USB-serial driver is missing, Detect shows the exact

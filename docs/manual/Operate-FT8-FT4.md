@@ -141,7 +141,7 @@ The **boundary pass** runs at the normal period end and ingests only lines the e
 
 ## Split Operation
 
-Set in **Settings → Operate → Split Operation**. Three modes:
+Set in **Settings → Radio ▸ Rig & CAT ▸ Split operation**. Three modes:
 
 **None** (default) — TX audio offset equals your raw waterfall click position. No VFO manipulation. The rig's passband must be wide enough to cover your chosen TX frequency.
 

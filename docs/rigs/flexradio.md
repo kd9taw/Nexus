@@ -26,7 +26,7 @@ your Flex you need:
 
 ## Quick setup (the proven path)
 
-1. **Settings ▸ Radio ▸ Rig Control ▸ Detect my radio.** The same scan that reads USB rigs
+1. **Settings ▸ Radio ▸ Rig & CAT ▸ Detect my radio.** The same scan that reads USB rigs
    also **discovers FlexRadios on your LAN**. Your Flex appears as a row like
    *"FLEX-6400M — network · via SmartSDR CAT on this PC (slice A, TCP 5002)"*.
 2. Click **Use this**. Nexus sets everything for the proven path automatically:

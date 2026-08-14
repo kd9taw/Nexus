@@ -19,7 +19,7 @@ The tabs, in the order they appear:
 The panel header carries the **build stamp** (confirm a fresh install actually
 took) and a **Check for updates** button.
 
-![The Settings panel with the Radio tab open. The nine tabs — Station, Radio, Phone, CW, Digital, Spots & Alerts, Logging & Connectors, Contesting, Appearance — run across the top, and the panel header carries the build stamp and Check for updates. Under them the Radios roster lists three configured rigs: a Yaesu FTDX10 on COM3 badged ACTIVE, an Icom IC-9700 on COM6 and a 991a on a CP2105 bridge, the two inactive rigs carrying Edit / Make active / Remove while the active one shows only its name and the ACTIVE badge, each with a row of band chips lighting the bands it covers — 160 m through 2 m for the Yaesu, 2 m and 70 cm for the 9700, 6 m and 2 m for the 991a. + Add radio closes the roster and Save sits at the bottom right; the rest of the tab continues below the fold.](../img/manual/settings-radio.webp)
+![The Settings panel with the Radio tab open on a fresh install. The nine tabs — Station, Radio, Phone, CW, Digital, Spots & Alerts, Logging & Connectors, Contesting, Appearance — run across the top beside a "Find a setting" box, and the header carries the build stamp and Check for updates. Below them a Setup health strip, the Radios roster holding a single radio badged ACTIVE with an Add radio button, Profiles, and the Rig & CAT section laid out in columns across the full width of the window: PTT Method, Zero-config setup with a Detect my radio button, Rig Model, Connection, Serial Port with Refresh and Auto-test, Baud, and Antenna Rotator. Each control has its explanation printed under it.](../img/manual/settings-radio.webp)
 
 ---
 
@@ -264,7 +264,7 @@ and the source. A failed refresh adds a plain-language "Last refresh" line.
 
 ### Rotator
 
-Pointing manners for the rotator picked under **Rig Control**. They apply to
+Pointing manners for the rotator picked under **Rig & CAT**. They apply to
 satellite auto-track.
 
 - **Park position (° az / el)** — "The stow position — wind-safe, or wherever
@@ -439,7 +439,7 @@ the radio.
 All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
 (Companion mode) decodes arrive already made and **none of them apply**.
 
-![The Decoder and Station Housekeeping groups of the Digital (FT8/FT4) fieldset, part-way down the Modes tab. Decode depth is set to Deep, the passband reads F low 200 and F high 2900, A-priori (AP) decoding — FT8 is on while AP: CQ hypothesis only and Single decode are off, and DXpedition mode sits on Off rather than Hound. The housekeeping row underneath carries Journey, Beacon, IR-HARQ and Clock check (NTP) as toggles — Beacon the only one off — with Station power (W) starting below them. Each control has its explanation printed under it.](../img/manual/settings-modes.webp)
+![The top of the Digital tab, the Digital (FT8/FT4) fieldset spread across the full width of the window. Transmit & sequencing runs along the top — Transmit period TX 1st (even) on, TX watchdog 6 minutes, Disable TX after sending 73 on, Double-click arms TX on, Tune timeout 12 s. Auto-CQ & caller selection and Logging behavior follow, with Auto-log QSOs on and Prompt before logging off. The Decoder group sits at the bottom: Decode depth on Deep, the passband reading F low 200 and F high 2900, A-priori (AP) decoding — FT8 on while AP: CQ hypothesis only and Single decode are off, with DXpedition mode beginning below. Each control has its explanation printed under it.](../img/manual/settings-modes.webp)
 
 - **Decode depth** — Fast / Normal / Deep. "Deep finds the most signals (WSJT-X
   default); Fast saves CPU on old hardware."
@@ -997,7 +997,7 @@ HTTP.
 
 Always visible — capability, not configuration, gates the tabs.
 
-![The Contesting tab, both its fieldsets in one view. Contest Category holds the Unassisted entry switch, off here, above a live ASSISTED line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs have been supplying callsign identification since 16:27Z, and an Assistance record of eight timestamped rows, each a Nexus start with those same three sources active. Field Day Setup below is off and unfilled: the Event pair ARRL Field Day / Winter Field Day, empty FD Class and ARRL Section boxes showing their 1D and WI hints, and ×2 ≤100W picked from the power-multiplier chips.](../img/manual/settings-contesting.webp)
+![The Contesting tab, both its fieldsets in one view. Contest Category holds the Unassisted entry switch, off here, above an ASSISTED line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification, and a collapsed "What this means for your contest category" note. Field Day Setup below it has Field Day mode off, with Event (ARRL Field Day / Winter Field Day), FD Class, ARRL Section and Power multiplier — set to ×2 ≤100W — laid out in a row across the window.](../img/manual/settings-contesting.webp)
 
 ### Contest Category
 

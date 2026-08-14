@@ -193,7 +193,7 @@ Every QSO record carries a per-source `UploadOutcome` stamped at upload time and
 | Rejected | Service refused the record; inspect the connection event log |
 | AuthFail | Credentials invalid; re-enter in Settings |
 
-The connection event log (accessible from Settings → Connectors) holds the last 200 events in a rolling buffer, covering every credential save, sync download, upload dispatch, and service rejection for all five connectors. Each event carries a timestamp, connector name, severity, and a sanitized message (absolute paths redacted to basenames, truncated to 200 characters).
+The connection event log (accessible from Settings → Logging & Connectors ▸ Connections) holds the last 200 events in a rolling buffer, covering every credential save, sync download, upload dispatch, and service rejection for all five connectors. Each event carries a timestamp, connector name, severity, and a sanitized message (absolute paths redacted to basenames, truncated to 200 characters).
 
 A per-row push button (↥) in the Logbook table lets you re-push any individual QSO to QRZ on demand without re-syncing the entire log. ClubLog and eQSL have no per-row push button; re-uploading to those services requires triggering a full sync.
 

@@ -199,7 +199,7 @@ mileage follows you.
 
 - **＋ Save captures frequency and mode, nothing else.** Save an FM repeater off
   the dial and you get a plain simplex channel — the shift and tone you have set
-  in [Settings ▸ Modes ▸ Phone](settings-reference.md#phone-ssb--fm) do not come
+  in [Settings ▸ Phone](settings-reference.md#phone-ssb--fm) do not come
   with it. Type them into the editor, or bring the machine over from Program,
   which does carry them.
 - **Nexus never writes to the radio's own memory channels.** There is no CAT path

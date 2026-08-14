@@ -14,7 +14,7 @@ hand.
 
 ## Setup
 
-Everything lives in **Settings ▸ Radio ▸ Rig Control ▸ Antenna rotator**:
+Everything lives in **Settings ▸ Radio ▸ Rig & CAT ▸ Antenna rotator**:
 
 1. Pick your **rotator model** from the dropdown.
 2. Set its **serial port** (COM7, `/dev/ttyUSB1`, …) and **baud** (GS-232
@@ -23,7 +23,7 @@ Everything lives in **Settings ▸ Radio ▸ Rig Control ▸ Antenna rotator**:
 
 That's it — no separate daemon, no hand-run commands.
 
-<!-- TODO: capture screenshot — Antenna rotator model, port, and baud in the Radio tab’s Rig Control fieldset -->
+<!-- TODO: capture screenshot — Antenna rotator model, port, and baud in the Radio tab’s Rig & CAT fieldset -->
 
 ### No hardware? Test with the dummy
 

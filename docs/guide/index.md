@@ -80,7 +80,7 @@ multi-monitor shack.
 ### System
 - **[Program](program.md)** — the radio-programming workbench: the repeaters
   around a location become a channel list, and the list becomes a CHIRP CSV.
-- **[Settings reference](settings-reference.md)** — a walk through all eleven
+- **[Settings reference](settings-reference.md)** — a walk through all nine
   Settings tabs, field by field.
 
 ## First run

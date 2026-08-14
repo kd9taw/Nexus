@@ -26,7 +26,7 @@ Deliberate differences: Nexus always decodes every RX slot (no Monitor-on/off to
 
 ### Will JTAlert and GridTracker still work?
 
-Yes. Nexus outputs the standard WSJT-X UDP datagram set on `127.0.0.1:2237` (Decode type 2, Status type 1, QsoLogged type 5, Heartbeat). It also accepts inbound HaltTx, Clear, Replay, Location, HighlightCallsign, FreeText, and Reply. (`Location` type 11 updates the operator's Maidenhead grid from a GPS feeder.) Type numbers are pinned to the canonical 0–15 range. During Field Day, the Status message sets `special_op = 3` so JTAlert and GridTracker auto-activate their FD behaviour. You may need to point JTAlert at port `2237` if you changed the WSJT-X default in your setup — check Settings > UDP.
+Yes. Nexus outputs the standard WSJT-X UDP datagram set on `127.0.0.1:2237` (Decode type 2, Status type 1, QsoLogged type 5, Heartbeat). It also accepts inbound HaltTx, Clear, Replay, Location, HighlightCallsign, FreeText, and Reply. (`Location` type 11 updates the operator's Maidenhead grid from a GPS feeder.) Type numbers are pinned to the canonical 0–15 range. During Field Day, the Status message sets `special_op = 3` so JTAlert and GridTracker auto-activate their FD behaviour. You may need to point JTAlert at port `2237` if you changed the WSJT-X default in your setup — check Settings → Logging & Connectors ▸ Integrations & Feeds.
 
 ---
 
@@ -35,7 +35,7 @@ Yes. Nexus outputs the standard WSJT-X UDP datagram set on `127.0.0.1:2237` (Dec
 Yes, via two paths:
 
 - **UDP QsoLogged datagrams** go to `127.0.0.1:2237` just like WSJT-X. N1MM+, HRD, and Log4OM can receive these and log the contact on their side.
-- **CAT broker**: Nexus can serve a rigctld-compatible TCP broker (off by default; enable in Settings → Radio ▸ Rig Control) so WSJT-X, N1MM+, and other loggers share the radio through Nexus. The broker handles `f/F`, `m/M`, `t/T`, `v/V`, `s`, `\dump_state`, `\chk_vfo`, `\get_powerstat`, and `q`. Genuinely unimplemented Hamlib commands (e.g. `L RFPOWER`) return `RPRT -11`.
+- **CAT broker**: Nexus can serve a rigctld-compatible TCP broker (off by default; enable in Settings → Radio ▸ Rig & CAT) so WSJT-X, N1MM+, and other loggers share the radio through Nexus. The broker handles `f/F`, `m/M`, `t/T`, `v/V`, `s`, `\dump_state`, `\chk_vfo`, `\get_powerstat`, and `q`. Genuinely unimplemented Hamlib commands (e.g. `L RFPOWER`) return `RPRT -11`.
 
 For Field Day specifically, Nexus pushes each contact to N3FJP over TCP (ADDDIRECT + CHECKLOG, default port 1100) and broadcasts N1MM+ contactinfo UDP datagrams (default port 12060). See [Field Day](Field-Day.md).
 
@@ -85,7 +85,7 @@ No. The engine starts passive on every launch regardless of saved settings. For 
 
 ### I am a non-US operator. Does the license lockout block me?
 
-The default license class is **Open** (no lockout), so Nexus does not restrict transmit on a fresh install. The lockout enforces US FCC Part 97 Region 2 sub-band rules only (Technician / General / Amateur Extra segments, including the 2026 60 m subband). Non-US operators should leave the class set to Open or select Open in Settings > License. No other national band plans are currently modelled in the privilege engine.
+The default license class is **Open** (no lockout), so Nexus does not restrict transmit on a fresh install. The lockout enforces US FCC Part 97 Region 2 sub-band rules only (Technician / General / Amateur Extra segments, including the 2026 60 m subband). Non-US operators should leave the class set to Open or select Open in Settings → Station. No other national band plans are currently modelled in the privilege engine.
 
 ---
 
@@ -119,7 +119,7 @@ The desktop shell is packaged for **Windows, Linux and Raspberry Pi**, all from 
 
 ### Where is my log file?
 
-Nexus stores the logbook as an **ADIF v3.1.4** file in the app data directory (on Windows: `%APPDATA%\tempo\log.adi` — check Settings > Logbook for the exact path). The file is plain-text ADIF and can be imported into any standard logger. Import deduplicates on call + band + mode + UTC day, so re-importing your own log is safe.
+Nexus stores the logbook as an **ADIF v3.1.4** file in the app data directory (on Windows: `%APPDATA%\tempo\log.adi`). The file is plain-text ADIF and can be imported into any standard logger. Import deduplicates on call + band + mode + UTC day, so re-importing your own log is safe.
 
 QSO recordings (if started in the Phone cockpit) are written to timestamped WAV files in a `recordings/` subdirectory alongside the settings file. The WAV header is checkpointed approximately every second so an abnormal exit leaves a readable file; recording auto-stops after 2 hours to prevent unbounded disk fill.
 
@@ -127,7 +127,7 @@ QSO recordings (if started in the Phone cockpit) are written to timestamped WAV 
 
 ### Do auto-upload connectors (LoTW, QRZ, ClubLog, eQSL) run automatically?
 
-Only if you enable them. Auto-upload on log for QRZ Logbook, ClubLog, and eQSL is **off by default** (three separate boolean flags in Settings > Connectors). LoTW upload is manual by default: you trigger it from the Awards page or the per-row button in the Logbook, and Nexus shells out to your installed TQSL binary with `-d -u -x -a compliant`. TQSL must be installed separately from ARRL; Nexus does not bundle it. There is also an opt-in **Upload to LoTW automatically** switch (Settings > Confirmations > LoTW) that runs that same batch on a timer every few hours; it needs a Station Location, it is refused while "Sign from ADIF location" is on, and one refused batch stops it until you fix the cause.
+Only if you enable them. Auto-upload on log for QRZ Logbook, ClubLog, and eQSL is **off by default** (three separate boolean flags in Settings → Logging & Connectors ▸ Connections). LoTW upload is manual by default: you trigger it from the Awards page or the per-row button in the Logbook, and Nexus shells out to your installed TQSL binary with `-d -u -x -a compliant`. TQSL must be installed separately from ARRL; Nexus does not bundle it. There is also an opt-in **Upload to LoTW automatically** switch (Settings → Logging & Connectors ▸ Confirmations ▸ LoTW) that runs that same batch on a timer every few hours; it needs a Station Location, it is refused while "Sign from ADIF location" is on, and one refused batch stops it until you fix the cause.
 
 Note that **ClubLog also requires a developer API key**. Official installer builds bundle one, so you only need your ClubLog email and Application Password. If you build from source (the key is never committed to the public repository), pushes fail with an error directing you to obtain a free key at `clublog.org/requestapikey.php` and add it in Settings. QRZ and eQSL do not have this requirement.
 
@@ -137,13 +137,13 @@ Confirmation syncs (LoTW download, eQSL InBox) are likewise triggered manually o
 
 ### How does the rig-detection "Detect my radio" button work?
 
-Click **Detect** in Settings → Radio ▸ Rig Control. Nexus reads USB descriptors: if the bridge-chip vendor ID matches Silicon Labs CP210x, FTDI, WCH CH340, or Prolific PL2303, it provides an OS-aware driver hint. If the USB product string fuzzy-matches a known model name (e.g. `IC-7300`), it fills the Hamlib model number. It also attempts to pair the audio codec by matching USB product strings or falling back to any device whose name contains `USB Audio` or `USB Codec`. On generic-cable rigs (e.g. a CH340 cable reporting only "USB Serial") you get the serial port and audio suggestion but must select the rig model manually.
+Click **Detect** in Settings → Radio ▸ Rig & CAT. Nexus reads USB descriptors: if the bridge-chip vendor ID matches Silicon Labs CP210x, FTDI, WCH CH340, or Prolific PL2303, it provides an OS-aware driver hint. If the USB product string fuzzy-matches a known model name (e.g. `IC-7300`), it fills the Hamlib model number. It also attempts to pair the audio codec by matching USB product strings or falling back to any device whose name contains `USB Audio` or `USB Codec`. On generic-cable rigs (e.g. a CH340 cable reporting only "USB Serial") you get the serial port and audio suggestion but must select the rig model manually.
 
 ---
 
 ### Can I share the radio with WSJT-X while running Nexus?
 
-Yes — enable the **CAT broker** in Settings → Radio ▸ Rig Control. Nexus listens on a configurable port (default 4532) as a rigctld-compatible TCP server. WSJT-X or any Hamlib NET rigctl client points at `localhost:4532` and Nexus proxies frequency, mode, and PTT commands through to the actual rig. The broker is off by default; enabling it while WSJT-X is already bound to the same port will conflict, so bring up Nexus first or change one of the port numbers.
+Yes — enable the **CAT broker** in Settings → Radio ▸ Rig & CAT. Nexus listens on a configurable port (default 4532) as a rigctld-compatible TCP server. WSJT-X or any Hamlib NET rigctl client points at `localhost:4532` and Nexus proxies frequency, mode, and PTT commands through to the actual rig. The broker is off by default; enabling it while WSJT-X is already bound to the same port will conflict, so bring up Nexus first or change one of the port numbers.
 
 In Companion source mode, Nexus can also ride an upstream WSJT-X or JTDX decode stream over UDP port 2237 without running its own modem, so both apps decode independently from the same audio stream piped from the rig.
 

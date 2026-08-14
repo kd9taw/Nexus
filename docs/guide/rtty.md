@@ -24,14 +24,14 @@ behind one. The badge explains itself on hover: "RTTY — Baudot/ITA2 at the
 configured baud + shift (45.45 / 170 Hz is the HF standard; change it in
 Settings → RTTY)."
 
-The big frequency readout is editable — type a dial and press Enter. A frequency
-outside the band plan is rejected with a toast rather than sent to the rig. Beside
-it, a compact band picker serves the built-in RTTY watering holes: ten HF
-channels from 160 m (1.838) through 10 m (28.083), each with a note on what
-shares the window — 40 m carries both the US 7.080 and the EU/DX 7.045 entries,
-and 20 m parks at 14.083, above the FT4 cluster at 14.080. The list is filtered
-by license class per band, so a band where your class holds no digital
-privileges never appears.
+The big frequency readout is editable — type a dial and press Enter. It tunes
+wherever you type, off the ham bands included, so a shortwave RTTY station is
+reachable from here. Beside it, a compact band picker serves the built-in RTTY
+watering holes: ten HF channels from 160 m (1.838) through 10 m (28.083), each
+with a note on what shares the window — 40 m carries both the US 7.080 and the
+EU/DX 7.045 entries, and 20 m parks at 14.083, above the FT4 cluster at 14.080.
+The list is filtered by license class per band, so a band where your class holds
+no digital privileges never appears.
 
 On the right: **⊞ Panels**, the **TX On / TX Off** latch, **Stop TX** and the CAT
 pill. The latch is this cockpit's Enable-Tx — the top bar's TX cluster is hidden
@@ -104,8 +104,8 @@ the first tick after you come back catches the display up.
 
 **The TX dock** — macros, compose, and the sequencer row when Auto is on — is
 pinned below the pane and cannot be scrolled out of reach or hidden. The macro
-row holds a **Their call…** field feeding the `{CALL}` token, four macros, and
-**Esc / Stop**:
+row holds a **Their call…** field feeding the `{CALL}` token, four macros, the
+**TX** continuous-transmit button and **Esc / Stop**:
 
 | Key | Label | Sends |
 |---|---|---|
@@ -162,7 +162,7 @@ together.
    characters. The pill shows the offset it settled on and gains its 🔒.
 4. If the copy is upside down — the classic all-garble against a strong signal —
    turn on **Reverse (swap mark/space)** in
-   [Settings ▸ Modes ▸ RTTY](settings-reference.md#rtty). There is no reverse
+   [Settings ▸ Digital ▸ RTTY](settings-reference.md#rtty). There is no reverse
    button in the cockpit; the M and S cursors trading places on the waterfall are
    the only on-screen sign of which sense you are running.
 5. If the AFC locked onto the wrong signal, press **Re-tune** to drop and rebuild
@@ -182,6 +182,31 @@ together.
 4. **Esc / Stop** is live exactly while an over is on the air. It aborts the
    transmission, drops anything queued behind it, and unkeys. **Stop TX** in the
    header does the same and is never disabled.
+
+### Key up and type
+
+The dock's **TX** button keys up and stays keyed, the way MMTTY does. It reads
+**Continuous** when it is off and **On air** while you are transmitting. Type
+and the characters go out as you type them; between keystrokes the air carries
+diddle — the LTRS idle every RTTY station sends — so the far end holds sync
+instead of hearing you drop out at the end of every line. Click **TX** again and
+it sends the rest of what you typed and unkeys.
+
+While the latch is up, **Enter** puts a new line on the air instead of sending,
+and the F-key macros type into the transmission already in progress rather than
+queueing an over behind it. Enter-per-line works exactly as before with the
+latch down. Continuous TX and the auto-sequencer will not run at the same time,
+and each says so if you try.
+
+This is the one transmission in Nexus with no fixed end, so it carries more
+stops than the rest. **Stop TX**, the dock's **Esc / Stop** macro, the header's
+**TX On** latch and the **Esc** key each cut it immediately, and so does
+anything that takes RTTY off the rig without you pressing a stop at all —
+leaving the RTTY section, tuning to a frequency you are not licensed for,
+starting a tune carrier, or switching radios. Your TX watchdog applies as it
+does to any other over (typing keeps it happy, walking away does not), and above
+it one continuous over is capped at ten minutes, which no amount of typing
+extends.
 
 ### Run a QSO with the auto-sequencer
 
@@ -216,7 +241,7 @@ and any class/section riding the comment field so nothing you copied is lost.
 
 ### Choose a keying backend
 
-Set this in [Settings ▸ Modes ▸ RTTY](settings-reference.md#rtty); the cockpit's
+Set this in [Settings ▸ Digital ▸ RTTY](settings-reference.md#rtty); the cockpit's
 pill shows which one is live.
 
 - **AFSK** (default) plays a two-tone waveform through the same TX audio path
@@ -249,13 +274,13 @@ wherever you are.
 
 ## Honest limits
 
-- **The F-key labels are labels.** Nothing in this cockpit is bound to a
-  keyboard key except **Enter** in the compose bar — `F1`–`F4` and `Esc` name the
-  buttons, and you click them. (The CW cockpit does bind its keys; this one does
-  not.)
+- **The F-key labels are labels.** `F1`–`F4` name the macro buttons and you
+  click them; none of them is bound to the keyboard. (The CW cockpit does bind
+  its keys; this one does not.) The two real bindings are **Enter** in the
+  compose bar and **Esc**, which stops RTTY from anywhere in the cockpit.
 - **Nothing you work by hand is logged.** There is no log strip here. Only the
   auto-sequencer writes a QSO, and only when **Auto-log QSOs** is on in
-  [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4) — with
+  [Settings ▸ Digital](settings-reference.md#digital-ft8ft4) — with
   auto-log off, even a completed auto-run contact is not written anywhere.
 - **An auto run works one station and stops.** After the contact is logged and
   your closing goes out, the sequencer reaches Done and stays there. Press
@@ -264,7 +289,7 @@ wherever you are.
 - **An unanswered auto CQ repeats indefinitely** — every 30 seconds, by design
   ("the operator owns stopping a run"). A bare repeat deliberately does not reset
   the transmit watchdog, so the **Tx Watchdog** in
-  [Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4) (6 minutes
+  [Settings ▸ Digital](settings-reference.md#digital-ft8ft4) (6 minutes
   by default) is the backstop that eventually disarms TX. Abort and Stop TX are
   the immediate ones.
 - **The report is always 599.** The `F3` macro sends it literally and the
@@ -282,9 +307,11 @@ wherever you are.
 - **One signal at a time.** A single demodulator sits on a single tone pair, so
   two stations in the passband do not decode into two columns and the second one
   does not decode at all. This is a receiver, not a skimmer.
-- **Send-and-done: no diddle.** The transmitter unkeys the moment the final stop
-  bit ends. Nexus does not hold an idle mark between overs, which some stations'
-  AGC and some contest software expect.
+- **Send-and-done between overs, unless you latch TX.** Sent a line at a time,
+  the transmitter unkeys the moment the final stop bit ends — no idle mark is
+  held between overs, which some stations' AGC and some contest software expect.
+  The **TX** button is the way round it: it holds the carrier up and idles on
+  diddle. See [Key up and type](#key-up-and-type).
 - **The character set is ITA2 and nothing else** — A–Z, 0–9 and the classic
   punctuation. Everything is uppercased, and anything with no Baudot code (`+`,
   `=`, `@`, accented letters) is dropped silently before it reaches the rig. One

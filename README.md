@@ -288,7 +288,7 @@ logs, and never shown back to the UI beyond "configured."
    the app's own libraries but not the system C library. On an older distro both install cleanly and
    then fail to start, so it is worth checking first. See
    [Install → What you need](docs/install.md#what-you-need).
-2. Plug in the radio, open **Settings ▸ Rig & Audio**, click **Detect my radio**.
+2. Plug in the radio, open **Settings ▸ Radio**, click **Detect my radio**.
 3. Answer the first-run wizard: callsign, grid, license class, and what you want to do.
 4. Watch decodes arrive. Double-click a station, the sequencer runs the QSO, and the contact lands
    in the logbook, on PSK Reporter, and (if configured) on QRZ and LoTW.
@@ -299,7 +299,7 @@ New here? Start with **[Getting Started](docs/manual/Getting-Started.md)**.
 > Run anyway*. Verify the download against the `SHA-256` published on the
 > [release page](https://github.com/kd9taw/Nexus/releases/latest).
 >
-> On a slower Raspberry Pi, **Settings ▸ Decode depth ▸ Fast** keeps FT8/FT4 decoding in real time.
+> On a slower Raspberry Pi, **Settings ▸ Digital ▸ Decode depth ▸ Fast** keeps FT8/FT4 decoding in real time.
 
 ## Status — the honest version
 

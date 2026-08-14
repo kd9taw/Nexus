@@ -91,7 +91,7 @@ controls.
   feed's controls in place: the on/off switch, **Radius (km)**, and **Watched
   calls** (committed on blur, not per keystroke, because each write reconnects
   the feed). Server, port, traffic types and the iGate live in
-  [Settings ▸ Modes ▸ APRS](settings-reference.md#aprs), and the panel says so.
+  [Settings ▸ Digital ▸ APRS](settings-reference.md#aprs), and the panel says so.
 - **Internet N** / **Internet N hidden** appears once the feed has contributed
   stations your own antenna has not heard. One click hides them, leaving the
   honest picture of what this radio can actually reach. The count is in the
@@ -272,7 +272,7 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
 ### Run the receive-only iGate
 
 1. Switch **Receive-only iGate** on in
-   [Settings ▸ Modes ▸ APRS](settings-reference.md#aprs) (it sits under the
+   [Settings ▸ Digital ▸ APRS](settings-reference.md#aprs) (it sits under the
    APRS-IS feed and needs it on). It publishes under your callsign, which is why
    it is a separate choice from watching the feed.
 2. Keep the RF decoder armed — the iGate contributes only what your own antenna
@@ -343,5 +343,5 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
 - [Phone (SSB)](phone.md) — the FM side of the same radio, repeaters and CTCSS
 - [Connect — map + propagation](connect.md) — the full map, with everything this
   one deliberately leaves off
-- [Settings reference](settings-reference.md) — the Radio tab's Rig Control and
+- [Settings reference](settings-reference.md) — the Radio tab's Rig & CAT and
   Audio fieldsets, and the Features toggles this section depends on

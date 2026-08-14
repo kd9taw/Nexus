@@ -36,7 +36,7 @@ picked in [Settings ▸ Logging & Connectors](settings-reference.md#integrations
    strongest opportunity.
 3. When the window comes, work them through the [Operate cockpit](operate-digital.md)
    — turn on **Hound** mode for the pileup
-   ([Settings ▸ Modes ▸ Digital](settings-reference.md#digital-ft8ft4), or the
+   ([Settings ▸ Digital](settings-reference.md#digital-ft8ft4), or the
    DXpedition chip selector in the Operate cockpit). Active expeditions also
    surface on the [Needed board](needed-dx.md) and the
    [Connect map](connect.md) when heard.

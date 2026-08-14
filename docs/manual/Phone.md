@@ -68,7 +68,7 @@ If your declared license class does not permit the current frequency and mode, t
 
 ### PTT hardware method
 
-Three back-ends are available (set in Settings > Rig):
+Three back-ends are available (set in Settings → Radio ▸ Rig & CAT):
 
 | Method | How it keys |
 |---|---|

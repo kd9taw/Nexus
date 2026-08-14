@@ -12,8 +12,8 @@ come here for the complete picture.
 
 - **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **64-bit Raspberry Pi**
   (Pi 3/4/5). All three build from the same tree and ship together every release.
-  macOS does not ship yet. On a slower Pi, **Settings ▸ Modes ▸ Digital (FT8/FT4) ▸
-  Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
+  macOS does not ship yet. On a slower Pi, **Settings ▸ Digital ▸ Decode depth ▸
+  Fast** keeps FT8 and FT4 decoding in real time.
 - **On a PC, Linux means Ubuntu 24.04 or newer** — Debian 13 (trixie), Fedora 40+, Mint 22
   and anything else built on a C library of at least that vintage. Both PC Linux files are
   built on Ubuntu 24.04, and the AppImage does not change this: an AppImage carries the

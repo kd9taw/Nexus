@@ -176,8 +176,7 @@ and 64-bit **Raspberry Pi OS** on a Pi 3, 4 or 5 gets its own `.deb` per base �
 three platforms build from the same tree and ship together every release. CAT on Linux
 uses the system Hamlib rather than a bundled copy; the `.deb` pulls `libhamlib-utils` in
 for you and AppImage users run `sudo apt install libhamlib-utils` once. On a slower Pi,
-**Settings ▸ Modes ▸ Digital (FT8/FT4) ▸ Decode depth ▸ Fast** keeps FT8 and FT4
-decoding in real time.
+**Settings ▸ Digital ▸ Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
 
 **macOS does not ship.** The codebase is cross-platform Rust and Tauri, so it is a
 packaging and testing job rather than a port. If you want it, say so on the issue

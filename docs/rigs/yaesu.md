@@ -14,7 +14,7 @@ bridge and a USB Audio Codec over a single cable.
 ## Quick setup
 
 1. Plug the rig into USB and power it on.
-2. **Settings ▸ Radio ▸ Rig Control ▸ Detect my radio.** Nexus fills the serial port, the
+2. **Settings ▸ Radio ▸ Rig & CAT ▸ Detect my radio.** Nexus fills the serial port, the
    paired USB Audio Codec, and — on Windows, if the Silicon Labs CP210x driver
    is missing — a one-click driver link.
 3. If Detect couldn't read the model from USB (common on Yaesu — the bridge
@@ -24,7 +24,7 @@ bridge and a USB Audio Codec over a single cable.
    that support it; set the rig's menu and Nexus to the same value.
 5. **Save**, then **Test CAT**. A green frequency read-back confirms CAT.
 
-<!-- TODO: capture screenshot — Yaesu FTDX10 detected in the Radio tab’s Rig Control fieldset -->
+<!-- TODO: capture screenshot — Yaesu FTDX10 detected in the Radio tab’s Rig & CAT fieldset -->
 
 ### The two-COM-port gotcha
 
@@ -62,8 +62,8 @@ The CW cockpit offers three keyers, and the choice changes what mode Nexus comma
   not CW. Nexus sets this automatically — don't manually flip the rig to CW when
   you're on the soundcard keyer, or the tone won't pass.
 - **WinKeyer** — a K1EL WinKeyer hardware keyer over its own serial port (set
-  the port in **Settings ▸ WinKeyer port**); the rig goes to **CW**, same as the
-  CAT keyer.
+  the port in **Settings ▸ CW ▸ WinKeyer port**); the rig goes to **CW**, same
+  as the CAT keyer.
 
 ---
 

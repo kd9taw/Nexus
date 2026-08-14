@@ -38,8 +38,8 @@ launch is not armed until you open the section (or an ISS pass arms it, below).
 
 **The header.** Left to right: a mode badge that reads **SSTV** and fills in to
 **SSTV · Scottie 1** when a header lands, or **SSTV · TX PD-120** while you are
-transmitting; the big frequency readout, which you can type into (a dial outside
-the band plan is refused with a toast); the SSTV band-plan picker; the **Slant**
+transmitting; the big frequency readout, which you can type into and which tunes
+off the ham bands as readily as on them; the SSTV band-plan picker; the **Slant**
 trim, which is deliberately disabled — "Auto-corrected by the decoder; the manual
 trim comes in a later build"; **Arm**; and the **▼ TX On / ■ TX Off** latch, which
 is this section's transmit arm — the top bar's TX cluster is hidden here, so

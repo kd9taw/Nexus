@@ -6,7 +6,7 @@ The full reference for CAT control, PTT configuration, audio device selection, a
 
 ## How "Detect My Radio" Works
 
-The **Detect my radio** button in Settings → Radio ▸ Rig Control enumerates connected USB devices and attempts to fill the rig model, serial port, and audio device fields in a single action.
+The **Detect my radio** button in Settings → Radio ▸ Rig & CAT enumerates connected USB devices and attempts to fill the rig model, serial port, and audio device fields in a single action.
 
 **What auto-matches:**
 
@@ -59,7 +59,7 @@ On **Linux and macOS**, rigctld must be on PATH. The bundled binary is not distr
 
 ## Test CAT
 
-**Settings → Radio ▸ Rig Control → Test CAT** runs this sequence:
+**Settings → Radio ▸ Rig & CAT → Test CAT** runs this sequence:
 
 1. Saves current settings to disk.
 2. Triggers a rigctld re-probe in the radio loop — Nexus spawns (or re-spawns) rigctld with the new model, port, and baud parameters.
@@ -109,7 +109,7 @@ If your rig rejects `PKTUSB`/`PKTLSB` (returns `RPRT -1`), the radio loop perfor
 
 ## The CAT Broker
 
-The CAT broker (Settings → Radio ▸ Rig Control → CAT Broker, **off by default**) makes Nexus act as a rigctld-compatible TCP server so WSJT-X, N1MM+, and other loggers can share the radio through Nexus without competing on the serial port.
+The CAT broker (Settings → Radio ▸ Rig & CAT → CAT Broker, **off by default**) makes Nexus act as a rigctld-compatible TCP server so WSJT-X, N1MM+, and other loggers can share the radio through Nexus without competing on the serial port.
 
 - **Broker listen port:** default **4532** (configurable)
 - Commands handled: `f`/`F` (frequency), `m`/`M` (mode), `t`/`T` (PTT), `v`/`V` (VFO), `s` (split), `\dump_state`, `\chk_vfo`, `\get_powerstat`, `q`
@@ -124,11 +124,11 @@ To run WSJT-X alongside Nexus: enable the broker in Nexus, then point WSJT-X's H
 
 If you run more than one rig — an HF radio, a VHF/UHF weak-signal radio, an FM/APRS radio — Nexus keeps **all of them connected at once** and switches between them instantly.
 
-- **Add a radio:** Settings → Rig, click **+ Add radio**. A new radio card appears. Give it a name (e.g. "IC-9700"), then click **Edit** on it to configure its model, port, baud, and audio without changing the radio you are operating on. "Make active" switches your operating radio. Single-radio operators never see any of this beyond the "+ Add radio" button.
+- **Add a radio:** Settings → Radio ▸ Radios, click **+ Add radio**. A new radio card appears. Give it a name (e.g. "IC-9700"), then click **Edit** on it to configure its model, port, baud, and audio without changing the radio you are operating on. "Make active" switches your operating radio. Single-radio operators never see any of this beyond the "+ Add radio" button.
 - **Distinct daemon ports:** each radio runs its own bundled `rigctld` at the same time, so every rig must use a **different rigctld TCP port**. New radios are assigned a free port automatically, and any accidental collision is repaired on load — you don't normally have to think about it.
 - **Switching:** with two or more radios configured, a **switcher appears in the top bar** (one pill per radio, showing each rig's live frequency). Click a pill to switch. Every rig stays connected the whole time — the non-active ones are monitored (frequency and S-meter stay live in the switcher), and switching is an instant handoff with no CAT reconnect, so the dial never bounces. When you switch to a radio, Nexus adopts the frequency it's *actually* on (you may have hand-tuned it).
 - **What's shared:** you operate (waterfall, decode, transmit, audio) the **active** radio; the others stay connected for monitoring. Watching two waterfalls at the same time is a planned later addition — run two windows (below) for that.
-- **Running two at the same time:** with two or more radios, Settings → Rig offers **Run both radios at the same time**. Launching Nexus then asks which radio this window drives; open a second window for another. All windows share one logbook. Radios you add in one window are picked up by the others when they start.
+- **Running two at the same time:** with two or more radios, Settings → Radio ▸ Radios offers **Run both radios at the same time**. Launching Nexus then asks which radio this window drives; open a second window for another. All windows share one logbook. Radios you add in one window are picked up by the others when they start.
 
 ### Automatic Routing (band, and band + mode)
 
@@ -153,7 +153,7 @@ When you pick a band, type a frequency, click a spot, or press APRS Tune, Nexus 
 ## Native Icom CI-V (Early Access)
 
 For scope-capable Icoms (IC-7300, IC-7610, IC-9700, IC-705, IC-905) on a **serial** connection,
-Settings → Rig offers a **Native Icom CI-V** toggle (per radio, off by default). When on, Nexus
+Settings → Radio ▸ Rig & CAT ▸ Advanced offers a **Native Icom CI-V** toggle (per radio, off by default). When on, Nexus
 drives the rig's CI-V protocol directly instead of launching Hamlib's `rigctld`:
 
 - **Real spectrum scope** — the waterfall shows the radio's own panadapter (the "CI-V RF" badge

@@ -62,7 +62,7 @@ You are responsible for knowing your privileges; the lockout is a safety net, no
 
 ## Detect my radio
 
-Before leaving Settings, open **Settings → Radio ▸ Rig Control** and click **Detect my radio**. Nexus scans USB devices and does three things simultaneously:
+Before leaving Settings, open **Settings → Radio ▸ Rig & CAT** and click **Detect my radio**. Nexus scans USB devices and does three things simultaneously:
 
 1. **Identifies the bridge chip** by USB vendor ID (Silicon Labs CP210x, FTDI, CH340, Prolific) and tells you whether you need a driver download (Windows) or already have one (Linux, modern macOS).
 2. **Fuzzy-matches the USB product string** against a curated table of ~50 Hamlib rig models (Icom, Yaesu, Kenwood, Elecraft, FlexRadio, Xiegu, QRP Labs, and others, verified against Hamlib 4.7.1) and fills in the Hamlib model number and name if the radio identifies itself.
