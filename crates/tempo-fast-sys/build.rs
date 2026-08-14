@@ -80,6 +80,17 @@ fn main() {
     // Link: static libtempo first, then its runtime dependencies.
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=tempo");
+    // macOS has no system Fortran and no Homebrew dir on the default linker path, so
+    // -lgfortran/-lfftw3f below resolve on Linux (/usr/lib) but fail on macOS with
+    // "ld: library 'gfortran' not found". Ask the toolchain where its own libraries
+    // are rather than hardcoding a prefix — that keeps this right on both Apple
+    // Silicon (/opt/homebrew) and Intel (/usr/local), and across gcc revisions.
+    // TARGET, not host: `cfg!(target_os)` in a build script describes the machine the script
+    // itself was compiled for, so cross-compiling FROM a Mac would wrongly emit these. The file
+    // already draws that distinction for Windows (`is_cross_to_windows_gnu`); same rule here.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        emit_macos_runtime_search_paths();
+    }
     println!("cargo:rustc-link-lib=dylib=gfortran");
     println!("cargo:rustc-link-lib=dylib=fftw3f");
     println!("cargo:rustc-link-lib=dylib=stdc++");
@@ -90,6 +101,53 @@ fn main() {
     }
 
     emit_rerun(&libtempo_src);
+}
+
+/// Emit `rustc-link-search` entries for the gfortran and FFTW3f runtimes on macOS.
+///
+/// Both are Homebrew-provided and neither prefix (`/opt/homebrew` on Apple Silicon,
+/// `/usr/local` on Intel) is on Apple ld's default search path. Each location is
+/// resolved by asking the relevant tool, so no prefix is baked in:
+///
+/// * `gfortran -print-file-name=libgfortran.dylib` — the compiler reports the
+///   absolute path of its own runtime; its parent directory also holds libquadmath.
+/// * `pkg-config --libs-only-L fftw3f` — the same source CMake uses for FFTW.
+///
+/// A probe that fails is skipped rather than fatal: the link may still succeed if
+/// the libraries are somewhere the linker already looks, and a real miss surfaces
+/// as the ld error above with better context than a build-script panic.
+fn emit_macos_runtime_search_paths() {
+    let fortran = env::var("FC").unwrap_or_else(|_| "gfortran".into());
+    if let Some(dir) = Command::new(&fortran)
+        .arg("-print-file-name=libgfortran.dylib")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|p| PathBuf::from(p.trim()))
+        // -print-file-name echoes the bare name back when it cannot resolve it.
+        .filter(|p| p.is_absolute())
+        .and_then(|p| p.parent().map(PathBuf::from))
+        // The reported path runs through `../../..` segments; canonicalize so the
+        // emitted -L is the real directory.
+        .and_then(|d| d.canonicalize().ok())
+    {
+        println!("cargo:rustc-link-search=native={}", dir.display());
+    }
+
+    if let Ok(out) = Command::new("pkg-config")
+        .args(["--libs-only-L", "fftw3f"])
+        .output()
+    {
+        if out.status.success() {
+            for dir in String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .filter_map(|f| f.strip_prefix("-L"))
+            {
+                println!("cargo:rustc-link-search=native={dir}");
+            }
+        }
+    }
 }
 
 /// True when cross-compiling to `*-pc-windows-gnu` from a non-Windows host.
