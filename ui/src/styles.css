@@ -3563,11 +3563,42 @@ body.resizing {
   margin: 0 auto;
 }
 /* xl (effective width ≥ 2400): let the DATA surfaces — Logbook's 11-column table
-   and the Program workbench — use the room. Prose-shaped panels (Settings, POTA)
-   keep the 1100px measure above. */
+   and the Program workbench — use the room. POTA is prose-shaped and keeps the
+   1100px measure above; Settings USED to, and the rule below is why it no longer does. */
 [data-viewport='xl'] .layout.single > .panel.log-view,
 [data-viewport='xl'] .layout.single > .panel.radioprog {
   max-width: 1600px;
+}
+/* SETTINGS IS NOT PROSE-SHAPED, and calling it that cost it half the window.
+   (Operator, 2026-08-12: "make the settings full screen. It's small and in the middle.
+   You have the opportunity to put far more on the page vs scrolling.")
+
+   WHY THE OLD PREMISE WAS WRONG. A measure exists to stop a LINE of text getting so long
+   the eye loses the return sweep. Settings has almost no lines: its content is 40
+   `.settings-grid`s of `repeat(auto-fill, minmax(220px, 1fr))` labelled controls. Width
+   there buys COLUMNS, not longer lines — so the 1100px cap was not protecting legibility,
+   it was converting horizontal room into vertical scrolling, in the one view whose whole
+   complaint is that it is too deep to navigate. The genuinely prose-shaped fragments
+   inside it are capped individually further down (see THE PROSE AUDIT) — that is the
+   right altitude for a measure, because it is where the prose actually is.
+
+   WHY `none` AND NOT A BIGGER NUMBER. 1600px (Logbook's) still leaves a 320px gutter at
+   1920, which is the size the report came from — it would have answered the letter of
+   "wider" and none of "full screen". There is no content in here whose correctness
+   depends on the PANEL's width once the four caps below are in place; the panel is a
+   frame, so let it be the window.
+
+   WHY md AND UP, AND WHY THAT CANNOT MOVE THE FLOOR. md/lg/xl is *exactly* the set of
+   tiers where the 1100px cap could ever bind — classifyViewport starts md at 1100
+   effective px, so at xs/sm the cap is inert by arithmetic, not by luck. Scoping the
+   override to md+ therefore leaves the 1024×768 supported floor bit-identical rather
+   than merely "probably unchanged". Computed per tier in settings-width.test.tsx.
+   1920 lands in **lg**, not xl — an xl-only override (≥2400) would have left the
+   reported window untouched, which is the trap the rule above sets. */
+[data-viewport='md'] .layout.single > .panel.settings-panel,
+[data-viewport='lg'] .layout.single > .panel.settings-panel,
+[data-viewport='xl'] .layout.single > .panel.settings-panel {
+  max-width: none;
 }
 /* Connect must flex-FILL rather than block-scroll — its map needs a DEFINITE height
    (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
@@ -9040,6 +9071,67 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
   align-content: start;
+}
+/* `auto-fit` IS A TRAP ONCE THE PANEL IS UNBOUND (2026-08-12, with the md+ widening).
+   auto-fit collapses the tracks that ended up empty and hands the freed space to the
+   `1fr` tracks that survive, so a track's width is (container ÷ number of ITEMS), not
+   (container ÷ number of TRACKS). At the old 1100px cap that was invisible; unbound it
+   is the whole regression. Of the 40 grids in SettingsPanel.tsx, 4 hold a single field
+   and 8 hold two — under auto-fit at 1920 those become one 1850px text input, or two
+   920px ones, which is worse than the scrolling it was meant to fix.
+
+   auto-fill keeps the empty tracks, so a field is ONE column wide regardless of how many
+   fields its section happens to have, and the room goes where the operator asked for it:
+   the 12-field sections go from 4 columns to 7. It is scoped to the widened tiers because
+   at xs/sm the panel is still capped and auto-fit's stretch is the layout that shipped —
+   changing it there would move the 1024×768 floor for no reason. */
+[data-viewport='md'] .settings-grid,
+[data-viewport='lg'] .settings-grid,
+[data-viewport='xl'] .settings-grid {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+/* ── THE PROSE AUDIT (2026-08-12) ──────────────────────────────────────────────────────
+   What the panel's max-width was silently doing for everything inside it, and now isn't.
+   Three shapes needed their own bound; the rest were audited and deliberately left alone.
+
+   1. PROSE. `.settings-hint` and `.settings-note` are real running text — the Rig tab's
+      "Data modes use plain SSB…" hint is ~130 words. A hint inside a grid cell is already
+      bounded by its 220px track, so this cap is inert for most of them; it exists for the
+      18 that are direct children of `.settings-section` and had nothing between them and
+      the panel edge. 72ch sits inside the range the rest of this sheet already uses for
+      readable text (62ch, 64ch, 78ch).
+
+   2. LONE CONTROLS. A `.settings-field` that is a direct child of `.settings-section`
+      rather than of a grid gets no track to sit in, so its `<select>`/`.settings-input`
+      would be as wide as the window. Worse, `.settings-toggle` is
+      `justify-content: space-between`: unbounded, the switch parts company with its own
+      label and ends up an eye-track away at the far right. 520px matches `.freq-table`,
+      the one measure this panel already had, so standalone controls line up with it.
+
+   3. THE AUDIO SCOPE. `.settings-audio-scope` spans `1 / -1` and holds MiniSpectrum,
+      whose canvas is `width: 100%` with a backing store of clientWidth × DPR — so a
+      full-width panel buys a 3800px canvas on a 2× display to draw the same spectrum.
+      It gets more room than a plain control (it is an instrument; width is resolution)
+      but a hard ceiling.
+
+   LEFT UNBOUNDED, ON PURPOSE: `.radios-manager`, `.watchlist-items`, `.conn-log`,
+   `.conn-status-grid`, `.settings-cat-test`. Every one is a LIST OF ROWS or a wrapping
+   button row — wider rows are more room for the row's own fields, not a longer line to
+   read, and their content is already left-packed. `.freq-table` and `.freq-edit-row`
+   were bounded at 520px before any of this and are unaffected. */
+[data-viewport='md'] .settings-hint,
+[data-viewport='lg'] .settings-hint,
+[data-viewport='xl'] .settings-hint,
+[data-viewport='md'] .settings-note,
+[data-viewport='lg'] .settings-note,
+[data-viewport='xl'] .settings-note {
+  max-width: 72ch;
+}
+[data-viewport='md'] .settings-section > .settings-field,
+[data-viewport='lg'] .settings-section > .settings-field,
+[data-viewport='xl'] .settings-section > .settings-field {
+  max-width: 520px;
 }
 /* Features section: profile chips wrap; each category group gets a subheading. */
 .settings-profiles {
@@ -17609,6 +17701,18 @@ button.sat-chip:disabled {
 }
 .settings-audio-scope {
   grid-column: 1 / -1;
+}
+/* Item 3 of THE PROSE AUDIT (see `.settings-grid`). Spanning `1 / -1` used to mean "as
+   wide as a 1100px panel"; since the md+ widening it means "as wide as the window", and
+   what sits in here is MiniSpectrum — `.mini-spectrum-canvas { width: 100% }` with a
+   backing store of clientWidth × devicePixelRatio, redrawn per audio frame. Unbounded on
+   a 2560 display at 2× that is a 5000px-wide canvas rendering the same spectrum. 720px
+   is deliberately more than the 520px a plain control gets — this one is an instrument,
+   so width is frequency resolution — and deliberately finite. */
+[data-viewport='md'] .settings-audio-scope,
+[data-viewport='lg'] .settings-audio-scope,
+[data-viewport='xl'] .settings-audio-scope {
+  max-width: 720px;
 }
 
 .cw-macro-role {
