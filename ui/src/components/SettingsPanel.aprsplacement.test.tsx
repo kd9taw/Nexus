@@ -15,32 +15,26 @@ import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
 const api = vi.hoisted(() => {
-  const VERBS = [
-    'clearCloudlogKey', 'clearClublogPassword', 'clearEqslPassword', 'clearHamqthPassword',
-    'clearHrdlogCode', 'clearLotwPassword', 'clearQrzLogbookKey', 'clearQrzPassword', 'detectRigs',
-    'downloadEqslReport', 'downloadLotwReport', 'getAllRigModels', 'getAudioDevices', 'getBandPlan',
-    'getRigModels', 'getSerialPortsDetailed', 'getSettings', 'setCloudlogKey', 'setClublogPassword',
-    'setEqslPassword', 'setHamqthPassword', 'setHrdlogCode', 'setLotwPassword', 'setQrzLogbookKey',
-    'setQrzPassword', 'setRepeaterbookToken', 'setRxGain', 'setSettings', 'setTxLevel', 'addRadio',
-    'removeRadio', 'renameRadio', 'setActiveRadio', 'setRadioBands', 'updateRadioProfile', 'testCat',
-    'probeCatPorts', 'qrzTestConnection', 'syncQrz', 'n3fjpTestConnection', 'getConnectionLog',
-    'getCredentialsStatus', 'fetchLotwUsers', 'getLotwUsersStatus', 'fetchFccStates',
-    'getFccStatesStatus', 'getTleStatus', 'fetchTlesNow', 'importTles', 'discoverFlex', 'civDiagnosticLog', 'civDiagnosticStatus',
-    'allTxtLocation', 'revealAllTxt', 'recordingsLocation', 'revealRecordings', 'appVersion', 'getSpectrumRow', 'setFrequency',
-    'getWatchlist', 'setWatchlist', 'openPanelWindow', 'getAssistanceJournal',
-    'setUnassistedMode',
-  ]
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {
     if (!spies[name]) spies[name] = vi.fn(() => Promise.resolve(null))
     return spies[name]
   }
-  return { spies, get, VERBS }
+  return { spies, get }
 })
 
-vi.mock('../api', () => {
+// Mock EVERY export of `../api`, derived from the real module rather than a hand-kept list.
+//
+// The list was the problem: a verb missing from it made the panel THROW ON MOUNT ("No export is
+// defined on the mock"), which presents as a behaviour regression in whichever test happened to
+// run -- not as the out-of-date mock it actually is. Reading the real module's export names makes
+// that failure impossible by construction.
+vi.mock('../api', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
   const mod: Record<string, unknown> = {}
-  for (const v of api.VERBS) mod[v] = api.get(v)
+  for (const name of Object.keys(actual)) {
+    mod[name] = typeof actual[name] === 'function' ? api.get(name) : actual[name]
+  }
   return mod
 })
 vi.mock('../toast', () => ({
