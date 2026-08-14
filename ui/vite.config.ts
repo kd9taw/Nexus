@@ -30,6 +30,11 @@ export default defineConfig({
     port: 5173,
     host: true,
   },
+  // Vitest: see src/test-setup.ts — Node 25's built-in `localStorage` shadows jsdom's
+  // and breaks every suite that clears storage between cases.
+  test: {
+    setupFiles: ['./src/test-setup.ts'],
+  },
   build: {
     outDir: 'dist',
     sourcemap: false,
