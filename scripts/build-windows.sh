@@ -103,7 +103,7 @@ if [ "$CHECK" = 1 ]; then bold "Toolchain OK (--check). Not building."; exit 0; 
 
 # 5 — Web UI deps + bundled Hamlib (for CAT) ---------------------------------
 bold "5/6  Web UI deps + Hamlib"
-npm --prefix "$REPO/ui" install
+npm --prefix "$REPO/ui" ci
 ok "ui dependencies installed (Tauri's beforeBuildCommand runs the build)"
 bash "$REPO/scripts/fetch-hamlib.sh"     # bundle rigctld so CAT needs no separate install
 ok "Hamlib staged (bundled into the installer)"

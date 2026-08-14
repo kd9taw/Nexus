@@ -87,7 +87,7 @@ if [ "$GUI" = 0 ]; then bold "Modem exes done (--no-gui)."; exit 0; fi
 
 # 3 — UI build deps ---------------------------------------------------------------------------
 bold "3/4  Web UI dependencies"
-( cd "$REPO/ui" && npm install >/dev/null )
+( cd "$REPO/ui" && npm ci >/dev/null )
 ok "ui/node_modules"
 
 # 4 — the GUI app + offline .deb + AppImage ---------------------------------------------------
