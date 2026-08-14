@@ -1828,6 +1828,15 @@ export async function setBlockedCalls(calls: string[]): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_blocked_calls', { calls })
 }
 
+/** Set (or clear, with '') who is at the key — the ONE write path for the seat-swap chip,
+ * the Field Day panel's Operator field and the pop-out scoreboard. Narrow write: never the
+ * heavyweight settings save, which resets the mode, clears the TX queue and re-derives the
+ * TX cycle from the struct the caller happened to be holding (#54). A seat swap is a
+ * mid-QSO act by definition. The engine trims + uppercases. */
+export async function setFdOperator(call: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_fd_operator', { call })
+}
+
 /** Load persisted operator + radio settings. */
 export async function getSettings(): Promise<Settings> {
   return invoke<Settings>('get_settings')

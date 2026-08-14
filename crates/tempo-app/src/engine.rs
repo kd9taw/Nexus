@@ -3655,6 +3655,21 @@ impl Engine {
         self.settings.lotw_last_auto_upload_unix = unix;
     }
 
+    /// Set (or clear, with an empty string) who is at the key — the Field Day operator,
+    /// read by `log_qso` for the ADIF `OPERATOR` field and by the N3FJP push. A NARROW
+    /// write, and the #54 lesson again: the seat-swap chip, the FD panel's Operator field
+    /// and the pop-out scoreboard all patched a whole `Settings` and saved it, so handing
+    /// the key over mid-QSO reset the mode to Chat, cleared the TX queue, and re-derived
+    /// the TX parity from the form's `tx_even` — a panel's struct is a snapshot from
+    /// whenever it loaded, so that last one put the next over on the DX's own period.
+    /// A seat swap changes who is logged, nothing else. Normalizes (trim + uppercase) so
+    /// the three callers cannot disagree about the stored shape; returns the updated
+    /// [`Settings`] for the caller to persist.
+    pub fn set_fd_operator(&mut self, call: String) -> Settings {
+        self.settings.fd_operator = call.trim().to_ascii_uppercase();
+        self.settings.clone()
+    }
+
     /// Replace the blocked-callsigns list — a NARROW write for the Alt-double-click
     /// gesture and the Settings editor, deliberately NOT `apply_settings` (the #54
     /// lesson: the heavyweight path resets the mode and clears the TX queue, and this
@@ -19307,6 +19322,71 @@ mod tests {
         assert!(
             e.snapshot().qso.is_some(),
             "advancing the sync cursor must not evaporate an in-flight QSO"
+        );
+    }
+
+    /// The Field Day operator swap — the seat-swap chip (#25), the FD panel's Operator
+    /// field and the pop-out scoreboard — persists ONE field. All three patched a whole
+    /// `Settings` and saved it, so swapping seats mid-QSO ran the heavyweight teardown
+    /// (#54): mode back to Chat, TX queue dropped, and the TX parity re-derived from the
+    /// form's `tx_even` — which, on a struct the panel loaded before the answer picked a
+    /// cycle, puts the next over on the DX's own period. CONTROL first (the old path must
+    /// still tear all three down, or this test cannot tell the fix from the bug), then the
+    /// narrow setter, which touches none of them.
+    #[test]
+    fn the_fd_operator_swap_keeps_the_qso_the_queue_and_the_cycle() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        // The struct a panel loaded BEFORE the QSO started — what all three writers
+        // spread-patched. Its `tx_even` is still the pre-answer default.
+        let stale_form = e.settings().clone();
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
+        e.call_station("PJ4DX");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
+        // The radio loop fills this each slot; queue it directly so the state is definite.
+        e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
+        assert_eq!(
+            e.tx_parity, 1,
+            "harness: answering a slot-5 decode took the odd cycle"
+        );
+
+        // Control: the old path really does tear all three down.
+        let mut patched = stale_form.clone();
+        patched.fd_operator = "W1ABC".into();
+        e.apply_settings(patched);
+        assert!(
+            e.snapshot().qso.is_none(),
+            "control: apply_settings resets the mode"
+        );
+        assert!(
+            e.tx_queue.is_empty(),
+            "control: apply_settings drops the TX queue"
+        );
+        assert_eq!(
+            e.tx_parity, 0,
+            "control: apply_settings re-derives the cycle from the stale form"
+        );
+
+        // Re-arm, then the narrow path: the operator changes, nothing else does.
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
+        e.call_station("PJ4DX");
+        assert!(e.snapshot().qso.is_some(), "harness: re-armed");
+        e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
+        assert_eq!(e.tx_parity, 1, "harness: odd cycle again");
+
+        let saved = e.set_fd_operator(" w1abc ".into());
+        assert_eq!(
+            saved.fd_operator, "W1ABC",
+            "normalized once, in the engine — every writer sent a different shape"
+        );
+        assert_eq!(e.settings().fd_operator, "W1ABC");
+        assert!(
+            e.snapshot().qso.is_some(),
+            "a seat swap must not end the QSO in flight"
+        );
+        assert_eq!(e.tx_queue.len(), 1, "the queued over must survive the swap");
+        assert_eq!(
+            e.tx_parity, 1,
+            "the answering cycle must survive the swap — a flip transmits on the DX's period"
         );
     }
 

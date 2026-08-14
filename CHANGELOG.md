@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had set by hand. Now the width only goes out when the mode or the band actually changed, which
   is when the rig might have recalled a filter of its own. Move around inside a band and Nexus
   leaves the filter alone. (#67)
+- **Changing the operator no longer drops you out of the QSO you are in.** Handing the key to
+  the next operator — the chip in the top bar, the Field Day panel's Operator field, or the
+  torn-off scoreboard — saved that one name by writing the whole settings file back, which
+  resets the app the way pressing Save in Settings does: back to Chat, anything queued to send
+  thrown away, and the transmit cycle reset to whatever it was when the panel was opened, so
+  the next over went out in the same period as the station you were working. Nothing on screen
+  said any of it had happened. A seat swap now writes only the operator's name; the contact in
+  progress, the queue and your cycle are left exactly as they were. (#54)
 
 ## [1.3.0] — 2026-08-13
 

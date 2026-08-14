@@ -51,6 +51,7 @@ import {
   setHoldTxFreq,
   dockBandmapWindow,
   setSettings as persistSettings,
+  setFdOperator,
   setSidebandOverride,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
@@ -456,9 +457,11 @@ export function DetachedPanel({ panel }: { panel: string }) {
             detached
             onSaveOperator={(call) => {
               if (!settings) return
-              const updated: Settings = { ...settings, fdOperator: call }
-              setSettings(updated) // optimistic local mirror (useState)
-              apply(persistSettings(updated)) // persist + mirror the returned snapshot
+              const op = call.trim().toUpperCase()
+              setSettings({ ...settings, fdOperator: op }) // optimistic local mirror (useState)
+              // Narrow write, not the whole-struct save: a seat swap is mid-QSO by
+              // definition and the heavyweight path would end it (#54).
+              apply(setFdOperator(op)) // persist + mirror the returned snapshot
             }}
           />
         ) : (

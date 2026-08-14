@@ -104,6 +104,7 @@ import {
   sstvArm,
   sstvAutoDisarm,
   setSettings as apiSetSettings,
+  setFdOperator,
   setSidebandOverride,
   testCat,
   setOperatingMode,
@@ -833,12 +834,13 @@ export default function App() {
       .then(setOpRoster)
       .catch(() => {}) // older core / no bridge — the chip just offers no switch targets
   }, [settings?.fdOperator])
-  /** Switch (or clear) the operator at the key, persisting it like any other setting. */
+  /** Switch (or clear) the operator at the key. Narrow write — read-modify-write through
+      the whole settings struct ran the heavyweight save, which ends the QSO the seat swap
+      was made during (#54). */
   const handleSetOperator = useCallback(async (call: string) => {
-    const current = await getSettings()
-    const patched = { ...current, fdOperator: call.trim().toUpperCase() }
-    await apiSetSettings(patched)
-    setSettings(patched)
+    const op = call.trim().toUpperCase()
+    await setFdOperator(op)
+    setSettings((prev) => (prev ? { ...prev, fdOperator: op } : prev))
   }, [])
   // Live mirror for the app-wide 30 s poll effect — the ISS SSTV auto-arm reads
   // its opt-in here (the effect's empty deps can't see `settings` directly).

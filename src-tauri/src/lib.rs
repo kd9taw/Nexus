@@ -10384,6 +10384,21 @@ fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnaps
     Ok(eng.snapshot())
 }
 
+/// Set (or clear) who is at the key — the seat-swap chip, the Field Day panel's Operator
+/// field and the pop-out scoreboard, one write path for all three. A NARROW write — never
+/// `apply_settings` (#54: the heavyweight path resets the mode, clears the TX queue and
+/// re-derives the TX cycle from the caller's snapshot, and a seat swap happens mid-QSO by
+/// definition). Persists; `log_qso` stamps the new operator from the next contact on.
+#[tauri::command(async)]
+fn set_fd_operator(state: State<'_, SharedEngine>, call: String) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.set_fd_operator(call);
+    if let Err(e) = s.save(&settings_path()) {
+        eprintln!("tempo: failed to persist field day operator: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Replace the blocked-callsigns list (the Alt-double-click gesture + the Settings
 /// editor's one write path). A NARROW write — never `apply_settings` (#54: the heavyweight
 /// path resets the mode and clears the TX queue, and this gets clicked mid-QSO). Persists;
@@ -16191,6 +16206,7 @@ pub fn run() {
             n3fjp_test_connection,
             set_hold_tx_freq,
             set_blocked_calls,
+            set_fd_operator,
             call_station,
             open_panel_window,
             dock_bandmap_window,

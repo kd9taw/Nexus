@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
-import { exportLog, getSettings, setSettings, openPanelWindow } from '../api'
+import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow } from '../api'
 import { fdNextEvent, fdHeaderSubtitle, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
@@ -617,13 +617,16 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
     }
   }
 
-  // Persist the settable Field Day operator (optimistic; same round-trip as toggleBonus).
+  // Persist the settable Field Day operator (optimistic). NOT the whole-struct save that
+  // toggleBonus uses: a seat swap happens mid-QSO, and the heavyweight path resets the mode,
+  // drops the TX queue and re-derives the TX cycle from this component's settings snapshot
+  // (#54). The engine trims + uppercases.
   const saveOperator = async (call: string) => {
     if (!settings) return
-    const updated: Settings = { ...settings, fdOperator: call }
-    setSettingsState(updated)
+    const op = call.trim().toUpperCase()
+    setSettingsState({ ...settings, fdOperator: op })
     try {
-      await setSettings(updated)
+      await setFdOperator(op)
     } catch {
       setSettingsState(settings)
     }
