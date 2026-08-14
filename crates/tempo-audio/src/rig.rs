@@ -1493,6 +1493,13 @@ mod tests {
         let (addr, _log) = mock_rigctld(|_l| "RPRT -1\n".to_string());
         let mut rig = Rig::rigctld(&addr);
         assert!(rig.ptt(true).is_err());
+        // TX-SAFETY INVARIANT, and the reason `ptt` sets this BEFORE the attempt: a key-down
+        // that ERRORED may still have keyed the rig, so we must believe we are keyed and let
+        // the unkey paths run. Believing the failure means never sending the unkey. This was
+        // pinned by an integration test that keyed a PTT-less rigctld dummy; that premise
+        // stopped holding at Hamlib 4.6.5 (the dummy now accepts PTT), so the assertion moved
+        // here, where it needs no daemon and cannot rot with a Hamlib release.
+        assert!(rig.keyed, "a FAILED key-down must still leave keyed=true");
     }
 
     #[test]

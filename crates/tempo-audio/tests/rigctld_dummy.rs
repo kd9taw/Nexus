@@ -69,8 +69,11 @@ impl DummyRig {
     }
 
     /// Spawn with extra rigctld args prepended to the standard dummy set.
-    /// -P RIG matters: the dummy's caps default to PTT_NONE, so without it
-    /// every `T` returns RPRT -1 and `t` returns -11 (measured, Hamlib 4.5.5).
+    /// ⚠️ VERSION-DEPENDENT, and this file asserts the newer behaviour: on Hamlib
+    /// 4.5.5 a dummy without `-P RIG` rejected PTT (`T` → RPRT -1, `t` → -11), but
+    /// on 4.6.5 / 4.7.0~rc it ACCEPTS it (`T 1` → RPRT 0). Do not reintroduce a test
+    /// that keys a PTT-less dummy expecting a rejection — see the measurement table
+    /// on the rejection-framing test below.
     fn spawn_with(bin: &str, extra: &[&str]) -> DummyRig {
         // A port from the counter can still collide with an unrelated service
         // (measured once in 20 runs: rigctld exits 1 on a taken port). The
@@ -278,25 +281,35 @@ fn failed_unkey_leaves_keyed_latched_for_the_retry_loop() {
 
 #[test]
 fn real_rprt_rejection_framing_parses_as_err() {
-    // set_mode must surface a rig rejection as Err so the radio loop's
-    // bounded retry can give up (never falsely advance last_mode). The dummy
-    // ACCEPTS unknown mode tokens (measured: `M NOSUCHMODE 0` → RPRT 0), so
-    // mode rejection stays mock territory — but a real negative RPRT is
-    // producible: `t` on a PTT-less daemon returns RPRT -11. Spawn a second
-    // daemon WITHOUT -P RIG and assert Rig surfaces the real error framing.
+    // A rig rejection must surface as Err so the radio loop's bounded retry can give up
+    // instead of falsely advancing its idea of the rig's state. Mock coverage cannot prove
+    // the FRAMING — that Rig actually parses a negative `RPRT n` off the wire — so this needs
+    // a real daemon that really rejects something.
+    //
+    // Finding one is the whole difficulty, because the dummy backend accepts almost
+    // everything. Measured against Hamlib 4.6.5 and 4.7.0~rc on 2026-08-13:
+    //
+    //   T 1 (no -P RIG)   → RPRT 0    t → 1, RPRT 0     M NOSUCHMODE 0 → RPRT 0
+    //   T 1 (-P NONE)     → RPRT 0    F 99999999999999  → RPRT 0
+    //   V NOSUCHVFO       → RPRT -1   G NOSUCHOP → RPRT -1   L NOSUCHLEVEL 1 → RPRT -11
+    //
+    // This test used to key PTT against a daemon spawned without `-P RIG`, on the belief that
+    // a PTT-less dummy rejects it. It does not (and the comment's own cited measurement was of
+    // `t`, not `T 1`) — so the test asserted `is_err()` on a command the daemon answers
+    // `RPRT 0`, and failed on any machine with a real rigctld rather than testing the framing.
+    // An unknown VFO is rejected for real, so drive the framing through that instead.
+    //
+    // The "a failed key-down still marks keyed" invariant that used to ride along here is not
+    // lost: it is a Rig state rule, not a wire-framing one, and is covered by the unit tests in
+    // `rig.rs` plus `failed_unkey_leaves_keyed_latched_for_the_retry_loop` above.
     let bin = require_rigctld!();
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
-    let d = DummyRig::spawn_with(&bin, &[]); // deliberately NO -P RIG
+    let d = DummyRig::spawn_with(&bin, &[]);
     let mut rig = connect_settled(&d.addr);
-    let err = rig.ptt(true);
     assert!(
-        err.is_err(),
-        "a real RPRT -1 from `T 1` must surface as Err, and the keyed flag \
-         semantics still apply (attempt marks keyed even on failure)"
-    );
-    assert!(
-        rig.keyed,
-        "a FAILED key-down still marks keyed (the rig may have keyed)"
+        rig.set_vfo("NOSUCHVFO").is_err(),
+        "a real negative RPRT (`V NOSUCHVFO` → RPRT -1) must surface as Err — if this passes as \
+         Ok the loop would treat a rejected command as applied"
     );
     // The connection must remain usable afterwards (drop-and-reconnect hygiene).
     assert_eq!(rig.read_freq().expect("post-error command"), 145_000_000);
