@@ -685,6 +685,86 @@ fn on_path(bin_name: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|path| path_has(&path, bin_name))
 }
 
+/// Does `bin` actually RUN, or does it merely exist?
+///
+/// Existence is not usability, and the gap is not hypothetical: a Hamlib built from source and
+/// installed under `~/.local` keeps the configured `--prefix` (`/usr/local/lib/libhamlib.4.dylib`)
+/// as its dylib load path, so every `rigctl*` binary is executable, first on `PATH`, and dies at
+/// `dyld` load with *"Library not loaded"* before `main`. Found on a real station on 2026-08-13:
+/// CAT was dead with no usable diagnosis, because [`on_path`] said yes and the
+/// [`HAMLIB_SEARCH_DIRS`] fallback — which would have found a working Homebrew Hamlib one
+/// directory later — was never consulted.
+///
+/// `--version` is the probe: it touches no serial port, binds no TCP port, and returns at once.
+///
+/// **A NON-ZERO EXIT IS A PASS — only a SIGNAL is a failure.** This is the whole subtlety, and
+/// getting it wrong silently breaks the [`resolve_rigctld`] contract that an operator's or a
+/// test's own binary outranks Nexus's guesses. A wrapper script, a version pin, or the stand-in
+/// in `service`'s `an_ordinary_connect_failure_carries_what_the_daemon_said` need not implement
+/// `--version` at all — that fixture answers only `-vvv` and exits 9 for anything else — and
+/// rejecting them for it would hand Nexus's own guess a veto over a deliberate choice. A binary
+/// whose libraries cannot be loaded fails differently: `dyld` calls `abort()` before `main`, so
+/// the process is KILLED BY SIGABRT rather than returning an exit code (observed: 134, i.e.
+/// 128+6, from the `~/.local` Hamlib above). Signal death, failure to exec at all, and a hang are
+/// the three "this cannot run" verdicts; every ordinary exit status means it ran.
+///
+/// The wait is BOUNDED because this sits on the CAT-connect path: a candidate that hangs must not
+/// hang Nexus, so it is killed and treated as unusable rather than waited on.
+#[cfg(unix)]
+fn runs_ok(bin: &std::ffi::OsStr) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new(bin)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false, // not executable at all (ENOENT / EACCES / bad arch)
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
+    loop {
+        match child.try_wait() {
+            // Exited on its own terms — ANY code, see above. Only signal death disqualifies.
+            Ok(Some(status)) => return status.signal().is_none(),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Resolve a Hamlib binary on Unix: the operator's `PATH` first, then [`HAMLIB_SEARCH_DIRS`],
+/// requiring at each step that the candidate actually runs ([`runs_ok`]).
+///
+/// The PATH-first order is deliberate and unchanged — an operator who puts a specific build
+/// earliest on `PATH` (a version pin, a wrapper, a fixture) still outranks Nexus's guesses. What
+/// changed is that a candidate which cannot execute no longer counts as a resolution and no
+/// longer suppresses the fallback. Falling all the way through returns the bare name so
+/// `Command` produces its own normal "not found" error, exactly as before.
+#[cfg(unix)]
+fn resolve_hamlib_bin(bin_name: &str) -> std::ffi::OsString {
+    if on_path(bin_name) && runs_ok(std::ffi::OsStr::new(bin_name)) {
+        return bin_name.into();
+    }
+    // One directory at a time rather than one `find_in_dirs` call over all of them: the first
+    // directory that merely CONTAINS the binary is no longer necessarily the answer, so each
+    // candidate has to clear `runs_ok` before the search stops.
+    for dir in HAMLIB_SEARCH_DIRS {
+        match find_in_dirs(std::slice::from_ref(dir), bin_name) {
+            Some(p) if runs_ok(&p) => return p,
+            _ => continue,
+        }
+    }
+    bin_name.into()
+}
+
 /// Locate the `rigctld` binary. Prefers one **bundled next to the app** — the
 /// Windows installer ships Hamlib under the install dir (with its DLLs), so CAT
 /// works with no separate Hamlib install — then whatever `rigctld` the process's own `PATH`
@@ -709,12 +789,13 @@ fn resolve_rigctld() -> std::ffi::OsString {
         }
     }
     #[cfg(unix)]
-    if !on_path("rigctld") {
-        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rigctld") {
-            return p;
-        }
+    {
+        resolve_hamlib_bin("rigctld")
     }
-    std::ffi::OsString::from("rigctld")
+    #[cfg(not(unix))]
+    {
+        std::ffi::OsString::from("rigctld")
+    }
 }
 
 /// Build the `rotctld` argument vector — same shape as [`rigctld_args`] minus
@@ -755,12 +836,13 @@ fn resolve_rotctld() -> std::ffi::OsString {
         }
     }
     #[cfg(unix)]
-    if !on_path("rotctld") {
-        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rotctld") {
-            return p;
-        }
+    {
+        resolve_hamlib_bin("rotctld")
     }
-    std::ffi::OsString::from("rotctld")
+    #[cfg(not(unix))]
+    {
+        std::ffi::OsString::from("rotctld")
+    }
 }
 
 /// Spawn `rotctld` for a ROTATOR `model` on `port`@`baud`, listening on
@@ -916,12 +998,13 @@ pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
         }
     }
     #[cfg(unix)]
-    if !on_path("rigctl") {
-        if let Some(p) = find_in_dirs(HAMLIB_SEARCH_DIRS, "rigctl") {
-            return p;
-        }
+    {
+        resolve_hamlib_bin("rigctl")
     }
-    std::ffi::OsString::from("rigctl")
+    #[cfg(not(unix))]
+    {
+        std::ffi::OsString::from("rigctl")
+    }
 }
 
 /// One conf parameter out of a `rigctld --show-conf` dump, as `(value, combo tokens)`.
@@ -1104,6 +1187,66 @@ pub fn spawn_rigctld(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Write `body` as an executable shell script in a fresh temp dir and return its path.
+    #[cfg(unix)]
+    fn stub_script(tag: &str, body: &str) -> std::path::PathBuf {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-runs-ok-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let p = dir.join("rigctld");
+        std::fs::File::create(&p)
+            .and_then(|mut f| f.write_all(body.as_bytes()))
+            .expect("write stub");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        p
+    }
+
+    /// [`runs_ok`] must separate "ran and said no" from "could not run at all".
+    ///
+    /// The bug this guards is a REGRESSION THAT ALREADY HAPPENED once, on 2026-08-13: written as
+    /// `status.success()`, the probe rejected every binary that exits non-zero for an unknown
+    /// flag — which is most wrapper scripts and, concretely, the `rigctld` stand-in in
+    /// `service`'s `an_ordinary_connect_failure_carries_what_the_daemon_said` (it answers `-vvv`
+    /// and exits 9 otherwise). Nexus then silently overrode a deliberately-chosen binary with its
+    /// own `HAMLIB_SEARCH_DIRS` guess, exactly what [`resolve_rigctld`]'s contract forbids. Only
+    /// death by SIGNAL — how `dyld` reports unloadable libraries, via `abort()` before `main` —
+    /// means unusable. Anyone tempted to "simplify" this back to `.success()` fails here.
+    #[cfg(unix)]
+    #[test]
+    fn runs_ok_accepts_a_nonzero_exit_and_rejects_only_a_signal() {
+        // Exits 9 for an unknown flag — the shape of the service.rs fixture and of real wrappers.
+        let picky = stub_script("picky", "#!/bin/sh\n[ \"$1\" = \"-vvv\" ] || exit 9\n");
+        assert!(
+            runs_ok(picky.as_os_str()),
+            "a stand-in that exits non-zero for --version still RUNS; rejecting it lets Nexus \
+             override an operator's or a test's deliberate choice of binary"
+        );
+
+        // Killed by SIGABRT — how a binary whose dylibs cannot be loaded dies.
+        let aborts = stub_script("aborts", "#!/bin/sh\nkill -ABRT $$\n");
+        assert!(
+            !runs_ok(aborts.as_os_str()),
+            "signal death is the unloadable-library signature and must be rejected"
+        );
+
+        // Not executable at all.
+        assert!(
+            !runs_ok(std::ffi::OsStr::new("/nonexistent-nexus-test-dir/rigctld")),
+            "a path that cannot be spawned is not usable"
+        );
+
+        for p in [picky, aborts] {
+            if let Some(d) = p.parent() {
+                let _ = std::fs::remove_dir_all(d);
+            }
+        }
+    }
 
     /// Repro for the 2026-08-07 macOS report: `rigctld` installed via Homebrew, `which rigctld`
     /// works in every terminal, and Nexus still can't spawn it — because a Finder-launched app's
