@@ -102,7 +102,7 @@ if [ "$GUI" = 1 ]; then
   command -v npm >/dev/null || die "npm not found — install Node.js LTS to build the UI."
   command -v makensis >/dev/null || warn "makensis not found — the NSIS step needs it (Debian/Ubuntu: sudo apt install nsis)."
   cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo install tauri-cli --version "^2" --locked; }
-  ( cd "$REPO/ui" && npm install >/dev/null )       # deps; cargo tauri runs the build
+  ( cd "$REPO/ui" && npm ci >/dev/null )            # deps; cargo tauri runs the build
   [ -f "$REPO/src-tauri/icons/icon.ico" ] || python3 "$REPO/scripts/gen-icons.py"
   bash "$REPO/scripts/fetch-hamlib.sh"              # bundle Hamlib for CAT (no-op if staged)
   # THE SILENT-LOBOTOMY GUARD. The DeepCW engine is a PAIR of gitignored files
