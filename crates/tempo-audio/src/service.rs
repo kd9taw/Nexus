@@ -3063,6 +3063,29 @@ impl RadioLoop {
                         eng.halt_tx_for_context_change();
                     }
                 }
+                // ⚠️ RELEASE THE OLD CARD FIRST — see `AudioBackend::release_device`.
+                // ALSA opens a card ONCE, and until this call the rebuild probed the new
+                // device while our OWN previous streams still held it, so moving to any
+                // device on the card you were already using was impossible (#2 / #8:
+                // `audio input device "plughw:CARD=CODEC,DEV=0" is not available`, with
+                // the CODEC absent from the offered list). Picking input and output in one
+                // save worked only because that opens both from a single fresh backend.
+                //
+                // `release_device` takes AUDIO_HOST_LOCK ITSELF (this is a native
+                // device-graph teardown, and a concurrent `default_host()` from
+                // `available_devices()` — Settings open, or Detect — faults natively rather
+                // than panicking). Do NOT wrap this call in the lock: it would deadlock a
+                // non-reentrant mutex, and `reopen_audio` below takes the same lock
+                // internally, which is why the swap's guard is scoped the way it is.
+                //
+                // TRADE-OFF, deliberate: if the replacement then fails to open, the
+                // operator has NO audio until `audio_retry_at` fires, where before they
+                // kept the old device. That is the right way round — the old behaviour
+                // bought graceful degradation in the rare failure case by making the
+                // common case impossible, and they are changing devices precisely because
+                // the current one is not what they want. The retry already recovers a card
+                // another app holds momentarily.
+                backend.release_device();
                 match reopen_audio(&want) {
                     Ok(b) => {
                         // ⚠️ THE SWAP DROPS THE OLD BACKEND, AND THAT DROP IS A NATIVE
@@ -13980,6 +14003,68 @@ mod tests {
         assert!(
             !recorded.is_empty(),
             "recording keeps receiving real audio across the rebuild — never silence"
+        );
+    }
+
+    #[test]
+    fn a_device_change_releases_the_old_card_before_probing_the_new_one() {
+        // akhepcat, 2026-08-13 (#2 / #8), on a build whose `tempo-audio` is byte-identical
+        // to the one 1.3.0 shipped: choosing input and output in SEPARATE saves fails —
+        // `audio input device "plughw:CARD=CODEC,DEV=0" is not available`, and the CODEC is
+        // missing from the offered list entirely. Choosing both in ONE save works.
+        //
+        // That asymmetry is the whole tell. One save opens both from a single fresh
+        // backend; two saves make the second rebuild probe a card OUR OWN still-live
+        // streams are holding, and ALSA opens a card once. The lazy-probe and CARD= alias
+        // fixes could not help — the holder was never another app, it was us.
+        //
+        // The mock card below refuses exactly the way ALSA does.
+        let card = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new().holding(Arc::clone(&card));
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut rr) = (no_sinks(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+
+        // The operator picks a different device on the SAME card (the second save).
+        engine.lock().unwrap().apply_settings(Settings {
+            audio_in: "plughw:CARD=CODEC,DEV=0".to_string(),
+            ..Settings::default()
+        });
+        let mut ra = {
+            let card = Arc::clone(&card);
+            move |_t: &Transport| -> Result<MockBackend, String> {
+                if card.load(std::sync::atomic::Ordering::SeqCst) {
+                    // Precisely the error the operator saw.
+                    Err("audio input device \"plughw:CARD=CODEC,DEV=0\" is not available".into())
+                } else {
+                    Ok(MockBackend::new())
+                }
+            }
+        };
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        let err = engine.lock().unwrap().snapshot().radio.audio_error.clone();
+        assert!(
+            err.is_none(),
+            "the rebuild must release the old card BEFORE probing the replacement; \
+             holding it makes any device on the same card impossible to select. got: {err:?}"
+        );
+        assert!(
+            state.audio_retry_at.is_none(),
+            "a successful open must not arm the retry timer"
         );
     }
 

@@ -362,8 +362,10 @@ where
 /// Real sound-card backend. Keep it alive for the duration of operation — the
 /// cpal streams stop when this is dropped.
 pub struct CpalBackend {
-    _in_stream: Stream,
-    _out_stream: Stream,
+    /// `Option` so [`AudioBackend::release_device`] can drop them IN PLACE. Dropping a
+    /// cpal `Stream` is what actually frees the ALSA handle; pausing does not.
+    _in_stream: Option<Stream>,
+    _out_stream: Option<Stream>,
     in_ring: Arc<Mutex<VecDeque<f32>>>,
     out_ring: Arc<Mutex<VecDeque<f32>>>,
     /// Anti-aliased device-rate → 12 kHz decimator for the RX/decode path,
@@ -842,8 +844,8 @@ impl CpalBackend {
         out_stream.play().map_err(|e| e.to_string())?;
 
         Ok(Self {
-            _in_stream: in_stream,
-            _out_stream: out_stream,
+            _in_stream: Some(in_stream),
+            _out_stream: Some(out_stream),
             in_ring,
             out_ring,
             // The device output rate lives inside tx_rs now — play() resamples
@@ -876,6 +878,23 @@ fn update_rx_meter(meter: &Arc<Mutex<f32>>, sum_sq: f32, n: usize) {
 }
 
 impl AudioBackend for CpalBackend {
+    /// Free every device this backend holds, in ONE critical section.
+    ///
+    /// All four holders have to go, not just the obvious two: a monitor output stream or a
+    /// live voice-mic stream keeps its card open just as firmly as the main capture stream,
+    /// and either one left behind reproduces the original bug on that card.
+    ///
+    /// Takes [`AUDIO_HOST_LOCK`] ITSELF and calls `Monitor::release_locked` (which does not
+    /// lock) rather than `Monitor::apply`, because `std::sync::Mutex` is not reentrant —
+    /// `apply` locks internally, so calling it from under the lock would deadlock the radio
+    /// loop. For the same reason the CALLER must not hold the lock around this.
+    fn release_device(&mut self) {
+        let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        self.monitor.release_locked();
+        self.voice_mic = None;
+        self._in_stream = None;
+        self._out_stream = None;
+    }
     fn spectrum_tap(&self) -> Option<(Arc<SpscRing>, u32)> {
         Some((self.spectrum_tap.clone(), self.in_rate))
     }

@@ -68,6 +68,23 @@ pub trait AudioBackend {
     fn voice_capture(&mut self) -> Vec<f32> {
         Vec::new()
     }
+    /// Release the sound card NOW, in place, without dropping the backend value.
+    ///
+    /// ⚠️ Exists because **ALSA opens a card once**. The radio loop rebuilds audio by
+    /// opening the replacement backend and only then dropping the old one at the swap —
+    /// which means the probe of the new device runs while our OWN previous streams still
+    /// hold the card. Changing to any device on the card you were already using therefore
+    /// could not succeed: `audio input device "plughw:CARD=CODEC,DEV=0" is not available`
+    /// (akhepcat, #2/#8; reproduced on 1.2.10, whose `tempo-audio` is byte-identical to
+    /// 1.3.0's). Picking input and output in ONE save worked only because that opened both
+    /// from a single fresh backend.
+    ///
+    /// After this returns the backend is INERT — `capture` yields nothing and `play` goes
+    /// nowhere. The caller must replace it. It is not "pause": pausing a cpal stream keeps
+    /// the ALSA handle, which is the very thing that has to go.
+    ///
+    /// Default no-op, so backends with no real device (mocks, DAX-only paths) are unaffected.
+    fn release_device(&mut self) {}
 }
 
 /// Whether a recording should capture from the dedicated voice-mic device instead of
@@ -96,6 +113,10 @@ pub struct MockBackend {
     pub voice_mic_open: bool,
     /// When true, `set_voice_mic(Some(_))` returns `Err` (simulates an open failure).
     pub voice_mic_fail: bool,
+    /// Models an ALSA card that can only be open once: while this is held, a mock
+    /// `reopen_audio` refuses to open the same card. `release_device()` clears it, which
+    /// is exactly what the real backend does by dropping its streams.
+    card: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl MockBackend {
@@ -110,9 +131,23 @@ impl MockBackend {
     pub fn queue_voice_capture(&mut self, samples: Vec<f32>) {
         self.to_voice_capture.push_back(samples);
     }
+    /// Make this backend HOLD a (mock) exclusive sound card. The flag stays set until
+    /// `release_device()`, so a test's `reopen_audio` can refuse the way ALSA does.
+    pub fn holding(mut self, card: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        card.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.card = Some(card);
+        self
+    }
 }
 
 impl AudioBackend for MockBackend {
+    fn release_device(&mut self) {
+        // Mirrors the real backend: the card is let go, and this instance is inert after.
+        if let Some(card) = self.card.take() {
+            card.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.to_capture.clear();
+    }
     fn capture(&mut self) -> Vec<f32> {
         self.to_capture.pop_front().unwrap_or_default()
     }

@@ -250,6 +250,18 @@ mod device_monitor {
         /// (the caller has already refused a TX-device collision). Starts, stops, or
         /// retunes the output stream without disturbing capture. `Err` = the output
         /// device failed to open.
+        /// Drop the monitor's output stream, freeing its device. **The caller MUST already
+        /// hold [`AUDIO_HOST_LOCK`]** — this deliberately does not take it, because
+        /// `std::sync::Mutex` is not reentrant and the whole point is to release every
+        /// stream the backend owns inside ONE critical section
+        /// (`AudioBackend::release_device`). Use [`Self::apply`] with `enabled: false`
+        /// anywhere else; that one locks for you.
+        pub fn release_locked(&mut self) {
+            self.enabled.store(false, Ordering::Release);
+            self.out_stream = None;
+            self.active_device.clear();
+            self.ring.clear();
+        }
         pub fn apply(&mut self, enabled: bool, device: &str, level: f32) -> Result<(), String> {
             self.level_bits
                 .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
