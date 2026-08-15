@@ -13873,9 +13873,16 @@ impl Engine {
             band: self.settings.band.clone(),
             freq_mhz,
             mode,
-            // Digital dB SNR reports → ADIF string form ("-12").
-            rst_sent: self.qso_report_sent.map(|v| v.to_string()),
-            rst_rcvd: rx_report.map(|v| v.to_string()),
+            // Digital dB SNR reports → the form that WENT ON THE AIR: sign + two digits
+            // ("-07", "+03"). `fmt_report` is the packer's own formatter, so the logged
+            // report is byte-identical to the report in the message — which is also how
+            // WSJT-X logs it (it slices the report out of the message text itself,
+            // `mainwindow.cpp:4767`). A bare `to_string()` wrote "-7", and for a strong
+            // signal "3" — no sign at all, which is not a signal report any consumer can
+            // read. That reached the logbook, the ADIF export, LoTW, QRZ and the WSJT-X
+            // type 5 datagram loggers log from (the blank RST_SENT/RST_RCVD in Log4OM).
+            rst_sent: self.qso_report_sent.map(tempo_core::message::fmt_report),
+            rst_rcvd: rx_report.map(tempo_core::message::fmt_report),
             name: None,
             qth: None,
             comment: None,
@@ -20002,7 +20009,7 @@ mod tests {
         assert_eq!(log.len(), 1, "the QSO auto-logged");
         assert_eq!(
             log[0].rst_sent.as_deref(),
-            Some("-7"),
+            Some("-07"),
             "RST_SENT survives working a station that answered our CQ"
         );
     }
@@ -20573,7 +20580,7 @@ mod tests {
             Some("-10"),
             "report received about our signal"
         );
-        assert_eq!(r.rst_sent.as_deref(), Some("-7"), "report we sent the DX");
+        assert_eq!(r.rst_sent.as_deref(), Some("-07"), "report we sent the DX");
 
         // worked_before now true (reflected in the snapshot's worked flag).
         let snap = e.snapshot();
@@ -20801,6 +20808,84 @@ mod tests {
             e.take_pending_udp_qsos().is_empty(),
             "a drained contact must not be emitted twice"
         );
+    }
+
+    /// A LOGGED digital report is the report that went ON THE AIR — sign + two digits.
+    ///
+    /// Operator report (Log4OM, 2026-08): "when making a qso I get all the information on the
+    /// main screen of log4om but I don't get the send receive report." Every other field in the
+    /// WSJT-X type 5 `QSOLogged` datagram arrived; only the two reports did not.
+    ///
+    /// The datagram was never the problem — WSJT-X's own Qt `MessageServer` reads Nexus's type 5
+    /// back field-for-field — and the sequencer captures both reports. What Nexus wrote INTO them
+    /// was `i32::to_string()`: `-7`, where the same contact's on-air message said `-07` and where
+    /// WSJT-X logs `-07` (it slices the report straight out of the message text,
+    /// `mainwindow.cpp:4767`). `tempo_core::message::fmt_report` has formatted reports "the way
+    /// WSJT-X does" since the message packer was written; this one path bypassed it, so the
+    /// contact went out on the air in one format and into the log, the ADIF export, LoTW, QRZ and
+    /// the logger datagram in another.
+    ///
+    /// Pinned on BOTH sides of the exchange and at BOTH ends of the write: the record the
+    /// logbook keeps and the record the WSJT-X UDP sink emits are the same bytes.
+    #[test]
+    fn a_logged_digital_report_is_the_report_that_went_on_the_air() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft8);
+        // Their CQ decodes at -5 in slot 1; we double-click it (S&P — the ordinary FT8 QSO).
+        e.ingest_decodes_for_test(&[dec_snr("CQ W1AW FN42", -5)], 1);
+        e.call_station("W1AW");
+        key_one_over(&mut e, 2); // our Tx1 (grid)
+                                 // They answer with OUR report; we owe them -07, the SNR we decoded them at.
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W1AW -05", -7)], 3);
+        let on_air = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .expect("our R-report over is queued");
+        assert_eq!(
+            on_air, "W1AW K2DEF R-07",
+            "precondition: the packer already sends the two-digit form"
+        );
+        key_one_over(&mut e, 4);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W1AW RR73", -7)], 5);
+
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "the QSO auto-logged: {log:?}");
+        assert_eq!(
+            log[0].rst_sent.as_deref(),
+            Some("-07"),
+            "RST_SENT is the report we actually transmitted, not a bare integer"
+        );
+        assert_eq!(
+            log[0].rst_rcvd.as_deref(),
+            Some("-05"),
+            "RST_RCVD is the report they actually transmitted"
+        );
+
+        // …and the WSJT-X UDP sink (the datagram Log4OM/N1MM+/HRD log from) carries the same.
+        let queued = e.take_pending_udp_qsos();
+        assert_eq!(queued.len(), 1, "the contact reached the WSJT-X sink");
+        assert_eq!(queued[0].rst_sent.as_deref(), Some("-07"));
+        assert_eq!(queued[0].rst_rcvd.as_deref(), Some("-05"));
+    }
+
+    /// The positive-signed half, which `{:+03}` gets right and `to_string()` gets wrong in a
+    /// second way: a strong signal logs `+03`, never `3`. Same QSO shape, other sign.
+    #[test]
+    fn a_positive_digital_report_logs_with_its_sign_and_two_digits() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft8);
+        e.ingest_decodes_for_test(&[dec_snr("CQ W1AW FN42", 3)], 1);
+        e.call_station("W1AW");
+        key_one_over(&mut e, 2);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W1AW +03", 3)], 3);
+        key_one_over(&mut e, 4);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W1AW RR73", 3)], 5);
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "the QSO auto-logged: {log:?}");
+        assert_eq!(log[0].rst_sent.as_deref(), Some("+03"));
+        assert_eq!(log[0].rst_rcvd.as_deref(), Some("+03"));
     }
 
     #[test]

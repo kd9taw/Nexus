@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Signal reports are logged in the form they went out on the air.** Reported by an operator
+  running Log4OM: contacts arrived in Log4OM complete except for the sent and received reports,
+  which were blank. Nexus transmits `-07` and `+03` — the two-digit signed form every FT mode
+  puts in the message, and the form WSJT-X writes to its log — but recorded them as `-7` and,
+  worse, `3`, dropping the plus sign entirely. A report with no sign is not a signal report a
+  logging program can read, which is why the field came through empty. The report Nexus logs is
+  now byte-for-byte the report it transmitted, so it reads correctly in Log4OM and any other
+  logger on the WSJT-X link, and in your own logbook, ADIF exports and LoTW and QRZ uploads.
+  Contacts logged before this keep whatever they were written with; re-exporting does not change
+  them.
 - **Push to Talk tells you when transmit is switched off instead of doing nothing.** Reported on
   an FTdx10: clicking Push to Talk did not key the rig, and nothing on screen said why. Nexus
   drops a mic key for two different reasons — you are outside your licence privileges, or
