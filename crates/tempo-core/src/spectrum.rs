@@ -172,20 +172,56 @@ pub fn power_spectrum(samples: &[f32], sr: f32, f_lo: f32, f_hi: f32, bins: usiz
         let hz_per_bin = sr / FFT_N as f32;
         let k_max = (FFT_N / 2 - 1) as isize;
         let span = f_hi - f_lo;
-        (0..bins)
-            .map(|i| {
-                let flo = f_lo + span * i as f32 / bins as f32;
-                let fhi = f_lo + span * (i + 1) as f32 / bins as f32;
-                let klo = ((flo / hz_per_bin).floor() as isize).clamp(1, k_max);
-                let khi = ((fhi / hz_per_bin).ceil() as isize).clamp(klo, k_max);
-                let mut p = 0.0f32;
-                for k in klo..=khi {
-                    let c = spec[k as usize];
-                    p = p.max(c.re * c.re + c.im * c.im); // peak-hold over the raw bins we cover
-                }
-                p
-            })
-            .collect::<Vec<f32>>()
+        // ⭐ SCATTER, NOT GATHER. Each RAW bin is assigned to the ONE display bin containing its
+        // centre frequency, and display bins peak-hold whatever lands in them.
+        //
+        // The old form gathered per display bin over `floor(flo)..=ceil(fhi)`, which made
+        // CONSECUTIVE display bins share raw bins whenever the display grid was coarser than the
+        // raw grid — the shipped case, 7.8125 Hz display bins over a 5.859 Hz raw grid. Display
+        // bin 0 covered raw 1-2, bin 1 raw 1-3, bin 2 raw 2-4, so one carrier was peak-held into
+        // two or three display bins AT IDENTICAL AMPLITUDE: a flat-topped 15.6-23.4 Hz plateau
+        // before the Hann lobe was even considered. See
+        // `a_carrier_is_one_display_bin_not_a_plateau`.
+        //
+        // The old comment defended `ceil` as stopping a narrow carrier falling BETWEEN display
+        // bins. Scatter is strictly safer on that axis — every raw bin lands in exactly one
+        // display bin, so no carrier can be lost — and the nearest-bin fill below covers the
+        // opposite regime (a display grid FINER than the raw grid, which is what a zoomed scope
+        // span asks for). It is also O(k_max) rather than O(bins x cover), i.e. cheaper.
+        let mut acc = vec![0.0f32; bins];
+        let mut hit = vec![false; bins];
+        for k in 1..=k_max {
+            let f = k as f32 * hz_per_bin;
+            if f < f_lo || f >= f_hi {
+                continue;
+            }
+            let i = (((f - f_lo) / span) * bins as f32) as usize;
+            if i >= bins {
+                continue;
+            }
+            let c = spec[k as usize];
+            let p = c.re * c.re + c.im * c.im;
+            if p > acc[i] {
+                acc[i] = p;
+            }
+            hit[i] = true;
+        }
+        // A display bin narrower than a raw bin receives nothing. Fill it from the raw bin
+        // NEAREST its centre so a zoomed span reads as a smooth lobe rather than a comb of
+        // zeros — the display is finer than the data there, and saying so honestly means
+        // repeating the nearest measurement, never inventing one.
+        for (i, h) in hit.iter().enumerate() {
+            if *h {
+                continue;
+            }
+            let f = f_lo + span * (i as f32 + 0.5) / bins as f32;
+            let k = (f / hz_per_bin).round() as isize;
+            if (1..=k_max).contains(&k) {
+                let c = spec[k as usize];
+                acc[i] = c.re * c.re + c.im * c.im;
+            }
+        }
+        acc
     });
     // Raw power → the dB display axis. ABSOLUTE (against full scale), so the reference never
     // moves with the signal — see `db_display` and the two axis tests below.
@@ -235,6 +271,56 @@ mod tests {
             (row[peak] - 1.0).abs() < 0.002,
             "a full-scale tone reads the top of the axis (got {})",
             row[peak]
+        );
+    }
+
+    /// ⭐ A carrier must be ONE display bin with real shoulders, not a flat-topped plateau.
+    ///
+    /// The old display-bin assignment gathered raw bins with `floor(flo)`..`ceil(fhi)`, so
+    /// CONSECUTIVE display bins shared raw bins: at 512 bins over 0-4000 Hz (7.8125 Hz display
+    /// bins over a 5.859 Hz raw grid) display bin 0 covered raw 1-2, bin 1 covered raw 1-3, bin 2
+    /// covered raw 2-4. A carrier landing on one raw bin was therefore peak-held into two or
+    /// three display bins AT IDENTICAL AMPLITUDE — a 15.6-23.4 Hz flat top before the Hann lobe
+    /// is even considered. On the CW cockpit's 800 Hz view that is a ~75 px blob interpolated
+    /// from three real numbers, which is the operator's "not crisp" (2026-08-15).
+    ///
+    /// The scatter form assigns each raw bin to the ONE display bin containing its centre, so a
+    /// carrier reads as a peak with true -6 dB Hann shoulders.
+    #[test]
+    fn a_carrier_is_one_display_bin_not_a_plateau() {
+        let sr = 12_000.0;
+        // Sit the tone exactly on a raw-bin centre (k * sr/FFT_N) so this measures the display-bin
+        // assignment and not scalloping loss: k = 256 -> 1500.0 Hz.
+        let f = 256.0 * sr / FFT_N as f32;
+        let s = tone(f, sr, FFT_N);
+        // The shipped scope geometry: 512 display bins over 0-4000 Hz.
+        let row = power_spectrum(&s, sr, 0.0, 4000.0, 512);
+        let peak = row
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+
+        // `db_display` is linear-in-dB over DB_SPAN, so a display delta converts straight to dB.
+        let db_per_unit = DB_SPAN;
+        let shoulder_db = |i: usize| (row[peak] - row[i]) * db_per_unit;
+
+        assert!(
+            peak > 0 && peak + 1 < row.len(),
+            "peak {peak} needs both neighbours"
+        );
+        assert!(
+            shoulder_db(peak - 1) >= 5.0,
+            "the bin BELOW the carrier must be a real shoulder, not a copy of the peak \
+             (got {:.1} dB down; a plateau reads ~0)",
+            shoulder_db(peak - 1)
+        );
+        assert!(
+            shoulder_db(peak + 1) >= 5.0,
+            "the bin ABOVE the carrier must be a real shoulder, not a copy of the peak \
+             (got {:.1} dB down; a plateau reads ~0)",
+            shoulder_db(peak + 1)
         );
     }
 
