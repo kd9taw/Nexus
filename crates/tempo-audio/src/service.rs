@@ -3458,7 +3458,8 @@ impl RadioLoop {
                     // Apply the section's mode. `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
                     if mode_changed {
-                        match rig.set_mode(&md, retry_passband(&md, self.mode_fail_count)) {
+                        let sent_pb = retry_passband(&md, self.mode_fail_count);
+                        match rig.set_mode(&md, sent_pb) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
                                 self.rig_asserted = true; // a real assert — credit the latch
@@ -3466,7 +3467,15 @@ impl RadioLoop {
                                 self.mode_giveup = None; // a success clears any prior give-up
                                 self.mode_saw_reject = false;
                                 retuned = true;
-                                retune_note = Some(mode_set_note(rig, &md, self.applied.rig_model));
+                                // Rung 2 lands the mode at the RIG's own default width (6 kHz on
+                                // the Flex of issue #82). Assert the width we wanted, and if the
+                                // rig keeps its own say so — a refused width OUTRANKS the mode
+                                // note, because a cheerful "rig confirmed in PKTUSB" beside a
+                                // 6 kHz filter is exactly how this stayed mysterious.
+                                retune_note = width_reassert_after_default_rung(rig, &md, sent_pb)
+                                    .or_else(|| {
+                                        Some(mode_set_note(rig, &md, self.applied.rig_model))
+                                    });
                             }
                             Err(e) => {
                                 // Retries cover a rig/rigctld still settling; past the budget the
@@ -7208,6 +7217,38 @@ fn retry_passband(md: &str, prior_fails: u32) -> i32 {
     } else {
         pb
     }
+}
+
+/// The mode has just been ACCEPTED on the filter-agnostic rung (`sent_pb == 0` —
+/// `RIG_PASSBAND_NORMAL`, i.e. "use YOUR own default width"). Put the width we actually
+/// wanted back, as its own `set_mode`, once. Returns the note to surface when the rig kept
+/// its own width; `None` when there is nothing to say (any other rung, or the width landed).
+///
+/// ISSUE #82 (ve3wej, Flex 6400): "the filter lands at 6000 Hz on a mode/band change." The
+/// escalation to passband 0 is deliberate and stays — it is what gets the MODE accepted from a
+/// backend that chokes on the width→DATA-filter mapping rather than on the mode, instead of
+/// riding the whole retry budget into a bogus "no such mode" give-up. But a rig's default
+/// width is whatever the rig feels like (6 kHz of SSB filter on a Flex), and FT8 never wants
+/// 6000. So the rung's two halves are separated: the MODE lands first (the thing it was
+/// protecting), then the width is attempted on its own terms.
+///
+/// This cannot re-open the give-up loop. It runs only in the success arm, after the counters
+/// are cleared and `last_mode` already holds `md`, so a refusal here changes no state and the
+/// next tick sees no mode change and sends nothing — one extra command, once, on the one tick
+/// the escalation fired.
+fn width_reassert_after_default_rung(rig: &mut Rig, md: &str, sent_pb: i32) -> Option<String> {
+    let want = passband_for(md);
+    if sent_pb != 0 || want <= 0 {
+        return None; // not the default-width rung — the operator's filter was never overridden
+    }
+    if rig.set_mode(md, want).is_ok() {
+        return None;
+    }
+    Some(format!(
+        "set {md} but the rig kept its own filter width — it refused {want} Hz; set the rig's \
+         DATA filter to about {} kHz by hand (FT8 needs the full audio passband)",
+        want / 1000
+    ))
 }
 
 /// The plain sideband underneath a DATA/PKT submode — the LAST rung of the mode-set
@@ -14719,6 +14760,198 @@ mod tests {
         assert_eq!(
             state.last_mode, "USB",
             "last_mode tracks what was actually applied (the fallback)"
+        );
+    }
+
+    // ---- the width the operator never asked for (issue #82, ve3wej, Flex 6400) ----
+
+    /// A rigctld that refuses a DATA mode-set carrying an explicit WIDTH (`M PKTUSB 3000`
+    /// → `RPRT -1`) but takes the filter-agnostic form (`M PKTUSB 0`) — the exact shape the
+    /// passband-0 rung of the ladder exists for, and the one that leaves a Flex sitting on
+    /// its own 6 kHz default filter. After `heal_after` width refusals it accepts the width
+    /// too: the TRANSIENT rig (settling, not incapable), where asserting the width again
+    /// actually lands it. `usize::MAX` never heals. Logs every command line, like
+    /// [`mock_pkt_rejecting_rigctld`].
+    fn mock_width_rejecting_rigctld(heal_after: usize) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            let mut refused = 0usize;
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    // Only a PKT mode-set with a real width is refused; `M PKTUSB 0` (the
+                    // rig's own default width) is fine, and so is everything else.
+                    let explicit_width = l.starts_with("M PKT")
+                        && l.split_whitespace()
+                            .nth(2)
+                            .and_then(|w| w.parse::<i32>().ok())
+                            .is_some_and(|w| w > 0);
+                    let refuse = explicit_width && refused < heal_after;
+                    if refuse {
+                        refused += 1;
+                    }
+                    let reply = if l == "f" {
+                        "14074000\n"
+                    } else if refuse {
+                        "RPRT -1\n"
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    #[test]
+    fn the_default_width_rung_puts_the_intended_width_back() {
+        // ISSUE #82 (ve3wej, Flex 6400): "the filter lands at 6000 Hz on a mode/band change."
+        // Rung 2 of the ladder commands `M PKTUSB 0` — RIG_PASSBAND_NORMAL, i.e. "use YOUR
+        // default width" — and a Flex's default is the full 6 kHz SSB filter. The rung is
+        // there to get the MODE accepted, and it must keep doing that; what it must not do is
+        // hand the operator a filter they never asked for. So once the mode is in, the
+        // intended 3 kHz is asserted again on its own. Here the rig was merely settling, so
+        // the width lands and the operator ends on PKTUSB at 3000 — never 6000.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_width_rejecting_rigctld(MODE_SET_PASSBAND0_AFTER as usize);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        state.last_mode = String::new();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        for i in 0..(MODE_SET_PASSBAND0_AFTER + 3) {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(i),
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+
+        let cmds = log.lock().unwrap().clone();
+        let modes: Vec<String> = cmds
+            .iter()
+            .filter(|c| c.starts_with("M "))
+            .cloned()
+            .collect();
+        let rung2 = modes
+            .iter()
+            .position(|c| c == "M PKTUSB 0")
+            .unwrap_or_else(|| {
+                panic!("rung 2 (the filter-agnostic retry) must be reached: {modes:?}")
+            });
+        assert_eq!(
+            modes.get(rung2 + 1).map(String::as_str),
+            Some("M PKTUSB 3000"),
+            "the width the operator's mode needs is asserted again right after the mode \
+             landed at the rig's own default: {modes:?}"
+        );
+        assert_eq!(
+            modes.last().map(String::as_str),
+            Some("M PKTUSB 3000"),
+            "the rig is left on the intended width, not on its 6 kHz default: {modes:?}"
+        );
+        assert_eq!(state.last_mode, "PKTUSB", "the mode is applied");
+        assert_eq!(state.mode_giveup, None, "nothing was given up");
+        assert_eq!(
+            state.mode_fail_count, 0,
+            "the width re-assert must not re-enter the retry ladder"
+        );
+    }
+
+    #[test]
+    fn a_rig_that_keeps_refusing_the_width_is_told_on_once() {
+        // The other half: a rig that genuinely will not take the width→DATA-filter mapping.
+        // The mode still has to land (that is what the rung is for), the width is attempted
+        // ONCE — not on every tick — and the operator is TOLD, so a 6 kHz filter is
+        // explainable instead of mysterious.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_width_rejecting_rigctld(usize::MAX);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        state.last_mode = String::new();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut detail_after_rung2 = None;
+        for i in 0..(MODE_SET_PASSBAND0_AFTER + 6) {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(i),
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            if state.last_mode == "PKTUSB" && detail_after_rung2.is_none() {
+                detail_after_rung2 = Some(engine.lock().unwrap().snapshot().radio.cat_detail);
+            }
+        }
+
+        let cmds = log.lock().unwrap().clone();
+        let modes: Vec<String> = cmds
+            .iter()
+            .filter(|c| c.starts_with("M "))
+            .cloned()
+            .collect();
+        let rung2 = modes
+            .iter()
+            .position(|c| c == "M PKTUSB 0")
+            .unwrap_or_else(|| {
+                panic!("rung 2 (the filter-agnostic retry) must be reached: {modes:?}")
+            });
+        let after: Vec<&String> = modes[rung2 + 1..].iter().collect();
+        assert_eq!(
+            after
+                .iter()
+                .filter(|c| c.as_str() == "M PKTUSB 3000")
+                .count(),
+            1,
+            "the width is re-asserted exactly once — a refusal must not spam the CAT link \
+             every tick: {modes:?}"
+        );
+        let detail = detail_after_rung2.expect("the mode must land on the filter-agnostic rung");
+        assert!(
+            detail.contains("filter width") && detail.contains("3000"),
+            "the operator is told the rig kept its own filter width: {detail:?}"
+        );
+        assert_eq!(
+            state.last_mode, "PKTUSB",
+            "the mode still landed — the rung's whole purpose"
+        );
+        assert_eq!(
+            state.mode_giveup, None,
+            "a refused WIDTH is not a refused MODE: the give-up loop must not come back"
         );
     }
 

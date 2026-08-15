@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A radio that refuses the filter width no longer strands you on its widest one.** Reported on
+  a Flex 6400: the filter ends up at 6000 Hz after a mode or band change. In the data modes Nexus
+  sends the mode and a 3 kHz width in one command, so a radio recalling a narrow DATA filter
+  cannot clip FT8. If that command keeps being refused, Nexus retries a while and then sends the
+  mode with the width left to the radio's own default — otherwise a radio that objects only to
+  the width would end up with no mode set at all. On a Flex that default is the full 6 kHz SSB
+  filter, which is not a filter anyone wants for FT8, and nothing on screen said where it came
+  from. Nexus now asserts the 3 kHz again the moment the mode is in; if the radio refuses the
+  width as well, the CAT status says so and tells you to set the DATA filter on the radio, rather
+  than leaving you with a 6 kHz filter and no explanation. (#82)
 - **Signal reports are logged in the form they went out on the air.** Reported by an operator
   running Log4OM: contacts arrived in Log4OM complete except for the sent and received reports,
   which were blank. Nexus transmits `-07` and `+03` — the two-digit signed form every FT mode
