@@ -311,6 +311,21 @@ pub fn packs_beside_hash(call: &str) -> bool {
     !c.contains('/') && is_std_call(c)
 }
 
+/// Strip an i3=4 hashed wrapper, keeping everything else about the call.
+///
+/// ⚠️ NOT [`base_call`], and the difference matters at a log boundary: `base_call` reduces a
+/// compound call to its base (`KH8/W1AW` → `W1AW`), which is right for deciding whether two
+/// tokens are the same station and WRONG for a log entry, where the prefix IS the DXCC entity.
+/// This removes the brackets and nothing else.
+pub fn unhash_call(s: &str) -> &str {
+    let t = s.trim();
+    if is_valid_hashed(t) {
+        hashed_inner(t).trim()
+    } else {
+        t
+    }
+}
+
 /// The inner text of an i3=4 hashed token (`<W9XYZ>` → `W9XYZ`, `<...>` → `...`).
 fn hashed_inner(s: &str) -> &str {
     s.trim_start_matches('<').trim_end_matches('>')

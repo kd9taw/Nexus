@@ -14091,6 +14091,21 @@ impl Engine {
         dxgrid: Option<String>,
         rx_report: Option<i32>,
     ) -> QsoRecord {
+        // ⚠️ THE HASHED-CALL BRACKETS COME OFF HERE, AT THE RECORD BOUNDARY (issue #84).
+        //
+        // FT8's 77-bit protocol sends a compound call as `<DX1ABC>` when the message will not
+        // otherwise fit, and the decoded token keeps its brackets through the whole sequencer.
+        // A DXpedition then logged as `<...>`: a different station from every other QSO with
+        // the same operator, and no award credit either, because `dxcc::resolve` cannot match
+        // a call containing a character `cty.dat` has never heard of.
+        //
+        // NOT STRIPPED IN THE SEQUENCER, deliberately. `Station::dxcall` also builds the
+        // OUTGOING message, and there the hashed form is what the protocol REQUIRES — a bare
+        // compound call does not fit the frame that form exists to make room for. This
+        // function is where a live station becomes a log entry, so a log-shaped rule belongs
+        // here and nowhere earlier. WSJT-X draws the same line: it strips `<`/`>` at every
+        // point it consumes a call for logging or display.
+        let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
         // ADIF mode must reflect the tier actually used — FT8/FT4 contacts log as
         // FT8/FT4 (award eligibility depends on it), not the native FT1 path.
         let mode = match self.app.tier() {
@@ -20174,6 +20189,38 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.ingest_decodes_for_test(&[dec_snr("K1ABC RR73; W9XYZ PJ4DX -08", -10)], 1);
         assert_eq!(e.last_decodes().len(), 1, "no split outside Hound mode");
+    }
+
+    /// A HASHED (BRACKETED) CALL MUST NOT REACH THE LOG — issue #84.
+    ///
+    /// FT8's 77-bit protocol sends a compound call as `<DX1ABC>` when the message will not
+    /// otherwise fit, and the decoded token carries its brackets all the way through the
+    /// sequencer. The reporter worked a DXpedition and it logged as `<...>`: a different
+    /// station from the same operator's plain form, and no award credit, because the entity
+    /// lookup cannot match a call with angle brackets in it either.
+    ///
+    /// ⚠️ STRIPPED HERE, AT THE RECORD BOUNDARY, AND DELIBERATELY NOT IN THE SEQUENCER.
+    /// `Station::dxcall` also builds the OUTGOING message, where the hashed form is what the
+    /// protocol requires on the air — stripping it there would put a bare compound call into a
+    /// frame that cannot hold one. This function is where a live station becomes a log entry,
+    /// so it is the right place for a log-shaped rule.
+    ///
+    /// WSJT-X does the same thing everywhere it consumes a call for logging or display
+    /// (`.remove("<").remove(">")` throughout `widgets/mainwindow.cpp`), and its own decode
+    /// tokeniser cannot even capture a `<` into a callsign.
+    #[test]
+    fn a_hashed_dxpedition_call_logs_without_its_brackets() {
+        let e = Engine::new("KD9TAW", "EN52", 0);
+        let rec = e.qso_record("<KH8/W1AW>".into(), None, Some(-12));
+        assert_eq!(
+            rec.call, "KH8/W1AW",
+            "the log must carry the plain call — brackets make it a different station from \
+             every other QSO with the same operator, and break the award check"
+        );
+        // CONTROL: an ordinary call is untouched by the strip, so this is not just blanket
+        // rewriting of whatever it is handed.
+        let plain = e.qso_record("W9XYZ".into(), None, Some(-12));
+        assert_eq!(plain.call, "W9XYZ");
     }
 
     #[test]

@@ -210,7 +210,19 @@ fn kg4_is_guantanamo(base: &str) -> bool {
 /// Resolve a callsign to a DXCC entity + representative location.
 pub fn resolve(call: &str) -> Option<DxccInfo> {
     let r = resolver();
-    let full = call.trim().to_ascii_uppercase();
+    // ⚠️ STRIP THE HASHED-CALL BRACKETS FIRST (issue #84). FT8's 77-bit protocol sends a
+    // compound call as `<DX1ABC>` when the message will not otherwise fit, and the decoded
+    // token keeps its brackets all the way here. `cty.dat` contains no `<` anywhere, so a
+    // bracketed call misses the exact map AND every prefix walk below and resolves to nothing
+    // — a worked DXpedition scoring as neither a new country nor a new band, which is exactly
+    // what the reporter saw. Stripping here rather than at each call site because this is the
+    // boundary: everything past this line is prefix arithmetic that assumes a bare call.
+    let full = call
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim()
+        .to_ascii_uppercase();
     if full.is_empty() {
         return None;
     }
@@ -602,5 +614,42 @@ mod kg4_suffix_rule {
         assert_eq!(resolve("KH6ABC").map(|d| d.entity), Some("Hawaii"));
         assert_eq!(resolve("KL7ABC").map(|d| d.entity), Some("Alaska"));
         assert_eq!(resolve("G0ABC").map(|d| d.entity), Some("England"));
+    }
+}
+
+#[cfg(test)]
+mod hashed_call_tests {
+    use super::*;
+
+    /// A HASHED (bracketed) CALL MUST RESOLVE — issue #84.
+    ///
+    /// FT8's 77-bit protocol sends a compound call as `<DX1ABC>` when the message will not
+    /// otherwise fit, and the decoded token keeps its brackets. `cty.dat` contains no `<`
+    /// anywhere, so a bracketed call misses the exact map AND every prefix walk, and comes back
+    /// as no entity at all. From the operator's chair that is a worked DXpedition scoring as
+    /// neither a new country nor a new band — the reporter's "any assessment (NEW, GRID) failed".
+    ///
+    /// `tempo_core::message::base_call` strips brackets; this module's own `base_call` splits
+    /// only on '/', and nothing upstream of it strips them either.
+    #[test]
+    fn a_bracketed_hashed_call_resolves_to_the_same_entity_as_its_plain_form() {
+        for call in ["W1AW", "G0ABC", "JA1XYZ"] {
+            let plain = resolve(call).map(|d| d.entity);
+            assert!(plain.is_some(), "control: {call} must resolve at all");
+            let hashed = resolve(&format!("<{call}>")).map(|d| d.entity);
+            assert_eq!(
+                hashed, plain,
+                "<{call}> must resolve exactly as {call} does — cty.dat holds no '<', so a \
+                 bracketed call otherwise scores as no country and no award"
+            );
+        }
+    }
+
+    /// The compound forms are the whole reason brackets exist on the wire.
+    #[test]
+    fn a_bracketed_compound_call_still_picks_the_location_side() {
+        let plain = resolve("KH8/W1AW").map(|d| d.entity);
+        assert!(plain.is_some(), "control: the compound form resolves");
+        assert_eq!(resolve("<KH8/W1AW>").map(|d| d.entity), plain);
     }
 }
