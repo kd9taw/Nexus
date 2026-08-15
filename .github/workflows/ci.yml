@@ -496,7 +496,11 @@ jobs:
         env:
           NEXUS_ALLOW_MISSING_AICW: 1
         run: |
-          export LIBRARY_PATH="$(brew --prefix gcc)/lib/gcc/current:$(brew --prefix fftw)/lib:${LIBRARY_PATH:-}"
+          # NO LIBRARY_PATH export here, deliberately. It used to supply exactly the two directories
+          # tempo-fast-sys/build.rs now derives (gcc's lib/gcc/current and fftw's lib), which meant
+          # this job passed whether or not the probe worked -- green either way is not a test. Without
+          # it, the job IS the positive control for the probe: if the derivation breaks, the link
+          # fails here rather than on a contributor's Mac.
           cargo build --release \
             --manifest-path src-tauri/Cargo.toml \
             --target aarch64-apple-darwin \

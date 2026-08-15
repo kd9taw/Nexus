@@ -117,6 +117,10 @@ fn main() {
 /// the libraries are somewhere the linker already looks, and a real miss surfaces
 /// as the ld error above with better context than a build-script panic.
 fn emit_macos_runtime_search_paths() {
+    // Same rule as WX above: cargo does not re-run a build script when an env var it READS
+    // changes unless told to, so pointing FC at a different toolchain would otherwise keep
+    // the previously-probed paths.
+    println!("cargo:rerun-if-env-changed=FC");
     let fortran = env::var("FC").unwrap_or_else(|_| "gfortran".into());
     if let Some(dir) = Command::new(&fortran)
         .arg("-print-file-name=libgfortran.dylib")
