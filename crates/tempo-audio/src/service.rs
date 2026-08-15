@@ -1912,6 +1912,15 @@ struct RadioLoop {
     /// Last NR level / AGC speed we pushed to the rig — only set on change.
     last_nr_level: Option<f32>,
     last_agc: Option<String>,
+    /// The AGC speed this rig REFUSED, so it stops being re-sent. Hamlib carries AGC as an
+    /// enum (OFF/SUPERFAST/FAST/SLOW/USER/MEDIUM/AUTO) and backends do not all implement every
+    /// step — MEDIUM is the one rigs commonly lack. A refused `L AGC` leaves `last_agc`
+    /// unchanged, so without this the loop re-sent the same doomed command on EVERY 20 ms
+    /// tick, forever: an extra CAT round-trip per tick starving the dial mirror, the S-meter
+    /// and the keyer behind it (the same shape as the FT-950 dial storm, which is why modes
+    /// have `MODE_SET_MAX_TRIES`). Cleared by a fresh operator pick, a rig handoff, and a CAT
+    /// recovery — a give-up is a rate limit, never a permanent latch.
+    agc_giveup: Option<String>,
     /// Open WAV sink while a QSO recording is streaming live RX capture to disk (audio
     /// bridge). The loop owns the file handle so the audio never has to live in RAM.
     qso_sink: Option<crate::voice::WavSink>,
@@ -2186,6 +2195,7 @@ impl RadioLoop {
             last_mic_gain: None,
             last_nr_level: None,
             last_agc: None,
+            agc_giveup: None,
             qso_sink: None,
             qso_started_ms: None,
             voice_mic_open: false,
@@ -2707,6 +2717,7 @@ impl RadioLoop {
         self.last_mic_gain = None;
         self.last_nr_level = None;
         self.last_agc = None;
+        self.agc_giveup = None; // a fresh rig may well take the step the old one refused
         self.fake_it_restore = None;
         self.audio_rig_split = false;
         self.last_rig_poll = 0.0; // poll the new rig's health/mode/S-meter immediately
@@ -3649,6 +3660,7 @@ impl RadioLoop {
                             self.func_state = [None; 5];
                             self.level_supported = [None; 4];
                             self.level_misses = [0; 4];
+                            self.agc_giveup = None; // the refusal may have been the dead link
                             self.rx_ranges_probed = false;
                             {
                                 let mut eng = engine_lock(engine);
@@ -5287,19 +5299,50 @@ impl RadioLoop {
             }
             // RX DSP levels: NR level (0..1) + AGC speed — applied on change like mic gain.
             let (nr, agc) = {
-                let e = engine_lock(engine);
-                (e.nr_level(), e.agc())
+                let mut e = engine_lock(engine);
+                (e.nr_level(), e.agc_to_command())
             };
             if let Some(n) = nr {
                 if Some(n) != self.last_nr_level && rig.set_rx_level("NR", n).is_ok() {
                     self.last_nr_level = Some(n);
                 }
             }
-            if let Some(a) = agc {
-                if self.last_agc.as_deref() != Some(a.as_str())
-                    && rig.set_agc(agc_to_hamlib(&a)).is_ok()
-                {
-                    self.last_agc = Some(a);
+            // AGC. `picked` is the operator's own click and OVERRIDES both guards below —
+            // `last_agc` is only what we last WROTE and the rig's AGC moves without us (its
+            // front-panel knob, and the per-mode AGC memory it recalls when the app commands
+            // CW), so a re-pick of that same speed used to match the dedupe and reach nothing.
+            // It is a one-shot, so honouring it can never become a per-tick re-assert that
+            // fights the operator's knob between clicks. The `agc_giveup` leg is the other
+            // half: a step this rig REFUSES must stop being re-sent (a failed write leaves
+            // `last_agc` unchanged, so the plain change test alone re-sent it every 20 ms
+            // forever) — and must be said out loud rather than leaving the cockpit's chip
+            // claiming a speed the radio never took.
+            if let Some((a, picked)) = agc {
+                let refused = self.agc_giveup.as_deref() == Some(a.as_str());
+                if picked || (!refused && self.last_agc.as_deref() != Some(a.as_str())) {
+                    match rig.set_agc(agc_to_hamlib(&a)) {
+                        Ok(()) => {
+                            self.last_agc = Some(a);
+                            self.agc_giveup = None;
+                            let mut eng = engine_lock(engine);
+                            eng.set_rig_refused_agc(None);
+                        }
+                        Err(_) => {
+                            // Deliberately does NOT blame the rig's capability: `cat` reports a
+                            // refusal and a link fault the same way, and the mode-give-up note
+                            // learned that guessing sends operators chasing the wrong thing.
+                            let note = format!(
+                                "couldn't set AGC {a} — the rig didn't take it; set AGC on the radio"
+                            );
+                            self.agc_giveup = Some(a.clone());
+                            let ok = self.cat_ok;
+                            let mut eng = engine_lock(engine);
+                            eng.set_cat_status(ok, note);
+                            // …and let the cockpit's chip fall back to the rig's real speed
+                            // instead of lighting a step the radio never took.
+                            eng.set_rig_refused_agc(Some(a));
+                        }
+                    }
                 }
             }
         }
@@ -14709,6 +14752,270 @@ mod tests {
             "the band-cross re-assert must not re-ask for a mode this same tick already \
              proved the rig refuses — one attempt per tick, not two: {:?}",
             log.lock().unwrap()[mark..].to_vec()
+        );
+    }
+
+    // ---- CW cockpit AGC (operator report, 2026-08-13): "In CW mode, AGC changes for
+    //      F-M-S work slowly or not at all." ----
+
+    /// A [`mock_agc_rigctld`]: its address, the command lines it was sent, and its own AGC
+    /// register (the "front-panel knob" a test can twist behind the app's back).
+    type AgcRigctld = (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<u8>>);
+
+    /// A rigctld that REMEMBERS its AGC step and answers `l AGC` TRUTHFULLY — which no other
+    /// mock here does (they reply `RPRT 0` to every level read, so the loop's AGC read-back
+    /// never sees a value at all and the scene cannot express a divergence).
+    ///
+    /// The returned knob is the rig's own AGC register: a test can twist it BEHIND the app's
+    /// back, which is the whole point — the operator's front-panel AGC knob and the rig's own
+    /// per-mode AGC memory (recalled on entering CW) both move it with no command from us.
+    ///
+    /// `refuse` shapes it like a rig whose Hamlib backend lacks that AGC step (MEDIUM=5 is the
+    /// common one): that `L AGC` is answered `RPRT -1` and the register is left alone.
+    fn mock_agc_rigctld(start: u8, refuse: Option<u8>) -> AgcRigctld {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let knob = Arc::new(Mutex::new(start));
+        let rec = Arc::clone(&log);
+        let reg = Arc::clone(&knob);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut out = match stream.try_clone() {
+                    Ok(o) => o,
+                    Err(_) => return,
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let mut p = line.split_whitespace();
+                    let reply: String = match (p.next(), p.next()) {
+                        (Some("L"), Some("AGC")) => {
+                            let v = p.next().and_then(|s| s.parse::<u8>().ok());
+                            match v {
+                                Some(v) if Some(v) != refuse => {
+                                    *reg.lock().unwrap() = v;
+                                    "RPRT 0\n".into()
+                                }
+                                // No such AGC step on this rig — refused, register untouched.
+                                _ => "RPRT -1\n".into(),
+                            }
+                        }
+                        (Some("l"), Some("AGC")) => format!("{}\n", *reg.lock().unwrap()),
+                        (Some("f"), _) => "14050000\n".into(),
+                        (Some("m"), _) => "CW\n500\n".into(),
+                        _ => "RPRT 0\n".into(),
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log, knob)
+    }
+
+    /// Drive `step` on the real 20 ms tick for `ticks` iterations, advancing `t`.
+    fn run_ticks(
+        state: &mut RadioLoop,
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+        backend: &mut MockBackend,
+        t: &mut f64,
+        ticks: usize,
+    ) {
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        for _ in 0..ticks {
+            state
+                .step(
+                    engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    *t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            *t += 20.0;
+        }
+    }
+
+    fn cw_agc_engine() -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", true);
+            e.set_frequency(14.050, "20m", "CW");
+        }
+        engine
+    }
+
+    /// ⭐ THE "OR NOT AT ALL" HALF. The radio loop dedupes the AGC write against `last_agc` —
+    /// *what we last wrote*, never what the radio is actually on. Those two part company
+    /// constantly, and CW is where it bites hardest: the operator's front-panel AGC knob moves
+    /// it, and so does the rig's own per-mode AGC memory the moment the app commands CW.
+    ///
+    /// Past that point the operator's chip is dead. They click Fast, the guard says "already
+    /// fast", and NOTHING goes on the wire — for the rest of the session, on that speed. This
+    /// is the same defect class as the rig-mode re-assert in `App.tsx` ("the guard ref drifts
+    /// out of sync with the real rig"), which is why that one asserts unconditionally.
+    ///
+    /// Measured at the wire and at the RADIO'S OWN REGISTER, not at `last_agc` — the cache is
+    /// the thing under suspicion, so asserting on it would prove nothing.
+    #[test]
+    fn a_reselected_agc_speed_reaches_a_rig_that_moved_on_its_own() {
+        let engine = cw_agc_engine();
+        let (addr, log, knob) = mock_agc_rigctld(2, None); // rig sitting on FAST
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let mut t = 0.0;
+        run_ticks(&mut state, &engine, &mut rig, &mut backend, &mut t, 5);
+
+        // The operator picks Fast in the CW cockpit's AGC strip.
+        engine.lock().unwrap().set_agc("fast");
+        run_ticks(&mut state, &engine, &mut rig, &mut backend, &mut t, 3);
+        // POSITIVE CONTROL for the mock and the counter: the click must reach the wire at all,
+        // or every "0 commands" below would read as a pass on a scene that never worked.
+        assert!(
+            count_from(&log, 0, "L AGC 2") > 0,
+            "control: the first pick must write AGC FAST: {:?}",
+            log.lock().unwrap()
+        );
+
+        // THE DIVERGENCE: the rig moves on its own — the front-panel AGC knob, or the rig
+        // recalling its per-mode AGC setting. No command from us; `last_agc` still says "fast".
+        *knob.lock().unwrap() = 3; // SLOW
+
+        // Two heavy polls' worth of ticks, so the loop's own read-back sees it.
+        let drift_mark = log.lock().unwrap().len();
+        run_ticks(&mut state, &engine, &mut rig, &mut backend, &mut t, 90);
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.agc.as_deref(),
+            Some("slow"),
+            "precondition: the app KNOWS the rig is on Slow — it read it back off the wire"
+        );
+        // THE OTHER DIRECTION, and it is why the pick is a ONE-SHOT rather than a re-assert:
+        // between clicks the operator's own AGC knob is theirs. Knowing the rig disagrees with
+        // the last commanded speed must NOT make the loop stomp it back — an unconditional
+        // re-assert, or one driven off the read-back, would fight the front panel every poll.
+        assert_eq!(
+            count_from(&log, drift_mark, "L AGC"),
+            0,
+            "the loop must not re-assert AGC on its own — the operator's knob wins between \
+             clicks: {:?}",
+            log.lock().unwrap()[drift_mark..].to_vec()
+        );
+
+        // THE CLICK THAT DOES NOTHING: the operator taps Fast to get back.
+        let mark = log.lock().unwrap().len();
+        engine.lock().unwrap().set_agc("fast");
+        run_ticks(&mut state, &engine, &mut rig, &mut backend, &mut t, 5);
+
+        assert!(
+            count_from(&log, mark, "L AGC") > 0,
+            "re-picking an AGC speed must reach the radio even when the app last WROTE that \
+             same speed — the rig has moved since: {:?}",
+            log.lock().unwrap()[mark..].to_vec()
+        );
+        assert_eq!(
+            *knob.lock().unwrap(),
+            2,
+            "…and the radio must actually be back on Fast"
+        );
+    }
+
+    /// ⭐ THE "WORK SLOWLY" HALF. Hamlib carries AGC as an ENUM (OFF/SUPERFAST/FAST/SLOW/
+    /// USER/MEDIUM/AUTO) and not every backend implements every step — MEDIUM is the one
+    /// rigs commonly lack. A refused `L AGC` answers `RPRT -1`, so `set_agc().is_ok()` is
+    /// false, so `last_agc` is NOT updated — and the apply is unguarded by anything else, so
+    /// the loop re-sends the same doomed command on EVERY 20 ms tick, forever.
+    ///
+    /// That is the operator's "slowly": an extra CAT round-trip every tick starves the dial
+    /// mirror, the S-meter and the keyer behind it — the same shape as the FT-950 dial storm
+    /// (`a_given_up_mode_stops_the_per_tick_dial_storm`), which is why modes have
+    /// `MODE_SET_MAX_TRIES` and a give-up note. AGC has neither.
+    ///
+    /// And it must not end SILENTLY: a rig that refused the step must not leave the app
+    /// believing it applied.
+    #[test]
+    fn an_agc_step_the_rig_refuses_stops_being_re_sent_and_is_reported() {
+        let engine = cw_agc_engine();
+        // A rig with no MEDIUM step: `L AGC 5` → RPRT -1. It starts on FAST.
+        let (addr, log, knob) = mock_agc_rigctld(2, Some(5));
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let mut t = 0.0;
+        run_ticks(&mut state, &engine, &mut rig, &mut backend, &mut t, 5);
+
+        // The operator picks Mid.
+        engine.lock().unwrap().set_agc("mid");
+        run_ticks(&mut state, &engine, &mut rig, &mut backend, &mut t, 40);
+        // POSITIVE CONTROL: the pick must have been TRIED, or "it stops" is vacuous.
+        assert!(
+            count_from(&log, 0, "L AGC 5") > 0,
+            "control: the pick must be attempted at least once: {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(
+            *knob.lock().unwrap(),
+            2,
+            "control: the rig really did refuse it — still on FAST"
+        );
+
+        // THE STEADY WINDOW: nothing changes, the operator is just sitting there.
+        let mark = log.lock().unwrap().len();
+        const STEADY_TICKS: usize = 100;
+        run_ticks(
+            &mut state,
+            &engine,
+            &mut rig,
+            &mut backend,
+            &mut t,
+            STEADY_TICKS,
+        );
+        let sends = count_from(&log, mark, "L AGC");
+        assert_eq!(
+            sends, 0,
+            "an AGC step the rig has REFUSED must stop being re-sent: {STEADY_TICKS} idle \
+             ticks sent it {sends} more times (pre-fix: one per tick, forever)"
+        );
+
+        // …and the operator must be TOLD, not left with a chip that claims it landed.
+        let snap = engine.lock().unwrap().snapshot();
+        assert!(
+            snap.radio.cat_detail.to_lowercase().contains("agc"),
+            "the refusal must be reported to the operator, not swallowed: {:?}",
+            snap.radio.cat_detail
+        );
+        assert_eq!(
+            snap.radio.refused_agc.as_deref(),
+            Some("mid"),
+            "the refused step must be NAMED in the snapshot, so the cockpit's optimistic chip \
+             falls back to the rig's real speed instead of claiming Mid"
+        );
+        assert_eq!(
+            snap.radio.agc.as_deref(),
+            Some("fast"),
+            "…and the rig's real speed is what the read-back says: Fast"
+        );
+
+        // THE OTHER DIRECTION: a step this rig DOES have must clear the refusal, or one bad
+        // pick would leave the cockpit permanently distrusting its own chip.
+        engine.lock().unwrap().set_agc("slow");
+        run_ticks(&mut state, &engine, &mut rig, &mut backend, &mut t, 90);
+        assert_eq!(*knob.lock().unwrap(), 3, "control: SLOW is accepted");
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.refused_agc,
+            None,
+            "an accepted AGC write clears the refusal"
         );
     }
 

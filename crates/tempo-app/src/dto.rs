@@ -680,6 +680,12 @@ pub struct RadioStatus {
     /// The dial (MHz) the radio most recently REFUSED, so the UI can name it. `None` = none.
     #[serde(default)]
     pub refused_dial_mhz: Option<f64>,
+    /// The AGC speed ("fast"|"mid"|"slow") the radio most recently REFUSED — Hamlib's AGC is an
+    /// enum and backends do not all implement every step, MEDIUM least of all. The cockpit's
+    /// segmented chip is optimistic (the rig read-back lags a poll), so without this it would
+    /// keep claiming a speed the radio never took. `None` = the last AGC write was accepted.
+    #[serde(default)]
+    pub refused_agc: Option<String>,
     /// The CW keyer backend: "cat" (the rig generates CW → rig in CW mode) or "soundcard"
     /// (a keyed audio tone → rig deliberately in USB/LSB). Surfaced so the CW cockpit's
     /// toggle reflects the ACTUAL backend setting instead of a stale local default — that

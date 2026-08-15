@@ -58,6 +58,7 @@
     "qsoRecording": false,
     "radioConfigWarning": null,
     "recordingWarning": null,
+    "refusedAgc": null,
     "refusedDialMhz": null,
     "rfPower": null,
     "rigConfirmed": false,

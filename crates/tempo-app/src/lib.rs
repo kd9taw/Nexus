@@ -285,6 +285,7 @@ impl AppState {
                 cat_detail: String::new(),
                 rx_ranges_mhz: Vec::new(),
                 refused_dial_mhz: None,
+                refused_agc: None,
                 cw_keyer: "cat".to_string(),
                 cw_wpm: 25,
                 split_tx_mhz: None,

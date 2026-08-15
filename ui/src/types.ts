@@ -1105,6 +1105,11 @@ export interface RadioStatus {
   rxRangesMhz?: [number, number][]
   /** The dial (MHz) the radio most recently REFUSED, so the UI can name it. */
   refusedDialMhz?: number | null
+  /** The AGC speed ('fast'|'mid'|'slow') the radio most recently REFUSED. Hamlib's AGC is an
+   * enum and not every backend implements every step (MEDIUM least of all), so a pick can be
+   * rejected outright. The cockpits' segmented AGC chip is optimistic — the rig read-back lags
+   * a poll — and this is what stops it claiming a speed the radio never took. */
+  refusedAgc?: string | null
   /** The CW keyer backend the engine is actually using: 'cat' (rig in CW) or
    * 'soundcard' (rig in USB/LSB). Lets the CW cockpit toggle show the REAL state. */
   cwKeyer?: string

@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logger on the WSJT-X link, and in your own logbook, ADIF exports and LoTW and QRZ uploads.
   Contacts logged before this keep whatever they were written with; re-exporting does not change
   them.
+- **The AGC Fast/Mid/Slow buttons reach the radio every time you press one.** Reported from CW:
+  "AGC changes for F-M-S work slowly or not at all." Two things were wrong. Nexus only sent an
+  AGC command when the speed differed from the one it had last sent — but your radio's AGC moves
+  without Nexus (the front-panel knob does it, and so does the radio recalling its own per-mode
+  AGC when Nexus puts it into CW), so once the two disagreed, pressing the speed Nexus thought
+  it had already set sent nothing at all, for the rest of the session. Pressing a button is now
+  always a command. And if the radio refuses a step — Hamlib's AGC is a fixed list and not every
+  radio has every entry, Mid least of all — Nexus used to re-send that rejected command every
+  20 ms forever, which is what made everything else on the CAT link feel sluggish. It now stops,
+  says so, and the highlighted button drops back to the speed the radio is actually on instead
+  of claiming one it never took.
 - **Push to Talk tells you when transmit is switched off instead of doing nothing.** Reported on
   an FTdx10: clicking Push to Talk did not key the rig, and nothing on screen said why. Nexus
   drops a mic key for two different reasons — you are outside your licence privileges, or

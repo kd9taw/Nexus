@@ -1559,6 +1559,14 @@ pub struct Engine {
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
     rig_agc: Option<String>,
+    /// The operator just PICKED an AGC speed — a one-shot force for the radio loop, consumed
+    /// by [`Self::agc_to_command`]. See that method for why the pick cannot ride the loop's
+    /// change-detection alone.
+    agc_picked: bool,
+    /// The AGC speed the rig REFUSED, from the radio loop's write. Feeds the snapshot so the
+    /// cockpit's optimistic chip falls back to the rig's truth instead of claiming a step the
+    /// radio never took. Cleared by the next accepted write.
+    rig_refused_agc: Option<String>,
     /// Rig CAT S-meter (dB relative to S9) from the radio-loop poll; `None` when the
     /// rig doesn't report STRENGTH. Observed-only, RX-only.
     rig_smeter_db: Option<i32>,
@@ -3108,6 +3116,8 @@ impl Engine {
             rig_nr_level: None,
             agc: None,
             rig_agc: None,
+            agc_picked: false,
+            rig_refused_agc: None,
             rig_smeter_db: None,
             rig_keyed: false,
             rig_tx_swr: None,
@@ -5746,19 +5756,42 @@ impl Engine {
         }
     }
 
-    /// Set desired AGC speed ("fast"|"mid"|"slow"); the radio loop applies it on change.
+    /// Set desired AGC speed ("fast"|"mid"|"slow") — an OPERATOR PICK, which the radio loop
+    /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
         if matches!(speed, "fast" | "mid" | "slow") {
             self.agc = Some(speed.to_string());
+            self.agc_picked = true;
         }
     }
-    pub fn agc(&self) -> Option<String> {
-        self.agc.clone()
+    /// The AGC speed for the radio loop to apply, and whether the operator just PICKED it.
+    ///
+    /// The force flag is load-bearing, not belt-and-braces. The loop dedupes its AGC write
+    /// against what it last WROTE, and the rig's AGC moves without us — the front-panel knob
+    /// does it, and so does the rig's own per-mode AGC memory the moment the app commands CW.
+    /// Once the two part company, a re-pick of that same speed matched the dedupe and never
+    /// reached the radio: the operator's Fast/Mid/Slow chips were dead for the rest of the
+    /// session. (Same defect class as the rig-mode re-assert in `App.tsx`, whose comment says
+    /// why it asserts unconditionally.)
+    ///
+    /// A ONE-SHOT, consumed here, is the whole design: re-asserting on every tick instead
+    /// would fight the operator's own AGC knob between clicks — worse than a dead chip — and
+    /// re-asserting from the read-back would do the same, one heavy poll later. One click is
+    /// one command.
+    pub fn agc_to_command(&mut self) -> Option<(String, bool)> {
+        let speed = self.agc.clone()?;
+        Some((speed, std::mem::take(&mut self.agc_picked)))
     }
     pub fn observe_rig_agc(&mut self, speed: String) {
         if matches!(speed.as_str(), "fast" | "mid" | "slow") {
             self.rig_agc = Some(speed);
         }
+    }
+    /// Record (`Some`) or clear (`None`) the AGC speed the rig refused — the radio loop's
+    /// verdict on its own write. Same shape as [`Self::set_rig_refused_dial`], and for the same
+    /// reason: a control the radio said no to must not keep reading as applied.
+    pub fn set_rig_refused_agc(&mut self, speed: Option<String>) {
+        self.rig_refused_agc = speed;
     }
 
     /// Adopt the rig's reported S-meter (dB relative to S9), from the radio-loop poll.
@@ -11865,6 +11898,7 @@ impl Engine {
         s.radio.mic_gain = self.rig_mic_gain.or(self.mic_gain);
         s.radio.nr_level = self.rig_nr_level.or(self.nr_level);
         s.radio.agc = self.rig_agc.clone().or_else(|| self.agc.clone());
+        s.radio.refused_agc = self.rig_refused_agc.clone();
         s.radio.smeter_db = self.rig_smeter_db;
         s.radio.tx_swr = self.rig_tx_swr;
         s.radio.tx_alc = self.rig_tx_alc;

@@ -239,16 +239,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     setNr(pct)
     void setNrLevel(pct / 100)
   }
-  // AGC speed — local optimistic mirror so the segmented highlight flips on click. Reading
+  // AGC speed — the chip lights on the click, then the rig gets the last word. Reading
   // snap.radio.agc directly lagged ~0.75–1.5 s: setAgc's snapshot returns the OLD rig read-back
-  // (rig_agc.or(agc)) until the next RX poll, so the clicked chip wouldn't light up. Sync from
-  // the snapshot when it changes (confirms / corrects), exactly like the NR slider above.
-  const [agc, setAgcLocal] = useState<string | null>(() => snap.radio.agc ?? null)
-  useEffect(() => {
-    if (snap.radio.agc != null) setAgcLocal(snap.radio.agc)
-  }, [snap.radio.agc])
+  // (rig_agc.or(agc)) until the next RX poll, so the clicked chip wouldn't light up. DERIVED
+  // rather than a remembered mirror, because a mirror synced only "when the snapshot changes"
+  // is blind to a REFUSAL — a rig whose Hamlib backend lacks that AGC step answers RPRT -1, the
+  // read-back never moves, and the chip claimed a speed the radio never took.
+  const [agcPick, setAgcPick] = useState<string | null>(null)
+  const agc =
+    agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
   const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
-    setAgcLocal(sp)
+    setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
       .catch(() => {})
