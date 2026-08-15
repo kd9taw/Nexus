@@ -64,7 +64,8 @@ fn the_daemons_own_words_reach_the_handle_the_operator_is_told_from() {
         57600, // …at the rate his radio is actually on
         45_123,
         false,
-        None,
+        // no keying declaration — this test is about stderr capture, not line states
+        Default::default(),
         ControlLines::hold_low(),
     )
     .expect("the stand-in daemon must launch");

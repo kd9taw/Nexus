@@ -2879,6 +2879,26 @@ export function SettingsPanel({
                 </label>
               )}
 
+              <label className="settings-field">
+                <span className="settings-label">Interface keys RTS on the CAT port</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={form.catRtsKeysPtt ?? false}
+                    onChange={(e) => updateBool('catRtsKeysPtt', e.target.checked)}
+                  />
+                </span>
+                <span className="settings-hint">
+                  Tick this if your interface keys the radio from the CAT port&rsquo;s RTS line —
+                  a Digirig Mobile and most other one-cable interfaces are wired this way. Nexus
+                  then holds RTS down, instead of leaving it up where it puts some rigs into
+                  transmit the moment the port opens.{' '}
+                  <strong>If your radio transmits as soon as Nexus starts, this is the setting.</strong>{' '}
+                  Leave it off if a plain serial cable goes straight to the radio: the radio may
+                  be using that line for flow control, and taking it away can cost you CAT.
+                </span>
+              </label>
+
               <div className="settings-field">
                 <span className="settings-label">Zero-config setup</span>
                 <div className="settings-input-row">

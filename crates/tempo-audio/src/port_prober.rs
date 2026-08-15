@@ -222,7 +222,11 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -
                 baud,
                 tcp_port,
                 false,
-                None,
+                // DEFAULT (no declaration): this sweep probes ports BEFORE any of them is
+                // configured, so there is no per-port declaration to read yet. Declaring RTS
+                // deliberate here would drop the hardware handshake on every model it touches,
+                // which is the FTDX10/FT-991 bench regression reintroduced blind.
+                crate::rigctld_proc::KeyingFacts::default(),
                 ControlLines::hold_low(),
             ) else {
                 continue;

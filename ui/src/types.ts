@@ -2364,6 +2364,14 @@ export interface Settings {
   /** Dedicated serial/COM port for RTS/DTR PTT when it differs from the CAT port
    * (SO2R controllers key on their own COM port). Empty = key on `serialPort`. */
   pttSerialPort: string
+  /** "My interface keys PTT on the CAT port's RTS line" — a fact only the operator can supply.
+   *
+   * A one-cable interface (Digirig class) keys RTS on the same port that carries CAT, so RTS
+   * must be held low or the rig transmits from the moment the port opens. Nexus cannot detect
+   * this: a stock Digirig enumerates with the same USB identity as an FTDX10, so no rule can
+   * separate "cable that keys RTS" from "radio that needs its hardware handshake". Ticking this
+   * lets Nexus drop the declared handshake to hold the line — which is why it defaults off. */
+  catRtsKeysPtt: boolean
   /** Serial baud rate. */
   baud: number
   /** Rig connection: "serial" (default) or "network" (rigctld → rigAddr over TCP, e.g. a

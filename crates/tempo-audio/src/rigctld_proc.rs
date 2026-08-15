@@ -192,6 +192,45 @@ pub struct SettableLines {
 /// `rts_deliberate` — is RTS at this port KNOWN to be wired to something (a recognised
 /// keying-interface cable, or a serial keying line declared on this very port)? The
 /// handshake override is gated on it: see the ⚠️ in [`ControlLines::handshake_none`].
+/// Is RTS at this port a DELIBERATE keying line, rather than a line we are merely holding low
+/// out of caution?
+///
+/// The distinction decides whether Nexus may drop the rig's declared hardware handshake to make
+/// RTS holdable — see [`resolve_lines`]. Getting it wrong in the permissive direction killed CAT
+/// on FTDX10/FT-991 (bench, 2026-08-09); getting it wrong in the restrictive direction leaves a
+/// rig keyed from launch, which is issue #44.
+///
+/// Three ways to be deliberate, in order of how much we trust them:
+///  * `ptt_line` — the operator declared serial PTT on this port. Unambiguous.
+///  * `declared` — the operator ticked "my interface keys PTT on the CAT port's RTS line".
+///    ⚠️ THIS ARM IS WHY #44 WAS STILL OPEN. Autodetection cannot close it: a stock Digirig
+///    enumerates as a plain `CP2102 USB to UART Bridge`, the SAME USB identity an FTDX10 and
+///    several Xiegu radios present, so no VID/PID or product-string rule can separate "cable
+///    that keys RTS" from "radio that needs its handshake". The operator can see the cable; we
+///    cannot. Asking is the honest mechanism, not a fallback.
+///  * `port_is_keying_interface` — the port enumerates as a RECOGNISED keying cable. Narrow by
+///    construction, and deliberately not widened; widening it is what caused the regression.
+pub(crate) fn rts_is_deliberate(
+    ptt_line: Option<crate::rig::SerialLine>,
+    declared: bool,
+    addr: &str,
+) -> bool {
+    ptt_line.is_some() || declared || crate::usbrig::port_is_keying_interface(addr)
+}
+
+/// What is known about how this port is KEYED — as distinct from [`ControlLines`], which is what
+/// the operator wants the lines HELD AT. Two different kinds of fact about the same two pins, and
+/// keeping them apart is what makes `rts_is_deliberate` readable at the call sites.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct KeyingFacts {
+    /// A serial keying line declared for this port (PTT = RTS/DTR). Unambiguous evidence.
+    pub ptt_line: Option<crate::rig::SerialLine>,
+    /// The operator's "my interface keys PTT on the CAT port's RTS line" declaration
+    /// (`Settings::cat_rts_keys_ptt`) — the fact no autodetection can supply. See
+    /// [`rts_is_deliberate`].
+    pub rts_declared: bool,
+}
+
 fn resolve_lines(
     settable: SettableLines,
     want: ControlLines,
@@ -1019,9 +1058,10 @@ pub fn spawn_rigctld(
     baud: u32,
     tcp_port: u16,
     network: bool,
-    ptt_line: Option<crate::rig::SerialLine>,
+    keying: KeyingFacts,
     want: ControlLines,
 ) -> std::io::Result<RigctldProc> {
+    let ptt_line = keying.ptt_line;
     // Ask the daemon about the rig BEFORE launching it, so it cannot come up holding the
     // transmitter keyed (see [`SettableLines`]). Skipped where there is no control line at
     // all: a TCP transport, or a model that needs no port.
@@ -1030,7 +1070,7 @@ pub fn spawn_rigctld(
     } else {
         // Is RTS at this port a deliberate thing? A serial keying line declared here, or
         // the port enumerating as a recognised keying-interface cable (Digirig class).
-        let deliberate = ptt_line.is_some() || crate::usbrig::port_is_keying_interface(addr);
+        let deliberate = rts_is_deliberate(ptt_line, keying.rts_declared, addr);
         resolve_lines(settable_lines_for(model, ptt_line), want, deliberate)
     };
     let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, lines);
@@ -2319,5 +2359,54 @@ mod tests {
             );
         }
         eprintln!("swept every model; keyed by a serial line: {keyed_by_a_line:?}");
+    }
+}
+
+#[cfg(test)]
+mod rts_declaration_tests {
+    use super::*;
+    use crate::rig::SerialLine;
+
+    /// ISSUE #44 — the operator must be able to SAY the cable keys RTS.
+    ///
+    /// vk6mo's rig (TS-2000 + Digirig Mobile) keys from the moment Nexus starts. His PTT is not
+    /// set to a serial line, and his cable enumerates as a plain `CP2102 USB to UART Bridge` —
+    /// the same USB identity an FTDX10 presents — so nothing could mark RTS deliberate, no
+    /// `-C rts_state` was emitted, and the line sat asserted on a hardware-handshake rig.
+    #[test]
+    fn an_operator_declaration_makes_rts_deliberate_when_nothing_else_can() {
+        // The unrecognisable cable, exactly as his enumerates.
+        let addr = "COM7";
+        assert!(
+            !crate::usbrig::port_is_keying_interface(addr),
+            "control: this port must NOT be auto-recognised — if it were, the declaration \
+             would be untestable here and #44 would already have been fixed"
+        );
+        assert!(
+            !rts_is_deliberate(None, false, addr),
+            "today's behaviour: nothing marks it deliberate, so RTS is left alone and the rig keys"
+        );
+        assert!(
+            rts_is_deliberate(None, true, addr),
+            "with the operator's declaration, RTS becomes deliberate and can be held low"
+        );
+    }
+
+    /// The declaration must not be the ONLY route — the two existing ones still stand.
+    #[test]
+    fn a_declared_serial_ptt_line_is_still_deliberate_on_its_own() {
+        assert!(rts_is_deliberate(Some(SerialLine::Rts), false, "COM7"));
+        assert!(rts_is_deliberate(Some(SerialLine::Dtr), false, "COM7"));
+    }
+
+    /// And the default stays SAFE for everyone who does not tick it: an ordinary rig on an
+    /// ordinary port is untouched, which is what protects the Yaesu CAT regression from
+    /// returning. A blanket "always deliberate" would pass the first test and reintroduce it.
+    #[test]
+    fn the_default_leaves_an_ordinary_rig_alone() {
+        assert!(
+            !rts_is_deliberate(None, false, "COM3"),
+            "an operator who ticks nothing must get exactly the behaviour they have today"
+        );
     }
 }

@@ -15333,6 +15333,9 @@ pub fn run() {
         meter_feed: meter_feed.clone(),
         ptt_method: settings.ptt_method.clone(),
         rig_model: settings.rig_model,
+        // Seeded here rather than waiting for the first settings tick: the launch of rigctld is
+        // itself what keys an undeclared RTS-wired cable, so a tick later is too late (#44).
+        cat_rts_keys_ptt: settings.cat_rts_keys_ptt,
         serial_port: settings.serial_port.clone(),
         baud: settings.baud,
         rig_conn: settings.rig_conn.clone(),

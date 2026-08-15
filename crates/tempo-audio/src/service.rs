@@ -157,7 +157,10 @@ fn spawn_cat_daemon(
         t.baud,
         t.rigctld_port,
         network,
-        ptt_line,
+        crate::rigctld_proc::KeyingFacts {
+            ptt_line,
+            rts_declared: t.cat_rts_keys_ptt,
+        },
         t.control_lines,
     )
     .map(|p| (CatDaemon::Spawned(p), native_fallback))
@@ -633,6 +636,13 @@ pub struct RadioConfig {
     pub ptt_method: String,
     /// Hamlib rig model number for `rigctld -m` (0 = none / VOX).
     pub rig_model: u32,
+    /// The operator's "my interface keys PTT on the CAT port's RTS line" declaration
+    /// (`Settings::cat_rts_keys_ptt`). Carried in the STARTUP SEED, not left to the first
+    /// settings tick, because launching rigctld is itself what keys the rig on an undeclared
+    /// cable — arriving a tick later would be after the fact (issue #44). Defaulted false so
+    /// existing constructions (tests, tools) need no change.
+    #[allow(clippy::struct_excessive_bools)]
+    pub cat_rts_keys_ptt: bool,
     /// Serial port for CAT / serial PTT, e.g. `"COM5"` or `"/dev/ttyUSB0"`.
     pub serial_port: String,
     /// Serial baud for CAT.
@@ -678,6 +688,7 @@ impl Default for RadioConfig {
             meter_feed: tempo_app::engine::MeterFeed::default(),
             ptt_method: "vox".to_string(),
             rig_model: 0,
+            cat_rts_keys_ptt: false,
             serial_port: String::new(),
             baud: 38400,
             rig_conn: "serial".to_string(),
@@ -1036,6 +1047,9 @@ impl Transport {
             // better: nothing in this transport will ever key or unkey, so an interface wired
             // to key from RTS would sit in transmit for as long as the monitor is open.
             control_lines: crate::rigctld_proc::ControlLines::hold_low(),
+            // A monitor radio is read-only and never keys, so there is no keying cable to
+            // declare — and dropping its handshake could only cost it CAT.
+            cat_rts_keys_ptt: false,
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),
@@ -6969,6 +6983,10 @@ struct Transport {
     /// `cat_dtr_state`). Part of the transport because changing it has to relaunch rigctld —
     /// the states are `-C` flags on its command line, not something a running daemon re-reads.
     control_lines: crate::rigctld_proc::ControlLines,
+    /// The operator's "my interface keys PTT on the CAT port's RTS line" declaration
+    /// (`Settings::cat_rts_keys_ptt`). Part of the transport for the same reason as
+    /// `control_lines`: it changes rigctld's command line, so it needs a relaunch.
+    cat_rts_keys_ptt: bool,
     baud: u32,
     /// "network" → rigctld talks to `rig_addr` over TCP (Flex/SmartSDR); else serial.
     rig_conn: String,
@@ -7009,6 +7027,10 @@ impl Transport {
             // The startup seed is the SAFE state, not "no opinion": this is what the very
             // first rigctld of the session is launched with, before any settings tick.
             control_lines: crate::rigctld_proc::ControlLines::hold_low(),
+            // Seeded from the stored setting, NOT false: this is the very first rigctld of the
+            // session, and it is the launch itself that keys the rig on an undeclared cable —
+            // waiting for the first settings tick would be too late to help issue #44.
+            cat_rts_keys_ptt: c.cat_rts_keys_ptt,
             baud: c.baud,
             rig_conn: c.rig_conn.clone(),
             rig_addr: c.rig_addr.clone(),
@@ -7043,6 +7065,7 @@ impl Transport {
                 // and only where dropping the handshake is what makes `rts` above achievable.
                 handshake_none: false,
             },
+            cat_rts_keys_ptt: s.cat_rts_keys_ptt,
             baud: s.baud,
             icom_native_cat: s.icom_native_cat,
             rig_conn: s.rig_conn.clone(),
@@ -13153,6 +13176,7 @@ mod tests {
             rig_model: 1035,
             serial_port: "/dev/ttyUSB0".to_string(),
             ptt_serial_port: String::new(),
+            cat_rts_keys_ptt: false,
             control_lines: crate::rigctld_proc::ControlLines::hold_low(),
             baud: 38400,
             icom_native_cat: false,

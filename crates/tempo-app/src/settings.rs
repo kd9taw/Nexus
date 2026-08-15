@@ -717,6 +717,26 @@ pub struct Settings {
     /// See [`Settings::cat_rts_state`] — the same, for DTR.
     #[serde(default)]
     pub cat_dtr_state: String,
+    /// "My interface keys PTT on the CAT port's RTS line" — the operator telling us something
+    /// we cannot detect.
+    ///
+    /// ⚠️ THIS EXISTS BECAUSE AUTODETECTION CANNOT WORK HERE (issue #44). A single-cable
+    /// interface like a Digirig Mobile keys RTS on the same port that carries CAT, and Nexus
+    /// must then hold RTS low or the rig transmits from the moment the port opens. But a stock
+    /// Digirig enumerates as a plain `CP2102 USB to UART Bridge` — byte-for-byte the USB
+    /// identity an FTDX10 and several Xiegu radios present — so no VID/PID or product-string
+    /// rule can tell "cable that keys RTS" from "radio that needs its hardware handshake".
+    /// Guessing permissively is exactly what killed CAT on FTDX10/FT-991 at the bench
+    /// (2026-08-09), and guessing conservatively is what left vk6mo's TS-2000 keyed from launch
+    /// through four releases.
+    ///
+    /// So we ask. The operator can see which cable is plugged in; we cannot.
+    ///
+    /// DEFAULT FALSE, and that matters: ticking it lets Nexus drop the rig's declared hardware
+    /// handshake so RTS becomes holdable, which is precisely the thing that must never happen
+    /// to a rig that did not ask for it.
+    #[serde(default)]
+    pub cat_rts_keys_ptt: bool,
     /// Serial baud rate for CAT.
     pub baud: u32,
     /// Rig connection type: "serial" (default; rigctld talks to `serial_port`/`baud`) or
@@ -2510,6 +2530,11 @@ impl Default for Settings {
             // THIS value, so the fix reaches existing stations without a migration.
             cat_rts_state: "low".to_string(),
             cat_dtr_state: "low".to_string(),
+            // Default OFF, deliberately. Ticking it lets Nexus drop a rig's DECLARED hardware
+            // handshake so RTS becomes holdable — right for a Digirig-class cable, and exactly
+            // what must never happen to a rig that did not ask for it (the FTDX10/FT-991 bench
+            // regression). An operator who ticks nothing gets today's behaviour unchanged.
+            cat_rts_keys_ptt: false,
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
@@ -4543,6 +4568,29 @@ mod tests {
         assert_eq!(s.rig_mode(), "USB");
         s.dial_mhz = 3.850; // 80 m
         assert_eq!(s.rig_mode(), "LSB");
+    }
+
+    /// ISSUE #44 — the one setting whose silence is a transmitting radio.
+    ///
+    /// Same trap as the APRS keys below: `rename_all = "camelCase"` mangles any hand-written TS
+    /// key that disagrees, the backend falls back to the serde default, and the control appears
+    /// to do nothing. Here "does nothing" means the operator ticks "my interface keys RTS",
+    /// believes the rig will stop keying at launch, and it keys anyway — so this key earns its
+    /// own guard rather than riding along in a list.
+    #[test]
+    fn the_rts_keying_declaration_uses_the_exact_wire_key_the_ui_writes() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            json.contains("\"catRtsKeysPtt\":false"),
+            "ui/src/types.ts writes `catRtsKeysPtt`; if this key ever disagrees the tick box \
+             silently stops working and the rig goes on transmitting at launch. json = {json}"
+        );
+        // CONTROL: the assertion is reading a real serialisation, not an empty haystack that
+        // would make any `contains` claim vacuously checkable.
+        assert!(
+            json.contains("\"catRtsState\":\"low\""),
+            "control: neighbouring keys serialise"
+        );
     }
 
     #[test]
