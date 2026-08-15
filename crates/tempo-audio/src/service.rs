@@ -31,7 +31,7 @@ use tempo_core::timing::{now_unix_ms, SlotClock};
 use crate::backend::AudioBackend;
 use crate::device::CpalBackend;
 use crate::frames::RxRing;
-use crate::rig::{PttMode, Rig, SerialLine};
+use crate::rig::{PttMode, Rig, SerialLine, ATU_START_TUNE};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
 /// The daemon serving the rigctld protocol on a radio's TCP port: Hamlib's spawned
@@ -3921,16 +3921,19 @@ impl RadioLoop {
                         // there — but that is a button the operator is still holding down, and
                         // this is a one-shot press they have already let go of.
                         //
-                        // ⚠️ NEEDS BENCH (no rig on this machine): `U TUNER 1` is Hamlib's
-                        // `RIG_FUNC_TUNER`, and what a given backend does with it is the rig's
-                        // business — on Icom it is the ATU register, on Yaesu the `AC` tuner
-                        // command. Whether each brand STARTS a tune-up or only switches the tuner
-                        // in-line is unverified here; the gating above is what this change is
-                        // responsible for, and it holds either way.
+                        // ⚠️ THE VALUE IS 2, NOT 1, AND THAT IS THE WHOLE BUG (operator,
+                        // 2026-08-15, FTDX10: "the atu button does nothing when clicked").
+                        // `U TUNER 1` is Yaesu `AC001` — ATU IN LINE — which on a rig whose
+                        // tuner is already in line is a visible no-op. `U TUNER 2` is `AC002`,
+                        // "start tuning". The question the old note here left open — whether a
+                        // brand STARTS a tune-up or only switches the tuner in-line — turned out
+                        // to be the defect rather than a caveat. See `rig::ATU_START_TUNE` for
+                        // the Hamlib source this was read out of, and for why 2 is a no-op
+                        // rather than a new behaviour on Icom and Kenwood.
                         let fire_atu = engine_lock(engine).take_atu_tune();
                         if fire_atu && self.may_key() {
                             crate::civ::diag::note("ATU: operator asked the rig to tune up");
-                            if let Err(e) = rig.set_func("TUNER", true) {
+                            if let Err(e) = rig.set_func_value("TUNER", ATU_START_TUNE) {
                                 // NOT re-queued: retrying a keying command the radio already
                                 // refused would key on a later tick the operator didn't ask for.
                                 // They press it again if they want it again.
@@ -12782,7 +12785,7 @@ mod tests {
             "…and the snapshot carries the capability, so the cockpit can show the control"
         );
         assert!(
-            !log.lock().unwrap().iter().any(|l| l == "U TUNER 1"),
+            !log.lock().unwrap().iter().any(|l| l == "U TUNER 2"),
             "PROBING MUST NOT TUNE: nothing keys until the operator asks — saw {:?}",
             log.lock().unwrap()
         );
@@ -12790,8 +12793,9 @@ mod tests {
         engine.lock().unwrap().atu_tune().expect("the gate passes");
         run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 1);
         assert!(
-            log.lock().unwrap().iter().any(|l| l == "U TUNER 1"),
-            "the operator's ATU press reaches the radio — saw {:?}",
+            log.lock().unwrap().iter().any(|l| l == "U TUNER 2"),
+            "the operator's ATU press reaches the radio as a TUNE-UP (2 = Yaesu AC002), not as \
+             \"switch the tuner in\" (1 = AC001, the dead-button bug) — saw {:?}",
             log.lock().unwrap()
         );
     }
@@ -12802,7 +12806,7 @@ mod tests {
         // trusted from the click: an ATU tune-up KEYS THE TRANSMITTER, and the operator's press
         // is up to a poll old by the time the loop can send it. TX going off in that window (the
         // TX-Off button, a watchdog trip, a radio handoff standing transmit down) must leave
-        // `U TUNER 1` unsent — a keying command may never outlive the state that allowed it.
+        // `U TUNER 2` unsent — a keying command may never outlive the state that allowed it.
         let engine = atu_engine();
         let (addr, log) = mock_rigctld_with_atu(14_290_000);
         let mut rig = Rig::rigctld(&addr);
@@ -12818,7 +12822,7 @@ mod tests {
         }
         run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
         assert!(
-            !log.lock().unwrap().iter().any(|l| l == "U TUNER 1"),
+            !log.lock().unwrap().iter().any(|l| l == "U TUNER 2"),
             "the ATU must NOT have been fired at the radio — saw {:?}",
             log.lock().unwrap()
         );
@@ -12831,7 +12835,7 @@ mod tests {
         engine.lock().unwrap().atu_tune().unwrap();
         run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 2);
         assert!(
-            log.lock().unwrap().iter().any(|l| l == "U TUNER 1"),
+            log.lock().unwrap().iter().any(|l| l == "U TUNER 2"),
             "control: an ungated press DOES reach the radio — saw {:?}",
             log.lock().unwrap()
         );

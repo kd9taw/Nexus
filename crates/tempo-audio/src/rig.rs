@@ -95,10 +95,45 @@ pub fn split_mode_line(mode: &str, passband_hz: i32) -> String {
 pub fn vfo_line(vfo: &str) -> String {
     format!("V {vfo}\n")
 }
-/// rigctld `U` — toggle a function (RIT/XIT must be enabled this way before `J`/`Z`).
-pub fn func_line(func: &str, on: bool) -> String {
-    format!("U {} {}\n", func, on as u8)
+/// rigctld `U` — set a function (RIT/XIT must be enabled this way before `J`/`Z`).
+///
+/// Takes a VALUE, not a bool, because `RIG_FUNC_TUNER` is not boolean — see
+/// [`ATU_START_TUNE`]. Every other function this project sends is on/off; pass `u8::from(bool)`.
+pub fn func_line(func: &str, value: u8) -> String {
+    format!("U {func} {value}\n")
 }
+/// The `U TUNER <n>` value that asks a rig to RUN ITS ATU TUNE-UP, as opposed to merely
+/// switching the tuner in-line.
+///
+/// ⚠️ THIS IS WHY THE ATU BUTTON DID NOTHING (operator, 2026-08-15, FTDX10). Nexus sent
+/// `U TUNER 1`, and on a Yaesu that is `AC001` — "ATU in line". If the tuner was already in
+/// line, which it usually is, the rig does exactly nothing: no relays, no carrier, no change
+/// the operator can see. Read out of Hamlib's own source rather than inferred from ours
+/// (`rigs/yaesu/newcat.c`, `case RIG_FUNC_TUNER`):
+///
+/// ```text
+/// SNPRINTF(priv->cmd_str, ..., "AC00%d%c", status == 0 ? 0 : status, cat_term);
+/// ```
+///
+/// The status passes STRAIGHT THROUGH, so `2` produces `AC002` — Yaesu's "start tuning".
+///
+/// WHY SENDING 2 IS SAFE ON EVERY OTHER BACKEND, also read from source, because a class-wide
+/// CAT change is exactly where this project has been burned before:
+///  * **Icom** (`rigs/icom/icom.c::icom_set_func`) — `fctbuf[0] = status ? 0x01 : 0x00`, so 2
+///    is clamped to the same 0x01 it sends today. No change, no regression. (Icom's own
+///    "start tune" byte 0x02 is simply not reachable through `RIG_FUNC_TUNER`.)
+///  * **Kenwood** (`rigs/kenwood/kenwood.c`) — `"AC1%c0"` with `(status == 0) ? '0' : '1'`,
+///    so 2 is likewise identical to 1 (and its third digit, the tune-state, is hard-coded 0).
+///
+/// So this is a real fix on Yaesu and a no-op everywhere else — never a new behaviour on a
+/// radio that was working.
+///
+/// ⚠️ NEEDS BENCH (no rig on this machine). What is verified here is the BYTES: that Nexus
+/// sends `U TUNER 2` and that Hamlib carries the 2 to the backend unclamped. What is NOT
+/// verified is the FTDX10 actually starting a tune-up cycle in response to `AC002`, and
+/// whether it does so when the ATU is currently switched out.
+pub const ATU_START_TUNE: u8 = 2;
+
 /// rigctld `J` — RIT offset in Hz (receive incremental tuning).
 pub fn rit_line(hz: i32) -> String {
     format!("J {hz}\n")
@@ -753,10 +788,21 @@ impl Rig {
     /// Enable/disable a rig CAT function via rigctld `U FUNC <0|1>`. CAT-only; `Ok(())` on
     /// `RPRT 0`, else an error (unsupported func or link failure).
     pub fn set_func(&mut self, token: &str, on: bool) -> std::io::Result<()> {
+        self.set_func_value(token, u8::from(on))
+    }
+
+    /// `U FUNC <n>` with an arbitrary value — because `RIG_FUNC_TUNER` is NOT a boolean.
+    ///
+    /// Hamlib carries this value through UNCHANGED to the backend, verified in its source rather
+    /// than assumed: `tests/rigctl_parse.c` reads it with `sscanf(arg2, "%d", &func_stat)`, and
+    /// `src/settings.c::rig_set_func` hands it straight to `caps->set_func(rig, vfo, func,
+    /// status)` with no clamping on the way. What each BACKEND then does with it differs, which
+    /// is the whole reason this entry point exists — see [`ATU_START_TUNE`].
+    pub fn set_func_value(&mut self, token: &str, value: u8) -> std::io::Result<()> {
         if self.control.is_none() {
             return Err(std::io::Error::other("not a CAT rig"));
         }
-        let reply = self.command(&format!("U {token} {}\n", u8::from(on)))?;
+        let reply = self.command(&func_line(token, value))?;
         if reply_ok(&reply) {
             Ok(())
         } else {
@@ -853,12 +899,12 @@ impl Rig {
     }
     /// Set RIT (receive incremental tuning) offset in Hz; enabling RIT first (0 = off).
     pub fn set_rit(&mut self, hz: i32) -> std::io::Result<()> {
-        self.cat(&func_line("RIT", hz != 0))?;
+        self.cat(&func_line("RIT", u8::from(hz != 0)))?;
         self.cat(&rit_line(hz))
     }
     /// Set XIT (transmit incremental tuning) offset in Hz (0 = off).
     pub fn set_xit(&mut self, hz: i32) -> std::io::Result<()> {
-        self.cat(&func_line("XIT", hz != 0))?;
+        self.cat(&func_line("XIT", u8::from(hz != 0)))?;
         self.cat(&xit_line(hz))
     }
     /// Set RF output power as a 0.0–1.0 fraction (Hamlib `RFPOWER`).
@@ -977,6 +1023,27 @@ mod tests {
         assert!(!reply_ok("RPRT -1\n"));
     }
 
+    /// THE ATU BUTTON DID NOTHING — the wire form, pinned (operator 2026-08-15, FTDX10).
+    ///
+    /// `U TUNER 1` is Yaesu `AC001` ("ATU in line"), and on a rig whose tuner is already in
+    /// line that is a no-op the operator sees as a dead button. `U TUNER 2` is `AC002`,
+    /// "start tuning". This test is the byte-level half of that fix; the rig-level half needs
+    /// a bench, and `ATU_START_TUNE` says so.
+    #[test]
+    fn the_atu_press_asks_the_rig_to_tune_up_not_merely_to_switch_the_tuner_in() {
+        assert_eq!(func_line("TUNER", ATU_START_TUNE), "U TUNER 2\n");
+        assert_ne!(
+            func_line("TUNER", ATU_START_TUNE),
+            "U TUNER 1\n",
+            "1 only switches the tuner in-line on Yaesu — it does not start a tune-up, which \
+             is exactly what made the button look dead"
+        );
+        // The ordinary boolean funcs must be UNTOUCHED by that entry point — NB/NR/ANF/COMP/VOX
+        // are genuine on/off DSP toggles and a stray 2 there would be a different command.
+        assert_eq!(func_line("NB", u8::from(true)), "U NB 1\n");
+        assert_eq!(func_line("NR", u8::from(false)), "U NR 0\n");
+    }
+
     #[test]
     fn fm_repeater_lines_match_rigctld_protocol() {
         assert_eq!(rptr_shift_line("plus"), "R +\n");
@@ -1035,8 +1102,8 @@ mod tests {
         // listen USB, transmit LSB, on one radio.
         assert_eq!(split_mode_line("LSB", -1), "X LSB -1\n");
         assert_eq!(vfo_line("VFOA"), "V VFOA\n");
-        assert_eq!(func_line("RIT", true), "U RIT 1\n");
-        assert_eq!(func_line("XIT", false), "U XIT 0\n");
+        assert_eq!(func_line("RIT", u8::from(true)), "U RIT 1\n");
+        assert_eq!(func_line("XIT", u8::from(false)), "U XIT 0\n");
         assert_eq!(rit_line(-200), "J -200\n");
         assert_eq!(xit_line(500), "Z 500\n");
         assert_eq!(level_line("RFPOWER", "0.500"), "L RFPOWER 0.500\n");
