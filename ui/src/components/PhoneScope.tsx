@@ -290,6 +290,9 @@ export function PhoneScope({
     // read-only percentile scan. Float64Array, not Float32Array: `row` arrives from JSON as
     // doubles and narrowing it would nudge the AGC floor for no benefit (see agcScratch).
     let visBuf: Float64Array | null = null
+    // Normalized row bins for the history ring, reused (see the push below).
+    let binBuf: Float32Array | null = null
+    let binBufN = 0
     // The trace's fill gradient, rebuilt only when the palette or the trace height changes —
     // it was a `createLinearGradient` + 3 `sampleLut` + 3 colour-stop parses PER ROW for a
     // value that changes on a theme switch or a splitter drag. The cache is effect-local on
@@ -528,9 +531,27 @@ export function PhoneScope({
         mag[x] = t
       }
 
-      // Append this row to the retained history over its OWN view window (so a palette
-      // switch / resize re-renders accumulated history frequency-honestly).
-      historyRef.current.push(mag, lo, hi, Date.now())
+      // Append this row to the retained history as normalized intensities over the ROW's OWN
+      // span — the same contract the FT waterfall uses (Waterfall.tsx), and not what this
+      // scope used to do.
+      //
+      // ⚠️ IT USED TO PUSH `mag`: the row already interpolated to DEVICE COLUMNS, stamped with
+      // the VIEW's span. Three things followed, and the first is the bad one:
+      //   1. history was CLIPPED TO THE VIEW, permanently. Everything outside the drawn window
+      //      was not hidden, it was never stored — so the pause + wheel-scrollback below could
+      //      never widen, and no zoom-out could recover a band that had already gone past.
+      //   2. `push` then resampled device columns back onto its own grid, so every row was
+      //      resampled TWICE on the way in, neither pass reversible.
+      //   3. a resize re-rendered accumulated history at the OLD geometry's interpolation.
+      // `renderInto` maps each stored row from its own frame onto whatever view is asked for
+      // (and floors the pixels outside it), so storing the row is strictly more information
+      // for strictly less work.
+      if (binBufN !== nBins || !binBuf) {
+        binBuf = new Float32Array(nBins)
+        binBufN = nBins
+      }
+      for (let b = 0; b < nBins; b++) binBuf[b] = normalize(row[b], dispFloor, dispCeil)
+      historyRef.current.push(binBuf, rowLo, rowHi, Date.now())
 
       // PAUSED = review mode: history keeps filling (nothing is lost) but the scope is frozen;
       // the mouse wheel scrolls the band back via rebuildFromHistory. Skip the live draw.

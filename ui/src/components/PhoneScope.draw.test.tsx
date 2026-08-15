@@ -20,6 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
 import { TRACE_HOLD_MS } from '../waterfall'
+import { WaterfallHistory } from '../waterfallHistory'
 
 /** A 512-bin row with one carrier, shaped like what the engine publishes. */
 const ROW = Array.from({ length: 512 }, (_, i) => (i === 200 ? 0.9 : 0.1))
@@ -30,9 +31,10 @@ vi.mock('../api', () => ({
   getScopeRow: (_tx: boolean, loHz: number, hiHz: number) => {
     rowsServed++
     spanAsked = [loHz, hiHz]
-    // The backend answers over the span it was asked for (or falls back wide); either way the
-    // row states its own extent, which is what the component reads.
-    return Promise.resolve({ row: ROW, loHz, hiHz, source: 'rx' })
+    // Answer WIDER than asked — the real backend's refusal path (native RF live, span not a
+    // sane audio window, narrow row not produced yet). The row states its own extent, and
+    // that extent is what everything downstream must read.
+    return Promise.resolve({ row: ROW, loHz: 0, hiHz: 4000, source: 'rx' })
   },
 }))
 
@@ -135,6 +137,27 @@ describe('rig scope per-row work', () => {
 
     // The measurement: one gradient for the whole run, no matter how many rows were drawn.
     expect(calls.createLinearGradient).toBe(1)
+  })
+
+  it('stores the ROW’s own bins and span in history, not screen pixels over the view', async () => {
+    // THE DEFECT: the row was interpolated to device width and pushed with the VIEW's span, so
+    // history was clipped to whatever was on screen when each row arrived — permanently. The
+    // scope has pause + wheel-scrollback, and scrollback could therefore never widen: the data
+    // outside the view was not merely hidden, it was never stored.
+    const pushes: Array<{ n: number; lo: number; hi: number }> = []
+    vi.spyOn(WaterfallHistory.prototype, 'push').mockImplementation(function (row, loHz, hiHz) {
+      pushes.push({ n: row.length, lo: loHz, hi: hiHz })
+    })
+    render(<PhoneScope transmitting={false} theme="dark" viewLoHz={300} viewHiHz={1100} />)
+    await runFrames(300)
+
+    expect(pushes.length, 'control: no rows reached history').toBeGreaterThanOrEqual(3)
+    const last = pushes[pushes.length - 1]
+    expect(last.n, 'the row’s own bins, not one value per device column').toBe(ROW.length)
+    expect(
+      [last.lo, last.hi],
+      'the ROW’s span (0-4000), not the 300-1100 window it happens to be drawn in',
+    ).toEqual([0, 4000])
   })
 
   it('asks for the row over the window it is drawing, not the whole capture', () => {
