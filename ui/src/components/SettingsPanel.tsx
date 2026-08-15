@@ -1244,7 +1244,16 @@ export function SettingsPanel({
     })
   }
   const handleAddRadio = () => {
-    void withErrorToast(() => addRadio(), 'Could not add a radio').then((s) => s && reloadRadios())
+    // Adding does not switch the station onto the new radio -- see Engine::add_radio. Select it
+    // for EDITING instead, so the operator lands on the profile they just made and can configure
+    // it, while the rig they are actually operating keeps running.
+    void withErrorToast(() => addRadio(), 'Could not add a radio').then(async (s) => {
+      if (!s) return
+      reloadRadios()
+      const fresh = await getSettings()
+      const added = fresh.radios?.[fresh.radios.length - 1]
+      if (added) setEditingRadioId(added.id)
+    })
   }
   const handleRemoveRadio = (id: number) => {
     // Destructive + immediate + unrecoverable (drops the radio's CAT/audio config, its unique
