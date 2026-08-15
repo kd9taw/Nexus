@@ -128,6 +128,19 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
         SplitMode::Rig => {
             let _ = rig.set_split(true, "VFOB");
             let _ = rig.set_split_freq(tx_dial);
+            // …AND THE TX VFO'S MODE. `M` only ever reaches the RX VFO, so without this VFO B
+            // transmits in whatever mode it was last left in — reported on an FTDX1200 and then
+            // again on an FTDX10, where FT8 went out of a VFO that was not in the data submode
+            // and nothing on screen said so. WSJT-X does exactly this when split is on
+            // (HamlibTransceiver.cpp:922 `rig_set_mode(rig, RIG_VFO_B, mode, RIG_PASSBAND_NOCHANGE)`
+            // and :1093 `rig_set_split_mode(..., RIG_PASSBAND_NOCHANGE)`).
+            //
+            // ⚠️ WIDTH IS NOCHANGE (-1), NOT `passband_for(md)`. WSJT-X passes NOCHANGE, and the
+            // point here is the MODE — sending a width would reach across and reset the filter
+            // the operator set on the TX VFO, which is the shape of the very bug #67 was about.
+            // AFTER the split enable above: `X` addresses the TX VFO, so it has to exist first.
+            let md = eng.rig_mode_effective();
+            let _ = rig.set_split_mode(&md, -1);
             SplitApply {
                 fake_it_restore: None,
                 rig_split_engaged: true,
@@ -656,6 +669,76 @@ mod tests {
             let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, false, None, None);
             (act, false)
         }
+    }
+
+    /// A logging rigctld stand-in: answers everything RPRT 0 and records the verb lines, so a
+    /// test can assert on WHAT WENT ON THE WIRE rather than on a return value.
+    fn logging_rigctld() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log_w = log.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut w = stream.try_clone().unwrap();
+                for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                    let t = line.trim().to_string();
+                    if t.is_empty() {
+                        continue;
+                    }
+                    log_w.lock().unwrap().push(t);
+                    let _ = w.write_all(b"RPRT 0\n");
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    #[test]
+    fn rig_split_puts_the_tx_vfo_in_the_operating_mode() {
+        // Operator report (FTDX1200, then FTDX10): "working FT8 in split, the mode doesn't get
+        // set for VFO B." It did not — `apply_tx_dial_shift` sent `S 1 VFOB` and `I <freq>` and
+        // stopped, so VFO B transmitted in whatever mode it happened to be left in. The `M` verb
+        // only ever reaches the RX VFO; `X` is the only way to reach the TX VFO's mode.
+        //
+        // WSJT-X is the baseline here and it does exactly this — HamlibTransceiver.cpp:922
+        // `if (state().split()) rig_set_mode(rig, RIG_VFO_B, new_mode, RIG_PASSBAND_NOCHANGE)`
+        // and :1093 `rig_set_split_mode(..., RIG_PASSBAND_NOCHANGE)`. Note the WIDTH: NOCHANGE
+        // (-1), not an explicit passband — set the mode, leave the operator's filter alone.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tier(tempo_app::dto::Tier::Ft8);
+        let mut st = eng.settings().clone();
+        st.split_mode = tempo_app::settings::SplitMode::Rig;
+        eng.apply_settings(st);
+        eng.set_tx_enabled(true);
+        eng.set_tx_offset(750.0); // out of the 1500-2000 window → a real dial shift
+        eng.broadcast("CQ W9XYZ EN37");
+
+        let (addr, log) = logging_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+        let md = eng.rig_mode_effective();
+        // Through the real TX phase — the dial shift is PLANNED there, not by broadcast alone.
+        let _ = slot_tx_phase(
+            &mut eng, &mut rig, &mut backend, &mut rx, 0, 1000.0, false, None, None,
+        );
+
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            sent.iter().any(|l| l.starts_with("S 1")),
+            "precondition: rig split was engaged at all — wire was {sent:?}"
+        );
+        assert!(
+            sent.iter().any(|l| l == &format!("X {md} -1")),
+            "the TX VFO must be put in the operating mode, with the width left alone \
+             (WSJT-X passes RIG_PASSBAND_NOCHANGE). wanted `X {md} -1`, wire was: {sent:?}"
+        );
+        // …and it must land AFTER split is on, or it addresses the wrong VFO.
+        let i_split = sent.iter().position(|l| l.starts_with("S 1")).expect("split on");
+        let i_mode = sent.iter().position(|l| l.starts_with('X')).expect("split mode");
+        assert!(i_mode > i_split, "mode must be set after split is enabled: {sent:?}");
     }
 
     #[test]
