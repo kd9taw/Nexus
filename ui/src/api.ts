@@ -1339,6 +1339,12 @@ export async function setTune(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_tune', { on })
 }
 
+/** Run the radio's OWN built-in antenna tuner. Rejects with the reason when the rig has no ATU or
+ * a TX gate is down (TX off, outside privileges, transmitter busy) — it keys the transmitter. */
+export async function atuTune(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('atu_tune')
+}
+
 /** Emergency stop: halt any transmit immediately. Returns the fresh snapshot. */
 export async function haltTx(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('halt_tx')

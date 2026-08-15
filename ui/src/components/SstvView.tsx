@@ -23,6 +23,7 @@ import { halvingChain } from '../sstvResample'
 import { drawIdPlate, normalizeCall } from '../sstvIdOverlay'
 import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import {
+  atuTune,
   getLicensedBandPlan,
   getSstvState,
   haltTx,
@@ -1212,6 +1213,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             title: 'RF output power — set it against a Tune carrier, below ALC',
           }}
           onTune={(on) => void setTune(on).then((st) => onSnap?.(st))}
+          onAtuTune={() =>
+            void atuTune()
+              .then((st) => onSnap?.(st))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
           onStopTx={() => void haltTx()}
           modeIndicator={
             <span

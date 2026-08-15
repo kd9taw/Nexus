@@ -1064,6 +1064,11 @@ export interface RadioStatus {
   notch?: boolean | null
   comp?: boolean | null
   vox?: boolean | null
+  /** The rig's BUILT-IN ANTENNA TUNER: null/absent = this radio doesn't report one, so no ATU
+   * control is shown at all; a boolean = it has one, and the value is whether it's switched
+   * in-line. NOT a DSP toggle — running it keys the transmitter, so it rides the gated
+   * `atuTune()` command, never `setRigFunc`. */
+  atu?: boolean | null
   /** Rig RX passband / filter width in Hz over CAT; null/absent = unknown or the rig's default. */
   filterWidthHz?: number | null
   /** RIT (receive incremental tuning) offset in Hz — last commanded (0 = off). */

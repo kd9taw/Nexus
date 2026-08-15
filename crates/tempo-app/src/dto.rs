@@ -611,6 +611,13 @@ pub struct RadioStatus {
     pub comp: Option<bool>,
     #[serde(default)]
     pub vox: Option<bool>,
+    /// The rig's BUILT-IN ANTENNA TUNER (Hamlib `RIG_FUNC_TUNER`): `None` = the radio doesn't
+    /// report one, so no ATU control is offered at all; `Some(bool)` = it has one, and the bool is
+    /// whether the tuner is currently switched in-line. Same `None = can't do it` idiom as the DSP
+    /// funcs above — but NOT one of them: running the tuner keys the transmitter, so it rides its
+    /// own gated command (`atu_tune`), never the generic `set_rig_func`.
+    #[serde(default)]
+    pub atu: Option<bool>,
     /// Rig RX passband / filter width in Hz from CAT; `None` = unknown or the rig's own default.
     #[serde(default)]
     pub filter_width_hz: Option<u32>,

@@ -1591,6 +1591,20 @@ pub struct Engine {
     /// Pending func toggles from the UI, per the same `[nb, nr, notch, comp, vox]` order; the
     /// radio loop drains + applies them next cycle (mirrors the split-request seam). Off the TCP path.
     pending_func: [Option<bool>; 5],
+    /// Whether the radio reports a built-in antenna tuner (Hamlib `RIG_FUNC_TUNER`) and, if so,
+    /// whether it is currently switched in-line. `None` = the rig never answered the func, so no
+    /// ATU control is offered at all — an ATU button on a radio that has no ATU is worse than no
+    /// button. Observed-only, same `None = can't do it` idiom as [`Self::rig_funcs`].
+    ///
+    /// ⚠️ DELIBERATELY NOT A SIXTH `rig_funcs` SLOT. Those five are receive-side DSP toggles the
+    /// UI may set through the generic `set_rig_func` command, which has no transmit gate on it
+    /// (it doesn't need one). Running the tuner KEYS THE TRANSMITTER, so it gets its own request
+    /// path behind [`Self::atu_tune_gate`] and must never become reachable from that generic one.
+    rig_tuner: Option<bool>,
+    /// A pending "run the rig's own ATU tune-up" request from the operator — the Unix second it
+    /// was pressed. Drained by the radio loop via [`Self::take_atu_tune`], which RE-RUNS the TX
+    /// gate and enforces [`ATU_REQUEST_MAX_AGE_SECS`] before anything keys.
+    pending_atu_tune: Option<u64>,
     /// Rig RX passband width (Hz) from the poll; `None` = unknown / rig default. Observed-only.
     rig_passband: Option<u32>,
     /// The radio's RECEIVE frequency ranges (Hz, inclusive), read once per CAT confirmation from
@@ -2463,6 +2477,11 @@ pub(crate) const SSTV_GALLERY_CAP: usize = 200;
 /// longest legitimate mode (PD290) is ~295 s; anything past this is a bug/abuse and is
 /// refused before keying — defense-in-depth above the per-send TX-watchdog budget.
 const SSTV_MAX_TX_SECS: f64 = 330.0;
+/// How long an operator's ATU-tune press stays actionable (seconds). The radio loop's poll block
+/// that drains it is skipped while the transmitter is up, so without an expiry a press made just
+/// before the operator keyed the mic would fire when they unkeyed — see [`Engine::take_atu_tune`].
+/// Generous next to the ~750 ms poll it normally waits on, tight next to any real over.
+const ATU_REQUEST_MAX_AGE_SECS: u64 = 5;
 
 /// What the SSTV RX decoder is actually HEARING — the readout that tells a
 /// picture-less screen apart from a picture-less band.
@@ -3129,6 +3148,8 @@ impl Engine {
             rig_rx_ranges: None,
             rig_refused_dial_mhz: None,
             pending_func: [None; 5],
+            rig_tuner: None,
+            pending_atu_tune: None,
             rig_passband: None,
             pending_passband: None,
             pending_scope_span: None,
@@ -5932,6 +5953,79 @@ impl Engine {
     /// each `Some(on)` to apply then cleared. Mirrors `take_split_request`.
     pub fn take_func_requests(&mut self) -> [Option<bool>; 5] {
         std::mem::take(&mut self.pending_func)
+    }
+
+    /// Adopt the radio's antenna-tuner capability + state from the loop's probe (`None` = the rig
+    /// does not report `TUNER`, so the ATU control disappears).
+    pub fn observe_rig_tuner(&mut self, state: Option<bool>) {
+        self.rig_tuner = state;
+    }
+
+    /// Drop the tuner capability (→ the ATU control hides) on a breaker trip — the same reason as
+    /// [`Self::clear_rig_funcs`]: a half-open CAT link must never leave a stale capability behind,
+    /// and this one offers the operator a button that keys their transmitter.
+    pub fn clear_rig_tuner(&mut self) {
+        self.rig_tuner = None;
+    }
+
+    /// ⚠️ THE ATU TX GATE. Running the radio's built-in antenna tuner **KEYS THE TRANSMITTER** —
+    /// the rig puts its own carrier into the tuner for a second or two. It is a transmit action,
+    /// not a receive-side DSP toggle like NB/NR/Notch, so it asks exactly what the other keying
+    /// gates ask ([`Self::aprs_tx_gate`], [`Self::rtty_tx_gate`], [`Self::sstv_tx_gate`]), in the
+    /// same order, plus the capability — a rig with no tuner has nothing to run.
+    ///
+    /// The Enable-TX latch is in here even though the TUNE CARRIER does not consult it: that latch
+    /// is also the receive-only-tier backstop ([`Self::set_tx_enabled`] is the one funnel that
+    /// refuses to arm on a tier that must not key), and an ATU cycle is the rig transmitting with
+    /// no hand on a control. Where the two existing gates differ, this takes the STRICTER one.
+    pub fn atu_tune_gate(&self) -> Result<(), String> {
+        if self.rig_tuner.is_none() {
+            return Err(
+                "This radio doesn't report an antenna tuner over CAT — nothing to run".to_string(),
+            );
+        }
+        if !self.tx_enabled {
+            return Err("TX is off — enable TX first".to_string());
+        }
+        if !self.tx_allowed() {
+            return Err(
+                "TX locked — this frequency is outside your license privileges".to_string(),
+            );
+        }
+        if let Some(owner) = self.tx_owner() {
+            return Err(owner.busy_reason());
+        }
+        Ok(())
+    }
+
+    /// Ask the radio to run its own ATU tune-up. Refused — WITH THE REASON, never silently — by
+    /// [`Self::atu_tune_gate`]; on accept the request is queued for the radio loop, which re-runs
+    /// the gate before anything reaches the wire.
+    pub fn atu_tune(&mut self) -> Result<(), String> {
+        self.atu_tune_gate()?;
+        self.pending_atu_tune = Some(now_unix_secs());
+        Ok(())
+    }
+
+    /// Drain a pending ATU tune-up for the radio loop — `true` only while EVERY gate STILL passes
+    /// AND the press is still fresh. Consumed unconditionally: a press the loop cannot act on is
+    /// DROPPED, never held.
+    ///
+    /// Two guards, and both are about the gap between the click and the wire:
+    ///  * the gate is re-run HERE, because inside that gap the dial can move out of privileges,
+    ///    TX can be disarmed, or another keying source can take the transmitter — masked on read
+    ///    for the same reason [`Self::tuning`] is;
+    ///  * the press EXPIRES ([`ATU_REQUEST_MAX_AGE_SECS`]), because the poll block that drains it
+    ///    is skipped while the transmitter is up. Without an expiry, an ATU pressed a moment
+    ///    before the operator keyed the mic would fire when they unkeyed — legal by every gate,
+    ///    and still a transmission nobody asked for at that moment. An ATU tune-up is a
+    ///    here-and-now act, not a standing order to key later.
+    pub fn take_atu_tune(&mut self) -> bool {
+        let Some(at) = self.pending_atu_tune.take() else {
+            return false;
+        };
+        now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
+            && self.atu_tune_gate().is_ok()
     }
 
     /// Adopt the rig's RX passband width (Hz) from the poll. `None` (a split `m` read) keeps the
@@ -11920,6 +12014,8 @@ impl Engine {
         s.radio.notch = self.rig_funcs[2];
         s.radio.comp = self.rig_funcs[3];
         s.radio.vox = self.rig_funcs[4];
+        // The rig's own ATU: None = no tuner reported → the UI offers no ATU control at all.
+        s.radio.atu = self.rig_tuner;
         s.radio.filter_width_hz = self.rig_passband;
         s.radio.rit_hz = self.rit_hz;
         s.radio.xit_hz = self.xit_hz;
@@ -16068,6 +16164,163 @@ mod tests {
         // A PD290-sized image (~290 s) fits under a generous watchdog → accepted.
         let pd290 = vec![0.0f32; 290 * 12_000];
         e.sstv_send(pd290, "PD-290".into()).unwrap();
+    }
+
+    /// A Phone-armed engine whose radio reports a built-in ATU switched in-line — the scene the
+    /// ATU button is offered in.
+    fn atu_engine() -> Engine {
+        let mut e = phone_armed_engine();
+        e.observe_rig_tuner(Some(true));
+        e.atu_tune_gate()
+            .expect("scene guard: an armed, in-privileges, idle rig with a tuner may run it");
+        e
+    }
+
+    #[test]
+    fn the_atu_is_offered_only_by_a_radio_that_reports_one() {
+        // Offering an ATU button to a radio with no ATU is worse than not having the button, so
+        // the capability is the FIRST thing the gate asks — and the snapshot the UI hides on is
+        // the same value, not a second opinion.
+        let mut e = phone_armed_engine();
+        assert!(
+            e.snapshot().radio.atu.is_none(),
+            "unprobed / no tuner → the UI must see nothing to show"
+        );
+        let err = e
+            .atu_tune()
+            .expect_err("a radio with no tuner has nothing to run");
+        assert!(
+            err.contains("antenna tuner"),
+            "the refusal must say the radio has no tuner, got: {err}"
+        );
+
+        e.observe_rig_tuner(Some(false));
+        assert_eq!(
+            e.snapshot().radio.atu,
+            Some(false),
+            "a rig that answers TUNER shows the control (here: bypassed)"
+        );
+        e.atu_tune().expect("…and may be asked to run it");
+
+        // A breaker trip must take the capability with it — a half-open link may not leave an
+        // ATU button standing.
+        e.clear_rig_tuner();
+        assert!(e.snapshot().radio.atu.is_none());
+        assert!(e.atu_tune().is_err());
+    }
+
+    #[test]
+    fn the_atu_honours_every_gate_the_tune_carrier_honours() {
+        // ⚠️ AN ATU TUNE-UP KEYS THE TRANSMITTER — the rig puts its own carrier into the tuner.
+        // It is NOT a receive-side toggle like NB/NR/Notch, so it answers to the same gates as
+        // every other keying path, and each refusal has to SAY WHY (the operator never gets
+        // silence).
+
+        // 1. TX disarmed. (This is also the receive-only-tier backstop: `set_tx_enabled` is the
+        //    one funnel that refuses to arm a tier that must not key.)
+        let mut e = atu_engine();
+        e.set_tx_enabled(false);
+        let err = e.atu_tune().expect_err("TX off must refuse an ATU tune-up");
+        assert!(err.contains("TX is off"), "got: {err}");
+        e.set_tx_enabled(true);
+
+        // 2. Outside the operator's privileges — the licence gate the tune carrier keys on.
+        let mut e = atu_engine();
+        e.set_license_class("technician");
+        e.set_frequency(14.290, "20m", "USB"); // no Technician phone privilege here
+        assert!(!e.tx_allowed(), "scene guard: the licence gate is down");
+        let err = e
+            .atu_tune()
+            .expect_err("outside privileges must refuse an ATU tune-up");
+        assert!(err.contains("privileges"), "got: {err}");
+
+        // 3. Something else already owns the transmitter — every owner, from the ONE arbiter.
+        //    The tune carrier itself is one of them: an ATU cycle on top of a held carrier is
+        //    two transmitters' worth of intent on one radio.
+        let mut e = atu_engine();
+        e.set_tune(true);
+        assert!(e.tuning(), "scene guard: the tune carrier is up");
+        assert!(
+            e.atu_tune().is_err(),
+            "an ATU tune-up must not start under a held tune carrier"
+        );
+        e.set_tune(false);
+
+        e.set_ptt(true);
+        let err = e
+            .atu_tune()
+            .expect_err("a held mic key must refuse an ATU tune-up");
+        assert!(err.contains("PTT"), "got: {err}");
+        e.set_ptt(false);
+
+        e.send_voice(vec![0.1; 100]);
+        assert!(
+            e.atu_tune().is_err(),
+            "a queued voice message must refuse an ATU tune-up"
+        );
+        e.stop_voice();
+
+        // All clear → accepted.
+        e.atu_tune()
+            .expect("an idle, armed, in-privileges rig runs its tuner");
+    }
+
+    #[test]
+    fn a_queued_atu_tune_up_is_re_gated_at_the_wire() {
+        // The click and the moment the radio loop puts `U TUNER 1` on the wire are up to a poll
+        // apart, and `atu_tune`'s answer is stale by then: in that window the dial can move out
+        // of privileges, TX can be disarmed, or another keying source can take the transmitter.
+        // `take_atu_tune` re-runs the gate, exactly as `Engine::tuning` masks the tune carrier on
+        // READ rather than trusting what `set_tune` decided.
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        e.set_tx_enabled(false);
+        assert!(
+            !e.take_atu_tune(),
+            "TX went off between the click and the wire — the ATU must not fire"
+        );
+
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        e.set_license_class("technician");
+        e.set_frequency(14.290, "20m", "USB");
+        assert!(
+            !e.take_atu_tune(),
+            "the dial left the operator's privileges — the ATU must not fire"
+        );
+
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        e.set_ptt(true);
+        assert!(
+            !e.take_atu_tune(),
+            "the transmitter changed hands — the ATU must not fire"
+        );
+
+        // …and the ordinary path still fires, exactly once.
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        assert!(e.take_atu_tune(), "the gate still passes — fire it");
+        assert!(!e.take_atu_tune(), "one click is one tune-up, not a latch");
+    }
+
+    #[test]
+    fn a_stale_atu_press_expires_instead_of_keying_late() {
+        // The radio loop's poll block that drains this is SKIPPED while the transmitter is up, so
+        // a press made a moment before the operator keyed the mic would otherwise sit there and
+        // fire when they unkeyed — legal by every gate above, and still a transmission nobody
+        // asked for at that moment.
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        e.pending_atu_tune = Some(now_unix_secs().saturating_sub(ATU_REQUEST_MAX_AGE_SECS + 1));
+        assert!(
+            !e.take_atu_tune(),
+            "a press older than the freshness window must not key the rig"
+        );
+        assert!(
+            e.pending_atu_tune.is_none(),
+            "…and it is consumed, not left to key on the next poll"
+        );
     }
 
     #[test]

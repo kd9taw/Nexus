@@ -2104,6 +2104,13 @@ struct RadioLoop {
     /// (40 → 80 → 160 … heavy polls, capped), and reset on a successful read.
     func_retry_at: [u32; 5],
     func_retry_backoff: [u32; 5],
+    /// Whether the rig's BUILT-IN ATU (Hamlib `TUNER`) has been probed for the current CAT
+    /// confirmation. Probed ONCE per confirmation like [`Self::rx_ranges`] rather than round-robin
+    /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on,
+    /// not a value that moves under the operator's hand — so a rig with no tuner costs one
+    /// round-trip per confirmation, not one per poll. The answer itself lives on the engine
+    /// (`Engine::rig_tuner`), which is what the gate and the snapshot both read.
+    tuner_probed: bool,
     /// Where every spectrum source publishes. Held here so the CI-V native row can be published
     /// WITHOUT the engine mutex — that mutex is held across this loop's own blocking CAT at the
     /// slot boundary, which is what starved the panadapter along with the audio row.
@@ -2242,6 +2249,7 @@ impl RadioLoop {
             func_state: [None; 5],
             func_retry_at: [0; 5],
             func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; 5],
+            tuner_probed: false,
             spectrum_feed: cfg.spectrum_feed.clone(),
             rx_tap: cfg.rx_tap.clone(),
             meter_feed: cfg.meter_feed.clone(),
@@ -2745,6 +2753,7 @@ impl RadioLoop {
         self.func_supported = [None; 5];
         self.func_misses = [0; 5];
         self.func_state = [None; 5];
+        self.tuner_probed = false;
         self.level_supported = [None; 4];
         self.level_misses = [0; 4];
         // The audio device must be (re)opened for the new radio even if its device name matches
@@ -3592,6 +3601,7 @@ impl RadioLoop {
                     self.func_supported = [None; 5];
                     self.func_misses = [0; 5];
                     self.func_state = [None; 5];
+                    self.tuner_probed = false;
                     self.level_supported = [None; 4];
                     self.level_misses = [0; 4];
                     {
@@ -3658,6 +3668,7 @@ impl RadioLoop {
                             self.func_supported = [None; 5];
                             self.func_misses = [0; 5];
                             self.func_state = [None; 5];
+                            self.tuner_probed = false;
                             self.level_supported = [None; 4];
                             self.level_misses = [0; 4];
                             self.agc_giveup = None; // the refusal may have been the dead link
@@ -3687,6 +3698,27 @@ impl RadioLoop {
                             {
                                 let mut eng = engine_lock(engine);
                                 eng.observe_rig_rx_ranges(self.rx_ranges.clone());
+                            }
+                        }
+                        // Does this radio have a built-in ATU? ONE round-trip per CAT
+                        // confirmation, like the range table above and deliberately NOT the
+                        // round-robin the DSP funcs use: this is a capability the cockpit shows
+                        // or hides a TRANSMIT control on, not a value that moves under the
+                        // operator's hand. A rig that doesn't answer `u TUNER` stays `None` and
+                        // is offered no ATU button — an ATU control on a radio with no ATU is
+                        // worse than no control.
+                        //
+                        // KNOWN GAP: the NATIVE CI-V daemon has no `TUNER` token (`civ::commands
+                        // ::func_sub` covers the `0x16` DSP family; Icom's ATU is `1C 01`), so a
+                        // native-Icom operator gets `None` here and no button. That is the honest
+                        // answer rather than a wrong one, and adding it means a second CAT surface
+                        // this machine has no rig to verify — deliberately left for a bench pass.
+                        if !self.tuner_probed {
+                            self.tuner_probed = true;
+                            let tuner = rig.read_func("TUNER");
+                            {
+                                let mut eng = engine_lock(engine);
+                                eng.observe_rig_tuner(tuner);
                             }
                         }
                         // RF power / mic gain / NR / AGC read-backs mirror the rig's real knob
@@ -3860,6 +3892,42 @@ impl RadioLoop {
                                 }
                             }
                         }
+                        // ⚠️ THE ATU TUNE-UP — THIS KEYS THE TRANSMITTER. The radio puts its own
+                        // carrier into its tuner for a second or two, so this is NOT the
+                        // receive-side `set_func` above wearing a different token; it is a keying
+                        // command, and it passes through the same TWO doors the tune carrier does:
+                        //
+                        //  • the ENGINE's door — `take_atu_tune` re-runs every TX gate HERE, at
+                        //    the wire, because the operator's press was up to a poll ago and the
+                        //    dial, the TX latch or the transmitter's owner may have changed since.
+                        //    It also EXPIRES a stale press rather than holding it;
+                        //  • the LOOP's door — `may_key()`, plus this whole poll block's own
+                        //    `tx_until_ms.is_none() && !tuning_keyed && !manual_ptt_applied`. A
+                        //    radio switch mid-flight or a Test-CAT port hold and the ATU never
+                        //    starts.
+                        //
+                        // Note the ORDER: the press is DRAINED first and only then tested against
+                        // `may_key`, so one that can't be acted on is dropped, never queued behind
+                        // a handoff to key when it lands. The tune carrier deliberately HOLDS
+                        // there — but that is a button the operator is still holding down, and
+                        // this is a one-shot press they have already let go of.
+                        //
+                        // ⚠️ NEEDS BENCH (no rig on this machine): `U TUNER 1` is Hamlib's
+                        // `RIG_FUNC_TUNER`, and what a given backend does with it is the rig's
+                        // business — on Icom it is the ATU register, on Yaesu the `AC` tuner
+                        // command. Whether each brand STARTS a tune-up or only switches the tuner
+                        // in-line is unverified here; the gating above is what this change is
+                        // responsible for, and it holds either way.
+                        let fire_atu = engine_lock(engine).take_atu_tune();
+                        if fire_atu && self.may_key() {
+                            crate::civ::diag::note("ATU: operator asked the rig to tune up");
+                            if let Err(e) = rig.set_func("TUNER", true) {
+                                // NOT re-queued: retrying a keying command the radio already
+                                // refused would key on a later tick the operator didn't ask for.
+                                // They press it again if they want it again.
+                                crate::civ::diag::note(&format!("ATU: the rig refused it: {e}"));
+                            }
+                        }
                         // Apply pending RIT/XIT/VFO clarifier requests (CAT-panel controls). Drain
                         // under the lock, RELEASE it, then do the CAT round-trip. Write-only +
                         // optimistic — the snapshot already mirrors the commanded value.
@@ -3956,6 +4024,7 @@ impl RadioLoop {
                             self.func_supported = [None; 5];
                             self.func_misses = [0; 5];
                             self.func_state = [None; 5];
+                            self.tuner_probed = false;
                             // Name the rig config in the diagnostic too, so a capture taken while
                             // the fault is ongoing records model/port/baud (the spawn note may
                             // predate logging being armed).
@@ -3979,6 +4048,7 @@ impl RadioLoop {
                                 eng.clear_rig_smeter();
                                 eng.clear_rig_mode();
                                 eng.clear_rig_funcs();
+                                eng.clear_rig_tuner();
                                 eng.clear_rig_passband();
                                 eng.set_cat_status(Some(false), msg);
                             }
@@ -12558,6 +12628,172 @@ mod tests {
             }
         });
         (addr, log)
+    }
+
+    /// A logging rigctld stub for a 20 m rig WITH a built-in ATU: it answers `u TUNER` with `1`
+    /// (tuner present and in-line) and `RPRT 0` to everything else, so the ATU probe finds a
+    /// tuner and every command the loop sends is on the record.
+    fn mock_rigctld_with_atu(dial_hz: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let dial = format!("{dial_hz}\n");
+                    let reply = if l == "f" {
+                        dial.as_str()
+                    } else if l == "u TUNER" {
+                        "1\n"
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// A 20 m Phone engine with TX armed and in privileges — the scene an ATU tune-up is
+    /// legitimate in.
+    fn atu_engine() -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.290, "20m", "USB");
+            assert!(
+                e.tx_enabled() && e.tx_allowed(),
+                "scene guard: armed + legal"
+            );
+        }
+        engine
+    }
+
+    /// Drive `n` heavy polls (the poll is due every tick).
+    fn run_heavy_polls(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        rig: &mut Rig,
+        backend: &mut MockBackend,
+        n: usize,
+    ) {
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        for _ in 0..n {
+            state.last_rig_poll = tick - RIG_POLL_MS - 1.0;
+            tick += 400.0;
+            state
+                .step(
+                    engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_rigs_own_atu_is_probed_then_fired_on_the_wire() {
+        // Discussion #19 (N8GB, FTdx10): Tune only emits a carrier; the operator wants the
+        // radio's OWN antenna tuner. Measured as the rigctld command log, because what matters
+        // is what the radio was actually told.
+        let engine = atu_engine();
+        let (addr, log) = mock_rigctld_with_atu(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "u TUNER"),
+            "the loop asks the radio whether it HAS a tuner — saw {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.atu,
+            Some(true),
+            "…and the snapshot carries the capability, so the cockpit can show the control"
+        );
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l == "U TUNER 1"),
+            "PROBING MUST NOT TUNE: nothing keys until the operator asks — saw {:?}",
+            log.lock().unwrap()
+        );
+
+        engine.lock().unwrap().atu_tune().expect("the gate passes");
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 1);
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "U TUNER 1"),
+            "the operator's ATU press reaches the radio — saw {:?}",
+            log.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn an_atu_tune_up_never_reaches_the_wire_once_a_tx_gate_goes_down() {
+        // ⚠️ THE SAFETY CASE, and it is why the request is re-gated at the wire rather than
+        // trusted from the click: an ATU tune-up KEYS THE TRANSMITTER, and the operator's press
+        // is up to a poll old by the time the loop can send it. TX going off in that window (the
+        // TX-Off button, a watchdog trip, a radio handoff standing transmit down) must leave
+        // `U TUNER 1` unsent — a keying command may never outlive the state that allowed it.
+        let engine = atu_engine();
+        let (addr, log) = mock_rigctld_with_atu(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+
+        {
+            let mut e = engine.lock().unwrap();
+            e.atu_tune()
+                .expect("armed + legal at the moment of the press");
+            e.set_tx_enabled(false); // …and TX goes off before the loop can send it
+        }
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l == "U TUNER 1"),
+            "the ATU must NOT have been fired at the radio — saw {:?}",
+            log.lock().unwrap()
+        );
+
+        // POSITIVE CONTROL: the same scene with the gate still up DOES reach the wire, so the
+        // assertion above is measuring the gate and not a broken harness. Re-arming fires a
+        // retune, and a retune tick skips the poll block — so let it settle before pressing.
+        engine.lock().unwrap().set_tx_enabled(true);
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 2);
+        engine.lock().unwrap().atu_tune().unwrap();
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 2);
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "U TUNER 1"),
+            "control: an ungated press DOES reach the radio — saw {:?}",
+            log.lock().unwrap()
+        );
     }
 
     /// An engine parked on the 2 m SSTV calling channel in FM — the tester's exact setup

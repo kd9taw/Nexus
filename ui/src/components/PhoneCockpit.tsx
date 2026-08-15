@@ -29,6 +29,7 @@ import {
   startQsoRecording,
   stopQsoRecording,
   setTune,
+  atuTune,
   haltTx,
   setTxEnabled,
 } from '../api'
@@ -940,6 +941,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         }}
         txActiveLabel="▲ TX"
         onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+        onAtuTune={() =>
+          void atuTune()
+            .then((s) => onSnap?.(s))
+            .catch((e) => pushToast(String(e), 'error'))
+        }
         onStopTx={() => void haltTx()}
       >
         {modeMismatch && (

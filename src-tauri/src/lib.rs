@@ -9291,6 +9291,19 @@ fn set_tune(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, Str
     Ok(eng.snapshot())
 }
 
+/// Ask the radio to run its OWN built-in antenna tuner (Hamlib `RIG_FUNC_TUNER`) — the ATU
+/// tune-up WSJT-X fires from a right-click on Tune. Unlike [`set_tune`], which plays our carrier
+/// through the sound card, the rig produces its own; and unlike [`set_rig_func`], which toggles
+/// receive-side DSP, this KEYS THE TRANSMITTER — so it goes through `Engine::atu_tune_gate` (TX
+/// armed, inside the operator's privileges, transmitter idle, and the rig actually has a tuner)
+/// and comes back as `Err(reason)` when any of that is not true. Never a silent no-op.
+#[tauri::command(async)]
+fn atu_tune(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.atu_tune()?;
+    Ok(eng.snapshot())
+}
+
 /// Stop transmitting now: drop any queued frames and clear the TX indicator.
 #[tauri::command(async)]
 fn halt_tx(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
@@ -16236,6 +16249,7 @@ pub fn run() {
             route_preview,
             update_radio_profile,
             set_tune,
+            atu_tune,
             halt_tx,
             test_cat,
             set_tx_even,

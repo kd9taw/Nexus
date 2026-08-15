@@ -74,6 +74,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key.
 ### Added
 
+- **An ATU button that runs your radio's own antenna tuner.** Asked for in discussion #19: Tune
+  keys a steady carrier, which is what you want for setting drive or tuning an external ATU, but
+  it does nothing for the tuner built into the radio. There is now an **ATU** button beside Tune
+  in the Phone, CW and SSTV headers that tells the radio to run its own tune-up, the way a
+  right-click on Tune does in WSJT-X. It appears only on radios that report having a tuner over
+  CAT — if your rig has none, there is no button to press and no mystery about why nothing
+  happened. Because a tune-up makes the radio transmit, the button answers to the same rules as
+  every other transmit control in Nexus: transmit has to be on, the dial has to be inside your
+  licence privileges, and nothing else may be keying. When one of those is not true, Nexus says
+  which, instead of quietly doing nothing. **Not yet tested against a radio** — the tuner command
+  is Hamlib's standard one, and what each brand does with it is worth a report either way.
 - **The Call Roster shows who each station is calling, and what state or province they are in.**
   Two more columns on the FT8/FT4 roster, sortable like the rest, as GridTracker has them.
   **Calling** is the callsign from that station's last decode — who they are working right now —

@@ -35,6 +35,7 @@
   "radio": {
     "activeVfo": "A",
     "agc": null,
+    "atu": null,
     "audioError": null,
     "band": "20m",
     "beacon": false,

@@ -67,6 +67,12 @@ export interface CockpitHeaderProps {
   txActiveLabel?: string
   /** Tune (key a steady carrier). */
   onTune?: (on: boolean) => void
+  /** Run the RADIO's own built-in ATU (discussion #19 — WSJT-X fires it from a right-click on
+   * Tune). Belongs HERE, beside Tune, and not in a cockpit's DSP row: NB/NR/Notch are receive
+   * filters, while an ATU tune-up keys the transmitter — so it sits with the other TX controls,
+   * carries the same `txAllowed` lockout, and reports the backend's refusal instead of going
+   * quiet. Rendered only when the rig actually reports a tuner (`radio.atu != null`). */
+  onAtuTune?: () => void
   /** Stop TX / abort (CW passes its combined stopCw()+haltTx()). */
   onStopTx?: () => void
   /** Arm/disarm TX (WSJT-X "Enable Tx"). When provided, the TX/RX pill becomes a clickable
@@ -118,6 +124,7 @@ export function CockpitHeader({
   txState = true,
   txActiveLabel = '▲ KEYING',
   onTune,
+  onAtuTune,
   onStopTx,
   onSetTxEnabled,
   catStatus,
@@ -314,6 +321,27 @@ export function CockpitHeader({
             title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
           >
             {radio.tuning ? 'TUNING…' : 'Tune'}
+          </button>
+        )}
+
+        {/* The RADIO's own ATU, beside the carrier Tune it is so often confused with. Shown ONLY
+            when the rig reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no
+            ATU is worse than no button. Disabled on the licence lockout exactly like Tune; every
+            other refusal (TX off, transmitter busy) comes back from the backend WITH ITS REASON
+            and is shown, because a control that keys the transmitter must never fail silently. */}
+        {onAtuTune && radio.atu != null && (
+          <button
+            type="button"
+            className="cockpit-tune"
+            onClick={onAtuTune}
+            disabled={!radio.txAllowed}
+            title={
+              radio.atu
+                ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
+                : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is currently bypassed."
+            }
+          >
+            ATU
           </button>
         )}
 

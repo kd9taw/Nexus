@@ -45,6 +45,7 @@ import {
   setFlexPanRef,
   openPanelWindow,
   setTune,
+  atuTune,
   setFrequency,
   haltTx,
   startQsoRecording,
@@ -1120,6 +1121,11 @@ export function CwCockpit({
           />
         }
         onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+        onAtuTune={() =>
+          void atuTune()
+            .then((s) => onSnap?.(s))
+            .catch((e) => pushToast(String(e), 'error'))
+        }
         onStopTx={abort}
       >
         <label className="cw-wpm" title="Keyer speed — PgUp/PgDn to nudge (Shift = ±4)">
