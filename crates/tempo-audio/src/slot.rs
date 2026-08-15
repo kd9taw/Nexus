@@ -722,7 +722,15 @@ mod tests {
         let md = eng.rig_mode_effective();
         // Through the real TX phase — the dial shift is PLANNED there, not by broadcast alone.
         let _ = slot_tx_phase(
-            &mut eng, &mut rig, &mut backend, &mut rx, 0, 1000.0, false, None, None,
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            1000.0,
+            false,
+            None,
+            None,
         );
 
         let sent = log.lock().unwrap().clone();
@@ -736,9 +744,18 @@ mod tests {
              (WSJT-X passes RIG_PASSBAND_NOCHANGE). wanted `X {md} -1`, wire was: {sent:?}"
         );
         // …and it must land AFTER split is on, or it addresses the wrong VFO.
-        let i_split = sent.iter().position(|l| l.starts_with("S 1")).expect("split on");
-        let i_mode = sent.iter().position(|l| l.starts_with('X')).expect("split mode");
-        assert!(i_mode > i_split, "mode must be set after split is enabled: {sent:?}");
+        let i_split = sent
+            .iter()
+            .position(|l| l.starts_with("S 1"))
+            .expect("split on");
+        let i_mode = sent
+            .iter()
+            .position(|l| l.starts_with('X'))
+            .expect("split mode");
+        assert!(
+            i_mode > i_split,
+            "mode must be set after split is enabled: {sent:?}"
+        );
     }
 
     #[test]
