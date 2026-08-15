@@ -1284,3 +1284,44 @@ mod tests {
         assert_eq!(rigs[1].suggested_audio.as_deref(), Some("USB AUDIO CODEC"));
     }
 }
+
+#[cfg(test)]
+mod qrplabs_descriptor_tests {
+    use super::*;
+
+    /// QRP Labs kits are NATIVE-USB: they enumerate themselves rather than hiding behind a
+    /// CP2102/CH340 bridge, so Detect should name them from the descriptor and they should never
+    /// need the `COMMON_CAT_MODELS` seeded sweep — which is just as well, because neither is in
+    /// it. This pins that assumption, because if it is wrong the operator gets the worst case:
+    /// Detect finds nothing AND Auto-test cannot find them either.
+    ///
+    /// The exact product strings vary by firmware revision, so several plausible spellings are
+    /// checked rather than one. `QRP` is in `MAKER_WORDS`, so the match has to come from the
+    /// model token (`QDX` / `QMX` / `QCX`), not the maker.
+    #[test]
+    fn a_qrp_labs_kit_is_identified_from_its_usb_descriptor() {
+        for product in ["QDX", "QDX Transceiver", "QDX-Mini"] {
+            assert_eq!(
+                match_rig_model(product, "QRP Labs").map(|(m, _)| m),
+                Some(2052),
+                "QDX descriptor {product:?} must resolve to the QCX/QDX backend"
+            );
+        }
+        for product in ["QMX", "QMX Transceiver", "QMX+"] {
+            assert_eq!(
+                match_rig_model(product, "QRP Labs").map(|(m, _)| m),
+                Some(2057),
+                "QMX descriptor {product:?} must resolve to the QMX backend"
+            );
+        }
+    }
+
+    /// The maker alone must NOT be enough. A future QRP Labs product Nexus has no entry for
+    /// should come back unidentified rather than being prefilled as a QDX — a wrong model
+    /// opens cleanly and then answers nothing, which is the hardest failure to diagnose.
+    #[test]
+    fn the_maker_name_alone_identifies_nothing() {
+        assert_eq!(match_rig_model("Transceiver", "QRP Labs"), None);
+        assert_eq!(match_rig_model("", "QRP Labs"), None);
+    }
+}
