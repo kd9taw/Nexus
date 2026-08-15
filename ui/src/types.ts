@@ -939,9 +939,11 @@ export interface Station {
   /** Who this station is calling — the addressee of its last decoded frame. Null when
    * it addressed nobody, i.e. it is calling CQ (the roster renders that as "CQ"). */
   calling?: string | null
-  /** US state from the callsign (FCC index) or the heard grid — the same hint the
-   * needed board uses. Null for a non-US station, or when the index isn't loaded. */
-  usState?: string | null
+  /** Primary administrative subdivision as its ADIF `STATE` code — a US state from the
+   * callsign (FCC index) or the heard grid, or a Canadian province from the regional
+   * numeral. The same hint the needed board uses. Null elsewhere in the world, or when
+   * the FCC index isn't loaded. */
+  state?: string | null
 }
 
 export interface ContestEvent {

@@ -3628,6 +3628,31 @@ fn us_state_hint(call: &str, grid: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The roster / log-record answer to "where is this station" — a US state OR a Canadian
+/// province, both as ADIF `STATE` codes (the field's actual definition is "primary
+/// administrative subdivision", which is the province for DXCC 1).
+///
+/// Superset of [`us_state_hint`], which stays exactly what it is — the WAS need hint — because
+/// WAS is US-only. Where both answer they answer the same, so the roster's cell and a NewState
+/// pill still cannot name different places; the province is only ever reached where the WAS
+/// hint has nothing to say.
+///
+/// PROVINCE FIRST, and that ordering is the fix rather than an accident. `us_state_hint` falls
+/// back to `state_for_grid`, whose table is generated from US state polygons alone, so a 4-char
+/// cell that straddles the border answers with the US side of it: EN82 holds Windsor, Ontario
+/// and Detroit, and a VE3 in Windsor came out "MI". The callsign knows the country; the grid
+/// cell does not, so the callsign is asked first.
+///
+/// None of the 13 Canadian codes collides with a WAS state (pinned in
+/// `propagation::province`), which is what makes it safe for this to feed the same worked-states
+/// set and the same logged `STATE` field the US side does.
+fn subdivision_hint(call: &str, grid: Option<&str>) -> Option<String> {
+    if let Some(p) = propagation::province_for_call(call) {
+        return Some(p.to_string());
+    }
+    us_state_hint(call, grid)
+}
+
 #[tauri::command]
 fn get_fcc_states_status() -> FccStatesStatus {
     fcc_status()
@@ -15410,12 +15435,17 @@ pub fn run() {
         eng.set_dxcc_resolver(|call| {
             propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
         });
-        // Wire the US-state resolver to the SAME `us_state_hint` the heard side uses
-        // (get_need_alerts / the spot rows). That shared function is the whole point of the
-        // fix: the worked side used to have no resolver at all and could only read a logged
-        // ADIF STATE, which the auto-log path never wrote — so a worked state stayed "needed"
-        // forever. Set BEFORE the log loads so the one-time backfill runs over it.
-        eng.set_state_resolver(us_state_hint);
+        // Wire the subdivision resolver — `us_state_hint`, the SAME function the heard side
+        // uses (get_need_alerts / the spot rows), plus the Canadian province. That shared
+        // function is the whole point of the fix: the worked side used to have no resolver at
+        // all and could only read a logged ADIF STATE, which the auto-log path never wrote —
+        // so a worked state stayed "needed" forever. Set BEFORE the log loads so the one-time
+        // backfill runs over it.
+        //
+        // The province half rides the same wire deliberately: ADIF STATE means "primary
+        // administrative subdivision", so "ON" on a Canadian contact is the correct value for
+        // an export and for TQSL, and no province code can collide with a WAS state.
+        eng.set_state_resolver(subdivision_hint);
         // Grid-rarity gems: geography table + the measured-activity census
         // (demote-only refinement). Restore the persisted census BEFORE any
         // stamping so the first snapshot already shows refined tiers.
@@ -16519,6 +16549,36 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// The roster's State-or-Province column and the log record's ADIF `STATE` both come from
+    /// `subdivision_hint`. Two things have to hold, and only the first one did.
+    ///
+    /// A Canadian call must resolve to its province — the operator asked for "State or
+    /// Province" and got a US-only column. And it must do so from the CALLSIGN, before the
+    /// grid is consulted: `us_state_hint` falls back to `state_for_grid`, whose table is
+    /// generated from US state polygons, so a border cell answers with the US side of the
+    /// border. EN82 holds Windsor, Ontario AND Detroit — a VE3 in Windsor was labelled "MI".
+    #[test]
+    fn a_canadian_call_reads_its_province_even_from_a_border_grid() {
+        assert_eq!(
+            super::subdivision_hint("VE3ABC", Some("EN82")).as_deref(),
+            Some("ON"),
+            "the callsign says Ontario; the shared border cell must not overrule it"
+        );
+        assert_eq!(
+            super::subdivision_hint("VY2ABC", None).as_deref(),
+            Some("PE"),
+            "a province resolves with no grid at all — the numeral is the whole input"
+        );
+        // The US side is unchanged: no FCC index is loaded in a unit test, so this is the
+        // grid fallback, which must still answer for a US call.
+        assert_eq!(
+            super::subdivision_hint("W9XYZ", Some("EN52")).as_deref(),
+            Some("WI"),
+            "US stations keep the state hint they already had"
+        );
+        assert_eq!(super::subdivision_hint("G0ABC", Some("IO91")), None);
+    }
+
     /// #75: 4 m shipped in ONE of the two band dropdowns. The FT/digital cockpit reads
     /// `Engine::band_plan` → `bandplan::ft8_band_plan`, which has 4 m at 70.154; the phone
     /// and CW cockpits read THIS list, which did not. So a Region-1 operator could work
@@ -16992,7 +17052,7 @@ mod tests {
             lotw_user: false,
             freq_hz: None,
             calling: None,
-            us_state: None,
+            state: None,
         };
         let spots = |stations: &[tempo_app::dto::Station], clock: &SlotClock, period: f64| {
             roster_local_spots(
@@ -17081,7 +17141,7 @@ mod tests {
             lotw_user: false,
             freq_hz: None,
             calling: None,
-            us_state: None,
+            state: None,
         };
         // The renumbering, measured rather than asserted from memory: the FT4 index of
         // 17:00 runs ahead of the FT8 index of 18:00, which is impossible on one clock.

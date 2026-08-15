@@ -42,6 +42,7 @@ pub mod pca;
 pub mod pota;
 pub mod pounce;
 pub mod predict;
+pub mod province;
 pub mod pskr_mqtt;
 pub mod repeaters;
 pub mod sat;
@@ -102,6 +103,7 @@ pub use predict::{
     band_outlook_ring, make_predictor, modeled_now, representative_muf, HeuristicEngine,
     ModeledNow, PathPrediction, PathPredictor,
 };
+pub use province::province_for_call;
 pub use pskr_mqtt::{
     hf_region_topics, mqtt_topics as pskr_mqtt_topics, parse_mqtt_report as parse_pskr_mqtt,
     parse_mqtt_report_payload as parse_pskr_mqtt_payload, region_topics as pskr_region_topics,

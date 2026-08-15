@@ -74,14 +74,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key.
 ### Added
 
-- **The Call Roster shows who each station is calling, and what state they are in.** Two more
-  columns on the FT8/FT4 roster, sortable like the rest, as GridTracker has them. **Calling** is
-  the callsign from that station's last decode — who they are working right now — or **CQ** when
-  they are calling nobody, which is the row worth double-clicking. **State** is the US state,
-  read from the FCC callsign index, or from the grid they sent when the index has no record for
-  them. It is the same answer the Needed board uses to decide "new state", so the two can never
-  disagree with each other. Neither column is a callbook lookup: both come off decodes you have
-  already heard, so there is nothing to set up and nothing leaves the machine.
+- **The Call Roster shows who each station is calling, and what state or province they are in.**
+  Two more columns on the FT8/FT4 roster, sortable like the rest, as GridTracker has them.
+  **Calling** is the callsign from that station's last decode — who they are working right now —
+  or **CQ** when they are calling nobody, which is the row worth double-clicking. **State** is
+  the US state, read from the FCC callsign index or from the grid they sent when the index has
+  no record for them, and now the Canadian province too, read from the region number in the
+  call: VE3 is Ontario, VY2 is Prince Edward Island, and so on for all thirteen. It shows as a
+  pill, like the other badges on the row, so it reads at a glance down a busy column. It is the
+  same answer the Needed board uses to decide "new state", so the two can never disagree with
+  each other. Neither column is a callbook lookup: both come off decodes you have already heard,
+  so there is nothing to set up and nothing leaves the machine.
+  A Canadian station whose grid square straddles the border is no longer labelled with the state
+  on the American side of it — the call says which country, and the call is asked first. Because
+  the province is also the right value for the ADIF **STATE** field, Canadian contacts now carry
+  it into your log and your exports.
 - **The waterfall can run the other way up.** A **Scrolls up / Scrolls down** button in the
   waterfall header. Scrolls up is what Nexus has always done and stays the default — the newest
   line arrives at the bottom and the picture climbs — and Scrolls down mirrors it, with new

@@ -168,7 +168,7 @@ fn parse_cty(text: &str) -> Resolver {
 /// Strip a portable affix and pick the side that indicates the DXCC. A plain
 /// operating suffix (`/P`, `/M`, `/QRP`, a digit, …) → the base call; otherwise
 /// the location side is usually the shorter one (e.g. `KH8/W1AW` → `KH8`).
-fn base_call(up: &str) -> &str {
+pub(crate) fn base_call(up: &str) -> &str {
     match up.split_once('/') {
         Some((a, b)) => {
             let suffix = matches!(b, "P" | "M" | "MM" | "AM" | "A" | "QRP" | "QRPP")

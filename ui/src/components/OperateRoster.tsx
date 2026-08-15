@@ -263,7 +263,7 @@ export function OperateRoster({
           c = (a.s.country ?? '~').localeCompare(b.s.country ?? '~')
           break
         case 'state':
-          c = byText(a.s.usState, b.s.usState)
+          c = byText(a.s.state, b.s.state)
           break
         case 'grid':
           // '~' sorts the grid-less to the end in both directions' ascending sense.
@@ -410,7 +410,13 @@ export function OperateRoster({
           {th('calling', 'Calling', 'Sort by who each station is calling (CQ = calling nobody)')}
           {th('need', 'Need')}
           {th('country', 'Country')}
-          {th('state', 'State', 'Sort by US state (from the callsign, or the heard grid)')}
+          {/* Header stays "State" — the column is two letters wide and GridTracker/WSJT-X call
+              it that — with the full meaning in the tooltip. */}
+          {th(
+            'state',
+            'State',
+            'Sort by state or province (from the callsign, or the heard grid)',
+          )}
           {th('grid', 'Grid')}
           {th('dist', 'Dist')}
           {th('bearing', 'Brg')}
@@ -511,9 +517,20 @@ export function OperateRoster({
                   <RarityChip rarity={s.gridRarity} />
                 </span>
                 <span className="or-country">{s.country ?? '—'}</span>
-                {/* US state from the callsign (FCC index) or the heard grid — the same hint the
-                    needed board resolves with, so a WAS chaser reads one answer, not two. */}
-                <span className="or-state">{s.usState ?? '—'}</span>
+                {/* State or province, from the callsign (FCC index / the Canadian regional
+                    numeral) or the heard grid — the same hint the needed board resolves with,
+                    so a WAS chaser reads one answer, not two. A PILL, like the roster's other
+                    badges: the operator scans this column, and two dim letters do not read at
+                    a glance. Nothing to say → the plain em dash, no chrome around an absence. */}
+                <span className="or-state">
+                  {s.state ? (
+                    <span className="or-subdiv" title={`${s.call} is in ${s.state}`}>
+                      {s.state}
+                    </span>
+                  ) : (
+                    '—'
+                  )}
+                </span>
                 <span className="or-gridc">{s.grid ?? '—'}</span>
                 <span className="or-dist">{distanceLabel(myGrid, s.grid, units) ?? '—'}</span>
                 {/* Brg falls back to the entity centre (shown `~`) when the station

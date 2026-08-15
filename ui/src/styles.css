@@ -13873,6 +13873,40 @@ button.cq-skiptx1.on {
   font-family: var(--font-mono);
   font-size: 0.78rem;
 }
+/* State / province pill. The operator asked for the subdivision "as a pill icon like you do
+   the rest of them", so it takes the roster's pill geometry verbatim from `.need-chip` —
+   999px, 10.5px/800, 0.04em, the same var(--space-2) side padding — and differs in exactly two
+   places, each for a reason:
+
+   VERTICAL PADDING is 1px, not the need chip's 2px (this is `.b4-chip`'s value, the roster's
+   other pill). 1px is what keeps the row the height it already was; 2px would add ~3px to every
+   state-bearing row and the pane would show fewer stations for no gain.
+
+   COLOUR is the neutral --text ink over a --text-dim wash, NOT a need colour. A teal chip here
+   would read as "you need this state" beside a state the operator already has — the need
+   palette is a claim about their log, and this is a fact about the station. Ink is --text
+   rather than the --text-dim the plain cell used because the pill is the reason he asked: a
+   column he scans has to carry at a glance. Both variables are defined in both themes, so this
+   needs no light-theme override (nor a high-contrast one).
+
+   THE COST IS ZERO, measured in Chrome against this exact CSS at the width that forces every
+   column onto its minimum: the row's min-content width is 681px with the pill and 681px with
+   the plain text it replaces, and the row is 22px tall either way. The pill measures 31.5px in
+   the unchanged 40px cell — 8.5px of headroom, and that is the WORST case in the --font-mono
+   stack (the generic fallback here is wider than Consolas or SF Mono). It holds because every
+   code this can render is two characters: 50 US states, 13 ADIF Canadian subdivisions. A
+   three-character subdivision would need the column widened, and the row is already at a hard
+   673px + padding inside a pane that clips. */
+.or-state .or-subdiv {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text-dim) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+}
 /* A station calling CQ is the one to work — say so quietly rather than with a chip;
    --text is defined in both themes. */
 .or-calling.cq {

@@ -352,20 +352,28 @@ describe('the roster says who each station is calling, and what state they are i
     expect(cell('FREE', '.or-calling')).toBe('CQ')
   })
 
-  it('shows the US state, and an em dash for a station outside the US', () => {
+  it('shows the state OR province as a pill, and a bare em dash when there is neither', () => {
     withCols([
-      { call: 'USSTA', usState: 'VT' },
-      { call: 'DXSTA', usState: null },
+      { call: 'USSTA', state: 'VT' },
+      { call: 'CANSTA', state: 'ON' },
+      { call: 'DXSTA', state: null },
     ])
-    expect(cell('USSTA', '.or-state')).toBe('VT')
+    // A PILL, not plain text (operator, 2026-08-14: "display the actual state or province as a
+    // pill icon like you do the rest of them"). The chip element itself carries the code, so a
+    // regression back to a bare text node fails here rather than passing on the cell's text.
+    expect(cell('USSTA', '.or-state .or-subdiv')).toBe('VT')
+    expect(cell('CANSTA', '.or-state .or-subdiv')).toBe('ON')
+    // Nothing to say → say nothing, quietly. A pill around an em dash would be chrome
+    // advertising an absence, on most rows of a DX-heavy roster.
     expect(cell('DXSTA', '.or-state')).toBe('—')
+    expect(cell('DXSTA', '.or-state .or-subdiv')).toBeUndefined()
   })
 
   it('sorts by state, parking the state-less at the end', () => {
     withCols([
-      { call: 'AAA', usState: 'VT' },
-      { call: 'BBB', usState: null },
-      { call: 'CCC', usState: 'CT' },
+      { call: 'AAA', state: 'VT' },
+      { call: 'BBB', state: null },
+      { call: 'CCC', state: 'CT' },
     ])
     fireEvent.click(screen.getByRole('button', { name: /^State/ }))
     const calls = screen

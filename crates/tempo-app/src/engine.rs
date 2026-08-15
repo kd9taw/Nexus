@@ -11817,9 +11817,10 @@ impl Engine {
             st.grid_rarity = self.station.rarity_of(st.grid.as_deref());
             st.lotw_user = self.station.lotw_user(Some(st.call.as_str()));
             // Same (call, heard grid) inputs the needed board resolves with, so the roster's
-            // State column and a NewState pill can never name different states.
+            // State column and a NewState pill can never name different states. The resolver
+            // also answers with a Canadian province, which no WAS state code can collide with.
             if let Some(resolve) = &self.station.state_resolve {
-                st.us_state = resolve(&st.call, st.grid.as_deref());
+                st.state = resolve(&st.call, st.grid.as_deref());
             }
         }
         // Reflect transmit-enable / tuning / watchdog and the DT-derived
@@ -20237,7 +20238,7 @@ mod tests {
             "the roster row must say who the station is working"
         );
         assert_eq!(
-            st.us_state.as_deref(),
+            st.state.as_deref(),
             Some("VT"),
             "state is stamped from the SAME resolver the needed board uses — no lookup here"
         );

@@ -83,11 +83,17 @@ pub struct Station {
     /// operator see who is already engaged before double-clicking a row.
     #[serde(default)]
     pub calling: Option<String>,
-    /// US state, from the callsign (FCC index) or the heard grid — the SAME hint the
-    /// needed board and WAS use, never a callbook lookup. `None` for a non-US station or
-    /// when no resolver is wired. Stamped by the engine snapshot loop (resolver lives there).
+    /// Primary administrative subdivision — a US state or a Canadian province, as the ADIF
+    /// `STATE` code either way. From the callsign (the FCC index / the Canadian regional
+    /// numeral) or the heard grid: the SAME hint the needed board and WAS use, never a
+    /// callbook lookup. `None` for a station in neither country, or when no resolver is wired.
+    /// Stamped by the engine snapshot loop (the resolver lives there).
+    ///
+    /// Named `state` and not `us_state` because it stopped being US-only, and because ADIF's
+    /// own `STATE` means exactly this: a field whose name promises a country it no longer
+    /// keeps is how two readers end up guessing different things off one wire.
     #[serde(default)]
-    pub us_state: Option<String>,
+    pub state: Option<String>,
 }
 
 /// A single decoded signal from the most recent RX slot, for the live decode

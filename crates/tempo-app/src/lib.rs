@@ -845,8 +845,8 @@ impl AppState {
             grid_rarity: None,
             freq_hz: h.freq_hz,
             calling: h.calling.clone(),
-            // Stamped by the engine from the US-state resolver; None at this layer.
-            us_state: None,
+            // Stamped by the engine from the subdivision resolver; None at this layer.
+            state: None,
         }
     }
 

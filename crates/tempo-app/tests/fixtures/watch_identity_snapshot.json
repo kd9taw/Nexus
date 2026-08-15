@@ -136,8 +136,8 @@
       "lotwUser": false,
       "presence": "active",
       "snr": 72,
+      "state": null,
       "tier": "FT4",
-      "usState": null,
       "worked": false
     }
   ],
