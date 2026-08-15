@@ -2047,9 +2047,24 @@ export async function getScopeRow(
   _transmitting: boolean,
   loHz: number,
   hiHz: number,
+  window?: ScopeWindow,
 ): Promise<Spectrum> {
-  return invoke<Spectrum>('get_scope_row', { loHz, hiHz })
+  return invoke<Spectrum>('get_scope_row', { loHz, hiHz, window })
 }
+
+/**
+ * Analysis window length for the rig scope — a genuine time-versus-frequency trade, and the one
+ * scope control with no right answer for everybody.
+ *
+ *   fast     1024 —  85 ms — 46.9 Hz lobe — 25 WPM keying is VISIBLE
+ *   balanced 2048 — 171 ms — 23.4 Hz lobe — the shipped default; dits are never resolved
+ *   sharp    4096 — 341 ms — 11.7 Hz lobe — half the width, double the smear
+ *
+ * ⚠️ Mirrors `tempo_core::spectrum::WindowN` — the tags are the wire contract and an unknown one
+ * is treated as `balanced` by the backend, so an out-of-step UI degrades to today's picture
+ * rather than to a blank scope.
+ */
+export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
 
 /** Fetch the live meters (RX audio level + CAT S-meter). Lock-free backend-side (no engine
  * mutex), so it is safe to poll fast and a CAT stall cannot freeze it — one shared ~100 ms

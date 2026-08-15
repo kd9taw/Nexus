@@ -31,6 +31,7 @@ use std::time::Duration;
 
 use tempo_app::dto::Spectrum;
 use tempo_app::engine::{MeterFeed, SpectrumFeed};
+use tempo_core::spectrum::WindowN;
 
 use crate::capture_resample::CaptureResampler;
 use crate::rxtap::RxTap;
@@ -39,16 +40,11 @@ use crate::rxtap::RxTap;
 const ANALYSIS_RATE: f32 = tempo_core::tempo_fast::SAMPLE_RATE;
 /// Same rate as an integer, for the resampler and the test tones.
 const ANALYSIS_RATE_HZ: u32 = ANALYSIS_RATE as u32;
-/// Rolling window the FFT runs over (must equal `tempo_core::spectrum::FFT_N`).
-///
-/// 2048 @ 12 kHz = 171 ms of audio. Halved from 4096 (341 ms) for display LIVELINESS
-/// (2026-08-01, operator report "smoothed out to remove response"): the Hann taper weights the
-/// newest samples near zero, so a signal edge only reaches full brightness a full window later —
-/// the window IS the display's time smear. 2048 keeps raw bins at 5.86 Hz, still finer than the
-/// 512-bin display's 7.81 Hz over 0–4000 Hz, so the visible resolution is unchanged while the
-/// edge-to-full-brightness lag halves (and the FFT gets cheaper). Pinned by
-/// `the_analysis_window_fits_the_display_liveliness_budget` below.
-const WINDOW: usize = 2048;
+/// Longest window the RIG SCOPE may ask for (`WindowN::Sharp`). The rolling buffer is kept this
+/// long so a Sharp row has 4096 samples to look at — the wide row is unaffected, because
+/// `power_spectrum` reads the LAST `FFT_N` samples of whatever it is handed, so a longer buffer
+/// changes nothing for it. That is what keeps the byte-stable golden row green.
+const MAX_WINDOW: usize = tempo_core::spectrum::MAX_FFT_N;
 /// Consumer cadence. Matches the radio loop's own 20 ms tick, so row rate is unchanged.
 pub const TICK_MS: u64 = 20;
 /// RX meter ATTACK per 20 ms tick: rising audio closes 60% of the remaining distance each tick,
@@ -83,7 +79,7 @@ impl RxDsp {
     pub fn new() -> Self {
         Self {
             rs: CaptureResampler::new(ANALYSIS_RATE_HZ, ANALYSIS_RATE_HZ),
-            window: Vec::with_capacity(WINDOW * 2),
+            window: Vec::with_capacity(MAX_WINDOW * 2),
             epoch: 0,
             rate: ANALYSIS_RATE_HZ,
             meter: 0.0,
@@ -139,28 +135,44 @@ impl RxDsp {
             return false;
         }
         self.window.extend_from_slice(&pcm);
-        if self.window.len() > WINDOW {
-            let drop = self.window.len() - WINDOW;
+        if self.window.len() > MAX_WINDOW {
+            let drop = self.window.len() - MAX_WINDOW;
             self.window.drain(0..drop);
         }
         feed.publish_audio(compute_row(&self.window));
         // The rig scope's own window, when one is on screen asking for it. One extra 2048-point
         // FFT (~30 us of a 20 ms budget) and no extra bytes — see `compute_row_over`. The
         // request expires on its own, so this costs nothing when no scope is up.
-        if let Some((lo, hi)) = feed.scope_request() {
-            feed.publish_scope(compute_row_over(&self.window, lo, hi));
+        if let Some((lo, hi, win)) = feed.scope_request() {
+            feed.publish_scope(compute_row_over(&self.window, lo, hi, win));
         }
         true
     }
 }
 
 /// The audio-FFT row, byte-for-byte the computation the radio loop used to do.
+///
+/// ITS WINDOW IS [`WindowN::Balanced`] — 2048 @ 12 kHz = 171 ms of audio — and that is the
+/// window every consumer except the rig scope reads, the FT waterfall included.
+///
+/// Halved from 4096 (341 ms) for display LIVELINESS (2026-08-01, operator report "smoothed out
+/// to remove response"): the Hann taper weights the newest samples near zero, so a signal edge
+/// only reaches full brightness a full window later — the window IS the display's time smear.
+/// 2048 keeps raw bins at 5.86 Hz, still finer than the 512-bin display's 7.81 Hz over
+/// 0-4000 Hz, so visible resolution was unchanged while the edge-to-full-brightness lag halved
+/// (and the FFT got cheaper). Pinned by `the_analysis_window_fits_the_display_liveliness_budget`.
+///
+/// ⚠️ NO LONGER THE ONLY WINDOW (2026-08-15). The rig scope may run ITS row at
+/// [`WindowN::Fast`] or [`WindowN::Sharp`] — see `compute_row_over`. This one does not move,
+/// because changing it would move the FT waterfall's picture too.
 fn compute_row(audio: &[f32]) -> Spectrum {
     // Widened from 200-2900: shows the full SSB/DATA passband and the filter-slope shelf. The
     // 6 kHz Nyquist (12 kHz capture) caps the top; 4000 covers every voice/data passband in use.
     const LO_HZ: f32 = 0.0;
     const HI_HZ: f32 = 4000.0;
-    compute_row_over(audio, LO_HZ, HI_HZ)
+    // Always Balanced: every other consumer reads this row, and the window control is the
+    // SCOPE's alone. Changing it here would move the FT waterfall's picture too.
+    compute_row_over(audio, LO_HZ, HI_HZ, WindowN::Balanced)
 }
 
 /// The same row over an arbitrary span.
@@ -175,12 +187,12 @@ fn compute_row(audio: &[f32]) -> Spectrum {
 /// the window length moves that. What it buys is SHAPE: that lobe is sampled by 3 numbers over
 /// the full span and by 15 over the CW window, so the scope draws a lobe instead of
 /// interpolating a spike across 75 px.
-fn compute_row_over(audio: &[f32], lo_hz: f32, hi_hz: f32) -> Spectrum {
+fn compute_row_over(audio: &[f32], lo_hz: f32, hi_hz: f32, win: WindowN) -> Spectrum {
     const BINS: usize = 512;
     let row = if audio.is_empty() {
         Vec::new()
     } else {
-        tempo_core::spectrum::power_spectrum(audio, ANALYSIS_RATE, lo_hz, hi_hz, BINS)
+        tempo_core::spectrum::power_spectrum_n(audio, ANALYSIS_RATE, lo_hz, hi_hz, BINS, win)
     };
     Spectrum {
         row,
@@ -317,7 +329,9 @@ mod tests {
         // THE FIRST CALL ONLY REGISTERS THE REQUEST and is answered from the wide row. That
         // fallback is the design, not a wart: it is why the UI needs no state machine and can
         // never draw one window's frequencies under another window's labels.
-        let first = feed.scope_row(300.0, 1100.0).expect("a row either way");
+        let first = feed
+            .scope_row(300.0, 1100.0, WindowN::Balanced)
+            .expect("a row either way");
         assert_eq!(
             first.hi_hz, 4000.0,
             "until the producer has answered, the request falls back to the full row"
@@ -325,7 +339,9 @@ mod tests {
 
         ring.push_slice(&tone(12_000, 700.0, 256));
         dsp.tick(&tap, &feed, &meters);
-        let narrow = feed.scope_row(300.0, 1100.0).expect("the narrow row");
+        let narrow = feed
+            .scope_row(300.0, 1100.0, WindowN::Balanced)
+            .expect("the narrow row");
         assert_eq!((narrow.lo_hz, narrow.hi_hz), (300.0, 1100.0));
         assert_eq!(
             narrow.row.len(),
@@ -427,7 +443,7 @@ mod tests {
         let feed = SpectrumFeed::default();
         let meters = MeterFeed::default();
         let mut dsp = RxDsp::new();
-        ring.push_slice(&tone(12_000, 1500.0, WINDOW * 2));
+        ring.push_slice(&tone(12_000, 1500.0, WindowN::Balanced.n() * 2));
         for _ in 0..4 {
             dsp.tick(&tap, &feed, &meters);
         }
@@ -477,7 +493,7 @@ mod tests {
 
         let b = Arc::new(SpscRing::new(48_000));
         tap.publish_card(b.clone(), 12_000);
-        b.push_slice(&tone(12_000, 2500.0, WINDOW * 2));
+        b.push_slice(&tone(12_000, 2500.0, WindowN::Balanced.n() * 2));
         for _ in 0..4 {
             dsp.tick(&tap, &feed, &meters);
         }
@@ -516,27 +532,45 @@ mod tests {
     /// 'smoothed out' to remove response").
     ///
     /// The only temporal smoothing on the spectrum is the analysis window itself: the row is a
-    /// Hann-windowed FFT over the last `WINDOW` samples, so a signal edge takes a full window
+    /// Hann-windowed FFT over the last `WindowN::Balanced` samples, so a signal edge takes a full window
     /// to reach full brightness (and ~half a window to reach half). At 4096 samples / 12 kHz
     /// that was 341 ms — the literal "smoothed out". Pin the window's time span at ≤ 200 ms so
     /// a future "more resolution" change can't quietly re-smear the display. (Frequency cost of
     /// shrinking it: raw bins must stay finer than the 512-bin display over 0–4000 Hz, i.e.
     /// ≤ 7.8 Hz — asserted alongside, so this pin can't be satisfied by gutting resolution.)
+    ///
+    /// ⚠️ RESTATED, NOT RELAXED (2026-08-15, the rig scope gained a window-length control).
+    /// `WindowN::Sharp` runs the SCOPE row at 4096 — 341 ms, outside this budget on purpose,
+    /// because the operator asked for frequency resolution and is trading liveliness for it
+    /// knowingly. That is an opt-out, so the pin now covers the two windows nobody opted into:
+    /// the DEFAULT row (`WindowN::Balanced`, which every other consumer including the FT waterfall reads)
+    /// and the scope's DEFAULT (`WindowN::Balanced`). Deleting this pin to make the control fit
+    /// would have thrown away the guarantee for everyone who never touches the control.
     #[test]
     fn the_analysis_window_fits_the_display_liveliness_budget() {
-        let window_s = WINDOW as f32 / ANALYSIS_RATE;
+        let window_s = WindowN::Balanced.n() as f32 / ANALYSIS_RATE;
         assert!(
             window_s <= 0.200,
             "analysis window is {:.0} ms of audio — a signal edge needs that long to reach \
              full brightness, which reads as lag on CW/voice (budget: 200 ms)",
             window_s * 1000.0
         );
-        let raw_bin_hz = ANALYSIS_RATE / WINDOW as f32;
+        let raw_bin_hz = ANALYSIS_RATE / WindowN::Balanced.n() as f32;
         assert!(
             raw_bin_hz <= 4000.0 / 512.0,
             "raw FFT bins ({raw_bin_hz:.2} Hz) must stay finer than the 512-bin display \
              (7.81 Hz) — liveliness may not be bought with visible resolution"
         );
+        // The scope's DEFAULT must sit inside the same budget: an operator who never opens the
+        // control must never be given a slower display than the one this pin was written for.
+        let scope_default_s = WindowN::default().seconds(ANALYSIS_RATE);
+        assert!(
+            scope_default_s <= 0.200,
+            "the rig scope's DEFAULT window is {:.0} ms — Sharp is an opt-out, the default is not",
+            scope_default_s * 1000.0
+        );
+        // And the default must still be the shipped length, so an upgrade moves nobody.
+        assert_eq!(WindowN::default(), WindowN::Balanced);
     }
 
     /// VALUE PIN, relocated from the `watch_identity` golden.
@@ -584,7 +618,7 @@ mod tests {
     /// libm that rounds a hair differently. Values are display intensity in 0..=1.
     ///
     /// Digest history:
-    /// - 2026-08-01: WINDOW/FFT_N 4096 → 2048 for display liveliness (see `WINDOW`). The row
+    /// - 2026-08-01: the analysis window went 4096 → 2048 for display liveliness (see `compute_row`). The row
     ///   is now an FFT over half the history — deliberately different bytes. Resolution proof
     ///   unchanged: `resolves_two_close_tones` (tempo-core) still splits tones 40 Hz apart.
     /// - 2026-08-04: the intensity axis became dB with an absolute full-scale reference
@@ -599,9 +633,11 @@ mod tests {
     #[test]
     fn the_row_for_a_known_input_is_byte_stable() {
         // The exact generator the golden used: a sawtooth over the analysis window.
-        let saw: Vec<f32> = (0..WINDOW).map(|i| (i % 64) as f32 / 64.0 - 0.5).collect();
+        let saw: Vec<f32> = (0..WindowN::Balanced.n())
+            .map(|i| (i % 64) as f32 / 64.0 - 0.5)
+            .collect();
         let tap = RxTap::new();
-        let ring = Arc::new(SpscRing::new(WINDOW * 2));
+        let ring = Arc::new(SpscRing::new(WindowN::Balanced.n() * 2));
         tap.publish_card(ring.clone(), ANALYSIS_RATE_HZ); // native rate → passthrough resampler
         let feed = SpectrumFeed::default();
         let meters = MeterFeed::default();

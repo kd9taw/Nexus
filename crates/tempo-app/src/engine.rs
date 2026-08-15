@@ -43,6 +43,13 @@ struct FeedRows {
     /// See [`SpectrumFeed::scope_row`] — this is the second slot, not a second feed.
     scope_req: Option<ScopeReq>,
     scope: Option<RowAverage>,
+    /// The window length the rows in `scope` were computed at. Tracked SEPARATELY from
+    /// `scope_req` because the request expires and this must not: a scope that goes away at
+    /// Balanced and comes back at Sharp would otherwise find no request to compare against, and
+    /// fold the new rows into the old window's average. (The 500 ms gap-restart in
+    /// `RowAverage::push` would usually cover it, but that is a coincidence of two timeouts, not
+    /// a guarantee — and coincidences are what this file keeps getting bitten by.)
+    scope_win: spectrum::WindowN,
 }
 
 /// A standing request from the rig scope for a row over ITS window rather than the full
@@ -52,6 +59,10 @@ struct FeedRows {
 struct ScopeReq {
     lo: f32,
     hi: f32,
+    /// Analysis window length. ⚠️ A change here is NOT visible to `RowAverage::push`, which
+    /// restarts on span / bin-count / source changes only — two window lengths have all three
+    /// in common. `scope_row` therefore clears the slot itself when this moves; see there.
+    win: spectrum::WindowN,
     at: Instant,
 }
 
@@ -259,10 +270,10 @@ impl SpectrumFeed {
     /// Read by the rx-dsp thread once per tick. `None` is the normal state — no scope on
     /// screen, a native RF row winning, or a request that has aged out — and it costs the
     /// producer exactly one mutex read.
-    pub fn scope_request(&self) -> Option<(f32, f32)> {
+    pub fn scope_request(&self) -> Option<(f32, f32, spectrum::WindowN)> {
         let g = self.rows.lock().ok()?;
         let req = g.scope_req?;
-        (req.at.elapsed() < Self::SCOPE_REQ_TTL).then_some((req.lo, req.hi))
+        (req.at.elapsed() < Self::SCOPE_REQ_TTL).then_some((req.lo, req.hi, req.win))
     }
 
     /// Publish a row computed over the scope's own span (the rx-dsp thread).
@@ -297,7 +308,7 @@ impl SpectrumFeed {
     ///   now — a mismatch means the request just changed, so it falls through rather than
     ///   drawing the old window's frequencies under the new window's labels;
     /// - else the full audio row, exactly as before.
-    pub fn scope_row(&self, lo_hz: f32, hi_hz: f32) -> Option<Spectrum> {
+    pub fn scope_row(&self, lo_hz: f32, hi_hz: f32, win: spectrum::WindowN) -> Option<Spectrum> {
         let sane = hi_hz > lo_hz
             && lo_hz >= 0.0
             && hi_hz <= Self::SCOPE_MAX_HZ
@@ -310,9 +321,19 @@ impl SpectrumFeed {
                 .rf
                 .as_ref()
                 .is_some_and(|(s, at)| at.elapsed() < Duration::from_secs(1) && !s.row.is_empty());
+            // A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE. `RowAverage::push`
+            // restarts on span, bin count and source; two window lengths share all three, so
+            // without this a Fast->Sharp switch would fold an 85 ms picture and a 341 ms one
+            // into the same drawn row — plausible-looking and wrong, exactly the failure the
+            // restart rules exist to prevent.
+            if g.scope_win != win {
+                g.scope = None;
+                g.scope_win = win;
+            }
             g.scope_req = (sane && !rf_live).then_some(ScopeReq {
                 lo: lo_hz,
                 hi: hi_hz,
+                win,
                 at: Instant::now(),
             });
             if !rf_live && sane {
@@ -23777,21 +23798,25 @@ mod tests {
         feed.publish_audio(spec(0.0, 4000.0, "audio"));
 
         // 1. NOT YET PRODUCED. The first poll registers the request and is answered wide.
-        let first = feed.scope_row(300.0, 1100.0).expect("a row either way");
+        let first = feed
+            .scope_row(300.0, 1100.0, spectrum::WindowN::Balanced)
+            .expect("a row either way");
         assert_eq!(
             first.hi_hz, 4000.0,
             "unanswered request falls back to the full row"
         );
         assert_eq!(
             feed.scope_request(),
-            Some((300.0, 1100.0)),
+            Some((300.0, 1100.0, spectrum::WindowN::Balanced)),
             "and the request now stands, so the producer will answer it next tick"
         );
 
         // Produce it, and confirm the honoured path really does hand back the narrow row —
         // the positive control for the three refusals below.
         feed.publish_scope(spec(300.0, 1100.0, "audio"));
-        let got = feed.scope_row(300.0, 1100.0).expect("narrow row");
+        let got = feed
+            .scope_row(300.0, 1100.0, spectrum::WindowN::Balanced)
+            .expect("narrow row");
         assert_eq!(
             (got.lo_hz, got.hi_hz),
             (300.0, 1100.0),
@@ -23802,7 +23827,7 @@ mod tests {
         // 2. AN INSANE SPAN. The cockpit passes ABSOLUTE RF Hz when a native panadapter is the
         // source, so this is the real shape of the bad input, not a hypothetical one.
         let rf_span = feed
-            .scope_row(14_073_000.0, 14_076_000.0)
+            .scope_row(14_073_000.0, 14_076_000.0, spectrum::WindowN::Balanced)
             .expect("a row either way");
         assert_eq!(
             rf_span.hi_hz, 4000.0,
@@ -23817,12 +23842,70 @@ mod tests {
         // 3. A LIVE NATIVE ROW. The scope is not drawing the audio FFT at all.
         feed.publish_scope(spec(300.0, 1100.0, "audio"));
         feed.publish_rf(spec(0.0, 4000.0, "flex"));
-        let rf = feed.scope_row(300.0, 1100.0).expect("a row either way");
+        let rf = feed
+            .scope_row(300.0, 1100.0, spectrum::WindowN::Balanced)
+            .expect("a row either way");
         assert_eq!(rf.source, "flex", "a fresh native row still wins outright");
         assert_eq!(
             feed.scope_request(),
             None,
             "and no narrow row is requested for it — that FFT would be for a picture nobody shows"
+        );
+    }
+
+    /// A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE — and nothing else can catch it.
+    ///
+    /// `RowAverage::push` restarts on span, bin count, source and a publish gap. Two analysis
+    /// windows share the first three, so an 85 ms picture and a 341 ms one would fold into the
+    /// same drawn row: plausible-looking, wrong, and invisible. This also covers the case where
+    /// the request EXPIRED in between (scope hidden, then reopened at a different window), which
+    /// is why the window is tracked separately from the request.
+    #[test]
+    fn changing_the_window_length_drops_the_accumulated_average() {
+        let quiet = 0.10f32;
+        let loud = 0.90f32;
+        let at = |v: f32| Spectrum {
+            row: vec![v; 512],
+            lo_hz: 300.0,
+            hi_hz: 1100.0,
+            source: "audio".into(),
+        };
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+
+        feed.scope_row(300.0, 1100.0, spectrum::WindowN::Balanced);
+        for _ in 0..4 {
+            feed.publish_scope(at(loud));
+        }
+        // CONTROL: without a window change those four DO average together, so the clear below is
+        // a real effect and not an artifact of the slot being empty anyway.
+        let same_window = feed
+            .scope_row(300.0, 1100.0, spectrum::WindowN::Balanced)
+            .expect("row")
+            .row[0];
+        assert!(
+            (same_window - loud).abs() < 1e-6,
+            "control: four identical frames must average to themselves, got {same_window}"
+        );
+
+        for _ in 0..4 {
+            feed.publish_scope(at(loud));
+        }
+        // Simulate the harder path: the scope went away long enough for the request to lapse,
+        // and came back at a different window.
+        feed.backdate_scope_req_for_test(SpectrumFeed::SCOPE_REQ_TTL + Duration::from_millis(50));
+        feed.scope_row(300.0, 1100.0, spectrum::WindowN::Sharp);
+        feed.publish_scope(at(quiet));
+
+        let got = feed
+            .scope_row(300.0, 1100.0, spectrum::WindowN::Sharp)
+            .expect("row")
+            .row[0];
+        assert!(
+            (got - quiet).abs() < 1e-6,
+            "the first frame at the new window must stand alone, not blend with the four loud \
+             frames from the old one: got {got}, want {quiet} (a blend reads {})",
+            power_mean(&[loud, loud, loud, loud, quiet]),
         );
     }
 
@@ -23834,7 +23917,7 @@ mod tests {
     fn a_scope_request_expires_when_nobody_is_polling() {
         let feed = SpectrumFeed::default();
         feed.publish_audio(spec(0.0, 4000.0, "audio"));
-        feed.scope_row(300.0, 1100.0);
+        feed.scope_row(300.0, 1100.0, spectrum::WindowN::Balanced);
         assert!(
             feed.scope_request().is_some(),
             "control: the request stands while polled"

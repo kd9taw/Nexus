@@ -7210,10 +7210,19 @@ fn get_spectrum_row(
 fn get_scope_row(
     lo_hz: f32,
     hi_hz: f32,
+    window: Option<String>,
     feed: State<'_, tempo_app::engine::SpectrumFeed>,
     state: State<'_, SharedEngine>,
 ) -> Result<Spectrum, String> {
-    if let Some(row) = feed.scope_row(lo_hz, hi_hz) {
+    // An absent or unrecognised tag is the DEFAULT, stated here rather than hidden in
+    // `from_tag`: a scope that keeps drawing at the shipped window is the right failure for a
+    // UI that is out of step with this build, and it is the only failure that cannot surprise
+    // an operator who never opened the control.
+    let win = window
+        .as_deref()
+        .and_then(tempo_core::spectrum::WindowN::from_tag)
+        .unwrap_or_default();
+    if let Some(row) = feed.scope_row(lo_hz, hi_hz, win) {
         return Ok(row);
     }
     // Nothing published yet — the Companion/UDP path, exactly as in `get_spectrum_row`.

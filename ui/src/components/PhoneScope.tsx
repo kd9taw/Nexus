@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { getScopeRow } from '../api'
+import { getScopeRow, type ScopeWindow } from '../api'
 import { sampleLut } from '../colormaps'
 import {
   agcRange,
@@ -30,6 +30,46 @@ import { surfaceGet, surfaceSet } from '../features/windowScope'
  * so a popped-out cockpit keeps its own choice). Static literal — the storage-scope test
  * classifies surfaceGet/Set keys by matching this declaration. */
 const PHSCOPE_DSS_KEY = 'nexus.phonescope.dss'
+
+/** Persisted analysis-window choice for the rig scope. Static literal for the same reason as
+ * PHSCOPE_DSS_KEY — the storage-scope test matches this declaration. */
+const PHSCOPE_WIN_KEY = 'nexus.phonescope.win'
+
+/**
+ * The window-length control, in the order it cycles.
+ *
+ * THE OPERATOR'S TRADE, not ours, which is why this is a control and the trace hold is not: the
+ * trace hold follows from the signal, but time-versus-frequency has no right answer. A CW op
+ * chasing a weak carrier in a crowded passband wants `sharp`; one reading somebody's fist at
+ * 25 WPM wants `fast`, because at the default a 48 ms dit is inside a 171 ms window and keying
+ * simply is not there to see.
+ *
+ * The LABEL is the Hann main-lobe width, because that is the thing the operator is buying and it
+ * is legible at a glance on a rig display. The title carries the cost.
+ */
+const SCOPE_WINDOWS: ReadonlyArray<{ id: ScopeWindow; label: string; title: string }> = [
+  {
+    id: 'balanced',
+    label: '23 Hz',
+    title: 'Resolution: Balanced — 2048-point window, 171 ms. The default. A 25 WPM dit is shorter than this window, so CW keying reads as a solid bar. Click for sharper.',
+  },
+  {
+    id: 'sharp',
+    label: '12 Hz',
+    title: 'Resolution: Sharp — 4096-point window, 341 ms. Half the carrier width, at double the time smear. Best for picking a weak carrier out of a crowded passband. Click for faster.',
+  },
+  {
+    id: 'fast',
+    label: '47 Hz',
+    title: 'Resolution: Fast — 1024-point window, 85 ms. Carriers read twice as wide, but keying and speech onsets actually resolve. Click to return to the default.',
+  },
+]
+
+/** A stored value is only honoured if it is one we still ship — anything else is the default,
+ *  so a stale or foreign key can never leave the scope on a window this build does not have. */
+function resolveScopeWindow(stored: string | null): ScopeWindow {
+  return SCOPE_WINDOWS.some((w) => w.id === stored) ? (stored as ScopeWindow) : 'balanced'
+}
 
 interface Props {
   transmitting: boolean
@@ -161,6 +201,12 @@ export function PhoneScope({
   const [dss, setDss] = useState<boolean>(() => surfaceGet(PHSCOPE_DSS_KEY) === '1')
   const dssRef = useRef(dss)
   dssRef.current = dss
+
+  const [scopeWin, setScopeWin] = useState<ScopeWindow>(() =>
+    resolveScopeWindow(surfaceGet(PHSCOPE_WIN_KEY)),
+  )
+  const scopeWinRef = useRef(scopeWin)
+  scopeWinRef.current = scopeWin
   /** Scrollback offset in history rows while paused (0 = live tail). */
   const offsetRef = useRef(0)
   // Which scope feed is live: '' / 'audio' = soundcard FFT, 'flex'/'civ' = a native RF panadapter.
@@ -402,7 +448,7 @@ export function PhoneScope({
         // duplicating the RF test here against a source we only learn from the PREVIOUS row.
         // An unhonourable request returns exactly what `getSpectrumRow` would have, and the
         // row's own loHz/hiHz below is what everything downstream reads anyway.
-        spec = await getScopeRow(txRef.current, viewLoRef.current, viewHiRef.current)
+        spec = await getScopeRow(txRef.current, viewLoRef.current, viewHiRef.current, scopeWinRef.current)
       } catch {
         return
       }
@@ -1009,6 +1055,21 @@ export function PhoneScope({
             aria-label="Scope visual zero (floor)"
           />
         </label>
+        <button
+          type="button"
+          className={`ph-scope-btn${scopeWin !== 'balanced' ? ' on' : ''}`}
+          aria-label={`Scope resolution ${SCOPE_WINDOWS.find((w) => w.id === scopeWin)?.label} — click to change`}
+          title={SCOPE_WINDOWS.find((w) => w.id === scopeWin)?.title}
+          onClick={() => {
+            const i = SCOPE_WINDOWS.findIndex((w) => w.id === scopeWin)
+            const next = SCOPE_WINDOWS[(i + 1) % SCOPE_WINDOWS.length].id
+            setScopeWin(next)
+            scopeWinRef.current = next
+            surfaceSet(PHSCOPE_WIN_KEY, next)
+          }}
+        >
+          {SCOPE_WINDOWS.find((w) => w.id === scopeWin)?.label}
+        </button>
         <button
           type="button"
           className={`ph-scope-btn${dss ? ' on' : ''}`}

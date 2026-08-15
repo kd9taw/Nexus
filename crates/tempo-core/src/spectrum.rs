@@ -80,6 +80,85 @@ pub fn tone_power(samples: &[f32], sr: f32, f: f32) -> f32 {
 /// (7.81 Hz over 0–4000 Hz), so nothing visible is lost; the FFT is ~half the work.
 const FFT_N: usize = 2048;
 
+/// Analysis window lengths the RIG SCOPE may be run at. The FT waterfall and every other
+/// consumer stay on [`FFT_N`] — this is a scope control, not a global one.
+///
+/// ⚠️ THIS IS A GENUINE TIME-VERSUS-FREQUENCY TRADE, and it is the one knob on this display
+/// where there is no right default for everybody:
+///
+/// | Window | Time   | Hann lobe | 25 WPM dit (48 ms) |
+/// |--------|--------|-----------|--------------------|
+/// | 1024   |  85 ms |   46.9 Hz | visible            |
+/// | 2048   | 171 ms |   23.4 Hz | NEVER resolved     |
+/// | 4096   | 341 ms |   11.7 Hz | badly smeared      |
+///
+/// Today's 2048 is simultaneously the crisp choice and the laggy one. `Balanced` stays the
+/// default so an upgrade moves nobody's display.
+///
+/// **8192 is deliberately not offered.** A 48 ms dit inside a 683 ms window also loses ~11 dB
+/// of peak amplitude, so weak CW would get dimmer AND more smeared — the option reads like
+/// "sharpest" and is strictly worse for the signal the sharpness is wanted for.
+///
+/// An ENUM rather than a bare `usize` so an unsupported length is unrepresentable instead of
+/// being silently rounded or defaulted by whichever consumer notices first.
+///
+/// No serde derive here on purpose: `tempo-core` is the DSP core and has no `serde` dependency
+/// (only `serde_json`), and a wire format is not its business. [`WindowN::from_tag`] and
+/// [`WindowN::tag`] are the boundary, and they round-trip — pinned by `window_tags_round_trip`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum WindowN {
+    /// 1024 — 85 ms. Keying and speech onsets resolve; carriers are twice as wide.
+    Fast,
+    /// 2048 — 171 ms. The shipped behaviour, and the default.
+    #[default]
+    Balanced,
+    /// 4096 — 341 ms. Half the lobe width, at double the smear.
+    Sharp,
+}
+
+impl WindowN {
+    /// Samples in the analysis window. Named `n` rather than `len` because this is an FFT
+    /// size, not the length of a collection — and because a `len` without an `is_empty` is a
+    /// clippy lint for exactly that confusion.
+    pub const fn n(self) -> usize {
+        match self {
+            // Expressed against the shipped default so the relationship is the definition:
+            // one step either side of what every other consumer still runs at.
+            Self::Fast => FFT_N / 2,
+            Self::Balanced => FFT_N,
+            Self::Sharp => FFT_N * 2,
+        }
+    }
+    /// Analysis window in seconds at `sr` — the display's temporal smear.
+    pub fn seconds(self, sr: f32) -> f32 {
+        self.n() as f32 / sr
+    }
+    /// The wire tag. Kept next to [`Self::from_tag`] so the pair cannot drift.
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Balanced => "balanced",
+            Self::Sharp => "sharp",
+        }
+    }
+    /// Parse a wire tag. `None` for anything unrecognised — the CALLER decides what an unknown
+    /// tag means, rather than this silently rounding it to something. Every caller today treats
+    /// `None` as [`Self::Balanced`], because a scope that stops drawing is worse than a scope
+    /// drawing the default, but that choice is stated at the call site instead of hidden here.
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "fast" => Some(Self::Fast),
+            "balanced" => Some(Self::Balanced),
+            "sharp" => Some(Self::Sharp),
+            _ => None,
+        }
+    }
+}
+
+/// Longest window any consumer may ask for — the scratch and the producer's rolling buffer are
+/// both sized to this.
+pub const MAX_FFT_N: usize = 4096;
+
 /// Display span of the intensity axis, in dB. A row value is LINEAR IN dB across
 /// `[-DB_SPAN, 0]` dBFS: `0.0` = the axis floor, `1.0` = full scale.
 ///
@@ -96,7 +175,14 @@ pub const DB_SPAN: f32 = 120.0;
 /// Raw-FFT power that a full-scale (amplitude 1.0) sine deposits in its own bin under the Hann
 /// window: the bin magnitude is `A·N·CG/2` with Hann's coherent gain `CG = 0.5`, so `p = (N/4)²`.
 /// This is the axis's ABSOLUTE reference — it does not move with the signal.
-const FULL_SCALE_POWER: f32 = ((FFT_N / 4) * (FFT_N / 4)) as f32;
+///
+/// ⚠️ IT DOES MOVE WITH N, and that is the whole reason the dB axis survives a window change: a
+/// longer window deposits MORE raw power in the carrier's bin, so a per-N reference is what makes
+/// a -20 dBFS tone read -20 dBFS at every length. Pinned by
+/// `the_absolute_db_axis_reads_the_same_at_every_window_length`.
+const fn full_scale_power(n: usize) -> f32 {
+    ((n / 4) * (n / 4)) as f32
+}
 
 /// Linear power, RELATIVE TO FULL SCALE, → its 0..1 display value on the dB axis
 /// (see [`DB_SPAN`]). Silence (p = 0) floors at 0.0 rather than producing -inf.
@@ -122,20 +208,20 @@ pub fn display_to_power(display: f32) -> f32 {
 }
 
 /// One raw bin's power → its 0..1 display value on the dB axis (see [`DB_SPAN`]).
-fn db_display(power: f32) -> f32 {
-    power_to_display(power / FULL_SCALE_POWER)
+fn db_display(power: f32, n: usize) -> f32 {
+    power_to_display(power / full_scale_power(n))
 }
 
 /// Hann window coefficient for sample `i` of an `FFT_N`-length frame (reduces spectral leakage so a
 /// carrier reads as a clean peak, not a smear across neighbouring bins).
-fn hann(i: usize) -> f32 {
-    0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (FFT_N as f32 - 1.0)).cos()
+fn hann(i: usize, n: usize) -> f32 {
+    0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (n as f32 - 1.0)).cos()
 }
 
 std::thread_local! {
     /// Reused FFT input buffer (8 KB) so the per-tick spectrum computes with no allocation, and
     /// works lock-free from both the radio-loop thread and the IPC fallback thread.
-    static FFT_SCRATCH: std::cell::RefCell<[f32; FFT_N]> = const { std::cell::RefCell::new([0.0; FFT_N]) };
+    static FFT_SCRATCH: std::cell::RefCell<[f32; MAX_FFT_N]> = const { std::cell::RefCell::new([0.0; MAX_FFT_N]) };
 }
 
 /// Estimate a `bins`-point power spectrum over `[f_lo, f_hi]` Hz, normalized to 0..1
@@ -144,14 +230,28 @@ std::thread_local! {
 /// A Hann-windowed real FFT over the last `FFT_N` samples (front-zero-padded while warming up); the
 /// DC bin is excluded. Empty input → a zeroed row of length `bins`.
 pub fn power_spectrum(samples: &[f32], sr: f32, f_lo: f32, f_hi: f32, bins: usize) -> Vec<f32> {
+    power_spectrum_n(samples, sr, f_lo, f_hi, bins, WindowN::Balanced)
+}
+
+/// [`power_spectrum`] at a chosen analysis window length — the rig scope's Fast/Balanced/Sharp
+/// control. See [`WindowN`] for the trade; `Balanced` is byte-for-byte what `power_spectrum` does.
+pub fn power_spectrum_n(
+    samples: &[f32],
+    sr: f32,
+    f_lo: f32,
+    f_hi: f32,
+    bins: usize,
+    win: WindowN,
+) -> Vec<f32> {
     if bins == 0 {
         return Vec::new();
     }
+    let fft_n = win.n();
     let mut out = FFT_SCRATCH.with(|sc| {
         let mut buf = sc.borrow_mut();
-        // Load the last FFT_N samples (front-zero-padded if we have fewer), applying the Hann window.
-        let n = samples.len().min(FFT_N);
-        let pad = FFT_N - n;
+        // Load the last fft_n samples (front-zero-padded if we have fewer), applying the Hann window.
+        let n = samples.len().min(fft_n);
+        let pad = fft_n - n;
         for v in buf[..pad].iter_mut() {
             *v = 0.0;
         }
@@ -164,13 +264,27 @@ pub fn power_spectrum(samples: &[f32], sr: f32, f_lo: f32, f_hi: f32, bins: usiz
             0.0
         };
         for i in 0..n {
-            buf[pad + i] = (src[i] - mean) * hann(pad + i);
+            buf[pad + i] = (src[i] - mean) * hann(pad + i, fft_n);
         }
-        // In-place real FFT → FFT_N/2 complex bins; bin k is centred at k·sr/FFT_N Hz. rfft packs
+        // In-place real FFT → fft_n/2 complex bins; bin k is centred at k·sr/fft_n Hz. rfft packs
         // Nyquist into bin 0's imaginary part, so bin 0 (DC + Nyquist) is skipped entirely.
-        let spec = microfft::real::rfft_2048(&mut buf);
-        let hz_per_bin = sr / FFT_N as f32;
-        let k_max = (FFT_N / 2 - 1) as isize;
+        //
+        // One arm per length because `microfft` is a FIXED-SIZE kernel — that is why it allocates
+        // nothing and why a second FFT per tick costs ~30 us. `microfft` 0.6 already enables
+        // rfft_256..rfft_4096, so none of this needed a Cargo change.
+        let spec: &mut [microfft::Complex32] = match win {
+            WindowN::Fast => microfft::real::rfft_1024(
+                (&mut buf[..1024]).try_into().expect("scratch covers 1024"),
+            ),
+            WindowN::Balanced => microfft::real::rfft_2048(
+                (&mut buf[..2048]).try_into().expect("scratch covers 2048"),
+            ),
+            WindowN::Sharp => microfft::real::rfft_4096(
+                (&mut buf[..4096]).try_into().expect("scratch covers 4096"),
+            ),
+        };
+        let hz_per_bin = sr / fft_n as f32;
+        let k_max = (fft_n / 2 - 1) as isize;
         let span = f_hi - f_lo;
         // ⭐ SCATTER, NOT GATHER. Each RAW bin is assigned to the ONE display bin containing its
         // centre frequency, and display bins peak-hold whatever lands in them.
@@ -226,7 +340,7 @@ pub fn power_spectrum(samples: &[f32], sr: f32, f_lo: f32, f_hi: f32, bins: usiz
     // Raw power → the dB display axis. ABSOLUTE (against full scale), so the reference never
     // moves with the signal — see `db_display` and the two axis tests below.
     for v in out.iter_mut() {
-        *v = db_display(*v);
+        *v = db_display(*v, fft_n);
     }
     out
 }
@@ -368,6 +482,96 @@ mod tests {
             null_db > 20.0,
             "resolved with a deep null between them (only {null_db} dB down)"
         );
+    }
+
+    /// THE AXIS MUST NOT MOVE WITH THE WINDOW — the contract that lets the scope's
+    /// Fast/Balanced/Sharp control exist at all.
+    ///
+    /// A row value is an ABSOLUTE dBFS reading, not a relative one, and the S-meter-ish
+    /// readouts, the AGC and the dB legend all depend on that. A longer window deposits MORE
+    /// raw power in a carrier's bin (`p = (A·N·CG/2)²`), so a single `FULL_SCALE_POWER` would
+    /// have made the same tone read ~6 dB louder at 4096 than at 2048 and ~6 dB quieter at 1024
+    /// — the operator would change "resolution" and watch every signal's level jump. That is
+    /// why `full_scale_power` takes `n`.
+    #[test]
+    fn the_absolute_db_axis_reads_the_same_at_every_window_length() {
+        let sr = 12_000.0;
+        let (lo, hi, bins) = (0.0f32, 4000.0f32, 512usize);
+        for amp in [1.0f32, 0.1, 0.01] {
+            let want_dbfs = 20.0 * amp.log10();
+            let mut readings = Vec::new();
+            for win in [WindowN::Fast, WindowN::Balanced, WindowN::Sharp] {
+                // Long enough to fill the biggest window with no zero padding, and on a raw-bin
+                // centre of EVERY length (1500 Hz divides all three grids) so no reading is
+                // scalloped by a different amount than the others.
+                let s = tones(&[(1500.0, amp)], sr, MAX_FFT_N);
+                let row = power_spectrum_n(&s, sr, lo, hi, bins, win);
+                let peak = row.iter().copied().fold(f32::MIN, f32::max);
+                // Display value -> dBFS: the axis is linear in dB across DB_SPAN below full scale.
+                let dbfs = (peak - 1.0) * DB_SPAN;
+                assert!(
+                    (dbfs - want_dbfs).abs() < 1.0,
+                    "a {want_dbfs:.0} dBFS tone must read {want_dbfs:.0} dBFS at N={} — got \
+                     {dbfs:.2}. The dB axis is absolute; if it tracked the window length, \
+                     changing resolution would change every level on the display.",
+                    win.n()
+                );
+                readings.push(dbfs);
+            }
+            let spread = readings.iter().copied().fold(f32::MIN, f32::max)
+                - readings.iter().copied().fold(f32::MAX, f32::min);
+            assert!(
+                spread < 0.5,
+                "the three windows must agree with EACH OTHER too (spread {spread:.2} dB at \
+                 amp {amp}): {readings:?}"
+            );
+        }
+    }
+
+    /// The lobe really does narrow with N — the thing the control is sold on.
+    ///
+    /// Without this the test above could be satisfied by a control that changes nothing at all.
+    #[test]
+    fn a_longer_window_actually_narrows_the_carrier() {
+        let sr = 12_000.0;
+        // A NARROW span, because at 7.81 Hz display bins the difference between a 46.9 Hz lobe
+        // and an 11.7 Hz one is only a couple of bins — the same reason the scope asks for its
+        // own span (Tier 3). At 1.5625 Hz bins the three are unmistakable.
+        let (lo, hi, bins) = (300.0f32, 1100.0f32, 512usize);
+        let s = tones(&[(700.0, 1.0)], sr, MAX_FFT_N);
+        let width = |win: WindowN| {
+            let row = power_spectrum_n(&s, sr, lo, hi, bins, win);
+            let peak = row.iter().copied().fold(f32::MIN, f32::max);
+            let thr = peak - 6.0 / DB_SPAN;
+            row.iter().filter(|v| **v >= thr).count()
+        };
+        let (fast, balanced, sharp) = (
+            width(WindowN::Fast),
+            width(WindowN::Balanced),
+            width(WindowN::Sharp),
+        );
+        assert!(
+            fast > balanced && balanced > sharp,
+            "the -6 dB carrier width must shrink monotonically as the window grows: \
+             fast(1024)={fast} balanced(2048)={balanced} sharp(4096)={sharp} display bins"
+        );
+    }
+
+    #[test]
+    fn window_tags_round_trip() {
+        for win in [WindowN::Fast, WindowN::Balanced, WindowN::Sharp] {
+            assert_eq!(WindowN::from_tag(win.tag()), Some(win), "tag round trip");
+        }
+        // An unknown tag is NOT silently mapped here — the caller owns that decision.
+        assert_eq!(WindowN::from_tag("8192"), None);
+        assert_eq!(WindowN::from_tag(""), None);
+        // The default is the shipped length, so an upgrade moves nobody's display.
+        assert_eq!(WindowN::default(), WindowN::Balanced);
+        assert_eq!(WindowN::default().n(), 2048);
+        // Every offered length must fit the shared scratch.
+        for win in [WindowN::Fast, WindowN::Balanced, WindowN::Sharp] {
+            assert!(win.n() <= MAX_FFT_N);
+        }
     }
 
     /// A sum of `(freq, amplitude)` tones, for level-accuracy tests.
