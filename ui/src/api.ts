@@ -2033,6 +2033,24 @@ export async function getSpectrumRow(_transmitting: boolean): Promise<Spectrum> 
   return invoke<Spectrum>('get_spectrum_row')
 }
 
+/**
+ * Fetch one RIG SCOPE row, spread across the window the scope is actually drawing.
+ *
+ * Same 512 bins as `getSpectrumRow`, same bytes on the wire — but over `loHz..hiHz` instead of
+ * the full 0-4000 Hz capture, so the CW cockpit's 300-1100 Hz view gets 1.5625 Hz bins rather
+ * than 7.8125. The span request rides this call; there is nothing to set up and nothing to tear
+ * down. Ask for a span the backend cannot honour (a native RF panadapter is live, or the numbers
+ * are not a sane audio window) and it returns exactly what `getSpectrumRow` would have — so a
+ * caller never has to branch on which row it got, only read the `loHz`/`hiHz` it came back with.
+ */
+export async function getScopeRow(
+  _transmitting: boolean,
+  loHz: number,
+  hiHz: number,
+): Promise<Spectrum> {
+  return invoke<Spectrum>('get_scope_row', { loHz, hiHz })
+}
+
 /** Fetch the live meters (RX audio level + CAT S-meter). Lock-free backend-side (no engine
  * mutex), so it is safe to poll fast and a CAT stall cannot freeze it — one shared ~100 ms
  * poll feeds every meter widget instead of riding the 300 ms snapshot (see `LiveMeters`). */

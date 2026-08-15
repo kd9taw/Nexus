@@ -39,6 +39,20 @@ use tempo_core::{channel, spectrum, tempo_fast, tx};
 struct FeedRows {
     audio: Option<RowAverage>,
     rf: Option<(Spectrum, Instant)>,
+    /// The span the on-screen rig scope is actually showing, and the row computed over it.
+    /// See [`SpectrumFeed::scope_row`] — this is the second slot, not a second feed.
+    scope_req: Option<ScopeReq>,
+    scope: Option<RowAverage>,
+}
+
+/// A standing request from the rig scope for a row over ITS window rather than the full
+/// capture. Carries its own timestamp because the request must EXPIRE: the producer would
+/// otherwise keep computing a second FFT forever after the last scope left the screen.
+#[derive(Clone, Copy)]
+struct ScopeReq {
+    lo: f32,
+    hi: f32,
+    at: Instant,
 }
 
 /// The audio slot: the running POWER mean of every frame published since the last read.
@@ -220,6 +234,109 @@ impl SpectrumFeed {
             hi_hz: audio.mean.hi_hz,
             source: audio.mean.source.clone(),
         })
+    }
+
+    /// How long a scope-span request stands after the last poll that renewed it.
+    ///
+    /// The request rides the READ (`scope_row`), so it renews itself for as long as a scope is
+    /// on screen and lapses on its own when one is not — no unmount hook to forget, and a
+    /// crashed or hidden window cannot leave the producer doing work for nobody. Two seconds is
+    /// far longer than any scope's poll period (50 ms today, 120 ms under reduced motion) and
+    /// far shorter than a person would notice.
+    const SCOPE_REQ_TTL: Duration = Duration::from_secs(2);
+    /// Widest span worth answering with a narrow row, and the narrowest.
+    ///
+    /// The upper bound is a SANITY GATE, not a preference: the rig scope's view props carry
+    /// ABSOLUTE RF Hz when a native panadapter is the source (the cockpit passes `rfSpan`), and
+    /// a 14 MHz "audio span" must degrade to the full row rather than compute a spectrum of
+    /// nothing. The lower bound stops a degenerate drag from asking for a span with no bins in
+    /// it.
+    const SCOPE_MAX_HZ: f32 = 6000.0;
+    const SCOPE_MIN_SPAN_HZ: f32 = 50.0;
+
+    /// The span the rig scope wants a row over, or `None` if nobody is asking.
+    ///
+    /// Read by the rx-dsp thread once per tick. `None` is the normal state — no scope on
+    /// screen, a native RF row winning, or a request that has aged out — and it costs the
+    /// producer exactly one mutex read.
+    pub fn scope_request(&self) -> Option<(f32, f32)> {
+        let g = self.rows.lock().ok()?;
+        let req = g.scope_req?;
+        (req.at.elapsed() < Self::SCOPE_REQ_TTL).then_some((req.lo, req.hi))
+    }
+
+    /// Publish a row computed over the scope's own span (the rx-dsp thread).
+    ///
+    /// Averaged exactly like the audio slot, and for the same reason — the producer runs at
+    /// 20 ms and the scope reads at 50, so a latest-value slot would throw away three frames in
+    /// five and grain the noise floor. `RowAverage::push` already restarts on a span change, so
+    /// a zoom or a cockpit swap can never blend two windows into one picture.
+    pub fn publish_scope(&self, row: Spectrum) {
+        if let Ok(mut g) = self.rows.lock() {
+            match g.scope.as_mut() {
+                Some(avg) => avg.push(row),
+                None => g.scope = Some(RowAverage::start(row)),
+            }
+        }
+    }
+
+    /// The row for a rig scope showing `lo_hz..hi_hz` of audio — and, in the same call, the
+    /// standing request that makes that row exist.
+    ///
+    /// ONE COMMAND, deliberately. A separate `set_span` would need the UI to sequence two calls
+    /// and to decide what to draw in between; riding the request on the poll means the fallback
+    /// is structural instead of stated: the first poll after a span change asks and is answered
+    /// from the full row, and the next one (20 ms later) gets the narrow row. There is no state
+    /// machine in the UI and no window where it can draw the wrong span.
+    ///
+    /// Precedence is [`Self::row`]'s, with the narrow row inserted between the native RF row and
+    /// the full audio row:
+    /// - a fresh NATIVE RF row still wins outright, and no narrow row is even requested for it
+    ///   (the caller maps its view onto RF itself; an audio FFT is not that picture);
+    /// - else the narrow row, if it is fresh AND was computed over the span being asked for
+    ///   now — a mismatch means the request just changed, so it falls through rather than
+    ///   drawing the old window's frequencies under the new window's labels;
+    /// - else the full audio row, exactly as before.
+    pub fn scope_row(&self, lo_hz: f32, hi_hz: f32) -> Option<Spectrum> {
+        let sane = hi_hz > lo_hz
+            && lo_hz >= 0.0
+            && hi_hz <= Self::SCOPE_MAX_HZ
+            && hi_hz - lo_hz >= Self::SCOPE_MIN_SPAN_HZ;
+        {
+            let mut g = self.rows.lock().ok()?;
+            // A live native row means the scope is not drawing the audio FFT at all — drop the
+            // request so the producer stops paying for a row nobody will show.
+            let rf_live = g
+                .rf
+                .as_ref()
+                .is_some_and(|(s, at)| at.elapsed() < Duration::from_secs(1) && !s.row.is_empty());
+            g.scope_req = (sane && !rf_live).then_some(ScopeReq {
+                lo: lo_hz,
+                hi: hi_hz,
+                at: Instant::now(),
+            });
+            if !rf_live && sane {
+                if let Some(avg) = g.scope.as_mut() {
+                    let matches = f64::from(lo_hz) == avg.mean.lo_hz
+                        && f64::from(hi_hz) == avg.mean.hi_hz
+                        && !avg.mean.row.is_empty();
+                    if matches && avg.at.elapsed() < Duration::from_secs(2) {
+                        return Some(avg.take());
+                    }
+                }
+            }
+        }
+        self.row()
+    }
+
+    /// Test-only: age the standing scope request to simulate a scope that stopped polling.
+    #[cfg(test)]
+    pub fn backdate_scope_req_for_test(&self, by: Duration) {
+        if let Ok(mut g) = self.rows.lock() {
+            if let Some(req) = g.scope_req.as_mut() {
+                req.at = Instant::now() - by;
+            }
+        }
     }
 
     /// Test-only: backdate the audio stamp to simulate a capture stream that went silent.
@@ -23636,6 +23753,99 @@ mod tests {
             "the row after a stall must be the post-stall frame alone, not blended with the \
              four loud frames from before it: got {got}, want {post} (a blend reads {})",
             power_mean(&[pre, pre, pre, pre, post]),
+        );
+    }
+
+    fn spec(lo: f64, hi: f64, src: &str) -> Spectrum {
+        Spectrum {
+            row: vec![0.5; 512],
+            lo_hz: lo,
+            hi_hz: hi,
+            source: src.into(),
+        }
+    }
+
+    /// The rig-scope slot's precedence, and the three ways a request is refused.
+    ///
+    /// Every refusal must land on the SAME answer `get_spectrum_row` would have given, because
+    /// the UI does not branch on which row it got — it reads the `lo_hz`/`hi_hz` that came back.
+    /// A refusal that returned `None`, or an unrequested span, would draw one window's
+    /// frequencies under another window's labels.
+    #[test]
+    fn a_scope_request_is_refused_to_the_full_row_never_to_nothing() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+
+        // 1. NOT YET PRODUCED. The first poll registers the request and is answered wide.
+        let first = feed.scope_row(300.0, 1100.0).expect("a row either way");
+        assert_eq!(
+            first.hi_hz, 4000.0,
+            "unanswered request falls back to the full row"
+        );
+        assert_eq!(
+            feed.scope_request(),
+            Some((300.0, 1100.0)),
+            "and the request now stands, so the producer will answer it next tick"
+        );
+
+        // Produce it, and confirm the honoured path really does hand back the narrow row —
+        // the positive control for the three refusals below.
+        feed.publish_scope(spec(300.0, 1100.0, "audio"));
+        let got = feed.scope_row(300.0, 1100.0).expect("narrow row");
+        assert_eq!(
+            (got.lo_hz, got.hi_hz),
+            (300.0, 1100.0),
+            "control: an honoured request must actually return the narrow row, or the \
+             assertions below prove nothing"
+        );
+
+        // 2. AN INSANE SPAN. The cockpit passes ABSOLUTE RF Hz when a native panadapter is the
+        // source, so this is the real shape of the bad input, not a hypothetical one.
+        let rf_span = feed
+            .scope_row(14_073_000.0, 14_076_000.0)
+            .expect("a row either way");
+        assert_eq!(
+            rf_span.hi_hz, 4000.0,
+            "an RF span is not an audio window — answer wide"
+        );
+        assert_eq!(
+            feed.scope_request(),
+            None,
+            "and drop the request, don't compute for nobody"
+        );
+
+        // 3. A LIVE NATIVE ROW. The scope is not drawing the audio FFT at all.
+        feed.publish_scope(spec(300.0, 1100.0, "audio"));
+        feed.publish_rf(spec(0.0, 4000.0, "flex"));
+        let rf = feed.scope_row(300.0, 1100.0).expect("a row either way");
+        assert_eq!(rf.source, "flex", "a fresh native row still wins outright");
+        assert_eq!(
+            feed.scope_request(),
+            None,
+            "and no narrow row is requested for it — that FFT would be for a picture nobody shows"
+        );
+    }
+
+    /// The request rides the READ, so it lapses on its own when the scope goes away.
+    ///
+    /// This is the whole reason there is no unmount hook to forget: a hidden window, a crashed
+    /// webview or a cockpit swap all stop polling, and the producer stops paying within TTL.
+    #[test]
+    fn a_scope_request_expires_when_nobody_is_polling() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        feed.scope_row(300.0, 1100.0);
+        assert!(
+            feed.scope_request().is_some(),
+            "control: the request stands while polled"
+        );
+
+        feed.backdate_scope_req_for_test(SpectrumFeed::SCOPE_REQ_TTL + Duration::from_millis(50));
+        assert_eq!(
+            feed.scope_request(),
+            None,
+            "an unrenewed request must lapse — otherwise one scope that was once on screen \
+             costs an FFT per tick forever"
         );
     }
 

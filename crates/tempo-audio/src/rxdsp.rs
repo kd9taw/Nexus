@@ -144,6 +144,12 @@ impl RxDsp {
             self.window.drain(0..drop);
         }
         feed.publish_audio(compute_row(&self.window));
+        // The rig scope's own window, when one is on screen asking for it. One extra 2048-point
+        // FFT (~30 us of a 20 ms budget) and no extra bytes — see `compute_row_over`. The
+        // request expires on its own, so this costs nothing when no scope is up.
+        if let Some((lo, hi)) = feed.scope_request() {
+            feed.publish_scope(compute_row_over(&self.window, lo, hi));
+        }
         true
     }
 }
@@ -154,16 +160,32 @@ fn compute_row(audio: &[f32]) -> Spectrum {
     // 6 kHz Nyquist (12 kHz capture) caps the top; 4000 covers every voice/data passband in use.
     const LO_HZ: f32 = 0.0;
     const HI_HZ: f32 = 4000.0;
+    compute_row_over(audio, LO_HZ, HI_HZ)
+}
+
+/// The same row over an arbitrary span.
+///
+/// THE BIN COUNT IS FIXED AT 512 WHATEVER THE SPAN, which is the whole point: the payload is
+/// the same 512 numbers either way, and narrowing the span is therefore free resolution rather
+/// than a bigger message. Over the full 0-4000 that is 7.81 Hz per bin; over the CW cockpit's
+/// 300-1100 window it is 1.5625 Hz — FIVE TIMES FINER for the same bytes on the wire.
+///
+/// ⚠️ BE HONEST ABOUT WHAT THIS DOES NOT DO. It does not make a carrier thinner. Apparent
+/// width is set by the Hann main lobe (23.4 Hz at N=2048), not by the display grid, and only
+/// the window length moves that. What it buys is SHAPE: that lobe is sampled by 3 numbers over
+/// the full span and by 15 over the CW window, so the scope draws a lobe instead of
+/// interpolating a spike across 75 px.
+fn compute_row_over(audio: &[f32], lo_hz: f32, hi_hz: f32) -> Spectrum {
     const BINS: usize = 512;
     let row = if audio.is_empty() {
         Vec::new()
     } else {
-        tempo_core::spectrum::power_spectrum(audio, ANALYSIS_RATE, LO_HZ, HI_HZ, BINS)
+        tempo_core::spectrum::power_spectrum(audio, ANALYSIS_RATE, lo_hz, hi_hz, BINS)
     };
     Spectrum {
         row,
-        lo_hz: f64::from(LO_HZ),
-        hi_hz: f64::from(HI_HZ),
+        lo_hz: f64::from(lo_hz),
+        hi_hz: f64::from(hi_hz),
         source: "audio".into(),
     }
 }
@@ -263,6 +285,67 @@ mod tests {
         assert!(
             meters.rx_level() > 0.0,
             "the meter publishes on this thread too — no CAT stall may freeze it"
+        );
+    }
+
+    /// Display bins within 6 dB of the peak — how finely the Hann main lobe is SAMPLED.
+    fn lobe_bins(row: &[f32]) -> usize {
+        let peak = row.iter().copied().fold(f32::MIN, f32::max);
+        let thr = peak - 6.0 / tempo_core::spectrum::DB_SPAN;
+        row.iter().filter(|v| **v >= thr).count()
+    }
+
+    /// TIER 3 — the scope's row follows the scope's WINDOW, and that is where fidelity comes from.
+    #[test]
+    fn a_narrow_scope_window_samples_the_lobe_far_more_finely() {
+        let tap = RxTap::new();
+        let ring = Arc::new(SpscRing::new(48_000));
+        tap.publish_card(ring.clone(), 12_000);
+        let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
+        let mut dsp = RxDsp::new();
+
+        for _ in 0..40 {
+            ring.push_slice(&tone(12_000, 700.0, 256));
+            dsp.tick(&tap, &feed, &meters);
+        }
+
+        let wide = feed.row().expect("a wide row is published");
+        assert_eq!((wide.lo_hz, wide.hi_hz), (0.0, 4000.0));
+        let wide_lobe = lobe_bins(&wide.row);
+
+        // THE FIRST CALL ONLY REGISTERS THE REQUEST and is answered from the wide row. That
+        // fallback is the design, not a wart: it is why the UI needs no state machine and can
+        // never draw one window's frequencies under another window's labels.
+        let first = feed.scope_row(300.0, 1100.0).expect("a row either way");
+        assert_eq!(
+            first.hi_hz, 4000.0,
+            "until the producer has answered, the request falls back to the full row"
+        );
+
+        ring.push_slice(&tone(12_000, 700.0, 256));
+        dsp.tick(&tap, &feed, &meters);
+        let narrow = feed.scope_row(300.0, 1100.0).expect("the narrow row");
+        assert_eq!((narrow.lo_hz, narrow.hi_hz), (300.0, 1100.0));
+        assert_eq!(
+            narrow.row.len(),
+            wide.row.len(),
+            "SAME PAYLOAD — the win is resolution per byte, not more bytes"
+        );
+
+        let narrow_lobe = lobe_bins(&narrow.row);
+        // MEASURED when this landed: wide=1, narrow=4. One bin is the whole point — over the
+        // full span the scope holds a SINGLE number describing the carrier's peak region and
+        // interpolates it across ~75 px of the CW view, which is what "not crisp" looks like.
+        assert!(
+            wide_lobe <= 2,
+            "the full-span row samples the lobe with almost nothing (got {wide_lobe} bins) — if \
+             this ever rises, the premise of this whole tier changed"
+        );
+        assert!(
+            narrow_lobe >= wide_lobe * 3,
+            "the 800 Hz window must sample the lobe far more finely than the 4000 Hz one \
+             (wide={wide_lobe} bins, narrow={narrow_lobe})"
         );
     }
 

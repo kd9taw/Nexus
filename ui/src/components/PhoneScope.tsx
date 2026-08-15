@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { getSpectrumRow } from '../api'
+import { getScopeRow } from '../api'
 import { sampleLut } from '../colormaps'
 import {
   agcRange,
@@ -389,7 +389,17 @@ export function PhoneScope({
     const drawRow = async () => {
       let spec
       try {
-        spec = await getSpectrumRow(txRef.current)
+        // Ask for the row over the window this scope is DRAWING, not the whole 0-4000 Hz
+        // capture. Same 512 bins, same bytes — 1.5625 Hz per bin on the CW cockpit's 300-1100
+        // view instead of 7.8125.
+        //
+        // The view props are passed RAW even though they carry ABSOLUTE RF Hz when a native
+        // panadapter is the source (the cockpit passes `rfSpan`). That is deliberate: the
+        // backend already has to reject an insane span, so letting it own the one rule beats
+        // duplicating the RF test here against a source we only learn from the PREVIOUS row.
+        // An unhonourable request returns exactly what `getSpectrumRow` would have, and the
+        // row's own loHz/hiHz below is what everything downstream reads anyway.
+        spec = await getScopeRow(txRef.current, viewLoRef.current, viewHiRef.current)
       } catch {
         return
       }

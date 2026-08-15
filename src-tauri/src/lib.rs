@@ -13,6 +13,7 @@
 //! - `select_peer { peer }` -> `AppSnapshot`
 //! - `set_tier { tier }` -> `AppSnapshot`  (tier is "TempoFast" | "FT8" | "FT4" | "TempoDeep")
 //! - `get_spectrum_row` -> `Spectrum`      (one waterfall row)
+//! - `get_scope_row`     -> `Spectrum`      (one rig-scope row, over the scope's own span)
 //!
 //! ## Live radio (`--features radio`, built on the station PC)
 //! With the `radio` feature, `run()` spawns [`tempo_audio::service::run_radio`]
@@ -7190,6 +7191,32 @@ fn get_spectrum_row(
     }
     // Nothing published yet: a Companion/UDP source has no local capture, so its row is
     // computed on demand from the last decoded buffer. Rare, low-rate, and correct to block on.
+    let eng = engine_lock(&state);
+    Ok(eng.spectrum_row())
+}
+
+/// One row for the RIG SCOPE, computed over the span that scope is actually showing.
+///
+/// Same fast path and same fallbacks as `get_spectrum_row`; the difference is that the caller
+/// says what window it is drawing, and gets its 512 bins spread across THAT window instead of
+/// across the whole 0-4000 Hz capture. On the CW cockpit's 300-1100 Hz view that is 1.5625 Hz
+/// per bin against 7.8125, five times finer for the same payload.
+///
+/// The span request rides this poll rather than a separate setter — see
+/// `SpectrumFeed::scope_row` for why the fallback is structural rather than sequenced. A caller
+/// showing a native RF panadapter, or asking for a span that is not a sane audio window, simply
+/// gets what `get_spectrum_row` would have returned.
+#[tauri::command(async)]
+fn get_scope_row(
+    lo_hz: f32,
+    hi_hz: f32,
+    feed: State<'_, tempo_app::engine::SpectrumFeed>,
+    state: State<'_, SharedEngine>,
+) -> Result<Spectrum, String> {
+    if let Some(row) = feed.scope_row(lo_hz, hi_hz) {
+        return Ok(row);
+    }
+    // Nothing published yet — the Companion/UDP path, exactly as in `get_spectrum_row`.
     let eng = engine_lock(&state);
     Ok(eng.spectrum_row())
 }
@@ -16105,6 +16132,7 @@ pub fn run() {
             set_tier,
             set_source,
             get_spectrum_row,
+            get_scope_row,
             get_meters,
             set_mode,
             get_settings,

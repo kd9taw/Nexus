@@ -25,10 +25,14 @@ import { TRACE_HOLD_MS } from '../waterfall'
 const ROW = Array.from({ length: 512 }, (_, i) => (i === 200 ? 0.9 : 0.1))
 
 let rowsServed = 0
+let spanAsked: [number, number] | null = null
 vi.mock('../api', () => ({
-  getSpectrumRow: () => {
+  getScopeRow: (_tx: boolean, loHz: number, hiHz: number) => {
     rowsServed++
-    return Promise.resolve({ row: ROW, loHz: 200, hiHz: 2900, source: 'rx' })
+    spanAsked = [loHz, hiHz]
+    // The backend answers over the span it was asked for (or falls back wide); either way the
+    // row states its own extent, which is what the component reads.
+    return Promise.resolve({ row: ROW, loHz, hiHz, source: 'rx' })
   },
 }))
 
@@ -131,5 +135,13 @@ describe('rig scope per-row work', () => {
 
     // The measurement: one gradient for the whole run, no matter how many rows were drawn.
     expect(calls.createLinearGradient).toBe(1)
+  })
+
+  it('asks for the row over the window it is drawing, not the whole capture', () => {
+    render(<PhoneScope transmitting={false} theme="dark" viewLoHz={300} viewHiHz={1100} />)
+    return runFrames(150).then(() => {
+      expect(rowsServed, 'control: nothing was polled').toBeGreaterThanOrEqual(1)
+      expect(spanAsked).toEqual([300, 1100])
+    })
   })
 })
