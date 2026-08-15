@@ -21694,3 +21694,12 @@ tr.sel .aprs-sym {
 :where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-hero-card {
   padding: var(--space-6) var(--space-5) 22px;
 }
+
+/* Confirmation dialog actions (src/confirm.tsx). Cancel first in the DOM so it takes focus and
+   ESC/overlay-click agree with it: for a destructive question the safe answer is the default. */
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}

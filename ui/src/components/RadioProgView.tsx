@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { confirmDialog } from '../confirm'
 import type {
   GeoCandidate,
   ProgChannel,
@@ -271,12 +272,19 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     }
     setRows((rs) => [...rs, { channel: { ...row.channel }, nameEdited: false }])
   }
-  const addAllShown = () => {
+  const addAllShown = async () => {
     const candidates = shown.filter(
       (row) => isProgrammable(row.record) && !inList.has(row.channel.id),
     )
     if (candidates.length === 0) return
-    if (candidates.length > 50 && !window.confirm(`Add ${candidates.length} channels?`)) return
+    if (
+      candidates.length > 50 &&
+      !(await confirmDialog({
+        title: `Add ${candidates.length} channels?`,
+        confirmLabel: 'Add channels',
+      }))
+    )
+      return
     setRows((rs) => [
       ...rs,
       ...candidates.slice(0, 200).map((row) => ({ channel: { ...row.channel }, nameEdited: false })),
@@ -939,7 +947,16 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               className="settings-refresh rp-clear"
               disabled={rows.length === 0}
               onClick={() => {
-                if (window.confirm('Clear the whole channel list?')) setRows([])
+                void (async () => {
+                  if (
+                    await confirmDialog({
+                      title: 'Clear the whole channel list?',
+                      confirmLabel: 'Clear list',
+                      danger: true,
+                    })
+                  )
+                    setRows([])
+                })()
               }}
             >
               Clear

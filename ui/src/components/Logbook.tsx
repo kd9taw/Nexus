@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { confirmDialog } from '../confirm'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
@@ -457,7 +458,15 @@ export function Logbook({
   }
 
   const onDelete = async (q: LoggedQso, i: number) => {
-    if (!window.confirm(`Delete the QSO with ${q.call} on ${q.band}? This can't be undone.`)) return
+    if (
+      !(await confirmDialog({
+        title: `Delete the QSO with ${q.call} on ${q.band}?`,
+        body: "This removes it from your log. This can't be undone.",
+        confirmLabel: 'Delete QSO',
+        danger: true,
+      }))
+    )
+      return
     const snap = await withErrorToast(() => deleteQso(i), 'Could not delete the QSO')
     if (snap) {
       pushToast(`Deleted ${q.call}`, 'success')

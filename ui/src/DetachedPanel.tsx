@@ -7,6 +7,7 @@
 // self-fetches its spectrum), and its action callbacks drive the same engine, so state
 // stays consistent across every window.
 import { useEffect, useMemo, useState } from 'react'
+import { confirmDialog } from './confirm'
 import type {
   AppSnapshot,
   BandChannel,
@@ -209,11 +210,14 @@ export function DetachedPanel({ panel }: { panel: string }) {
   }
   // Mirrors App.tsx's handleArchive — the detached window had a silent no-op here, so the
   // ✕ did nothing at all in this panel.
-  const onArchive = (peer: string) => {
+  const onArchive = async (peer: string) => {
     if (
-      !window.confirm(
-        `Delete the conversation with ${peer}? Any messages still waiting to send will be cancelled. This can't be undone.`,
-      )
+      !(await confirmDialog({
+        title: `Delete the conversation with ${peer}?`,
+        body: "Any messages still waiting to send will be cancelled. This can't be undone.",
+        confirmLabel: 'Delete conversation',
+        danger: true,
+      }))
     )
       return
     apply(archiveConversation(peer))
