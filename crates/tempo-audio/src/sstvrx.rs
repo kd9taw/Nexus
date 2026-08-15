@@ -242,9 +242,27 @@ fn finish_image(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let spec = tempo_sstv::for_mode(image.mode);
-    let filename = format!("{}_{}.bmp", sstv_store::utc_stamp(unix), spec.short_name);
+    let filename = format!("{}_{}.png", sstv_store::utc_stamp(unix), spec.short_name);
     let path = gallery_dir.join(&filename);
-    if let Err(e) = sstv_store::write_bmp(&path, image.width, image.height, &image.pixels) {
+    // Stamp what this picture IS into the file itself, not only into gallery.json beside it —
+    // a picture mailed back to the sender or posted to a club page keeps its provenance.
+    // Read the dial under the same lock the gallery entry below uses, so the two agree.
+    let dial_mhz = engine_lock(engine).settings().dial_mhz;
+    let meta = [
+        ("Software", format!("Nexus {}", env!("CARGO_PKG_VERSION"))),
+        (
+            "Title",
+            format!(
+                "SSTV {} received {}",
+                spec.short_name,
+                sstv_store::utc_iso(unix)
+            ),
+        ),
+        ("Source", format!("{} SSTV", spec.short_name)),
+        ("Creation Time", sstv_store::utc_iso(unix)),
+        ("Comment", format!("{:.4} MHz dial", dial_mhz)),
+    ];
+    if let Err(e) = sstv_store::write_png(&path, image.width, image.height, &image.pixels, &meta) {
         eprintln!("sstv-rx: failed to save {}: {e}", path.display());
         engine_lock(engine).set_sstv_progress(None);
         return None;

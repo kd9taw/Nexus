@@ -34,6 +34,9 @@ tempo-app = { path = "../tempo-app" }
 tempo-core = { path = "../tempo-core" }
 # Voice-keyer WAV I/O (read/write 12 kHz mono message files). Pure, no audio device.
 hound = "3.5"
+# Received-SSTV image encoding. MIT OR Apache-2.0, already in the tree via tauri, and on
+# deny.toml's allowlist. Encode-only use: one 320x256-ish frame per ~2-minute transmission.
+png = "0.17"
 cpal = { version = "0.15", optional = true }
 serialport = { version = "4", optional = true }
 deepcw = { path = "../deepcw", optional = true }

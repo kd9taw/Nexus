@@ -169,8 +169,9 @@ of reach.
 4. When a transmission starts, the waterfall is replaced by the picture and the
    caption names the mode and the airtime. Expect a black frame for most of that
    time — see the limits below.
-5. The finished picture saves itself: it appears in the Gallery, and a BMP lands
-   in the Nexus `sstv-gallery` folder beside a `gallery.json` of the metadata.
+5. The finished picture saves itself: it appears in the Gallery, and a PNG lands
+   in your Pictures folder under `Nexus SSTV`, beside a `gallery.json` of the
+   metadata.
 
 <!-- TODO: capture screenshot — the Gallery pane with four received images: mixed modes (a PD-120 and two Robot 36), one card carrying a decoded FSK callsign badge, each caption showing UTC and dial frequency -->
 
@@ -292,11 +293,16 @@ other station can read it":
   crisp (and capped at 6×, leaving margin rather than blur). The full-resolution
   image exists only once it is saved.
 - **The gallery is a gallery, not a viewer.** There is no click-to-enlarge, no
-  delete, no rename, no export or share. To see an image full size, open the BMP
+  delete, no rename, no export or share. To see an image full size, open the file
   from the folder — the card's tooltip gives you the path. The in-app list keeps
   the 200 newest; images past that stay on disk but drop off the screen.
-- **Images are 24-bit BMP.** Universally openable, and larger than a PNG of the
-  same picture.
+- **Images are PNG, and lossless.** A received picture is the only copy of what
+  somebody sent you, so it is stored exactly as it was decoded — nothing is
+  smoothed or thrown away to make the file smaller. Each one also carries its own
+  mode, receive time and dial frequency inside the file, so a picture keeps saying
+  what it is after you mail it to the sender or post it somewhere. Pictures
+  received before v1.3.x are 24-bit BMP and stay exactly where they are; the
+  Gallery still shows them.
 - **The slant trim is disabled.** The decoder re-anchors the line rate itself;
   the manual trim control is on screen but inert, and its tooltip says so.
 - **Nothing here logs.** No QSO, no callsign field, no dupe check. On receive, the

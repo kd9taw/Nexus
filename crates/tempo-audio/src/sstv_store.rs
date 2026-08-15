@@ -6,8 +6,17 @@
 //! sidecar living BESIDE the images (atomic tmp+rename, the `openings_log.json`
 //! pattern) — in step with the engine's session gallery list.
 //!
-//! Images are written as uncompressed 24-bit BMP: universally openable, zero new
-//! dependencies. (Swap in a PNG encoder later if one ever enters the tree.)
+//! Images are written as PNG (operator decision, 2026-08-15). It is LOSSLESS, so a received
+//! picture — the only copy of what somebody sent you — is stored exactly as decoded; every
+//! webview and phone gallery decodes it, which retires the `<img>`-can't-read-BMP canvas
+//! fallback for everything written from now on; and it is roughly half the bytes of the 24-bit
+//! BMP it replaces (only roughly: HF copy is noisy, and noise does not compress).
+//!
+//! ⚠️ The BMP encoder below STAYS. Galleries written before this change are `.bmp`, they are
+//! referenced by path in `gallery.json`, and the UI still decodes them — deleting the encoder
+//! would not break them, but the format has to keep working on the READ side either way, and
+//! keeping the writer means the round-trip test that proves the old files are still well-formed
+//! keeps running. New images are PNG; old images stay exactly where and what they are.
 
 use std::io;
 use std::path::Path;
@@ -53,6 +62,44 @@ pub fn encode_bmp(width: u32, height: u32, pixels: &[[u8; 3]]) -> Vec<u8> {
         out.extend(std::iter::repeat_n(0u8, pad));
     }
     out
+}
+
+/// Write `pixels` to `path` as an 8-bit RGB PNG, carrying `meta` as tEXt chunks.
+///
+/// The metadata is the point of using PNG rather than just a smaller BMP. Mode, dial frequency
+/// and receive time live in `gallery.json` beside the images — so the moment a picture is copied
+/// OUT of that folder (mailed to the sender, posted to a club page, dropped in a QSO log) it
+/// becomes an anonymous image. tEXt chunks travel inside the file, so it stays self-describing.
+///
+/// ⚠️ The sender's FSK callsign ID is deliberately NOT here: it is recovered from the burst
+/// AFTER the image is complete (`sstvrx::run` → `set_sstv_gallery_fsk_id`), which is after this
+/// returns. Embedding it would mean rewriting the file. It remains in `gallery.json`.
+pub fn write_png(
+    path: &Path,
+    width: u32,
+    height: u32,
+    pixels: &[[u8; 3]],
+    meta: &[(&str, String)],
+) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let file = std::fs::File::create(path)?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    for (k, v) in meta {
+        // A tEXt keyword is 1-79 Latin-1 bytes; ours are fixed ASCII literals below.
+        enc.add_text_chunk((*k).to_string(), v.clone())
+            .map_err(|e| io::Error::other(e.to_string()))?;
+    }
+    let mut w = enc
+        .write_header()
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    // `[[u8; 3]]` is laid out exactly as packed RGB triples, which is the format PNG wants.
+    w.write_image_data(pixels.as_flattened())
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    w.finish().map_err(|e| io::Error::other(e.to_string()))
 }
 
 /// Write `pixels` to `path` as a 24-bit BMP (see [`encode_bmp`]).
@@ -164,6 +211,76 @@ mod tests {
         assert_eq!(&bmp[63..66], &[0, 0, 0], "row padding");
         // Second stored row is image row 0: red in BGR = 00 00 FF.
         assert_eq!(&bmp[66..69], &[0, 0, 255]);
+    }
+
+    /// A received picture is the ONLY copy of what somebody sent, so the bytes that come back
+    /// out must be the bytes that went in — no quantisation, no subsampling, no "close enough".
+    /// Decoded with the same crate that encoded it, which proves a real PNG rather than a file
+    /// that merely starts with the signature.
+    #[test]
+    fn png_round_trips_every_pixel_exactly_and_carries_its_metadata() {
+        let dir = std::env::temp_dir().join(format!("nexus-png-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("shot.png");
+        // Deliberately awkward colours: pure primaries, black, white, and a mid grey that a
+        // lossy encoder would shift.
+        let px: Vec<[u8; 3]> = vec![
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+            [0, 0, 0],
+            [255, 255, 255],
+            [128, 127, 129],
+        ];
+        let meta = [
+            ("Software", "Nexus test".to_string()),
+            ("Comment", "14.2300 MHz dial".to_string()),
+        ];
+        write_png(&path, 3, 2, &px, &meta).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "PNG signature");
+
+        let dec = png::Decoder::new(std::fs::File::open(&path).unwrap());
+        let mut reader = dec.read_info().unwrap();
+        let mut buf = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        assert_eq!((info.width, info.height), (3, 2));
+        assert_eq!(info.color_type, png::ColorType::Rgb);
+        assert_eq!(info.bit_depth, png::BitDepth::Eight);
+        assert_eq!(
+            &buf[..info.buffer_size()],
+            px.as_flattened(),
+            "LOSSLESS: every pixel identical to what was decoded off the air"
+        );
+
+        // The metadata is the reason for PNG over a smaller BMP — a picture copied out of the
+        // gallery folder must still say what it is.
+        let text: std::collections::HashMap<_, _> = reader
+            .info()
+            .uncompressed_latin1_text
+            .iter()
+            .map(|c| (c.keyword.clone(), c.text.clone()))
+            .collect();
+        assert_eq!(text.get("Software").map(String::as_str), Some("Nexus test"));
+        assert_eq!(
+            text.get("Comment").map(String::as_str),
+            Some("14.2300 MHz dial")
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Galleries written before the switch are `.bmp` and are referenced by path in
+    /// gallery.json. The encoder has to keep producing well-formed BMP or the proof that those
+    /// files are still readable goes away with it.
+    #[test]
+    fn the_bmp_encoder_still_works_for_galleries_written_before_the_switch() {
+        let px: Vec<[u8; 3]> = vec![[255, 0, 0], [0, 0, 0]];
+        let bmp = encode_bmp(2, 1, &px);
+        assert_eq!(&bmp[0..2], b"BM");
+        assert_eq!(i32::from_le_bytes(bmp[18..22].try_into().unwrap()), 2);
     }
 
     #[test]
