@@ -7682,7 +7682,15 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
 /// exactly as it would have. Writing the file directly would leave a running app disagreeing with
 /// its own config until the next restart.
 #[tauri::command(async)]
-fn import_settings_bundle(text: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn import_settings_bundle(
+    text: String,
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+) -> Result<AppSnapshot, String> {
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
@@ -7708,11 +7716,18 @@ fn import_settings_bundle(text: String, state: State<'_, SharedEngine>) -> Resul
             ui_state_save(map);
         }
     }
-    {
-        let mut eng = engine_lock(&state);
-        eng.apply_settings(settings);
-    }
-    Ok(())
+    // Reuse the ordinary save path in full rather than reimplementing its side effects -- the
+    // same reasoning `reset_settings` already follows.
+    //
+    // This used to hand-roll `eng.apply_settings(settings)` and return `()`. That applied the
+    // bundle to the RUNNING engine and nothing else: it never persisted, and it returned no
+    // snapshot, so the panel had nothing to re-render from and went on showing the pre-restore
+    // form. To the operator, Restore changed nothing at all.
+    //
+    // Worse than nothing, in fact: that stale form stayed live, so the next Save wrote the OLD
+    // values straight back over the restored ones -- a silent revert of an explicit, confirmed,
+    // "this cannot be undone" action.
+    set_settings(state, spots, live_paths, region_paths, health, cache, settings)
 }
 
 /// the UI uses to decide whether a per-operator export is worth offering at all.

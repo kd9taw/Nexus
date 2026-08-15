@@ -8,7 +8,7 @@
 // ClubLog auto-revokes once it becomes public. If the wording and the redaction ever drift
 // apart, the wording is the one that gets believed.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -164,6 +164,44 @@ describe('backing up the station', () => {
     const label = await screen.findByText('Back up your setup')
     return label.closest('.settings-field') as HTMLElement
   }
+
+  // RESTORE MUST REFRESH WHAT IS ON SCREEN. `import_settings_bundle` used to hand-roll
+  // `eng.apply_settings()` and return nothing, instead of routing through `set_settings` the way
+  // `reset_settings` does. So it applied the bundle to the running engine, persisted nothing, and
+  // handed the panel no snapshot -- which went on rendering the PRE-restore form. To the operator
+  // (2026-08-14) Restore appeared to do nothing at all.
+  //
+  // And the stale form stayed live, so the next Save wrote the OLD values back over the restored
+  // ones: a silent revert of an explicit, confirmed, "this cannot be undone" action. Nothing
+  // tested this path at all -- there was not one reference to importSettingsBundle in the suite.
+  it('re-reads the settings after a restore, so the panel cannot show stale values', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const { container } = renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+
+    // NOT the first file input: the TLE importer is also one and comes first in the DOM.
+    // Pick the restore input by what it accepts, or this drives the wrong feature entirely.
+    const input = container.querySelector(
+      'input[type="file"][accept*="json"]',
+    ) as HTMLInputElement
+    expect(input).toBeTruthy()
+
+    // The real command returns the refreshed AppSnapshot; the blanket mock returns null for
+    // every verb, and a null snapshot is exactly the "something went wrong" case the handler
+    // must NOT treat as success.
+    api.get('importSettingsBundle').mockResolvedValueOnce({ settings: defaultSettings })
+    const bundle = JSON.stringify({ kind: 'nexus-settings-backup', schema: 1, settings: {} })
+    const file = new File([bundle], 'nexus-backup.json', { type: 'application/json' })
+    const before = api.get('getSettings').mock.calls.length
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => expect(api.get('importSettingsBundle')).toHaveBeenCalled())
+    // The point: settings are re-read AFTER the import, not left to the stale form.
+    await waitFor(() =>
+      expect(api.get('getSettings').mock.calls.length).toBeGreaterThan(before),
+    )
+    confirmSpy.mockRestore()
+  })
 
   it('offers both halves — a backup is no use without a restore', async () => {
     renderPanel()
