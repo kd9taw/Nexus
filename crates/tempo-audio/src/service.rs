@@ -501,6 +501,24 @@ const RIG_POLL_MS: f64 = 750.0;
 /// not hammered — a failed `snd_pcm_open` is cheap but not free, and the loop ticks every 20 ms,
 /// so retrying every tick would be 50 probes a second forever on a machine with no sound card.
 const AUDIO_RETRY_MS: f64 = 2_000.0;
+
+/// How long a card that reported a stream error gets to prove it is still alive before the error
+/// is treated as device death.
+///
+/// A stream error is NOT proof the device is gone, and on ALSA it is not even close. cpal 0.15.3
+/// routes every `alsa::Error` through `StreamError::BackendSpecificError`, so there is no
+/// `DeviceNotAvailable` variant to filter on there — and cpal calls the error callback for several
+/// conditions it then RECOVERS FROM and continues past: a spurious `poll()` return, a `POLLERR` in
+/// `poll_descriptors_and_prepare_buffer`, a `readi` overrun in `process_input`, a short write in
+/// `process_output`. Treating any of those as death would tear down the device graph — and abort a
+/// live transmission — for a hiccup that cpal had already handled.
+///
+/// So corroborate instead of guessing, and corroborate with the one signal that cannot lie: a
+/// stream that is still delivering frames is not dead, whatever it reported. Only silence for this
+/// long confirms it. That works identically on every host and needs no error-string matching and
+/// no enumeration — which must never be done from this loop anyway (see `device.rs`: a concurrent
+/// `default_host()` faults natively and hard-kills the process).
+const AUDIO_DEATH_CONFIRM_MS: f64 = 1_500.0;
 /// How often to read the NEXT transmit meter while keyed — the mirror image of the RX health
 /// poll. One meter is read per interval (round-robin over SWR/ALC/Po/COMP), so at 150 ms each
 /// meter refreshes ~1.7×/s: live enough to set mic gain against the moving ALC bar, while never
@@ -1983,6 +2001,12 @@ struct RadioLoop {
     /// a banner telling him to do the one thing that would not help. Found by the change's own
     /// adversarial review, 2026-08-05.
     audio_retry_at: Option<f64>,
+    /// A stream error arrived and the card is on probation: the time it was reported, and the
+    /// message to use if the silence that follows confirms it. Cleared the moment frames arrive.
+    audio_suspect: Option<(f64, String)>,
+    /// A confirmed device death that arrived mid-over. Held until the key is up — see the
+    /// no-rebuild-while-keyed rule at the rebuild site.
+    audio_rebuild_pending: Option<String>,
     /// The NATIVE RF panadapter worker (Flex SmartSDR VITA / Icom CI-V) for the ACTIVE radio, if
     /// it has one. Reconciled each step from `native_spectrum_kind(want)`: started when the active
     /// radio gains a native scope, dropped (threads stopped + pan removed) when it loses it or the
@@ -2238,6 +2262,8 @@ impl RadioLoop {
             monitor_reapply: false,
             force_audio_rebuild: false,
             audio_retry_at: None,
+            audio_suspect: None,
+            audio_rebuild_pending: None,
             spectrum_src: None,
             spectrum_src_key: None,
             dax_src: None,
@@ -2822,6 +2848,10 @@ impl RadioLoop {
         // ring (so it can't overflow), but when native Flex DAX RX audio is the active source, use
         // its 12 kHz stream as the RX audio instead of the soundcard.
         let soundcard = backend.capture();
+        // Did the CARD deliver this tick? Recorded here because `soundcard` may be replaced by DAX
+        // audio just below, and the corroboration below is about the sound card itself — not about
+        // whatever source happens to be feeding the decoder.
+        let card_delivered = !soundcard.is_empty();
         let captured = match self.dax_src.as_ref() {
             Some(dax) => {
                 let dax_audio = dax.take_audio();
@@ -3076,13 +3106,37 @@ impl RadioLoop {
             // event as a failed open, so the operator gets the same banner and the same
             // self-healing retry: a rig switched off and on, a Bluetooth headset reshuffling
             // CoreAudio, or a flaky codec now recovers without restarting Nexus.
-            if let Some(dead) = backend.take_stream_error() {
-                {
-                    let mut eng = engine_lock(engine);
-                    eng.set_audio_error(Some(format!("Sound card stopped — {dead}. Reopening…")));
+            // A stream error puts the card ON PROBATION; it does not condemn it. See
+            // AUDIO_DEATH_CONFIRM_MS for why an error is not proof of death, especially on ALSA.
+            if let Some(err) = backend.take_stream_error() {
+                self.audio_suspect.get_or_insert((now, err));
+            }
+            if let Some((since, err)) = self.audio_suspect.clone() {
+                if card_delivered {
+                    // Still delivering. Whatever it reported, cpal recovered from it — and a
+                    // rebuild here would abort an over for a hiccup.
+                    self.audio_suspect = None;
+                } else if now - since >= AUDIO_DEATH_CONFIRM_MS {
+                    self.audio_suspect = None;
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.set_audio_error(Some(format!(
+                            "Sound card stopped — {err}. Reopening…"
+                        )));
+                    }
+                    // A REAL device error owns the line, same as the open-failure arm below.
+                    self.err_owner = ErrOwner::Device;
+                    self.audio_rebuild_pending = Some(err);
                 }
-                // A REAL device error owns the line, same as the open-failure arm below.
-                self.err_owner = ErrOwner::Device;
+            }
+            // NO REBUILD WHILE KEYED. The rebuild path unconditionally runs flush_output() +
+            // ptt(false) + halt_tx_for_context_change(), so letting it fire mid-over would abort a
+            // transmission that the operator never asked to stop — and nothing but an explicit
+            // operator stop may do that. If the card is genuinely gone the over is already dead,
+            // so waiting for the key to come up costs nothing real; if it is not gone, waiting is
+            // exactly right. `rig.keyed` is true for EVERY keying path (slot, tune, voice, CW).
+            if self.audio_rebuild_pending.is_some() && !rig.keyed {
+                self.audio_rebuild_pending = None;
                 self.force_audio_rebuild = true;
             }
             // A dual-radio switch forces the rebuild (a new radio's device must be opened even if the
@@ -13903,6 +13957,129 @@ mod tests {
     /// here: the operator is TOLD, and the card is reopened so it heals itself when the device
     /// returns.
     #[test]
+    fn a_stream_error_the_card_survives_must_not_rebuild_anything() {
+        // THE LINUX REGRESSION THIS GUARDS. cpal 0.15.3 routes every alsa::Error through
+        // StreamError::BackendSpecificError, so on ALSA there is no DeviceNotAvailable variant to
+        // filter on — and cpal calls the error callback for conditions it then RECOVERS FROM and
+        // continues past: a spurious poll() return, a POLLERR, a readi overrun, a short write.
+        //
+        // Rebuilding on any of those would run flush_output() + ptt(false) +
+        // halt_tx_for_context_change() — aborting a live transmission for a hiccup, on a Pi or any
+        // loaded box, with no rate limit. So the rule is: a card that is STILL DELIVERING is not
+        // dead, whatever it just reported.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+
+        let mut ra = mock_reopen_audio();
+        state
+            .step(&engine, &mut backend, &mut rig, &sinks, 0.0, &mut ra, &mut rr, &mut station)
+            .unwrap();
+        engine.lock().unwrap().set_audio_error(None);
+
+        backend.stream_error = Some("ALSA function 'snd_pcm_readi' failed: overrun".to_string());
+        let reopened = std::cell::Cell::new(false);
+        let mut ra_counting = |t: &Transport| {
+            reopened.set(true);
+            mock_reopen_audio()(t)
+        };
+        // Frames keep arriving on every tick, well past the confirmation window.
+        for t in [20.0, 500.0, 1_200.0, 20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0, 4_000.0] {
+            backend.queue_capture(vec![0.01_f32; 480]);
+            state
+                .step(
+                    &engine, &mut backend, &mut rig, &sinks, t, &mut ra_counting, &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+
+        assert!(
+            !reopened.get(),
+            "a card that kept delivering must NEVER be rebuilt — that is a live TX aborted for a \
+             hiccup cpal had already handled"
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.audio_error,
+            None,
+            "and no scare on screen for an error the card recovered from"
+        );
+    }
+
+    #[test]
+    fn a_dead_card_waits_for_the_key_to_come_up_before_rebuilding() {
+        // NO REBUILD WHILE KEYED. The rebuild path unconditionally runs flush_output() +
+        // ptt(false) + halt_tx_for_context_change(), so firing it mid-over aborts a transmission
+        // the operator never asked to stop. If the card is genuinely gone the over is already dead
+        // and waiting for the key costs nothing real.
+        //
+        // This is NOT the operator changing device mid-over — that is an explicit act, and
+        // `audio_rebuild_mid_over_cuts_the_over_instead_of_holding_a_dead_carrier` pins that it
+        // still cuts the over. Only device DEATH waits.
+        //
+        // The pending death is set directly rather than aged in through the confirmation window:
+        // this loop ends an over on its own when the engine is not actually transmitting, so a
+        // fixture cannot hold the key down across the several ticks confirmation needs. What is
+        // under test is the GATE, and the gate reads `rig.keyed` at the moment it runs.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+
+        let mut ra = mock_reopen_audio();
+        state
+            .step(&engine, &mut backend, &mut rig, &sinks, 0.0, &mut ra, &mut rr, &mut station)
+            .unwrap();
+        engine.lock().unwrap().set_audio_error(None);
+
+        let reopened = std::cell::Cell::new(false);
+        let mut ra_counting = |t: &Transport| {
+            reopened.set(true);
+            mock_reopen_audio()(t)
+        };
+
+        // A death is confirmed and waiting, and the key is DOWN.
+        state.audio_rebuild_pending = Some("device no longer available".to_string());
+        let _ = rig.ptt(true);
+        assert!(rig.keyed, "fixture: the over is on the air");
+        state
+            .step(
+                &engine, &mut backend, &mut rig, &sinks, 20.0, &mut ra_counting, &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            !reopened.get(),
+            "a confirmed death must not cut an over — nothing but an explicit operator stop may"
+        );
+        assert!(
+            state.audio_rebuild_pending.is_some(),
+            "and it must still be pending — deferred, not dropped"
+        );
+
+        // Key up: the deferred rebuild is now free to run.
+        let _ = rig.ptt(false);
+        state
+            .step(
+                &engine, &mut backend, &mut rig, &sinks, 40.0, &mut ra_counting, &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            reopened.get(),
+            "once the key is up the deferred rebuild must actually happen"
+        );
+        assert!(state.audio_rebuild_pending.is_none(), "and it is consumed, not repeated");
+    }
+
+    #[test]
     fn a_stream_killed_by_the_os_raises_the_banner_and_reopens_the_card() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let mut backend = MockBackend::new();
@@ -13946,6 +14123,26 @@ mod tests {
                 &mut rig,
                 &sinks,
                 20.0,
+                &mut ra_counting,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        // NOT yet: one error only puts the card on probation. Rebuilding here would tear the
+        // device graph down for a hiccup cpal had already recovered from.
+        assert!(
+            !reopened.get(),
+            "a single stream error must not rebuild on its own — see AUDIO_DEATH_CONFIRM_MS"
+        );
+
+        // The card stays silent past the confirmation window, which is what death looks like.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
                 &mut ra_counting,
                 &mut rr,
                 &mut station,
@@ -13998,18 +14195,21 @@ mod tests {
         );
         let mut ra_failing =
             |_t: &Transport| Err("device \"USB Audio Device\" not available".to_string());
-        state
-            .step(
-                &engine,
-                &mut backend,
-                &mut rig,
-                &sinks,
-                60.0,
-                &mut ra_failing,
-                &mut rr,
-                &mut station,
-            )
-            .unwrap();
+        // Probation again, then silence past the window — the device really is gone this time.
+        for t in [60.0, 60.0 + AUDIO_DEATH_CONFIRM_MS + 1.0] {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra_failing,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
         let banner = engine
             .lock()
             .unwrap()
