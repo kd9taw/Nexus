@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { getScopeRow, type ScopeWindow } from '../api'
 import { sampleLut } from '../colormaps'
 import {
-  agcRange,
   applyGainZero,
   bakeLut,
   dbToSpan,
@@ -10,6 +9,9 @@ import {
   isSymmetricMode,
   normalize,
   resolveColormap,
+  agcRange,
+  SCOPE_WINDOW_DB,
+  WF_FLOOR_PCT,
   scopeView,
   sidebandSign,
   TRACE_HOLD_MS,
@@ -506,39 +508,58 @@ export function PhoneScope({
         for (let i = 0; i < n; i++) visBuf[i] = row[vLo + i]
         visible = visBuf
       }
-      const { floor, ceil } = agcRange(visible)
+      // A FIXED WINDOW ABOVE THE NOISE — not a re-fit to this row's own peak.
+      //
+      // ⚠️ THIS IS WHAT MAKES A LOUD SIGNAL DRAW TALL (operator, 2026-08-15: "on my FTDX10 I see
+      // big vertical spikes where the voice is; on Nexus it seems like it's all smoothed out
+      // without the aggressive peaks"). It used to be `agcRange(visible)` — floor at the 5th
+      // percentile, ceiling at the 99.5th — which had two independent faults, both measured:
+      //   * the CEILING WAS THE SIGNAL, so every peak normalised to exactly 1.000 whether it was
+      //     12 dB or 40 dB out of the noise. A signal could not get taller; it was already at
+      //     the top, and the display just re-scaled around it every row.
+      //   * the FLOOR WAS THE LEFT TAIL, which on an audio row is the rig's SSB stopband — 42 dB
+      //     below the passband noise. So the noise floor itself rendered at 0.956 of full
+      //     height: the whole passband sat as a bright slab at the top with nowhere to rise.
+      // See `SCOPE_WINDOW_DB` and `scopeNoiseFloor` for the numbers and the reasoning.
+      //
+      // The floor still SMOOTHS (it is an estimate of a slowly-changing thing, and a jittering
+      // one would bounce the whole picture vertically); the ceiling no longer needs smoothing at
+      // all, because it is now the floor plus a constant and moves only when the floor does.
+      // WF_FLOOR_PCT (the MEDIAN), not agcRange's 5% default — see SCOPE_WINDOW_DB.
+      const floor = agcRange(visible, WF_FLOOR_PCT).floor
       if (!agcInit) {
         agcFloor = floor
-        agcCeil = ceil
         agcInit = true
       } else {
         agcFloor += (floor - agcFloor) * AGC_ALPHA
-        agcCeil += (ceil - agcCeil) * AGC_ALPHA
       }
-      // HONESTY CLAMP + operator Gain/Zero. A row with no strong signal has a tiny
-      // dynamic range; stretching it to the full palette painted stopband noise as
-      // full-width rainbow (the "stuff on the waterfall with a quiet band" report —
-      // CW and Phone both, this scope serves both cockpits). Enforce a 10 dB minimum
-      // visual span so noise-only rows sit dark at the palette bottom; rows with real
-      // signals span far more than 10 dB and render exactly as before. Gain/Zero then
-      // apply on top (same semantics as the FT8 waterfall's controls).
+      agcCeil = agcFloor + dbToSpan(SCOPE_WINDOW_DB)
+      // Operator Gain/Zero on top, same semantics as the FT8 waterfall's controls: G widens
+      // the window (2x at G-1) or tightens it (0.4x at G+1), Z trims the black point.
       //
-      // The clamp is ADDITIVE because the row's intensity axis is linear in dB
-      // (2026-08-04). It used to be `agcFloor * 3.16` — 10 dB as an amplitude RATIO, which
-      // on a dB axis is not 10 dB at all: it scales with where the floor happens to sit, so
-      // a quiet band (floor near 0) got almost no clamp at all and the rainbow came back,
-      // while a hot one got a wildly excessive one. This is the exact failure the sentinel
-      // rule warns about — arithmetic that still runs, and still looks plausible, on a wire
-      // whose meaning changed underneath it.
-      const MIN_DYN_DB = 10
+      // ⚠️ THE 10 dB MINIMUM-SPAN CLAMP THAT USED TO SIT HERE IS GONE, and it is worth saying
+      // why rather than leaving dead arithmetic that implies a constraint. It existed because
+      // the window was fitted to each row, so a row with no signal had a tiny span that got
+      // stretched across the whole palette — a quiet band rendered as full-width rainbow (the
+      // "stuff on the waterfall with a quiet band" report). The window is now a fixed
+      // SCOPE_WINDOW_DB above the noise and can never shrink, so that failure is
+      // unrepresentable rather than clamped. A quiet band sits dark at the palette bottom
+      // because there is genuinely nothing above the noise, which is the honest picture.
       const { floor: dispFloor, ceil: dispCeil } = applyGainZero(
         agcFloor,
-        Math.max(agcCeil, agcFloor + dbToSpan(MIN_DYN_DB)),
+        agcCeil,
         gainRef.current,
         zeroRef.current,
       )
-      // Live Δ-span honesty readout: how much real dynamic range this view holds.
-      const db = Math.round(rowSpanDb(agcFloor, agcCeil))
+      // Live readout: the strongest signal's height ABOVE THE NOISE FLOOR, in dB.
+      //
+      // It used to report the AGC window's own width, which was a real measurement while the
+      // window was fitted to the row — and is now a constant, so it would have read "Δ50 dB"
+      // forever. Peak-over-noise is the number that actually changes, and on a rig scope it is
+      // the more useful one anyway: it is what the operator is looking at the spikes FOR.
+      let peakDisp = 0
+      for (let i = 0; i < visible.length; i++) if (visible[i] > peakDisp) peakDisp = visible[i]
+      const db = Math.round(rowSpanDb(agcFloor, peakDisp))
       if (Number.isFinite(db) && db !== spanDbRef.current) {
         spanDbRef.current = db
         setSpanDb(db)
@@ -1026,9 +1047,9 @@ export function PhoneScope({
         {spanDb != null && (
           <span
             className="ph-scope-dyn"
-            title="Real dynamic range in this view — a small Δ means the colors are mostly noise floor (a quiet band now renders dark instead of stretched rainbow)"
+            title="How far the strongest signal in this view stands above the noise floor. The scope's vertical scale is FIXED at 50 dB above the noise, so a louder signal really does draw a taller spike — use G to widen or tighten that window."
           >
-            Δ{spanDb} dB
+            ▲{spanDb} dB
           </span>
         )}
         <label className="ph-scope-gz" title="Visual gain — stretch (right) or flatten (left) the color contrast">

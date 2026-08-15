@@ -103,6 +103,46 @@ export function traceHoldDecay(ms: number, tauMs: number): number {
 }
 
 /**
+ * The RIG SCOPE's display window, in dB above the noise floor.
+ *
+ * ⚠️ THE WHOLE POINT IS THAT IT IS FIXED. `agcRange`'s ceiling is the 99.5th percentile — the
+ * signal itself — so the scope re-fitted its own peak to full scale on EVERY row, and a signal
+ * could not get taller because it was already at the top. Measured on a modelled row, the peak
+ * normalises to exactly 1.000 at +12 dB SNR and exactly 1.000 at +40 dB:
+ *
+ *     CW quiet tone  +12dB   ceil=-83.0dBFS   PEAK->1.000
+ *     CW loud tone   +40dB   ceil=-55.0dBFS   PEAK->1.000
+ *
+ * That is the operator's report (2026-08-15): "on my FTDX10 I see big vertical spikes where the
+ * voice is; on Nexus it seems like it's all smoothed out without the aggressive peaks." A
+ * hardware scope has a FIXED vertical scale, so loud draws tall. This restores that.
+ *
+ * 50 dB is chosen against real signal levels rather than taste: a +40 dB voice peak draws at
+ * 80% height, a +12 dB weak one at 24%, and both are unmistakably different — which is the
+ * property that was missing. A signal more than 50 dB over the noise clips at the top, exactly
+ * as it does on a rig, and the Gain slider already widens the window (`applyGainZero` takes it
+ * to 2x at G-1) for anyone who wants the headroom back.
+ *
+ * ANCHORED TO THE NOISE, so it is self-scaling: on a noisy band the floor rises and the window
+ * rises with it. That is why a fixed window does not need a band-conditions control.
+ *
+ * ⚠️ THE FLOOR IT SITS ON MUST BE `WF_FLOOR_PCT`, NOT `agcRange`'s 5% DEFAULT — the scope passed
+ * the default and that was the second half of the same report. A low percentile is a statistic
+ * of the row's LEFT TAIL, which on an audio row is the rig's SSB stopband: measured 42 dB below
+ * the passband noise, which put the noise floor itself at 0.956 of full panel height. The median
+ * lands on the passband noise (see WF_FLOOR_PCT's own note) and is barely moved by a wide phone
+ * signal — 2 dB across a 200-bin voice on the modelled row.
+ *
+ * Measured end to end at 50 dB, floor = median, on a modelled 0-4000 Hz row with a real filter
+ * skirt — this is the whole point of the change, in one table:
+ *
+ *     no signal        peak 0.100   noise 0.100
+ *     CW tone +12 dB   peak 0.280   noise 0.100
+ *     CW tone +40 dB   peak 0.840   noise 0.100
+ */
+export const SCOPE_WINDOW_DB = 50
+
+/**
  * Visual-AGC: a robust floor/ceiling for one (or a window of) waterfall row(s).
  * The floor is the low percentile (the noise) and the ceiling the high
  * percentile (the strong signals) — clipping the outliers so a single hot

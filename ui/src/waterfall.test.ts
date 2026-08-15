@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
+import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -1239,5 +1239,76 @@ describe('trace peak-hold (rig scope)', () => {
     expect(TRACE_HOLD_MS.fast).toBeLessThan(TRACE_HOLD_MS.normal)
     expect(TRACE_HOLD_MS.normal).toBeLessThan(TRACE_HOLD_MS.slow)
     expect(TRACE_HOLD_MS.slow, 'slow must stay the pre-2026-08 value').toBe(400)
+  })
+})
+
+describe('rig scope vertical scale (a loud signal must draw TALL)', () => {
+  const d = (dbfs: number) => (dbfs + WF_DB_SPAN) / WF_DB_SPAN
+  /** A realistic audio row: SSB passband 300-2700 Hz, a 40 dB stopband outside it. */
+  function audioRow(noiseDbfs: number, snrDb: number, voiceBins: number, n = 512) {
+    const r = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const hz = (i / (n - 1)) * 4000
+      const inBand = hz > 300 && hz < 2700
+      r[i] = d(inBand ? noiseDbfs + (i % 7) - 3 : noiseDbfs - 40 + (i % 5) - 2)
+    }
+    const start = Math.floor(n * 0.3)
+    for (let i = start; i < start + voiceBins; i++) r[i] = d(noiseDbfs + snrDb)
+    return r
+  }
+  /** Exactly what PhoneScope draws: median floor, FIXED window above it. */
+  function scope(r: Float32Array) {
+    const floor = agcRange(r, WF_FLOOR_PCT).floor
+    const ceil = floor + SCOPE_WINDOW_DB / WF_DB_SPAN
+    return {
+      peak: normalize(Math.max(...r), floor, ceil),
+      // A passband bin with no signal on it (the voice block starts at 0.3n).
+      noise: normalize(r[Math.floor(r.length * 0.12)], floor, ceil),
+    }
+  }
+
+  it('draws a +40 dB signal far taller than a +12 dB one', () => {
+    // THE REPORT, as an assertion (operator 2026-08-15, FTDX10): "I see big vertical spikes
+    // where the voice is; on Nexus it seems like it's all smoothed out without the aggressive
+    // peaks." Under the old fitted window BOTH of these normalised to exactly 1.000, because
+    // the ceiling WAS the peak — the control below proves that rather than asserting it.
+    const weak = scope(audioRow(-95, 12, 6)).peak
+    const loud = scope(audioRow(-95, 40, 6)).peak
+    expect(weak).toBeCloseTo(0.28, 1)
+    expect(loud).toBeCloseTo(0.84, 1)
+    expect(loud - weak).toBeGreaterThan(0.4)
+
+    // CONTROL: the OLD window really did flatten both to the top, so the assertions above are
+    // measuring the change and not a property the scope always had.
+    for (const snr of [12, 40]) {
+      const r = audioRow(-95, snr, 6)
+      const { floor, ceil } = agcRange(r) // the 5% default + 99.5% ceiling, as it shipped
+      expect(normalize(Math.max(...r), floor, ceil)).toBe(1)
+    }
+  })
+
+  it('keeps the noise floor DOWN, not at 96% of the panel', () => {
+    // The other half of the report — "the whole spectrum is up". A 5th-percentile floor landed
+    // in the SSB stopband, 42 dB below the passband noise, so the noise itself rendered near
+    // the top and nothing had room to rise above it.
+    const r = audioRow(-95, 0, 0)
+    expect(scope(r).noise).toBeLessThan(0.2)
+    const old = agcRange(r) // control, again: the old statistic really does float it up
+    expect(normalize(r[Math.floor(r.length * 0.12)], old.floor, old.ceil)).toBeGreaterThan(0.8)
+  })
+
+  it('the median floor is barely moved by a wide phone signal', () => {
+    // The risk in choosing the median: a phone signal is WIDE, and a statistic that followed it
+    // would put the floor inside the voice and flatten the picture again.
+    const quiet = agcRange(audioRow(-95, 0, 0), WF_FLOOR_PCT).floor
+    const busy = agcRange(audioRow(-95, 40, 200), WF_FLOOR_PCT).floor
+    expect(Math.abs(busy - quiet) * WF_DB_SPAN).toBeLessThan(6)
+  })
+
+  it('is self-scaling: a noisier band lifts the floor with it', () => {
+    // Why a FIXED window needs no band-conditions control.
+    const quietBand = agcRange(audioRow(-95, 0, 0), WF_FLOOR_PCT).floor
+    const noisyBand = agcRange(audioRow(-75, 0, 0), WF_FLOOR_PCT).floor
+    expect((noisyBand - quietBand) * WF_DB_SPAN).toBeGreaterThan(15)
   })
 })
