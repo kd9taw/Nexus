@@ -17636,6 +17636,15 @@ button.sat-chip:disabled {
   color: var(--accent);
   border-color: var(--accent);
 }
+/* Scroll-direction toggle — a worded button, so it must not be squeezed to an ellipsis in the
+   narrow docked header (the header wraps instead; see .waterfall-wrap > .panel-header). */
+.wf-flow {
+  white-space: nowrap;
+}
+.wf-flow.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .wf-popout:hover {
   color: var(--text);
 }

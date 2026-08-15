@@ -121,11 +121,20 @@ export class WaterfallHistory {
   }
 
   /**
-   * Render a viewport FROM DATA into an RGBA buffer (width `outW` × height `outH`,
-   * newest row at the BOTTOM), mapping each output column through the requested view
-   * window [viewLoHz, viewHiHz] and each ROW's OWN stored frame — so history stays
-   * frequency-honest across retunes/zoom. `offsetRows` scrolls back in time (0 = live
-   * tail). Columns outside a row's stored span render the palette floor (lut[0..2]).
+   * Render a viewport FROM DATA into an RGBA buffer (width `outW` × height `outH`),
+   * mapping each output column through the requested view window [viewLoHz, viewHiHz]
+   * and each ROW's OWN stored frame — so history stays frequency-honest across
+   * retunes/zoom. `offsetRows` scrolls back in time (0 = live tail) and is an AGE, so it
+   * counts from the newest visible row whichever end of the viewport that is. Columns
+   * outside a row's stored span render the palette floor (lut[0..2]).
+   *
+   * `newestAtTop` is the operator's scroll-direction toggle (`nexus.waterfall.flow`):
+   * DEFAULT FALSE = newest row at the BOTTOM, history travelling up the screen, which is
+   * what every build before it did and what an upgrade must keep. True mirrors it — newest
+   * at the top, history travelling down.
+   * ⚠️ The caller's HOT path (retained-buffer copyWithin + where the new row is written)
+   * must flip with it. This cold path re-runs on palette/theme/zoom/resize/pause/2D↔3D, so
+   * a half-flip tears or inverts the picture the moment the operator touches any of those.
    *
    * Cold-path only (palette/zoom/resize/scrollback): O(outW × outH). The hot path
    * appends via `push` + the caller's retained-buffer copyWithin scroll — and goes
@@ -140,6 +149,7 @@ export class WaterfallHistory {
     viewHiHz: number,
     lut: Uint8ClampedArray,
     offsetRows = 0,
+    newestAtTop = false,
   ): void {
     const span = viewHiHz - viewLoHz
     const floorR = lut[0]
@@ -147,8 +157,9 @@ export class WaterfallHistory {
     const floorB = lut[2]
     const px = new Float32Array(outW)
     for (let y = 0; y < outH; y++) {
-      // Bottom row = newest (age offsetRows), top row = oldest visible.
-      const age = offsetRows + (outH - 1 - y)
+      // Newest row (age offsetRows) at the bottom by default, at the top when flipped;
+      // the opposite end is the oldest visible either way.
+      const age = offsetRows + (newestAtTop ? y : outH - 1 - y)
       const o = y * outW * 4
       const fr = this.frameAt(age)
       if (!fr || !(span > 0) || !(fr.hiHz > fr.loHz)) {

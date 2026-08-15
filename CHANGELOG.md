@@ -61,6 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them. It is the same answer the Needed board uses to decide "new state", so the two can never
   disagree with each other. Neither column is a callbook lookup: both come off decodes you have
   already heard, so there is nothing to set up and nothing leaves the machine.
+- **The waterfall can run the other way up.** A **Scrolls up / Scrolls down** button in the
+  waterfall header. Scrolls up is what Nexus has always done and stays the default — the newest
+  line arrives at the bottom and the picture climbs — and Scrolls down mirrors it, with new
+  lines landing at the top and history sliding downward, the way some rigs and other software
+  draw it. The switch repaints the history you have already collected, so nothing tears, and
+  the paused scrollback wheel follows the same direction. Each waterfall remembers its own
+  setting, so a torn-off waterfall on a second monitor can run the opposite way to the docked
+  one. The 3D stacked view keeps its own front-to-back perspective either way.
 
 ## [1.3.0] — 2026-08-13
 

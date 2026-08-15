@@ -40,6 +40,12 @@ const ZOOM_KEY = 'nexus.waterfall.zoom'
 /** PER-SURFACE: 2D scroll vs 3D stacked-spectrum (3DSS) view. A torn-off 3D display next to a
  *  docked 2D one is a legitimate multi-monitor setup, so this is per-surface like the zoom. */
 const THREED_KEY = 'nexus.waterfall.dss'
+/** PER-SURFACE: which way the flat 2D waterfall scrolls — `down` = newest row at the TOP.
+ *  ABSENT (or anything else) resolves to today's behaviour, newest at the BOTTOM with history
+ *  travelling up, so an upgrade never moves a display that was never asked to move. Per-surface
+ *  for the same reason as the zoom and the 3D toggle: a torn-off waterfall on a second monitor
+ *  may legitimately run the other way from the docked one. */
+const FLOW_KEY = 'nexus.waterfall.flow'
 /** Load a persisted [-1,1] slider value (gain/zero); missing/blocked → 0 (= auto). */
 function loadKnob(key: string): number {
   try {
@@ -195,6 +201,15 @@ export function Waterfall({
   const [dss, setDss] = useState<boolean>(() => surfaceGet(THREED_KEY) === '1')
   const dssRef = useRef(dss)
   dssRef.current = dss
+  // Scroll direction of the flat 2D waterfall. false (the default) = newest row at the BOTTOM,
+  // history travelling up — what every build before this one did. true mirrors it.
+  // ⚠️ BOTH render paths read this ref and must never disagree: the hot path's copyWithin +
+  // where the new row is written, and `renderInto`'s cold rebuild (which re-runs on palette,
+  // theme, zoom, resize, pause/scrollback and 2D↔3D). A half-flip tears the picture.
+  // The 3DSS view is deliberately unaffected — it keeps its own front-to-back perspective.
+  const [newestAtTop, setNewestAtTop] = useState<boolean>(() => surfaceGet(FLOW_KEY) === 'down')
+  const newestAtTopRef = useRef(newestAtTop)
+  newestAtTopRef.current = newestAtTop
   /** Scrollback offset in rows while paused (0 = live tail). */
   const offsetRef = useRef(0)
   /** Cold-path re-render hook, owned by the canvas effect (null until mounted). */
@@ -278,7 +293,8 @@ export function Waterfall({
     const AGC_ALPHA = 0.1
 
     // Retained RGBA viewport buffer (the waterfall area, devW × wfHd): the hot path
-    // scrolls it with copyWithin + writes one new bottom row + blits it once — the canvas
+    // scrolls it with copyWithin + writes the one new row at the leading edge (bottom, or top
+    // when the operator has flipped the scroll direction) + blits it once — the canvas
     // is WRITE-ONLY (the old getImageData readback scroll is gone). Cold paths rebuild it
     // from the history ring. Realloc only on a real size change.
     let retBuf: Uint8ClampedArray<ArrayBuffer> | null = null
@@ -306,6 +322,7 @@ export function Waterfall({
           viewHiRef.current,
           lutRef.current,
           offsetRef.current,
+          newestAtTopRef.current,
         )
       }
       return retImg
@@ -331,6 +348,7 @@ export function Waterfall({
         viewHiRef.current,
         lut,
         offsetRef.current,
+        newestAtTopRef.current,
       )
       try {
         ctx.putImageData(retImg!, 0, 0)
@@ -541,12 +559,21 @@ export function Waterfall({
         return
       }
 
-      // Scroll the retained RGBA buffer up one row with copyWithin (pure CPU — the old
+      // Scroll the retained RGBA buffer one row with copyWithin (pure CPU — the old
       // getImageData readback stall is gone; the canvas is write-only now), write the new
-      // bottom row through the LUT, and blit the buffer once.
+      // row through the LUT at the leading edge, and blit the buffer once.
+      //
+      // The direction is the operator's (FLOW_KEY), read ONCE here so the shift and the
+      // row it makes room for can never disagree: default = shift every row UP and write
+      // the new row at the BOTTOM; flipped = shift DOWN and write at the TOP. `renderInto`
+      // below/above takes the same flag, which is what keeps a palette switch, zoom, resize
+      // or pause from repainting the accumulated history the other way round.
+      const topDown = newestAtTopRef.current
       const img = retained(Wd, wfHd)
       const out = retBuf!
-      out.copyWithin(0, Wd * 4)
+      const rowBytes = Wd * 4
+      if (topDown) out.copyWithin(rowBytes, 0)
+      else out.copyWithin(0, rowBytes)
       const lut = lutRef.current
       // device-x → view frequency → bin, through the SAME mapping the history rebuild
       // uses (resampleRow: max-pool where a pixel covers several bins, interpolate where
@@ -562,7 +589,7 @@ export function Waterfall({
       }
       const mag = magBuf
       resampleRow(frow, rowLo, rowHi, vlo, vhi, mag)
-      const base = (wfHd - 1) * Wd * 4
+      const base = topDown ? 0 : (wfHd - 1) * rowBytes
       for (let x = 0; x < Wd; x++) {
         const v = mag[x]
         const o = base + x * 4
@@ -641,13 +668,19 @@ export function Waterfall({
         const newest = h.frameAt(off)
         const backLabel = newest ? ageLabel(Date.now() - newest.tsMs) : 'now'
         octx.fillText(off > 0 ? `⏸ PAUSED · −${backLabel}` : '⏸ PAUSED', 6, 20)
-        // Time tape: 4 evenly spaced age labels down the right edge.
+        // Time tape: 4 evenly spaced age labels down the right edge. Each label's age is
+        // read off the SAME mapping renderInto paints with — newest end at the bottom by
+        // default, at the top when the operator has flipped the scroll direction.
+        // ⚠️ This used to be a plain `off + (devRows-1)·i/5`, i.e. ages increasing DOWNWARD,
+        // which was upside down against the picture in the only direction that existed: it
+        // labelled the top (oldest) rows as the most recent. Mirrored, not merely flipped.
         octx.fillStyle = axisColor
         octx.font = '9px system-ui, sans-serif'
         const devRows = Math.max(1, Math.round(wfH * scaleY))
         for (let i = 1; i <= 4; i++) {
           const yCss = (wfH * i) / 5
-          const age = off + Math.round(((devRows - 1) * i) / 5)
+          const yDev = Math.round(((devRows - 1) * i) / 5)
+          const age = off + (newestAtTopRef.current ? yDev : devRows - 1 - yDev)
           const fr = h.frameAt(age)
           if (!fr) continue
           octx.fillText(`−${ageLabel(Date.now() - fr.tsMs)}`, W - 34, yCss)
@@ -850,6 +883,32 @@ export function Waterfall({
             }}
           />
         </label>
+        {/* Scroll direction. The operator's own wording (2026-08-14) names the CURRENT
+            state; those two words alone do not say where a new row lands, so the tooltip
+            spells out both halves — which end is newest and which way history travels. */}
+        <button
+          type="button"
+          className={`wf-popout wf-flow${newestAtTop ? ' on' : ''}`}
+          aria-pressed={newestAtTop}
+          onClick={() => {
+            const next = !newestAtTop
+            setNewestAtTop(next)
+            newestAtTopRef.current = next
+            surfaceSet(FLOW_KEY, next ? 'down' : 'up')
+            // Repaint the ACCUMULATED history the new way at once. Without this the operator
+            // watches the old image scroll the new direction until something else triggers a
+            // rebuild — a half-flipped waterfall.
+            rebuildRef.current?.()
+          }}
+          title={
+            (newestAtTop
+              ? 'Scrolls down — the newest row appears at the TOP and history travels downward. Click for the other way: newest at the bottom, history travelling up (the default).'
+              : 'Scrolls up — the newest row appears at the BOTTOM and history travels upward (the default). Click for the other way: newest at the top, history travelling down.') +
+            (dss ? ' The 3D view keeps its own front-to-back perspective either way.' : '')
+          }
+        >
+          {newestAtTop ? 'Scrolls down' : 'Scrolls up'}
+        </button>
         <button
           type="button"
           className={`wf-popout wf-dss${dss ? ' on' : ''}`}
@@ -909,10 +968,15 @@ export function Waterfall({
           onMouseDown={handleMouseDown}
           onContextMenu={(e) => e.preventDefault()}
           onWheel={(e) => {
-            // Paused = scrollback mode: wheel up goes back in time, down toward live.
+            // Paused = scrollback mode. The wheel FOLLOWS THE FLOW: older rows lie the way
+            // history travels, so going back in time is wheel-UP in the default direction
+            // (history climbs, old rows leave over the top) and wheel-DOWN once the operator
+            // has flipped it. Keeping the sign fixed would send the wheel the wrong way
+            // against half the operators' own displays.
             if (!pausedRef.current) return
             const h = historyRef.current
-            const step = e.deltaY < 0 ? 3 : -3
+            const back = newestAtTopRef.current ? e.deltaY > 0 : e.deltaY < 0
+            const step = back ? 3 : -3
             // Viewport height in HISTORY rows ≈ the retained buffer height; a generous
             // clamp via maxOffset keeps a full screen of rows at max scrollback.
             const cur = offsetRef.current

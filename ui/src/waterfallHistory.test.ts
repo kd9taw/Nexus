@@ -13,9 +13,17 @@ function grayLut(): Uint8ClampedArray {
   return lut
 }
 
-function render(h: WaterfallHistory, w: number, ht: number, lo: number, hi: number, off = 0) {
+function render(
+  h: WaterfallHistory,
+  w: number,
+  ht: number,
+  lo: number,
+  hi: number,
+  off = 0,
+  newestAtTop = false,
+) {
   const out = new Uint8ClampedArray(w * ht * 4)
-  h.renderInto(out, w, ht, lo, hi, grayLut(), off)
+  h.renderInto(out, w, ht, lo, hi, grayLut(), off, newestAtTop)
   return out
 }
 
@@ -131,6 +139,51 @@ describe('WaterfallHistory', () => {
     expect(h.length).toBe(0)
     const out = render(h, 2, 1, 0, 100)
     expect(out[0]).toBe(0) // palette floor
+  })
+})
+
+// The operator's "Scrolls up" / "Scrolls down" toggle (nexus.waterfall.flow) resolves to this
+// one flag. The component's hot path (copyWithin + the new row's position in the retained RGBA
+// buffer) must flip WITH it: the cold path here re-renders on every palette switch, theme
+// change, zoom, resize, pause/scrollback and 2D↔3D, so a half-flip tears the picture the moment
+// the operator touches any of those.
+describe('WaterfallHistory scroll direction', () => {
+  /** Three rows, oldest → newest, one column each so a pixel reads the stored value back. */
+  function stack(): WaterfallHistory {
+    const h = new WaterfallHistory(1, 8)
+    h.push([0.2], 0, 100, 1) // oldest
+    h.push([0.4], 0, 100, 2)
+    h.push([1], 0, 100, 3) // newest
+    return h
+  }
+
+  it('newestAtTop puts the newest row in row 0 and the oldest in row outH-1', () => {
+    const out = render(stack(), 1, 3, 0, 100, 0, true)
+    expect(out[0 * 4]).toBe(255) // row 0 = newest
+    expect(out[1 * 4]).toBe(102) // 0.4
+    expect(out[2 * 4]).toBe(51) // row outH-1 = oldest
+  })
+
+  it('DEFAULT (flag unset) is unchanged: newest at the BOTTOM — nobody flips on upgrade', () => {
+    const dflt = render(stack(), 1, 3, 0, 100)
+    expect(dflt[2 * 4]).toBe(255) // bottom row = newest
+    expect(dflt[0 * 4]).toBe(51) // top row = oldest
+    // ...and the default argument is byte-identical to asking for it explicitly.
+    expect(Array.from(dflt)).toEqual(Array.from(render(stack(), 1, 3, 0, 100, 0, false)))
+  })
+
+  it('scrollback counts from the same end in both directions', () => {
+    const h = new WaterfallHistory(1, 16)
+    for (let i = 0; i < 10; i++) h.push([i / 10], 0, 100, i)
+    // offsetRows is an AGE, not a y: at offset 6 the newest visible row is age 6 (ts 3 →
+    // 0.3 → 76) wherever the direction puts it, and the viewport walks two rows older from
+    // there — up the screen by default (age 8 → 0.1 → 25), down it when flipped.
+    const up = render(h, 1, 3, 0, 100, 6)
+    expect(up[2 * 4]).toBe(76) // bottom = newest visible
+    expect(up[0 * 4]).toBe(25) // top = oldest visible
+    const down = render(h, 1, 3, 0, 100, 6, true)
+    expect(down[0 * 4]).toBe(76) // top = newest visible
+    expect(down[2 * 4]).toBe(25)
   })
 })
 
