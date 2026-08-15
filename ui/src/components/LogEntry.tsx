@@ -258,6 +258,25 @@ export function LogEntry({
   // onChange), false for machine fills (CW decoder, click-to-work). The debounced auto-lookup
   // fires on human edits only, so the shared CW cockpit never spams QRZ on decoder candidate flap.
   const humanCallEditRef = useRef(false)
+  /**
+   * A call that arrived from the app rather than the keyboard, and is SETTLED enough to look up.
+   *
+   * ⚠️ WHY THIS EXISTS (operator, 2026-08-15: CW contacts logging with no grid). Callbook
+   * enrichment — grid, state, country — only ever ran for calls the operator TYPED, because the
+   * debounced auto-lookup is gated on `humanCallEditRef` and both machine fills clear it. In the
+   * CW cockpit the call is never typed: the decoder fills it, and focus goes straight to RST, so
+   * the on-blur lookup never fires either. Nothing else populates `logGrid` — the CW/Phone strips
+   * have no Grid box at all (see `asksForGrid`), it is a write-only autofill stash — so every CW
+   * QSO logged with `grid: null`. Same defect on a clicked spot, which is also a machine fill.
+   *
+   * It is a SEPARATE ref rather than just setting `humanCallEditRef = true` because the two facts
+   * are different and one of them is about typing: `humanCallEditRef` still means "the operator is
+   * editing this field", which is what stops a half-typed call being looked up. This one means
+   * "this call is final" — a clicked spot, or a CONFIRMED decoder call. An unconfirmed best guess
+   * is deliberately excluded: the decoder walks K9 → K9A → K9ABC, and looking each one up would
+   * spend the operator's QRZ quota on calls that were never worked.
+   */
+  const settledCallRef = useRef(false)
 
   // The call whose identity (name/QTH/grid/state/country) the enrichment fields currently hold.
   // Clear them when the call changes to a DIFFERENT one, so a previous callsign's data never
@@ -402,7 +421,8 @@ export function LogEntry({
   useEffect(() => {
     if (!pendingWork) return
     setLogCall(pendingWork.call.toUpperCase())
-    humanCallEditRef.current = false // a clicked spot is not a human keystroke — no auto-lookup
+    humanCallEditRef.current = false // a clicked spot is not a human keystroke…
+    settledCallRef.current = true // …but it IS a final call, so it still gets enriched
     // preventScroll: focusing the RST readies it for the report, but must NOT scroll the log
     // into view — the operator works from the decode feed/roster scrolled up, and a click
     // snapping the window down to the log every time is the reported bug.
@@ -432,7 +452,10 @@ export function LogEntry({
         logCallRef.current.toUpperCase() !== (cwFilledFor.current ?? '')
       if (!overridden) {
         setLogCall(up)
-        humanCallEditRef.current = false // decoder fill, not a keystroke — no auto-lookup
+        humanCallEditRef.current = false // decoder fill, not a keystroke…
+        // …and enrich it once the decoder is SURE. A best guess still changes character by
+        // character, and each change would be a callbook request for a call nobody worked.
+        settledCallRef.current = cwLive.confirmed === true
         cwFilledFor.current = up
         cwRstFilled.current = false
         cwNameFilled.current = false
@@ -562,8 +585,10 @@ export function LogEntry({
   useEffect(() => {
     const c = logCall.trim()
     const cu = c.toUpperCase()
-    // Human keystrokes only (not CW-decoder/click-to-work machine fills), and not already enriched.
-    if (fdActive || !humanCallEditRef.current || c.length < 3 || enrichedForRef.current === cu) return
+    // A typed call, or a machine fill that has settled (see `settledCallRef`) — and not already
+    // enriched. The machine-fill half is what puts a grid on a CW contact.
+    const worthLookingUp = humanCallEditRef.current || settledCallRef.current
+    if (fdActive || !worthLookingUp || c.length < 3 || enrichedForRef.current === cu) return
     const t = setTimeout(() => {
       // Re-check at FIRE time via refs: an onCallBlur/QRZ-button lookup may have already enriched
       // this call or still be in flight — either way, don't fire a duplicate QRZ request.
