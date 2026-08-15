@@ -859,6 +859,47 @@ impl Station {
                     self.state = State::Done;
                     self.log("got the closing over → QSO complete".into());
                 }
+                // THE PARTNER DID NOT COPY OUR ROGER AND IS ASKING AGAIN (issue #59).
+                //
+                // We are `Confirming`, so we have sent our closing over and cleared `pending`.
+                // If the DX now repeats their report — bare, or R-prefixed — they did not hear
+                // it, and the only useful thing we can do is send it again. Without these arms
+                // the message fell to `_ => {}`: Nexus went silent at exactly the moment the
+                // partner was asking it to speak, and (having already logged) went back to
+                // calling CQ. From the operator's chair that is the contact being abandoned
+                // mid-close, which is what kr4fqg reported.
+                //
+                // ⚠️ THIS IS WSJT-X's BEHAVIOUR, not an improvement on it. Real upstream source,
+                // `widgets/mainwindow.cpp:6374-6378`:
+                //
+                //     } else if((m_QSOProgress >= REPORT || (m_QSOProgress >= REPLYING && …))
+                //               && word_3.startsWith ('R')) {
+                //       m_ntx=4;                    // send the roger AGAIN
+                //       m_QSOProgress = ROGERS;
+                //
+                // Note what is NOT here: the three closing words keep their own arms ABOVE this
+                // one and still finish the QSO. A partner's `RRR` is their roger, not a request
+                // — answering it would be the "re-sending ours at them forever" this file
+                // already warns about, so these arms match only a REPORT.
+                (State::Confirming, Msg::Report { to, de, snr })
+                | (State::Confirming, Msg::RReport { to, de, snr })
+                    if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
+                {
+                    // Their number, in case the repeat carries a corrected one.
+                    self.rx_report = Some(*snr);
+                    self.pending = Some(if self.confirm_with_rrr {
+                        Msg::Rrr {
+                            to: de.clone(),
+                            de: self.mycall.clone(),
+                        }
+                    } else {
+                        Msg::Rr73 {
+                            to: de.clone(),
+                            de: self.mycall.clone(),
+                        }
+                    });
+                    self.log("DX repeated their report → re-sending our closing over".into());
+                }
                 // --- Out-of-order / step-skipping partners (mirror the `start()` resume
                 // table so a running QSO can't hang re-sending the same message forever
                 // when the DX skips a step — exactly what WSJT-X handles). ---
@@ -1263,6 +1304,71 @@ mod start_context_tests {
         let s = Station::start(ME, MY_GRID, DX, Some((&m, -8)), true, false);
         assert_eq!(s.state, State::Confirming);
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW RRR"));
+    }
+
+    /// ISSUE #59 — A PARTNER WHO RE-SENDS THEIR REPORT MUST GET OUR ROGER AGAIN.
+    ///
+    /// kr4fqg: "the system misses retransmissions of signal reports on FT, closing the contact
+    /// and moving to the next." He proposed moving the LOGGING trigger; that would be the wrong
+    /// fix — Nexus already logs where WSJT-X logs, on transmitting the first 73/RR73 and on
+    /// receiving one. The actual gap is here: `Confirming` answers only the three closing words,
+    /// so a partner who did not copy our roger and re-sends their report falls through to
+    /// `_ => {}` and we go silent at exactly the moment they are asking us to speak.
+    ///
+    /// WSJT-X re-engages, read from real upstream source
+    /// (`widgets/mainwindow.cpp:6374-6378`):
+    ///
+    /// ```text
+    /// } else if((m_QSOProgress >= REPORT || (m_QSOProgress >= REPLYING && FT8/FT4/...))
+    ///           && word_3.startsWith ('R')) {
+    ///   m_ntx=4;                       // Tx4 = R+report — send the roger AGAIN
+    ///   m_QSOProgress = ROGERS;
+    /// ```
+    #[test]
+    fn a_repeated_r_report_while_confirming_re_sends_our_roger() {
+        let mut s = start("KD9TAW W9XYZ R-15", -8);
+        assert_eq!(s.state, State::Confirming);
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW RR73"));
+        // We transmit our closing over, and the pending message clears.
+        s.pending = None;
+        // The partner did not copy it and asks again with the same R+report.
+        s.observe(&[dec("KD9TAW W9XYZ R-15", -8)]);
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("W9XYZ KD9TAW RR73"),
+            "they are still asking — WSJT-X re-sends the roger here, and going quiet is what \
+             the operator saw as the contact being abandoned"
+        );
+        assert_eq!(s.state, State::Confirming, "still closing, not finished");
+    }
+
+    /// The same for a BARE repeated report (no R prefix) — the partner never got as far as
+    /// rogering us, so they are still asking for the step before.
+    #[test]
+    fn a_repeated_bare_report_while_confirming_re_sends_our_roger() {
+        let mut s = start("KD9TAW W9XYZ R-15", -8);
+        s.pending = None;
+        s.observe(&[dec("KD9TAW W9XYZ -15", -8)]);
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("W9XYZ KD9TAW RR73"),
+            "a bare repeat is still a partner asking to be rogered"
+        );
+    }
+
+    /// ⚠️ THE GUARD ON THE FIX. A partner's own CLOSING word must still finish the QSO — the new
+    /// arms must not turn a completed contact into an endless exchange of rogers. This is the
+    /// regression the existing comment above the Confirming arms warns about in prose
+    /// ("re-sending ours at them forever is not a courtesy"), stated as a test.
+    #[test]
+    fn a_closing_word_still_ends_it_after_the_re_engagement_arms() {
+        for closing in ["KD9TAW W9XYZ RR73", "KD9TAW W9XYZ RRR", "KD9TAW W9XYZ 73"] {
+            let mut s = start("KD9TAW W9XYZ R-15", -8);
+            s.pending = None;
+            s.observe(&[dec(closing, -8)]);
+            assert_eq!(s.state, State::Done, "{closing} must complete the QSO");
+            assert_eq!(s.pending, None, "{closing} must leave nothing to send");
+        }
     }
 
     #[test]
