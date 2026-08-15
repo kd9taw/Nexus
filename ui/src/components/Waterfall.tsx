@@ -41,10 +41,21 @@ const ZOOM_KEY = 'nexus.waterfall.zoom'
  *  docked 2D one is a legitimate multi-monitor setup, so this is per-surface like the zoom. */
 const THREED_KEY = 'nexus.waterfall.dss'
 /** PER-SURFACE: which way the flat 2D waterfall scrolls — `down` = newest row at the TOP.
- *  ABSENT (or anything else) resolves to today's behaviour, newest at the BOTTOM with history
- *  travelling up, so an upgrade never moves a display that was never asked to move. Per-surface
- *  for the same reason as the zoom and the 3D toggle: a torn-off waterfall on a second monitor
- *  may legitimately run the other way from the docked one. */
+ *
+ *  ⚠️ THE DEFAULT IS `down` (operator ruling, 2026-08-15). It was `up` — newest at the BOTTOM —
+ *  for every build through 1.3.2, and the opt-in ran the other way. Flipping a default is not
+ *  free: every operator who never touched the toggle sees their waterfall reverse on upgrade,
+ *  which is exactly what the previous wording existed to prevent. That was a deliberate call,
+ *  not a silent one, and the button is right there in the waterfall header for anyone who wants
+ *  the old direction back.
+ *
+ *  Only the exact string `up` opts out now. ABSENT, blank, stale, or written by some other build
+ *  all resolve to `down` — the reading is unchanged in shape, just inverted in polarity, so a
+ *  foreign value can still never select a direction nobody chose. An operator who already tried
+ *  `down` and went back keeps `up`, because the toggle writes both strings explicitly.
+ *
+ *  Per-surface for the same reason as the zoom and the 3D toggle: a torn-off waterfall on a
+ *  second monitor may legitimately run the other way from the docked one. */
 const FLOW_KEY = 'nexus.waterfall.flow'
 /** Load a persisted [-1,1] slider value (gain/zero); missing/blocked → 0 (= auto). */
 function loadKnob(key: string): number {
@@ -201,13 +212,13 @@ export function Waterfall({
   const [dss, setDss] = useState<boolean>(() => surfaceGet(THREED_KEY) === '1')
   const dssRef = useRef(dss)
   dssRef.current = dss
-  // Scroll direction of the flat 2D waterfall. false (the default) = newest row at the BOTTOM,
-  // history travelling up — what every build before this one did. true mirrors it.
+  // Scroll direction of the flat 2D waterfall. true (THE DEFAULT since 2026-08-15) = newest row
+  // at the TOP, history travelling down. false mirrors it — what every build through 1.3.2 did.
   // ⚠️ BOTH render paths read this ref and must never disagree: the hot path's copyWithin +
   // where the new row is written, and `renderInto`'s cold rebuild (which re-runs on palette,
   // theme, zoom, resize, pause/scrollback and 2D↔3D). A half-flip tears the picture.
   // The 3DSS view is deliberately unaffected — it keeps its own front-to-back perspective.
-  const [newestAtTop, setNewestAtTop] = useState<boolean>(() => surfaceGet(FLOW_KEY) === 'down')
+  const [newestAtTop, setNewestAtTop] = useState<boolean>(() => surfaceGet(FLOW_KEY) !== 'up')
   const newestAtTopRef = useRef(newestAtTop)
   newestAtTopRef.current = newestAtTop
   /** Scrollback offset in rows while paused (0 = live tail). */
