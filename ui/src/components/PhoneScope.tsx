@@ -12,6 +12,8 @@ import {
   resolveColormap,
   scopeView,
   sidebandSign,
+  TRACE_HOLD_MS,
+  traceHoldDecay,
   // Aliased: this component already has a `spanDb` STATE variable (the Δ readout it renders),
   // which shadows a bare import everywhere inside the component — including the one call site
   // below, where it resolved to a number and failed to compile.
@@ -78,6 +80,11 @@ interface Props {
   /** Master gate for click/drag tuning: the cockpit passes catOk && !transmitting &&
    * dial-known. False → no pointer capture, no box, no cursor affordance. */
   interactive?: boolean
+  /** Trace peak-hold time constant (ms) — how long a column's peak stands after the signal
+   * stops. See TRACE_HOLD_MS: the cockpit picks it, because the right answer depends on the
+   * SIGNAL, not on the operator. CW passes `fast` (48 ms dits have to be visible as keying);
+   * phone takes the `normal` default (a hold short enough for CW flickers on every syllable). */
+  traceHoldMs?: number
 }
 
 /**
@@ -123,6 +130,7 @@ export function PhoneScope({
   pitchHz = 600,
   cwPitchRefDial = true,
   interactive = false,
+  traceHoldMs = TRACE_HOLD_MS.normal,
 }: Props) {
   // Master palette shared with the FT8 waterfall + all scopes ('auto' = theme-driven).
   const [palette] = useWaterfallPalette()
@@ -176,6 +184,7 @@ export function PhoneScope({
   const pitchRef = useRef(pitchHz)
   const cwPitchRefRef = useRef(cwPitchRefDial)
   const interactiveRef = useRef(interactive)
+  const traceHoldRef = useRef(traceHoldMs)
   const lastRowRef = useRef<{ row: number[]; rowLo: number; rowHi: number } | null>(null)
   const lastViewRef = useRef<{ lo: number; hi: number; rf: boolean } | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
@@ -219,6 +228,7 @@ export function PhoneScope({
   pitchRef.current = pitchHz
   cwPitchRefRef.current = cwPitchRefDial
   interactiveRef.current = interactive
+  traceHoldRef.current = traceHoldMs
 
   useLayoutEffect(() => {
     lutRef.current = bakeLut(resolveColormap(palette, theme))
@@ -255,12 +265,14 @@ export function PhoneScope({
     const AGC_ALPHA = 0.4 // snappy attack/release — a rig scope, not a slow FT8 noise floor
     const TRACE_FRAC = 0.45 // top fraction = panadapter trace; rest = waterfall
     // Trace persistence (fast attack / slow decay, the classic rig peak-hold): the trace
-    // column jumps up instantly with a signal but FADES over ~a second between syllables
-    // and key-ups instead of strobing at frame rate with every gap in a bursty voice/CW
-    // signal (the "flashing vertical line" report). Time-based so the fade speed is the
-    // same under reduced-motion's slower frame cadence. Waterfall rows stay raw — the
-    // scroll IS their history; only the instantaneous trace gets the hold.
-    const TRACE_FADE_TAU_MS = 400
+    // column jumps up instantly with a signal but FADES between syllables and key-ups instead
+    // of strobing at frame rate with every gap in a bursty voice/CW signal (the "flashing
+    // vertical line" report). Waterfall rows stay raw — the scroll IS their history; only the
+    // instantaneous trace gets the hold.
+    //
+    // The TIME CONSTANT is the cockpit's (traceHoldMs, read live from the ref so changing it
+    // never restarts the poll loop). It was one 400 ms constant for both, which is far too long
+    // for CW: a 25 WPM dit gap gave back 11% of the trace height, so keying drew a static bar.
 
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
     const reducedMotion = () =>
@@ -272,8 +284,20 @@ export function PhoneScope({
     let lastFeed = '' // last onFeed-reported "source:lo:hi" (fire only on change)
 
     let magBuf: Float32Array | null = null // reused per-column magnitudes (no per-tick garbage)
-    let holdBuf: Float32Array | null = null // per-column trace peak-hold (decays, see TRACE_FADE_TAU_MS)
+    let holdBuf: Float32Array | null = null // per-column trace peak-hold (decays, see traceHoldMs)
     let lastHoldTs = 0
+    // The AGC window, reused. `row.slice(vLo, vHi)` allocated a fresh array 20x/second for a
+    // read-only percentile scan. Float64Array, not Float32Array: `row` arrives from JSON as
+    // doubles and narrowing it would nudge the AGC floor for no benefit (see agcScratch).
+    let visBuf: Float64Array | null = null
+    // The trace's fill gradient, rebuilt only when the palette or the trace height changes —
+    // it was a `createLinearGradient` + 3 `sampleLut` + 3 colour-stop parses PER ROW for a
+    // value that changes on a theme switch or a splitter drag. The cache is effect-local on
+    // purpose: `ctx` is captured by this effect, and a CanvasGradient belongs to the context
+    // that made it, so a new canvas re-runs the effect and resets the cache with it.
+    let gradCache: CanvasGradient | null = null
+    let gradKey = ''
+    let traceStroke = '' // the bright line on top of the fill — same palette, same cache key
     let magBufW = 0
     // Retained RGBA buffer for the WATERFALL BAND only (Wd × wfHd, drawn at y=traceHd). The
     // trace region above it is redrawn each frame and is not part of this buffer.
@@ -416,7 +440,13 @@ export function PhoneScope({
       const nb = row.length
       const vLo = Math.max(0, Math.floor(((view.loHz - rowLo) / span) * (nb - 1)))
       const vHi = Math.min(nb, Math.ceil(((view.hiHz - rowLo) / span) * (nb - 1)) + 1)
-      const visible = vHi - vLo >= 8 ? row.slice(vLo, vHi) : row
+      let visible: ArrayLike<number> = row
+      if (vHi - vLo >= 8) {
+        const n = vHi - vLo
+        if (!visBuf || visBuf.length !== n) visBuf = new Float64Array(n)
+        for (let i = 0; i < n; i++) visBuf[i] = row[vLo + i]
+        visible = visBuf
+      }
       const { floor, ceil } = agcRange(visible)
       if (!agcInit) {
         agcFloor = floor
@@ -524,11 +554,11 @@ export function PhoneScope({
       }
 
       // Fast-attack / slow-decay hold for the trace: a new signal jumps up instantly,
-      // a pause fades down over ~TRACE_FADE_TAU_MS instead of strobing per frame.
+      // a pause fades down over ~traceHoldMs instead of strobing per frame.
       const nowTs = performance.now()
       const dt = lastHoldTs > 0 ? nowTs - lastHoldTs : ROW_MS
       lastHoldTs = nowTs
-      const decay = Math.exp(-dt / TRACE_FADE_TAU_MS)
+      const decay = traceHoldDecay(dt, traceHoldRef.current)
       const hold = holdBuf
       for (let x = 0; x < Wd; x++) {
         const h = hold[x] * decay
@@ -539,13 +569,20 @@ export function PhoneScope({
       ctx.fillStyle = `rgb(${lut[0]},${lut[1]},${lut[2]})` // clear trace region to floor color
       ctx.fillRect(0, 0, Wd, traceHd)
       const name = resolveColormap(paletteRef.current, themeRef.current)
-      const c0 = sampleLut(name, 0.3)
-      const c1 = sampleLut(name, 0.7)
-      const c2 = sampleLut(name, 1.0)
-      const grad = ctx.createLinearGradient(0, traceHd, 0, 0)
-      grad.addColorStop(0, `rgba(${c0[0]},${c0[1]},${c0[2]},0.45)`)
-      grad.addColorStop(0.6, `rgba(${c1[0]},${c1[1]},${c1[2]},0.8)`)
-      grad.addColorStop(1, `rgba(${c2[0]},${c2[1]},${c2[2]},0.95)`)
+      const gk = `${name}:${traceHd}`
+      if (!gradCache || gk !== gradKey) {
+        const c0 = sampleLut(name, 0.3)
+        const c1 = sampleLut(name, 0.7)
+        const c2 = sampleLut(name, 1.0)
+        const g = ctx.createLinearGradient(0, traceHd, 0, 0)
+        g.addColorStop(0, `rgba(${c0[0]},${c0[1]},${c0[2]},0.45)`)
+        g.addColorStop(0.6, `rgba(${c1[0]},${c1[1]},${c1[2]},0.8)`)
+        g.addColorStop(1, `rgba(${c2[0]},${c2[1]},${c2[2]},0.95)`)
+        traceStroke = `rgb(${c2[0]},${c2[1]},${c2[2]})`
+        gradCache = g
+        gradKey = gk
+      }
+      const grad = gradCache
       const yFor = (t: number) => traceHd - t * (traceHd - 1)
       // filled area under the curve
       ctx.beginPath()
@@ -559,7 +596,7 @@ export function PhoneScope({
       ctx.beginPath()
       ctx.moveTo(0, yFor(hold[0]))
       for (let x = 1; x < Wd; x++) ctx.lineTo(x, yFor(hold[x]))
-      ctx.strokeStyle = `rgb(${c2[0]},${c2[1]},${c2[2]})`
+      ctx.strokeStyle = traceStroke
       ctx.lineWidth = Math.max(1, scaleY)
       ctx.stroke()
 

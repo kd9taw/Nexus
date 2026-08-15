@@ -48,7 +48,7 @@ function clamp01(x: number): number {
 }
 
 /** Value at percentile `p`∈[0,1] of an ascending-sorted array (linear interp). */
-function percentile(sorted: number[], p: number): number {
+function percentile(sorted: ArrayLike<number>, p: number): number {
   const n = sorted.length
   if (n === 1) return sorted[0]
   const idx = clamp01(p) * (n - 1)
@@ -57,6 +57,49 @@ function percentile(sorted: number[], p: number): number {
   if (lo === hi) return sorted[lo]
   const frac = idx - lo
   return sorted[lo] * (1 - frac) + sorted[hi] * frac
+}
+
+/**
+ * Sort scratch for `agcRange`, reused across calls.
+ *
+ * Four canvases call `agcRange` up to 20x/second each, and it used to build a fresh `number[]`
+ * and sort it every time — ~500 numbers of garbage per row per scope, for a result that is two
+ * floats. `Float64Array`, deliberately NOT `Float32Array`: the rows arrive from JSON as doubles,
+ * and narrowing them here would move the AGC floor in the last few bits — a real (if tiny)
+ * behaviour change to buy nothing, since the win is the allocation, not the width.
+ *
+ * Safe to share: `agcRange` is synchronous and calls nothing that could re-enter it, so no two
+ * users of the scratch are ever live at once.
+ */
+let agcScratch = new Float64Array(0)
+
+/**
+ * Trace peak-hold decay constants for the rig scope (`PhoneScope`), in ms.
+ *
+ * The panadapter trace holds each column's peak and decays it, so a bursty signal does not
+ * strobe at frame rate with every gap in speech or keying (the "flashing vertical line"
+ * report). The hold is REQUIRED — what was wrong was having ONE time constant for two very
+ * different signals:
+ *
+ *   - CW at 25 WPM keys a 48 ms dit. A 400 ms hold gives back 11% of the trace height between
+ *     elements, so keying renders as a static bar and the operator sees no rhythm at all.
+ *   - Voice syllables run ~150-300 ms, and a hold that short would flicker on every one.
+ *
+ * So CW gets `fast` and phone gets `normal`. `slow` is the pre-2026-08 value, kept because it
+ * is the right answer for a very slow or very weak signal and costs one line to keep.
+ */
+export const TRACE_HOLD_MS = { fast: 120, normal: 250, slow: 400 } as const
+
+/**
+ * Fraction of a held trace peak still standing `ms` after the signal stops — `exp(-ms/tau)`.
+ *
+ * Time-based rather than per-frame so the fade runs at the same speed under reduced-motion's
+ * slower row cadence. Exported for the guard: the two ends of this decision (does keying show?
+ * does it strobe?) are arithmetic, and arithmetic can be pinned without a browser.
+ */
+export function traceHoldDecay(ms: number, tauMs: number): number {
+  if (!(tauMs > 0)) return 0
+  return Math.exp(-Math.max(0, ms) / tauMs)
 }
 
 /**
@@ -69,17 +112,21 @@ function percentile(sorted: number[], p: number): number {
  * doesn't flicker as a signal keys up.
  */
 export function agcRange(
-  magnitudes: Float32Array | number[],
+  // ArrayLike, so a caller can pass a reusable scratch of its own (PhoneScope's AGC window)
+  // instead of slicing a fresh array per row. Read-only here.
+  magnitudes: ArrayLike<number>,
   loPct = 0.05,
   hiPct = 0.995,
 ): { floor: number; ceil: number } {
-  const arr: number[] = []
+  if (agcScratch.length < magnitudes.length) agcScratch = new Float64Array(magnitudes.length)
+  let n = 0
   for (let i = 0; i < magnitudes.length; i++) {
     const v = magnitudes[i]
-    if (Number.isFinite(v)) arr.push(v)
+    if (Number.isFinite(v)) agcScratch[n++] = v
   }
-  if (arr.length === 0) return { floor: 0, ceil: 1 }
-  arr.sort((a, b) => a - b)
+  if (n === 0) return { floor: 0, ceil: 1 }
+  const arr = agcScratch.subarray(0, n)
+  arr.sort() // TypedArray sorts NUMERICALLY by default — the `number[]` version needed a comparator
   const floor = percentile(arr, loPct)
   let ceil = percentile(arr, hiPct)
   if (!(ceil > floor)) ceil = floor + MIN_SPAN // all-equal / lo>=hi → safe span

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
+import { TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -1211,5 +1211,33 @@ describe('flattenRow (spectral flattening)', () => {
     // make the baseline follow signals and subtract them from themselves.
     const segHz = 4000 / WF_FLATTEN_SEGMENTS
     expect(segHz).toBeGreaterThan(4 * 50)
+  })
+})
+
+describe('trace peak-hold (rig scope)', () => {
+  const DIT_25WPM_MS = 1200 / 25 // 48 ms — PARIS timing
+  const ROW_MS = 50 // PhoneScope's poll cadence
+
+  it('lets 25 WPM keying modulate the trace at the CW default', () => {
+    // The complaint this fixes: on the CW scope, keying renders as a static bar. A dit gap has
+    // to give back a real fraction of the trace height. At the old single 400 ms constant it
+    // gave back 11%, which is why nothing appeared to move.
+    expect(traceHoldDecay(DIT_25WPM_MS, TRACE_HOLD_MS.fast)).toBeLessThan(0.75)
+  })
+
+  it('does not strobe: no preset collapses within one row period', () => {
+    // The OTHER end, and the reason the hold exists at all — the "flashing vertical line"
+    // report. A preset that decayed to near zero between polls would flicker at the row rate.
+    // Both directions are pinned here on purpose: a guard that can only fail one way is half
+    // a guard, and "make CW faster" has an obvious wrong answer (tau -> 0) that this rejects.
+    for (const [name, tau] of Object.entries(TRACE_HOLD_MS)) {
+      expect(traceHoldDecay(ROW_MS, tau), `${name} strobes between rows`).toBeGreaterThan(0.5)
+    }
+  })
+
+  it('orders the presets, and slow is still what shipped before', () => {
+    expect(TRACE_HOLD_MS.fast).toBeLessThan(TRACE_HOLD_MS.normal)
+    expect(TRACE_HOLD_MS.normal).toBeLessThan(TRACE_HOLD_MS.slow)
+    expect(TRACE_HOLD_MS.slow, 'slow must stay the pre-2026-08 value').toBe(400)
   })
 })

@@ -58,7 +58,7 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
-import { isRfScopeSource, sidebandSign, NO_NATIVE_SCOPE_REASON } from '../waterfall'
+import { isRfScopeSource, sidebandSign, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 
 /** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit). */
 const RF_SPANS = [
@@ -1336,6 +1336,7 @@ export function CwCockpit({
           filterWidthHz={filterHz ?? 500}
           pitchHz={pitch}
           cwPitchRefDial={keyer !== 'soundcard'}
+          traceHoldMs={TRACE_HOLD_MS.fast}
           interactive={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
         />
       </section>
