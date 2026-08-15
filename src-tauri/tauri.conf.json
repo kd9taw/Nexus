@@ -43,7 +43,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$LOCALDATA/Nexus/sstv-gallery/**"]
+        "scope": ["$PICTURE/Nexus SSTV/**", "$LOCALDATA/Nexus/sstv-gallery/**"]
       }
     }
   },

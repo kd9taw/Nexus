@@ -33,6 +33,10 @@
 mod chains;
 mod pouncer;
 mod window_state;
+/// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
+/// two files, and when they drifted every gallery preview silently went blank.
+#[cfg(test)]
+mod sstv_scope_test;
 
 use chains::{panel_key, panel_label, Instance};
 use std::path::PathBuf;
