@@ -7905,6 +7905,17 @@ impl Engine {
                 };
             }
         }
+        // ⭐ MSK144 PARKS BOTH OFFSETS ON 1500 Hz, exactly as WSJT-X does on entering the
+        // mode (mainwindow.cpp:8169-8173, clamp 1400-1600). The transmitter ALREADY keys
+        // 1500 regardless — `Msk144Mode::gen_wave` ignores `f0`, and the decoder pins the
+        // same centre — so offsets carried over from FT8 were a lie on screen: the red TX
+        // marker could sit at 2400 Hz while the rig transmitted at 1500. The display now
+        // says what the radio does. (Leaving MSK144 restores nothing: the operator retunes
+        // for the new mode as they always did, and WSJT-X keeps the same behaviour.)
+        if tier == Tier::Msk144 {
+            self.set_rx_offset(1500.0);
+            self.set_tx_offset(1500.0);
+        }
         // Point the native signal source at the selected mode (FT1/FT8/FT4). DX1
         // decodes via its own robust path in `ingest`, so the source is left as-is.
         // In Companion mode the source is the upstream WSJT-X stream — never
@@ -8436,6 +8447,19 @@ impl Engine {
 
     /// Set the RX capture gain (≥1.0 multiplier on received audio before decode). Headroom for a
     /// quiet interface; clamped to 1.0–8.0 (+18 dB). Applied live by the audio service.
+    /// Set the MSK144 T/R period (s) — the cockpit's narrow write. Clamped to the mode's
+    /// own set {5,10,15,30}; anything else snaps to 15. NARROW deliberately: a full
+    /// settings apply resets the mode and clears the TX queue (issue #54), which is the
+    /// one thing a mid-pass period change must never do.
+    pub fn set_msk144_period(&mut self, secs: u16) {
+        let secs = if modes::mode::ModeKind::MSK144_PERIODS.contains(&secs) {
+            secs
+        } else {
+            15
+        };
+        self.settings.msk144_period_s = secs;
+    }
+
     pub fn set_rx_gain(&mut self, gain: f32) {
         self.settings.rx_gain = gain.clamp(1.0, 8.0);
     }

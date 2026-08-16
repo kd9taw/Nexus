@@ -571,7 +571,17 @@ export function OperateDecodes({
                 </span>
                 <span className="decode-utc" title="UTC heard">{fmtUtc(d.at)}</span>
                 <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
-                <span className={`decode-dt ${dtClass(d.dtSec)}`} title="DT — time offset (s); large = clock/sync skew">
+                {/* On MSK144 dt is the ping's TIME WITHIN THE PERIOD (WSJT-X renames this
+                    column "T"), so it is legitimately 0..period and the FT8 clock-skew
+                    colouring would paint every healthy ping red. */}
+                <span
+                  className={`decode-dt ${d.tier === 'MSK144' ? 'ok' : dtClass(d.dtSec)}`}
+                  title={
+                    d.tier === 'MSK144'
+                      ? 'T — when in the period the ping landed (s)'
+                      : 'DT — time offset (s); large = clock/sync skew'
+                  }
+                >
                   {fmtDt(d.dtSec)}
                 </span>
                 <span className="decode-freq">{Math.round(d.freqHz)}</span>

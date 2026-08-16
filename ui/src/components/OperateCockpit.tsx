@@ -19,7 +19,7 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { openPanelWindow, getSettings, notifyErase, setSettings } from '../api'
+import { openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period } from '../api'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
@@ -710,6 +710,23 @@ export function OperateCockpit({
                 <span className="cm-slot">{m.slot}</span>
               </button>
             ))}
+            {tier === 'MSK144' && (
+              /* WSJT-X shows its T/R spinner on the main window exactly in fast mode
+                 (sbTR, mainwindow.cpp:8387) — the period is an operating decision on
+                 meteor scatter, not configuration, so it lives here and not only in
+                 Settings. Narrow write: a full settings apply is the #54 mid-QSO reset. */
+              <select
+                className="cockpit-mode cm-trperiod"
+                aria-label="MSK144 T/R period (seconds)"
+                title="T/R period — 15 s is the 6 m workhorse; 30 s eases deep-search on 2 m"
+                value={String(snap.link.periodSecs || 15)}
+                onChange={(e) => void setMsk144Period(Number(e.target.value)).then((s2) => onSnap?.(s2))}
+              >
+                {[5, 10, 15, 30].map((p) => (
+                  <option key={p} value={p}>{`${p}s`}</option>
+                ))}
+              </select>
+            )}
           </div>
         }
         bandControl={

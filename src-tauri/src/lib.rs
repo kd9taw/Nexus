@@ -9107,6 +9107,17 @@ fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSn
 /// applies it to the audio backend on the next slot; persisted so it survives
 /// restart. Returns the refreshed snapshot.
 #[tauri::command(async)]
+fn set_msk144_period(state: State<'_, SharedEngine>, secs: u16) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_msk144_period(secs);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: set_msk144_period save failed: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
+/// Set the TX audio drive level (0.0-1.0).
+#[tauri::command(async)]
 fn set_tx_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_tx_level(level);
@@ -16287,6 +16298,7 @@ pub fn run() {
             stop_qso_recording,
             set_tx_enabled,
             set_tx_level,
+            set_msk144_period,
             set_rx_gain,
             set_active_radio,
             set_peg_lock,

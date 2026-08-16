@@ -37,6 +37,9 @@ export const TIER_PERIOD_SECS: Record<Tier, number> = {
   // tagged it with.
   FST4: 15,
   FST4W: 120,
+  // MSK144's period is an operator setting (5/10/15/30); this is the default. Same
+  // caveat as FST4/Q65 below — a decode row's true period comes from the engine, and
+  // live surfaces should read link.periodSecs, not this table.
   MSK144: 15,
   JT65: 60,
   WSPR: 120,

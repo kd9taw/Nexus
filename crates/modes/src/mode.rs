@@ -50,8 +50,9 @@ pub enum ModeKind {
         period_s: u16,
         submode: u8,
     },
-    /// WSJT-X MSK144 — the METEOR-SCATTER mode. **RECEIVE-ONLY** — see
-    /// [`Capabilities::tx`].
+    /// WSJT-X MSK144 — the METEOR-SCATTER mode. Transmits and receives
+    /// ([`Capabilities::tx`] is true; the tone track keys 1500 Hz regardless of
+    /// the requested offset — the whole mode lives on one centre).
     ///
     /// Carries its T/R period for the same reason FST4 and Q65 do: the frame is
     /// `period_s * 12000` samples. `period_s` ∈ {5, 10, 15, 30}; 15 is the 6 m
@@ -1389,12 +1390,13 @@ impl Mode for Q65Mode {
     }
 }
 
-/// WSJT-X **MSK144** — the meteor-scatter mode. Receive-only.
+/// WSJT-X **MSK144** — the meteor-scatter mode. Transmits and receives.
 ///
 /// 72 ms frames repeated through the period, so one ionised trail lasting a tenth
-/// of a second can carry a whole message. Third receive-only mode in this tree:
-/// `encode`/`gen_wave` are left defaulted (empty) and `Capabilities.tx` is false,
-/// so [`tx_mode`] refuses to hand it to the transmit path.
+/// of a second can carry a whole message. `encode` and `gen_wave` are implemented
+/// below; `gen_wave` deliberately IGNORES the requested `f0` and keys the mode's
+/// fixed 1500 Hz centre — MSK144 lives on one frequency, and the tier switch parks
+/// the UI offsets there so the display says what the transmitter does.
 #[derive(Debug, Clone, Copy)]
 pub struct Msk144Mode {
     /// T/R period in seconds: 5, 10, 15 or 30.
@@ -1452,9 +1454,6 @@ impl Mode for Msk144Mode {
         // (msk144sim starts at sample 1), unlike Q65/FST4/WSPR.
         msk144::gen_wave(itone, self.period_s, fsample, msk144::TX_CENTRE_HZ).unwrap_or_default()
     }
-
-    // encode() and gen_wave() are DELIBERATELY not implemented — the trait defaults
-    // return empty, which is the safe failure if anything bypasses tx_mode.
 
     #[allow(clippy::too_many_arguments)]
     fn decode_frame(

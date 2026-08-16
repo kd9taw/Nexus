@@ -2066,6 +2066,12 @@ export async function getScopeRow(
  */
 export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
 
+/** Set the MSK144 T/R period (5/10/15/30 s) — the cockpit's narrow write. Deliberately not a
+ * full settings save, which resets the mode and clears the TX queue (#54). */
+export async function setMsk144Period(secs: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_msk144_period', { secs })
+}
+
 /** One Fast Graph power sample: raw 20 ms RMS, monotonic seq for delta polling. */
 export interface FastPowerSample {
   seq: number
