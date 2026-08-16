@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A satellite over can no longer be yanked onto the downlink by a stale keyed-state poll.**
+  Proven on the wire from the operator's CI-V capture: the mic went down, the once-a-second
+  PTT poll hadn't noticed yet, and the dial-keep pushed the downlink onto what was now the
+  transmit VFO. The rig's own reported frequency is now the evidence — if it reads the
+  pass's uplink, the rig is treated as keyed no matter what the last poll said — and the
+  PTT poll runs five times a second while a pass is up. Works for linear birds too, and a
+  bird's other documented uplink pairing (145.200 vs 144.490 on the ISS) counts as the pass,
+  not as you turning the knob. The pass also pins its transponder row at AOS, ending the
+  first-correction flip between rows the same capture caught.
+- **The Phone scope gives the voice three quarters of the panel.** The centered axis was
+  symmetric, so the (empty, filtered-away) far side of the dial cost half the display and
+  speech looked compressed into one section. The dial line now sits at the quarter mark —
+  left of center on USB, right on LSB — and the occupied sideband gets the rest.
+
 - **The setup wizard's example callsign is nobody's callsign.** The callsign and grid boxes
   showed `KD9TAW` and `EN52` as hint text on a fresh install — readable as prefilled values,
   and they are a real station's. The examples are now `N0CALL` and `FN31` everywhere hint
@@ -45,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (ISS, SO-50, AO-91, PO-101) now key their published tone; the tone ends with the pass.
 
 ### Added
+
+- **Text that carries your callsign IS your SSTV ident.** Put your call in any text overlay
+  and the corner ID plate retires — your layout identifies the picture, not the app's
+  stamp. Delete that text and the plate returns on the same draw. The manual "already in
+  the picture" checkbox still works as before.
 
 - **Every waterfall can now be hidden.** The scope strip in Phone, CW, RTTY, and SSTV joins
   the ⊞ Panels menu (Operate's already lived there) — on by default, and a hide sticks until
