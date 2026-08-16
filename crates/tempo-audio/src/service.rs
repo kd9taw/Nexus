@@ -2961,6 +2961,29 @@ impl RadioLoop {
             // stay queued (consume-only-when-acting) and apply after the handoff lands.
             let can_retune =
                 self.tx_until_ms.is_none() && !self.tuning_keyed && !self.handoff_deferred;
+            // ⚠️ THE DIAL, additionally, never while the rig is KEYED BY THE OPERATOR — the
+            // WRITE half of the V/V pass bug the `rig_keyed` read guards above close (field
+            // report, 2026-08-16, IC-9700). `set_freq` addresses the rig's SELECTED VFO, and
+            // on an Icom in split the selected VFO during transmit IS the transmit VFO: a
+            // Doppler correction landing mid-over wrote the bird's DOWNLINK straight onto the
+            // uplink. Nothing is lost by waiting — `last_dial` is not advanced, so the steady
+            // path re-pushes on the first unkeyed tick (20 ms), the same leave-it-pending
+            // semantics the other keyed guards use.
+            //
+            // Deliberately NOT folded into `can_retune`, for two separate reasons:
+            //  - the MODE must still reach the rig under manual PTT. That is the proven
+            //    behaviour the comment above is about, and gating it here is what made
+            //    "the VFO mirrors but modes won't switch" regress once already;
+            //  - the SPLIT one-shot must still reach the rig, and this is the sharper one.
+            //    The split TX dial is written with `set_split_freq`, which addresses the
+            //    UNSELECTED VFO (`25 01`) or select-writes the Sub band — it names its
+            //    register rather than inheriting whichever one TX happens to have selected,
+            //    so it stays correct while keyed. That leg is the operator's UPLINK, and
+            //    freezing it mid-over is precisely what `TxPolicy::Continuous` exists to
+            //    prevent: on a linear bird you must keep correcting the uplink WHILE you
+            //    talk, or you drift off the transponder in front of everyone. So the policy
+            //    is untouched; only the register that lies while keyed is withheld.
+            let can_push_dial = can_retune && !self.rig_keyed && !self.manual_ptt_applied;
             let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold) = {
                 let mut eng = engine_lock(engine);
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
@@ -3553,7 +3576,7 @@ impl RadioLoop {
                     // last_dial` test exists for (never re-slam a freq the operator may have just
                     // hand-tuned): that protects a dial-only re-entry with the SAME mode, and
                     // `mode_changed` is false there.
-                    if dial != self.last_dial || mode_changed {
+                    if (dial != self.last_dial || mode_changed) && can_push_dial {
                         let prev_dial = self.last_dial;
                         match self.push_dial(rig, dial, engine) {
                             // A refused DIAL outranks any mode note produced above: "the radio
@@ -3664,7 +3687,10 @@ impl RadioLoop {
                     // mode's convention, or the shift stands and the read-back adopts it.
                     // `dial_giveup` still stops a frequency the radio has REFUSED from being
                     // re-sent every tick — the HF-only-rig-on-2 m storm.
-                    if (dial != self.last_dial || mode_changed) && self.dial_giveup != Some(dial) {
+                    if (dial != self.last_dial || mode_changed)
+                        && self.dial_giveup != Some(dial)
+                        && can_push_dial
+                    {
                         let prev_dial = self.last_dial;
                         match self.push_dial(rig, dial, engine) {
                             // A refused DIAL outranks any mode note produced above.
@@ -4228,6 +4254,16 @@ impl RadioLoop {
                 && self.tx_until_ms.is_none()
                 && !self.tuning_keyed
                 && !self.manual_ptt_applied
+                // ⚠️ AND NOT MIC-KEYED, exactly as the heavy poll above (field report,
+                // 2026-08-16, IC-9700 on a V/V pass). This block is an INDEPENDENT reader on
+                // its own 180 ms cadence, and it did not inherit the `rig_keyed` guard when
+                // that was added upstairs — so during a keyed split TX, where the Icom's
+                // selected VFO is the TRANSMIT VFO, `read_freq` handed `observe_rig_freq` the
+                // UPLINK. Read as a knob QSY, that tore the pass down mid-over (the split
+                // cleared, TX fell back onto the bird's own downlink) about half a second in:
+                // this interval plus a tick. A dial read is RX-time work; a rig keyed by
+                // ANYONE means skip it.
+                && !self.rig_keyed
                 && self.cat_ok != Some(false)
                 && self.freq_misses == 0 // a heavy-poll miss pauses fast reads until it recovers
                 && now - self.last_freq_poll >= FREQ_POLL_MS
@@ -16513,6 +16549,159 @@ mod tests {
             Some("USB"),
             "a new transponder pick re-asserts the BIRD's mode over a mode picked for the \
              previous one: {modes:?}"
+        );
+    }
+
+    /// An FM V/V pass — BOTH legs on 2 m. The shape matters: same-band means
+    /// the split is the ordinary A/B kind, which is the one the operator was
+    /// running when this broke.
+    const V_V_FM: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 145_990_000,
+        downlink_centre_hz: 145_800_000,
+        invert: false,
+        half_width_hz: 0, // a channel — an FM bird has nothing to tune inside
+    };
+
+    #[test]
+    fn a_mic_keyed_over_on_a_v_v_pass_reads_no_dial_and_keeps_the_split() {
+        // ⭐ THE FIELD REPORT, as a wire test (KD9TAW, IC-9700 over CI-V,
+        // 2026-08-16): "about half a second into an over, TX jumps back to the
+        // downlink."
+        //
+        // The chain, all four links of which are real:
+        //  1. the operator keys the MIC — the rig transmits, Nexus did not ask;
+        //  2. keyed and in split, an Icom reports its TRANSMIT VFO, so the
+        //     loop's dial read comes back with the UPLINK;
+        //  3. `observe_rig_freq` is handed a frequency that is not the dial it
+        //     believes in, and on an FM bird the passband arm cannot recognise
+        //     it (a channel has no passband), so it read as a knob QSY;
+        //  4. a knob QSY's first act is to hand the rig back to simplex —
+        //     mid-over, onto the bird's own downlink.
+        //
+        // Driven through the REAL loop, because every claim here is about what
+        // does or does not reach the RIG.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        // The rig answers `f` with the UPLINK — link 2, standing.
+        let (addr, log) = mock_rigctld_on(145_990_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            let mut s = e.settings().clone();
+            s.phone_mode = "fm".into();
+            e.apply_settings(s);
+            e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, V_V_FM)));
+            e.sat_tune_nominal(FM_BIRD, 1_000_000);
+            // The uplink on the split TX dial — the same one-shot the Doppler
+            // tick uses, so this is the shipped mechanism, not a test-only one.
+            e.request_split(Some(145.990));
+        }
+        run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+        assert_eq!(
+            engine.lock().unwrap().split_tx_mhz(),
+            Some(145.990),
+            "scene: the pass is up and the uplink is on the split TX dial"
+        );
+        assert!(
+            log.lock().unwrap().iter().any(|l| l.starts_with("S 1")),
+            "scene: the split reached the rig: {:?}",
+            log.lock().unwrap()
+        );
+
+        // ---- THE OVER. Everything from here happens with the mic down. ----
+        state.rig_keyed = true;
+        log.lock().unwrap().clear();
+        // …and Doppler keeps steering THROUGH it, which is the design: a manual
+        // mode is `TxPolicy::Continuous`, because on a linear bird you must keep
+        // correcting while you talk. That policy is untouched here — what must
+        // not happen is the correction reaching the rig as an `F`, because `F`
+        // addresses the SELECTED VFO and while keyed in split that is the
+        // TRANSMIT one.
+        engine.lock().unwrap().steer_sat_dial(145.8015);
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+
+        let keyed_traffic = log.lock().unwrap().clone();
+        assert!(
+            !keyed_traffic.iter().any(|l| l.trim() == "f"),
+            "a keyed rig's dial is its TRANSMIT VFO — the loop must not read it at all \
+             (this is link 2, cut): {keyed_traffic:?}"
+        );
+        assert!(
+            !keyed_traffic.iter().any(|l| l.starts_with("S 0")),
+            "NOTHING may hand the rig back to simplex mid-over — that is the bug, on the \
+             wire: {keyed_traffic:?}"
+        );
+        assert!(
+            !keyed_traffic.iter().any(|l| l.starts_with("F ")),
+            "and the steer must NOT go out as an `F`: that addresses the SELECTED VFO, which \
+             while keyed in split is the transmit one — writing the downlink there IS the \
+             reported symptom: {keyed_traffic:?}"
+        );
+        assert_eq!(
+            engine.lock().unwrap().split_tx_mhz(),
+            Some(145.990),
+            "the operator's uplink still stands at the end of the over"
+        );
+
+        // ---- POSITIVE CONTROL, and it is doing two jobs. ----
+        // First it proves the scene is live: unkeyed, this very loop against
+        // this very stub DOES read the dial, so the silence above is the guard
+        // working and not a test that never exercised the path.
+        // Second it proves the SECOND fix independently: the uplink comes back
+        // on an unkeyed read here, and the pass still survives it, because a
+        // channel bird's own frequencies are now recognised as the pass's
+        // rather than as somewhere the operator tuned to.
+        state.rig_keyed = false;
+        log.lock().unwrap().clear();
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+
+        let unkeyed_traffic = log.lock().unwrap().clone();
+        assert!(
+            unkeyed_traffic.iter().any(|l| l.trim() == "f"),
+            "control: unkeyed, the loop really does read the dial — otherwise the assertions \
+             above prove nothing: {unkeyed_traffic:?}"
+        );
+        assert!(
+            unkeyed_traffic.iter().any(|l| l == "F 145801500"),
+            "control: the steer was WITHHELD, not dropped — it reaches the rig on the first \
+             unkeyed tick, which is what makes the guard a deferral rather than a lost \
+             correction: {unkeyed_traffic:?}"
+        );
+        assert_eq!(
+            engine.lock().unwrap().split_tx_mhz(),
+            Some(145.990),
+            "and the pass's OWN uplink, read back off the rig, is not an operator QSY"
+        );
+        assert!(
+            !unkeyed_traffic.iter().any(|l| l.starts_with("S 0")),
+            "so nothing tears the split down here either: {unkeyed_traffic:?}"
         );
     }
 
