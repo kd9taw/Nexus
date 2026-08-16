@@ -16,7 +16,7 @@
   "hunt": null,
   "link": {
     "dtSec": 0.04749727249145508,
-    "freqHz": 1499.9281005859375,
+    "freqHz": 1500,
     "periodSecs": 7.5,
     "quality": 1.0,
     "rv": -1,
@@ -106,7 +106,7 @@
       "country": null,
       "directedToMe": false,
       "dtSec": 0.04749727249145508,
-      "freqHz": 1499.9281005859375,
+      "freqHz": 1500,
       "from": "N7GHI",
       "grid": "DM79",
       "gridRarity": null,
