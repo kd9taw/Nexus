@@ -147,8 +147,23 @@ pub fn level_line(name: &str, value: &str) -> String {
     format!("L {name} {value}\n")
 }
 /// rigctld `b` — send_morse: the rig keys CW from this text (rest of the line).
+///
+/// ⚠️ A SINGLE-CHARACTER WORD IS PADDED TO TWO (issue #86, VE3FMQ, FT-991A: "CQ does not
+/// send the K after the call sign", "? is not sent at all"). Hamlib's Yaesu backend
+/// (`newcat_send_morse`, in the 4.7.1 DLL Nexus ships) interprets a ONE-character message as
+/// a keyer-memory playback number — valid only '1'..'5', anything else returns -RIG_EINVAL
+/// and keys NOTHING. Nexus queues CW word-at-a-time (the Stop-TX contract), so every 1-char
+/// word — the closing K, a bare ?, R, E — was silently rejected, and a lone digit 1-5 would
+/// have PLAYED the rig's stored memory instead of keying the digit. A trailing space makes
+/// the message two characters, which routes down the working KM1/KY path; in Morse a
+/// trailing space is only a word gap, and on the other backends (Kenwood pads its KY buffer
+/// with spaces anyway; Icom sends the text) it is equally harmless.
 pub fn morse_line(text: &str) -> String {
-    format!("b {text}\n")
+    if text.chars().count() == 1 {
+        format!("b {text} \n")
+    } else {
+        format!("b {text}\n")
+    }
 }
 /// Parse the S-meter reading (dB relative to S9) from a rigctld `l STRENGTH` reply.
 /// Hamlib reports STRENGTH as a signed integer dB value where S9 = 0 dB (S1 ≈ -48 dB,
@@ -1021,6 +1036,25 @@ mod tests {
         assert_eq!(mode_line("PKTUSB", 0), "M PKTUSB 0\n");
         assert!(reply_ok("RPRT 0\n"));
         assert!(!reply_ok("RPRT -1\n"));
+    }
+
+    /// ISSUE #86 — the closing K of every CW macro was silently never keyed.
+    ///
+    /// Hamlib's Yaesu `newcat_send_morse` reads a ONE-character message as a keyer-memory
+    /// number ('1'..'5' only) and refuses anything else with -RIG_EINVAL — so word-at-a-time
+    /// keying dropped every single-character word. The pad routes them down the normal path.
+    #[test]
+    fn a_single_character_cw_word_is_padded_past_hamlibs_memory_number_trap() {
+        assert_eq!(morse_line("K"), "b K \n", "the closing K must actually key");
+        assert_eq!(morse_line("?"), "b ? \n");
+        assert_eq!(
+            morse_line("5"),
+            "b 5 \n",
+            "a lone digit must KEY '5', not play the rig's stored memory 5"
+        );
+        // Multi-character words are untouched — the pad is not blanket rewriting.
+        assert_eq!(morse_line("CQ"), "b CQ\n");
+        assert_eq!(morse_line("VE3FMQ"), "b VE3FMQ\n");
     }
 
     /// THE ATU BUTTON DID NOTHING — the wire form, pinned (operator 2026-08-15, FTDX10).

@@ -15861,13 +15861,16 @@ pub fn run() {
                 // Recover a poisoned lock (conn_log pattern) — a panicked command
                 // holding the engine must not silently kill auto-upload forever.
                 let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                let (q, c, e, h, n, cl, dxk, cl_email, cl_key) = {
+                let (q, c, e, h, hrd, n, cl, dxk, cl_email, cl_key) = {
                     let s = eng.settings();
                     (
                         s.qrz_logbook_upload,
                         s.clublog_upload,
                         s.eqsl_upload,
                         s.hrdlog_upload,
+                        // HRD Logbook (QSO Forwarding, UDP 2333) — a DIFFERENT feature from
+                        // hrdlog_upload (HRDLog.net) above, and the distinction is issue #87.
+                        s.hrd_logging,
                         s.n3fjp_upload && !s.n3fjp_host.trim().is_empty(),
                         s.cloudlog_upload && !s.cloudlog_url.trim().is_empty(),
                         // DXKeeper: empty host = off. Carried as (host, base_port, uploads)
@@ -15889,7 +15892,14 @@ pub fn run() {
                 // broadcast deliberately does NOT appear here: it fires from the log funnel
                 // itself, so it never consumes a queued record that a still-disabled
                 // connector is waiting to be turned on for.)
-                if !(q || c || e || h || n || cl || dxk.is_some()) {
+                // ⚠️ `hrd` IS IN THIS LIST (issue #87, Luk73). Its drain lives at the tail of
+                // this loop, and hrd_logging was never added here — so a station running ONLY
+                // Ham Radio Deluxe forwarding hit this `continue` on every tick: the app said
+                // "Logged CALL", the queue silently filled to 256 and dropped, and wireshark
+                // correctly showed not one datagram on udp/2333. The comment above records the
+                // IDENTICAL bug being fixed for DXKeeper; the lesson generalises: every
+                // connector whose drain lives below must appear in this gate.
+                if !(q || c || e || h || hrd || n || cl || dxk.is_some()) {
                     // Nothing enabled: LEAVE the queue intact (bounded at 256) so
                     // flipping a toggle on later still uploads this session's
                     // recent QSOs — log-first-configure-later must not lose them.
