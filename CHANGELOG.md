@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.1] — 2026-08-16
+## [1.5.0] — 2026-08-16
 
 ### Added
 
@@ -13,10 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notarized, with the same self-updater as Windows and Linux. CAT control uses Hamlib from
   Homebrew (`brew install hamlib`); Intel Macs can build from source, which works out of the
   box as of 1.5.0. First macOS release — treat it as fresh ground and report what you find.
-
-## [1.5.0] — 2026-08-16
-
-### Added
+  *(Added to the 1.5.0 release 2026-08-16, after the initial publish — same source, new platform.)*
 
 - **MSK144 has a display built for meteor scatter.** Switch to MSK144 and the waterfall strip
   becomes a time display — the Fast Graph, as WSJT-X draws it: seconds across one T/R period,
