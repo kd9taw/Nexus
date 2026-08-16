@@ -10,14 +10,16 @@
 import type { DecodeRow } from './types'
 import { durableGet, durableSet } from './features/durableStore'
 
-export type WatchKind = 'call' | 'dxcc'
+export type WatchKind = 'call' | 'dxcc' | 'grid'
 
 export interface WatchFilter {
   /** Stable id for list keys + removal. */
   id: string
   kind: WatchKind
   /** For `call`: an exact call or a `*`-wildcard (e.g. `VP8*`, `*ABC`, `3Y0*`). For
-   * `dxcc`: a country/entity name matched case-insensitively against the decode's country. */
+   * `dxcc`: a country/entity name matched case-insensitively against the decode's country.
+   * For `grid`: an exact 4-char square (`FN31`) or a `*`-wildcard (`EM7*`, `EM*`) — FT8/FT4
+   * frames carry 4-char grids, so a 2-char field wants the star. */
   value: string
   /** Only alert on a CQ call (not mid-QSO chatter). Default false. */
   cqOnly?: boolean
@@ -57,6 +59,11 @@ export function matchWatchlist(d: DecodeRow, filters: WatchFilter[]): WatchFilte
     } else if (f.kind === 'dxcc') {
       const country = (d.country ?? '').toUpperCase().trim()
       hit = country !== '' && country === f.value.toUpperCase().trim()
+    } else if (f.kind === 'grid') {
+      // Only frames that carry a grid can match (CQ + first reply, per protocol) — a
+      // grid-less row is "unknown", never a hit. matchCallPattern is a general glob.
+      const grid = (d.grid ?? '').toUpperCase().trim()
+      hit = grid !== '' && matchCallPattern(grid, f.value)
     }
     if (hit) return f
   }
@@ -65,7 +72,10 @@ export function matchWatchlist(d: DecodeRow, filters: WatchFilter[]): WatchFilte
 
 /** A short human label for a matched filter, for the alert toast. */
 export function watchLabel(f: WatchFilter): string {
-  return f.label?.trim() || (f.kind === 'dxcc' ? f.value : f.value.toUpperCase())
+  if (f.label?.trim()) return f.label.trim()
+  if (f.kind === 'dxcc') return f.value
+  if (f.kind === 'grid') return `grid ${f.value.toUpperCase()}`
+  return f.value.toUpperCase()
 }
 
 /** Load the saved watch list (empty on first run or any parse error). */
@@ -77,7 +87,10 @@ export function loadWatchlist(): WatchFilter[] {
     if (!Array.isArray(arr)) return []
     return arr.filter(
       (f): f is WatchFilter =>
-        f && typeof f.id === 'string' && (f.kind === 'call' || f.kind === 'dxcc') && typeof f.value === 'string',
+        f &&
+        typeof f.id === 'string' &&
+        (f.kind === 'call' || f.kind === 'dxcc' || f.kind === 'grid') &&
+        typeof f.value === 'string',
     )
   } catch {
     return []

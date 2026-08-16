@@ -9378,6 +9378,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .watchlist-kind-dxcc {
   background: var(--state-ok, #2fbf71);
 }
+.watchlist-kind-grid {
+  background: var(--state-info, #5ba8f5);
+}
 .watchlist-value {
   font-family: var(--font-mono);
   font-weight: 700;

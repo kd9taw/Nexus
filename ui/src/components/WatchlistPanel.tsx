@@ -11,7 +11,7 @@ import {
  * Manage the user watch list — "alert me loudly when THIS shows up." Self-contained: it
  * persists to localStorage and dispatches `nexus:watchlist-changed` so the live decode
  * alerter (App) re-syncs immediately. Generalizes the DXpedition chase-star to any
- * operator-defined target (a call/prefix, or a whole DXCC entity).
+ * operator-defined target (a call/prefix, a whole DXCC entity, or a grid square).
  */
 export function WatchlistPanel() {
   const [list, setList] = useState<WatchFilter[]>(() => loadWatchlist())
@@ -37,17 +37,19 @@ export function WatchlistPanel() {
     <div className="watchlist">
       <div className="watchlist-hint">
         Get a loud alert when a matching station is decoded — a callsign or prefix (wildcards:{' '}
-        <code>VP8*</code>, <code>*ABC</code>) or a whole DXCC entity.
+        <code>VP8*</code>, <code>*ABC</code>), a whole DXCC entity, or a grid square (
+        <code>FN31</code>, <code>EM7*</code>). A grid you name here alerts on every band — the
+        HF grid-quiet default doesn&apos;t apply to squares you asked for.
       </div>
       {list.length > 0 && (
         <ul className="watchlist-items">
           {list.map((f) => (
             <li key={f.id} className="watchlist-item">
               <span className={`watchlist-kind watchlist-kind-${f.kind}`}>
-                {f.kind === 'call' ? 'CALL' : 'DXCC'}
+                {f.kind === 'call' ? 'CALL' : f.kind === 'grid' ? 'GRID' : 'DXCC'}
               </span>
               <span className="watchlist-value">
-                {f.kind === 'call' ? f.value.toUpperCase() : f.value}
+                {f.kind === 'dxcc' ? f.value : f.value.toUpperCase()}
               </span>
               {f.cqOnly && <span className="watchlist-flag">CQ only</span>}
               <button
@@ -72,11 +74,14 @@ export function WatchlistPanel() {
         >
           <option value="call">Call / prefix</option>
           <option value="dxcc">DXCC entity</option>
+          <option value="grid">Grid square</option>
         </select>
         <input
           className="settings-input"
           value={value}
-          placeholder={kind === 'call' ? 'e.g. VP8*  or  3Y0J' : 'e.g. Bouvet'}
+          placeholder={
+            kind === 'call' ? 'e.g. VP8*  or  3Y0J' : kind === 'grid' ? 'e.g. FN31  or  EM7*' : 'e.g. Bouvet'
+          }
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') add()

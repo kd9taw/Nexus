@@ -220,6 +220,45 @@ describe('per-alert band scopes (dialMhz gate)', () => {
   })
 })
 
+describe('grid squares on the watch list', () => {
+  const ctx = { state: 'Listening', dxcall: null }
+  const hunt = [{ id: 'g1', kind: 'grid' as const, value: 'EM7*' }]
+
+  it('a watched grid fires the loud ⭐ watch tier and consumes the decode', () => {
+    processDecodes(
+      [decode({ from: 'K4ROV', grid: 'EM79', newGrid: true, gridRarity: 'common' })],
+      settings,
+      undefined,
+      ctx,
+      hunt,
+      50.313,
+    )
+    // Exactly ONE toast: the watch hit, not the watch hit plus a generic grid alert.
+    expect(toasts).toHaveBeenCalledTimes(1)
+    const [msg, , , opts] = toasts.mock.calls[0]
+    expect(msg).toContain('⭐ Watch')
+    expect(msg).toContain('grid EM7*')
+    expect(opts).toMatchObject({ prominent: true, actionLabel: 'Work' })
+  })
+
+  it('fires on HF — a square asked for by name outranks the HF grid-quiet default', () => {
+    // The 1.5.0 ruling scoped UNWORKED-grid chatter off HF. A grid the operator typed
+    // into the watch list is not chatter; the watch branch runs above the scope gates.
+    // (A different rover than the test above — the watch dedup is per filter+call and
+    // module-global, so reusing K4ROV would test the dedup, not the scope.)
+    processDecodes(
+      [decode({ from: 'W9ROV', grid: 'EM77', newGrid: true })],
+      settings,
+      undefined,
+      ctx,
+      hunt,
+      14.074,
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('⭐ Watch')
+  })
+})
+
 // ── Repeat-alert regression (operator, 0.20.x): "someone turned ATNO on and they
 // were on the band with them and it alerted over and over ... on each cycle."
 describe('alerts do not repeat every cycle', () => {
