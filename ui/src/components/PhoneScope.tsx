@@ -37,6 +37,13 @@ const PHSCOPE_DSS_KEY = 'nexus.phonescope.dss'
  * PHSCOPE_DSS_KEY — the storage-scope test matches this declaration. */
 const PHSCOPE_WIN_KEY = 'nexus.phonescope.win'
 
+/** Persisted scroll direction for the rig scope's waterfall band — same contract as the FT8
+ * waterfall's FLOW_KEY (operator ask, 2026-08-16: the toggle everywhere a waterfall scrolls,
+ * default DOWN to match). Only the exact string 'up' opts out; anything else is the default,
+ * so a stale/foreign value can never pick a direction nobody chose. Static literal — the
+ * storage-scope test classifies keys off this declaration. */
+const PHSCOPE_FLOW_KEY = 'nexus.phonescope.flow'
+
 /**
  * The window-length control, in the order it cycles.
  *
@@ -207,6 +214,10 @@ export function PhoneScope({
   const [scopeWin, setScopeWin] = useState<ScopeWindow>(() =>
     resolveScopeWindow(surfaceGet(PHSCOPE_WIN_KEY)),
   )
+  /** Newest row at the TOP (scrolls down) — the default, matching the FT8 waterfall. */
+  const [newestAtTop, setNewestAtTop] = useState<boolean>(() => surfaceGet(PHSCOPE_FLOW_KEY) !== 'up')
+  const newestAtTopRef = useRef(newestAtTop)
+  newestAtTopRef.current = newestAtTop
   const scopeWinRef = useRef(scopeWin)
   scopeWinRef.current = scopeWin
   /** Scrollback offset in history rows while paused (0 = live tail). */
@@ -364,7 +375,7 @@ export function PhoneScope({
         retImg = new ImageData(retBuf, Wd, wfHd)
         retW = Wd
         retH = wfHd
-        historyRef.current.renderInto(retBuf, Wd, wfHd, vLo, vHi, lutRef.current, 0)
+        historyRef.current.renderInto(retBuf, Wd, wfHd, vLo, vHi, lutRef.current, 0, newestAtTopRef.current)
       }
       return retImg
     }
@@ -383,7 +394,7 @@ export function PhoneScope({
       }
       if (retBuf && retW > 0 && retH > 0) {
         const traceHd = Math.max(1, Math.round(devH * TRACE_FRAC))
-        historyRef.current.renderInto(retBuf, retW, retH, lastViewLo, lastViewHi, lut, offsetRef.current)
+        historyRef.current.renderInto(retBuf, retW, retH, lastViewLo, lastViewHi, lut, offsetRef.current, newestAtTopRef.current)
         try {
           // Clear the trace band to floor first — while paused/scrolled (or just back from 3D)
           // the live trace isn't being repainted, so wipe stale pixels before the band blit.
@@ -635,12 +646,17 @@ export function PhoneScope({
         return
       }
 
-      // ---- Waterfall (bottom region): scroll the RETAINED buffer up 1 row + write the new
-      // bottom row from the LUT, then blit at y=traceHd. No getImageData readback. ----
+      // ---- Waterfall (bottom region): scroll the RETAINED buffer one row and write the
+      // new row at the leading edge, then blit at y=traceHd. Direction is the operator's
+      // (PHSCOPE_FLOW_KEY), read ONCE so the shift and the row it makes room for can never
+      // disagree — the same discipline as Waterfall.tsx. ----
       const img = retained(Wd, wfHd, lo, hi)
       const out = retBuf!
-      out.copyWithin(0, Wd * 4)
-      const base = (wfHd - 1) * Wd * 4
+      const rowBytes = Wd * 4
+      const topDown = newestAtTopRef.current
+      if (topDown) out.copyWithin(rowBytes, 0)
+      else out.copyWithin(0, rowBytes)
+      const base = topDown ? 0 : (wfHd - 1) * rowBytes
       for (let x = 0; x < Wd; x++) {
         const li = (mag[x] >= 1 ? 255 : Math.round(mag[x] * 255)) * 4
         const o = base + x * 4
@@ -1133,6 +1149,25 @@ export function PhoneScope({
         >
           {paused ? '▶' : '⏸'}
         </button>
+        <button
+          type="button"
+          className={`ph-scope-btn${!newestAtTop ? ' on' : ''}`}
+          aria-pressed={!newestAtTop}
+          title={
+            newestAtTop
+              ? 'Scrolls down — the newest row appears at the TOP and history travels downward. Click for newest at the bottom.'
+              : 'Scrolls up — the newest row appears at the BOTTOM and history travels upward. Click for newest at the top.'
+          }
+          onClick={() => {
+            const next = !newestAtTop
+            setNewestAtTop(next)
+            newestAtTopRef.current = next
+            surfaceSet(PHSCOPE_FLOW_KEY, next ? 'down' : 'up')
+            rebuildRef.current?.()
+          }}
+        >
+          {newestAtTop ? 'Scrolls down' : 'Scrolls up'}
+        </button>
       </div>
       <div className="ph-scope-canvas-wrap">
         <canvas
@@ -1151,7 +1186,9 @@ export function PhoneScope({
             // Only in pause/review mode: wheel up = back in time, down = toward live.
             if (!pausedRef.current) return
             const h = historyRef.current
-            const step = e.deltaY < 0 ? 3 : -3
+            // Wheel-back follows the scroll direction, exactly as the FT8 waterfall's does.
+            const back = newestAtTopRef.current ? e.deltaY > 0 : e.deltaY < 0
+            const step = back ? 3 : -3
             const cur = offsetRef.current
             const next = Math.max(0, Math.min(h.maxOffset(1), cur + step))
             if (next !== cur) {
