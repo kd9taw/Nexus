@@ -181,7 +181,7 @@ describe('Lock on — putting the radio back on the bird', () => {
     // that wrote a frequency directly would skip routing, the band and the
     // commanded mode, and land the dial on a rig that was never asked.
     expect(api.setSatTransponder).toHaveBeenCalledTimes(1)
-    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1, false)
   })
 
   it('sits with the radio line, not inside the Doppler readout', async () => {
@@ -218,7 +218,7 @@ describe('Lock on — putting the radio back on the bird', () => {
     fireEvent.click(await lockOn())
     // The index comes off the track DTO, which indexes the same getSatDetail
     // list the cards do — so it re-runs the pick the ENGINE is holding.
-    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1, false)
   })
 
   it('is absent when no transponder is held — it never picks one for you', async () => {
@@ -259,7 +259,7 @@ describe('Lock on — reachable in every state that holds a transponder', () => 
     api.getSatTrackStatus.mockImplementation(() => Promise.resolve(null))
     render(<SatellitesView focusSat="RS-44" />)
     fireEvent.click(await lockOn())
-    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1, false)
   })
 
   it('(b) armed, before AOS, Doppler reporting no tuning', async () => {
@@ -283,7 +283,7 @@ describe('Lock on — reachable in every state that holds a transponder', () => 
     // The exact sentence the control was hidden behind.
     await screen.findByText(/nothing to correct until the bird is up/i)
     fireEvent.click(await lockOn())
-    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1, false)
   })
 
   it('(c) tracking, with the frequencies on screen', async () => {
@@ -292,7 +292,7 @@ describe('Lock on — reachable in every state that holds a transponder', () => 
     // scale) — the state the button always worked in.
     await screen.findAllByText(/435\.64332 MHz/)
     fireEvent.click(await lockOn())
-    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1)
+    expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 1, false)
   })
 
   it('(d) no hold at all, armed or not — it never picks a transponder for you', async () => {

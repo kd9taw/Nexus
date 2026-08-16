@@ -5753,11 +5753,29 @@ async fn set_sat_transponder(
     state: State<'_, SharedEngine>,
     name: String,
     index: Option<usize>,
+    auto: Option<bool>,
 ) -> Result<(), String> {
     let Some(index) = index else {
         engine_lock(&state).set_sat_transponder(None);
         return Ok(());
     };
+    // ⚠️ MACHINERY DOES NOT CHANGE THE ROW MID-PASS. `auto` = this pick came from
+    // the "Work this pass" chain rather than from a click on a transponder card,
+    // and that chain re-runs — from the schedule, from a pass alarm, from the
+    // detail pane. Re-entered during a pass it re-picks "the first workable row",
+    // which on a bird with two documented pairings (the ISS: 145.200 up in region
+    // 1, 144.490 in regions 2/3, one 145.800 downlink) is not necessarily the row
+    // the operator is working. That is how two uplinks reached the split TX dial a
+    // second apart (CI-V capture, 2026-08-16).
+    //
+    // Asked HERE and not in the engine for the one thing the engine cannot know:
+    // whether a human clicked. An operator choosing another transponder mid-pass
+    // is what the picker is for, and it re-pins (`Engine::set_sat_transponder`).
+    if auto.unwrap_or(false) && engine_lock(&state).sat_row_pinned_against(index) {
+        return Err(format!(
+            "{name}: a pass is being worked on another transponder — keeping it"
+        ));
+    }
     let tles = tle_snapshot();
     // Rename-surviving lookup: a ★'d old name still finds its bird (phase 4).
     let norad = resolve_bird(&tles, &tle_aliases(), &name)
@@ -5766,7 +5784,7 @@ async fn set_sat_transponder(
 
     let snap = satnogs_snapshot(vec![norad])
         .ok_or_else(|| "satellite data not fetched yet — open the bird's detail first".to_string())?;
-    let tp = snap
+    let rows: Vec<_> = snap
         .transmitters
         .iter()
         // ⚠️ INDEX THE SAME LIST `get_sat_detail` RETURNS — norad only, dead
@@ -5777,9 +5795,11 @@ async fn set_sat_transponder(
         // list the caller was actually shown is. A dead pick is refused here,
         // by name, rather than shifting everything after it.
         .filter(|t| t.norad == norad)
-        .nth(index)
-        .ok_or_else(|| format!("{name}: no transponder #{index}"))?
-        .clone();
+        .collect();
+    let tp = (*rows
+        .get(index)
+        .ok_or_else(|| format!("{name}: no transponder #{index}"))?)
+    .clone();
     if !tp.alive {
         return Err(format!(
             "{}: that transponder is marked inactive — pick a live one",
@@ -5815,17 +5835,34 @@ async fn set_sat_transponder(
     // takes a closed list, so a raw name handed down would be refused on the
     // wire and spend the loop's bounded set-mode budget.
     let class = tp.downlink_class();
+    let uplink = tp.uplink_centre_hz().unwrap_or(0);
+    // EVERY OTHER UPLINK THIS BIRD DOCUMENTS. The operator's rig may be running a
+    // pairing we did not write — the ISS voice repeater is 145.200 up in region 1
+    // and 144.490 in regions 2/3 against the same downlink — and a rig reporting
+    // one of those is still on this pass, not off it (`Engine::sat_alt_uplinks`).
+    // Dead rows included: a transmitter marked inactive cannot be PICKED, but its
+    // channel is still a documented pairing an operator's rig may be sitting on,
+    // and recognising a frequency costs nothing where selecting it would mislead.
+    let alt_uplinks: Vec<u64> = rows
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != index)
+        .filter_map(|(_, t)| t.uplink_centre_hz())
+        .filter(|&hz| hz != 0 && hz != uplink)
+        .collect();
     let mut eng = engine_lock(&state);
     eng.set_sat_transponder(Some((
         label,
         index,
         tempo_core::doppler::Transponder {
-            uplink_centre_hz: tp.uplink_centre_hz().unwrap_or(0),
+            uplink_centre_hz: uplink,
             downlink_centre_hz: down,
             invert: tp.invert,
             half_width_hz: half,
         },
     )));
+    // AFTER the pick, which clears the list — see `Engine::set_sat_alt_uplinks`.
+    eng.set_sat_alt_uplinks(alt_uplinks);
     // TUNE ON PICK — the click IS the consent for the dial, exactly as it is for
     // a spot, a repeater favourite or a band-map click. The hold is set FIRST so
     // the tune reads the transponder it is tuning to; a refused tune (Doppler
@@ -6624,7 +6661,20 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // another rig or a transponder release moves the label exactly
         // when it moves the behaviour.
         let (mode, consent, held, tx_mode) = {
-            let eng = engine_lock(&dop_engine);
+            let mut eng = engine_lock(&dop_engine);
+            // THE PASS IS UP (or is not) — pushed every tick rather than on the
+            // edges, so a track that dies without running its handback cannot
+            // leave the engine believing a pass is being worked, and so the
+            // armed/prepositioning ticks (which `continue` below, before the
+            // phase is named) say so too. `t >= aos` is exactly the phase the
+            // Doppler tick runs in: the armed hold ends at or before AOS.
+            //
+            // Two things downstream turn on it — the transponder row is PINNED
+            // while it stands, and the radio loop tightens its PTT poll to
+            // 200 ms (`Engine::set_sat_pass_engaged`). Both are about an over in
+            // flight, which is why the waiting phases are not it: the operator
+            // is not working the bird until it is up.
+            eng.set_sat_pass_engaged(t >= pass.aos_unix);
             let con = SatDopplerConsent::read(&eng);
             let held = eng.sat_transponder_held().is_some();
             (

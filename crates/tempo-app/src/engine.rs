@@ -1654,6 +1654,41 @@ pub struct Engine {
     /// hold is released, because a binding without a hold names a rig nothing
     /// is about to drive.
     sat_binding: Option<SatBinding>,
+    /// The tracked pass is UP — the track loop's `tracking` phase, pushed in
+    /// every tick by [`Engine::set_sat_pass_engaged`]. Two things read it, and
+    /// both are about an over in flight: the row PIN below (a pass being worked
+    /// does not change transponder under the operator) and the radio loop's PTT
+    /// poll cadence, which tightens to `SAT_PASS_PTT_POLL_MS` while it is set.
+    /// Always false with no hold — releasing the transponder ends the pass by
+    /// definition.
+    sat_pass_engaged: bool,
+    /// The row the pass ENGAGED on: `(row index, the transponder as it stood at
+    /// engage)`. `None` outside an engaged pass.
+    ///
+    /// ⚠️ Why the frequencies are carried and not just the index. The index is a
+    /// position in the SatNOGS transmitter list for this bird, and that list is
+    /// a fetched snapshot: a re-pick naming the same row (the "Lock on" button,
+    /// a re-run of the work-pass chain) can resolve to DIFFERENT frequencies if
+    /// the snapshot moved under it. On the ISS — two documented voice pairings,
+    /// 145.200 and 144.490 against the same 145.800 downlink — that is what put
+    /// two uplinks on the split TX dial a second apart mid-pass (CI-V capture,
+    /// 2026-08-16). Pinning the VALUES is what makes the row stand.
+    sat_row_pin: Option<(usize, tempo_core::doppler::Transponder)>,
+    /// The bird's OTHER documented uplink centres (Hz) — every row of the same
+    /// satellite except the one held. Set by the command layer right after
+    /// [`Engine::set_sat_transponder`] (which clears it, so a stale list can
+    /// never outlive a pick) because only that layer has the transmitter list.
+    ///
+    /// The rig may be running a pairing we did not write: the ISS voice repeater
+    /// is 145.200 up in region 1 and 144.490 up in regions 2/3, and an operator
+    /// whose rig came up on the other one is still working THIS pass. So these
+    /// count as the pass's own frequencies for the channel hatch in
+    /// [`Engine::sat_observe_operator_tune`], and as keyed evidence for
+    /// [`Engine::sat_inferred_keyed`].
+    sat_alt_uplinks: Vec<u64>,
+    /// The rig is transmitting, INFERRED from the frequency it reported rather
+    /// than from its PTT line — see [`Engine::sat_inferred_keyed`].
+    sat_inferred_keyed: bool,
     /// The operator took the MODE back during a pass (they picked a sideband by
     /// hand). While set, [`Engine::sat_tx_mode`] says nothing at all: we never
     /// re-assert a sideband over the top of a choice the operator just made.
@@ -3373,6 +3408,10 @@ impl Engine {
             sat_dial_owner: None,
             sat_last_rate: None,
             sat_binding: None,
+            sat_pass_engaged: false,
+            sat_row_pin: None,
+            sat_alt_uplinks: Vec::new(),
+            sat_inferred_keyed: false,
             sat_mode_released: false,
             split_tx_mhz: None,
             split_dirty: false,
@@ -8699,8 +8738,27 @@ impl Engine {
         &mut self,
         tp: Option<(String, usize, tempo_core::doppler::Transponder)>,
     ) {
+        // Whatever happens below, the alternate-uplink list belongs to the
+        // outgoing pick. The command layer re-states it for the new one.
+        self.sat_alt_uplinks.clear();
         match tp {
             Some((label, index, t)) => {
+                // ⚠️ THE ROW PIN. While a pass is ENGAGED, a re-pick naming the
+                // row the pass engaged on keeps the frequencies it engaged
+                // with — the incoming pair is discarded. See `sat_row_pin`: the
+                // index is a position in a fetched list, so "the same row" and
+                // "the same transponder" are not the same claim, and the
+                // difference put two uplinks on the rig a second apart.
+                //
+                // A pick naming a DIFFERENT row is the operator choosing another
+                // transponder, which is theirs to do mid-pass; it re-pins. What
+                // cannot reach here is the work-pass chain's AUTO pick — the
+                // command layer refuses that one against `sat_row_pinned_against`
+                // rather than letting machinery change the operator's row.
+                let t = match self.sat_row_pin.as_ref() {
+                    Some((pinned, tp)) if self.sat_pass_engaged && *pinned == index => *tp,
+                    _ => t,
+                };
                 self.sat_tune = Some(SatTune {
                     label: label.clone(),
                     index: Some(index),
@@ -8708,6 +8766,9 @@ impl Engine {
                     state: tempo_core::doppler::DopplerState::default(),
                     sent: tempo_core::doppler::SentTuning::default(),
                 });
+                if self.sat_pass_engaged {
+                    self.sat_row_pin = Some((index, t));
+                }
                 self.set_sat_dial_owner(Some((label, 0)));
                 // Picking a transponder is the operator asking for this bird's
                 // tuning, which re-arms the uplink sideband after any earlier
@@ -8721,8 +8782,59 @@ impl Engine {
                 // A binding names the rig a HOLD is about to drive. With the
                 // hold gone it would name a rig nothing will move.
                 self.sat_binding = None;
+                // No hold, no pass: the engagement and everything derived from
+                // it (the row pin, the inferred-keyed belief) go with it. This
+                // is the LOS handback's path as well as the operator's own
+                // "None — leave the dial to me".
+                self.set_sat_pass_engaged(false);
             }
         }
+    }
+
+    /// The tracked pass is UP (the track loop's `tracking` phase) — or is not.
+    /// Pushed every tick by the loop that owns the pass, so a track that dies
+    /// without a handback cannot leave the state standing.
+    ///
+    /// The RISING edge is where the row is PINNED: whatever transponder is held
+    /// when the bird comes up is the one this pass is worked on. The falling
+    /// edge releases the pin and the inferred-keyed belief — both describe an
+    /// over on a pass, and there is no pass.
+    pub fn set_sat_pass_engaged(&mut self, on: bool) {
+        if on == self.sat_pass_engaged {
+            return;
+        }
+        self.sat_pass_engaged = on;
+        if on {
+            self.sat_row_pin = self
+                .sat_tune
+                .as_ref()
+                .and_then(|st| st.index.map(|i| (i, st.transponder)));
+        } else {
+            self.sat_row_pin = None;
+            self.sat_inferred_keyed = false;
+        }
+    }
+
+    /// Would a pick of `index` change the row this engaged pass is being worked
+    /// on? The AUTOMATIC pick — the work-pass chain's, which runs whenever that
+    /// chain is re-entered — asks this before acting, and stands down when the
+    /// answer is yes.
+    ///
+    /// It is asked at the COMMAND layer and not here for the one reason the
+    /// engine cannot settle: only the caller knows whether a human clicked. An
+    /// operator picking another transponder mid-pass is doing exactly what the
+    /// picker is for; machinery doing it is the defect.
+    pub fn sat_row_pinned_against(&self, index: usize) -> bool {
+        self.sat_pass_engaged
+            .then_some(self.sat_row_pin.as_ref())
+            .flatten()
+            .is_some_and(|(pinned, _)| *pinned != index)
+    }
+
+    /// The bird's other documented uplink centres — see [`Self::sat_alt_uplinks`].
+    /// Call it AFTER [`Self::set_sat_transponder`], which clears the list.
+    pub fn set_sat_alt_uplinks(&mut self, uplinks: Vec<u64>) {
+        self.sat_alt_uplinks = uplinks;
     }
 
     /// QSY to the HELD transponder's nominal centres — the click-to-tune half of
@@ -9610,6 +9722,122 @@ impl Engine {
             .map(|st| (st.label.as_str(), st.index))
     }
 
+    /// The held pass's two legs AS THEY STAND ON THE RIG: what was last WRITTEN
+    /// to each, falling back to that leg's nominal centre when nothing has been.
+    /// `(downlink, uplink)`; `None` with no hold, and either may be 0 when the
+    /// transponder has no such leg (a beacon has no uplink).
+    ///
+    /// PER LEG, not one choice for both — the distinction is load-bearing and
+    /// cost a debugging round. The pre-AOS writer records a downlink and leaves
+    /// `uplink_hz` at 0 whenever Doppler is not driving the transmit leg (an
+    /// unconfirmed mapping, a beacon), while the uplink itself is sitting on the
+    /// rig at its nominal centre. Choosing the sent PAIR because the downlink
+    /// had been sent therefore compared the uplink against zero, and the
+    /// operator's own uplink read back as a QSY.
+    ///
+    /// Either way the comparand is within a correction step of the truth, which
+    /// is what keeps [`SAT_CHANNEL_HOLD_TOLERANCE_HZ`] honest at its call sites:
+    /// a Doppler-shifted frequency is never measured against an unshifted centre.
+    fn sat_legs_on_rig(&self) -> Option<(u64, u64)> {
+        let st = self.sat_tune.as_ref()?;
+        let on_rig = |sent: u64, nominal: u64| if sent != 0 { sent } else { nominal };
+        Some((
+            on_rig(st.sent.downlink_hz, st.transponder.downlink_centre_hz),
+            on_rig(st.sent.uplink_hz, st.transponder.uplink_centre_hz),
+        ))
+    }
+
+    /// ⭐ THE FREQUENCY IS THE EVIDENCE. A rig reporting the pass's TRANSMIT leg
+    /// is a rig that is transmitting: on an Icom in split the selected VFO — the
+    /// one a plain dial read returns — IS the transmit VFO while keyed, so the
+    /// uplink coming back off the radio can mean nothing else.
+    ///
+    /// # Why an inference exists at all
+    ///
+    /// The PTT line is asked once a second (`RIG_PTT_POLL_MS`). The operator
+    /// keying a mic is instant, so between the key-down and the next poll there
+    /// is a window of up to a second in which every guard that reads "is the rig
+    /// keyed" is answering from a reading taken BEFORE the over started. In that
+    /// window the dial-keep pushed the DOWNLINK onto the rig's selected VFO —
+    /// which was the uplink — and yanked the over onto the bird's own output
+    /// (CI-V capture, IC-9700, 2026-08-16: 400 ms stale, the push 150 ms later).
+    ///
+    /// A stale poll must not outvote a live frequency. So this belief is set by
+    /// the observation itself and read by the same guards, and it is released by
+    /// either of the two things that can honestly end it: an observation of the
+    /// RECEIVE leg, or a PTT poll that says off from a FRESH read
+    /// ([`Self::observe_rig_ptt_read`]). The poll cadence tightens while a pass
+    /// is engaged so the second of those lands in ~200 ms instead of a second;
+    /// the first is what makes the belief releasable on a radio that cannot
+    /// report its PTT line at all.
+    ///
+    /// ⚠️ Both legs must be DISTINGUISHABLE or nothing is inferred. A simplex
+    /// channel carries the whole QSO on one frequency, and a bird whose legs sit
+    /// within the channel tolerance of each other offers no evidence either way —
+    /// inferring "keyed" there would latch on the pass's own receive frequency
+    /// and freeze the dial for the whole pass.
+    ///
+    /// Returns true when THIS observation is the transmit leg, which its caller
+    /// answers `Held` to on every transponder shape.
+    fn sat_note_keyed_leg(&mut self, tuned_hz: u64) -> bool {
+        let Some((down, up)) = self.sat_legs_on_rig() else {
+            return false;
+        };
+        if down == 0 {
+            return false;
+        }
+        let near = |f: u64| f != 0 && f.abs_diff(tuned_hz) <= SAT_CHANNEL_HOLD_TOLERANCE_HZ;
+        // The transmit leg, plus every other documented uplink for this bird —
+        // the rig may be running a pairing we did not write (`sat_alt_uplinks`),
+        // and a keyed reading of THAT uplink is still a keyed reading.
+        let mut tx_legs = std::iter::once(up)
+            .chain(self.sat_alt_uplinks.iter().copied())
+            .filter(|&f| f != 0 && f.abs_diff(down) > SAT_CHANNEL_HOLD_TOLERANCE_HZ);
+        // ⭐ THE BELIEF LIVES EXACTLY AS LONG AS THE RIG KEEPS SAYING SO. Set by
+        // a transmit-leg reading, dropped by ANY other reading — the receive leg,
+        // a knob move across the passband, a QSY off the bird entirely. That is
+        // the release that needs no PTT line, and it is the only one a radio with
+        // no `t` at all can ever produce.
+        //
+        // Nothing is lost by making it that strict. While the rig is keyed it
+        // keeps answering the SAME uplink, and the loop only observes a
+        // frequency that CHANGED — so no other reading can arrive until the
+        // operator unkeys. What must stay reachable is the reading itself: the
+        // 750 ms heavy poll is deliberately not gated on this belief (only the
+        // 180 ms fast reader is), or the guard would gate away its own way out.
+        let keyed = tx_legs.any(near);
+        self.sat_inferred_keyed = keyed;
+        keyed
+    }
+
+    /// The rig is transmitting, inferred from the frequency it reported rather
+    /// than from its PTT line — see [`Self::sat_note_keyed_leg`]. The radio loop
+    /// reads this alongside the polled `rig_keyed` and treats either as keyed.
+    pub fn sat_inferred_keyed(&self) -> bool {
+        self.sat_inferred_keyed
+    }
+
+    /// A PTT read just came back off the rig. `on` is what it said.
+    ///
+    /// Separate from [`Self::observe_rig_ptt`] because the two answer different
+    /// questions: that one adopts a CHANGE of belief (and is not called when the
+    /// poll merely confirms what we already thought), while this one records that
+    /// the question was ASKED and answered — which is the only thing that can
+    /// honestly retire an inferred key. A poll that says off while the frequency
+    /// still says uplink is a rig that has stopped transmitting and not yet been
+    /// re-read; the next read settles it either way.
+    pub fn observe_rig_ptt_read(&mut self, on: bool) {
+        if !on {
+            self.sat_inferred_keyed = false;
+        }
+    }
+
+    /// Is the tracked pass UP? The radio loop mirrors this per tick — see
+    /// [`Self::set_sat_pass_engaged`].
+    pub fn sat_pass_engaged(&self) -> bool {
+        self.sat_pass_engaged
+    }
+
     /// The operator turned the VFO knob during a pass — adopt it as their
     /// position in the passband, so the uplink follows them.
     ///
@@ -9633,6 +9861,19 @@ impl Engine {
     /// operator's own downlink). A frequency that is simply the pass's own,
     /// come back off the rig, must never take that path.
     pub fn sat_observe_operator_tune(&mut self, tuned_hz: u64) -> SatObservation {
+        // FIRST, and whatever the answer below turns out to be: what this
+        // frequency says about whether the rig is TRANSMITTING right now.
+        //
+        // A match on the TRANSMIT leg answers `Held` here, ahead of every arm
+        // below and for every transponder SHAPE. The channel hatch could
+        // already recognise a keyed rig's uplink; a LINEAR bird could not — its
+        // uplink is 300 MHz outside the downlink passband, so
+        // `follow_downlink_in_band` declines and the knob-QSY arm tears the pass
+        // down. Both shapes report the transmit VFO while keyed in split, so
+        // both need the same answer: nobody tuned anything, the rig is talking.
+        if self.sat_note_keyed_leg(tuned_hz) {
+            return SatObservation::Held;
+        }
         let Some(st) = self.sat_tune.as_ref() else {
             return SatObservation::NotOurs;
         };
@@ -9658,31 +9899,21 @@ impl Engine {
         // back means nothing was tuned. Anything else is a genuine QSY away
         // from the bird, and the teardown below is the right answer to it.
         if st.transponder.half_width_hz == 0 {
-            // The pair AS IT STANDS ON THE RIG: what was last WRITTEN to a leg,
-            // falling back to that leg's nominal centre when nothing has been.
-            //
-            // PER LEG, not one choice for both — the distinction is load-bearing
-            // and cost a debugging round. The pre-AOS writer records a downlink
-            // and leaves `uplink_hz` at 0 whenever Doppler is not driving the
-            // transmit leg (an unconfirmed mapping, a beacon), while the uplink
-            // itself is sitting on the rig at its nominal centre. Choosing the
-            // sent PAIR because the downlink had been sent therefore compared
-            // the uplink against zero, and the operator's own uplink read back
-            // as a QSY — the very bug this arm exists to stop, one layer in.
-            //
-            // Either way the comparand is within a correction step of the truth,
-            // which is what keeps the tolerance below honest: a Doppler-shifted
-            // frequency is never measured against an unshifted centre.
-            let on_rig = |sent: u64, nominal: u64| if sent != 0 { sent } else { nominal };
-            let down = on_rig(st.sent.downlink_hz, st.transponder.downlink_centre_hz);
-            let up = on_rig(st.sent.uplink_hz, st.transponder.uplink_centre_hz);
+            let (down, up) = self.sat_legs_on_rig().unwrap_or((0, 0));
             // The UPLINK is in the list deliberately. A keyed Icom in split
             // reports its TRANSMIT VFO, so the uplink is exactly what a read
             // during an over hands back — the read paths are now gated on
             // `rig_keyed`, and this is the backstop that makes any future
             // reader safe by construction rather than by remembering.
+            //
+            // …and so are the bird's OTHER documented uplinks. A pairing we did
+            // not write is still this pass (`sat_alt_uplinks`): an ISS worked on
+            // 144.490 up while the pick carried 145.200 must not read as a QSY
+            // off the bird just because the operator's rig runs the other
+            // region's channel.
             let ours = [down, up]
                 .iter()
+                .chain(self.sat_alt_uplinks.iter())
                 .any(|&f| f != 0 && f.abs_diff(tuned_hz) <= SAT_CHANNEL_HOLD_TOLERANCE_HZ);
             return if ours {
                 SatObservation::Held
@@ -27410,6 +27641,234 @@ mod tests {
             SatObservation::Held,
             "the dial we just wrote is ours, not theirs — and being ours, it must not \
              take the QSY path that hands the rig back to simplex"
+        );
+    }
+
+    /// The ISS as SatNOGS lists it: ONE downlink, TWO documented voice pairings
+    /// (145.200 up in region 1, 144.490 in regions 2/3). The row the operator
+    /// picked, then the other one.
+    fn iss_voice_rows() -> (
+        tempo_core::doppler::Transponder,
+        tempo_core::doppler::Transponder,
+    ) {
+        use tempo_core::doppler::Transponder;
+        (
+            Transponder::channel(145_200_000, 145_800_000),
+            Transponder::channel(144_490_000, 145_800_000),
+        )
+    }
+
+    #[test]
+    fn a_keyed_rigs_uplink_is_read_as_keyed_and_not_as_a_knob_move() {
+        // ⭐ THE FREQUENCY IS THE EVIDENCE (CI-V capture, IC-9700, 2026-08-16).
+        // A rig answering with the pass's TRANSMIT leg is transmitting — on an
+        // Icom in split the selected VFO, which is what a plain dial read
+        // returns, IS the transmit VFO. The PTT poll can be up to a second
+        // behind that; the frequency cannot.
+        let (row0, _) = iss_voice_rows();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row0)));
+        assert!(
+            !e.sat_inferred_keyed(),
+            "scene: nothing observed yet, nothing inferred"
+        );
+
+        // The uplink comes back off the rig.
+        assert_eq!(
+            e.sat_observe_operator_tune(145_200_000),
+            SatObservation::Held,
+            "the transmit leg is not somewhere the operator tuned to"
+        );
+        assert!(
+            e.sat_inferred_keyed(),
+            "…it is the rig saying it is transmitting"
+        );
+
+        // The RECEIVE leg retires it — the release that needs no PTT line, and
+        // the only one a radio with no `t` at all can ever produce.
+        assert_eq!(
+            e.sat_observe_operator_tune(145_800_000),
+            SatObservation::Held
+        );
+        assert!(
+            !e.sat_inferred_keyed(),
+            "back on the downlink is back on RX"
+        );
+
+        // So does a fresh PTT read that says off — the poll's half of it.
+        e.sat_observe_operator_tune(145_200_000);
+        assert!(e.sat_inferred_keyed());
+        e.observe_rig_ptt_read(false);
+        assert!(
+            !e.sat_inferred_keyed(),
+            "a fresh 'off' answers the question"
+        );
+
+        // ⚠️ AND A SIMPLEX CHANNEL INFERS NOTHING. One frequency carries both
+        // legs (145.825 packet), so an observation is no evidence either way —
+        // inferring here would latch on the pass's own receive frequency and
+        // freeze the dial for the rest of the pass.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some((
+            "ISS|APRS digipeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_825_000, 145_825_000),
+        )));
+        assert_eq!(
+            e.sat_observe_operator_tune(145_825_000),
+            SatObservation::Held
+        );
+        assert!(
+            !e.sat_inferred_keyed(),
+            "indistinguishable legs are no evidence — never a guess"
+        );
+    }
+
+    #[test]
+    fn a_linear_birds_uplink_is_held_too_not_torn_down() {
+        // The channel hatch could already recognise a keyed rig's uplink; a
+        // LINEAR bird could not, because its uplink is a whole band outside the
+        // downlink passband — `follow_downlink_in_band` declines and the
+        // knob-QSY arm clears the split, which on a satellite is the operator's
+        // corrected uplink. Both shapes report the transmit VFO while keyed, so
+        // both need the same answer.
+        let tp = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 435_640_000,
+            downlink_centre_hz: 145_965_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some(("RS-44|linear V/U".into(), 0, tp)));
+        e.sat_doppler_tick(0.0, 15_000, false); // a rate, so the passband arm is reachable
+        assert_eq!(
+            e.sat_observe_operator_tune(435_640_000),
+            SatObservation::Held,
+            "a keyed linear bird's uplink must not take the teardown path"
+        );
+        assert!(e.sat_inferred_keyed());
+        // And the passband still works for what it is for: an in-band move.
+        assert_eq!(
+            e.sat_observe_operator_tune(145_970_000),
+            SatObservation::Tuned,
+            "the operator chasing somebody across the passband is untouched"
+        );
+        assert!(
+            !e.sat_inferred_keyed(),
+            "and that observation is on the receive side, so the key belief goes"
+        );
+    }
+
+    #[test]
+    fn a_two_row_bird_keeps_the_row_the_pass_engaged_on() {
+        // ⭐ TWO ROWS FIGHTING (the same CI-V capture): the split TX dial took
+        // 144.490 and then 145.200 a second apart — consecutive corrections
+        // computed from DIFFERENT transponder rows of the same bird. A pass is
+        // worked on one uplink; the other one arriving mid-over is the operator
+        // transmitting where nobody is listening.
+        let (row0, row1) = iss_voice_rows();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row0)));
+        e.set_sat_alt_uplinks(vec![144_490_000]);
+        e.set_sat_pass_engaged(true);
+
+        // THE ROW IS PINNED. A re-pick naming the same row — "Lock on", the
+        // work-pass chain re-entered — resolves against a snapshot that may have
+        // moved under it; the frequencies it brings are discarded.
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row1)));
+        let c = e
+            .sat_doppler_tick(0.0, 15_000, false)
+            .expect("the first correction of the pass goes out");
+        assert_eq!(
+            c.uplink_hz,
+            Some(145_200_000),
+            "the row the pass engaged on is the row it is worked on — a re-pick of the \
+             SAME row index cannot swap the uplink underneath the operator"
+        );
+
+        // The AUTO pick — machinery, not a human — is refused a row change
+        // outright, which is the half the engine cannot decide for itself.
+        assert!(
+            e.sat_row_pinned_against(1),
+            "an automatic pick of another row while the pass is engaged: refused"
+        );
+        assert!(
+            !e.sat_row_pinned_against(0),
+            "…and re-picking the row being worked is not a change at all"
+        );
+
+        // An OPERATOR picking another transponder mid-pass is what the picker is
+        // for. It lands, and it re-pins.
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 1, row1)));
+        let c = e
+            .sat_doppler_tick(0.0, 60_000, false)
+            .expect("a fresh pick corrects immediately");
+        assert_eq!(
+            c.uplink_hz,
+            Some(144_490_000),
+            "the operator's own change of transponder is honored"
+        );
+        assert!(
+            e.sat_row_pinned_against(0),
+            "and the NEW row is the pinned one"
+        );
+
+        // LOS: the pin goes with the pass.
+        e.set_sat_pass_engaged(false);
+        assert!(
+            !e.sat_row_pinned_against(0),
+            "nothing is pinned when no pass is being worked"
+        );
+    }
+
+    #[test]
+    fn the_birds_other_documented_uplink_is_still_this_pass() {
+        // The rig may be running a pairing we did not write: the ISS voice
+        // repeater is 145.200 up in region 1 and 144.490 in regions 2/3, one
+        // downlink for both. An operator whose rig came up on the other channel
+        // is working THIS pass — read as a QSY, the split tears down and the
+        // next over goes out on the bird's own downlink.
+        let (row0, _) = iss_voice_rows();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row0)));
+        assert_eq!(
+            e.sat_observe_operator_tune(144_490_000),
+            SatObservation::NotOurs,
+            "scene: with only the picked row known, the other region's uplink is a QSY"
+        );
+
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row0)));
+        e.set_sat_alt_uplinks(vec![144_490_000]);
+        assert_eq!(
+            e.sat_observe_operator_tune(144_490_000),
+            SatObservation::Held,
+            "told what the bird documents, the other pairing is the pass's own"
+        );
+        assert!(
+            e.sat_inferred_keyed(),
+            "and it is an UPLINK, so a rig sitting on it is a rig transmitting"
+        );
+
+        // Somewhere else entirely is still somewhere else.
+        e.observe_rig_ptt_read(false);
+        assert_eq!(
+            e.sat_observe_operator_tune(14_074_000),
+            SatObservation::NotOurs,
+            "a QSY to 20 m is a QSY to 20 m"
+        );
+
+        // The list belongs to the PICK: a new hold clears it rather than letting
+        // one bird's channels vouch for another's.
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        assert_eq!(
+            e.sat_observe_operator_tune(144_490_000),
+            SatObservation::NotOurs,
+            "the ISS's other channel is nothing to do with SO-50"
         );
     }
 

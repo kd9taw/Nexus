@@ -120,7 +120,7 @@ describe('picking a transponder', () => {
     // alive-relative index here would now select the wrong row.
     render(<SatellitesView focusSat="RS-44" />)
     fireEvent.click(await linearRadio())
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2, false))
   })
 
   it('collapses dead transmitters behind "show N inactive" and never offers them', async () => {
@@ -142,7 +142,7 @@ describe('picking a transponder', () => {
     fireEvent.click(await linearRadio())
     await waitFor(() => expect(((linearRadioSync()) as HTMLInputElement).checked).toBe(true))
     fireEvent.click(await noneRadio())
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenLastCalledWith('RS-44', null))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenLastCalledWith('RS-44', null, false))
   })
 
   it('does not show a selection the backend refused', async () => {

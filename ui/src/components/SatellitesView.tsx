@@ -2546,7 +2546,11 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
    * this pass", disclosed in the toast and on the card. */
   const pickTransponder = (name: string, index: number | null, label = '', auto = false) => {
     pickBusy.current = true
-    return setSatTransponder(name, index)
+    // `auto` travels to the backend as well as into the local mirror: it is the
+    // one thing the engine cannot work out for itself, and while a pass is
+    // engaged it decides whether a pick naming a different row is honored (an
+    // operator changing transponder) or refused (the chain re-running).
+    return setSatTransponder(name, index, auto)
       .then(() => {
         setTuned(index == null ? null : { name, index, auto })
         // An explicit None is a consent statement "Work this pass" must honor

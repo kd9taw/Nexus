@@ -228,9 +228,19 @@ export async function getSatTrackStatus(): Promise<import('./types').SatTrackSta
  * Two layers agreeing on a hidden filter is not a contract; the backend now
  * indexes the list the caller was actually shown and REFUSES a dead pick by
  * name instead of shifting everything after it. Do not re-introduce a filter
- * on either side. */
-export async function setSatTransponder(name: string, index: number | null): Promise<void> {
-  return invoke('set_sat_transponder', { name, index })
+ * on either side.
+ *
+ * `auto` says WHO picked: false (the default) = the operator clicked this row,
+ * true = the "Work this pass" chain chose it. The backend needs the difference
+ * because that chain re-runs, and re-running it mid-pass used to move the
+ * operator onto another of the bird's documented pairings — an auto pick is
+ * refused while a pass is engaged on a different row, an operator's is not. */
+export async function setSatTransponder(
+  name: string,
+  index: number | null,
+  auto = false,
+): Promise<void> {
+  return invoke('set_sat_transponder', { name, index, auto })
 }
 
 /** The transponder the ENGINE holds right now (bird + the raw index into the

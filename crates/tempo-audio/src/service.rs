@@ -548,6 +548,21 @@ const TX_METER_POLL_MS: f64 = 150.0;
 /// the TX-meter poll too, so the operator gets SWR/Po for a mic-keyed over. NEEDS-BENCH:
 /// class-wide serial change — verified on real rigs before release.
 const RIG_PTT_POLL_MS: f64 = 1_000.0;
+/// The same poll WHILE A SATELLITE PASS IS ENGAGED — five times a second.
+///
+/// A second of staleness is a display lag on a terrestrial band and a defect on
+/// a pass: the guards that withhold the dial while the rig is keyed read this
+/// answer, and on an Icom in split the dial they would push lands on the
+/// TRANSMIT VFO. The CI-V capture (2026-08-16) has the poll 400 ms stale at
+/// key-down with 600 ms still to run, and the correction landing inside that
+/// window. `Engine::sat_note_keyed_leg` closes the window from the other end —
+/// this bounds how long its inference has to stand on frequency evidence alone.
+///
+/// The cost is FOUR extra `1C 00` round-trips per second, each a few bytes, and
+/// only between AOS and LOS on a pass the operator armed. The bus is carrying
+/// the Doppler corrections, the meters and the scope over the same window, which
+/// is exactly why this is not the everyday cadence.
+const SAT_PASS_PTT_POLL_MS: f64 = 200.0;
 /// How often to run the FAST dial-only read-back. The dial is the one value that must track a
 /// manual VFO knob in real time, so it's polled ~4× faster than the heavy set — matching HRD's
 /// Yaesu responsiveness (which is pure fast polling; the earlier 1–2 s lag was self-inflicted by
@@ -2109,6 +2124,15 @@ struct RadioLoop {
     /// something that is not Nexus (mic PTT, straight key). Polled only while Nexus is
     /// idle; gates the TX-meter poll and mirrors into the engine (`observe_rig_ptt`).
     rig_keyed: bool,
+    /// The rig is transmitting, INFERRED from the frequency it reported rather
+    /// than from its PTT line (`Engine::sat_inferred_keyed`). Mirrored once per
+    /// tick from the engine, which owns the belief — this is a per-tick copy for
+    /// the guards, like `cur_dial`, never a second authority. Read through
+    /// [`RadioLoop::operator_keyed`] and never on its own.
+    sat_inferred_keyed: bool,
+    /// A tracked satellite pass is UP (`Engine::sat_pass_engaged`), mirrored on
+    /// the same tick as the flag above. Only the PTT-poll cadence reads it.
+    sat_pass_engaged: bool,
     /// Last `t` poll (ms); 0.0 forces an immediate first read on going idle.
     last_ptt_poll: f64,
     /// Last time we ran the FAST dial-only read-back (ms). The dial is mirrored on a much shorter
@@ -2321,6 +2345,8 @@ impl RadioLoop {
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
             rig_keyed: false,
+            sat_inferred_keyed: false,
+            sat_pass_engaged: false,
             last_ptt_poll: 0.0,
             tx_meter_idx: 0,
             last_freq_poll: now_unix_ms(),
@@ -2354,6 +2380,25 @@ impl RadioLoop {
             decode_in_flight: false,
             dropped_decodes: 0,
         }
+    }
+
+    /// ⚠️ THE RIG IS TRANSMITTING AND NEXUS DID NOT ASK — the whole answer, from
+    /// both of the things that can know it. Every guard that withholds a write
+    /// because the operator is keyed asks THIS, never `rig_keyed` alone.
+    ///
+    /// `rig_keyed` is a POLL, and a poll is only as fresh as its interval: at 1 Hz
+    /// it is up to a second stale, and the field capture (IC-9700, 2026-08-16) has
+    /// the key-down landing 400 ms after the last "off" with 600 ms still to run.
+    /// `sat_inferred_keyed` is the same fact read off the FREQUENCY the rig
+    /// reported — a rig answering with the pass's transmit leg is transmitting,
+    /// and that evidence is live rather than up to a second old
+    /// (`Engine::sat_note_keyed_leg` derives it; this loop only mirrors it).
+    ///
+    /// Deliberately NOT folded into `manual_ptt_applied` or the slot-TX flags:
+    /// those are keying WE did, and several paths must still behave differently
+    /// for the two.
+    fn operator_keyed(&self) -> bool {
+        self.rig_keyed || self.sat_inferred_keyed
     }
 
     /// The backend attribution for the CURRENTLY-owned CAT channel, appended to probe and
@@ -2983,7 +3028,13 @@ impl RadioLoop {
             //    prevent: on a linear bird you must keep correcting the uplink WHILE you
             //    talk, or you drift off the transponder in front of everyone. So the policy
             //    is untouched; only the register that lies while keyed is withheld.
-            let can_push_dial = can_retune && !self.rig_keyed && !self.manual_ptt_applied;
+            //
+            // ⚠️ AND THE KEYED TEST IS `operator_keyed`, NOT `rig_keyed`. The
+            // polled flag alone is up to a poll interval stale, and the capture
+            // that produced this guard has the operator keying 400 ms after the
+            // last "off" — so the guard it was written to be was answering about
+            // a rig that had not been transmitting when it was asked. See
+            // `RadioLoop::operator_keyed`.
             let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold) = {
                 let mut eng = engine_lock(engine);
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
@@ -2993,6 +3044,13 @@ impl RadioLoop {
                 let fm = eng.fm_repeater_config();
                 let want = Transport::from_settings(eng.settings());
                 let cat_hold = eng.cat_port_hold();
+                // The satellite mirrors, refreshed here because this is the one
+                // engine lock every tick takes unconditionally — and taken HERE,
+                // at the top, so both readers downstream (the dial guard below,
+                // the fast dial read and the PTT poll further down the tick) are
+                // answering from this tick's truth.
+                self.sat_inferred_keyed = eng.sat_inferred_keyed();
+                self.sat_pass_engaged = eng.sat_pass_engaged();
                 // Consume the Test-CAT request ONLY when this tick's transport branch will
                 // actually probe — the same consume-only-when-acting rule as the retune/split
                 // one-shots below. A rebuild tick (a settings Save, a port hold, a deferred
@@ -3030,6 +3088,7 @@ impl RadioLoop {
                     cat_hold,
                 )
             };
+            let can_push_dial = can_retune && !self.operator_keyed() && !self.manual_ptt_applied;
             // Stash for the key-site latch (ensure_commanded) — the bindings above live in
             // this block's scope; the key-ups happen in narrower ones.
             self.cur_dial = dial;
@@ -3798,6 +3857,17 @@ impl RadioLoop {
                 // and half a second into a mic-down over the operator was transmitting on
                 // the bird's downlink. Everything in this block is RX-time work; a rig keyed
                 // by ANYONE means skip it, exactly as for Nexus's own keying.
+                //
+                // ⚠️ `rig_keyed` HERE AND DELIBERATELY NOT `operator_keyed` — do not
+                // "finish the job" by tightening this one. The inferred key is
+                // released by an observation of the pass's RECEIVE leg, and this
+                // 750 ms read is what produces it: it is the only release a radio
+                // with no PTT read-back can ever generate. Gate this on the
+                // inference too and the guard gates away its own way out — the dial
+                // freezes for the rest of the pass. The fast 180 ms reader IS gated
+                // (see it below); one reader standing down is the saving, and this
+                // one answers `Held` to a keyed rig's uplink now, on every
+                // transponder shape (`Engine::sat_note_keyed_leg`).
                 && !self.rig_keyed
                 // A TRIPPED breaker skips the poll — but only until its re-probe is due. It exists
                 // to stop the loop blocking on a dead read every cycle, which is rate-limiting;
@@ -4263,7 +4333,14 @@ impl RadioLoop {
                 // cleared, TX fell back onto the bird's own downlink) about half a second in:
                 // this interval plus a tick. A dial read is RX-time work; a rig keyed by
                 // ANYONE means skip it.
-                && !self.rig_keyed
+                //
+                // `operator_keyed`, so an INFERRED key stands the fast reader down too
+                // (the second guard the inference feeds). The 750 ms heavy poll above is
+                // deliberately NOT gated on the inference: it is the release path — the
+                // observation that sees the RECEIVE leg come back and retires the belief,
+                // and the only one a radio with no PTT read-back can ever produce. Gating
+                // both readers would gate away the way out.
+                && !self.operator_keyed()
                 && self.cat_ok != Some(false)
                 && self.freq_misses == 0 // a heavy-poll miss pauses fast reads until it recovers
                 && now - self.last_freq_poll >= FREQ_POLL_MS
@@ -5665,13 +5742,32 @@ impl RadioLoop {
             // say nothing new. A lost poll keeps the last belief (no flapping); a CAT
             // trip clears it below with the meters.
             if !keyed_now && self.cat_ok != Some(false) {
-                if now - self.last_ptt_poll >= RIG_PTT_POLL_MS {
+                // FIVE TIMES A SECOND WHILE A PASS IS UP (see SAT_PASS_PTT_POLL_MS).
+                // The engaged state is this tick's mirror of the engine's, which the
+                // track loop pushes at its own cadence — so the cadence follows the
+                // pass without this loop knowing anything about satellites.
+                let interval = if self.sat_pass_engaged {
+                    SAT_PASS_PTT_POLL_MS
+                } else {
+                    RIG_PTT_POLL_MS
+                };
+                if now - self.last_ptt_poll >= interval {
                     self.last_ptt_poll = now;
                     if let Some(on) = rig.read_ptt() {
+                        // Two different facts, two different verbs, and the
+                        // difference is the whole point of the second one: the
+                        // CHANGE of belief is adopted only when it changes, while
+                        // the fact that a fresh read HAPPENED has to reach the
+                        // engine every time — it is what retires an inferred key
+                        // (`Engine::sat_note_keyed_leg`), and a poll that merely
+                        // confirms "still off" is exactly the answer that must.
+                        let mut eng = engine_lock(engine);
+                        eng.observe_rig_ptt_read(on);
                         if on != self.rig_keyed {
                             self.rig_keyed = on;
-                            engine_lock(engine).observe_rig_ptt(on);
+                            eng.observe_rig_ptt(on);
                         }
+                        self.sat_inferred_keyed = eng.sat_inferred_keyed();
                     }
                 }
             } else if keyed_now && self.rig_keyed {
@@ -12869,6 +12965,52 @@ mod tests {
         );
     }
 
+    /// A logging rigctld stub whose `f` answer the TEST can change mid-run —
+    /// which is the whole of what a keyed Icom in split does: the same `f` that
+    /// answered the downlink a moment ago answers the UPLINK, because the
+    /// selected VFO is now the transmit one. Returns the dial cell alongside the
+    /// address and the log; write it to move the rig.
+    fn mock_rigctld_switchable(
+        dial_hz: u64,
+    ) -> (
+        String,
+        Arc<Mutex<Vec<String>>>,
+        Arc<std::sync::atomic::AtomicU64>,
+    ) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        let dial = Arc::new(std::sync::atomic::AtomicU64::new(dial_hz));
+        let dial2 = Arc::clone(&dial);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let f = format!("{}\n", dial2.load(std::sync::atomic::Ordering::SeqCst));
+                    let reply = if l == "f" { f.as_str() } else { "RPRT 0\n" };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log, dial)
+    }
+
     /// A logging rigctld stub parked on `dial_hz`. `reject_pkt` makes it answer `RPRT -1` to
     /// every `M PKT…` — the rig with no DATA submode for the mode we asked for. The dial is a
     /// parameter because the stub's `f` reply IS the read-back the loop adopts as a knob QSY:
@@ -16582,8 +16724,11 @@ mod tests {
         // does or does not reach the RIG.
         let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
         let mut backend = MockBackend::new();
-        // The rig answers `f` with the UPLINK — link 2, standing.
-        let (addr, log) = mock_rigctld_on(145_990_000, false);
+        // The rig answers `f` with the UPLINK — link 2, standing. Switchable
+        // because the last phase needs the radio to come back to its receive
+        // VFO, which is what an unkeying rig does and what retires the
+        // inferred key (`Engine::sat_note_keyed_leg`).
+        let (addr, log, rig_dial) = mock_rigctld_switchable(145_990_000);
         let mut rig = Rig::rigctld(&addr);
         let mut state = loop_state();
         let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
@@ -16688,12 +16833,6 @@ mod tests {
             "control: unkeyed, the loop really does read the dial — otherwise the assertions \
              above prove nothing: {unkeyed_traffic:?}"
         );
-        assert!(
-            unkeyed_traffic.iter().any(|l| l == "F 145801500"),
-            "control: the steer was WITHHELD, not dropped — it reaches the rig on the first \
-             unkeyed tick, which is what makes the guard a deferral rather than a lost \
-             correction: {unkeyed_traffic:?}"
-        );
         assert_eq!(
             engine.lock().unwrap().split_tx_mhz(),
             Some(145.990),
@@ -16702,6 +16841,216 @@ mod tests {
         assert!(
             !unkeyed_traffic.iter().any(|l| l.starts_with("S 0")),
             "so nothing tears the split down here either: {unkeyed_traffic:?}"
+        );
+        // ⚠️ AND NO DIAL PUSH YET, WHICH IS NOT THE SAME CLAIM AS THE ONE ABOVE.
+        // The flag says RX; the RIG is still answering with the pass's transmit
+        // leg, and a rig reporting its uplink is a rig transmitting — the flag is
+        // a poll and the poll can be a second behind the mic (`operator_keyed`).
+        // This stub never answers `t` at all, so nothing contradicts the
+        // frequency, and the frequency is what the guard believes.
+        assert!(
+            !unkeyed_traffic.iter().any(|l| l.starts_with("F ")),
+            "a stale 'not keyed' does not license a dial push at a rig that is answering \
+             with its uplink: {unkeyed_traffic:?}"
+        );
+
+        // ---- …AND THE DEFERRAL, which needs the rig to actually come back. An
+        // unkeyed 9700 in satellite mode reports its MAIN (receive) VFO again;
+        // that reading is what retires the inference, on a radio with no PTT
+        // read-back as much as on one with it. Then the withheld correction goes.
+        rig_dial.store(145_800_000, std::sync::atomic::Ordering::SeqCst);
+        log.lock().unwrap().clear();
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+        let back_traffic = log.lock().unwrap().clone();
+        assert!(
+            back_traffic.iter().any(|l| l == "F 145801500"),
+            "control: the steer was WITHHELD, not dropped — it reaches the rig on the first \
+             tick after the radio says it is receiving, which is what makes the guard a \
+             deferral rather than a lost correction: {back_traffic:?}"
+        );
+    }
+
+    #[test]
+    fn a_stale_ptt_poll_cannot_outvote_the_uplink_the_rig_just_reported() {
+        // ⭐ THE BLIND WINDOW, as a wire test (CI-V capture, IC-9700, 2026-08-16).
+        // The guard above closes the case where the loop KNOWS the rig is keyed.
+        // This is the case where it does not know yet, which is every key-down:
+        //
+        //  1. the PTT poll last asked ~400 ms ago and was told "off". It will not
+        //     ask again for another ~600 ms — so `rig_keyed` is false, and it is
+        //     false about a rig that IS now transmitting;
+        //  2. inside that window the dial read runs (it is only gated on the
+        //     stale flag) and the rig — keyed, in split — answers with the
+        //     UPLINK;
+        //  3. the loop adopts that as the dial it last saw, so the engine's dial
+        //     (the DOWNLINK) now differs from it, and the dial-keep pushes;
+        //  4. `F` addresses the SELECTED VFO, which while keyed is the transmit
+        //     one. The over jumps onto the bird's own downlink — the operator's
+        //     "TX jumps back to the downlink", from the other cause.
+        //
+        // The frequency IS the evidence, and it is live where the poll is stale:
+        // a rig answering with the pass's transmit leg is transmitting.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        // The rig starts where the operator is LISTENING — the downlink.
+        let (addr, log, rig_dial) = mock_rigctld_switchable(145_800_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            let mut s = e.settings().clone();
+            s.phone_mode = "fm".into();
+            e.apply_settings(s);
+            e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, V_V_FM)));
+            e.sat_tune_nominal(FM_BIRD, 1_000_000);
+            e.request_split(Some(145.990));
+        }
+        run(&mut state, &mut rig, &mut backend, 6, &mut tick);
+        assert_eq!(
+            engine.lock().unwrap().split_tx_mhz(),
+            Some(145.990),
+            "scene: the pass is up, listening on the downlink with the uplink on the split"
+        );
+
+        // ---- KEY DOWN. The rig starts answering with its TRANSMIT VFO, and the
+        // poll has NOT caught up: `rig_keyed` stays false for the whole window,
+        // exactly as it is for the ~600 ms this defect lives in. (This stub
+        // answers `t` with `RPRT 0`, which parses as no answer at all — so it is
+        // also every radio that cannot report its PTT line.)
+        rig_dial.store(145_990_000, std::sync::atomic::Ordering::SeqCst);
+        assert!(!state.rig_keyed, "scene: the poll still believes RX");
+        log.lock().unwrap().clear();
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+
+        let traffic = log.lock().unwrap().clone();
+        assert!(
+            traffic.iter().any(|l| l.trim() == "f"),
+            "scene: the loop DID read the dial in the blind window — that read is the \
+             mechanism, and without it this test proves nothing: {traffic:?}"
+        );
+        assert!(
+            !traffic.iter().any(|l| l.starts_with("F ")),
+            "THE BUG: the rig answered with the pass's UPLINK, which only a transmitting \
+             rig does — so nothing may push a dial at it, stale poll or no stale poll. \
+             An `F` here lands the DOWNLINK on the transmit VFO: {traffic:?}"
+        );
+        assert!(
+            !traffic.iter().any(|l| l.starts_with("S 0")),
+            "and the split still stands — a transmit-leg reading is not a knob QSY: {traffic:?}"
+        );
+        assert!(
+            engine.lock().unwrap().sat_inferred_keyed(),
+            "the belief the guard runs on: the frequency said keyed"
+        );
+
+        // ---- UNKEY, and the release has to work on a radio that never answers
+        // `t` — otherwise the guard is a one-way door and the dial is frozen for
+        // the rest of the pass. The rig goes back to reporting the downlink; the
+        // 750 ms heavy poll (deliberately NOT gated on the inference) sees it.
+        rig_dial.store(145_800_000, std::sync::atomic::Ordering::SeqCst);
+        log.lock().unwrap().clear();
+        engine.lock().unwrap().steer_sat_dial(145.8015);
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+
+        let after = log.lock().unwrap().clone();
+        assert!(
+            !engine.lock().unwrap().sat_inferred_keyed(),
+            "control: the receive leg came back, so the inference is retired — with no `t` \
+             answer anywhere in this scene, this is the release path a PTT-less rig has"
+        );
+        assert!(
+            after.iter().any(|l| l == "F 145801500"),
+            "control: and the correction was WITHHELD, not lost — it reaches the rig on the \
+             first unkeyed tick, which is what makes this a deferral: {after:?}"
+        );
+    }
+
+    #[test]
+    fn the_ptt_poll_runs_five_times_a_second_while_a_pass_is_up() {
+        // The other half of closing the blind window: how long the inference has
+        // to stand on frequency evidence alone. At 1 Hz the poll is up to a
+        // second stale; while a pass is ENGAGED it asks every 200 ms, so a
+        // key-down is known within a fifth of a second and a key-UP releases the
+        // guard just as fast.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log, _dial) = mock_rigctld_switchable(145_800_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 100.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, V_V_FM)));
+            e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        }
+        // A pass is HELD but not up: the ordinary cadence. 20 ticks = 2 s.
+        run(&mut state, &mut rig, &mut backend, 20, &mut tick);
+        let idle_polls = log.lock().unwrap().iter().filter(|l| *l == "t").count();
+        assert!(
+            (1..=3).contains(&idle_polls),
+            "a bird picked for a pass that has not risen is not a reason to poll harder — \
+             ~1 Hz over 2 s: {idle_polls}"
+        );
+
+        // AOS: the track loop says the pass is up.
+        engine.lock().unwrap().set_sat_pass_engaged(true);
+        log.lock().unwrap().clear();
+        run(&mut state, &mut rig, &mut backend, 20, &mut tick);
+        let pass_polls = log.lock().unwrap().iter().filter(|l| *l == "t").count();
+        assert!(
+            pass_polls >= 8,
+            "while the pass is up the PTT line is asked ~5×/s (≥8 in 2 s, allowing for the \
+             ticks the dial read owns): {pass_polls}"
         );
     }
 
