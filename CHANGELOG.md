@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **FT2.** The fast slotted mode from the Decodium community (IU8LMC's WSJT-X fork) joins the
+  FT dropdown: FT4 with a halved symbol time — 3.75 s periods, ~167 Hz wide, decoding to
+  −10.8 dB — for when the band turnover is worth more than the last few dB. Nexus follows
+  Decodium's own band plan (a few kHz above each FT8 hole, 160 m through 23 cm), runs the
+  same auto-sequencer as FT8/FT4, shows a-priori decodes with the same `a` marker, and logs
+  as MFSK/FT2 so LoTW and the online logbooks accept the record. Built from Decodium's own
+  GPL modem sources (see NOTICE) and proven against its published sensitivity in the test
+  bench — **not yet validated on the air against a live Decodium station.**
+
 - **Text on your SSTV pictures.** The composer can now lay text over the picture before
   transmitting, the way MMSSTV does. One-click **CQ**, **73** and **Reply** cards — Reply fills
   in the other station's callsign from the newest FSK ID heard — plus free text. Two styles:
