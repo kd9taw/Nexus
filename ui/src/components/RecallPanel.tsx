@@ -178,7 +178,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
         </div>
         <div className="recall-badges">
           {hist.dupeThisBand && band && (
-            <span className="recall-badge dupe" title={`Already worked on ${band} — logging now would be a dupe`}>
+            <span className="recall-badge dupe" title={`Already worked on ${band} — logging now would be a dupe. Counts any mode on the band unless Settings’ “match mode too” is on.`}>
               Dupe {band}
             </span>
           )}

@@ -55,6 +55,10 @@ pub struct Station {
     pub presence: Presence,
     /// True if this callsign is in the logbook (worked before) — for B4 styling.
     pub worked: bool,
+    /// Worked before ON THE CURRENT BAND (and mode, when `b4_match_mode` is set) — WSJT-X's
+    /// second, stronger B4 scope (its `Highlight::CallBand` beside `Highlight::Call`).
+    #[serde(default)]
+    pub worked_band: bool,
     /// DXCC entity name (country), resolved from the callsign — DX chasers scan
     /// the roster by country. `None` unless a DXCC resolver is wired.
     #[serde(default)]
@@ -138,6 +142,10 @@ pub struct DecodeRow {
     pub signoff: bool,
     /// True if the sender is in the logbook (worked before).
     pub worked: bool,
+    /// Worked before ON THE CURRENT BAND (and mode, when `b4_match_mode` is set) — WSJT-X's
+    /// second, stronger B4 scope (its `Highlight::CallBand` beside `Highlight::Call`).
+    #[serde(default)]
+    pub worked_band: bool,
     /// Sender's DXCC entity name (country), resolved from the callsign. `None`
     /// unless a DXCC resolver is wired (always None in headless tests). DX chasers
     /// scan by country, so this rides on every decode + roster row.
@@ -1825,6 +1833,11 @@ pub struct AppSnapshot {
     /// Peg-lock state (band selection won't auto-switch when true).
     #[serde(default)]
     pub radio_pegged: bool,
+    /// Mirror of `Settings::b4_match_mode` so display surfaces (the recall Dupe badge) apply
+    /// the same B4/Dupe scope the engine's worked-band sets were built with — two readers of
+    /// one setting must never disagree about what "worked before" means.
+    #[serde(default)]
+    pub b4_match_mode: bool,
     /// AI CW decoder (beta): enabled flag, status line, recent window decodes.
     #[serde(default)]
     pub ai_cw: AiCwStatus,

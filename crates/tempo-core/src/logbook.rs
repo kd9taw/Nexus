@@ -708,6 +708,46 @@ impl Logbook {
             .collect()
     }
 
+    /// The worked-before index at BAND granularity, one sweep: `(CALL, BAND)` pairs, both
+    /// uppercased — beside [`Self::worked_call_set`] for the same single-sweep reason (a
+    /// per-row `worked_before_band` under the engine mutex is the waterfall stall).
+    ///
+    /// `fold_mode`: when set, the pair becomes `(CALL, BAND·MODE)` — WSJT-X's optional
+    /// "highlight by mode" scope (its `HighlightByMode`, default off), where working a station
+    /// on 40m FT8 does NOT mark them B4 for 40m phone. The raw uppercased ADIF mode is the
+    /// key, exactly as WSJT-X compares its own mode strings.
+    pub fn worked_band_set(&self, fold_mode: bool) -> std::collections::HashSet<(String, String)> {
+        note_log_sweep();
+        self.records
+            .iter()
+            .map(|r| {
+                let band = if fold_mode {
+                    format!(
+                        "{}\u{1}{}",
+                        r.band.to_ascii_uppercase(),
+                        r.mode.to_ascii_uppercase()
+                    )
+                } else {
+                    r.band.to_ascii_uppercase()
+                };
+                (r.call.to_ascii_uppercase(), band)
+            })
+            .collect()
+    }
+
+    /// The lookup key [`Self::worked_band_set`] stores for (`band`, `mode`) under `fold_mode`.
+    pub fn band_key(band: &str, mode: &str, fold_mode: bool) -> String {
+        if fold_mode {
+            format!(
+                "{}\u{1}{}",
+                band.to_ascii_uppercase(),
+                mode.to_ascii_uppercase()
+            )
+        } else {
+            band.to_ascii_uppercase()
+        }
+    }
+
     pub fn worked_before(&self, call: &str) -> bool {
         note_log_sweep();
         self.records

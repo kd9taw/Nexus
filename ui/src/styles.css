@@ -4688,6 +4688,14 @@ select optgroup {
   border-radius: 999px;
   padding: 1px 6px;
 }
+/* WSJT-X's stronger scope: worked before ON THIS BAND (CallBand). Solid where the plain chip
+   is hollow, so the two read apart at a glance. Uses --text-dim, deliberately not the need
+   palette — B4 is a fact about your log, not something to chase. */
+.b4-chip.b4-band {
+  color: var(--bg, #0b0f14);
+  background: var(--text-dim);
+  border-color: var(--text-dim);
+}
 
 /* Grid-rarity gem — ◆ rare (amber) / ◆◆ ultra-rare water-only (violet), beside
    calls/grids in the decode feed, rosters, and Needed board. Deliberately NOT

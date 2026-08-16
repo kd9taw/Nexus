@@ -6,6 +6,7 @@
     "status": "",
     "text": ""
   },
+  "b4MatchMode": false,
   "chatCq": "off",
   "clearTick": null,
   "conversations": [],
@@ -122,7 +123,8 @@
       "snr": 72,
       "tier": "FT4",
       "txAt": null,
-      "worked": false
+      "worked": false,
+      "workedBand": false
     }
   ],
   "stations": [
@@ -140,7 +142,8 @@
       "snr": 72,
       "state": null,
       "tier": "FT4",
-      "worked": false
+      "worked": false,
+      "workedBand": false
     }
   ],
   "uploadNote": null,

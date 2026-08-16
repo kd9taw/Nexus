@@ -12204,8 +12204,22 @@ impl Engine {
         // again every slot boundary; the old multiplicative sweep held the lock long enough to
         // stall the waterfall's spectrum fetch (which needs the same lock) for 1–2 s at low CPU.
         let worked = self.station.logbook.worked_call_set();
+        // The band-scope B4 index, built in the SAME single sweep discipline (a per-row
+        // logbook probe under the engine mutex is the 1-2 s waterfall stall). WSJT-X shows
+        // both scopes at once (Call and CallBand highlights); mode folds in only when the
+        // operator asked (`b4_match_mode`, default off — its HighlightByMode).
+        let fold_mode = self.settings.b4_match_mode;
+        s.b4_match_mode = fold_mode;
+        let worked_band_set = self.station.logbook.worked_band_set(fold_mode);
+        let cur_band_key = tempo_core::logbook::Logbook::band_key(
+            &self.settings.band,
+            self.adif_mode_for_tier(),
+            fold_mode,
+        );
         for st in &mut s.stations {
             st.worked = worked.contains(&st.call.to_ascii_uppercase());
+            st.worked_band =
+                worked_band_set.contains(&(st.call.to_ascii_uppercase(), cur_band_key.clone()));
             if let Some(resolve) = &self.station.dxcc_resolve {
                 st.country = resolve(&st.call);
             }
@@ -12549,6 +12563,13 @@ impl Engine {
                     .as_deref()
                     .map(|c| worked.contains(&c.to_ascii_uppercase()))
                     .unwrap_or(false);
+                // The stronger scope, same single-sweep set as the roster above.
+                let worked_band = from
+                    .as_deref()
+                    .map(|c| {
+                        worked_band_set.contains(&(c.to_ascii_uppercase(), cur_band_key.clone()))
+                    })
+                    .unwrap_or(false);
                 // New-grid (B3): the decode carries a Maidenhead grid we've never
                 // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
                 // because that is how grids are awarded (VUCC) — a grid worked on
@@ -12626,6 +12647,7 @@ impl Engine {
                     // matched frame is a signoff by construction.
                     signoff: parsed.is_signoff() || fox_mux.is_some(),
                     worked,
+                    worked_band,
                     country: entity,
                     new_dxcc,
                     new_band,
@@ -12667,6 +12689,7 @@ impl Engine {
                 // what's happening on the band, not what we sent.
                 signoff: false,
                 worked: false,
+                worked_band: false,
                 country: None,
                 new_dxcc: false,
                 new_band: false,
@@ -14249,30 +14272,11 @@ impl Engine {
 
     /// Build a [`QsoRecord`] for a completed auto-sequenced QSO from the current
     /// settings (band / dial / tier) and the station's exchanged reports.
-    fn qso_record(
-        &self,
-        dxcall: String,
-        dxgrid: Option<String>,
-        rx_report: Option<i32>,
-    ) -> QsoRecord {
-        // ⚠️ THE HASHED-CALL BRACKETS COME OFF HERE, AT THE RECORD BOUNDARY (issue #84).
-        //
-        // FT8's 77-bit protocol sends a compound call as `<DX1ABC>` when the message will not
-        // otherwise fit, and the decoded token keeps its brackets through the whole sequencer.
-        // A DXpedition then logged as `<...>`: a different station from every other QSO with
-        // the same operator, and no award credit either, because `dxcc::resolve` cannot match
-        // a call containing a character `cty.dat` has never heard of.
-        //
-        // NOT STRIPPED IN THE SEQUENCER, deliberately. `Station::dxcall` also builds the
-        // OUTGOING message, and there the hashed form is what the protocol REQUIRES — a bare
-        // compound call does not fit the frame that form exists to make room for. This
-        // function is where a live station becomes a log entry, so a log-shaped rule belongs
-        // here and nowhere earlier. WSJT-X draws the same line: it strips `<`/`>` at every
-        // point it consumes a call for logging or display.
-        let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
-        // ADIF mode must reflect the tier actually used — FT8/FT4 contacts log as
-        // FT8/FT4 (award eligibility depends on it), not the native FT1 path.
-        let mode = match self.app.tier() {
+    /// The ADIF mode name the active tier logs as — ONE source of truth, shared by
+    /// `qso_record` (what the log carries) and the B4 band-key (what the log is probed
+    /// with). If these ever diverged, mode-scoped B4 would silently never match.
+    fn adif_mode_for_tier(&self) -> &'static str {
+        match self.app.tier() {
             Tier::TempoDeep => "TempoDeep",
             Tier::Ft8 => "FT8",
             Tier::Ft4 => "FT4",
@@ -14295,7 +14299,31 @@ impl Engine {
             Tier::Wspr => "WSPR",
             Tier::TempoFast => "TempoFast",
         }
-        .to_string();
+    }
+
+    fn qso_record(
+        &self,
+        dxcall: String,
+        dxgrid: Option<String>,
+        rx_report: Option<i32>,
+    ) -> QsoRecord {
+        // ⚠️ THE HASHED-CALL BRACKETS COME OFF HERE, AT THE RECORD BOUNDARY (issue #84).
+        //
+        // FT8's 77-bit protocol sends a compound call as `<DX1ABC>` when the message will not
+        // otherwise fit, and the decoded token keeps its brackets through the whole sequencer.
+        // A DXpedition then logged as `<...>`: a different station from every other QSO with
+        // the same operator, and no award credit either, because `dxcc::resolve` cannot match
+        // a call containing a character `cty.dat` has never heard of.
+        //
+        // NOT STRIPPED IN THE SEQUENCER, deliberately. `Station::dxcall` also builds the
+        // OUTGOING message, and there the hashed form is what the protocol REQUIRES — a bare
+        // compound call does not fit the frame that form exists to make room for. This
+        // function is where a live station becomes a log entry, so a log-shaped rule belongs
+        // here and nowhere earlier. WSJT-X draws the same line: it strips `<`/`>` at every
+        // point it consumes a call for logging or display.
+        let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
+        // ADIF mode: one source of truth with the B4 band-key — see adif_mode_for_tier.
+        let mode = self.adif_mode_for_tier().to_string();
         // Resolve the DXCC entity (country) at log time — the key field for a
         // DXer. Uses the injected resolver; None in headless tests.
         let country = self

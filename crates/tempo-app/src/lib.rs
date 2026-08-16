@@ -840,6 +840,7 @@ impl AppState {
             presence,
             // Set by the engine from the logbook (worked-before); default false here.
             worked: false,
+            worked_band: false,
             // Resolved by the engine from the DXCC resolver; None at this layer.
             country: None,
             tier: h.mode.map(Tier::from_mode_kind),
@@ -878,6 +879,7 @@ impl AppState {
             radios: Vec::new(),
             active_radio_id: 0,
             radio_pegged: false,
+            b4_match_mode: false,
             link: self.link.clone(),
             chat_cq: String::new(), // Engine fills the run state in snapshot()
             stations,

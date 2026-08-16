@@ -625,7 +625,14 @@ export function OperateDecodes({
                       )}
                     </span>
                   )}
-                  {d.worked && <span className="b4-chip" title="Worked before">B4</span>}
+                  {d.worked && (
+                    <span
+                      className={`b4-chip${d.workedBand ? ' b4-band' : ''}`}
+                      title={d.workedBand ? 'Worked before on this band' : 'Worked before (another band)'}
+                    >
+                      B4
+                    </span>
+                  )}
                   {d.isCq && !d.directedToMe && <span className="decode-tag cq">CQ</span>}
                   {d.directedToMe && <span className="decode-tag me">YOU</span>}
                   {d.rv > 0 && (

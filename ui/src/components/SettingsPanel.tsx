@@ -6765,6 +6765,33 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {tab === 'logging' && (
+            <fieldset className="settings-section" id="settings-connections-b4">
+              <legend>Worked-before (B4) &amp; dupes</legend>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">Match mode too</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.b4MatchMode ?? false}
+                    className={`toggle${form.b4MatchMode ? ' on' : ''}`}
+                    onClick={() => updateBool('b4MatchMode', !form.b4MatchMode)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">
+                    Off (the default, and WSJT-X&rsquo;s): working a station on 40m marks them
+                    B4-on-band for 40m in every mode, and the log strip&rsquo;s Dupe badge counts
+                    any mode on the band. On: 40m FT8 and 40m phone are separate contacts — the
+                    solid B4 chip and the Dupe badge require the mode to match as well. The
+                    hollow B4 chip (worked anywhere) is unaffected either way.
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+          )}
+
           {/* ---- Network integrations ---- */}
           {tab === 'logging' && (
           <fieldset className="settings-section" id="settings-integrations-feeds">

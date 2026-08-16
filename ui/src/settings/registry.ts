@@ -304,6 +304,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'not uploading', 'last upload', 'failing', 'revoked', 'wrong password', 'green'],
   },
   {
+    id: 'connections-b4',
+    label: 'Worked-before (B4) & dupes',
+    tab: 'logging',
+    keywords: ['b4', 'worked before', 'dupe', 'duplicate', 'match mode', 'band', 'highlight',
+      'wsjt-x', 'already worked'],
+  },
+  {
     id: 'integrations-feeds',
     label: 'Integrations & Feeds',
     tab: 'logging',
