@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The setup wizard's example callsign is nobody's callsign.** The callsign and grid boxes
+  showed `KD9TAW` and `EN52` as hint text on a fresh install — readable as prefilled values,
+  and they are a real station's. The examples are now `N0CALL` and `FN31` everywhere hint
+  text names a callsign or grid.
 - **The Phone and CW scope centers your frequency, the way your rig's scope does.** Reported
   from the bench: a station on your own frequency painted at the left edge of the passband.
   The audio-fed scope's axis started at the dial and ran upward, so the dial sat on the far

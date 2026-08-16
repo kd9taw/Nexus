@@ -570,7 +570,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 className={`settings-input mono rp-grid${gridInput && !isValidGrid(gridInput.trim()) ? ' invalid' : ''}`}
                 value={gridInput}
                 maxLength={6}
-                placeholder="EN52"
+                placeholder="FN31"
                 aria-label="Grid square"
                 onChange={(e) => setGridInput(e.target.value.toUpperCase())}
               />
