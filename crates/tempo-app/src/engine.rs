@@ -400,6 +400,49 @@ impl SpectrumFeed {
 #[derive(Clone, Default)]
 pub struct MeterFeed {
     inner: Arc<MeterCells>,
+    /// The fast-mode power trace (MSK144's Fast Graph) — see [`MeterFeed::push_fast_power`].
+    fast: Arc<Mutex<FastPowerRing>>,
+}
+
+/// Raw 20 ms RMS power samples, retained — the data behind the MSK144 Fast Graph.
+///
+/// WSJT-X's fast modes draw a green power-vs-time trace (`fast_green[]`, one sample per
+/// ~21-43 ms FFT hop of `hspec.f90`) because on a meteor-scatter mode the SIGNAL IS A PING:
+/// milliseconds long, all energy at 1500 Hz, invisible on a frequency waterfall and obvious on
+/// a time trace. `rxdsp::tick` already computes exactly this sample — the per-tick RMS at
+/// 20 ms — and used to destroy it into the meter ballistics. This ring keeps the raw series.
+///
+/// Sized for two 30 s periods at the 20 ms tick (3000 samples) with headroom — enough for the
+/// Fast Graph's current + previous panels at the longest offered T/R period.
+struct FastPowerRing {
+    /// (sequence, unix ms, raw RMS 0..1). Sequence is monotonic so a poller can ask for the
+    /// delta since its last read and detect gaps; RAW rms, not the ballistics-shaped meter —
+    /// a ping IS the attack the ballistics exist to smooth away.
+    buf: std::collections::VecDeque<(u64, u64, f32)>,
+    next_seq: u64,
+}
+
+impl Default for FastPowerRing {
+    fn default() -> Self {
+        Self {
+            buf: std::collections::VecDeque::with_capacity(Self::DEPTH),
+            next_seq: 0,
+        }
+    }
+}
+
+impl FastPowerRing {
+    const DEPTH: usize = 3200;
+}
+
+/// One Fast Graph power sample on the wire (`get_fast_power`).
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FastPowerSample {
+    pub seq: u64,
+    pub unix_ms: u64,
+    /// Raw tick RMS, 0..1 linear.
+    pub rms: f32,
 }
 
 /// The cells behind [`MeterFeed`]. `rx_level` is f32 bits; `smeter_cdb` encodes
@@ -437,6 +480,32 @@ impl MeterFeed {
         use std::sync::atomic::Ordering;
         f32::from_bits(self.inner.rx_level.load(Ordering::Relaxed))
     }
+    /// Retain one raw 20 ms RMS sample for the Fast Graph — the rx-dsp thread, every tick
+    /// that drained audio. Cheap when nobody reads it: a mutex push into a fixed ring.
+    pub fn push_fast_power(&self, unix_ms: u64, rms: f32) {
+        if let Ok(mut g) = self.fast.lock() {
+            let seq = g.next_seq;
+            g.next_seq += 1;
+            if g.buf.len() >= FastPowerRing::DEPTH {
+                g.buf.pop_front();
+            }
+            g.buf.push_back((seq, unix_ms, rms));
+        }
+    }
+
+    /// Samples with sequence >= `since` — the Fast Graph's poll delta. A `since` older than
+    /// the ring answers from the ring's start (the caller sees the gap in the sequences).
+    pub fn fast_power_since(&self, since: u64) -> Vec<FastPowerSample> {
+        let Ok(g) = self.fast.lock() else {
+            return Vec::new();
+        };
+        g.buf
+            .iter()
+            .filter(|(seq, _, _)| *seq >= since)
+            .map(|&(seq, unix_ms, rms)| FastPowerSample { seq, unix_ms, rms })
+            .collect()
+    }
+
     /// Store the CAT S-meter (dB rel S9), `None` = no reading (unsupported rig / dead link).
     /// Called by the radio loop at every place it observes or clears the engine's mirror.
     pub fn set_smeter_db(&self, db: Option<i32>) {
@@ -12065,6 +12134,9 @@ impl Engine {
     /// Full snapshot, with mode + per-mode (QSO / Field Day) status filled in.
     pub fn snapshot(&self) -> AppSnapshot {
         let mut s = self.app.snapshot();
+        // The active tier's T/R period rides the link so the UI never hardcodes one —
+        // MSK144's is a 5/10/15/30 SETTING, and the Fast Graph's X axis is one period wide.
+        s.link.period_secs = self.active_slot_secs();
         // Mark roster stations worked-before (B4) from the persistent logbook, and
         // resolve each one's DXCC country (DX chasers scan the roster by country).
         //
@@ -23854,6 +23926,38 @@ mod tests {
              four loud frames from before it: got {got}, want {post} (a blend reads {})",
             power_mean(&[pre, pre, pre, pre, post]),
         );
+    }
+
+    /// The Fast Graph's data contract: raw samples, monotonic sequence, delta polling.
+    #[test]
+    fn the_fast_power_ring_serves_deltas_and_keeps_raw_rms() {
+        let m = MeterFeed::default();
+        for i in 0..5u64 {
+            m.push_fast_power(1_000 + i * 20, 0.1 * (i as f32 + 1.0));
+        }
+        let all = m.fast_power_since(0);
+        assert_eq!(all.len(), 5);
+        assert_eq!(all[0].seq, 0);
+        // RAW rms, not the ballistics-shaped meter — a ping IS the attack the meter smooths.
+        assert!((all[4].rms - 0.5).abs() < 1e-6);
+        let delta = m.fast_power_since(3);
+        assert_eq!(
+            delta.len(),
+            2,
+            "a poller asks only for what it has not seen"
+        );
+        assert_eq!(delta[0].seq, 3);
+        // The ring caps: sequences keep climbing while old samples fall off the front.
+        for i in 0..4000u64 {
+            m.push_fast_power(2_000 + i * 20, 0.0);
+        }
+        let tail = m.fast_power_since(0);
+        assert!(
+            tail.len() <= 3200,
+            "the ring must stay bounded, got {}",
+            tail.len()
+        );
+        assert_eq!(tail.last().unwrap().seq, 4004, "sequence survives eviction");
     }
 
     fn spec(lo: f64, hi: f64, src: &str) -> Spectrum {

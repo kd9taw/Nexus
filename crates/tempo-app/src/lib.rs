@@ -309,6 +309,7 @@ impl AppState {
                 // operators use. (Tier is runtime state, not persisted, so every
                 // launch starts on FT8.)
                 tier: Tier::Ft8,
+                period_secs: 15.0,
                 snr_db: 0.0,
                 dt_sec: 0.0,
                 freq_hz: 0.0,

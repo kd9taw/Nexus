@@ -480,6 +480,11 @@ pub struct Conversation {
 #[serde(rename_all = "camelCase")]
 pub struct LinkState {
     pub tier: Tier,
+    /// The active tier's T/R period in seconds. The Fast Graph needs it (its X axis is one
+    /// period wide) and the UI must not hardcode it — MSK144's is a 5/10/15/30 setting, and
+    /// `decodeHistory.ts` mislabelled period boundaries for years by assuming 15.
+    #[serde(default)]
+    pub period_secs: f64,
     pub snr_db: f32,
     pub dt_sec: f32,
     pub freq_hz: f32,

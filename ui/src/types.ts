@@ -998,6 +998,8 @@ export interface Conversation {
 
 export interface LinkState {
   tier: Tier
+  /** The active tier's T/R period (s). MSK144's is a 5/10/15/30 setting — never hardcode. */
+  periodSecs: number
   snrDb: number
   dtSec: number
   freqHz: number

@@ -2066,6 +2066,19 @@ export async function getScopeRow(
  */
 export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
 
+/** One Fast Graph power sample: raw 20 ms RMS, monotonic seq for delta polling. */
+export interface FastPowerSample {
+  seq: number
+  unixMs: number
+  rms: number
+}
+
+/** Fast-mode (MSK144) power trace since `sinceSeq` — the Fast Graph's poll. Meter bus only,
+ * no engine mutex, so pings keep rendering while the engine is busy decoding. */
+export async function getFastPower(sinceSeq: number): Promise<FastPowerSample[]> {
+  return invoke<FastPowerSample[]>('get_fast_power', { sinceSeq })
+}
+
 /** Fetch the live meters (RX audio level + CAT S-meter). Lock-free backend-side (no engine
  * mutex), so it is safe to poll fast and a CAT stall cannot freeze it — one shared ~100 ms
  * poll feeds every meter widget instead of riding the 300 ms snapshot (see `LiveMeters`). */

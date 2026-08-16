@@ -25,6 +25,7 @@ import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
+import { FastGraph } from './FastGraph'
 import { Waterfall } from './Waterfall'
 import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { Splitter } from './Splitter'
@@ -937,16 +938,29 @@ export function OperateCockpit({
         {wfState === 'docked' && (
           <>
             <section className="cockpit-waterfall panel">
-              <Waterfall
-                onPopOut={popOutWaterfall}
-                transmitting={snap.radio.transmitting}
-                rxOffsetHz={snap.radio.rxOffsetHz}
-                txOffsetHz={snap.radio.txOffsetHz}
-                theme={theme}
-                onTune={onTune}
-                active={active}
-                paletteScope={FT_PALETTE_SCOPE}
-              />
+              {tier === 'MSK144' ? (
+                /* MSK144 is a TIME display, not a frequency one — every signal sits at
+                 * 1500 Hz and lives for milliseconds, so the waterfall shows one unmoving
+                 * stripe while the actual event (the ping) is invisible. WSJT-X hides its
+                 * waterfall here and shows the Fast Graph; so does Nexus. Same strip, same
+                 * splitter — only the picture changes. */
+                <FastGraph
+                  periodS={snap.link.periodSecs || 15}
+                  decodes={snap.recentDecodes?.filter((d) => d.tier === 'MSK144')}
+                  theme={theme}
+                />
+              ) : (
+                <Waterfall
+                  onPopOut={popOutWaterfall}
+                  transmitting={snap.radio.transmitting}
+                  rxOffsetHz={snap.radio.rxOffsetHz}
+                  txOffsetHz={snap.radio.txOffsetHz}
+                  theme={theme}
+                  onTune={onTune}
+                  active={active}
+                  paletteScope={FT_PALETTE_SCOPE}
+                />
+              )}
             </section>
             <Splitter
               axis="y"

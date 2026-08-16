@@ -7230,6 +7230,16 @@ fn get_scope_row(
     Ok(eng.spectrum_row())
 }
 
+/// Fast Graph power trace (MSK144): raw 20 ms RMS samples since `since_seq`. Same meter bus,
+/// no engine mutex — pings must render while the engine is busy decoding.
+#[tauri::command(async)]
+fn get_fast_power(
+    since_seq: u64,
+    meters: State<'_, tempo_app::engine::MeterFeed>,
+) -> Result<Vec<tempo_app::engine::FastPowerSample>, String> {
+    Ok(meters.fast_power_since(since_seq))
+}
+
 /// The live meters (RX audio level + CAT S-meter), read lock-free off the meter bus — never
 /// the engine mutex, which the radio loop holds across blocking CAT (the same stall that used
 /// to freeze the waterfall would freeze a snapshot-fed needle). The meter widgets poll this at
@@ -16146,6 +16156,7 @@ pub fn run() {
             get_spectrum_row,
             get_scope_row,
             get_meters,
+            get_fast_power,
             set_mode,
             get_settings,
             set_settings,
