@@ -749,21 +749,21 @@ impl Mode for Ft4Mode {
 
 /// Slot lead-in for FT2, in seconds — how far into its 3.75 s T/R period the tones start.
 ///
-/// ⭐ 0.5 s, and it is MEASURED, not inherited from FT8. `ft2_decode`'s timing
-/// report is `xdt = xibest/1333.33 − 0.5`, so a transmission whose first sample
-/// lands 0.5 s into the window is the one the decoder calls dt = 0. Placing it at
-/// sample 0 would put every Nexus FT2 signal at dt ≈ −0.5 on the air, which is
-/// exactly the defect FT4 and FT1 each shipped once before.
-/// `ft2_gen_wave_is_slot_positioned_at_dt_zero` in `lib.rs` proves it by round
-/// trip — encode, place, decode — rather than by restating this comment.
+/// ⭐ 0.0 — DECODIUM'S OWN CONVENTION, corrected 2026-08-16 after the timing audit.
+/// This shipped as 0.5, read off the decoder's `xdt = xibest/1333.33 − 0.5` as a
+/// slot contract. It is not one: Decodium decodes a FREE-RUNNING ring (never
+/// slot-aligned), so the −0.5 merely re-centres a rolling window — and their
+/// transmitter starts audio at the instant it keys, 0 ms into the slot (their
+/// nominal `delay_ms=100` for FT2 is DEAD CODE behind a `synchronize` flag that
+/// async FT2 always passes false). The original round-trip "proof" was the
+/// missing-positive-control trap: it encoded with our lead and decoded with our
+/// decoder, proving only that Nexus agreed with Nexus. At 0.0 a Nexus signal
+/// reads dt ≈ −0.5 in our own slot-aligned window — as does every Decodium
+/// station's — and both ends keep the full ±1.0 s search margin.
 ///
-/// The geometry is TIGHT, tighter than any other mode here: 0.5 s lead + 2.52 s
-/// of tones = 3.02 s in a 3.75 s slot, leaving 0.73 s of tail. That tail is the
-/// soundcard-latency margin (the PTT hold is sized from the wave length and
-/// clamped to the slot boundary), so raising this constant spends margin the
-/// mode has less of than FT1 — read `FT1_LEAD_IN_SECS`'s note on that trade
-/// before touching it.
-pub(crate) const FT2_LEAD_IN_SECS: f32 = 0.5;
+/// The geometry: 2.52 s of tones in a 3.75 s slot leaves ~0.98 s of slack —
+/// double what the 0.5 lead left, on the tightest slot clock in the app.
+pub(crate) const FT2_LEAD_IN_SECS: f32 = 0.0;
 
 /// **FT2** (Decodium, IU8LMC) — 3.75 s T/R, 4-GFSK at 41.67 baud. FT4 with a
 /// halved symbol time: LDPC(174,91)+CRC14, ~167 Hz occupied, −10.8 to −12 dB.
@@ -845,7 +845,7 @@ impl Mode for Ft2Mode {
         };
         // Slot-positioned per the trait contract: PREPEND the lead-in silence so
         // the radio loop can play this straight at the slot boundary and the far
-        // end reports dt ≈ 0. See `FT2_LEAD_IN_SECS` for why it is 0.5 s.
+        // start of the slot, Decodium's own convention. See `FT2_LEAD_IN_SECS`.
         let lead = (FT2_LEAD_IN_SECS * fsample).round().max(0.0) as usize;
         let mut wave = vec![0f32; lead + tones.len()];
         wave[lead..].copy_from_slice(&tones);

@@ -6422,11 +6422,12 @@ impl RadioLoop {
             let early_at_ms = match tier_now {
                 Tier::Ft8 => Some(11_800.0),
                 Tier::Ft4 => Some(5_500.0),
-                // FT2's tones end at 3.02 s of 3.75 — this is a COMPLETE-signal pass
-                // (0.70 s of decode room, measured 510 ms), not a partial. Without it
-                // FT2 fell into the key-before-decode branch below and answered every
-                // exchange step one full cycle late (on-air, 2026-08-16).
-                Tier::Ft2 => Some(3_050.0),
+                // FT2's tones end at 2.52 s of 3.75 (slot-start audio, Decodium's
+                // convention) — this is a COMPLETE-signal pass with 1.15 s of decode
+                // room against a measured 510 ms, not a partial. Without it FT2 fell
+                // into the key-before-decode branch below and answered every exchange
+                // step one full cycle late (on-air, 2026-08-16).
+                Tier::Ft2 => Some(2_600.0),
                 // Repeating: the next 2 s mark not yet decoded this slot. Never the 0 mark
                 // (an empty buffer), and the boundary pass still owns the full frame.
                 Tier::Msk144 => {

@@ -8706,7 +8706,7 @@ impl Engine {
             // returns exactly lead + NWAVE — so 3.02 is the whole of it, and it is
             // airtime rather than an over-estimate. That leaves 0.73 s of the 3.75 s
             // slot, the tightest margin of any tier here.
-            Tier::Ft2 => 3.02,
+            Tier::Ft2 => 2.52,
             Tier::TempoFast => 3.55,
         }
     }

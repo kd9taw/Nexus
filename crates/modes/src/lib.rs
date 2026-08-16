@@ -284,32 +284,28 @@ mod tests {
     }
 
     #[test]
-    fn ft2_gen_wave_is_slot_positioned_at_dt_zero() {
-        // ⭐ THE TX-PLACEMENT PROOF, run through the `Mode` interface rather than
-        // asserted from the lead-in constant. `ft2_decode` reports
-        // `xdt = xibest/1333.33 − 0.5`, so where in the slot our audio starts is
-        // what every receiver's DT column reads — and getting it wrong is a defect
-        // FT4 and FT1 each shipped once (see their gen_wave notes).
+    fn ft2_gen_wave_starts_at_the_slot_boundary_like_decodium() {
+        // ⭐ THE TX-PLACEMENT PROOF, corrected 2026-08-16. FT2 audio starts AT the
+        // slot boundary — Decodium's own transmit convention (their decoder is a
+        // free-running ring, so its `xdt = xibest/1333.33 − 0.5` is a window
+        // re-centring, not a slot contract; a slot-aligned window reads slot-start
+        // audio as dt ≈ −0.5, ours and theirs alike). The first version of this
+        // test asserted dt ≈ 0 with a 0.5 s lead — encoding with our lead and
+        // decoding with our decoder, it proved only that Nexus agreed with Nexus.
         //
-        // Round trip: encode -> Mode::gen_wave -> place at the SLOT BOUNDARY (the
-        // radio loop plays the returned buffer straight, so sample 0 is t=0) ->
-        // Mode::decode_frame, and read the dt the decoder reports back.
+        // Round trip: encode -> Mode::gen_wave -> the radio loop plays the buffer
+        // straight (sample 0 = slot t=0) -> Mode::decode_frame, read dt back.
         let m = make_mode(ModeKind::Ft2);
         let msg = "CQ KD9TAW EN52";
         let tones = m.encode(msg);
         assert_eq!(tones.len(), ft2::NN, "FT2 encodes 103 channel symbols");
 
         let wave = m.gen_wave(&tones, FS, 1200.0);
-        let lead = (crate::mode::FT2_LEAD_IN_SECS * FS).round() as usize;
         assert_eq!(
             wave.len(),
-            lead + ft2::NWAVE,
-            "the slot-positioned buffer is lead-in + 2.52 s of tones"
+            ft2::NWAVE,
+            "the buffer is exactly 2.52 s of tones — no lead-in, per Decodium"
         );
-        assert!(wave[..lead].iter().all(|&s| s == 0.0), "lead-in is silence");
-        // ⚠️ AND IT MUST STILL FIT. 0.5 s + 2.52 s = 3.02 s in a 3.75 s slot. The
-        // PTT hold is sized from this length and clamped to the boundary, so a
-        // buffer that overran would cut the end of our own signal.
         assert!(
             wave.len() < ModeKind::Ft2.capture_samples(),
             "FT2's over must fit its 3.75 s slot: {} samples of {}",
@@ -328,19 +324,19 @@ mod tests {
 
         let dt = dt_of(&wave);
         assert!(
-            dt.abs() < 0.06,
-            "a Nexus FT2 over must decode at dt ~= 0, got {dt:.3} s"
+            (dt + 0.5).abs() < 0.06,
+            "slot-start FT2 audio reads dt ~= -0.5 in a slot-aligned window, got {dt:.3} s"
         );
 
-        // POSITIVE CONTROL for the assertion above: without the lead-in the same
-        // audio decodes at dt ~= -0.5. If this came back near 0 too, the test would
-        // be measuring nothing and a lead-in regression would sail through.
-        let bare = ft2::gen_wave(&tones, 1200.0).expect("wave must generate");
-        let dt_bare = dt_of(&bare);
+        // POSITIVE CONTROL: the SAME audio shifted 0.5 s later must read dt ~= 0.
+        // If both read the same, the measurement distinguishes nothing and a
+        // placement regression would sail through.
+        let mut shifted = vec![0.0f32; (0.5 * FS) as usize];
+        shifted.extend_from_slice(&wave);
+        let dt_shifted = dt_of(&shifted);
         assert!(
-            (dt_bare + 0.5).abs() < 0.06,
-            "control: audio at the slot boundary must read dt ~= -0.5, got {dt_bare:.3} s — \
-             if this is ~0 the dt assertion above proves nothing"
+            dt_shifted.abs() < 0.06,
+            "control: audio 0.5 s into the window must read dt ~= 0, got {dt_shifted:.3} s"
         );
     }
 

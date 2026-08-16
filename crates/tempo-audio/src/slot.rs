@@ -468,12 +468,12 @@ mod tests {
             (12_640.0, 15_000.0, "FT8"),
             (5_040.0, 7_500.0, "FT4"),
             (14_688.0, 15_000.0, "MSK144-15"),
-            // FT2: 0.5 s lead-in + 2.52 s tones in a 3.75 s period. The SHORTEST
+            // FT2: 2.52 s of tones from the slot start in a 3.75 s period. The SHORTEST
             // period here, but not the tightest fit — 3020 + 250 ms of tail leaves
-            // 480 ms of slack, more than MSK144-15's ~312 ms and unlike FT1's −250 ms
+            // ~980 ms of slack, more than MSK144-15's ~312 ms and unlike FT1's −250 ms
             // it does not clamp on an on-time over. Swept anyway: the clamp is what
             // makes a pathological stall unrepresentable rather than merely unlikely.
-            (3_020.0, 3_750.0, "FT2"),
+            (2_520.0, 3_750.0, "FT2"),
         ] {
             let slot_start = 1_000.0 * period_ms;
             // Every 10 ms of phase across a whole slot.
@@ -503,7 +503,7 @@ mod tests {
         // Asserted rather than reasoned, because the failure mode is silent: a
         // negative margin does not error, it quietly clamps every over and eats the
         // tail that protects the end of the signal from soundcard output latency.
-        const FT2_AUDIO_MS: f64 = 3_020.0; // 0.5 s lead + 30240 samples of tones
+        const FT2_AUDIO_MS: f64 = 2_520.0; // 30240 samples of tones from the slot start
         const FT2_PERIOD_MS: f64 = 3_750.0;
         let slack = FT2_PERIOD_MS - (FT2_AUDIO_MS + TX_TAIL_MS);
         assert!(
@@ -513,8 +513,8 @@ mod tests {
              transmits into the period we are supposed to be receiving in"
         );
         assert!(
-            (slack - 480.0).abs() < 1.0,
-            "FT2's slack moved from the 480 ms this build ships, to {slack:.1} ms"
+            (slack - 980.0).abs() < 1.0,
+            "FT2's slack moved from the 980 ms this build ships, to {slack:.1} ms"
         );
         // And the consequence that slack buys: an ON-TIME FT2 over is NOT clamped,
         // so it keeps its whole tail — unlike FT1, which is clamped at every phase.
