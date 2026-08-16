@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
+import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, cwScopeWindow, CW_SCOPE_SPAN_HZ, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -229,12 +229,44 @@ describe('zoomRange (waterfall span/zoom)', () => {
   })
 })
 
+describe('cwScopeWindow (CW audio scope window)', () => {
+  it('centers the operator’s pitch in the window', () => {
+    // THE DEFECT (operator, on air 2026-08-16): the window was hardcoded 300–1100, which
+    // centers the 600 Hz default and nothing else. At 900 Hz the signal painted three
+    // quarters of the way across; at 400 Hz, hard against the left edge.
+    for (const pitch of [400, 600, 750, 900, 1200]) {
+      const { loHz, hiHz } = cwScopeWindow(pitch)
+      expect(hiHz - loHz, `span at ${pitch}`).toBe(CW_SCOPE_SPAN_HZ)
+      expect((loHz + hiHz) / 2, `center at ${pitch}`).toBe(pitch)
+      expect(loHz, `backend rejects a negative lo (${pitch})`).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('floors at 0 for a pitch below half the span (never asks for a negative window)', () => {
+    // A negative lo is silently refused by the engine, which answers the WHOLE 0–4000 row —
+    // so below 400 Hz the marker sits left of center, which is the honest picture: there is
+    // no audio below 0 Hz to put on the other side of it.
+    expect(cwScopeWindow(300)).toEqual({ loHz: 0, hiHz: CW_SCOPE_SPAN_HZ })
+    expect(cwScopeWindow(0)).toEqual({ loHz: 0, hiHz: CW_SCOPE_SPAN_HZ })
+  })
+
+  it('keeps the span the engine can honour (lo ≥ 0, hi ≤ 6000, span ≥ 50)', () => {
+    for (const pitch of [300, 600, 1200]) {
+      const { loHz, hiHz } = cwScopeWindow(pitch)
+      expect(loHz).toBeGreaterThanOrEqual(0)
+      expect(hiHz).toBeLessThanOrEqual(6000)
+      expect(hiHz - loHz).toBeGreaterThanOrEqual(50)
+    }
+  })
+})
+
 describe('scopeView (Phone/CW scope window per feed source)', () => {
   it('audio row: the view window passes through unchanged, marker untouched', () => {
     expect(scopeView(0, 4000, 'audio', 300, 1100, 600, 1)).toEqual({
       loHz: 300,
       hiHz: 1100,
       markerAtHz: 600,
+      mirrored: false,
     })
   })
 
@@ -243,7 +275,41 @@ describe('scopeView (Phone/CW scope window per feed source)', () => {
       loHz: 200,
       hiHz: 2900,
       markerAtHz: null,
+      mirrored: false,
     })
+  })
+
+  it('audio row, carrier-centered (Phone): the DIAL sits at the exact middle of the axis', () => {
+    // Rig geometry: audio 0 Hz IS the dial (the suppressed carrier), so on a rig-style
+    // scope it belongs at the center pixel — not at the far left, which is where the
+    // plain audio window put it (operator, on air 2026-08-16: "the signal is at the left
+    // edge; my FTdx10 and IC-9700 draw it in the middle").
+    const v = scopeView(0, 4000, 'rx', 0, 2700, null, 1, null, false, true)
+    expect(v.loHz).toBe(-2700)
+    expect(v.hiHz).toBe(2700)
+    expect((v.loHz + v.hiHz) / 2, 'audio 0 = the dial = mid-axis').toBe(0)
+  })
+
+  it('audio row, carrier-centered: USB occupies the RIGHT half, LSB the LEFT (mirrored)', () => {
+    // The axis is RF OFFSET FROM THE DIAL, so which half holds the voice is the sideband's
+    // business: USB audio f is at dial+f, LSB at dial−f. `mirrored` is how the caller reads
+    // the row backwards to paint an LSB signal below the dial, exactly as a panadapter does.
+    const usb = scopeView(0, 4000, 'rx', 0, 4000, null, 1, null, false, true)
+    const lsb = scopeView(0, 4000, 'rx', 0, 4000, null, -1, null, false, true)
+    expect(usb.mirrored).toBe(false)
+    expect(lsb.mirrored).toBe(true)
+    // The axis itself is the same window either way — it is symmetric about the dial.
+    expect([lsb.loHz, lsb.hiHz]).toEqual([usb.loHz, usb.hiHz])
+  })
+
+  it('carrier-centering is Phone-only: it never touches a native RF row', () => {
+    // CW's one-sided pitch window and the RF branch both stay exactly as they were —
+    // the flag is an explicit Phone opt-in, not a global change of axis.
+    const rf = scopeView(6_925_000, 7_125_000, 'flex', 300, 1100, 600, 1, null, false, true)
+    expect(rf.loHz).toBe(7_024_700)
+    expect(rf.hiHz).toBe(7_025_500)
+    expect(rf.markerAtHz).toBe(7_025_000)
+    expect(rf.mirrored).toBe(false)
   })
 
   it('RF row (flex): the CW window maps around the dial with the marker exactly ON it (zero-beat)', () => {

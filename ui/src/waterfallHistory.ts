@@ -27,7 +27,9 @@ import { resampleRow } from './waterfall'
 
 /** One stored row's metadata. */
 export interface RowFrame {
-  /** Frequency window this row's columns span (Hz — audio-passband or absolute RF). */
+  /** Frequency window this row's columns span (Hz — audio-passband, absolute RF, or the
+   * dial-relative OFFSET the rig scope's carrier-centered axis stores, which is the one
+   * frame that can be negative: an LSB row is stored mirrored, so it spans −hi..−lo). */
   loHz: number
   hiHz: number
   /** Wall-clock stamp (ms) — drives the scrollback time tape. */

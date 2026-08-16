@@ -2038,9 +2038,9 @@ export async function getSpectrumRow(_transmitting: boolean): Promise<Spectrum> 
  * Fetch one RIG SCOPE row, spread across the window the scope is actually drawing.
  *
  * Same 512 bins as `getSpectrumRow`, same bytes on the wire — but over `loHz..hiHz` instead of
- * the full 0-4000 Hz capture, so the CW cockpit's 300-1100 Hz view gets 1.5625 Hz bins rather
- * than 7.8125. The span request rides this call; there is nothing to set up and nothing to tear
- * down. Ask for a span the backend cannot honour (a native RF panadapter is live, or the numbers
+ * the full 0-4000 Hz capture, so the CW cockpit's 800 Hz pitch-centered view gets 1.5625 Hz
+ * bins rather than 7.8125. The span request rides this call; there is nothing to set up and
+ * nothing to tear down. Ask for a span the backend cannot honour (a native RF panadapter is live, or the numbers
  * are not a sane audio window) and it returns exactly what `getSpectrumRow` would have — so a
  * caller never has to branch on which row it got, only read the `loHz`/`hiHz` it came back with.
  */

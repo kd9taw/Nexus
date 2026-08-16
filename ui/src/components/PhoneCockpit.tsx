@@ -156,12 +156,20 @@ const DSP_FUNCS = [
   { key: 'vox', label: 'VOX', title: 'Voice-Operated Transmit — hands-free keying (TX)' },
 ] as const
 
-/** Bandscope span presets — slices of the captured audio passband. */
+/** Bandscope span presets — ± HALF-WIDTHS around the dial, because the scope's axis is the
+ *  rig's: RF offset from the dial, carrier on the middle pixel (PhoneScope's
+ *  `carrierCentered`). The engine is still asked for 0..half — receiver audio is one-sided —
+ *  so a half-width is both what is captured and half of what is shown.
+ *
+ *  FROM THE OLD SLICES: 'Full' (0–4000) → ±4k and 'Voice' (300–2700) → ±2.7k, unchanged in
+ *  meaning. 'Low' (200–1500) is now the plain ±1.5k zoom. 'High' (1500–2900) has no
+ *  carrier-centered equivalent — a window that excludes the dial cannot be centered on it —
+ *  so its slot became the tighter ±800 zoom. */
 const SPANS = [
-  { label: 'Full', lo: 0, hi: 4000, title: 'Whole captured band (0–4000 Hz) — incl. the filter slopes' },
-  { label: 'Voice', lo: 300, hi: 2700, title: 'Voice energy (300–2700 Hz)' },
-  { label: 'Low', lo: 200, hi: 1500, title: 'Lower half — zoomed (200–1500 Hz)' },
-  { label: 'High', lo: 1500, hi: 2900, title: 'Upper half — zoomed (1500–2900 Hz)' },
+  { label: 'Full', halfHz: 4000, title: 'The whole captured passband — ±4 kHz around your dial' },
+  { label: 'Voice', halfHz: 2700, title: 'Voice energy — ±2.7 kHz around your dial' },
+  { label: '±1.5k', halfHz: 1500, title: 'Zoomed — ±1.5 kHz around your dial' },
+  { label: '±800', halfHz: 800, title: 'Tight — ±800 Hz around your dial, for fine tuning' },
 ] as const
 
 /** RF panadapter zoom presets (used only when a native RF scope is streaming). Symmetric ±Hz
@@ -1087,7 +1095,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                 title={
                   rf
                     ? 'Native RF panadapter — the real RF spectrum around your dial, not the demodulated audio passband.'
-                    : 'Receiver AUDIO spectrum (200–2900 Hz of the demodulated passband) — not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.'
+                    : 'Receiver AUDIO spectrum on your rig’s axis: the centre line is your dial, and the passband sits on the side your sideband is on (USB above, LSB below) — the other half is quiet because an SSB receiver only hears one side. Not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.'
                 }
               >
                 {rf ? 'RF Panadapter' : 'Passband'}{' '}
@@ -1141,8 +1149,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             transmitting={snap.radio.transmitting}
             theme={theme}
             smeterDb={smeterDb}
-            viewLoHz={nativeRf ? rfSpan.lo : span.lo}
-            viewHiHz={nativeRf ? rfSpan.hi : span.hi}
+            viewLoHz={nativeRf ? rfSpan.lo : 0}
+            viewHiHz={nativeRf ? rfSpan.hi : span.halfHz}
+            carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
             onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}

@@ -87,11 +87,18 @@ interface Props {
    * on nav today so it's effectively always true). */
   active?: boolean
   /** Displayed audio window (Hz) within the captured 200–2900 row. Defaults = the
-   * full voice passband; the CW cockpit narrows to ~300–1100 so individual carriers
-   * are readable for tone placement. On a native RF panadapter row the same window
-   * is mapped onto RF around the dial (scopeView), so the width still applies. */
+   * full voice passband; the CW cockpit narrows to an 800 Hz window around the pitch
+   * (cwScopeWindow) so individual carriers are readable for tone placement. On a native
+   * RF panadapter row the same window is mapped onto RF around the dial (scopeView), so
+   * the width still applies. With `carrierCentered` the width is the ± half-width. */
   viewLoHz?: number
   viewHiHz?: number
+  /** PHONE only: draw the audio row on a rig-style axis — RF offset from the dial, with
+   * the dial (audio 0 Hz, the suppressed carrier) on the exact middle pixel and the
+   * occupied side following the sideband. Off = the plain audio window, which is what CW
+   * uses (its axis is centered on the PITCH instead — see cwScopeWindow). Never applies to
+   * a native RF row; those are already dial-centered. */
+  carrierCentered?: boolean
   /** Draw a hairline at this audio frequency (the CW pitch) — tune a signal onto
    * the marker and you're zero-beat. Omitted = no marker. */
   markerHz?: number | null
@@ -169,6 +176,7 @@ export function PhoneScope({
   active = true,
   viewLoHz = 0,
   viewHiHz = 4000,
+  carrierCentered = false,
   markerHz = null,
   smeterDb = null,
   sideband = 'USB',
@@ -191,6 +199,7 @@ export function PhoneScope({
   const activeRef = useRef(active)
   const viewLoRef = useRef(viewLoHz)
   const viewHiRef = useRef(viewHiHz)
+  const carrierCenteredRef = useRef(carrierCentered)
   const markerRef = useRef(markerHz)
   const sidebandRef = useRef(sideband)
   const dialRef = useRef(dialHz)
@@ -245,7 +254,9 @@ export function PhoneScope({
   const interactiveRef = useRef(interactive)
   const traceHoldRef = useRef(traceHoldMs)
   const lastRowRef = useRef<{ row: number[]; rowLo: number; rowHi: number } | null>(null)
-  const lastViewRef = useRef<{ lo: number; hi: number; rf: boolean } | null>(null)
+  // `mirrored` = the drawn axis runs against the row (LSB on a carrier-centered axis), so
+  // every pixel↔Hz conversion here negates: axis Hz is RF offset, row Hz is receiver audio.
+  const lastViewRef = useRef<{ lo: number; hi: number; rf: boolean; mirrored: boolean } | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{
     x0: number
@@ -278,6 +289,7 @@ export function PhoneScope({
   activeRef.current = active
   viewLoRef.current = viewLoHz
   viewHiRef.current = viewHiHz
+  carrierCenteredRef.current = carrierCentered
   markerRef.current = markerHz
   sidebandRef.current = sideband
   dialRef.current = dialHz
@@ -492,6 +504,7 @@ export function PhoneScope({
         sidebandSign(sidebandRef.current),
         dialRef.current,
         isSymmetricMode(sidebandRef.current),
+        carrierCenteredRef.current,
       )
       // Tell the host what's actually drawn (only on change) — the honest scope label.
       const feed = `${src}:${view.loHz}:${view.hiHz}`
@@ -505,7 +518,12 @@ export function PhoneScope({
       // Capture the row + drawn window for the pointer handlers (click hit-testing and
       // drag-box Hz↔px mapping happen against exactly what's on screen).
       lastRowRef.current = { row, rowLo, rowHi }
-      lastViewRef.current = { lo: view.loHz, hi: view.hiHz, rf: isRfScopeSource(src) }
+      lastViewRef.current = {
+        lo: view.loHz,
+        hi: view.hiHz,
+        rf: isRfScopeSource(src),
+        mirrored: view.mirrored,
+      }
 
       // AGC over the VISIBLE window only — a loud signal outside the view (e.g.
       // the FT8 cluster above a narrow CW window) must not compress what's shown.
@@ -602,8 +620,21 @@ export function PhoneScope({
         magBufW = Wd
       }
       const mag = magBuf
+      // `mirrored` (LSB on the carrier-centered axis) reads the row backwards: the audio at
+      // f Hz is at dial−f, so it belongs LEFT of center. Both sidebands share one symmetric
+      // axis, so the negate is the whole of the difference.
+      const mirrored = view.mirrored
       for (let x = 0; x < Wd; x++) {
-        const hz = lo + (x / Wd) * (hi - lo)
+        const axisHz = lo + (x / Wd) * (hi - lo)
+        const hz = mirrored ? -axisHz : axisHz
+        // Outside the captured row there is nothing to draw — the floor, explicitly. The
+        // carrier-centered axis puts half the screen here by design, and unguarded this
+        // indexed row[<0] → undefined → NaN, which paints black columns and breaks the
+        // trace path without throwing.
+        if (hz < rowLo || hz > rowHi) {
+          mag[x] = 0
+          continue
+        }
         const bin = ((hz - rowLo) / span) * (nBins - 1)
         const b0 = Math.floor(bin)
         const b1 = Math.min(nBins - 1, b0 + 1)
@@ -632,8 +663,21 @@ export function PhoneScope({
         binBuf = new Float32Array(nBins)
         binBufN = nBins
       }
-      for (let b = 0; b < nBins; b++) binBuf[b] = normalize(row[b], dispFloor, dispCeil)
-      historyRef.current.push(binBuf, rowLo, rowHi, Date.now())
+      // A MIRRORED row is stored mirrored — bins reversed, frame negated — rather than
+      // flagged for the renderers to flip later. The stored frame then says what the row
+      // means ON THE AXIS IT WAS DRAWN ON, so the 2D rebuild, the 3D stack and scrollback
+      // all reproduce the live picture through the mapping they already have, and rows
+      // received on the other sideband keep their own honest frame instead of being
+      // re-mirrored by a flag that only describes the present.
+      for (let b = 0; b < nBins; b++) {
+        binBuf[mirrored ? nBins - 1 - b : b] = normalize(row[b], dispFloor, dispCeil)
+      }
+      historyRef.current.push(
+        binBuf,
+        mirrored ? -rowHi : rowLo,
+        mirrored ? -rowLo : rowHi,
+        Date.now(),
+      )
 
       // PAUSED = review mode: history keeps filling (nothing is lost) but the scope is frozen;
       // the mouse wheel scrolls the band back via rebuildFromHistory. Skip the live draw.
@@ -718,6 +762,31 @@ export function PhoneScope({
       ctx.lineWidth = Math.max(1, scaleY)
       ctx.stroke()
 
+      // ---- Carrier line (Phone): the DIAL, on the middle pixel ----
+      //
+      // WHY ONE HALF IS ALWAYS QUIET, and it is not a bug to be fixed later. This scope is
+      // fed by DEMODULATED RECEIVER AUDIO, which is one-sided: an SSB detector folds the
+      // wanted sideband down to 0–3 kHz and throws the image away, so there is no signal
+      // below the carrier to draw. The axis is still worth centering — it is the axis the
+      // rig draws, the dial is where the operator's eye goes, and the empty half is an
+      // honest statement that the receiver is listening on one side of it. A radio that
+      // streams its OWN panadapter (Flex, Icom CI-V) sends real RF and fills both halves;
+      // that feed takes the RF branch in scopeView and never reaches this code.
+      if (carrierCenteredRef.current && !isRfScopeSource(src)) {
+        const cx = Math.round(((0 - lo) / (hi - lo)) * Wd)
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'
+        ctx.lineWidth = Math.max(1, scaleY)
+        ctx.beginPath()
+        ctx.moveTo(cx, 0)
+        ctx.lineTo(cx, devH)
+        ctx.stroke()
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
+        ctx.font = `${Math.max(8, Math.round(10 * scaleY))}px system-ui, sans-serif`
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'top'
+        ctx.fillText('DIAL', cx + 3 * scaleY, 2 * scaleY)
+      }
+
       // ---- Pitch marker (CW): tune a carrier onto the hairline = zero-beat ----
       // (on a native RF row scopeView puts the marker exactly ON the dial)
       const markerAt = view.markerAtHz
@@ -777,7 +846,13 @@ export function PhoneScope({
     const rect = canvas.getBoundingClientRect()
     if (rect.width < 2 || !(view.hi > view.lo)) return null
     const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
-    return view.lo + frac * (view.hi - view.lo)
+    const axisHz = view.lo + frac * (view.hi - view.lo)
+    // ROW Hz is what every caller wants (hit-testing the row, clickTuneTarget's audio
+    // branch, the relative drag anchor) — so undo the axis mirror here, once, rather than
+    // at each of them. On the empty half this is a negative audio Hz, and that is the right
+    // answer: it says "this many Hz the other side of the dial", which is exactly how
+    // clickTuneTarget's `dial + sign·(af − lowcut)` then moves the dial toward the click.
+    return view.mirrored ? -axisHz : axisHz
   }
   // Imperative box positioning — pointer-rate (60 fps), decoupled from the 20 Hz canvas.
   const positionBox = (centerHz: number, widthHz: number) => {

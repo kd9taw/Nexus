@@ -58,7 +58,7 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
-import { isRfScopeSource, sidebandSign, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
+import { cwScopeWindow, isRfScopeSource, sidebandSign, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 
 /** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit). */
 const RF_SPANS = [
@@ -565,6 +565,9 @@ export function CwCockpit({
   // Sidetone pitch — local for instant marker response; persisted via set_cw_keyer.
   const [pitch, setPitch] = useState(pitchHz)
   useEffect(() => setPitch(pitchHz), [pitchHz])
+  // The audio scope window follows the pitch, so the signal being zero-beat is mid-screen
+  // whatever pitch the operator runs (it used to be a fixed 300–1100, centered on 600 only).
+  const cwView = cwScopeWindow(pitch)
   const changePitch = (v: number) => {
     const p = Math.max(300, Math.min(1200, Math.round(v)))
     setPitch(p)
@@ -1290,7 +1293,7 @@ export function CwCockpit({
             title={
               nativeRf
                 ? 'Native RF panadapter — the real RF spectrum around your dial.'
-                : 'Receiver AUDIO around your CW pitch (~300–1100 Hz) — tune a signal onto the dashed hairline to zero-beat it.'
+                : `Receiver AUDIO centered on your CW pitch (${cwView.loHz}–${cwView.hiHz} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.`
             }
           >
             {nativeRf ? 'RF Panadapter' : 'CW audio'}{' '}
@@ -1320,14 +1323,15 @@ export function CwCockpit({
             ))}
           </div>
         )}
-        {/* CW-narrow view (~300–1100 Hz) unless a native RF scope is streaming, in which case
-            we show the real RF spectrum around the dial. The dashed hairline is YOUR pitch. */}
+        {/* CW-narrow view — 800 Hz CENTERED ON THE PITCH (cwScopeWindow) — unless a native RF
+            scope is streaming, in which case we show the real RF spectrum around the dial. The
+            dashed hairline is YOUR pitch, and it now sits mid-screen where a rig puts it. */}
         <PhoneScope
           transmitting={snap.radio.transmitting}
           theme={theme}
           smeterDb={smeterDb}
-          viewLoHz={nativeRf ? rfSpan.lo : 300}
-          viewHiHz={nativeRf ? rfSpan.hi : 1100}
+          viewLoHz={nativeRf ? rfSpan.lo : cwView.loHz}
+          viewHiHz={nativeRf ? rfSpan.hi : cwView.hiHz}
           markerHz={nativeRf ? undefined : pitch}
           sideband={scopeMode}
           dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
