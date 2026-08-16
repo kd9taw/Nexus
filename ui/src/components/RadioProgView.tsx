@@ -43,6 +43,7 @@ import { gridToLatLon, isValidGrid } from '../grid'
 import { fmtDistanceKm, useUnits } from '../units'
 import { Dialog } from './ui/Dialog'
 import { pushToast } from '../toast'
+import { parseChirpCsv, type Memory } from '../features/memories'
 
 /** The single auto-saved working project in radioprog.json (named projects can
  * layer on later — the file format already holds many). */
@@ -264,6 +265,71 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   }, [shown, bank])
 
   // ── builder ops ──
+  /** A Memory (a CHIRP CSV row) as a Program channel — the reverse of `saveToBank`. Manual
+   * and imported rows carry a `manual:` id so re-imports dedup. */
+  const memoryToChannel = (m: Memory): ProgChannel => ({
+    id: `manual:${m.rxMhz.toFixed(4)}:${m.name}`,
+    name: m.name,
+    rxMhz: m.rxMhz,
+    duplex:
+      m.offsetDir === 'split' ? 'split' : m.offsetDir === 'plus' ? 'plus' : m.offsetDir === 'minus' ? 'minus' : 'simplex',
+    offsetMhz: m.offsetDir === 'split' ? (m.txMhz ?? m.rxMhz) - m.rxMhz : (m.offsetMhz ?? 0),
+    toneMode: m.toneMode === 'tone' || m.toneMode === 'tsql' || m.toneMode === 'dtcs' ? m.toneMode : 'none',
+    rtoneHz: m.ctcssEncHz ?? 0,
+    ctoneHz: m.ctcssDecHz ?? m.ctcssEncHz ?? 0,
+    dtcsCode: m.dtcsCode ?? 0,
+    mode: m.mode.trim().toLowerCase() === 'nfm' ? 'nfm' : m.mode.trim().toLowerCase() === 'am' ? 'am' : 'fm',
+    comment: m.notes ?? '',
+    source: null,
+  })
+
+  /** Manual channel entry (operator ask, 2026-08-16): the directory is a FEED, and a repeater
+   * it has wrong or missing must be enterable by hand — HearHam's coverage is thin in places
+   * and the shared RepeaterBook path is still pending approval. */
+  const addManual = () => {
+    const freq = window.prompt('Frequency (MHz), e.g. 146.940')
+    if (!freq) return
+    const rxMhz = Number(freq)
+    if (!Number.isFinite(rxMhz) || rxMhz <= 0) return
+    const name = window.prompt('Name (blank = frequency)') ?? ''
+    const off = window.prompt('Offset: + / - / blank for simplex') ?? ''
+    const tone = window.prompt('CTCSS tone Hz (blank = none)') ?? ''
+    const toneHz = Number(tone)
+    const ch: ProgChannel = {
+      id: `manual:${rxMhz.toFixed(4)}:${name || 'manual'}`,
+      name: name || `${rxMhz.toFixed(3)} FM`,
+      rxMhz,
+      duplex: off.trim() === '+' ? 'plus' : off.trim() === '-' ? 'minus' : 'simplex',
+      offsetMhz: 0,
+      toneMode: Number.isFinite(toneHz) && toneHz > 0 ? 'tone' : 'none',
+      rtoneHz: Number.isFinite(toneHz) && toneHz > 0 ? toneHz : 0,
+      ctoneHz: 0,
+      dtcsCode: 0,
+      mode: 'fm',
+      comment: '',
+      source: null,
+    }
+    setRows((rs) =>
+      rs.some((r) => r.channel.id === ch.id) ? rs : [...rs, { channel: ch, nameEdited: name !== '' }],
+    )
+  }
+
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const importCsv = async (file: File) => {
+    const text = await file.text()
+    const mems = parseChirpCsv(text)
+    if (mems.length === 0) {
+      pushToast('Not a CHIRP CSV — need a header row with Frequency and Mode', 'error')
+      return
+    }
+    setRows((rs) => {
+      const have = new Set(rs.map((r) => r.channel.id))
+      const add = mems.map(memoryToChannel).filter((c) => !have.has(c.id))
+      return [...rs, ...add.map((channel) => ({ channel, nameEdited: true }))]
+    })
+    pushToast(`Imported ${mems.length} channels from CHIRP CSV`, 'success')
+  }
+
   const addRow = (row: RepeaterSearchRow) => {
     if (inList.has(row.channel.id)) {
       setRows((rs) => rs.filter((r) => r.channel.id !== row.channel.id))
@@ -907,6 +973,33 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           </div>
 
           <div className="rp-deliver">
+            <button
+              type="button"
+              className="settings-refresh"
+              onClick={addManual}
+              title="Type in a repeater or simplex channel the directory doesn't have (or has wrong)"
+            >
+              Add by hand…
+            </button>
+            <button
+              type="button"
+              className="settings-refresh"
+              onClick={() => importInputRef.current?.click()}
+              title="Import a CHIRP CSV — the same format Export for CHIRP writes, and what CHIRP itself saves"
+            >
+              Import CHIRP CSV…
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void importCsv(f)
+                e.target.value = ''
+              }}
+            />
             <button
               type="button"
               className="settings-save rp-export-chirp"
