@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Satellite passes stop losing their split half a second into an over.** Found on the air
+  (IC-9700, ISS V/V): a fast dial-read during a keyed over saw the transmit VFO's frequency,
+  read it as you turning the knob, and tore the split down — the rig dropped to simplex on
+  the downlink and keyed there. Three holes closed: the fast read and the dial-keep write now
+  wait while the rig is keyed, and an FM bird's own two frequencies are recognised as the
+  pass (within Doppler) instead of being structurally unrecognisable, which is what made
+  every FM satellite take the teardown path. Doppler keeps correcting the uplink through the
+  over. **Needs on-air verification.**
+- **The uplink mode is now stated, not assumed.** An FM bird's transmit VFO kept whatever
+  mode the previous pass left on it — this morning that was an inverting bird's LSB on
+  145.990. Nexus now commands the uplink mode whenever it owns the transmit leg (once per
+  pass, not per tick), and the write reaches the Icom's unselected VFO directly so it lands
+  on the register the rig actually transmits from. Same fix covers non-inverting linear birds.
+- **A same-band (V/V) pass takes the 9700 out of satellite mode first, and puts it back.**
+  The rig's satellite mode is crossband-only, so a V/V pass fought it and lost — Nexus now
+  probes the front-panel state, steps it aside for the pass, restores it after, and says so
+  in the CAT detail. Only a state Nexus changed is ever restored.
+- **FM uplinks carry their CTCSS tone.** The ISS repeater needs 67.0 Hz and Nexus was
+  actively zeroing it on satellite passes — the repeater could never open. Known FM birds
+  (ISS, SO-50, AO-91, PO-101) now key their published tone; the tone ends with the pass.
+
 ### Added
 
 - **FT2.** The fast slotted mode from the Decodium community (IU8LMC's WSJT-X fork) joins the

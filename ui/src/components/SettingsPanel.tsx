@@ -6671,7 +6671,7 @@ export function SettingsPanel({
                   <span className="settings-label">Rare grid 💎</span>
                   <select
                     className="settings-input"
-                    value={!form.alertNew ? 'off' : (form.alertRareGridBands ?? 'all')}
+                    value={!form.alertNew ? 'off' : (form.alertRareGridBands ?? 'vhf')}
                     aria-label="Rare grid alert bands"
                     onChange={(e) => changeAlertScope('alertRareGridBands', e.target.value)}
                   >

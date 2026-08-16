@@ -194,7 +194,7 @@
   "alertNew": true,
   "alertDxccBands": "all",
   "alertGridBands": "vhf",
-  "alertRareGridBands": "all",
+  "alertRareGridBands": "vhf",
   "wheelTuneSensitivity": 1.0,
   "announceVerbosity": "needed",
   "soundTxState": false,
