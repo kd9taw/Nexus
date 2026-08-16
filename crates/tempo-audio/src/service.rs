@@ -14077,7 +14077,16 @@ mod tests {
 
         let mut ra = mock_reopen_audio();
         state
-            .step(&engine, &mut backend, &mut rig, &sinks, 0.0, &mut ra, &mut rr, &mut station)
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
             .unwrap();
         engine.lock().unwrap().set_audio_error(None);
 
@@ -14088,11 +14097,23 @@ mod tests {
             mock_reopen_audio()(t)
         };
         // Frames keep arriving on every tick, well past the confirmation window.
-        for t in [20.0, 500.0, 1_200.0, 20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0, 4_000.0] {
+        for t in [
+            20.0,
+            500.0,
+            1_200.0,
+            20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
+            4_000.0,
+        ] {
             backend.queue_capture(vec![0.01_f32; 480]);
             state
                 .step(
-                    &engine, &mut backend, &mut rig, &sinks, t, &mut ra_counting, &mut rr,
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra_counting,
+                    &mut rr,
                     &mut station,
                 )
                 .unwrap();
@@ -14129,7 +14150,16 @@ mod tests {
 
         let mut ra = mock_reopen_audio();
         state
-            .step(&engine, &mut backend, &mut rig, &sinks, 0.0, &mut ra, &mut rr, &mut station)
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
             .unwrap();
         engine.lock().unwrap().set_audio_error(None);
 
@@ -14147,7 +14177,13 @@ mod tests {
             for _ in 0..4 {
                 state
                     .step(
-                        &engine, &mut backend, &mut rig, &sinks, t, &mut ra_counting, &mut rr,
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        t,
+                        &mut ra_counting,
+                        &mut rr,
                         &mut station,
                     )
                     .unwrap();
@@ -14165,7 +14201,10 @@ mod tests {
             "a flapping card must be rebuilt at the DEBOUNCE rate, not the flap rate: {n} rebuilds \
              in 20 s, ceiling {ceiling}"
         );
-        assert!(n >= 1, "but it must still recover at all — got {n} rebuilds");
+        assert!(
+            n >= 1,
+            "but it must still recover at all — got {n} rebuilds"
+        );
     }
 
     #[test]
@@ -14193,7 +14232,16 @@ mod tests {
 
         let mut ra = mock_reopen_audio();
         state
-            .step(&engine, &mut backend, &mut rig, &sinks, 0.0, &mut ra, &mut rr, &mut station)
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
             .unwrap();
         engine.lock().unwrap().set_audio_error(None);
 
@@ -14209,7 +14257,13 @@ mod tests {
         assert!(rig.keyed, "fixture: the over is on the air");
         state
             .step(
-                &engine, &mut backend, &mut rig, &sinks, 20.0, &mut ra_counting, &mut rr,
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra_counting,
+                &mut rr,
                 &mut station,
             )
             .unwrap();
@@ -14226,7 +14280,13 @@ mod tests {
         let _ = rig.ptt(false);
         state
             .step(
-                &engine, &mut backend, &mut rig, &sinks, 40.0, &mut ra_counting, &mut rr,
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                40.0,
+                &mut ra_counting,
+                &mut rr,
                 &mut station,
             )
             .unwrap();
@@ -14234,7 +14294,10 @@ mod tests {
             reopened.get(),
             "once the key is up the deferred rebuild must actually happen"
         );
-        assert!(state.audio_rebuild_pending.is_none(), "and it is consumed, not repeated");
+        assert!(
+            state.audio_rebuild_pending.is_none(),
+            "and it is consumed, not repeated"
+        );
     }
 
     #[test]

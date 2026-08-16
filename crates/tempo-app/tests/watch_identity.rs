@@ -107,13 +107,17 @@ fn scripted_session() -> Engine {
     eng
 }
 
-/// Blank the fields that are genuinely derived from the wall clock, in place.
+/// Blank the fields that are genuinely derived from the wall clock, and round the one that is
+/// architecture-dependent, in place.
 ///
-/// EXACTLY four rules, and they are the contract of this harness:
+/// EXACTLY five rules, and they are the contract of this harness:
 /// * `nextSlotMs`     — slot countdown, fed from the audio service's clock.
 /// * `clockOffsetMs`  — measured PC-vs-UTC offset from the NTP probe.
 /// * `qsoStartUnix`   — the QSO start stamp (`now_unix_secs`).
 /// * `*Tick`          — UI change counters (`clearTick`, `workTick`, `uploadTick`).
+/// * `freqHz` (float) — the decoder's frequency ESTIMATE, rounded to whole Hz, not blanked;
+///   the long comment below is the justification, and it is the ONE field this harness
+///   deliberately loosens.
 ///
 /// Anything else that differs between runs is a FINDING, not a normalizer entry.
 fn normalize(v: &mut Value) {

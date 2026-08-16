@@ -132,9 +132,11 @@ fn emit_macos_runtime_search_paths() {
         // -print-file-name echoes the bare name back when it cannot resolve it.
         .filter(|p| p.is_absolute())
         .and_then(|p| p.parent().map(PathBuf::from))
-        // The reported path runs through `../../..` segments; canonicalize so the
-        // emitted -L is the real directory.
-        .and_then(|d| d.canonicalize().ok())
+    // The reported path runs through `../../..` segments, but ld takes them as-is —
+    // deliberately NOT canonicalized. Homebrew's gcc resolves through a version-stable
+    // `current` symlink, and canonicalizing bakes the versioned real dir into the emitted
+    // -L: the script only re-runs on libtempo changes or an FC change, so a `brew upgrade
+    // gcc` would leave a stale path and a link failure that needs a `cargo clean`.
     {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }

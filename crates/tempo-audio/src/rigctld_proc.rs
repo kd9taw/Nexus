@@ -702,10 +702,10 @@ fn find_in_dirs(dirs: &[&str], bin_name: &str) -> Option<std::ffi::OsString> {
         .map(std::path::PathBuf::into_os_string)
 }
 
-/// Does `path_var` (a `PATH`-shaped, `:`-joined list of directories) resolve `bin_name`? The
-/// testable core of [`on_path`] — takes the value as a parameter instead of reading the real
-/// process environment, so a test can drive it without mutating global state that other tests
-/// (the fixture stand-in below) already depend on being left alone.
+/// Does `path_var` (a `PATH`-shaped, `:`-joined list of directories) resolve `bin_name`? Takes
+/// the value as a parameter instead of reading the real process environment, so a test can drive
+/// it without mutating global state that other tests (the fixture stand-in below) already depend
+/// on being left alone.
 #[cfg(unix)]
 fn path_has(path_var: &std::ffi::OsStr, bin_name: &str) -> bool {
     std::env::split_paths(path_var).any(|dir| dir.join(bin_name).is_file())
@@ -717,7 +717,7 @@ fn path_has(path_var: &std::ffi::OsStr, bin_name: &str) -> bool {
 /// installed under `~/.local` keeps the configured `--prefix` (`/usr/local/lib/libhamlib.4.dylib`)
 /// as its dylib load path, so every `rigctl*` binary is executable, first on `PATH`, and dies at
 /// `dyld` load with *"Library not loaded"* before `main`. Found on a real station on 2026-08-13:
-/// CAT was dead with no usable diagnosis, because [`on_path`] said yes and the
+/// CAT was dead with no usable diagnosis, because the PATH existence check said yes and the
 /// [`HAMLIB_SEARCH_DIRS`] fallback — which would have found a working Homebrew Hamlib one
 /// directory later — was never consulted.
 ///

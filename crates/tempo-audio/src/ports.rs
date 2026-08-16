@@ -207,8 +207,14 @@ mod tests {
             mk("/dev/cu.usbserial-B"),
         ]);
         let names: Vec<&str> = got.iter().map(|p| p.port_name.as_str()).collect();
-        assert!(names.contains(&"/dev/cu.usbserial-A"), "the callout survives: {names:?}");
-        assert!(names.contains(&"/dev/cu.usbserial-B"), "and so does the other one: {names:?}");
+        assert!(
+            names.contains(&"/dev/cu.usbserial-A"),
+            "the callout survives: {names:?}"
+        );
+        assert!(
+            names.contains(&"/dev/cu.usbserial-B"),
+            "and so does the other one: {names:?}"
+        );
         assert!(
             !names.contains(&"/dev/tty.usbserial-A"),
             "the dial-in twin must go: {names:?}"

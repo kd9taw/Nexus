@@ -4124,10 +4124,6 @@ impl Engine {
         self.settings.confirm_sat_uplink(id, map);
     }
 
-    /// Add a new (2nd/3rd…) radio to the roster and SWITCH TO IT (returns its id). Switching makes the
-    /// flat Rig/Audio form edit the NEW radio, so the operator configures the radio they just added —
-    /// NOT the previously-active radio (which is how a config could get clobbered). The new radio has
-    /// no model yet, so it comes up as VOX/no-CAT until configured.
     /// Add a radio to the roster. Returns the new id.
     ///
     /// It does NOT switch to it, and that is the whole point: `add_radio_profile`'s own contract
@@ -15163,7 +15159,11 @@ mod tests {
 
         let added = eng.add_radio();
 
-        assert_eq!(eng.settings().radios.len(), before + 1, "the roster must grow");
+        assert_eq!(
+            eng.settings().radios.len(),
+            before + 1,
+            "the roster must grow"
+        );
         assert_ne!(added, original, "the new radio is a distinct profile");
         assert_eq!(
             eng.settings().active_radio,
