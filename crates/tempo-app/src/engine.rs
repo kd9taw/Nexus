@@ -4128,10 +4128,21 @@ impl Engine {
     /// flat Rig/Audio form edit the NEW radio, so the operator configures the radio they just added —
     /// NOT the previously-active radio (which is how a config could get clobbered). The new radio has
     /// no model yet, so it comes up as VOX/no-CAT until configured.
+    /// Add a radio to the roster. Returns the new id.
+    ///
+    /// It does NOT switch to it, and that is the whole point: `add_radio_profile`'s own contract
+    /// already says "Does NOT change the active radio", and this used to violate it one line later.
+    ///
+    /// `set_active_radio` is not a roster edit -- it is a LIVE RIG SWITCH. It tears down the
+    /// working radio's CAT and tries to bring up one that has no serial port and no model, while
+    /// the engine lock is held. Reported by an operator on 2026-08-14: pressing "Add radio" froze
+    /// the interface and silently moved the station onto the new, EMPTY profile, leaving a blank
+    /// settings pane and no working rig.
+    ///
+    /// Creating a roster entry and choosing which rig you OPERATE are different acts, and the
+    /// second is TX-relevant. "Make active" already exists as a deliberate button.
     pub fn add_radio(&mut self) -> u32 {
-        let id = self.settings.add_radio_profile();
-        self.set_active_radio(id);
-        id
+        self.settings.add_radio_profile()
     }
 
     /// Remove a radio from the roster (no-op on the active or last radio). Pure roster edit.
@@ -15135,6 +15146,31 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// Adding a radio must NOT move the station onto it. It used to call set_active_radio one line
+    /// after add_radio_profile, whose own doc comment says it does not change the active radio.
+    /// Operator report 2026-08-14: "Add radio" froze the UI and switched the station to the new
+    /// EMPTY profile -- no port, no model -- because that is a live rig switch under the engine
+    /// lock, not a roster edit.
+    #[test]
+    fn adding_a_radio_leaves_the_operator_on_the_radio_they_were_using() {
+        let mut eng = Engine::new("K2DEF", "FN31", 0);
+        // A fresh Engine has an empty roster, which no running app ever has: the first add also
+        // seeds the base profile. Establish the ordinary state before measuring.
+        eng.add_radio();
+        let original = eng.settings().active_radio;
+        let before = eng.settings().radios.len();
+
+        let added = eng.add_radio();
+
+        assert_eq!(eng.settings().radios.len(), before + 1, "the roster must grow");
+        assert_ne!(added, original, "the new radio is a distinct profile");
+        assert_eq!(
+            eng.settings().active_radio,
+            original,
+            "the ACTIVE radio must not move -- switching rigs is the operator's decision"
+        );
+    }
     use super::*;
     use modes::Decode;
     // The station owns every write to the shared log now (`StationCore::append_to_log`),
@@ -24663,6 +24699,7 @@ mod tests {
 
         // Radio 1: CAT on COM7, keyline on COM9.
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.settings.ptt_method = "rts".to_string();
         e.settings.serial_port = "COM7".to_string();
         e.settings.ptt_serial_port = "COM9".to_string();
@@ -24719,7 +24756,8 @@ mod tests {
         e.settings.ensure_radio_profiles();
         e.settings.rig_model = 1042; // FTDX10 on radio 0 (rigctld 4532)
         e.settings.sync_active_from_flat();
-        let r1 = e.add_radio(); // IC-9700 → distinct rigctld port (4534), now active
+        let r1 = e.add_radio(); // IC-9700 → distinct rigctld port (4534), made active below
+        e.set_active_radio(r1);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
 
@@ -24794,7 +24832,8 @@ mod tests {
         e.settings.band = "20m".into();
         e.settings.dial_mhz = 14.074;
         e.settings.sync_active_from_flat();
-        let r1 = e.add_radio(); // IC-9700, now active
+        let r1 = e.add_radio(); // IC-9700, made active below
+        e.set_active_radio(r1);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
         e.set_radio_bands(r1, vec!["2m".into()]); // IC-9700 explicitly covers 2 m
@@ -24839,7 +24878,8 @@ mod tests {
         e.settings.band = "20m".into();
         e.settings.dial_mhz = 14.074;
         e.settings.sync_active_from_flat();
-        let r1 = e.add_radio(); // IC-9700, now active
+        let r1 = e.add_radio(); // IC-9700, made active below
+        e.set_active_radio(r1);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
         e.set_radio_bands(r1, vec!["2m".into()]); // 9700 covers 2 m (operator confirmed this is ON)
@@ -24866,9 +24906,11 @@ mod tests {
         e.settings.rig_model = 1042; // FTdx10 on radio 0 — catch-all coverage (HF everything)
         e.settings.sync_active_from_flat();
         let ic9700 = e.add_radio();
+        e.set_active_radio(ic9700);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
         let ft991a = e.add_radio();
+        e.set_active_radio(ft991a);
         e.settings.rig_model = 1035;
         e.settings.sync_active_from_flat();
         e.rename_radio(0, "FTdx10");
@@ -25329,6 +25371,7 @@ mod tests {
         e.settings.band = "20m".into();
         e.settings.dial_mhz = 14.250;
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.set_radio_bands(r1, vec!["2m".into()]); // the VHF radio
         e.set_active_radio(0); // operating HF when APRS opens
                                // The ACTIVE (HF) radio's caps say no 2 m…
@@ -25416,7 +25459,8 @@ mod tests {
         e.settings.serial_port = "COM_R0".into();
         e.settings.sync_active_from_flat(); // radio 0 profile now carries COM_R0
         let r0 = e.settings.active_radio;
-        let r1 = e.add_radio(); // radio 1 — now the ACTIVE radio
+        let r1 = e.add_radio(); // radio 1 — made active below
+        e.set_active_radio(r1);
         e.settings.serial_port = "COM_R1".into();
         e.settings.sync_active_from_flat(); // radio 1 profile + flat mirror carry COM_R1
         assert_eq!(e.settings.active_radio, r1);
@@ -25460,12 +25504,16 @@ mod tests {
         e.settings.sync_active_from_flat();
         e.rename_radio(0, "FTDX10");
 
-        // "+ Add radio" now SWITCHES to the new radio, so its config form edits the NEW radio (not the
-        // previously-active one — the clobber bug). Configure it via the flat form while it's active.
+        // Adding no longer switches the station onto the new radio -- that was scaffolding for the
+        // clobber bug (the flat form edits whatever is ACTIVE), and a non-active edit now routes
+        // through update_radio_profile, which
+        // `update_radio_profile_edits_a_nonactive_radio_without_touching_the_active_one` pins.
+        // This test is about SWITCHING, so it switches deliberately.
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         assert_eq!(
             e.settings.active_radio, r1,
-            "add_radio switches to the new radio"
+            "set_active_radio switches to the new radio"
         );
         e.settings.rig_model = 3081;
         e.settings.rig_model_name = "Icom IC-9700".into();
@@ -26625,6 +26673,7 @@ mod tests {
     fn health_names_the_radio_the_decoder_is_listening_to() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.rename_radio(r1, "FT-991A");
         e.set_radio_bands(r1, vec!["2m".into()]);
         e.set_active_radio(r1);
@@ -26640,6 +26689,7 @@ mod tests {
         e.settings.ensure_radio_profiles();
         e.rename_radio(0, "FTdx10");
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.rename_radio(r1, "IC-9700");
         e.set_active_radio(0);
         e.set_aprs_arm(AprsArm::Explicit);
@@ -26664,6 +26714,7 @@ mod tests {
             "one radio covers 2 m — nothing to disambiguate, so the chip stays quiet"
         );
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.set_radio_bands(r1, vec!["2m".into()]);
         e.set_frequency(144.390, "2m", "FM");
         assert_eq!(
@@ -28417,6 +28468,7 @@ mod tests {
         e.settings.rig_model = 1042; // FTdx10
         e.settings.sync_active_from_flat();
         let ic9700 = e.add_radio();
+        e.set_active_radio(ic9700);
         e.settings.rig_model = 3081; // IC-9700 — bands deliberately LEFT EMPTY
         e.settings.sync_active_from_flat();
         e.rename_radio(0, "FTdx10");
@@ -28940,7 +28992,8 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.ensure_radio_profiles();
         e.rename_radio(0, "FTdx10");
-        let ic9700 = e.add_radio(); // id 1, becomes active
+        let ic9700 = e.add_radio(); // id 1, made active below
+        e.set_active_radio(ic9700);
         e.rename_radio(ic9700, "IC-9700");
         e.confirm_sat_uplink(
             Some(ic9700),
@@ -28960,6 +29013,7 @@ mod tests {
             "precondition: the backend pruned the consent with the radio"
         );
         let reused = e.add_radio();
+        e.set_active_radio(reused);
         assert_eq!(reused, ic9700, "the freed id is reused — the trap");
 
         // A later Save sends the stale snapshot.
@@ -28990,7 +29044,8 @@ mod tests {
         // consent would be inherited by the next rig added.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.ensure_radio_profiles();
-        let b = e.add_radio(); // becomes active
+        let b = e.add_radio(); // made active below
+        e.set_active_radio(b);
         e.confirm_sat_uplink(None, Some(crate::settings::SatVfoMap::MainDownSubUp));
         assert!(
             e.settings().sat_uplink_confirmed(b),
@@ -29015,6 +29070,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.ensure_radio_profiles();
         let b = e.add_radio();
+        e.set_active_radio(b);
         // The mapping in force moves AFTER the poll the click was based on…
         e.confirm_sat_uplink(Some(0), Some(crate::settings::SatVfoMap::UplinkOnly));
         e.confirm_sat_uplink(Some(0), Some(crate::settings::SatVfoMap::ADownBUp));
@@ -29171,6 +29227,7 @@ mod tests {
         e.settings.rig_model = 1042; // FTdx10
         e.settings.sync_active_from_flat();
         let ic9700 = e.add_radio();
+        e.set_active_radio(ic9700);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
         e.rename_radio(0, "Yeasu");

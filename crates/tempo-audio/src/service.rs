@@ -10114,7 +10114,8 @@ mod tests {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let (r1, r1_transport, r1_port) = {
             let mut e = engine.lock().unwrap();
-            let r1 = e.add_radio(); // active becomes r1 (add_radio switches to the new radio)
+            let r1 = e.add_radio();
+            e.set_active_radio(r1); // the flat form below edits the ACTIVE radio
                                     // Configure r1 (now the active/form radio) as a real CAT rig via the public settings path.
             let mut s = e.settings().clone();
             s.ptt_method = "cat".into();
@@ -10281,9 +10282,10 @@ mod tests {
             s.audio_out = "FTDX10 codec".to_string();
             e.apply_settings(s);
             e.set_radio_bands(0, vec!["20m".to_string(), "40m".to_string()]);
-            // Radio 1 — the Icom: CAT keying, its own sound card, 2 m/70 cm only. `add_radio`
-            // makes it active, which is what the flat form below then edits.
+            // Radio 1 — the Icom: CAT keying, its own sound card, 2 m/70 cm only. The flat form
+            // edits whatever is ACTIVE, so switch to it deliberately (adding no longer switches).
             let icom = e.add_radio();
+            e.set_active_radio(icom);
             let mut s = e.settings().clone();
             s.ptt_method = "cat".to_string();
             s.rig_model = 3081; // IC-9700
@@ -10479,9 +10481,10 @@ mod tests {
             s.audio_in = "FTDX10 codec".to_string();
             s.audio_out = "FTDX10 codec".to_string();
             e.apply_settings(s);
-            // Radio 1 — the Icom, likewise. `add_radio` makes it active, so the flat form
-            // below edits ITS profile.
+            // Radio 1 — the Icom, likewise. The flat form edits whatever is ACTIVE, so switch to
+            // the new radio deliberately before editing it (adding no longer switches on its own).
             let icom = e.add_radio();
+            e.set_active_radio(icom);
             let mut s = e.settings().clone();
             s.ptt_method = "cat".to_string();
             s.rig_model = 3081; // IC-9700
@@ -10801,9 +10804,10 @@ mod tests {
             s.audio_in = "FTDX10 codec".to_string();
             s.audio_out = "FTDX10 codec".to_string();
             e.apply_settings(s);
-            // Radio 1 — the Icom, likewise. `add_radio` makes it active, so the flat form
-            // below edits ITS profile.
+            // Radio 1 — the Icom, likewise. The flat form edits whatever is ACTIVE, so switch to
+            // the new radio deliberately before editing it (adding no longer switches on its own).
             let icom = e.add_radio();
+            e.set_active_radio(icom);
             let mut s = e.settings().clone();
             s.ptt_method = "cat".to_string();
             s.rig_model = 3081; // IC-9700
