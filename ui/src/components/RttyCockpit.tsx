@@ -56,6 +56,10 @@ interface Props {
 
 /** Display labels for the RTTY removable panels (the ⊞ Panels menu). */
 const RTTY_PANEL_LABELS: Record<RttyPanelId, string> = {
+  // "Waterfall", not "Scope": this strip is a band waterfall carrying the mark/space cursors,
+  // and the operator's own word for it here is waterfall. The shared id is `scope` because it
+  // is the same ENTRY in every cockpit; only the label is local.
+  scope: 'Waterfall',
   stream: 'Decoded Text',
 }
 
@@ -447,7 +451,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         />
       )}
 
-      {rtty && (
+      {/* THE BAND WATERFALL, ⊞-hideable since 2026-08-16. A shell child whose render is gated,
+          which leaves RTTY's census (header, waterfall, keyer-error banner, ONE pane frame, TX
+          dock) intact — one kind is conditional, as `stream` already was. `.rtty-cockpit
+          .waterfall-wrap` is `flex: 0 0 auto` with a 22%-of-viewport height, so hiding it hands
+          that height straight to `.rtty-cockpit > .pane-frame`, the shell's only grower: the
+          transcript gets taller, nothing is stranded, and there is no seam to clean up (this is
+          the one scope in the tree with no Splitter).
+
+          It hosts no stop control — the cursors and click-to-net are the decoder's tuning aid,
+          and net() moves the DECODER, not the rig's key. Stop TX and the TX-enable latch stay in
+          the header, the Esc/Stop macro and the sequencer's Abort in the dock (THE STOP LINE).
+          With this and `stream` both unticked the cockpit still holds all four. */}
+      {rtty && shown('scope') && (
         <Waterfall
           theme={theme}
           active={active}

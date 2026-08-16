@@ -177,6 +177,10 @@ interface Props {
 
 /** Display labels for the SSTV removable panels (the ⊞ Panels menu). */
 const SSTV_PANEL_LABELS: Record<SstvPanelId, string> = {
+  // The BAND waterfall — the half of the RX stage that stands in for a picture when nothing is
+  // decoding. Named for what the tick removes: an arriving picture still takes the stage
+  // whatever this box says, because the decode is not a panel. See the gate at the stage.
+  scope: 'Waterfall',
   txcompose: 'Transmit',
   gallery: 'Gallery',
 }
@@ -628,10 +632,17 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // (integerScaleStep.ts has the ruling). The ResizeObserver is 0×0-guarded the same
   // way as useRegionCols: a hidden keep-alive host or mid-layout pass keeps the last
   // real measurement rather than collapsing the picture to 1×.
-  const stageRef = useRef<HTMLElement>(null)
+  // A CALLBACK REF, not useRef + a mount-only effect. The stage stopped being permanent when
+  // the band waterfall gained a ⊞ entry (2026-08-16): unticked and idle, the whole section is
+  // gone, and it comes BACK the instant a VIS lands. A `[]` effect reading `stageRef.current`
+  // attaches once, at a moment when there is nothing to observe, and never again — so the
+  // picture the operator finally receives would render at the sheet's 480px 3× default with
+  // the measured integer upscale silently never applied. React calls a callback ref on every
+  // mount and unmount, so the observer follows the section instead of the first render.
+  const [stageEl, setStageEl] = useState<HTMLElement | null>(null)
   const [stage, setStage] = useState({ w: 0, h: 0 })
   useLayoutEffect(() => {
-    const el = stageRef.current
+    const el = stageEl
     if (!el) return
     let raf = 0
     const measure = () => {
@@ -650,7 +661,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       cancelAnimationFrame(raf)
       ro.disconnect()
     }
-  }, [])
+  }, [stageEl])
   // Fixed chrome between the stage's client box and the picture: .sstv-live padding
   // (2×space-3) + canvas border on the width; those plus the caption row and flex gap
   // on the height. Overestimating only costs margin; underestimating would trip the
@@ -1442,7 +1453,24 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         </CockpitHeader>
       )}
 
-      <section className="sstv-canvas" aria-label="SSTV image" ref={stageRef}>
+      {/* THE RX STAGE — and the ⊞ tick reaches only HALF of it, which is what the gate says.
+          This one region is the band waterfall until a VIS lands and the decoding PICTURE after
+          it (they swap in place rather than reflowing the view). `scope` hides the band half; a
+          picture in flight takes the stage whatever the box says, because the decode is the
+          thing this view is FOR, not a panel — an operator who unticked the waterfall last week
+          has not asked to stop seeing pictures.
+
+          THE GATE IS ON THE WHOLE SECTION, not on the <Waterfall> inside it, and that is the
+          layout half. `.sstv-canvas` is `flex: 1.1 1 0` with a 16em floor — keep the section and
+          hide only its contents and the operator trades a waterfall for a 16em bordered void
+          that hoards the height he was trying to reclaim. Dropped entirely, the height goes to
+          the gallery frame (the shell's fill grower) and the composer stays content-height.
+
+          Nothing here stops a transmission: the stage is display only, with no click-to-tune at
+          all in this cockpit. Stop lives in `.sstv-tx-bar` and the TX-enable latch in the
+          header, neither with a ⊞ id (THE STOP LINE). */}
+      {(inFlight || shown('scope')) && (
+      <section className="sstv-canvas" aria-label="SSTV image" ref={setStageEl}>
         {inFlight ? (
           <div className="sstv-live">
             {preview && (
@@ -1532,6 +1560,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           </div>
         )}
       </section>
+      )}
 
       {/* THE LOWER PANES — CockpitPaneFrame with ROLES, and deliberately NO
           .cockpit-panes region (RTTY's precedent: with this few content blocks every

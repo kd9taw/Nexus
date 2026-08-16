@@ -144,6 +144,11 @@ interface Props {
 
 /** Display labels for the CW removable panels (the ⊞ Panels menu). */
 const CW_PANEL_LABELS: Record<CwPanelId, string> = {
+  // The strip itself — the CW-narrow audio view (or the rig's RF panadapter when one
+  // streams). `scopeCtl` right below commands the RADIO's scope and is a separate pane in
+  // the region; the two entries sit adjacent in the menu, so the labels have to distinguish
+  // the display from the controls for it.
+  scope: 'Scope',
   scopeCtl: 'Scope Controls',
   dsp: 'DSP Toggles',
   txmeters: 'TX Meters',
@@ -1284,6 +1289,19 @@ export function CwCockpit({
         </div>
       )}
 
+      {/* THE SCOPE STRIP, ⊞-hideable since 2026-08-16 — the Phone twin of this gate carries the
+          full reasoning. In short: the shell's four-child census is unchanged (one of the four is
+          simply conditional), the gate is at the SHELL CHILD so no empty bordered box is left
+          holding its `flex: 0 1 13%` basis and 8em floor, the Splitter goes with it (it drags
+          --cw-scope-h, which is that basis, and would otherwise strand a seam), and
+          `.cockpit-panes { flex: 1 1 0 }` takes the freed height with no rule change.
+
+          Nothing here stops a transmission: the strip is a display plus click- and scroll-to-tune,
+          and Stop TX / Tune sit in the header, outside every ⊞ id (THE STOP LINE). Scroll-to-tune
+          survives a hide/show because useWheelTune re-attaches on the TARGET's identity, not the
+          hook's mount — which it did not do until this change; see the note there. */}
+      {shown('scope') && (
+        <>
       <section className="ph-scope-panel" ref={scopeRef} title="Scroll here to tune the VFO">
         <div className="ph-scope-head">
           {/* When a native panadapter drives the scope, name it honestly (real RF spectrum);
@@ -1354,6 +1372,8 @@ export function CwCockpit({
         defaultPct={13}
         label="scope height"
       />
+        </>
+      )}
 
       {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
           useRegionCols OWNS data-cols (measured from the region itself, stamped

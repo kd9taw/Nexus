@@ -98,6 +98,12 @@ interface Props {
  *  convenience, and PTT / Stop TX / Tune are what hold the guarantee up. THE STOP LINE lives
  *  in features/panelState.ts. */
 const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
+  // The strip itself, in this cockpit's own word for it. NOT "Waterfall": what Phone shows
+  // there is a trace + waterfall of the passband (or the rig's RF panadapter when one is
+  // streaming), and the header above it already calls the thing a scope. `rigscope` below is
+  // a different entry — the controls that command the RADIO's scope — so the two labels have
+  // to read as different things at a glance, which is why one says Controls and this does not.
+  scope: 'Scope',
   rigscope: 'Rig Scope Controls',
   txmeters: 'TX Meters',
   dsp: 'DSP Functions',
@@ -1083,6 +1089,26 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         </label>
       </CockpitHeader>
 
+      {/* THE SCOPE STRIP, ⊞-hideable since 2026-08-16. The shell's four-child census is
+          unchanged — header, scope, ONE pane region, TX dock — one of the four is simply
+          conditional now, exactly as Operate's waterfall has been since 0.15.0. The gate is
+          HERE, at the shell child, and not inside the section: a scope that rendered an empty
+          `.ph-scope-panel` would keep its `flex: 0 1 22%` basis and its 8em floor and hand the
+          operator back a bordered empty box instead of the height he asked to reclaim.
+          `.cockpit-panes` is `flex: 1 1 0` (cockpit-panes.css) — the region IS the sink, so
+          the freed height goes to the panes with no rule change.
+
+          The Splitter goes with it. It drags `--ph-scope-h`, the strip's flex basis, so on its
+          own it is a grab handle for something that is not there — and it is a shell child of
+          its own, which would leave a stranded 8px seam between the header and the region.
+          The var it wrote is untouched and still stored, so re-ticking restores the height he
+          dragged to rather than the 22% default.
+
+          Nothing on this strip stops a transmission (THE STOP LINE, features/panelState.ts):
+          it is a display plus click-to-tune, and Stop TX / Tune are in the header above, PTT in
+          the dock below, none of them reachable from the ⊞ menu. */}
+      {shown('scope') && (
+        <>
       <section className="ph-scope-panel">
         <div className="ph-scope-head">
           {(() => {
@@ -1171,6 +1197,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         defaultPct={22}
         label="scope height"
       />
+        </>
+      )}
 
       {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
           useRegionCols OWNS data-cols (measured from the region itself, stamped

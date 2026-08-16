@@ -257,6 +257,42 @@ describe('PhoneCockpit pane-grid shell', () => {
     expect(document.querySelector('.cockpit-txdock .ph-ptt')).not.toBeNull()
   })
 
+  // ── THE SCOPE STRIP IS A PANEL NOW (operator, 2026-08-16) ──────────────────────────
+  // "add the waterfall in each window as an option to remove in the panels section — leave
+  // it ON by default, give me the option to turn it off." Both halves are asserted, and the
+  // default half is not a formality: it is the difference between an option and a change.
+  it('the scope strip is SHOWN by default — the ⊞ entry is an option, not a new default', () => {
+    renderCockpit()
+    expect(document.querySelector('.ph-scope-panel'), 'the scope went missing on a stock layout').not.toBeNull()
+  })
+
+  it("⊞ 'Scope' unticked takes the strip AND its splitter, and the region takes the height", () => {
+    renderCockpit({ panels: fakePanels(['scope']) })
+    expect(document.querySelector('.ph-scope-panel'), 'the strip survived its own hide').toBeNull()
+    // The seam goes with it. It drags --ph-scope-h, the strip's flex basis, so on its own it is
+    // a grab handle for something that is not there — and a shell-level child of its own, which
+    // would leave a stranded 8px seam between the header and the region.
+    expect(
+      document.querySelector('.pane-splitter'),
+      'the scope splitter is still in the shell with no scope to size',
+    ).toBeNull()
+    // The point of the tick: the panes are still there to receive the freed height, which
+    // `.cockpit-panes { flex: 1 1 0 }` gives them with no rule change.
+    const region = document.querySelector('.cockpit-panes')
+    expect(region, 'hiding the scope took the pane region with it').not.toBeNull()
+    expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
+    // …and the shell census still holds: one of the four child kinds is simply absent.
+    const shell = document.querySelector('main.layout.single.phone-cockpit')!
+    for (const el of Array.from(shell.children)) {
+      expect(
+        ['.cockpit-header', '.cockpit-panes', '.cockpit-txdock', '.logconfirm-backdrop'].some((s) =>
+          el.matches(s),
+        ),
+        `unexpected shell child with the scope hidden: <${el.tagName.toLowerCase()} class="${el.className}">`,
+      ).toBe(true)
+    }
+  })
+
   // ── THE STOP LINE, structural half (features/panelState.ts) ────────────────────────
   // The operator must never be unable to stop a transmission. This asserts the SHELL side
   // of that here — the PTT row and the header survive every hide — and it is only half a

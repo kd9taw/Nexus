@@ -443,3 +443,73 @@ describe('useWheelTune — a deliberate notch off the band plan', () => {
     expect(mockSetFreq).not.toHaveBeenCalled()
   })
 })
+
+// ── THE TARGET CAN UNMOUNT AND COME BACK ───────────────────────────────────────────────────────
+// Every host used to render its wheel target unconditionally, so "attach once" and "attach per
+// target" were the same thing and the difference could not be observed. The ⊞-hideable cockpit
+// scope strips (2026-08-16) make them different: the operator unticks Scope, the strip unmounts,
+// he ticks it back and React builds a NEW element. An effect keyed on the ref OBJECT never
+// re-runs — writing `ref.current` schedules nothing — so the listener stays on the detached node
+// and the strip that says "Scroll here to tune the VFO" does nothing at all, silently and until
+// the next full remount.
+describe('useWheelTune — a target that unmounts and remounts', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    mockSetFreq.mockClear()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  /** The host's ref is stable; what it POINTS AT changes, exactly as React rewrites it across a
+   *  conditional child's unmount/remount. */
+  function mountSwappable(props: Opts) {
+    // Mutable on purpose — RefObject.current is readonly to callers, but REACT rewrites it as
+    // the conditional child mounts and unmounts, and that rewrite is the whole subject here.
+    const ref: { current: HTMLElement | null } = { current: null }
+    const refObj = ref as RefObject<HTMLElement | null>
+    const { rerender } = renderHook((p: Opts) => useWheelTune(refObj, p), { initialProps: props })
+    const swap = (el: HTMLElement | null) => {
+      ref.current = el
+      rerender(props) // the host re-renders for its own reasons; the ref write alone does not
+    }
+    return { swap }
+  }
+
+  const freshEl = () => {
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    return el
+  }
+
+  it('attaches to the element that is there NOW, not the one that was there first', () => {
+    const props: Opts = { dialMhz: 14.1, sideband: 'USB', enabled: true, stepHz: 100 }
+    const { swap } = mountSwappable(props)
+    const first = freshEl()
+    swap(first)
+    // Shown → hidden → shown, with a genuinely different node the second time.
+    swap(null)
+    const second = freshEl()
+    swap(second)
+
+    wheel(second, { deltaY: -100 })
+    vi.advanceTimersByTime(120)
+    expect(
+      mockSetFreq,
+      'the remounted scope strip does not tune — the listener was left on the node the ⊞ tick threw away',
+    ).toHaveBeenCalledTimes(1)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.1001, 6)
+  })
+
+  it('POSITIVE CONTROL — the node the operator hid is DEAD, not merely superseded', () => {
+    // The other half: a stale listener that survives on the detached node would tune the rig
+    // from an element no longer on screen. Both halves fail if the effect simply never detaches.
+    const props: Opts = { dialMhz: 14.1, sideband: 'USB', enabled: true, stepHz: 100 }
+    const { swap } = mountSwappable(props)
+    const first = freshEl()
+    swap(first)
+    swap(null)
+
+    wheel(first, { deltaY: -100 })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq, 'the hidden strip still tunes the VFO').not.toHaveBeenCalled()
+  })
+})

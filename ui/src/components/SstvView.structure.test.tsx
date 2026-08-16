@@ -174,6 +174,86 @@ describe('SstvView pane shell', () => {
     expect(stage!.closest('.pane-frame')).toBeNull()
   })
 
+  // ── THE BAND WATERFALL IS A PANEL NOW (operator, 2026-08-16) ──────────────────────
+  // "add the waterfall in each window as an option to remove in the panels section — leave
+  // it ON by default, give me the option to turn it off." SSTV is the awkward one: the tick
+  // reaches only HALF of a region that is the band until a VIS lands and the PICTURE after
+  // it. Three cases, because the interesting one is the third.
+  it('the band waterfall is SHOWN by default — the ⊞ entry is an option, not a new default', async () => {
+    await renderView()
+    expect(document.querySelector('[data-testid="band-waterfall"]')).not.toBeNull()
+    expect(document.querySelector('.sstv-canvas')).not.toBeNull()
+  })
+
+  it("⊞ 'Waterfall' unticked drops the whole idle stage, not just the canvas inside it", async () => {
+    await renderView({ panels: fakePanels(['scope']) })
+    expect(document.querySelector('[data-testid="band-waterfall"]'), 'the waterfall survived its own hide').toBeNull()
+    // AND the section with it. `.sstv-canvas` is `flex: 1.1 1 0` with a 16em floor: keep it
+    // and empty it and the operator trades a waterfall for a 16em bordered void that hoards
+    // the height he ticked the box to reclaim. This is the assertion that would catch the
+    // tempting one-line version of this change (gating the <Waterfall> alone).
+    expect(document.querySelector('.sstv-canvas'), 'an empty 16em stage is left hoarding the height').toBeNull()
+    // The lower panes are still there to receive it — the gallery is the shell's fill grower.
+    expect(document.querySelector('[data-pane="gallery"]')).not.toBeNull()
+    expect(document.querySelector('[data-pane="txcompose"]')).not.toBeNull()
+    // And the TX bar, which is where Stop lives, is untouched by any tick (THE STOP LINE).
+    expect(document.querySelector('.sstv-tx-stop')).not.toBeNull()
+  })
+
+  it('a picture in flight takes the stage even with the waterfall unticked', async () => {
+    // The tick hides the BAND, not the decode. An operator who unticked the waterfall last
+    // week has not asked to stop seeing pictures — and this view exists to show them.
+    getSstvState.mockResolvedValue({
+      ...IDLE,
+      armed: true,
+      mode: 'Robot 36',
+      linesDone: 1,
+      linesTotal: 240,
+      previewRgbBase64: btoa('\x01\x02\x03\x04\x05\x06'),
+      previewWidth: 2,
+      previewHeight: 1,
+    })
+    await renderView({ panels: fakePanels(['scope']) })
+    expect(document.querySelector('.sstv-canvas'), 'the RX stage went with the band waterfall').not.toBeNull()
+    expect(document.querySelector('.sstv-live'), 'no picture on the stage while one is decoding').not.toBeNull()
+    expect(document.querySelector('[data-testid="band-waterfall"]'), 'the band is back under a picture').toBeNull()
+  })
+
+  it('a picture arriving onto a HIDDEN-waterfall stage is still measured and upscaled', async () => {
+    // The stage is not permanent any more, and the measurement has to follow it. With the
+    // waterfall unticked the section does not exist while idle and mounts the instant a VIS
+    // lands — so a mount-only ResizeObserver would attach when there was nothing to observe
+    // and never again, and the picture would fall back to the sheet's 480px 3× default with
+    // the integer upscale silently never applied. Same fixture as the measurement case below,
+    // one id hidden: 1000×800 stage, native 2×1, 6× cap ⇒ 12px.
+    const cw = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')
+    const ch = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')
+    Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => 1000 })
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get: () => 800 })
+    try {
+      getSstvState.mockResolvedValue({
+        ...IDLE,
+        armed: true,
+        mode: 'Robot 36',
+        linesDone: 1,
+        linesTotal: 240,
+        previewRgbBase64: btoa('\x01\x02\x03\x04\x05\x06'),
+        previewWidth: 2,
+        previewHeight: 1,
+      })
+      await renderView({ panels: fakePanels(['scope']) })
+      const canvas = document.querySelector('.sstv-live-canvas') as HTMLElement
+      expect(canvas, 'no live canvas rendered with the waterfall hidden').not.toBeNull()
+      expect(
+        canvas.style.getPropertyValue('--sstv-img-w'),
+        'the stage was never measured — the picture fell back to the sheet default',
+      ).toBe('12px')
+    } finally {
+      if (cw) Object.defineProperty(Element.prototype, 'clientWidth', cw)
+      if (ch) Object.defineProperty(Element.prototype, 'clientHeight', ch)
+    }
+  })
+
   it('the band waterfall polls at the live-instrument cadence (50 ms), not the FT default', async () => {
     // The idle RX stage IS the band ("what's on the frequency right now") — a live instrument
     // like the rig scope, not a slot-synchronous FT surface. The producer makes a fresh row

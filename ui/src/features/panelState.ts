@@ -192,9 +192,12 @@
 // WHAT HAS NO ID HERE, and therefore cannot be hidden: the dial, the band/mode pickers, the
 // Rx/Tx offset spinners, the QSO strip's TX On / Tune / Stop TX / Hold Tx, Phone's PTT row,
 // CW's F-key macros and send bar, RTTY's header Stop TX + TX latch and both dock aborts,
-// SSTV's Send/Stop bar. Counted 2026-08-03: 24 entries across five vocabularies (19 distinct
-// ids), of which six can start a transmission, TWO host a stop control of their own
-// (voiceKeyer, stream) and exactly one — voiceKeyer — has a hide that stops anything. Recount
+// SSTV's Send/Stop bar. Recounted 2026-08-16: 28 entries across five vocabularies (20
+// distinct ids), of which six can start a transmission, TWO host a stop control of their own
+// (voiceKeyer, stream) and exactly one — voiceKeyer — has a hide that stops anything. The
+// four added that day are the spectrum strips (SCOPE_PANEL_ID) — Phone, CW, RTTY and SSTV
+// each gained the entry Operate has had since 0.15.0 — and they move none of those three
+// counts: a strip sends nothing, hosts no stop and ends nothing on its way out. Recount
 // from ALL_PANEL_VOCABULARIES at the foot of this file; do not trust the numbers, they are
 // here to be checked.
 //
@@ -560,11 +563,54 @@ export const OPERATE_PANELS: PanelVocabulary<OperatePanelId> = {
   panelIds: OPERATE_PANEL_IDS,
 }
 
-/** SSTV view's removable panels (Phase 3). The RX image (scope), the TX bar (mode/Send/Stop/
- *  progress) and all header chrome are NOT panels — so SSTV's two stop controls, the TX bar's
- *  Stop and the header's TX-enable latch, are outside every ⊞-removable pane, which is THE
- *  STOP LINE. `txcompose` is the image chooser only; Send does not live in it. */
-export const SSTV_PANEL_IDS = ['txcompose', 'gallery'] as const
+/**
+ * THE SPECTRUM STRIP'S ID, shared by the four cockpits that gained one on 2026-08-16
+ * (operator: "add the waterfall in each window as an option to remove in the panels
+ * section — leave it ON by default, give me the option to turn it off").
+ *
+ * ONE id across Phone/CW/RTTY/SSTV, because it is one thing wherever it renders: a
+ * spectrum display the operator either wants or does not. What it HOLDS differs per
+ * cockpit and never matters here — Operate's strip swaps FastGraph in for MSK144, Phone's
+ * and CW's is the rig scope, RTTY's and SSTV's the band waterfall. The ⊞ label is the
+ * cockpit's own word for it ("Scope" in Phone/CW, "Waterfall" in RTTY/SSTV); the id is not.
+ *
+ * WHY IT MAY BE HIDDEN, under THE STOP LINE and not around it: verified per cockpit
+ * 2026-08-16, the strip hosts NO control that stops a transmission in any of them. Its
+ * whole control surface is display — palette, floor/zero, resolution window, 2D/3D, pause
+ * (a RENDER pause, not a TX one), scroll direction, Operate's pop-out — plus click-to-tune,
+ * which moves the dial and keys nothing. Every stop control stays where it was: Stop TX and
+ * Tune in the CockpitHeader, Phone's PTT in the dock, RTTY's Esc/Stop macro and the
+ * TX-enable latch, SSTV's `.sstv-tx-bar` Stop. Hiding the strip is therefore
+ * unrepresentable-as-harmful in the same way every other entry is, and the four-cockpit
+ * wiring sweep in components/stop-line.test.tsx now hides this id too (it is driven off
+ * these arrays), which is where that claim is COMPUTED rather than asserted here.
+ *
+ * IT IS NOT A SENDER AND ITS HIDE ENDS NOTHING, so it carries no ⊞ note — THE PRACTICE
+ * requires a note of a hide that stops something in flight, and one the operator cannot act
+ * on teaches him to ignore the next.
+ *
+ * OPERATE IS NOT ON THIS LIST and keeps its own `waterfall` id. That entry shipped in
+ * 0.15.0, already hides the strip, and carries two things `scope` does not: the 'popped'
+ * pop-out state and migrateWaterfallDetached, which keys on the literal id. Renaming it
+ * would drop every stored preference and break the re-dock; giving RTTY/SSTV the name
+ * `waterfall` instead would pull them into that one-time migration and make which cockpit
+ * consumed its marker an ordering accident. Two names, one behaviour, and the reason is
+ * storage compatibility rather than taste.
+ */
+const SCOPE_PANEL_ID = 'scope'
+
+/** SSTV view's removable panels (Phase 3). The RX image stage and the TX bar
+ *  (mode/Send/Stop/progress) and all header chrome are NOT panels — so SSTV's two stop
+ *  controls, the TX bar's Stop and the header's TX-enable latch, are outside every
+ *  ⊞-removable pane, which is THE STOP LINE. `txcompose` is the image chooser only; Send
+ *  does not live in it.
+ *
+ *  `scope` here is THE BAND WATERFALL ONLY, and the distinction is structural rather than
+ *  cosmetic: SSTV has one RX stage that is the band until a VIS lands and the PICTURE after
+ *  it (SstvView's `inFlight` branch). The tick hides the band half; an arriving picture
+ *  still takes the stage whatever the box says, because that is the decode itself and not a
+ *  panel. See the gate at the render site. */
+export const SSTV_PANEL_IDS = [SCOPE_PANEL_ID, 'txcompose', 'gallery'] as const
 export type SstvPanelId = (typeof SSTV_PANEL_IDS)[number]
 
 export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
@@ -572,11 +618,20 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
   panelIds: SSTV_PANEL_IDS,
 }
 
-/** Phone cockpit's removable panels (Phase 3) — the panes UNDER the scope. The scope, the
- *  whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW) and the PTT row are
- *  NOT panels: each hosts a way to STOP a transmission, which is THE RULE. The log strip is
- *  not one either, for a different reason — it holds a QSO the operator is part-way through
- *  typing, and a tick that drops unsaved work is its own kind of harm.
+/** Phone cockpit's removable panels (Phase 3) — the scope strip plus the panes under it.
+ *  The whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW) and the PTT row
+ *  are NOT panels: each hosts a way to STOP a transmission, which is THE RULE. The log strip
+ *  is not one either, for a different reason — it holds a QSO the operator is part-way
+ *  through typing, and a tick that drops unsaved work is its own kind of harm.
+ *
+ *  THE SCOPE ITSELF IS ONE, since 2026-08-16 (see SCOPE_PANEL_ID). An earlier version of
+ *  this note grouped it with the header and the PTT row as "NOT panels: each hosts a way to
+ *  STOP a transmission" — which was FALSE OF THE SCOPE and is the reason it is called out
+ *  here rather than quietly moved. PhoneScope hosts a floor slider, a resolution/2D-3D/pause
+ *  trio and click-to-tune; not one of them stops anything. The header and the PTT row are
+ *  what that sentence was ever true of, and they are still outside the menu's reach.
+ *  `rigscope` remains a SEPARATE and differently-scoped entry: it is the pane of controls
+ *  that command the RADIO's own panadapter, and it lives in the region under the strip.
  *
  *  `voiceKeyer` IS one, since 2026-08-03. Nothing about it needed admitting: it transmits,
  *  and under the rule that has no bearing on whether it may be hidden — Stop TX and PTT are
@@ -594,6 +649,7 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
  *  nothing — Operate's Tx messages, its decode panes, its rosters — warns about nothing,
  *  and must not. */
 export const PHONE_PANEL_IDS = [
+  SCOPE_PANEL_ID,
   'rigscope',
   'txmeters',
   'dsp',
@@ -608,10 +664,16 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   panelIds: PHONE_PANEL_IDS,
 }
 
-/** CW cockpit's removable panels (Phase 3) — the panes under the scope. The scope, the whole
- *  CockpitHeader + keyer (WPM/backend/pitch/BW/Tune/StopTX), the F-key macros, the type-to-send
- *  input, and the log strip are NOT panels (TX-safety by construction). */
+/** CW cockpit's removable panels (Phase 3) — the scope strip plus the panes under it. The
+ *  whole CockpitHeader + keyer (WPM/backend/pitch/BW/Tune/StopTX), the F-key macros, the
+ *  type-to-send input, and the log strip are NOT panels (TX-safety by construction).
+ *
+ *  THE SCOPE ITSELF IS ONE, since 2026-08-16 (see SCOPE_PANEL_ID) — the same correction as
+ *  in the Phone twin: it was listed as unhideable "by TX-safety", and it hosts no stop
+ *  control. `scopeCtl` is a different entry for a different thing (the controls that command
+ *  the rig's own panadapter, in the region below), and both keep their own box. */
 export const CW_PANEL_IDS = [
+  SCOPE_PANEL_ID,
   'scopeCtl',
   'dsp',
   'txmeters',
@@ -628,8 +690,16 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   panelIds: CW_PANEL_IDS,
 }
 
-/** RTTY cockpit's removable panels (Phase 3). The waterfall, the CockpitHeader + StopTX + TX-arm,
- *  the auto-sequence QSO strip, the F-key macros, and the type-to-send compose are NOT panels.
+/** RTTY cockpit's removable panels (Phase 3). The CockpitHeader + StopTX + TX-arm, the
+ *  auto-sequence QSO strip, the F-key macros, and the type-to-send compose are NOT panels.
+ *
+ *  THE WATERFALL IS ONE, since 2026-08-16 (see SCOPE_PANEL_ID) — it headed the unhideable
+ *  list above until then, and nothing about it belonged there: its mark/space cursors and
+ *  click-to-net are the decoder's tuning aid, not a stop. `stream` is unchanged and is still
+ *  the pane that hosts a stop control of its own. With both ticked off this cockpit renders
+ *  no ⊞-reachable content at all, and THE STOP LINE holds exactly as before: Stop TX and the
+ *  TX-enable latch are in the header, the Esc/Stop macro and the sequencer's Abort in the
+ *  dock, none of them with an id.
  *
  *  `stream` IS THE SECOND PANE IN THE APP THAT HOSTS A STOP CONTROL, and it is admitted for
  *  the same reason the voice keyer is. Its "Auto on" toggle, clicked off, is
@@ -639,7 +709,7 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  and the sequencer's Abort are in the dock, none of them with an id. Its hide ENDS nothing
  *  (unmounting the pane calls no wire), so it correctly carries no ⊞ note. This is the pane
  *  that falsified the FOURTH wording a second time — see the header. */
-export const RTTY_PANEL_IDS = ['stream'] as const
+export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, 'stream'] as const
 export type RttyPanelId = (typeof RTTY_PANEL_IDS)[number]
 
 export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
