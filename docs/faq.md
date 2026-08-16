@@ -1,7 +1,7 @@
 # Nexus FAQ
 
 Answers for new operators and for hams evaluating Nexus against the tools they
-already run. **1.0.0 closes the beta period**: the FT8/FT4 core is production-grade
+already run. **Nexus left beta at 1.0.0**: the FT8/FT4 core is production-grade
 and verified against WSJT-X behavior, and where a number still comes from the bench
 rather than the air these answers say so. Field reports are still what closes those
 gaps.

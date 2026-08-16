@@ -7,7 +7,7 @@ always-current version, updated alongside the code it documents.
 **Full docs on GitHub:**
 <https://github.com/kd9taw/Nexus/tree/main/docs>
 
-> **1.0.0 closes the beta period, and the habit it was written with stays.** Where
+> **Nexus left beta at 1.0.0, and the habit the beta was written with stays.** Where
 > a feature is opt-in, or a number comes from the bench rather than the air, these
 > pages say so, and each section guide ends with what that section does **not** do.
 > The FT8/FT4 core is the production tier and is built to WSJT-X's behaviour.

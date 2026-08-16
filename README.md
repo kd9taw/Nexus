@@ -303,7 +303,7 @@ New here? Start with **[Getting Started](docs/manual/Getting-Started.md)**.
 
 ## Status — the honest version
 
-**1.0.0 closes the beta period**, and what that claims is narrow: the modes, the rig control, the
+**Nexus left beta at 1.0.0**, and what that claims is narrow: the modes, the rig control, the
 logbook and the awards engine have been run on the air through that period, on more than one
 station and on rigs the author does not own. It does not claim nothing is left. Every line below
 still says what a thing does *not* do, and so does every entry in the changelog.
