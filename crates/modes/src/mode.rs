@@ -1425,7 +1425,13 @@ impl Mode for Msk144Mode {
             free_text: true,
             contest: false,
             structured_identity: true,
-            early_decode: false,
+            // ⭐ IN-PERIOD DECODE IS THE MODE (2026-08-15, phase C). A meteor ping lands at
+            // any moment of the period and is gone; WSJT-X decodes continuously (mskrtd from
+            // hspec every ~0.3 s) and prints pings as they land, while a boundary-only pass
+            // sat silent for the whole period. The audio loop schedules REPEATED early passes
+            // for this tier (service.rs), each a cheap full-buffer slide — measured 23 ms for
+            // a full 15 s decode after the ntol fix, so the cost gate the plan set is open.
+            early_decode: true,
             split_reduce: false,
             // A QSO mode: it has an exchange to sequence. ⚠️ But a METEOR-SCATTER
             // one — the far end may hear a single 72 ms frame out of ~200 and a

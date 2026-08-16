@@ -23431,6 +23431,50 @@ mod tests {
     /// the worker feeds into `modes::DecodeRequest` → the FFI), not at the UI.
     /// Guards the placebo-knob failure mode: a settings row that renders but
     /// never changes the decode is worse than no row.
+    /// PHASE C, END TO END: a ping mid-period reaches the operator BEFORE the boundary.
+    ///
+    /// The meteor-scatter case: a burst lands at ~3 s of a 15 s period and is gone.
+    /// Boundary-only decoding sat silent until the period ended; WSJT-X prints it within
+    /// ~0.3 s. This drives the exact path the audio loop uses for the repeating early pass —
+    /// a tail-padded partial buffer through `ingest_early` — and asserts the decode lands
+    /// with its T intact while the period is still running.
+    #[test]
+    fn an_msk144_ping_decodes_mid_period_through_the_early_pass() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Msk144);
+
+        // A "ping": the encoded frame keyed at 1500 Hz, placed ~3 s into an otherwise
+        // silent period buffer (the early pass pads the unheard tail with zeros exactly
+        // like this).
+        let mode = modes::make_mode(modes::mode::ModeKind::Msk144 { period_s: 5 });
+        let tones = mode.encode("KD9TAW W9XYZ EN37");
+        assert!(!tones.is_empty(), "control: the message packs");
+        let burst = mode.gen_wave(&tones, 12_000.0, 1_500.0);
+        assert!(!burst.is_empty(), "control: the wave generates");
+        let mut frame = vec![0.0f32; 15 * 12_000];
+        let at = 3 * 12_000;
+        // ~0.6 s of repeated frames — a healthy ping, not a single 72 ms copy.
+        let n = burst.len().min(7_200);
+        frame[at..at + n].copy_from_slice(&burst[..n]);
+
+        let got = e.ingest_early(&frame, 1);
+        assert!(
+            got >= 1,
+            "the ping must decode from the partial buffer — early_decode is the mode"
+        );
+        let d = e
+            .snapshot()
+            .recent_decodes
+            .into_iter()
+            .find(|d| d.message.contains("W9XYZ"))
+            .expect("the ping's message reaches the decode feed");
+        assert!(
+            (2.0..5.0).contains(&f64::from(d.dt_sec)),
+            "T must be the ping's time in the period (~3 s), got {}",
+            d.dt_sec
+        );
+    }
+
     #[test]
     fn decode_controls_reach_the_decode_job() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);

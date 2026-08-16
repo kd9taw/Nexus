@@ -1997,6 +1997,12 @@ struct RadioLoop {
     /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
     /// RX slot; the boundary decode then ingests only the stragglers).
     early_done_slot: Option<u64>,
+    /// MSK144's repeating early passes: (slot, index of the last 2 s interval decoded).
+    /// One fixed early pass per slot is right for FT8/FT4 (callers appear before the TX
+    /// window opens) and wrong for meteor scatter, where a ping lands at ANY moment and is
+    /// gone — WSJT-X decodes continuously. This schedules a cheap full-tail decode every
+    /// interval instead (measured 23 ms per 15 s buffer, on the decode worker, off-loop).
+    early_msk_done: Option<(u64, u32)>,
     /// A slot whose boundary TX decision already ran AT the boundary (the WSJT-X
     /// key-at-boundary ordering, taken when the just-ended slot's early decode had
     /// folded): the slot, whether it actually keyed, and the pre-key dial for the
@@ -2233,6 +2239,7 @@ impl RadioLoop {
             dax_tee_set: false,
             err_owner: ErrOwner::None,
             early_done_slot: None,
+            early_msk_done: None,
             boundary_keyed: None,
             rig_asserted: false, // read-only launch: nothing asserted until a real command
             cur_dial: 0,
@@ -6074,6 +6081,7 @@ impl RadioLoop {
             // Slot indices renumber with the new period — stale per-slot markers from
             // the old tier must not coincidentally match a new tier's slot.
             self.early_done_slot = None;
+            self.early_msk_done = None;
             self.boundary_keyed = None;
             // Including the index THIS tick already computed, above, from the clock we
             // just replaced. `last_slot = None` makes the boundary block below fire on
@@ -6136,9 +6144,23 @@ impl RadioLoop {
             && self.early_done_slot != Some(slot)
             && !is_tuning
         {
+            /// Interval between MSK144's repeating early passes (ms). 2 s keeps ping-to-
+            /// screen latency ~2 s (WSJT-X's rtd is ~0.3 s; the difference buys reuse of the
+            /// existing early machinery instead of a new streaming path into rxdsp).
+            const MSK_EARLY_STEP_MS: f64 = 2_000.0;
+            let slot_ms_now = eng.active_slot_secs() * 1000.0;
+            let elapsed_now = slot_ms_now - self.clock.ms_to_next_slot(now);
             let early_at_ms = match tier_now {
                 Tier::Ft8 => Some(11_800.0),
                 Tier::Ft4 => Some(5_500.0),
+                // Repeating: the next 2 s mark not yet decoded this slot. Never the 0 mark
+                // (an empty buffer), and the boundary pass still owns the full frame.
+                Tier::Msk144 => {
+                    let idx = (elapsed_now / MSK_EARLY_STEP_MS).floor() as u32;
+                    let done =
+                        matches!(self.early_msk_done, Some((s2, i2)) if s2 == slot && i2 >= idx);
+                    (idx >= 1 && !done).then(|| f64::from(idx) * MSK_EARLY_STEP_MS)
+                }
                 _ => None,
             };
             if let Some(at) = early_at_ms {
@@ -6157,6 +6179,14 @@ impl RadioLoop {
                     && eng.source_kind() == SourceKind::Native
                 {
                     self.early_done_slot = Some(slot);
+                    if tier_now == Tier::Msk144 {
+                        self.early_msk_done =
+                            Some((slot, (elapsed_ms / MSK_EARLY_STEP_MS).floor() as u32));
+                        // The one-per-slot latch must not stop the NEXT interval: it exists
+                        // for the single-shot FT8/FT4 passes, and MSK144's schedule is the
+                        // (slot, idx) pair above.
+                        self.early_done_slot = None;
+                    }
                     // Only THIS slot's audio, at its true position from the slot
                     // start, tail-padded — a rolling tail of the previous slot
                     // (or front-padding) would wreck the decoder's dt alignment.
