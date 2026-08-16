@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every waterfall can now be hidden.** The scope strip in Phone, CW, RTTY, and SSTV joins
+  the ⊞ Panels menu (Operate's already lived there) — on by default, and a hide sticks until
+  you bring it back. The panes below take the freed height.
+
 - **FT2.** The fast slotted mode from the Decodium community (IU8LMC's WSJT-X fork) joins the
   FT dropdown: FT4 with a halved symbol time — 3.75 s periods, ~167 Hz wide, decoding to
   −10.8 dB — for when the band turnover is worth more than the last few dB. Nexus follows
