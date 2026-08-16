@@ -561,7 +561,17 @@ export function Waterfall({
       // OWN frequency span (carried in the DTO) — the ring is what every cold path
       // (palette recolor, zoom, resize, scrollback) re-renders from.
       const tRow = new Float32Array(nBins)
-      for (let b = 0; b < nBins; b++) tRow[b] = normalize(frow[b], dispFloor, dispCeil)
+      // ⚠️ OUR OWN TX PAINTS A DARK BAND, exactly as WSJT-X draws it (operator ruling,
+      // 2026-08-16). While keyed the backend holds the LAST pre-TX row (so nothing goes
+      // stale-empty), but appending that repeat into the scroll FABRICATES history — a
+      // solid stripe claims a station kept transmitting through 13 s nobody was listening
+      // to. The scroll is a time axis; the honest value for time spent transmitting is
+      // silence, so TX rows go in at the palette floor and an over reads as the quiet gap
+      // it actually was. The AGC is frozen on the same flag, so this darkness can never
+      // re-create the key-up clamp that was the original red-band bug.
+      if (!txRef.current) {
+        for (let b = 0; b < nBins; b++) tRow[b] = normalize(frow[b], dispFloor, dispCeil)
+      }
       historyRef.current.push(tRow, rowLo, rowHi, Date.now())
 
       // PAUSED: history keeps accumulating (nothing is lost) but the VIEW is frozen —
