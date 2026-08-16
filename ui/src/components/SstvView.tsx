@@ -21,6 +21,20 @@ import {
 } from '../sstvCrop'
 import { halvingChain } from '../sstvResample'
 import { drawIdPlate, normalizeCall } from '../sstvIdOverlay'
+import {
+  OVERLAY_COLORS,
+  colorCss,
+  drawOverlays,
+  hitTest,
+  moveItem,
+  newOverlayId,
+  overlayRect,
+  preset73,
+  presetCq,
+  presetReply,
+  type OverlayItem,
+  type BannerMeasure,
+} from '../sstvOverlay'
 import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import {
   atuTune,
@@ -721,6 +735,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     }, 'Could not delete the image')
   }
 
+  /** Gallery → composer: fetch the received file over the asset protocol (the bridge
+   *  the BMP fallback already proved) and run it through the ORDINARY loadImage path,
+   *  so sniffing, orientation and the ident treat it like any dropped file. */
+  const editAndResend = async (g: SstvGalleryEntry) => {
+    const src = assetUrl(g.path)
+    if (!src) return
+    await withErrorToast(async () => {
+      const buf = await (await fetch(src)).arrayBuffer()
+      const name = g.path.split(/[\\/]/).pop() ?? 'received-image'
+      await loadImage(new File([buf], name))
+      announce(`Loaded ${g.mode} image into the composer`)
+    }, 'Could not load that image into the composer')
+  }
+
   // ---------------------------------------------------------------------------
   // TX: compose an image and transmit it. Nothing here keys the rig until the
   // operator clicks Send — the backend re-checks every gate (Phone, TX-enabled,
@@ -851,6 +879,9 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     ctx.imageSmoothingEnabled = true
     ctx.clearRect(0, 0, m.width, m.height)
     ctx.drawImage(cur, sx, sy, sw, sh, 0, 0, m.width, m.height)
+    // Operator text overlays — BEFORE the plate, so the ident always draws over them:
+    // an overlay can cover artwork (the operator's call), never the identification.
+    drawOverlays(ctx, m.width, m.height, overlaysRef.current)
     // ⭐ THE STATION ID, after everything that could shrink or crop it away — unless the
     // operator has affirmed this picture already carries it (#50): then drawing ours would
     // cover the artwork that identifies them, to repeat what the image already says.
@@ -952,6 +983,43 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const idInImageRef = useRef(false)
   idInImageRef.current = idInImage
 
+  // Operator text overlays (the MMSSTV-style compose). State drives the item strip;
+  // the ref is what renderTx and the drag read — the same state+ref pairing as
+  // idInImage, and for the same reason: the canvas redraws from source every frame, so
+  // items are re-drawn declaratively, never painted once. Items survive an image change
+  // on purpose (positions are normalised): swapping the background under a composed CQ
+  // card is a workflow, not an accident. They do NOT survive a remount — template
+  // save/recall is the planned v2, not a side effect.
+  const [overlays, setOverlays] = useState<OverlayItem[]>([])
+  const overlaysRef = useRef<OverlayItem[]>([])
+  overlaysRef.current = overlays
+  const [selectedOv, setSelectedOv] = useState<string | null>(null)
+  const selectedOvRef = useRef<string | null>(null)
+  selectedOvRef.current = selectedOv
+  /** Banner text width via the transmit canvas's own context — the one measurer that
+   *  matches what fillText will actually lay down. Crisp items never call it. */
+  const measureBanner: BannerMeasure = (text, px) => {
+    const ctx = txCanvasRef.current?.getContext('2d')
+    if (!ctx || typeof ctx.measureText !== 'function') return text.length * px * 0.6
+    ctx.font = `bold ${px}px system-ui, sans-serif`
+    return ctx.measureText(text).width
+  }
+  const commitOverlays = (next: OverlayItem[]) => {
+    overlaysRef.current = next
+    setOverlays(next)
+    renderTx(modeSlugRef.current, true)
+  }
+  const addOverlay = (item: OverlayItem) => {
+    setSelectedOv(item.id)
+    commitOverlays([...overlaysRef.current, item])
+  }
+  const updateOverlay = (id: string, patch: Partial<OverlayItem>) => {
+    commitOverlays(overlaysRef.current.map((it) => (it.id === id ? { ...it, ...patch } : it)))
+  }
+  /** The Reply preset's other-station call: the newest FSK ID the decoder has heard
+   *  (the gallery is newest-first). Live QSO data with zero configuration. */
+  const lastHeardCall = gallery.find((g) => g.fskId)?.fskId ?? null
+
   const loadImage = async (file: File) => {
     setIdInImage(false)
     setNotice(null)
@@ -1016,25 +1084,59 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // drag inside it would fight them for the same events. Pointer events also give
   // touch and pen for free.
   // ---------------------------------------------------------------------------
-  const dragRef = useRef<{ id: number; x: number; y: number; scale: number } | null>(null)
+  const dragRef = useRef<{
+    id: number
+    x: number
+    y: number
+    scale: number
+    /** Which gesture owns this pointer: the crop (source moves behind the frame) or a
+     *  text overlay (the item moves over it). Decided ONCE at pointerdown by hit-test,
+     *  so the two gestures share the canvas without ever fighting mid-drag. */
+    kind: 'crop' | 'overlay'
+    itemId?: string
+  } | null>(null)
   const axis = srcSize && txMode ? freeAxis(srcSize.w, srcSize.h, txMode.width, txMode.height) : 'none'
 
   const onPreviewPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!srcRef.current || !txMode || axis === 'none') return
+    if (!srcRef.current || !txMode) return
     const el = e.currentTarget
     const rect = el.getBoundingClientRect()
     // Measured, not assumed: the preview is CSS-scaled, so a drag in CSS pixels has to
     // be divided by that scale or it moves the picture by the wrong amount. This is the
     // classic "the drag feels three times too fast".
     const scale = el.width > 0 && rect.width > 0 ? rect.width / el.width : 1
+    // Overlay first: a press ON an item selects and drags it; a miss is the crop drag
+    // exactly as before (and clears the selection, so arrows go back to the crop).
+    const rx = (e.clientX - rect.left) / scale
+    const ry = (e.clientY - rect.top) / scale
+    const hit = hitTest(overlaysRef.current, rx, ry, el.width, el.height, measureBanner)
+    if (hit) {
+      setSelectedOv(hit.id)
+      el.setPointerCapture?.(e.pointerId)
+      dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY, scale, kind: 'overlay', itemId: hit.id }
+      return
+    }
+    if (selectedOvRef.current) setSelectedOv(null)
+    if (axis === 'none') return
     el.setPointerCapture?.(e.pointerId)
-    dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY, scale }
+    dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY, scale, kind: 'crop' }
   }
 
   const onPreviewPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const d = dragRef.current
     const src = srcRef.current
     if (!d || d.id !== e.pointerId || !src || !txMode) return
+    if (d.kind === 'overlay') {
+      const dx = (e.clientX - d.x) / d.scale
+      const dy = (e.clientY - d.y) / d.scale
+      overlaysRef.current = overlaysRef.current.map((it) =>
+        it.id === d.itemId ? moveItem(it, dx, dy, txMode.width, txMode.height) : it,
+      )
+      d.x = e.clientX
+      d.y = e.clientY
+      scheduleRender()
+      return
+    }
     centreRef.current = dragCentre(
       src.w,
       src.h,
@@ -1051,16 +1153,22 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   const endDrag = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!dragRef.current || dragRef.current.id !== e.pointerId) return
+    const d = dragRef.current
+    if (!d || d.id !== e.pointerId) return
     dragRef.current = null
     e.currentTarget.releasePointerCapture?.(e.pointerId)
+    // An overlay drag mutated the ref per-frame; land it in state so the strip agrees.
+    if (d.kind === 'overlay') setOverlays(overlaysRef.current)
     // Pack once, at the end — this is where the expensive read happens.
     renderTx(modeSlugRef.current, true)
   }
 
   /** Arrows nudge one target-raster pixel, shift ten. Non-negotiable: this app's
    *  accessibility stance is always-on, and a pointer-only crop is unusable with a
-   *  screen reader or without a mouse. */
+   *  screen reader or without a mouse. With a text overlay selected the same keys move
+   *  the ITEM (Delete removes it, Esc hands the keys back to the crop) — one keyboard
+   *  model for both gestures, switched by the selection the way the pointer is by the
+   *  hit-test. */
   const onPreviewKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
     const src = srcRef.current
     if (!src || !txMode) return
@@ -1070,6 +1178,30 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       ArrowRight: [-step, 0],
       ArrowUp: [0, step],
       ArrowDown: [0, -step],
+    }
+    const sel = selectedOvRef.current
+    if (sel) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSelectedOv(null)
+        return
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        setSelectedOv(null)
+        commitOverlays(overlaysRef.current.filter((it) => it.id !== sel))
+        return
+      }
+      const mv = d[e.key]
+      if (mv) {
+        e.preventDefault()
+        commitOverlays(
+          overlaysRef.current.map((it) =>
+            it.id === sel ? moveItem(it, -mv[0], -mv[1], txMode.width, txMode.height) : it,
+          ),
+        )
+        return
+      }
     }
     if (e.key === 'Home') {
       e.preventDefault()
@@ -1426,30 +1558,52 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               {/* THE STAGE. This canvas IS what gets transmitted — `renderTx` reads it
                   straight back with getImageData — so the preview is WYSIWYG down to the
                   pixel, ID plate included. It is also the drag surface: the frame never
-                  moves, the source moves behind it. */}
-              <canvas
-                ref={txCanvasRef}
-                className={`sstv-tx-preview${packed ? '' : ' empty'} drag-${axis}`}
-                role="img"
-                tabIndex={packed ? 0 : -1}
-                aria-label={
-                  packed
-                    ? `Transmit preview, ${packed.width}×${packed.height}${
-                        axis === 'none'
-                          ? ' — the picture already fits, no crop needed'
-                          : `. Drag or use the arrow keys to choose which part of the picture is sent (${
-                              axis === 'x' ? 'left and right' : 'up and down'
-                            }); Home re-centres.`
-                      }`
-                    : 'No image chosen'
-                }
-                onPointerDown={onPreviewPointerDown}
-                onPointerMove={onPreviewPointerMove}
-                onPointerUp={endDrag}
-                onPointerCancel={endDrag}
-                onDoubleClick={recentre}
-                onKeyDown={onPreviewKeyDown}
-              />
+                  moves, the source moves behind it. The wrapper exists for the overlay
+                  selection outline — a DOM box in percentages of the canvas, because
+                  drawing a marquee INTO the canvas would transmit the marquee. */}
+              <div className="sstv-stage-wrap">
+                <canvas
+                  ref={txCanvasRef}
+                  className={`sstv-tx-preview${packed ? '' : ' empty'} drag-${axis}`}
+                  role="img"
+                  tabIndex={packed ? 0 : -1}
+                  aria-label={
+                    packed
+                      ? `Transmit preview, ${packed.width}×${packed.height}${
+                          axis === 'none'
+                            ? ' — the picture already fits, no crop needed'
+                            : `. Drag or use the arrow keys to choose which part of the picture is sent (${
+                                axis === 'x' ? 'left and right' : 'up and down'
+                              }); Home re-centres.`
+                        }${overlays.length ? ' Click a text overlay to select it; arrows move it, Delete removes it.' : ''}`
+                      : 'No image chosen'
+                  }
+                  onPointerDown={onPreviewPointerDown}
+                  onPointerMove={onPreviewPointerMove}
+                  onPointerUp={endDrag}
+                  onPointerCancel={endDrag}
+                  onDoubleClick={recentre}
+                  onKeyDown={onPreviewKeyDown}
+                />
+                {packed &&
+                  txMode &&
+                  overlays.map((it) => {
+                    if (it.id !== selectedOv) return null
+                    const r = overlayRect(it, txMode.width, txMode.height, measureBanner)
+                    return (
+                      <div
+                        key={it.id}
+                        className="sstv-ov-outline"
+                        style={{
+                          left: `${(r.x / txMode.width) * 100}%`,
+                          top: `${(r.y / txMode.height) * 100}%`,
+                          width: `${(r.w / txMode.width) * 100}%`,
+                          height: `${(r.h / txMode.height) * 100}%`,
+                        }}
+                      />
+                    )
+                  })}
+              </div>
               {!packed && (
                 <div className="sstv-tx-drop-hint">
                   Drop an image here, or choose one below — any size, resized to the mode
@@ -1469,6 +1623,124 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 }}
               />
             </label>
+            {/* TEXT OVERLAYS — the MMSSTV-style compose. One-click presets that work
+                with nothing configured (the Reply pulls the other station's call from
+                the newest FSK ID heard), plus free text. Items draw UNDER the ID plate
+                by construction, and idInImage is never touched by any of this — text
+                the operator typed is not an affirmation that their callsign is in the
+                artwork (#50 stays a deliberate checkbox). */}
+            {packed && (
+              <div className="sstv-ov-presets">
+                <span className="sstv-ov-presets-label">Text:</span>
+                <button type="button" onClick={() => addOverlay(presetCq(callsign || 'MYCALL'))}>
+                  CQ
+                </button>
+                <button type="button" onClick={() => addOverlay(preset73(callsign || 'MYCALL'))}>
+                  73
+                </button>
+                <button
+                  type="button"
+                  disabled={!lastHeardCall}
+                  title={
+                    lastHeardCall
+                      ? `Reply to ${lastHeardCall} (the newest FSK ID in the gallery)`
+                      : 'Enabled once a station has been received with an FSK ID'
+                  }
+                  onClick={() => lastHeardCall && addOverlay(presetReply(lastHeardCall, callsign || 'MYCALL'))}
+                >
+                  Reply
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    addOverlay({
+                      id: newOverlayId(),
+                      text: 'TEXT',
+                      cx: 0.5,
+                      cy: 0.5,
+                      size: 2,
+                      style: 'crisp',
+                      color: 'white',
+                      treatment: 'plate',
+                    })
+                  }
+                >
+                  + Text
+                </button>
+              </div>
+            )}
+            {packed &&
+              overlays.map((it) => (
+                <div key={it.id} className={`sstv-ov-row${it.id === selectedOv ? ' selected' : ''}`}>
+                  <input
+                    className="settings-input sstv-ov-text"
+                    value={it.text}
+                    aria-label="Overlay text"
+                    onFocus={() => setSelectedOv(it.id)}
+                    onChange={(e) => updateOverlay(it.id, { text: e.target.value })}
+                  />
+                  <select
+                    className="settings-input"
+                    value={it.style}
+                    aria-label="Text style"
+                    onChange={(e) => updateOverlay(it.id, { style: e.target.value as OverlayItem['style'] })}
+                    title="Crisp: the ident's pixel font, proven through the decoder. Banner: big display text with an outline, MMSSTV-style."
+                  >
+                    <option value="crisp">Crisp</option>
+                    <option value="banner">Banner</option>
+                  </select>
+                  <select
+                    className="settings-input"
+                    value={it.size}
+                    aria-label="Text size"
+                    onChange={(e) => updateOverlay(it.id, { size: Number(e.target.value) as OverlayItem['size'] })}
+                  >
+                    {[1, 2, 3, 4].map((s) => (
+                      <option key={s} value={s}>
+                        {s}×
+                      </option>
+                    ))}
+                  </select>
+                  <span className="sstv-ov-swatches" role="radiogroup" aria-label="Text colour">
+                    {OVERLAY_COLORS.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={it.color === c.id}
+                        aria-label={c.id}
+                        className={`sstv-ov-swatch${it.color === c.id ? ' active' : ''}`}
+                        style={{ background: colorCss(c.id) }}
+                        onClick={() => updateOverlay(it.id, { color: c.id })}
+                      />
+                    ))}
+                  </span>
+                  <select
+                    className="settings-input"
+                    value={it.treatment}
+                    aria-label="Contrast treatment"
+                    onChange={(e) =>
+                      updateOverlay(it.id, { treatment: e.target.value as OverlayItem['treatment'] })
+                    }
+                    title="What keeps the text readable on the far end: a solid plate behind it, or a thick outline around it"
+                  >
+                    <option value="plate">Plate</option>
+                    <option value="outline">Outline</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="sstv-ov-remove"
+                    aria-label={`Remove overlay ${it.text}`}
+                    title="Remove this text"
+                    onClick={() => {
+                      if (selectedOv === it.id) setSelectedOv(null)
+                      commitOverlays(overlaysRef.current.filter((o) => o.id !== it.id))
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
             {/* What actually goes out: the source size, the raster it was resized to,
                 the mode, and — the number that matters most before a Send — how long the
                 rig will be keyed. A 290 s PTT hold is an expensive place to discover a
@@ -1579,6 +1851,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                     onClick={() => void deleteImage(g)}
                   >
                     ✕
+                  </button>
+                  {/* Edit & resend: a received picture back onto the compose stage — the
+                      MMSSTV workflow of answering a picture with that picture plus your
+                      text. Same fetch bridge the BMP fallback proved out; the file then
+                      rides the ORDINARY loadImage path, so format sniffing, orientation
+                      and the ident all apply exactly as if it were dropped in. */}
+                  <button
+                    type="button"
+                    className="sstv-thumb-edit"
+                    aria-label={`Edit and resend the ${g.mode} image received ${fmtUtc(g.finishedUtc)}`}
+                    title="Load this image into the composer"
+                    onClick={() => void editAndResend(g)}
+                  >
+                    ✎
                   </button>
                   <figcaption className="sstv-thumb-caption">
                     <span className="sstv-thumb-mode">{g.mode}</span>

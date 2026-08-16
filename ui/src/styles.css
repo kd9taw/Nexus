@@ -19319,6 +19319,21 @@ button.sat-chip:disabled {
   padding: 2px 5px;
   cursor: pointer;
 }
+.sstv-thumb-edit {
+  position: absolute;
+  top: 4px;
+  right: 30px;
+  opacity: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--tx);
+  border-radius: 4px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.sstv-thumb:hover .sstv-thumb-edit,
+.sstv-thumb-edit:focus-visible,
 .sstv-thumb:hover .sstv-thumb-del,
 .sstv-thumb-del:focus-visible {
   opacity: 1;
@@ -19407,6 +19422,73 @@ button.sat-chip:disabled {
   font-style: italic;
   font-size: var(--fs-body);
   text-align: center;
+}
+/* Overlay-compose stage: shrink-wraps the preview so the selection outline can be
+   positioned in percentages of the canvas box (never drawn INTO the canvas — the
+   canvas is the transmit buffer). */
+.sstv-stage-wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+.sstv-ov-outline {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.sstv-ov-presets {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.sstv-ov-presets-label {
+  color: var(--text-faint);
+  font-size: var(--fs-body);
+}
+.sstv-ov-presets button {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.sstv-ov-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.sstv-ov-row.selected {
+  outline: 1px dashed var(--accent);
+}
+.sstv-ov-row .sstv-ov-text {
+  flex: 1 1 10em;
+  min-width: 8em;
+  font-family: var(--font-mono);
+}
+.sstv-ov-swatches {
+  display: inline-flex;
+  gap: 3px;
+}
+.sstv-ov-swatch {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0;
+}
+.sstv-ov-swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sstv-ov-remove {
+  color: var(--state-weak);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 var(--space-1);
 }
 .sstv-tx-controls {
   display: flex;

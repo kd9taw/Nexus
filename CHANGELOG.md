@@ -5,6 +5,25 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Text on your SSTV pictures.** The composer can now lay text over the picture before
+  transmitting, the way MMSSTV does. One-click **CQ**, **73** and **Reply** cards — Reply fills
+  in the other station's callsign from the newest FSK ID heard — plus free text. Two styles:
+  **Crisp**, the same pixel font as the burned-in ident, proven readable through the decoder;
+  and **Banner**, big display text with a thick outline. Eight colours, four sizes, and every
+  item carries a solid plate or an outline — that contrast edge is what keeps coloured text
+  readable on the far end. Drag text where you want it (or use the arrow keys); your station
+  ID always draws last, so nothing you add can cover it.
+- **Edit & resend from the SSTV gallery.** The pencil on a received picture loads it into the
+  composer — answer a station's picture with their picture and your text on it.
+- **Hunt a grid square by name.** The watch list (Settings ▸ Spots & Alerts) now takes grid
+  squares alongside callsigns and DXCC entities: enter `FN31` or `EM7*` and get the loud ⭐
+  alert the moment a station decodes from there, with the Work button ready. A square you ask
+  for by name alerts on every band — the HF grid-quiet default doesn't apply to it.
+
 ## [1.5.0] — 2026-08-16
 
 ### Added
