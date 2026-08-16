@@ -13364,10 +13364,14 @@ button.cq-skiptx1.on {
   font-size: 0.86rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
-/* Spots panel — the raw firehose table (8 cols: age · call · entity · band · freq ·
+/* Spots panel — the raw firehose table (9 cols: age · call · entity · state · band · freq ·
    mode · spotter · comment). Reuses the Needed board's row chrome, own column template. */
 .sp-grid .np-row {
-  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
+  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
+}
+.sp-state {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 .np-age {
   color: var(--text-dim);

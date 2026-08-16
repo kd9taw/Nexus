@@ -185,6 +185,9 @@ export function BandStrip({
             beacon?.word,
             need && NEED_CHIP[need].label,
             badge?.word,
+            // State/province, when the FCC index or a heard grid resolved one — the same
+            // value the roster's State pill shows (operator ask, 2026-08-16).
+            s.state,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
             s.spotter && `de ${s.spotter}`,

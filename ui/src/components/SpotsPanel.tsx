@@ -9,7 +9,7 @@ import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 
-type SortKey = 'age' | 'call' | 'entity' | 'band' | 'freq' | 'mode'
+type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 
 // Common HF + 6m bands always offered in the filter bar; augmented with any band present
 // in the current spots.
@@ -144,6 +144,10 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           break
         case 'entity':
           c = a.entity.localeCompare(b.entity)
+          break
+        case 'state':
+          // Unknown states sort LAST both directions — '—' rows are noise when sorting by state.
+          c = (a.state || '\u{10FFFF}').localeCompare(b.state || '\u{10FFFF}')
           break
         case 'band':
           c = a.freqMhz - b.freqMhz // band sort by frequency reads naturally
@@ -308,6 +312,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           {th('age', 'Age')}
           {th('call', 'Call')}
           {th('entity', 'Entity')}
+          {th('state', 'St')}
           {th('band', 'Band')}
           {th('freq', 'Freq')}
           {th('mode', 'Mode')}
@@ -362,6 +367,10 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                     ) : null
                   })()}
                 </span>
+                {/* The panel already FILTERS by state; now it shows the value it filters on
+                    (operator ask, 2026-08-16). FCC-index / heard-grid resolved; '—' = unknown
+                    (a cluster spot of a station never heard, or a non-US/VE call). */}
+                <span className="sp-state">{s.state || '—'}</span>
                 <span className="np-band">{s.band || '—'}</span>
                 <span className="sp-freq">{s.freqMhz.toFixed(3)}</span>
                 <span
