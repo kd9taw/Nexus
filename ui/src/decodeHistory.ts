@@ -32,6 +32,10 @@ const SLOT_MS = 15_000
 export const TIER_PERIOD_SECS: Record<Tier, number> = {
   FT8: 15,
   FT4: 7.5,
+  // FT2's period is FIXED at 3.75 s — the only sub-4-second tier, and the one
+  // entry in this table that is a fact rather than a default: there is no FT2
+  // period setting to diverge from it.
+  FT2: 3.75,
   // FST4/FST4W periods are an operator setting (15..1800); these are the
   // defaults. A decode row's true period comes from the ModeKind the engine
   // tagged it with.

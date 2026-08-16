@@ -1350,6 +1350,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ft2"
+version = "0.1.0"
+dependencies = [
+ "tempo-fast-sys",
+]
+
+[[package]]
 name = "ft4"
 version = "0.1.0"
 dependencies = [
@@ -2605,6 +2612,7 @@ name = "modes"
 version = "0.1.0"
 dependencies = [
  "fst4",
+ "ft2",
  "ft4",
  "ft8",
  "jt65",

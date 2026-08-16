@@ -14,6 +14,7 @@ workspace = true
 tempo-fast = { path = "../tempo-fast" }
 ft8 = { path = "../ft8" }
 ft4 = { path = "../ft4" }
+ft2 = { path = "../ft2" }
 fst4 = { path = "../fst4" }
 q65 = { path = "../q65" }
 msk144 = { path = "../msk144" }

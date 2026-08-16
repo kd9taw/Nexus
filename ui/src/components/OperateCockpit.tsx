@@ -145,6 +145,16 @@ interface Props {
 const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
   { tier: 'FT8', label: 'FT8', slot: '15s', title: 'Standard WSJT-X FT8 — 15 s T/R' },
   { tier: 'FT4', label: 'FT4', slot: '7.5s', title: 'Standard WSJT-X FT4 — 7.5 s T/R' },
+  // FT2 sits beside its siblings here because it IS one: a slotted digital QSO
+  // tier running the same FT8/FT4 sequencer, just faster. Decodium's mode, not
+  // WSJT-X's — hence the attribution in the tooltip, where the operator can see
+  // which population they are calling into.
+  {
+    tier: 'FT2',
+    label: 'FT2',
+    slot: '3.75s',
+    title: 'FT2 (Decodium) — 3.75 s T/R, FT4 with a halved symbol time',
+  },
 ]
 
 /** DXpedition special-op chip definitions. */

@@ -1543,7 +1543,13 @@ mod tests {
     fn set_tier_selects_all_modes() {
         // All tiers are now live-selectable: FT1/FT8/FT4 native, DX1 robust.
         let mut app = AppState::new("K2DEF", "FN31");
-        for t in [Tier::TempoDeep, Tier::Ft8, Tier::Ft4, Tier::TempoFast] {
+        for t in [
+            Tier::TempoDeep,
+            Tier::Ft8,
+            Tier::Ft4,
+            Tier::Ft2,
+            Tier::TempoFast,
+        ] {
             app.set_tier(t);
             assert_eq!(app.tier(), t);
         }

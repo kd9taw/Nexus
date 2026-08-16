@@ -229,11 +229,17 @@ pub fn sstv_band_plan() -> Vec<BandChannel> {
 /// blob out of a real WSJT-X.ini — rather than typed from memory. Roughly ninety
 /// amateur frequencies is exactly the volume where one transposed digit hides in
 /// a table and looks authoritative.
+///
+/// ⚠️ ONE EXCEPTION, and it has to be: **FT2's plan comes from DECODIUM**, not
+/// WSJT-X, which has no FT2 rows at all. The on-air FT2 population runs Decodium,
+/// so Decodium's `models/FrequencyList.cpp` is the authority for that mode the
+/// same way WSJT-X's .ini is for the rest. See [`ft2_band_plan`].
 pub fn band_plan_for(tier: crate::dto::Tier) -> Vec<BandChannel> {
     use crate::dto::Tier;
     match tier {
         Tier::Ft8 => ft8_band_plan(),
         Tier::Ft4 => ft4_band_plan(),
+        Tier::Ft2 => ft2_band_plan(),
         Tier::Q65 => q65_band_plan(),
         Tier::Msk144 => msk144_band_plan(),
         Tier::Fst4 => fst4_band_plan(),
@@ -244,6 +250,76 @@ pub fn band_plan_for(tier: crate::dto::Tier) -> Vec<BandChannel> {
         // modes that must avoid mutual QRM with the WSJT-X watering holes.
         Tier::TempoFast | Tier::TempoDeep => band_plan(),
     }
+}
+
+/// **FT2** calling frequencies, taken verbatim from DECODIUM's own default
+/// frequency table — `models/FrequencyList.cpp` in the decodium3 tree, which is
+/// where the on-air FT2 population's dials come from. 16 entries.
+///
+/// ⚠️ NOT WSJT-X's table, and that is the whole point: WSJT-X has no FT2 rows at
+/// all. Every row below is one `Modes::FT2` entry from `default_frequency_list`,
+/// cited by line, and every one of them is flagged `preferred_` (the last field)
+/// — Decodium ships FT2 as a first-class band-plan mode, not an experiment.
+///
+/// The pattern is consistent and worth reading: FT2 sits a few kHz ABOVE the FT8
+/// watering hole on every HF band (20 m 14.084 against FT8's 14.074) and 3 kHz
+/// above it on VHF+ (2 m 144.177 against 144.174), i.e. in the shoulder past the
+/// FT8 cluster — the same "don't share a passband" placement Nexus's own native
+/// plan uses.
+pub fn ft2_band_plan() -> Vec<BandChannel> {
+    let n = "Decodium FT2 calling frequency (from Decodium's default table, \
+             models/FrequencyList.cpp)";
+    vec![
+        // FrequencyList.cpp:74
+        ch("160m", "HF", 1.843000, "USB", "160 m · FT2", n),
+        // :107
+        ch("80m", "HF", 3.578000, "USB", "80 m · FT2", n),
+        // :116 — ⚠️ 60 m is CHANNELISED in the US and several other
+        // administrations and the channels differ country to country. Decodium
+        // ships a bare 5.360 dial (US channel 5.3585-5.3665 territory); an
+        // operator outside the US must check their own plan, so the note says so
+        // rather than inheriting the flat `n`.
+        ch(
+            "60m",
+            "HF",
+            5.360000,
+            "USB",
+            "60 m · FT2",
+            "Decodium FT2 calling frequency (models/FrequencyList.cpp:116); 60 m is channelised \
+             and the channels differ by country - check your own band plan",
+        ),
+        // :154
+        ch("40m", "HF", 7.062000, "USB", "40 m · FT2", n),
+        // :189
+        ch("30m", "HF", 10.144000, "USB", "30 m · FT2", n),
+        // :236
+        ch("20m", "HF", 14.084000, "USB", "20 m · FT2", n),
+        // :272
+        ch("17m", "HF", 18.108000, "USB", "17 m · FT2", n),
+        // :280
+        ch("15m", "HF", 21.144000, "USB", "15 m · FT2", n),
+        // :290
+        ch("12m", "HF", 24.923000, "USB", "12 m · FT2", n),
+        // :298
+        ch("10m", "HF", 28.184000, "USB", "10 m · FT2", n),
+        // :321
+        ch("6m", "VHF", 50.316000, "USB", "6 m · FT2", n),
+        // :330 — the ONLY IARU-Region-1 row in Decodium's FT2 table
+        // (`IARURegions::R1`, where every other FT2 row is `ALL`). 4 m exists on a
+        // CEPT secondary basis in R1 only, with national edges differing by tens
+        // of kHz, and the US has no 4 m allocation at any class — the same caveat
+        // the FT8 plan's 4 m row carries, for the same reason.
+        ch("4m", "VHF", 70.157000, "USB", "4 m · FT2", "Decodium FT2 calling frequency (models/FrequencyList.cpp:330) — IARU Region 1 only, no US allocation; 4 m band edges vary widely by country, confirm yours before transmitting"),
+        // :338
+        ch("2m", "VHF", 144.177000, "USB", "2 m · FT2", n),
+        // :349 — IARU Region 2 only (`IARURegions::R2`): 222 MHz is a US/Canadian
+        // allocation and does not exist in R1 or R3.
+        ch("1.25m", "VHF", 222.177000, "USB", "1.25 m · FT2", "Decodium FT2 calling frequency (models/FrequencyList.cpp:349) — IARU Region 2 only; 222 MHz is a North American allocation"),
+        // :354
+        ch("70cm", "UHF", 432.177000, "USB", "70cm · FT2", n),
+        // :367
+        ch("23cm", "UHF", 1296.177000, "USB", "23cm · FT2", n),
+    ]
 }
 
 /// Q65 calling/beacon frequencies, taken verbatim from WSJT-X's own
@@ -604,6 +680,7 @@ mod tests {
                 | Tier::TempoDeep
                 | Tier::Ft8
                 | Tier::Ft4
+                | Tier::Ft2
                 | Tier::Fst4
                 | Tier::Fst4w
                 | Tier::Q65
@@ -614,7 +691,7 @@ mod tests {
         }
         assert_eq!(
             Tier::ALL.len(),
-            10,
+            11,
             "a tier was added or removed — update Tier::ALL and the match above, \
              then re-check every test that drives every_shipped_channel()"
         );
@@ -935,6 +1012,47 @@ mod wsjtx_parity_tests {
         // FST4/FST4W live at the bottom of the spectrum.
         assert_eq!(f(Tier::Fst4, "630m"), Some(0.4742));
         assert_eq!(f(Tier::Fst4w, "2200m"), Some(0.136));
+        // ⚠️ FT2's anchors come from DECODIUM, not WSJT-X, which has no FT2 rows
+        // at all — `models/FrequencyList.cpp` in the decodium3 tree. The
+        // consistent "few kHz above the FT8 hole" placement is what makes a
+        // transposed digit visible: 14.084 against FT8's 14.074, and 144.177
+        // against 144.174.
+        assert_eq!(f(Tier::Ft2, "20m"), Some(14.084));
+        assert_eq!(f(Tier::Ft2, "2m"), Some(144.177));
+        assert_eq!(f(Tier::Ft2, "6m"), Some(50.316));
+    }
+
+    /// FT2 is a general-purpose slotted tier, not a specialty one — its plan spans
+    /// HF through the microwave bands, and it is a SUPERSET of FT8's band coverage.
+    ///
+    /// That superset is not trivia: `Engine::set_tier` treats FT8/FT4/FT2 as the
+    /// family that STAYS ON BAND when the plan has no row for the current band, and
+    /// that is only the right call while a miss really does mean an exotic band.
+    #[test]
+    fn ft2_covers_every_band_ft8_does() {
+        let ft2 = ft2_band_plan();
+        for c in ft8_band_plan() {
+            assert!(
+                ft2.iter().any(|f| f.band == c.band),
+                "FT2's plan is missing {} — Engine::set_tier's stay-on-miss rule \
+                 assumes FT2 covers at least what FT8 does",
+                c.band
+            );
+        }
+        assert_eq!(ft2.len(), 16, "16 Modes::FT2 rows ship in Decodium's table");
+        // Every row is USB, as every Decodium FT2 row is a suppressed-carrier dial.
+        assert!(ft2.iter().all(|c| c.mode == "USB"));
+        // Both region-restricted rows must keep the caveat an operator reads
+        // BEFORE keying: 4 m is IARU R1 only (no US allocation) and 222 MHz is R2
+        // only. A flat note here would be the app giving wrong licensing advice.
+        for band in ["4m", "1.25m"] {
+            let c = ft2.iter().find(|c| c.band == band).unwrap();
+            assert!(
+                c.note.contains("Region"),
+                "{band} FT2 must name its IARU region restriction, got {:?}",
+                c.note
+            );
+        }
     }
 
     /// The regression this whole change exists to prevent: every new tier used to
@@ -948,6 +1066,7 @@ mod wsjtx_parity_tests {
         for t in [
             Tier::Q65,
             Tier::Msk144,
+            Tier::Ft2,
             Tier::Fst4,
             Tier::Fst4w,
             Tier::Jt65,

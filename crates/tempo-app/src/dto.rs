@@ -222,6 +222,19 @@ pub enum Tier {
     Ft8,
     #[serde(rename = "FT4")]
     Ft4,
+    /// **FT2** (Decodium, IU8LMC) — FT4 with a halved symbol time. **Transmits and
+    /// receives.**
+    ///
+    /// ⚠️ Decodium's FT2, not the abandoned WSJT-X experiment of the same name —
+    /// the on-air FT2 population runs Decodium, so its behaviour is the
+    /// compatibility baseline. Sits beside FT8/FT4 as a slotted digital tier and
+    /// inherits the same QSO sequencer.
+    ///
+    /// Carries NO settings, unlike Q65/FST4/MSK144: the T/R period is fixed at
+    /// 3.75 s — the tightest slot in the app — so there is nothing for the operator
+    /// to choose and no `Settings` field to plumb.
+    #[serde(rename = "FT2")]
+    Ft2,
     /// WSJT-X FST4 (QSO mode) — **transmits and receives**, verified on-air
     /// compatible by having stock WSJT-X `jt9 -7` decode our transmission at every
     /// period. The T/R period comes from `Settings::fst4_period_s`.
@@ -272,11 +285,12 @@ impl Tier {
     /// Every variant, in declaration order. The one place a tier list lives, so
     /// a test can drive them all — see `bandplan::tests::tier_all_lists_every_tier`,
     /// which fails to compile if a variant is added without being listed here.
-    pub const ALL: [Tier; 10] = [
+    pub const ALL: [Tier; 11] = [
         Tier::TempoFast,
         Tier::TempoDeep,
         Tier::Ft8,
         Tier::Ft4,
+        Tier::Ft2,
         Tier::Fst4,
         Tier::Fst4w,
         Tier::Q65,
@@ -296,6 +310,7 @@ impl Tier {
             Tier::TempoDeep => "Tempo Deep",
             Tier::Ft8 => "FT8",
             Tier::Ft4 => "FT4",
+            Tier::Ft2 => "FT2",
             Tier::Fst4 => "FST4",
             Tier::Fst4w => "FST4W",
             Tier::Q65 => "Q65",
@@ -337,6 +352,9 @@ impl Tier {
             Tier::TempoFast => Some(ModeKind::TempoFast),
             Tier::Ft8 => Some(ModeKind::Ft8),
             Tier::Ft4 => Some(ModeKind::Ft4),
+            // No parameter to validate: FT2's period is fixed at 3.75 s, so there
+            // is no `ft2_kind` degrade-don't-refuse helper to write.
+            Tier::Ft2 => Some(ModeKind::Ft2),
             Tier::Fst4 => Some(Self::fst4_kind(fst4_period_s, false)),
             Tier::Fst4w => Some(Self::fst4_kind(fst4_period_s, true)),
             Tier::Q65 => Some(Self::q65_kind(q65_period_s, q65_submode)),
@@ -395,6 +413,7 @@ impl Tier {
             ModeKind::TempoFast => Tier::TempoFast,
             ModeKind::Ft8 => Tier::Ft8,
             ModeKind::Ft4 => Tier::Ft4,
+            ModeKind::Ft2 => Tier::Ft2,
             // FST4 and FST4W are distinct tiers; the wspr flag is what tells them
             // apart, and a decode row must be labelled with the one that produced it.
             ModeKind::Fst4 { wspr: false, .. } => Tier::Fst4,

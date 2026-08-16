@@ -119,7 +119,7 @@ const TP_ALIVE_CAP = 4
  *
  * ⭐ TIER-AWARE ON A DIGITAL SECTION (the sat-FT batch, 2026-08-10 — this used
  * to be the disclosed "records SSB on a digital tier" defect). The section is
- * reachable on FT8/FT4/Q65/JT65/MSK144/WSPR/FST4/Tempo, and the sideband those
+ * reachable on FT8/FT4/FT2/Q65/JT65/MSK144/WSPR/FST4/Tempo, and the sideband those
  * tiers are generated on says "USB" — an analogue voice mode standing in for a
  * data mode on a permanent record. When the active operating SECTION is
  * digital, the honest value is the TIER's own registered name, and the

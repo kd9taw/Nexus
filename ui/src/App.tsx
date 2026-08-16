@@ -208,6 +208,7 @@ const DEFAULT_MACROS: Settings['macros'] = {
 const OPERATE_TIERS: Tier[] = [
   'FT8',
   'FT4',
+  'FT2',
   'Q65',
   'MSK144',
   'FST4',

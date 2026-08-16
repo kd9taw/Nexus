@@ -7926,13 +7926,17 @@ impl Engine {
         // ⚠️ SCOPED TO THE TIERS WHERE IT IS NEW. Halting on ANY armed tier switch
         // also disarms an FT8→FT4 change, which is shipped gold-standard behaviour
         // and not mine to alter — `tier_switch_keeps_message_layer` caught exactly
-        // that. FT8/FT4/FT1/DX1 keep their existing behaviour (their overs are
+        // that. FT8/FT4/FT2/FT1/DX1 keep their existing behaviour (their overs are
         // 13 s or less, and trailing one out reads as "the over finishes"); the
         // four new tiers, whose overs run from 26 s to 30 MINUTES, stand down.
+        //
+        // FT2 is on the SHORT side by a wide margin — a 3.02 s over in a 3.75 s
+        // period, the briefest of any tier here — so leaving it trails out inside a
+        // second, exactly like leaving FT4.
         let leaving_a_long_over = self.tx_enabled
             && !matches!(
                 from,
-                Tier::Ft8 | Tier::Ft4 | Tier::TempoFast | Tier::TempoDeep
+                Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::TempoFast | Tier::TempoDeep
             );
         if self.tier_is_rx_only(tier) || leaving_a_long_over {
             self.halt_tx();
@@ -7996,16 +8000,21 @@ impl Engine {
             // mode's own frequency in exactly this situation; the first plan entry
             // is that mode's calling channel (MSK144 → 6 m 50.260, FST4 → 2200 m).
             //
-            // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4 twins a flip
-            // is a timing change and the operator expects to STAY on band — the
-            // fallback used to land 70 cm FT4 (no plan row) on plan.first() =
+            // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4↔FT2 family a
+            // flip is a timing change and the operator expects to STAY on band —
+            // the fallback used to land 70 cm FT4 (no plan row) on plan.first() =
             // 80 m 3.575, dragging a UHF station to HF with no warning. On a
-            // missing row the twins now leave the dial put (mode_home's None
-            // semantics; the TX lockout still guards the air).
+            // missing row they now leave the dial put (mode_home's None semantics;
+            // the TX lockout still guards the air).
+            //
+            // FT2 is in that family, not among the specialty modes: its plan spans
+            // 160 m to 23 cm (a SUPERSET of FT8's — it adds 1.25 m), so a miss means
+            // a genuinely exotic band like 33 cm, and dragging that operator to
+            // 160 m is the same defect the 70 cm case describes.
             //
             // This is a BAND CHANGE, not an in-band nudge — `clear_decode_context`
             // at the top of this function has already flushed the stale context.
-            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4);
+            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2);
             let target = plan
                 .iter()
                 .find(|c| c.band.eq_ignore_ascii_case(&band))
@@ -8578,6 +8587,12 @@ impl Engine {
             // PTT-hold padding, not airtime, and the radio loop strips it on a
             // late (mid-slot) start so the over never bleeds into the next period.
             Tier::Ft4 => 5.54,
+            // FT2 = 0.5 s lead-in + 2.52 s tones (105 sym × 288 sa @ 12 kHz). Unlike
+            // FT4 there is NO trailing padding in the buffer — `Ft2Mode::gen_wave`
+            // returns exactly lead + NWAVE — so 3.02 is the whole of it, and it is
+            // airtime rather than an over-estimate. That leaves 0.73 s of the 3.75 s
+            // slot, the tightest margin of any tier here.
+            Tier::Ft2 => 3.02,
             Tier::TempoFast => 3.55,
         }
     }
@@ -13477,15 +13492,28 @@ impl Engine {
         // counter at the active slot period suffices.
         let frame_time_ms = (slot as i64).wrapping_mul((self.active_slot_secs() * 1000.0) as i64);
         // A-priori (AP) context for the golden WSJT-X FT8/FT4 decoder: our callsign,
-        // the station we're working, and the QSO-progress index (0..5). Only FT8/FT4
-        // use WSJT-X AP; FT1 ignores these and stays on the empty/0 path.
+        // the station we're working, and the QSO-progress index (0..5). Only
+        // FT8/FT4/FT2 use WSJT-X AP; FT1 ignores these and stays on the empty/0 path.
+        //
+        // ⭐ FT2 IS HERE BECAUSE ITS AP IS FT8'S. `ft2_decode` reports an `nap` on
+        // the same 0..=4 iaptype scale and prints the same `a1`..`a4` annotation —
+        // it is FT4's decoder with a halved symbol time — and it takes the calls
+        // through the same mycall/hiscall path. Leaving FT2 out of this match is not
+        // a cosmetic gap: `hiscall` empty is precisely what DISABLES the AP types
+        // that need the DX call (see `ft2::decode_frame`), so every FT2 decode would
+        // have come back `nap = 0` and the decode row's 'a' marker would have been
+        // dead for the mode whose AP scale actually matches FT8's.
+        //
+        // `ap_progress` is carried for uniformity and is INERT for FT2:
+        // `ft2_triggered_decode` declares `nqsoprogress` and never references it, so
+        // `ft2_cabi.f90` pins it to 0 (see that file's dead-arguments banner).
         let (ap_mycall, ap_hiscall, ap_progress) = match (&self.mode, self.app.tier()) {
-            (Mode::Qso { station, .. }, Tier::Ft8 | Tier::Ft4) => (
+            (Mode::Qso { station, .. }, Tier::Ft8 | Tier::Ft4 | Tier::Ft2) => (
                 self.settings.mycall.clone(),
                 station.dxcall.clone().unwrap_or_default(),
                 station.state.nqso_progress(),
             ),
-            (Mode::FieldDay { .. }, Tier::Ft8 | Tier::Ft4) => {
+            (Mode::FieldDay { .. }, Tier::Ft8 | Tier::Ft4 | Tier::Ft2) => {
                 (self.settings.mycall.clone(), String::new(), 0)
             }
             _ => (String::new(), String::new(), 0),
@@ -14287,6 +14315,15 @@ impl Engine {
             Tier::TempoDeep => "TempoDeep",
             Tier::Ft8 => "FT8",
             Tier::Ft4 => "FT4",
+            // ⚠️ "FT2" is NOT in the ADIF MODE enumeration — it is Decodium's mode,
+            // not WSJT-X's. Stored verbatim anyway, for the same reason "TempoFast"
+            // and "TempoDeep" are: the log has to say what was actually worked, and
+            // a wrong-but-registered name (FT4, say) would claim award credit for a
+            // contact made in a different mode. The ADIF WRITER is what makes that
+            // uploadable — `logbook::adif_submode` rides FT2 out as MODE=MFSK +
+            // SUBMODE=FT2, the same cascade the Tempo modes use, because a bare
+            // MODE=FT2 is dropped outright by TQSL.
+            Tier::Ft2 => "FT2",
             // "FST4" is the ADIF-registered mode name. Unreachable in practice while
             // FST4 is receive-only (no TX means no completed QSO to log), but the
             // right answer the moment that changes.
@@ -18213,6 +18250,7 @@ mod tests {
         for tier in [
             Tier::Ft8,
             Tier::Ft4,
+            Tier::Ft2,
             Tier::Q65,
             Tier::Fst4,
             Tier::Msk144,

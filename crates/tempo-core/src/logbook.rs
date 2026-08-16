@@ -1370,6 +1370,17 @@ fn adif_submode(mode: &str) -> Option<&'static str> {
     match mode.trim().to_ascii_uppercase().as_str() {
         "TEMPOFAST" => Some("TEMPOFAST"),
         "TEMPODEEP" => Some("TEMPODEEP"),
+        // ⭐ FT2 RIDES HERE FOR THE SAME REASON THE TEMPO MODES DO, and leaving it
+        // out would have LOST CONTACTS. FT2 is Decodium's mode, not WSJT-X's, so it
+        // is in neither the ADIF MODE enumeration nor TQSL's own mode table — a
+        // bare <MODE:3>FT2 misses all three legs of the MODE%SUBMODE -> SUBMODE ->
+        // MODE cascade and the record is DROPPED with "Invalid MODE", exactly as
+        // the writer's note above describes for TempoFast.
+        //
+        // MFSK is the honest family here too, not a flag of convenience: FT2 is
+        // 4-GFSK at 41.67 baud — the same continuous-phase FSK family as FST4,
+        // which already lives under MFSK, and as FT4, whose symbol time it halves.
+        "FT2" => Some("FT2"),
         _ => None,
     }
 }
@@ -1388,6 +1399,9 @@ fn promoted_submode(sub: &str) -> Option<&'static str> {
         "TEMPOFAST" => Some("TempoFast"),
         "TEMPODEEP" => Some("TempoDeep"),
         "FT4" => Some("FT4"),
+        // The read side of the FT2 cascade above — without it our own export
+        // re-imports as bare "MFSK" and the mode is lost on the next full save.
+        "FT2" => Some("FT2"),
         "Q65" => Some("Q65"),
         "FST4" => Some("FST4"),
         "FST4W" => Some("FST4W"),
@@ -2249,6 +2263,7 @@ mod tests {
         for mode in [
             "FT8",
             "FT4",
+            "FT2",
             "TempoFast",
             "TempoDeep",
             "Q65",

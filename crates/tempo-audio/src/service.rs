@@ -6980,6 +6980,13 @@ fn tier_mode(tier: Tier) -> &'static str {
         Tier::TempoDeep => "TempoDeep",
         Tier::Ft8 => "FT8",
         Tier::Ft4 => "FT4",
+        // ⚠️ Not a registered name anywhere — FT2 is Decodium's, not WSJT-X's.
+        // Sent verbatim because this wire has no MFSK/SUBMODE escape hatch the way
+        // ADIF does (the log path takes that route instead — see
+        // `logbook::adif_submode`), so the only alternatives are the truth or a
+        // lie: a receiver that does not know "FT2" ignores the row, where sending
+        // "FT4" would put a wrong mode in somebody else's database.
+        Tier::Ft2 => "FT2",
         // These feed the WSJT-X UDP Decode message and the PSK Reporter spot
         // queue, so they must be the names cooperating loggers and the reporter
         // expect — "Q65" without the submode, as in ADIF, not the "Q65-30A" the
@@ -8306,6 +8313,8 @@ mod tests {
         assert_eq!(tier_mode(Tier::TempoDeep), "TempoDeep");
         assert_eq!(tier_mode(Tier::Ft8), "FT8");
         assert_eq!(tier_mode(Tier::Ft4), "FT4");
+        // Not an ADIF name, and reported anyway — see the arm's note.
+        assert_eq!(tier_mode(Tier::Ft2), "FT2");
     }
 
     #[test]

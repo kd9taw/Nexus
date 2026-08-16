@@ -4,7 +4,7 @@
 
 export type Presence = 'active' | 'idle' | 'stale'
 
-export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR'
+export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FT2' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR'
 
 /** Tiers Nexus DECODES but will not transmit. Mirrors `Capabilities { tx: false }`
  * in the `modes` crate — the engine is the enforcement (it refuses to arm TX or

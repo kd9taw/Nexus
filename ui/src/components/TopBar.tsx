@@ -34,6 +34,12 @@ const TIER_PILLS: {
   { tier: 'FT4', name: 'FT4', title: 'Standard WSJT-X FT4 (7.5 s)' },
   { tier: 'FT8', name: 'FT8', title: 'Standard WSJT-X FT8 (15 s)' },
   {
+    tier: 'FT2',
+    name: 'FT2',
+    title:
+      'FT2 — Decodium’s fast slotted mode (3.75 s), FT4 with a halved symbol time. Transmit and receive. No settings: the period is fixed',
+  },
+  {
     tier: 'WSPR',
     name: 'WSPR',
     small: 'BCN',
