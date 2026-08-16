@@ -366,6 +366,11 @@ jobs:
           # staple, the exact test a user's first double-click runs.
           spctl -a -t exec -vv "$app"
           xcrun stapler validate "$app"
+          # The model must be IN the bundle — the 2026-07-20 .deb shipped without it
+          # and nothing but looking inside the artifact can catch that class.
+          m="$app/Contents/Resources/resources/deepcw/model.onnx"
+          [ -s "$m" ] || { echo "DeepCW model missing from the .app"; exit 1; }
+          echo "$MODEL_SHA  $m" | shasum -a 256 -c -
           mkdir -p out
           ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           cp "$dmg" "out/Nexus_${ver}_aarch64.dmg"
