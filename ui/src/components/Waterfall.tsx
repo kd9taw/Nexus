@@ -498,6 +498,14 @@ export function Waterfall({
       if (!flatBuf || flatBuf.length !== nBins) flatBuf = new Float32Array(nBins)
       flattenRow(row, flatBuf)
       const frow = flatBuf
+      // ⚠️ OUR OWN TX ZEROES THE ROW AT THE SOURCE (operator retest, 2026-08-16: the first
+      // dark-band fix darkened only the HISTORY copy, and the live hot path below paints
+      // `frow` independently — so the drawn waterfall still replayed the held row bright,
+      // and live and rebuild disagreed, the exact divergence the shared-mapping discipline
+      // in this file exists to prevent). Zeroing `frow` itself puts the floor into BOTH
+      // consumers by construction: the leading-edge write and the retained history. The
+      // AGC is frozen on the same flag, so the darkness cannot re-create the key-up clamp.
+      if (txRef.current) frow.fill(0)
 
       // visual-AGC over the VISIBLE window only, EMA-smoothed across frames.
       //
@@ -561,17 +569,10 @@ export function Waterfall({
       // OWN frequency span (carried in the DTO) — the ring is what every cold path
       // (palette recolor, zoom, resize, scrollback) re-renders from.
       const tRow = new Float32Array(nBins)
-      // ⚠️ OUR OWN TX PAINTS A DARK BAND, exactly as WSJT-X draws it (operator ruling,
-      // 2026-08-16). While keyed the backend holds the LAST pre-TX row (so nothing goes
-      // stale-empty), but appending that repeat into the scroll FABRICATES history — a
-      // solid stripe claims a station kept transmitting through 13 s nobody was listening
-      // to. The scroll is a time axis; the honest value for time spent transmitting is
-      // silence, so TX rows go in at the palette floor and an over reads as the quiet gap
-      // it actually was. The AGC is frozen on the same flag, so this darkness can never
-      // re-create the key-up clamp that was the original red-band bug.
-      if (!txRef.current) {
-        for (let b = 0; b < nBins; b++) tRow[b] = normalize(frow[b], dispFloor, dispCeil)
-      }
+      // TX rows arrive already zeroed at the source above — the same floor lands here and
+      // on the leading-edge write, so an over reads as the quiet gap it actually was
+      // (WSJT-X's own picture) in the live scroll AND in every cold rebuild.
+      for (let b = 0; b < nBins; b++) tRow[b] = normalize(frow[b], dispFloor, dispCeil)
       historyRef.current.push(tRow, rowLo, rowHi, Date.now())
 
       // PAUSED: history keeps accumulating (nothing is lost) but the VIEW is frozen —
