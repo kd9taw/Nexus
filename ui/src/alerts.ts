@@ -237,7 +237,9 @@ export function processDecodes(
   // (a pre-scope settings file with it off keeps everything off, no migration).
   const dxccOk = bandScopeOk(settings.alertDxccBands, dialMhz, 'all')
   const gridOk = bandScopeOk(settings.alertGridBands, dialMhz, 'vhf')
-  const rareOk = bandScopeOk(settings.alertRareGridBands, dialMhz, 'all')
+  // 'vhf' fallback matches the backend default — an absent setting must not resurrect the
+  // HF rare-grid chatter the default was changed to remove (operator, 2026-08-15).
+  const rareOk = bandScopeOk(settings.alertRareGridBands, dialMhz, 'vhf')
   for (const d of decodes) {
     const call = d.from
 

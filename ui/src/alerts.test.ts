@@ -163,17 +163,25 @@ describe('per-alert band scopes (dialMhz gate)', () => {
     expect(toasts.mock.calls[0][0]).toContain('NEW DXCC')
   })
 
-  it('rare 💎 grid still fires on HF (rare scope all beats grid scope vhf)', () => {
-    processDecodes(
-      [decode({ from: 'N5GE', newGrid: true, grid: 'AA11', gridRarity: 'ultraRare' })],
-      settings,
-      undefined,
-      ctx,
-      undefined,
-      14.074,
-    )
+  it('rare 💎 grid is QUIET on HF by default, and fires when the rare scope is widened', () => {
+    // Operator ruling, 2026-08-15: "remove the grid alerts for HF bands by default." The rare
+    // tier shipped scoped 'all', making it the one grid alert still firing on HF — and on HF
+    // nearly every decode is an unworked grid, so even the rare subset read as chatter. The
+    // default is now 'vhf' like the plain scope; an HF grid-chaser widens it in Settings.
+    const rare = decode({ from: 'N5GE', newGrid: true, grid: 'AA11', gridRarity: 'ultraRare' })
+    processDecodes([rare], settings, undefined, ctx, undefined, 14.074)
+    expect(toasts, 'default: HF stays quiet, even for an ultra-rare grid').not.toHaveBeenCalled()
+
+    // The opt-in still works — this is a scope change, not a removal.
+    const wide = { ...settings, alertRareGridBands: 'all' } as unknown as Settings
+    processDecodes([rare], wide, undefined, ctx, undefined, 14.074)
     expect(toasts).toHaveBeenCalledTimes(1)
     expect(toasts.mock.calls[0][0]).toContain('ULTRA-RARE grid')
+
+    // And on VHF the default still fires — the gems were never the problem there.
+    const vhf = decode({ from: 'K0AA', newGrid: true, grid: 'BB22', gridRarity: 'ultraRare' })
+    processDecodes([vhf], settings, undefined, ctx, undefined, 144.174)
+    expect(toasts).toHaveBeenCalledTimes(2)
   })
 
   it('explicit Off silences grids even on VHF', () => {

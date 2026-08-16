@@ -1476,8 +1476,14 @@ pub struct Settings {
     #[serde(default = "default_alert_grid_bands")]
     pub alert_grid_bands: String,
     /// Band scope for the rare/ultra 💎 grid alerts — separate from plain grids
-    /// so silencing HF grid chatter keeps the genuinely rare open-water gems.
-    #[serde(default = "default_alert_scope_all")]
+    /// so an operator CAN keep the open-water gems on HF by widening it.
+    ///
+    /// ⚠️ Default "vhf", matching the plain grid scope (operator ruling, 2026-08-15:
+    /// "remove the grid alerts for HF bands by default"). It shipped as "all", which made
+    /// the rare tier the one grid alert still firing on HF — and on HF nearly every decode
+    /// is an unworked grid, so even the rare subset reads as chatter. Grid awards are
+    /// VHF-centric; an HF grid-chaser opts in from Settings ▸ Spots & Alerts.
+    #[serde(default = "default_alert_grid_bands")]
     pub alert_rare_grid_bands: String,
     /// Mouse-wheel tuning sensitivity multiplier (1.0 = stock). <1 = less sensitive
     /// (needs more scroll per step — for over-energetic / high-res "free-spin" mice),
@@ -2720,7 +2726,7 @@ impl Default for Settings {
             alert_new: true,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
-            alert_rare_grid_bands: default_alert_scope_all(),
+            alert_rare_grid_bands: default_alert_grid_bands(),
             wheel_tune_sensitivity: default_wheel_tune_sensitivity(),
             announce_verbosity: default_announce_verbosity(),
             sound_tx_state: false,
