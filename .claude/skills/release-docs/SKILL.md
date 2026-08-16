@@ -87,6 +87,11 @@ The **SourceForge Default Download** flip is browser-only (a scripted POST retur
 both Windows and Linux; `best_release.json` is the authoritative confirmation and the Files-page
 banner caches and lies.
 
+**macOS is a shipped platform (since 1.5.0, 2026-08-16).** The docs pass covers it too: any
+platform table or install prose must name the Apple Silicon DMG (Intel = source build), the
+Homebrew Hamlib note (`brew install hamlib` for CAT), and the verification list includes the
+DMG's release URL, the site's `downloads.macos` entry, and the DMG in the SF release folder.
+
 ## 5. What none of this covers
 
 Written down rather than chased with more checks, because overstating reach is how the next gap

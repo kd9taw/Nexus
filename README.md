@@ -274,6 +274,7 @@ logs, and never shown back to the UI beyond "configured."
    | File | Platform |
    |---|---|
    | `Nexus_<version>_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
+   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; CAT via Homebrew Hamlib (`brew install hamlib`); Intel Macs build from source |
    | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place |
    | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed, pulls `libhamlib-utils` in for CAT |
    | `Nexus_<version>_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
