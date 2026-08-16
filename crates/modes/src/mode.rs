@@ -800,13 +800,19 @@ impl Mode for Ft2Mode {
             // Fortran supports are not reachable through this ABI.
             contest: false,
             structured_identity: true,
-            // ⚠️ NO EARLY PASS, deliberately, and this is the tightest slot in the
-            // app. FT8 decodes its partial capture at 11.8 s of 15 and FT4 at 5.5 s
-            // of 7.5 — both leave seconds of decision time. 3.75 s leaves none worth
-            // splitting, and `service.rs`'s boundary path keys IMMEDIATELY for a tier
-            // with no early pass, which is what a slot this short needs: a
-            // decode-then-key ordering would eat the over's own room.
-            early_decode: false,
+            // ⭐ EARLY PASS AT 3.05 s — and the first on-air QSOs are why (operator,
+            // 2026-08-16: "the QSO timing feels off"). This slot originally shipped
+            // with NO early pass on the reasoning that 3.75 s leaves nothing worth
+            // splitting — which routed FT2 into service.rs's key-IMMEDIATELY branch,
+            // where the boundary keys BEFORE the just-ended slot's decode folds in:
+            // every answer slipped a full cycle and every message went out twice.
+            // The reasoning missed that FT2's tones END at 3.02 s, so a pass at
+            // 3.05 s decodes the COMPLETE signal (not a partial like FT8's 11.8 s
+            // pass) 0.70 s before the boundary — measured 510 ms at depth 3, so it
+            // fits. A pass that misses the window degrades to exactly the old
+            // ordering; it can never regress. Decodium reaches the same ordering by
+            // decoding asynchronously and arming TX 100 ms after the decode.
+            early_decode: true,
             // Split Operation applies for the same reason it does on FT4: a ~167 Hz
             // signal tunes freely across the passband, so an offset outside
             // 1500-2000 Hz can and should be reduced into the clean window with a

@@ -28,6 +28,20 @@ pub use ft8::a7_reset as reset_ft8_a7;
 
 #[cfg(test)]
 mod tests {
+
+    /// FT2 MUST run the early pass — this flag routes it out of service.rs's
+    /// key-before-decode branch, where its first on-air QSOs answered every step one
+    /// full cycle late and sent every message twice (2026-08-16). The loop-level
+    /// ordering itself has no test harness yet (documented gap in the QSO review);
+    /// this pins the configuration that selects the correct branch.
+    #[test]
+    fn ft2_runs_an_early_pass() {
+        assert!(
+            crate::mode::make_mode(crate::mode::ModeKind::Ft2)
+                .capabilities()
+                .early_decode
+        );
+    }
     use super::*;
 
     const FS: f32 = 12_000.0;
