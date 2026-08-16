@@ -35,6 +35,7 @@ import {
   type OverlayItem,
   type BannerMeasure,
 } from '../sstvOverlay'
+import { normalizeOverlayText } from '../sstvOverlayFont'
 import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import {
   atuTune,
@@ -845,6 +846,37 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   /**
+   * ⭐ THE COMPUTED AFFIRMATION — the operator's own text already carrying the ident.
+   *
+   * The same statement the #50 checkbox makes ("this picture already identifies me"),
+   * reached from what the operator typed instead of from their word: if any overlay's
+   * text contains the callsign, a plate on top of it is a SECOND copy of the same call,
+   * covering artwork to repeat what the picture already says.
+   *
+   * ⚠️ THE BACKSTOP IS UNTOUCHED. This removes a duplicate ident, never the ident. With
+   * no call-bearing text and no checkbox the plate is unconditional, and deleting that
+   * text revives it on the same draw — nothing here can leave an over unidentified.
+   *
+   * Matched through the fold the crisp renderer applies (`normalizeOverlayText`) against
+   * the fold the plate applies (`normalizeCall`, already done into `callsignRef`), so for
+   * crisp text what is compared is exactly what the glyphs paint. The overlay font is a
+   * superset of the ident font, so every character a normalised call can hold is
+   * representable. Banner text is drawn raw and may be mixed case, which this uppercases
+   * to match — a callsign is a callsign in either case. Where the two folds disagree the
+   * error is toward DRAWING the plate (the 64-char cap, punctuation the ident font lacks),
+   * which is the safe direction. The empty-callsign guard is load-bearing: `''` is
+   * contained in every string, and Send refuses without a call anyway.
+   *
+   * ⚠️ FROM THE REFS, EVALUATED AT CALL TIME. `commitOverlays` mutates `overlaysRef` and
+   * calls `renderTx` in the same tick, before React has re-rendered — a value derived
+   * from the `overlays` state would be one edit stale, so the plate would survive the
+   * very edit that retires it and the packed RGB would go out carrying both.
+   */
+  const overlayCarriesId = () =>
+    callsignRef.current.length > 0 &&
+    overlaysRef.current.some((it) => normalizeOverlayText(it.text).includes(callsignRef.current))
+
+  /**
    * Draw the picture the operator will transmit, and optionally pack it.
    *
    * THE ORDER IS THE WHOLE DESIGN: orient (done at load) → crop → resample → burn in
@@ -893,10 +925,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     // Operator text overlays — BEFORE the plate, so the ident always draws over them:
     // an overlay can cover artwork (the operator's call), never the identification.
     drawOverlays(ctx, m.width, m.height, overlaysRef.current)
-    // ⭐ THE STATION ID, after everything that could shrink or crop it away — unless the
-    // operator has affirmed this picture already carries it (#50): then drawing ours would
-    // cover the artwork that identifies them, to repeat what the image already says.
-    if (!idInImageRef.current) {
+    // ⭐ THE STATION ID, after everything that could shrink or crop it away — unless this
+    // picture already carries it: the operator's word that their artwork shows it (#50),
+    // or their own overlay text spelling it out. Either way drawing ours would cover the
+    // artwork that identifies them, to repeat what the image already says.
+    if (!idInImageRef.current && !overlayCarriesId()) {
       drawIdPlate(ctx, m.width, m.height, callsignRef.current)
     }
 
@@ -1299,7 +1332,18 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       if (!powerTouched.current && txPowerPct != null) {
         await setRfPower(Math.min(100, Math.max(0, Math.round(txPowerPct))) / 100).catch(() => {})
       }
-      return sstvSend(packed.b64, packed.width, packed.height, packed.slug, idInImageRef.current)
+      // ⭐ THE AFFIRMATION HAS TO TRAVEL. `Engine::sstv_send` re-burns the plate into the
+      // pixels it is handed unless this flag is set, so the COMPUTED form of the same
+      // statement the #50 checkbox makes — the operator's own text already spells out
+      // their call — has to reach it too, or the preview and the wire disagree. Delete
+      // that text and the plate is back, here and in the preview, on the same draw.
+      return sstvSend(
+        packed.b64,
+        packed.width,
+        packed.height,
+        packed.slug,
+        idInImageRef.current || overlayCarriesId(),
+      )
     }, 'SSTV send refused').then((s) => {
       if (s) {
         setSstv(s)
@@ -1655,9 +1699,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             {/* TEXT OVERLAYS — the MMSSTV-style compose. One-click presets that work
                 with nothing configured (the Reply pulls the other station's call from
                 the newest FSK ID heard), plus free text. Items draw UNDER the ID plate
-                by construction, and idInImage is never touched by any of this — text
-                the operator typed is not an affirmation that their callsign is in the
-                artwork (#50 stays a deliberate checkbox). */}
+                by construction. Text that CONTAINS the callsign retires the plate — the
+                picture identifies the station either way, and a second copy of the same
+                call only costs artwork. Text that does not is not an affirmation, and
+                #50 stays a deliberate checkbox for the call that lives in the artwork,
+                where nothing here can see it. */}
             {packed && (
               <div className="sstv-ov-presets">
                 <span className="sstv-ov-presets-label">Text:</span>
@@ -1781,13 +1827,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 {txMode.name} · {fmtClock(txMode.seconds)} key-down
               </span>
             )}
-            {/* ⭐ THE IDENT, SAID OUT LOUD — where it is, or whose word says it is already
-                in the picture (#50), or that Send is going to refuse and why. */}
+            {/* ⭐ THE IDENT, SAID OUT LOUD — where it is: the plate, the operator's own
+                text, or whose word says it is already in the artwork (#50) — or that Send
+                is going to refuse and why. */}
             {packed && (
               <span className={`sstv-tx-id${callsign ? '' : ' missing'}`}>
                 {callsign ? (
                   idInImage ? (
                     `${callsign} — you've said it's already in the picture`
+                  ) : overlayCarriesId() ? (
+                    `${callsign} in your text · no plate burned in`
                   ) : (
                     `${callsign} burned in · top left`
                   )

@@ -6,8 +6,11 @@
 //  1. THE IDENT WINS. Overlays draw BEFORE the ID plate inside renderTx, so operator
 //     text can cover artwork but structurally never the callsign. Asserted on the
 //     recorded draw order, not on hope.
-//  2. TEXT IS NOT AN AFFIRMATION. Adding overlays never touches idInImage (#50) — the
-//     Send payload still says the plate is wanted.
+//  2. TEXT THAT SPELLS OUT THE CALL *IS* THE IDENT (operator, 2026-08-16 — "remove the
+//     burn-in now that we have text"). An overlay containing the callsign retires the
+//     plate and sets idInImage on the Send, because Rust re-burns the plate without it;
+//     text that carries no call changes neither. This removes a DUPLICATE ident, never
+//     the ident: delete that text and the plate comes back on the same draw.
 //  3. LIVE QSO DATA COSTS NOTHING. The Reply preset reads the newest FSK ID from the
 //     gallery; with no station heard it is disabled with the reason in its tooltip.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -15,7 +18,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 import { SstvView } from './SstvView'
 import * as api from '../api'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
-import { overlayRect, presetCq } from '../sstvOverlay'
+import { overlayRect, type OverlayItem } from '../sstvOverlay'
 import { plateFor } from '../sstvIdOverlay'
 
 vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
@@ -108,6 +111,19 @@ class MockImage {
 
 type Op = { style: string; args: [number, number, number, number] }
 
+/** What the "+ Text" button adds — pinned here rather than imported, because the
+ *  component builds it inline. The point of it is that it carries NO callsign. */
+const PLAIN_TEXT: OverlayItem = {
+  id: 'plain',
+  text: 'TEXT',
+  cx: 0.5,
+  cy: 0.5,
+  size: 2,
+  style: 'crisp',
+  color: 'white',
+  treatment: 'plate',
+}
+
 /** Canvas stub that RECORDS fillRect order with the fillStyle at call time — the draw
  *  order is the contract under test. */
 function installRecordingCanvas() {
@@ -137,6 +153,18 @@ function installRecordingCanvas() {
   URL.createObjectURL = vi.fn(() => 'blob:mock')
   URL.revokeObjectURL = vi.fn()
   return ops
+}
+
+/** Index of the ID plate's backing rect among the recorded ops, or -1. The plate is
+ *  identified by its EXACT geometry from `plateFor` — the same pure module the component
+ *  draws with — so "the plate was drawn" is never re-derived arithmetic. */
+function plateIndexIn(ops: Op[]): number {
+  const canvas = document.querySelector('.sstv-tx-preview') as HTMLCanvasElement
+  const p = plateFor(canvas.width, canvas.height, 'KD9TAW')
+  expect(p, 'the plate has geometry at this raster').not.toBeNull()
+  return ops.findIndex(
+    (o) => o.args[0] === p!.x && o.args[1] === p!.y && o.args[2] === p!.w && o.args[3] === p!.h,
+  )
 }
 
 async function loadPicture() {
@@ -170,38 +198,39 @@ describe('SSTV text overlays', () => {
     await loadPicture()
 
     ops.length = 0
-    fireEvent.click(screen.getByRole('button', { name: 'CQ' }))
+    // "+ Text" — text that does NOT carry the call, so the plate is still in play and
+    // there is an order to assert. (The CQ preset spells out the call and retires it.)
+    fireEvent.click(screen.getByRole('button', { name: '+ Text' }))
     await waitFor(() => expect(ops.length).toBeGreaterThan(0))
 
     const canvas = document.querySelector('.sstv-tx-preview') as HTMLCanvasElement
     const W = canvas.width
     const H = canvas.height
-    // Expected geometry from the SAME pure modules the component draws with, so the
+    // Expected geometry from the SAME pure module the component draws with, so the
     // assertion is about ORDER, not about re-deriving arithmetic.
-    const cq = overlayRect(presetCq('KD9TAW'), W, H, (t, px) => t.length * px * 0.6)
-    const plate = plateFor(W, H, 'KD9TAW')
-    expect(plate).not.toBeNull()
+    const item = overlayRect(PLAIN_TEXT, W, H, (t, px) => t.length * px * 0.6)
 
     const idxOverlayBacking = ops.findIndex(
-      (o) => o.args[0] === cq.x && o.args[1] === cq.y && o.args[2] === cq.w && o.args[3] === cq.h,
+      (o) => o.args[0] === item.x && o.args[1] === item.y && o.args[2] === item.w && o.args[3] === item.h,
     )
-    const idxPlateBacking = ops.findIndex(
-      (o) =>
-        o.args[0] === plate!.x && o.args[1] === plate!.y && o.args[2] === plate!.w && o.args[3] === plate!.h,
-    )
-    expect(idxOverlayBacking, 'the CQ backing plate was drawn').toBeGreaterThanOrEqual(0)
+    const idxPlateBacking = plateIndexIn(ops)
+    expect(idxOverlayBacking, 'the text backing plate was drawn').toBeGreaterThanOrEqual(0)
     expect(idxPlateBacking, 'the ID plate was drawn').toBeGreaterThanOrEqual(0)
     expect(idxOverlayBacking, 'overlay first, ident last — the ident wins any overlap').toBeLessThan(
       idxPlateBacking,
     )
   })
 
-  it('adding text never flips the #50 affirmation — the Send still asks for the plate', async () => {
-    installRecordingCanvas()
+  it('text that does not carry the call leaves the plate and the #50 affirmation alone', async () => {
+    const ops = installRecordingCanvas()
     render(<SstvView snap={snap} />)
     const send = await loadPicture()
 
-    fireEvent.click(screen.getByRole('button', { name: 'CQ' }))
+    ops.length = 0
+    fireEvent.click(screen.getByRole('button', { name: '+ Text' }))
+    await waitFor(() => expect(ops.length).toBeGreaterThan(0))
+    expect(plateIndexIn(ops), '"TEXT" identifies nobody — the plate stands').toBeGreaterThanOrEqual(0)
+
     const affirm = screen.getByLabelText(/already shows my callsign/i) as HTMLInputElement
     expect(affirm.checked, 'operator text is not a callsign-in-artwork affirmation').toBe(false)
 
@@ -209,6 +238,60 @@ describe('SSTV text overlays', () => {
     await waitFor(() => expect(sstvSend).toHaveBeenCalled())
     // sstvSend(b64, w, h, mode, idInImage) — the last argument is the affirmation.
     expect(sstvSend.mock.calls[0][4]).toBe(false)
+  })
+
+  it('text carrying the call retires the plate, and the Send says so', async () => {
+    const ops = installRecordingCanvas()
+    render(<SstvView snap={snap} />)
+    const send = await loadPicture()
+
+    ops.length = 0
+    // "CQ CQ DE KD9TAW" — the operator's own text already identifies the station.
+    fireEvent.click(screen.getByRole('button', { name: 'CQ' }))
+    await waitFor(() => expect(ops.length).toBeGreaterThan(0))
+    expect(plateIndexIn(ops), 'the text carries the call — no second ident').toBe(-1)
+
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    // The Rust side redraws the plate unless idInImage is set, so the computed
+    // affirmation has to reach it or the preview and the wire disagree.
+    expect(sstvSend.mock.calls[0][4]).toBe(true)
+  })
+
+  it('deleting the call-bearing text revives the plate', async () => {
+    const ops = installRecordingCanvas()
+    render(<SstvView snap={snap} />)
+    await loadPicture()
+
+    fireEvent.click(screen.getByRole('button', { name: 'CQ' }))
+    ops.length = 0
+    fireEvent.click(screen.getByRole('button', { name: 'Remove overlay CQ CQ DE KD9TAW' }))
+    await waitFor(() => expect(ops.length).toBeGreaterThan(0))
+    // The backstop is the whole point: the picture stopped identifying the station, so
+    // the plate is back on the same draw — never a window with neither.
+    expect(plateIndexIn(ops), 'no text carries the call any more').toBeGreaterThanOrEqual(0)
+  })
+
+  it('the #50 checkbox still suppresses the plate on its own, with no text at all', async () => {
+    const ops = installRecordingCanvas()
+    render(<SstvView snap={snap} />)
+    const send = await loadPicture()
+
+    // Positive control: the load render DID draw the plate through this canvas, so the
+    // -1 below is the checkbox suppressing it and not a recorder that went quiet.
+    expect(plateIndexIn(ops), 'the plate is drawn before the affirmation').toBeGreaterThanOrEqual(0)
+
+    ops.length = 0
+    const affirm = screen.getByLabelText(/already shows my callsign/i) as HTMLInputElement
+    fireEvent.click(affirm)
+    // The handler that flipped this is the one that redraws — asserted so the -1 cannot
+    // pass by the redraw never happening. With no overlays and no plate it fills nothing.
+    expect(affirm.checked).toBe(true)
+    expect(plateIndexIn(ops), "the operator's word still stands alone").toBe(-1)
+
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(sstvSend.mock.calls[0][4]).toBe(true)
   })
 
   it('Reply is disabled until a station has been heard, then prefills both calls', async () => {
