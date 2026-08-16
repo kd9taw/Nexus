@@ -9154,6 +9154,22 @@ impl Engine {
         if !is_sat_uplink {
             return Ok("VFOB");
         }
+        // ⭐ THE BIRD DECIDES BEFORE THE MAPPING DOES (ISS V/V field report, 2026-08-15).
+        //
+        // A provably SAME-BAND pass is worked on A/B split, whatever the mapping says, because
+        // on every rig in `MAIN_SUB_SAT_RIGS` satellite Main/Sub is CROSS-BAND BY DESIGN —
+        // Main and Sub cannot both sit on 2 m. Asked for Main/Sub on a V/V bird, the native
+        // backend wrote an uplink that had nowhere to land and Hamlib refused and wrote
+        // nothing; both left TX on Main, which IS the downlink. The operator keyed on the
+        // bird's own output frequency.
+        //
+        // This is not new policy — it is the policy this function already applied on the OTHER
+        // branch, where `ab_cross_band_refusal` returns `None` for a same-band pair and lets it
+        // ride VFO B. That branch was simply unreachable from a Main/Sub mapping, so the band
+        // question was never asked of the operators most likely to be on a satellite.
+        if self.sat_pass_is_same_band(tx_hz) {
+            return Ok("VFOB");
+        }
         if !self.settings.sat_vfo_map.is_main_sub() {
             // A/B rides VFO B everywhere EXCEPT where the radio's A/B pair
             // cannot reach the uplink's band at all.
@@ -9212,14 +9228,30 @@ impl Engine {
     /// The cure clause is per rig ([`Self::sat_native_civ_cure`]) and only two
     /// of the four have one, so the message that reaches the operator is
     /// composed here rather than being a const.
+    /// Are this pass's two legs PROVABLY on one band?
+    ///
+    /// Fails CLOSED, and that is the whole discipline: an unnameable dial (`band_for_dial`
+    /// stops at 23 cm, so QO-100 and the IC-905 microwave birds have no label) answers `false`,
+    /// not `true`. "We cannot prove one band" must never become "treat it as one band" — the
+    /// same-band answer is what authorises an A/B write, and authorising one on a pair we could
+    /// not compare is exactly the unverified cross-band write the 0.24.2 fix exists to stop.
+    fn sat_pass_is_same_band(&self, tx_hz: u64) -> bool {
+        let Some(st) = self.sat_tune.as_ref() else {
+            return false;
+        };
+        let band = |hz: u64| crate::bandplan::band_for_dial(hz as f64 / 1_000_000.0);
+        let (down, up) = (band(st.sent.downlink_hz), band(tx_hz));
+        down.is_some() && down == up
+    }
+
     fn ab_cross_band_refusal(&self, tx_hz: u64) -> Option<String> {
         if !self.settings.sat_vfo_map.drives_uplink() || !self.settings.sat_main_sub_rig() {
             return None;
         }
-        let st = self.sat_tune.as_ref()?;
-        let band = |hz: u64| crate::bandplan::band_for_dial(hz as f64 / 1_000_000.0);
-        let (down, up) = (band(st.sent.downlink_hz), band(tx_hz));
-        if down.is_some() && down == up {
+        self.sat_tune.as_ref()?;
+        // Same-band is handled before the mapping branch in `sat_split_tx_vfo`; kept here too
+        // so this predicate stays true standing alone rather than depending on its caller.
+        if self.sat_pass_is_same_band(tx_hz) {
             return None;
         }
         Some(format!(
@@ -27855,6 +27887,51 @@ mod tests {
         invert: false,
         half_width_hz: 250_000,
     };
+
+    /// A V/V PASS RIDES A/B SPLIT WHATEVER THE MAPPING SAYS — the ISS voice case.
+    ///
+    /// Field report (operator, 2026-08-15, IC-9700): satellite mapping set to Main/Sub, ISS
+    /// picked as `Mode V/V FM (crew R2+3)` — 145.800 down, 144.490 up. The rail showed both
+    /// legs correctly, so the engine had the right numbers; the radio sat on the downlink and
+    /// KEYED on the downlink. Transmitting on a bird's output is the one thing that must never
+    /// happen.
+    ///
+    /// The cause is which branch asks the band question. `ab_cross_band_refusal` compares the
+    /// two legs, and it was reachable ONLY from the `!is_main_sub()` arm — so a Main/Sub
+    /// operator never reached it. The Main/Sub arm went straight to `Ok("Sub")`, and on these
+    /// rigs satellite Main/Sub is CROSS-BAND BY DESIGN: Main and Sub cannot both sit on 2 m.
+    /// Native CI-V wrote an uplink that had nowhere to land; Hamlib returned the refusal and
+    /// wrote nothing. Both leave TX on Main, which is the downlink.
+    ///
+    /// The fix is what this file already says twice in prose and pins on the OTHER branch — "a
+    /// V/V bird: A/B is how it is done". A provably same-band pass now takes that path from
+    /// either mapping. Cross-band is untouched, which is why V/U keeps working.
+    #[test]
+    fn a_same_band_pass_rides_a_b_split_even_under_a_main_sub_mapping() {
+        for model in [3081u32, 3044, 3068, 3090] {
+            let mut e = main_sub_station(model);
+            confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
+            e.set_sat_transponder(Some(("ISS|V/V".into(), 0, SAME_BAND)));
+            e.sat_tune_nominal(SSB_BIRD, 3_000_000);
+            for cat in [NATIVE, HAMLIB] {
+                assert_eq!(
+                    e.sat_split_tx_vfo(145_990_000, cat),
+                    Ok("VFOB"),
+                    "model {model}: a V/V pass is worked on A/B, not on Main/Sub"
+                );
+            }
+            // CONTROL: the SAME rig and the SAME mapping on a CROSS-BAND bird must still take
+            // the Main/Sub path — otherwise this "fix" is just A/B everywhere and it would
+            // silently undo the 0.24.2 fix that refuses an unverified cross-band A/B write.
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(SSB_BIRD, 4_000_000);
+            assert_eq!(
+                e.sat_split_tx_vfo(145_965_000, NATIVE),
+                Ok("Sub"),
+                "model {model}: control — cross-band still rides Main/Sub"
+            );
+        }
+    }
 
     #[test]
     fn an_a_b_split_on_a_main_sub_icom_is_refused_only_when_it_would_cross_bands() {
