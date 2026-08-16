@@ -2083,7 +2083,7 @@ export function SettingsPanel({
           type="button"
           className="settings-update-btn"
           onClick={() => void checkForUpdateManual()}
-          title="Check SourceForge for a newer Nexus release"
+          title="Check for a newer Nexus release"
         >
           Check for updates
         </button>

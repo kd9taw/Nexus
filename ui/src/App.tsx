@@ -407,7 +407,7 @@ export default function App() {
   const cwPanels = usePanelLayout(CW_PANELS)
   const rttyPanels = usePanelLayout(RTTY_PANELS)
 
-  // One-shot on launch: check SourceForge for a newer release (throttled to once/day + cached,
+  // One-shot on launch: check the release feed for a newer version (throttled to once/day + cached,
   // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
   useEffect(() => {
     void maybeCheckForUpdate()

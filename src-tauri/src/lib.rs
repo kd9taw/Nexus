@@ -15098,7 +15098,7 @@ fn fetch_latest_version() -> Result<Option<String>, String> {
     Ok(tempo_app::update::parse_latest_version(&body))
 }
 
-/// Check SourceForge for a newer release. Returns the current/latest versions and whether an
+/// Check the release feed for a newer version. Returns the current/latest versions and whether an
 /// update exists; the frontend decides whether to show the dismissible prompt. Returns `Err`
 /// offline or on a fetch error — the frontend treats that as a silent no-op (offline honesty).
 #[tauri::command]

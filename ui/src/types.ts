@@ -2195,7 +2195,7 @@ export interface FieldDayStatus {
   totalScore?: number
 }
 
-/** Result of the SourceForge update check (Phase 1: notify + open the download page). */
+/** Result of the release-feed update check (Phase 1: notify + open the download page). */
 export interface UpdateInfo {
   /** The running build's version. */
   current: string
@@ -2203,7 +2203,7 @@ export interface UpdateInfo {
   latest: string | null
   /** True only when `latest` is strictly newer than `current`. */
   updateAvailable: boolean
-  /** The SourceForge download page to open. */
+  /** The download page to open (GitHub Releases). */
   downloadUrl: string
 }
 

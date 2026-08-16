@@ -787,7 +787,8 @@ export async function getAllSpots(): Promise<import('./types').SpotRow[]> {
   return invoke<import('./types').SpotRow[]>('get_all_spots')
 }
 
-/** Check SourceForge for a newer Nexus release (Phase 1 update check). Rejects offline / on a
+/** Check the release feed (hamradiotools.io, SourceForge as fallback) for a newer Nexus
+ * release (Phase 1 update check). Rejects offline / on a
  * fetch error — callers treat that as a silent no-op. */
 export async function checkForUpdate(): Promise<import('./types').UpdateInfo> {
   return invoke<import('./types').UpdateInfo>('check_for_update')
