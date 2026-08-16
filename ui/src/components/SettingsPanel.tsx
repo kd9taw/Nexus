@@ -31,6 +31,7 @@ import {
   downloadEqslReport,
   downloadLotwReport,
   getAllRigModels,
+  getPortlessRigModels,
   getAudioDevices,
   getBandPlan,
   getRigModels,
@@ -591,6 +592,8 @@ export function SettingsPanel({
   const [serialPorts, setSerialPorts] = useState<string[]>([])
   /** Findings from the last save attempt — warnings stay visible after a save that proceeded. */
   const [rigChecks, setRigChecks] = useState<RigCheck[]>([])
+  /** Models needing no serial port, from the backend. Empty = rule unread; see checkRigForm. */
+  const [portlessRigModels, setPortlessRigModels] = useState<number[]>([])
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
   const [portLabels, setPortLabels] = useState<Record<string, string>>({})
@@ -838,6 +841,11 @@ export function SettingsPanel({
       .catch(() => mounted && setStatus('idle'))
     getRigModels()
       .then((m) => mounted && setRigModels(m))
+      .catch(() => {})
+    // The backend's own "needs no serial port" rule, fetched once. On failure it stays empty and
+    // the pre-save port check declines to block — see checkRigForm.
+    getPortlessRigModels()
+      .then((m) => mounted && Array.isArray(m) && setPortlessRigModels(m))
       .catch(() => {})
     getSerialPortsDetailed()
       .then((infos) => mounted && applyPorts(infos))
@@ -1926,7 +1934,7 @@ export function SettingsPanel({
     // the symptom always shows up far from the cause. Errors block and name the fix; warnings are
     // stated and the operator proceeds, because an unusual-but-correct station must never be
     // locked out of its own configuration by a heuristic.
-    const rigProblems = checkRigForm(form, serialPorts, editingRadioId)
+    const rigProblems = checkRigForm(form, serialPorts, portlessRigModels)
     setRigChecks(rigProblems)
     if (blocks(rigProblems)) {
       setTab('radio')

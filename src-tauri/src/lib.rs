@@ -9656,6 +9656,26 @@ fn get_all_rig_models() -> Vec<(u32, String)> {
     }
 }
 
+/// The models that need NO serial port — Hamlib's Dummy/NET/FLRig plus the software-CAT
+/// profiles (Thetis, PowerSDR, SmartSDR, …). See
+/// [`tempo_audio::rigmodels::portless_rig_models`] for why this crosses the boundary as a list
+/// and why the UI must not keep a copy of its own.
+///
+/// An empty result means "could not be determined" (built without the `radio` feature). The
+/// settings form treats that as unknown and declines to BLOCK a save on it: a rule that cannot
+/// be read must never be the reason an operator cannot save a configuration that is fine.
+#[tauri::command]
+fn get_portless_rig_models() -> Vec<u32> {
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rigmodels::portless_rig_models()
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        Vec::new()
+    }
+}
+
 /// Tempo's proposed calling-frequency band plan (HF + VHF/UHF), for the band
 /// selector. Each entry is General-legal + clear of the existing watering holes.
 #[tauri::command(async)]
@@ -16314,6 +16334,7 @@ pub fn run() {
             sstv_stop,
             get_rig_models,
             get_all_rig_models,
+            get_portless_rig_models,
             get_band_plan,
             set_license_class,
             get_licensed_band_plan,

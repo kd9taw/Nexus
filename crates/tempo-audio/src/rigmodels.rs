@@ -296,11 +296,33 @@ pub fn rig_model_name(model: u32) -> Option<&'static str> {
 ///
 /// (Hamlib's Dummy/NET/FLRig — models ≤ 4 — are excluded by `match_rig_model` separately;
 /// they are not radios at all rather than software-served ones.)
-pub(crate) fn is_software_cat_profile(model: u32) -> bool {
+pub fn is_software_cat_profile(model: u32) -> bool {
     matches!(
         model,
         5 | 7 | 2036 | 2040 | 2048 | 2051 | 2054 | 2056 | 23005
     )
+}
+
+/// Every catalog model that does **not** need a serial port: the software-CAT profiles above,
+/// plus Hamlib's Dummy/NET/FLRig (≤ 4). This is the same rule
+/// [`crate::usbrig::probe_usb_rigs`] gates on — `model <= 4 || is_software_cat_profile(model)`,
+/// there written as a `continue` because there is no USB device to enumerate.
+///
+/// It exists as a LIST rather than a predicate because its one other consumer is the settings
+/// UI, across the Tauri boundary, and a per-keystroke round trip to ask about one model would
+/// be absurd. The UI asks once and holds the set.
+///
+/// **Why the UI must not keep its own copy.** The membership above is not stable: `2040` was
+/// promoted out of the extended tier in the very commit that made these profiles start
+/// matching USB hardware, and the doc above keeps `7` against settings files written before it
+/// was delisted. A hand-maintained TypeScript duplicate would be correct on the day it was
+/// written and wrong at the next tier move — silently, and in the direction that blocks an
+/// operator from saving a configuration that is in fact fine.
+pub fn portless_rig_models() -> Vec<u32> {
+    // 0..=4 is Hamlib's own low range (0 None/VOX, 1 Dummy, 2 NET rigctl, 4 FLRig).
+    (0..=4)
+        .chain([5, 7, 2036, 2040, 2048, 2051, 2054, 2056, 23005])
+        .collect()
 }
 
 /// Recognise a CAT server that **names itself** in the greeting it sends on connect, and
@@ -529,6 +551,30 @@ pub fn native_spectrum_kind(model: u32, rig_conn: &str) -> Option<SpectrumKind> 
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// `portless_rig_models` is a materialised copy of a rule that lives as a predicate, handed
+    /// across the Tauri boundary because the UI cannot call the predicate per keystroke. Two
+    /// spellings of one rule drift — so this sweeps the whole catalog range and demands they
+    /// agree exactly, in BOTH directions: a model added to `is_software_cat_profile` without the
+    /// list fails here, and so does a stale entry left in the list after a tier move.
+    #[test]
+    fn the_portless_list_and_the_portless_rule_are_the_same_set() {
+        let listed: HashSet<u32> = portless_rig_models().into_iter().collect();
+        for model in 0u32..30_000 {
+            let by_rule = model <= 4 || is_software_cat_profile(model);
+            assert_eq!(
+                listed.contains(&model),
+                by_rule,
+                "model {model}: list says {}, rule says {by_rule}",
+                listed.contains(&model)
+            );
+        }
+        // Positive control: the sweep above passes vacuously if the rule ever answered `false`
+        // everywhere, which is exactly the shape a refactor accident takes. Name two members.
+        assert!(listed.contains(&2054), "Thetis (2054) must be portless");
+        assert!(listed.contains(&4), "FLRig (4) must be portless");
+        assert!(!listed.contains(&1042), "a real rig (FTDX10) needs a port");
+    }
 
     /// THE GROUND TRUTH the satellite refusal is worded from, pinned across the
     /// crate boundary.
