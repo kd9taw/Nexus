@@ -74,6 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus runs on the Mac.** A native Apple Silicon build (M-series, macOS 12+), signed and
+  notarized, with the same self-updater as Windows and Linux. CAT control uses Hamlib from
+  Homebrew (`brew install hamlib`); Intel Macs can build from source, which works out of the
+  box as of 1.5.0. First macOS release — treat it as fresh ground and report what you find.
+  *(Added to the 1.5.0 release 2026-08-16, after the initial publish — same source, new platform.)*
+
 - **MSK144 has a display built for meteor scatter.** Switch to MSK144 and the waterfall strip
   becomes a time display — the Fast Graph, as WSJT-X draws it: seconds across one T/R period,
   a green power trace where a ping is a spike you can see land, the current period above the
