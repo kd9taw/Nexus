@@ -527,11 +527,15 @@ export function PhoneScope({
       // all, because it is now the floor plus a constant and moves only when the floor does.
       // WF_FLOOR_PCT (the MEDIAN), not agcRange's 5% default — see SCOPE_WINDOW_DB.
       const floor = agcRange(visible, WF_FLOOR_PCT).floor
-      if (!agcInit) {
-        agcFloor = floor
-        agcInit = true
-      } else {
-        agcFloor += (floor - agcFloor) * AGC_ALPHA
+      // Frozen while keyed, same reason as the FT waterfall: the muted receiver drags the
+      // noise estimate to digital silence and key-up clamps the panel until the EMA recovers.
+      if (!txRef.current) {
+        if (!agcInit) {
+          agcFloor = floor
+          agcInit = true
+        } else {
+          agcFloor += (floor - agcFloor) * AGC_ALPHA
+        }
       }
       agcCeil = agcFloor + dbToSpan(SCOPE_WINDOW_DB)
       // Operator Gain/Zero on top, same semantics as the FT8 waterfall's controls: G widens

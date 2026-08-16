@@ -44,6 +44,9 @@ function qsoFor(state: StateName): QsoStatus | null {
     dxcall: 'JA1XYZ',
     rxReport: -15,
     running: true,
+    // The AUTO-CQ pill now keys off the real CQ-run flag, not `running` (which is true
+    // through plain S&P QSOs too) — this fixture is a running CQ, so both are true.
+    cqRunning: true,
     txNow: 'JA1XYZ KD9TAW R-15',
     txCount: 2,
   } as unknown as QsoStatus

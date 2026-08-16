@@ -174,6 +174,19 @@ impl RowAverage {
 #[derive(Clone, Default)]
 pub struct SpectrumFeed {
     rows: Arc<Mutex<FeedRows>>,
+    /// TRANSMIT HOLD — while true, audio/scope publishes are DROPPED and the freshness stamp
+    /// of the last real picture is kept alive, so every consumer keeps drawing the pre-TX band.
+    ///
+    /// ⚠️ WHY (operator-relayed report, 2026-08-16: a full-width red band after every over).
+    /// While keyed, the rig's codec returns a MUTED receiver: the rows collapse to digital
+    /// silence, the UI's visual AGC follows them down, and key-up clamps the whole band to
+    /// the palette's hot end until the EMA recovers (~2.7 s, 10-23 rows). The rows during TX
+    /// are not a picture of the band — they are a picture of the mute switch. rxdsp cannot
+    /// know we are keyed (its capture list is its safety argument and holds no engine/rig
+    /// handle), so the RADIO LOOP — which owns the keying decision — sets this atomic every
+    /// tick. The UI freezes its AGC on the same condition as a second seam for rows already
+    /// in flight.
+    tx_hold: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SpectrumFeed {
@@ -187,9 +200,24 @@ impl SpectrumFeed {
     /// rows), so a real reader never meets it.
     const MAX_AVG_FRAMES: u32 = 32;
 
+    /// Set/clear the transmit hold — the radio loop, every tick, from the keying state it owns.
+    pub fn set_tx_hold(&self, keyed: bool) {
+        self.tx_hold
+            .store(keyed, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Publish the audio-FFT row (the rx-dsp thread) into the running average.
     pub fn publish_audio(&self, row: Spectrum) {
         if let Ok(mut g) = self.rows.lock() {
+            // Under the TX hold the frame is a picture of the muted receiver, not the band —
+            // drop it, and keep the LAST REAL picture's freshness alive so readers repeat it
+            // instead of going stale-empty mid-over (see `tx_hold`).
+            if self.tx_hold.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(avg) = g.audio.as_mut() {
+                    avg.at = Instant::now();
+                }
+                return;
+            }
             match g.audio.as_mut() {
                 Some(avg) => avg.push(row),
                 None => g.audio = Some(RowAverage::start(row)),
@@ -276,7 +304,8 @@ impl SpectrumFeed {
         (req.at.elapsed() < Self::SCOPE_REQ_TTL).then_some((req.lo, req.hi, req.win))
     }
 
-    /// Publish a row computed over the scope's own span (the rx-dsp thread).
+    /// Publish a row computed over the scope's own span (the rx-dsp thread). Held during TX
+    /// exactly like the audio slot — same mute, same false picture.
     ///
     /// Averaged exactly like the audio slot, and for the same reason — the producer runs at
     /// 20 ms and the scope reads at 50, so a latest-value slot would throw away three frames in
@@ -284,6 +313,12 @@ impl SpectrumFeed {
     /// a zoom or a cockpit swap can never blend two windows into one picture.
     pub fn publish_scope(&self, row: Spectrum) {
         if let Ok(mut g) = self.rows.lock() {
+            if self.tx_hold.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(avg) = g.scope.as_mut() {
+                    avg.at = Instant::now();
+                }
+                return;
+            }
             match g.scope.as_mut() {
                 Some(avg) => avg.push(row),
                 None => g.scope = Some(RowAverage::start(row)),
@@ -12366,6 +12401,7 @@ impl Engine {
                         .and_then(|c| self.dx_grid_resolved(c, station.dxgrid.clone())),
                     rx_report: station.rx_report,
                     running: *running,
+                    cq_running: self.cq_running,
                     tx_now: station.pending_text(),
                     stalled: station.stalled(),
                     tx_count: station.tx_count,
@@ -24157,6 +24193,44 @@ mod tests {
             "the first frame at the new window must stand alone, not blend with the four loud \
              frames from the old one: got {got}, want {quiet} (a blend reads {})",
             power_mean(&[loud, loud, loud, loud, quiet]),
+        );
+    }
+
+    /// THE TX HOLD: rows published while keyed are a picture of the muted receiver, not the
+    /// band — they must never reach a reader, and the last real picture must not go stale.
+    #[test]
+    fn the_tx_hold_drops_keyed_rows_and_keeps_the_last_real_picture_fresh() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        let before = feed.row().expect("published").row[0];
+
+        feed.set_tx_hold(true);
+        // The muted receiver: near-zero rows, exactly what a keyed rig's codec returns.
+        for _ in 0..8 {
+            let mut z = spec(0.0, 4000.0, "audio");
+            z.row = vec![0.001; 512];
+            feed.publish_audio(z);
+        }
+        let held = feed
+            .row()
+            .expect("still fresh — the hold refreshes the stamp");
+        assert!(
+            (held.row[0] - before).abs() < 1e-6,
+            "under the hold a reader repeats the pre-TX picture, never the mute: got {}",
+            held.row[0]
+        );
+
+        // Key-up: publishing resumes, and the first real frame stands alone (the
+        // RowAverage window was never polluted by the muted frames).
+        feed.set_tx_hold(false);
+        let mut real = spec(0.0, 4000.0, "audio");
+        real.row = vec![0.75; 512];
+        feed.publish_audio(real);
+        let after = feed.row().expect("row");
+        assert!(
+            (after.row[0] - 0.75).abs() < 1e-6,
+            "after the hold the band reappears immediately, unblended: got {}",
+            after.row[0]
         );
     }
 

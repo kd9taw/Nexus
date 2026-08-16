@@ -425,7 +425,7 @@ export function OperateDecodes({
               className={`od-chip od-conf${hideConfirmed ? ' active' : ''}`}
               aria-pressed={hideConfirmed}
               onClick={() => pickHideConfirmed(!hideConfirmed)}
-              title="Hide stations already CONFIRMED (LoTW/card) on this band — chase what you still need. A station that's new on the band always shows."
+              title="Hide stations whose ENTITY is already confirmed (LoTW/card) on this band — chase what you still need. It is the country that is confirmed, not necessarily this callsign. A station that's new on the band always shows."
             >
               −Conf
             </button>

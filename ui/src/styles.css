@@ -14030,9 +14030,10 @@ button.cq-skiptx1.on {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 /* Call CQ is the primary action — give it the accent fill so it's easy to find. */
-.cq-role.cq-call {
-  border-color: var(--tx);
-}
+/* Call CQ wears the TX red ONLY while a CQ run is actually in progress (.active). At idle it
+ * used to carry a permanent red border — in this palette red means "TX-armed", which an idle
+ * S&P station is not, and it is what made the button read as highlighted all the time
+ * (operator-relayed report, 2026-08-16). Inactive it looks like its S&P sibling. */
 .cq-role.cq-call.active {
   background: var(--tx);
   border-color: var(--tx);

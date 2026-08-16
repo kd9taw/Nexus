@@ -860,7 +860,17 @@ pub struct QsoStatus {
     /// Signal report received about my own signal, if any.
     pub rx_report: Option<i32>,
     /// True if this station is calling CQ (running) vs answering (S&P).
+    ///
+    /// ⚠️ NOT the "am I running a CQ" flag, despite the doc line above (kept for wire
+    /// compatibility): `call_station_ctx` sets it true for a directed S&P call too, and
+    /// nothing clears it after the QSO. Surfaces that mean "a CQ run is in progress" read
+    /// [`Self::cq_running`] — the CQ/S&P strip lit Call CQ through every S&P contact and
+    /// forever after until this was split (operator-relayed report, 2026-08-16).
     pub running: bool,
+    /// True while a CQ RUN is actually in progress — the engine's `cq_running`, the flag
+    /// `resume_cq` and the auto-sequencer key off. This is what the CQ/S&P toggle shows.
+    #[serde(default)]
+    pub cq_running: bool,
     /// On-air text of the message queued for the next TX slot (the "Now sending"
     /// readout), or `None` when listening / the QSO is complete.
     #[serde(default)]

@@ -5553,6 +5553,15 @@ impl RadioLoop {
         // `mut`: a tier/period change below replaces the clock, and everything after
         // it must use the NEW numbering — see the rebuild.
         let mut slot = self.clock.slot_index(now);
+        // The spectrum TX hold, refreshed EVERY tick from the keying state this loop owns.
+        // While keyed the capture hears the rig's muted receiver (or our own monitor audio),
+        // and those rows painted the post-TX red band — see SpectrumFeed::tx_hold. rxdsp
+        // cannot know any of this (its capture list is its safety argument), so the flag is
+        // set here, at the one place that decides keying. Covers slot TX, the tune carrier
+        // and manual PTT alike; a missed clear self-heals on the next 20 ms tick.
+        self.spectrum_feed.set_tx_hold(
+            self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied,
+        );
         // ⚠ THIS GUARD IS HELD ACROSS BLOCKING CAT I/O for the rest of the tick —
         // set_freq, set_split, several ptt() paths and finish_boundary all run
         // under it, each up to the CAT deadline (700/2500 ms). The tune path

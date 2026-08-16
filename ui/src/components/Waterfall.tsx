@@ -513,13 +513,24 @@ export function Waterfall({
       const vHi = Math.min(nBins, Math.ceil((viewHiRef.current - rowLo) / binHz))
       const visible = vHi - vLo >= 8 ? frow.slice(vLo, vHi) : frow
       const { floor, ceil } = agcRange(visible, WF_FLOOR_PCT)
-      if (!agcInit) {
-        agcFloor = floor
-        agcCeil = ceil
-        agcInit = true
-      } else {
-        agcFloor += (floor - agcFloor) * AGC_ALPHA
-        agcCeil += (ceil - agcCeil) * AGC_ALPHA
+      // ⚠️ THE AGC FREEZES WHILE TRANSMITTING — the post-TX red band (operator-relayed
+      // report, 2026-08-16). While keyed, the rig's codec returns a muted receiver, the row
+      // collapses toward digital silence, and this EMA followed it down; on key-up the
+      // returning band noise sat ~40 dB above the collapsed window and every bin clamped to
+      // the hot end of the palette for the EMA's ~2.7 s recovery — a full-width red band,
+      // 10-23 rows tall. Holding the window through TX means key-up resumes from the
+      // pre-TX picture. The backend holds its published row through TX as well (the same
+      // report's second seam), so this guard mostly sees the LAST REAL row anyway — it
+      // remains because a monitor path or an in-flight row can still arrive keyed.
+      if (!txRef.current) {
+        if (!agcInit) {
+          agcFloor = floor
+          agcCeil = ceil
+          agcInit = true
+        } else {
+          agcFloor += (floor - agcFloor) * AGC_ALPHA
+          agcCeil += (ceil - agcCeil) * AGC_ALPHA
+        }
       }
       // Park the black point WF_PARK_DB above the measured noise median and hold a minimum
       // window (see parkFloor) — the default that makes an empty band read black instead of a

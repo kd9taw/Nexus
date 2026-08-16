@@ -2131,6 +2131,9 @@ export interface QsoStatus {
   dxgrid?: string | null
   rxReport: number | null
   running: boolean
+  /** True while a CQ RUN is actually in progress — what the CQ/S&P toggle shows.
+   * `running` above is also true through an S&P QSO and indefinitely after it. */
+  cqRunning: boolean
   /** On-air text of the message queued for the next TX slot ("Now sending"). */
   txNow?: string | null
   /** True when the sequencer has retransmitted to its limit without the partner
