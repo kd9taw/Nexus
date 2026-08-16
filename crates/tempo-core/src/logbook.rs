@@ -1467,6 +1467,12 @@ fn dedup_mode(mode: &str) -> String {
     let m = mode.trim().to_ascii_uppercase();
     match m.as_str() {
         "USB" | "LSB" => "SSB".to_string(),
+        // Same provably-one-mode rule: BPSK31 is a common logger spelling of ADIF's
+        // PSK31 (the B is the modulation the mode already means). The #31 record's last
+        // unfolded example; the broad data-mode respellings stay handled by the
+        // legacy-MFSK bridge in import_adif, and everything else stays unfolded —
+        // over-retention remains the failure this module prefers.
+        "BPSK31" => "PSK31".to_string(),
         _ => m,
     }
 }
@@ -1895,6 +1901,24 @@ fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// #31's last unfolded example: BPSK31 is a logger spelling of ADIF's PSK31 — one mode,
+    /// two strings. Re-importing a log round-tripped through such a logger must not double it.
+    #[test]
+    fn a_bpsk31_respelling_does_not_double_the_qso_on_reimport() {
+        let adif_a = "Nexus\n<EOH>\n<CALL:5>W9XYZ<BAND:3>20m<MODE:5>PSK31<QSO_DATE:8>20260801<TIME_ON:6>121500<EOR>";
+        let adif_b = "Nexus\n<EOH>\n<CALL:5>W9XYZ<BAND:3>20m<MODE:6>BPSK31<QSO_DATE:8>20260801<TIME_ON:6>121500<EOR>";
+        let mut lb = Logbook::new();
+        let (added, _, _) = lb.import_adif(adif_a);
+        assert_eq!(added.len(), 1, "control: the first import stores the QSO");
+        let (added2, skipped2, _) = lb.import_adif(adif_b);
+        assert_eq!(
+            (added2.len(), skipped2),
+            (0, 1),
+            "the respelled twin is the duplicate it is — one contact, two spellings"
+        );
+    }
+
     use super::*;
 
     // Regression for the operator's "export drops oldest QSOs" report (2026-07-23). Root
