@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Phone and CW scope centers your frequency, the way your rig's scope does.** Reported
+  from the bench: a station on your own frequency painted at the left edge of the passband.
+  The audio-fed scope's axis started at the dial and ran upward, so the dial sat on the far
+  left pixel with nothing marking it. The Phone scope now puts the **dial at the center** with
+  a labelled line — voice extends to the right on USB, to the left on LSB, exactly as a rig
+  draws it — and the CW scope centers on **your sidetone pitch**, so a zero-beat station and
+  the pitch hairline sit mid-window. The quiet half of the Phone display is honest: on the
+  soundcard feed the radio filtered that side away before Nexus ever heard it; rigs with a
+  native panadapter feed (Flex, CI-V scope) show real signal on both sides as before.
+
 - **Satellite passes stop losing their split half a second into an over.** Found on the air
   (IC-9700, ISS V/V): a fast dial-read during a keyed over saw the transmit VFO's frequency,
   read it as you turning the knob, and tore the split down — the rig dropped to simplex on
