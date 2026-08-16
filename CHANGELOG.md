@@ -37,6 +37,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dead sound card recovers instead of failing silently and permanently** — contributed by
+  on8st. A capture stream error used to be logged once and never acted on: the audio thread
+  kept running against a card that would never deliver another sample, so the waterfall froze
+  until a restart. A stream error now puts the card on probation, silence confirms the death,
+  and the card is rebuilt — waiting for your key to come up first, so a recovery never cuts an
+  over. A card that flaps is rebuilt at a steady rate rather than the flap rate, and a machine
+  whose default device disappears entirely keeps retrying instead of giving up for the
+  session. (#73, #74)
+- **Adding a radio no longer switches the station onto it** — contributed by on8st. Pressing
+  "Add radio" silently moved the station onto the new, empty profile — tearing down the
+  working rig's CAT to bring up one with no port and no model, which froze the interface and
+  blanked the settings pane. A new roster entry is just a roster entry now; the form opens on
+  it for editing, and "Make active" stays the deliberate act it always was. (#91)
+- **Every serial port showed twice on macOS** — contributed by on8st. The system publishes
+  each USB-serial adapter as a tty/cu pair, and the rig picker listed both; the tty twin
+  could hang a CAT probe waiting for a carrier-detect line no radio asserts. Only the cu
+  entry is listed now. (#92)
+- **A rigctld that cannot actually run no longer wins the CAT probe** — contributed by on8st.
+  A Hamlib built from source can be first on PATH yet die before main with an unloadable
+  library; Nexus committed to it and CAT came up dead with no usable diagnosis. Every
+  candidate is now spawn-checked first, and one that cannot run is skipped for one that can.
+  (#70)
+- **Nexus builds on a Mac without hand-set linker paths** — contributed by on8st. The
+  gfortran and FFTW3f runtimes live under Homebrew's prefix, which Apple's linker does not
+  search; the build now asks the toolchain where its own libraries are. With the golden
+  fixture made portable across architectures (#90), the test suite passes on Apple Silicon
+  out of the box. (#69, #90)
 - **Working the ISS voice repeater no longer transmits on the bird's downlink.** Two faults,
   both found on the air. A same-band (V/V) pass asked a Main/Sub mapping to do something those
   radios cannot — Main and Sub can't both sit on 2 m — so nothing was written and TX stayed on
