@@ -90,14 +90,15 @@ interface Props {
    * full voice passband; the CW cockpit narrows to an 800 Hz window around the pitch
    * (cwScopeWindow) so individual carriers are readable for tone placement. On a native
    * RF panadapter row the same window is mapped onto RF around the dial (scopeView), so
-   * the width still applies. With `carrierCentered` the width is the ± half-width. */
+   * the width still applies. With `carrierCentered` the width is the OCCUPIED SIDEBAND's,
+   * and the axis adds a W/3 guard band on the empty side. */
   viewLoHz?: number
   viewHiHz?: number
-  /** PHONE only: draw the audio row on a rig-style axis — RF offset from the dial, with
-   * the dial (audio 0 Hz, the suppressed carrier) on the exact middle pixel and the
-   * occupied side following the sideband. Off = the plain audio window, which is what CW
-   * uses (its axis is centered on the PITCH instead — see cwScopeWindow). Never applies to
-   * a native RF row; those are already dial-centered. */
+  /** PHONE only: draw the audio row on a rig-style axis — RF offset from the dial, with the
+   * dial (audio 0 Hz, the suppressed carrier) at the 1/4 mark on USB, the 3/4 mark on LSB,
+   * and the occupied sideband taking the other 3/4 of the panel. Off = the plain audio
+   * window, which is what CW uses (its axis is centered on the PITCH instead — see
+   * cwScopeWindow). Never applies to a native RF row; those are already dial-centered. */
   carrierCentered?: boolean
   /** Draw a hairline at this audio frequency (the CW pitch) — tune a signal onto
    * the marker and you're zero-beat. Omitted = no marker. */
@@ -527,9 +528,17 @@ export function PhoneScope({
 
       // AGC over the VISIBLE window only — a loud signal outside the view (e.g.
       // the FT8 cluster above a narrow CW window) must not compress what's shown.
+      //
+      // Bin indices are ROW Hz and the carrier-centered axis is not: a MIRRORED (LSB) axis
+      // runs the row backwards, so its bounds are the row's bounds negated and swapped. Undo
+      // that here, once. A symmetric ±W axis hid this — it negates to itself — but the
+      // asymmetric one does not, and unfixed an LSB view would window the wrong third of the
+      // row: the AGC floor and the ▲dB readout would be measured where the voice isn't.
       const nb = row.length
-      const vLo = Math.max(0, Math.floor(((view.loHz - rowLo) / span) * (nb - 1)))
-      const vHi = Math.min(nb, Math.ceil(((view.hiHz - rowLo) / span) * (nb - 1)) + 1)
+      const winLo = view.mirrored ? -view.hiHz : view.loHz
+      const winHi = view.mirrored ? -view.loHz : view.hiHz
+      const vLo = Math.max(0, Math.floor(((winLo - rowLo) / span) * (nb - 1)))
+      const vHi = Math.min(nb, Math.ceil(((winHi - rowLo) / span) * (nb - 1)) + 1)
       let visible: ArrayLike<number> = row
       if (vHi - vLo >= 8) {
         const n = vHi - vLo
@@ -621,14 +630,14 @@ export function PhoneScope({
       }
       const mag = magBuf
       // `mirrored` (LSB on the carrier-centered axis) reads the row backwards: the audio at
-      // f Hz is at dial−f, so it belongs LEFT of center. Both sidebands share one symmetric
-      // axis, so the negate is the whole of the difference.
+      // f Hz is at dial−f, so it belongs LEFT of the dial. scopeView already reflected the
+      // axis BOUNDS for LSB, so negating the per-column Hz is all that is left to do here.
       const mirrored = view.mirrored
       for (let x = 0; x < Wd; x++) {
         const axisHz = lo + (x / Wd) * (hi - lo)
         const hz = mirrored ? -axisHz : axisHz
         // Outside the captured row there is nothing to draw — the floor, explicitly. The
-        // carrier-centered axis puts half the screen here by design, and unguarded this
+        // carrier-centered axis puts its guard band here by design, and unguarded this
         // indexed row[<0] → undefined → NaN, which paints black columns and breaks the
         // trace path without throwing.
         if (hz < rowLo || hz > rowHi) {
@@ -762,16 +771,21 @@ export function PhoneScope({
       ctx.lineWidth = Math.max(1, scaleY)
       ctx.stroke()
 
-      // ---- Carrier line (Phone): the DIAL, on the middle pixel ----
+      // ---- Carrier line (Phone): the DIAL, at the 1/4 mark (USB) or the 3/4 mark (LSB) ----
       //
-      // WHY ONE HALF IS ALWAYS QUIET, and it is not a bug to be fixed later. This scope is
-      // fed by DEMODULATED RECEIVER AUDIO, which is one-sided: an SSB detector folds the
-      // wanted sideband down to 0–3 kHz and throws the image away, so there is no signal
-      // below the carrier to draw. The axis is still worth centering — it is the axis the
-      // rig draws, the dial is where the operator's eye goes, and the empty half is an
-      // honest statement that the receiver is listening on one side of it. A radio that
-      // streams its OWN panadapter (Flex, Icom CI-V) sends real RF and fills both halves;
-      // that feed takes the RF branch in scopeView and never reaches this code.
+      // WHY THE GUARD BAND IS ALWAYS QUIET, and it is not a bug to be fixed later. This scope
+      // is fed by DEMODULATED RECEIVER AUDIO, which is one-sided: an SSB detector folds the
+      // wanted sideband down to 0–3 kHz and throws the image away, so there is no signal on
+      // the other side of the carrier to draw. That is why the axis is not centered — a
+      // centered dial spent half the panel on that side and squeezed the voice into ~30% of
+      // the width (operator screenshot, 2026-08-16). W/3 of empty is the whole cost of having
+      // the dial read as a line rather than an edge. A radio that streams its OWN panadapter
+      // (Flex, Icom CI-V) sends real RF and genuinely fills both sides; that feed takes the RF
+      // branch in scopeView and never reaches this code.
+      //
+      // The x is derived from AXIS COORDINATE 0, the one place the dial is defined, so the
+      // line cannot land anywhere but where the row was painted around it — change the
+      // geometry in scopeView and this follows with no edit here.
       if (carrierCenteredRef.current && !isRfScopeSource(src)) {
         const cx = Math.round(((0 - lo) / (hi - lo)) * Wd)
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'

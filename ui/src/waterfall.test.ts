@@ -279,27 +279,52 @@ describe('scopeView (Phone/CW scope window per feed source)', () => {
     })
   })
 
-  it('audio row, carrier-centered (Phone): the DIAL sits at the exact middle of the axis', () => {
+  it('audio row, carrier-centered (Phone): the DIAL sits at the 1/4 mark, sideband to its right', () => {
     // Rig geometry: audio 0 Hz IS the dial (the suppressed carrier), so on a rig-style
-    // scope it belongs at the center pixel — not at the far left, which is where the
-    // plain audio window put it (operator, on air 2026-08-16: "the signal is at the left
-    // edge; my FTdx10 and IC-9700 draw it in the middle").
+    // scope it belongs on a reference line inside the picture — not at the far left, which
+    // is where the plain audio window put it (operator, on air 2026-08-16: "the signal is
+    // at the left edge; my FTdx10 and IC-9700 draw it in the middle").
+    //
+    // It was ±W, dial dead center. But an SSB receiver hands this scope ONE side of the
+    // carrier, so the other half of the panel could never hold a signal and the voice was
+    // squeezed into ~30% of the width (operator screenshot, 2026-08-16: "the voice is
+    // compressed into one section"). The occupied sideband now takes 3/4 of the axis and
+    // the empty side keeps a W/3 guard band — enough for the dial to read as a reference
+    // line rather than an edge, and nothing like half the panel.
     const v = scopeView(0, 4000, 'rx', 0, 2700, null, 1, null, false, true)
-    expect(v.loHz).toBe(-2700)
-    expect(v.hiHz).toBe(2700)
-    expect((v.loHz + v.hiHz) / 2, 'audio 0 = the dial = mid-axis').toBe(0)
+    expect(v.loHz).toBe(-900) // W/3 of guard band on the empty (LSB) side
+    expect(v.hiHz).toBe(2700) // the full requested W of occupied sideband
+    expect((0 - v.loHz) / (v.hiHz - v.loHz), 'audio 0 = the dial = the 1/4 mark').toBeCloseTo(0.25, 12)
   })
 
-  it('audio row, carrier-centered: USB occupies the RIGHT half, LSB the LEFT (mirrored)', () => {
-    // The axis is RF OFFSET FROM THE DIAL, so which half holds the voice is the sideband's
+  it('audio row, carrier-centered: USB occupies the RIGHT of the dial, LSB the LEFT (mirrored)', () => {
+    // The axis is RF OFFSET FROM THE DIAL, so which side holds the voice is the sideband's
     // business: USB audio f is at dial+f, LSB at dial−f. `mirrored` is how the caller reads
     // the row backwards to paint an LSB signal below the dial, exactly as a panadapter does.
     const usb = scopeView(0, 4000, 'rx', 0, 4000, null, 1, null, false, true)
     const lsb = scopeView(0, 4000, 'rx', 0, 4000, null, -1, null, false, true)
     expect(usb.mirrored).toBe(false)
     expect(lsb.mirrored).toBe(true)
-    // The axis itself is the same window either way — it is symmetric about the dial.
-    expect([lsb.loHz, lsb.hiHz]).toEqual([usb.loHz, usb.hiHz])
+    // The two axes are REFLECTIONS of each other about the dial — same width, opposite hand.
+    expect([lsb.loHz, lsb.hiHz]).toEqual([-usb.hiHz, -usb.loHz])
+  })
+
+  it('audio row, carrier-centered: the axis is ASYMMETRIC — W of sideband, W/3 of guard', () => {
+    // The bug this pins: a symmetric axis spends half the panel on a side the receiver
+    // cannot fill. Both edges, both sidebands, stated as numbers.
+    const usb = scopeView(0, 4000, 'rx', 0, 2700, null, 1, null, false, true)
+    expect([usb.loHz, usb.hiHz]).toEqual([-2700 / 3, 2700])
+    const lsb = scopeView(0, 4000, 'rx', 0, 2700, null, -1, null, false, true)
+    expect([lsb.loHz, lsb.hiHz]).toEqual([-2700, 2700 / 3])
+    // 3/4 of the panel goes to the voice either way — that is the whole point of the change.
+    expect(usb.hiHz / (usb.hiHz - usb.loHz), 'USB voice fills 3/4').toBeCloseTo(0.75, 12)
+    expect(-lsb.loHz / (lsb.hiHz - lsb.loHz), 'LSB voice fills 3/4').toBeCloseTo(0.75, 12)
+    // The presets keep their meaning exactly: W is the SIDEBAND width the operator picked
+    // (Full 4000, Voice 2700, 1500, 800), never a half-width, and the guard rides along.
+    for (const w of [4000, 2700, 1500, 800]) {
+      const v = scopeView(0, 4000, 'rx', 0, w, null, 1, null, false, true)
+      expect([v.loHz, v.hiHz], `preset ${w}`).toEqual([-w / 3, w])
+    }
   })
 
   it('carrier-centering is Phone-only: it never touches a native RF row', () => {

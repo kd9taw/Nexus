@@ -843,12 +843,22 @@ export function sidebandSign(sideband: string): 1 | -1 {
  * degenerate window (the pre-existing behavior, unchanged).
  *
  * `carrierCentered` (Phone only) swaps that axis for the one a rig draws: RF OFFSET FROM THE
- * DIAL, symmetric, with audio 0 Hz — the suppressed carrier, which IS the dial — on the
- * middle pixel. Without it the dial is the leftmost pixel and every signal hangs off the left
- * edge, which is what the operator saw against their FTdx10/IC-9700 (on air, 2026-08-16). The
- * requested width becomes the ± half-width, and `mirrored` tells the caller which way the row
- * runs: USB audio f is at dial+f, LSB at dial−f, so an LSB signal paints LEFT of the dial.
- * CW keeps the one-sided window (see cwScopeWindow), so this stays an explicit opt-in.
+ * DIAL, with audio 0 Hz — the suppressed carrier, which IS the dial — as a reference line
+ * inside the picture. Without it the dial is the leftmost pixel and every signal hangs off the
+ * left edge, which is what the operator saw against their FTdx10/IC-9700 (on air, 2026-08-16).
+ * `mirrored` tells the caller which way the row runs: USB audio f is at dial+f, LSB at dial−f,
+ * so an LSB signal paints LEFT of the dial. CW keeps the one-sided window (see cwScopeWindow),
+ * so this stays an explicit opt-in.
+ *
+ * The axis is ASYMMETRIC — [−W/3, +W] on USB, mirrored on LSB — and that is the fix for the
+ * second half of the same report (screenshot, 2026-08-16: "the voice is compressed into one
+ * section"). It shipped as ±W, which reads well on a rig streaming real RF but not here: this
+ * feed is DEMODULATED RECEIVER AUDIO, one-sided by construction, so half the panel was a side
+ * that can never carry a signal and the voice got ~30% of the width. Giving the occupied
+ * sideband 3/4 of the axis triples the detail; the W/3 guard band is what keeps the dial a
+ * reference LINE rather than the edge it was before carrier-centering, and it is display-only —
+ * the row is still requested (and read) as 0..W, so the guard has no data and paints as the
+ * out-of-row floor (see PhoneScope's column loop).
  *
  * Native-panadapter rows span ABSOLUTE RF Hz, but the row center only APPROXIMATES the
  * dial: the Flex pan recenters only after >500 Hz dial moves (RETUNE_EPS), and an Icom
@@ -875,13 +885,15 @@ export function scopeView(
 ): { loHz: number; hiHz: number; markerAtHz: number | null; mirrored: boolean } {
   if (!isRfScopeSource(source)) {
     if (carrierCentered) {
-      // Symmetric by construction — the dial can only be at the exact center if the axis is.
-      // The row is still requested (and read) as 0..half: only the OTHER half of the screen
-      // is new, and it has no data to show (see PhoneScope's carrier-line comment).
-      const half = Math.max(50, Math.abs(viewHiHz - viewLoHz))
+      // W of occupied sideband + W/3 of guard on the empty side, hung on the sideband's hand
+      // (see the header). The dial is axis 0, so it falls at the 1/4 mark on USB and the 3/4
+      // mark on LSB WITHOUT anyone stating that — every consumer derives its pixel from these
+      // two bounds, and there is no second constant that could drift out of step with them.
+      const width = Math.max(50, Math.abs(viewHiHz - viewLoHz))
+      const guard = width / 3
       return {
-        loHz: -half,
-        hiHz: half,
+        loHz: sign < 0 ? -width : -guard,
+        hiHz: sign < 0 ? guard : width,
         markerAtHz: markerHz == null ? null : sign * markerHz,
         mirrored: sign < 0,
       }

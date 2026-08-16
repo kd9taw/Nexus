@@ -162,20 +162,24 @@ const DSP_FUNCS = [
   { key: 'vox', label: 'VOX', title: 'Voice-Operated Transmit — hands-free keying (TX)' },
 ] as const
 
-/** Bandscope span presets — ± HALF-WIDTHS around the dial, because the scope's axis is the
- *  rig's: RF offset from the dial, carrier on the middle pixel (PhoneScope's
- *  `carrierCentered`). The engine is still asked for 0..half — receiver audio is one-sided —
- *  so a half-width is both what is captured and half of what is shown.
+/** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
+ *  is the rig's: RF offset from the dial, dial at the 1/4 mark and the sideband filling the
+ *  rest (PhoneScope's `carrierCentered`). The engine is asked for exactly 0..width — receiver
+ *  audio is one-sided — so the preset is both what is captured and 3/4 of what is shown; the
+ *  remaining quarter is scopeView's guard band, which has no data by construction.
  *
- *  FROM THE OLD SLICES: 'Full' (0–4000) → ±4k and 'Voice' (300–2700) → ±2.7k, unchanged in
- *  meaning. 'Low' (200–1500) is now the plain ±1.5k zoom. 'High' (1500–2900) has no
- *  carrier-centered equivalent — a window that excludes the dial cannot be centered on it —
- *  so its slot became the tighter ±800 zoom. */
+ *  These were briefly labelled ±4k/±2.7k/±1.5k/±800, from the fortnight the axis was
+ *  symmetric. The Hz never changed meaning; the ± did, and the labels came off with it.
+ *
+ *  FROM THE OLD SLICES: 'Full' (0–4000) and 'Voice' (300–2700) are unchanged in meaning.
+ *  'Low' (200–1500) is now the plain 1.5k zoom. 'High' (1500–2900) has no carrier-referenced
+ *  equivalent — a window that excludes the dial cannot be drawn from it — so its slot became
+ *  the tighter 800 Hz zoom. */
 const SPANS = [
-  { label: 'Full', halfHz: 4000, title: 'The whole captured passband — ±4 kHz around your dial' },
-  { label: 'Voice', halfHz: 2700, title: 'Voice energy — ±2.7 kHz around your dial' },
-  { label: '±1.5k', halfHz: 1500, title: 'Zoomed — ±1.5 kHz around your dial' },
-  { label: '±800', halfHz: 800, title: 'Tight — ±800 Hz around your dial, for fine tuning' },
+  { label: 'Full', widthHz: 4000, title: 'The whole captured passband — 4 kHz of sideband from your dial' },
+  { label: 'Voice', widthHz: 2700, title: 'Voice energy — 2.7 kHz of sideband from your dial' },
+  { label: '1.5k', widthHz: 1500, title: 'Zoomed — 1.5 kHz of sideband from your dial' },
+  { label: '800', widthHz: 800, title: 'Tight — 800 Hz of sideband from your dial, for fine tuning' },
 ] as const
 
 /** RF panadapter zoom presets (used only when a native RF scope is streaming). Symmetric ±Hz
@@ -1176,7 +1180,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             theme={theme}
             smeterDb={smeterDb}
             viewLoHz={nativeRf ? rfSpan.lo : 0}
-            viewHiHz={nativeRf ? rfSpan.hi : span.halfHz}
+            viewHiHz={nativeRf ? rfSpan.hi : span.widthHz}
             carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}

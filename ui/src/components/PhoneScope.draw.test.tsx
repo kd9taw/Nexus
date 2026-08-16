@@ -230,15 +230,24 @@ function peakTraceX(): number {
   return tracePoints().reduce((best, p) => (p.y < best.y ? p : best), { x: -1, y: Infinity }).x
 }
 
-// The row's carrier is bin 200 of 512 over 0–4000 Hz = 1565 Hz of receiver audio. On a
-// ±4000 Hz carrier-centered axis 200 px wide that is x=139 on USB (dial+1565) and its
-// mirror x=61 on LSB (dial−1565). On the OLD plain 0–4000 window it was x=78 for both,
-// which is what these two numbers are here to rule out.
-const PEAK_X_USB = 139
-const PEAK_X_LSB = 61
+// The row's carrier is bin 200 of 512 over 0–4000 Hz = 1565 Hz of receiver audio.
+//
+// The carrier-centered axis is ASYMMETRIC: W = 4000 Hz of occupied sideband plus a W/3 =
+// 1333.3 Hz guard band on the empty side, so 200 px carry 5333.3 Hz at 26.67 Hz/px. Axis 0
+// (the dial) is therefore 1333.3/5333.3 = the 1/4 mark on USB — x=50 — and its mirror x=150
+// on LSB. The 1565 Hz carrier lands at (1333.3+1565.6)/26.67 = x=109, and on LSB at its
+// reflection about the dial, 150−59 = x=91.
+//
+// The numbers these rule out: x=100 for the dial and 139/61 for the peak (the OLD symmetric
+// ±4000 axis, which gave the voice ~30% of the panel), and x=78 for both sidebands (the
+// plain 0–4000 audio window, dial off the left edge).
+const DIAL_X_USB = 50
+const DIAL_X_LSB = 150
+const PEAK_X_USB = 109
+const PEAK_X_LSB = 91
 
 describe('carrier-centered Phone axis', () => {
-  it('draws the dial at the exact middle of the canvas, labelled', async () => {
+  it('draws the dial at the 1/4 mark of the canvas (USB), labelled', async () => {
     stubRect()
     render(
       <PhoneScope transmitting={false} theme="dark" viewLoHz={0} viewHiHz={4000} carrierCentered />,
@@ -248,10 +257,16 @@ describe('carrier-centered Phone axis', () => {
     expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
     expect(calls.fill, 'control: drawRow did not reach the trace').toBeGreaterThanOrEqual(3)
 
-    expect(verticalRules(), 'the carrier line lands on the middle pixel').toContain(W / 2)
+    // The line is drawn from axis coordinate 0, not from a second placement constant — so
+    // it CANNOT disagree with the axis the row is painted on, whichever mark that puts it at.
+    expect(verticalRules(), 'the carrier line lands on the 1/4 mark').toContain(DIAL_X_USB)
     const label = ops.filter((o) => o.op === 'fillText')
-    expect(label.length, 'the centre line is labelled, like a rig marks its dial').toBeGreaterThan(0)
-    expect(Math.abs(label[0].args[0] - W / 2), 'the label sits at the line').toBeLessThan(12)
+    expect(label.length, 'the line is labelled, like a rig marks its dial').toBeGreaterThan(0)
+    expect(Math.abs(label[0].args[0] - DIAL_X_USB), 'the label sits at the line').toBeLessThan(12)
+    // The guard band is DISPLAY-ONLY. Widening the REQUEST to cover it would mean asking for
+    // a negative lo, which the backend refuses by handing back the whole 0–4000 row — the
+    // resolution the narrow presets exist for, thrown away.
+    expect(spanAsked, 'the row request is 0..W, untouched by the guard band').toEqual([0, 4000])
   })
 
   it('CONTROL: the plain audio window draws no carrier line at all', async () => {
@@ -265,8 +280,8 @@ describe('carrier-centered Phone axis', () => {
     expect(verticalRules()).toEqual([])
   })
 
-  it('paints the half with no data as floor, and never computes a NaN coordinate', async () => {
-    // The per-column loop indexes the row by frequency. Half this axis is BELOW the row's
+  it('paints the guard band with no data as floor, and never computes a NaN coordinate', async () => {
+    // The per-column loop indexes the row by frequency. The guard band is BELOW the row's
     // first bin, so without a guard it read row[negative] → undefined → NaN, which is a
     // black column in the waterfall and a broken trace path — silent, because a NaN
     // coordinate throws nothing.
@@ -285,12 +300,12 @@ describe('carrier-centered Phone axis', () => {
     const pts = tracePoints()
     expect(pts.length, 'control: no trace was drawn').toBeGreaterThan(W)
     expect(
-      pts.filter((p) => p.x < W / 2).every((p) => p.y === TRACE_H),
-      'below the dial there is no data — that half is the floor',
+      pts.filter((p) => p.x < DIAL_X_USB).every((p) => p.y === TRACE_H),
+      'below the dial there is no data — the guard band is the floor',
     ).toBe(true)
-    // …and the positive half of the same control: the occupied side is NOT floor, so the
-    // assertion above is about the axis and not about a trace that never drew anything.
-    expect(pts.some((p) => p.x > W / 2 && p.y < TRACE_H), 'the USB side carries the signal').toBe(true)
+    // …and the occupied side of the same control: it is NOT floor, so the assertion above is
+    // about the axis and not about a trace that never drew anything.
+    expect(pts.some((p) => p.x > DIAL_X_USB && p.y < TRACE_H), 'the USB side carries the signal').toBe(true)
     expect(Math.abs(peakTraceX() - PEAK_X_USB), `peak at ${peakTraceX()}, want ${PEAK_X_USB}`).toBeLessThanOrEqual(1)
   })
 
@@ -313,14 +328,25 @@ describe('carrier-centered Phone axis', () => {
 
     expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
     const pts = tracePoints()
-    expect(pts.some((p) => p.x < W / 2 && p.y < TRACE_H), 'the LSB side carries the signal').toBe(true)
+    expect(pts.some((p) => p.x < DIAL_X_LSB && p.y < TRACE_H), 'the LSB side carries the signal').toBe(true)
     expect(
-      pts.filter((p) => p.x > W / 2).every((p) => p.y === TRACE_H),
-      'above the dial there is no data on LSB',
+      pts.filter((p) => p.x > DIAL_X_LSB).every((p) => p.y === TRACE_H),
+      'above the dial there is no data on LSB — that is the guard band',
     ).toBe(true)
     // The mirror itself, and not merely "something is on the left": the same carrier that
-    // paints at x=139 on USB must paint at its reflection about the dial.
+    // paints at x=109 on USB must paint at its reflection about the dial.
     expect(Math.abs(peakTraceX() - PEAK_X_LSB), `peak at ${peakTraceX()}, want ${PEAK_X_LSB}`).toBeLessThanOrEqual(1)
-    expect(verticalRules(), 'and the dial is still the middle pixel').toContain(W / 2)
+    // …and the axis flips with it: the dial is at the 3/4 mark, so the guard band is the
+    // strip ABOVE it. Derived from axis 0 by the same code that drew the USB line at 1/4.
+    expect(verticalRules(), 'the dial is the 3/4 mark on LSB').toContain(DIAL_X_LSB)
+    // The AGC/readout window is indexed in ROW Hz, and a mirrored axis is not — its bounds
+    // are the row's negated and swapped. A symmetric ±W axis hid that (it negates to
+    // itself); an asymmetric one does not, and unwound it windows the wrong third of the
+    // row, missing the carrier entirely. ROW peak 0.9 over a 0.1 median = 96 dB; the broken
+    // window sees only floor and reads ▲0 dB.
+    expect(
+      document.querySelector('.ph-scope-dyn')?.textContent,
+      'peak-over-noise is measured where the voice actually is',
+    ).toBe('▲96 dB')
   })
 })
