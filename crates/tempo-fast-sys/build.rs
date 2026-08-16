@@ -104,6 +104,25 @@ fn main() {
         println!("cargo:rustc-link-lib=static=gfortran");
         println!("cargo:rustc-link-lib=static=quadmath");
         println!("cargo:rustc-link-lib=static=fftw3f");
+        // Static libgfortran on Darwin uses EMULATED TLS, and ___emutls_get_address
+        // lives in GCC's own libemutls_w.a — Apple's linker and compiler-rt provide
+        // no such symbol (first static link failed on exactly this, CI 2026-08-16).
+        // The archive sits in the versioned gcc subdirectory, not lib/gcc/current,
+        // so probe its full path rather than reusing the search dirs above.
+        let fc = env::var("FC").unwrap_or_else(|_| "gfortran".into());
+        if let Some(dir) = Command::new(&fc)
+            .arg("-print-file-name=libemutls_w.a")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|p| PathBuf::from(p.trim()))
+            .filter(|p| p.is_absolute())
+            .and_then(|p| p.parent().map(PathBuf::from))
+        {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            println!("cargo:rustc-link-lib=static=emutls_w");
+        }
         println!("cargo:rustc-link-lib=dylib=c++");
     } else {
         println!("cargo:rustc-link-lib=dylib=gfortran");
