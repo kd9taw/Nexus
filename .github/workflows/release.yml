@@ -502,11 +502,6 @@ jobs:
           path: dist
           pattern: nexus-windows
           merge-multiple: true
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: nexus-macos
-          merge-multiple: true
 
       - name: Silent-install the NSIS artifact
         shell: pwsh
@@ -563,6 +558,11 @@ jobs:
         with:
           path: dist
           pattern: nexus-windows
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: nexus-macos
           merge-multiple: true
 
       - name: Derive + cross-check the version
