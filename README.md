@@ -409,6 +409,12 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   copyright from the WSJT Development Group's, credited separately for that reason. Nexus does not
   vendor or link the same author's SuperFox polar-code tables, which are not free software — see
   **[NOTICE](NOTICE)**.
+- **[Decodium](https://github.com/iu8lmc/decodium3-build)** (GPLv3) — **IU8LMC** (ARI Caserta).
+  Nexus's **FT2** mode is built from Decodium's modem sources, vendored at
+  `libtempo/vendor/wsjtx/lib/ft2/`: the triggered decoder, LDPC scheduling, bit-metric and
+  channel-estimation chain are IU8LMC's work; the supporting files are K1JT's FT4 sources with
+  a halved symbol time. Decodium's on-air behavior is the compatibility baseline for the mode
+  (see **[NOTICE](NOTICE)** for the per-file provenance split).
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
 - **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the waterfall's 3D
   stacked-spectrum view (`ui/src/dss.ts`) and retained-history model
