@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FT2 answers in the next slot, not three later.** The first on-air QSOs exposed it: FT2
+  keyed each over before the previous slot's decode had folded in, so every reply slipped a
+  full cycle and every message went out twice — both stations reading each other as "didn't
+  copy". FT2 now decodes the completed signal 1.15 s before the boundary and keys with fresh
+  state, exactly like FT4. Its transmission also now starts at the slot boundary, matching
+  the Decodium convention on the air, and the band roster no longer ages stations out four
+  times too fast on short slots.
+- **The Phone and CW scope window follows your radio's filter.** A 500 Hz CW filter inside
+  the old fixed 800 Hz window left dead margins that could never light — the window now spans
+  the filter (plus a little skirt), and Phone's default span is a new Auto preset that tracks
+  the rig's bandwidth.
+
 - **A satellite over can no longer be yanked onto the downlink by a stale keyed-state poll.**
   Proven on the wire from the operator's CI-V capture: the mic went down, the once-a-second
   PTT poll hadn't noticed yet, and the dial-keep pushed the downlink onto what was now the
