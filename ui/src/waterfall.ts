@@ -932,10 +932,23 @@ export const CW_SCOPE_SPAN_HZ = 800
  * the resolution this narrow window exists for. Below 400 Hz the marker therefore sits left
  * of center — the honest picture, since there is no audio below 0 Hz to show beside it.
  */
-export function cwScopeWindow(pitchHz: number): { loHz: number; hiHz: number } {
+export function cwScopeWindow(
+  pitchHz: number,
+  filterHz?: number | null,
+): { loHz: number; hiHz: number } {
   const p = Number.isFinite(pitchHz) ? pitchHz : 600
-  const loHz = Math.max(0, Math.round(p - CW_SCOPE_SPAN_HZ / 2))
-  return { loHz, hiHz: loHz + CW_SCOPE_SPAN_HZ }
+  // ⭐ THE WINDOW TRACKS THE RIG'S FILTER (operator screenshot, 2026-08-16: a 500 Hz CW
+  // filter inside the fixed 800 Hz window left a dead stopband margin on each side — on an
+  // AUDIO-fed scope, pixels beyond the filter edge can never show anything). Span = the
+  // filter plus 25% of skirt so the roll-off is visible, floored at 300 Hz (bin resolution
+  // and the engine's span-≥50 rule both want a real window) and capped at the old 800 —
+  // wider than that is asking a CW filter to be what it isn't. Unknown filter → the old
+  // fixed span, unchanged behaviour.
+  const span = Number.isFinite(filterHz as number) && (filterHz as number) > 0
+    ? Math.min(CW_SCOPE_SPAN_HZ, Math.max(300, Math.round((filterHz as number) * 1.25)))
+    : CW_SCOPE_SPAN_HZ
+  const loHz = Math.max(0, Math.round(p - span / 2))
+  return { loHz, hiHz: loHz + span }
 }
 
 /** Waterfall view options for the picker. 0 = the default "Std" 0–3 kHz view (WSJT-X-like);

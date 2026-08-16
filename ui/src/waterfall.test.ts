@@ -242,6 +242,18 @@ describe('cwScopeWindow (CW audio scope window)', () => {
     }
   })
 
+  it("tracks the rig's filter: span = filter + skirt, clamped, centered on the pitch", () => {
+    // 500 Hz CW filter (the operator's screenshot, 2026-08-16): 625 Hz window, pitch
+    // mid-window — no dead stopband margins. Unknown/zero filter keeps the fixed 800.
+    const w = cwScopeWindow(600, 500)
+    expect(w.hiHz - w.loHz).toBe(625)
+    expect((w.loHz + w.hiHz) / 2).toBeCloseTo(600, -1)
+    expect(cwScopeWindow(600, 200).hiHz - cwScopeWindow(600, 200).loHz).toBe(300) // floor
+    expect(cwScopeWindow(600, 2400).hiHz - cwScopeWindow(600, 2400).loHz).toBe(800) // cap
+    expect(cwScopeWindow(600, null).hiHz - cwScopeWindow(600, null).loHz).toBe(800)
+    expect(cwScopeWindow(600).hiHz - cwScopeWindow(600).loHz).toBe(800)
+  })
+
   it('floors at 0 for a pitch below half the span (never asks for a negative window)', () => {
     // A negative lo is silently refused by the engine, which answers the WHOLE 0–4000 row —
     // so below 400 Hz the marker sits left of center, which is the honest picture: there is

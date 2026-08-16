@@ -572,7 +572,7 @@ export function CwCockpit({
   useEffect(() => setPitch(pitchHz), [pitchHz])
   // The audio scope window follows the pitch, so the signal being zero-beat is mid-screen
   // whatever pitch the operator runs (it used to be a fixed 300–1100, centered on 600 only).
-  const cwView = cwScopeWindow(pitch)
+  const cwView = cwScopeWindow(pitch, filterHz)
   const changePitch = (v: number) => {
     const p = Math.max(300, Math.min(1200, Math.round(v)))
     setPitch(p)

@@ -176,6 +176,11 @@ const DSP_FUNCS = [
  *  equivalent — a window that excludes the dial cannot be drawn from it — so its slot became
  *  the tighter 800 Hz zoom. */
 const SPANS = [
+  // ⭐ 'Auto' tracks the rig's reported filter width (operator, 2026-08-16: a fixed span
+  // wider than the filter shows a dead stopband — on the audio feed those pixels can never
+  // light). widthHz 0 is the sentinel; the render resolves it from filterWidthHz, clamped
+  // 800..4000, falling back to the full 4 kHz when the rig doesn't report one.
+  { label: 'Auto', widthHz: 0, title: "Follows the radio's filter — the scope shows what the rig can pass" },
   { label: 'Full', widthHz: 4000, title: 'The whole captured passband — 4 kHz of sideband from your dial' },
   { label: 'Voice', widthHz: 2700, title: 'Voice energy — 2.7 kHz of sideband from your dial' },
   { label: '1.5k', widthHz: 1500, title: 'Zoomed — 1.5 kHz of sideband from your dial' },
@@ -1180,7 +1185,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             theme={theme}
             smeterDb={smeterDb}
             viewLoHz={nativeRf ? rfSpan.lo : 0}
-            viewHiHz={nativeRf ? rfSpan.hi : span.widthHz}
+            viewHiHz={nativeRf ? rfSpan.hi : (span.widthHz || Math.min(4000, Math.max(800, filterHz ?? 4000)))}
             carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
