@@ -5,6 +5,89 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **MSK144 has a display built for meteor scatter.** Switch to MSK144 and the waterfall strip
+  becomes a time display — the Fast Graph, as WSJT-X draws it: seconds across one T/R period,
+  a green power trace where a ping is a spike you can see land, the current period above the
+  previous one, and a marker with the callsign at each decode. On meteor scatter every signal
+  sits at 1500 Hz and lives for milliseconds, so a frequency waterfall showed one unmoving
+  stripe while the actual event was invisible. A 5/10/15/30 s T/R selector sits beside the
+  mode pills — on meteor scatter the period is an operating decision, not configuration.
+- **MSK144 pings appear while the period is still running.** Nexus used to decode once at the
+  period boundary, so you watched a silent screen for 15 seconds and then got history. Pings
+  now reach the decode list about two seconds after they land, mid-period, with the T column
+  showing when in the period each one arrived.
+- **Worked-before comes in two strengths.** The B4 chip is hollow when you have worked the
+  callsign anywhere and solid when you have worked them on the band you are on now — the same
+  two scopes WSJT-X colours separately. A new setting (Logging ▸ Worked-before (B4) & dupes ▸
+  **Match mode too**, off by default like WSJT-X's) makes 40m FT8 and 40m phone count as
+  separate contacts for both the chips and the log strip's Dupe badge.
+- **The Spots panel shows the state it already filtered by**, as a sortable column, and the
+  Phone/CW band-strip flags carry the state in their tooltips.
+- **Program can take channels you type.** *Add by hand* enters a repeater or simplex channel
+  the directory has wrong or missing, and *Import CHIRP CSV* reads the same format Program
+  exports and CHIRP itself saves. Memories has had both for a while; now the workbench that
+  builds your radio's channel list does too.
+- **The rig scope's waterfall gets the scroll-direction button**, matching the FT8 waterfall,
+  and defaults the same way (newest at the top). RTTY and SSTV share the FT8 waterfall and
+  already had it.
+
+### Fixed
+
+- **Working the ISS voice repeater no longer transmits on the bird's downlink.** Two faults,
+  both found on the air. A same-band (V/V) pass asked a Main/Sub mapping to do something those
+  radios cannot — Main and Sub can't both sit on 2 m — so nothing was written and TX stayed on
+  the downlink; a V/V pass now rides the A/B split, which is how those passes are worked. And
+  a rig keyed from the HAND MIC didn't count as transmitting, so half a second into an over
+  the Doppler tick and the dial-keep would retune the transmit VFO back onto the downlink. A
+  mic-keyed rig is now keyed everywhere.
+- **"Call CQ" stops claiming you are calling CQ.** The CQ/S&P toggle lit Call CQ through every
+  S&P contact and forever after, because it read a flag a directed call also sets — and the
+  AUTO-CQ pill made the same false claim. Both now read the real CQ-run state, and the idle
+  Call CQ button drops its permanent red border: in this app red means TX-armed, which an idle
+  station is not.
+- **Your own transmission scrolls as a dark band on the waterfall** — the honest "not
+  listening" gap, as WSJT-X and your rig's own scope draw it. It used to paint a full-width
+  red band after every over: while keyed the rig's muted receiver dragged the display's
+  auto-contrast down to digital silence, and key-up clamped the whole band to the palette's
+  hot end for a couple of seconds. The false rows are dropped at the source now and the
+  contrast holds through the over.
+- **CONFIRM is now NEEDS QSL, and says what it means.** The tag marks an entity, zone or grid
+  worked on this band but not yet confirmed — a fact about your award slot, never about the
+  callsign in the row. The old "Worked —" wording read as a claim about the station and made
+  NEEDS-QSL-without-B4 look like a bug; it is the normal case.
+- **CW keyed over CAT sends the whole macro.** Every one-character word — the closing K, a
+  bare ? — was silently rejected by the keying library, which reads a single-character message
+  on a Yaesu as a stored-memory number; a lone digit 1–5 would even have played the rig's
+  stored message instead of keying the digit. Padded past the trap. (#86)
+- **Ham Radio Deluxe forwarding actually forwards when it is the only connector enabled.** An
+  internal gate skipped the send loop unless some other upload service was also on, so an
+  HRD-only station queued contacts forever and sent none — while the app said "Logged". (#87)
+- **The update banner's "Not now" sticks.** Dismissing an update lasted until the hourly
+  re-check, which re-downloaded it and put the banner straight back. A dismissal now holds for
+  that version; a newer release still lands.
+- **Re-importing a log with PSK31 respelled as BPSK31 no longer doubles those contacts** — the
+  last spelling pair from the import-dedup work that shipped in 1.4.0. (#31)
+- **The "check for updates" tooltip stops naming SourceForge** — the check reads the project
+  site first, and the Download button opens GitHub Releases.
+- **Entering MSK144 parks both frequency offsets on 1500 Hz**, where the mode actually
+  transmits — the red TX marker could sit at 2400 Hz while the rig keyed 1500 — and the DT
+  column reads as T (time of the ping within the period) instead of painting every healthy
+  ping red with FT8's clock-skew colouring.
+
+### Changed
+
+- **HF is grid-quiet by default.** The rare-grid (💎) alerts now scope to VHF and up like the
+  plain grid alerts — on HF nearly every decode is an unworked grid, so even the rare tier
+  read as chatter. An HF grid-chaser widens it back in Settings ▸ Spots & Alerts.
+- **The FT8 cockpit no longer hosts the memory favorites strip.** Memories are repeaters,
+  nets and calling frequencies — Phone and CW things, and those cockpits keep the strip. In
+  the FT8 header a favorite chip was one click from retuning the rig off the band
+  mid-sequence. The recall hotkeys work everywhere, unchanged.
+
 ## [1.4.0] — 2026-08-15
 
 ### Fixed
