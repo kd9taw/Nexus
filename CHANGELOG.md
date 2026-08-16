@@ -5,6 +5,15 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] — 2026-08-16
+
+### Added
+
+- **Nexus runs on the Mac.** A native Apple Silicon build (M-series, macOS 12+), signed and
+  notarized, with the same self-updater as Windows and Linux. CAT control uses Hamlib from
+  Homebrew (`brew install hamlib`); Intel Macs can build from source, which works out of the
+  box as of 1.5.0. First macOS release — treat it as fresh ground and report what you find.
+
 ## [1.5.0] — 2026-08-16
 
 ### Added
