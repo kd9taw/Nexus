@@ -2714,8 +2714,6 @@ export default function App() {
               onSetHoldTxFreq={handleSetHoldTxFreq}
               dxClearTick={dxClearTick}
               onSnap={setSnap}
-              onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-              onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
               onOpenSettings={openSettingsAt}
               wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
               preferRrr={settings?.preferRrr ?? false}

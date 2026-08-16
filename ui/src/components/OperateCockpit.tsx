@@ -41,8 +41,6 @@ import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
 import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
-import { MemoryStrip } from './MemoryStrip'
-import type { Memory } from '../features/memories'
 import { FrequencyControl } from './FrequencyControl'
 import { TuningStrip } from './TuningStrip'
 
@@ -125,9 +123,6 @@ interface Props {
   panels: PanelLayoutApi<OperatePanelId>
   /** Recall a saved memory (App applies settings + retune + cockpit switch).
    * Absent when the Memories feature is disabled — the MEM strip then hides. */
-  onRecallMemory?: (m: Memory) => void
-  /** Open the Memories section (manage/groups/import). */
-  onOpenMemories?: () => void
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
    * point at Settings stay plain text. */
   onOpenSettings?: (target: string) => void
@@ -254,8 +249,6 @@ export function OperateCockpit({
   panels,
   active = true,
   companionAddr,
-  onRecallMemory,
-  onOpenMemories,
   onOpenSettings,
   wheelSensitivity,
 }: Props) {
@@ -904,14 +897,11 @@ export function OperateCockpit({
               Roster
             </button>
           </div>
-          {onRecallMemory && (
-            <MemoryStrip
-              dialMhz={snap.radio.dialMhz}
-              mode={tier === 'FT4' ? 'FT4' : 'FT8'}
-              onRecall={onRecallMemory}
-              onManage={onOpenMemories}
-            />
-          )}
+          {/* No MemoryStrip here, deliberately (operator ruling, 2026-08-16). Memories are
+              repeaters, nets and calling frequencies — Phone/CW things. In this header a
+              favorite chip was worse than clutter: one click retuned the rig off the FT8
+              band mid-sequence. Phone and CW keep the strip; the global recall hotkeys are
+              unaffected. */}
           <button
             type="button"
             className="cockpit-popout icon"
