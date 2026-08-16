@@ -7677,19 +7677,25 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
 /// with a file that happens to be JSON — a partial restore of a mangled file is worse than a
 /// refusal, because the operator believes they are configured and they are not.
 ///
-/// Applies through `apply_settings`, the same path the Settings panel uses, so every side effect
-/// a settings change normally has (the radio loop reconfiguring, the profile mirrors) happens
-/// exactly as it would have. Writing the file directly would leave a running app disagreeing with
-/// its own config until the next restart.
+/// Applies through `apply_restored_settings`, NOT the panel's `apply_settings`. The two have
+/// opposite contracts: a form save deliberately keeps the engine's live roster so a stale form
+/// cannot revert a rig you just added, and a restore must take the bundle's roster instead. Going
+/// through the form path would silently drop radios 2..n, the routing rules and the blocked-call
+/// list on the case this feature exists for — a backup carried to another machine.
+///
+/// It also PERSISTS. Applying to the running engine alone left the restore to evaporate on the
+/// next relaunch, and left the panel's form stale so the next Save wrote the old values back over
+/// it — a silent revert of an explicit, confirmed, "this cannot be undone" action.
+///
+/// NOT done here, deliberately: the lazy live-feed start that `set_settings` performs. A bundle
+/// carrying a different callsign therefore reaches the cluster/RBN/PSKR feeds on the next launch
+/// rather than immediately. Duplicating that here would mean reimplementing the form path's side
+/// effects, which is what taking the form path wrongly was meant to avoid; a restore is a rare,
+/// confirmed, whole-configuration act and a relaunch after one is reasonable.
 #[tauri::command(async)]
 fn import_settings_bundle(
     text: String,
     state: State<'_, SharedEngine>,
-    spots: State<'_, SharedSpots>,
-    live_paths: State<'_, SharedLivePaths>,
-    region_paths: State<'_, SharedRegionPaths>,
-    health: State<'_, SharedHealth>,
-    cache: State<'_, PropCache>,
 ) -> Result<AppSnapshot, String> {
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
@@ -7716,18 +7722,23 @@ fn import_settings_bundle(
             ui_state_save(map);
         }
     }
-    // Reuse the ordinary save path in full rather than reimplementing its side effects -- the
-    // same reasoning `reset_settings` already follows.
-    //
-    // This used to hand-roll `eng.apply_settings(settings)` and return `()`. That applied the
-    // bundle to the RUNNING engine and nothing else: it never persisted, and it returned no
-    // snapshot, so the panel had nothing to re-render from and went on showing the pre-restore
-    // form. To the operator, Restore changed nothing at all.
-    //
-    // Worse than nothing, in fact: that stale form stayed live, so the next Save wrote the OLD
-    // values straight back over the restored ones -- a silent revert of an explicit, confirmed,
-    // "this cannot be undone" action.
-    set_settings(state, spots, live_paths, region_paths, health, cache, settings)
+    // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
+    // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
+    // which is right for a form and wrong for a restore.
+    {
+        let mut eng = engine_lock(&state);
+        eng.apply_restored_settings(settings);
+        // PERSIST. Applying to the running engine alone is what made the restore evaporate on the
+        // next launch while looking like it had worked.
+        if let Err(e) = eng.settings().save(&settings_path()) {
+            return Err(format!("The settings were restored but could not be saved: {e}"));
+        }
+        // ...and into the base config, or the launch picker keeps offering the OLD roster.
+        persist_roster_to_base(&eng.settings().radios);
+        persist_routing_to_base(eng.settings());
+    }
+    let snap = { engine_lock(&state).snapshot() };
+    Ok(snap)
 }
 
 /// the UI uses to decide whether a per-operator export is worth offering at all.
