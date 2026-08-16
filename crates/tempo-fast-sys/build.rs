@@ -90,10 +90,26 @@ fn main() {
     // already draws that distinction for Windows (`is_cross_to_windows_gnu`); same rule here.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         emit_macos_runtime_search_paths();
+        // ⭐ STATIC on macOS — a SHIP-time lesson, not a build-time one (2026-08-16).
+        // Dynamic -lgfortran/-lfftw3f link fine on the CI runner (brew install gcc fftw)
+        // and then the shipped .app aborts at dyld on every Mac WITHOUT Homebrew's gcc:
+        //   dyld: Library not loaded: /opt/homebrew/opt/gcc/lib/gcc/current/libgfortran.5.dylib
+        // — caught by smoke-macos on a clean runner, the first artifact ever built. The
+        // fix mirrors the Windows build's philosophy: the runtimes travel INSIDE the
+        // binary. libgfortran.a/libquadmath.a ship with Homebrew gcc (covered by the GCC
+        // Runtime Library Exception) and Homebrew fftw ships libfftw3f.a; the search
+        // paths emitted above locate all three. C++ is the OS's own libc++ — the C++
+        // objects in libtempo are compiled by AppleClang here, NOT g++, so linking GNU
+        // libstdc++ would be both wrong and another Homebrew dylib dependency.
+        println!("cargo:rustc-link-lib=static=gfortran");
+        println!("cargo:rustc-link-lib=static=quadmath");
+        println!("cargo:rustc-link-lib=static=fftw3f");
+        println!("cargo:rustc-link-lib=dylib=c++");
+    } else {
+        println!("cargo:rustc-link-lib=dylib=gfortran");
+        println!("cargo:rustc-link-lib=dylib=fftw3f");
+        println!("cargo:rustc-link-lib=dylib=stdc++");
     }
-    println!("cargo:rustc-link-lib=dylib=gfortran");
-    println!("cargo:rustc-link-lib=dylib=fftw3f");
-    println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-lib=dylib=m");
     // The MinGW gfortran runtime also needs quadmath.
     if cfg!(windows) {
