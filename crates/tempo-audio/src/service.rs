@@ -3645,6 +3645,15 @@ impl RadioLoop {
             } else if self.tx_until_ms.is_none()
                 && !self.tuning_keyed
                 && !self.manual_ptt_applied
+                // ⚠️ AND NOT MIC-KEYED (field report, 2026-08-16, IC-9700 ISS V/V). The rig's
+                // own PTT (`rig_keyed`, the 1 Hz `t` read-back) is a keyed state like the
+                // three above, and this block was running through it: during split TX the
+                // Icom's selected VFO is the TX VFO, so the block's dial reads saw the
+                // uplink, its dial-keep wrote the downlink back — onto the transmit VFO —
+                // and half a second into a mic-down over the operator was transmitting on
+                // the bird's downlink. Everything in this block is RX-time work; a rig keyed
+                // by ANYONE means skip it, exactly as for Nexus's own keying.
+                && !self.rig_keyed
                 // A TRIPPED breaker skips the poll — but only until its re-probe is due. It exists
                 // to stop the loop blocking on a dead read every cycle, which is rate-limiting;
                 // implemented as a permanent latch it left a recovered link dead for the session.

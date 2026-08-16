@@ -6716,7 +6716,15 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                 live_rate = Some(rate);
                 let keyed = {
                     let eng = engine_lock(&dop_engine);
-                    eng.snapshot().radio.transmitting
+                    let r = eng.snapshot().radio;
+                    // ⚠️ BOTH kinds of keyed (field report, 2026-08-16, IC-9700 ISS V/V).
+                    // `transmitting` is the SLOT-TX indicator alone; an FM bird is worked on
+                    // the HAND MIC, which is hardware PTT the rig handles itself — invisible
+                    // there, but read back once a second into `rig_keyed` (#57). With only
+                    // the slot flag, the Doppler tick fired mid-over and wrote the DOWNLINK
+                    // correction — and during split TX the Icom's selected VFO is the TX
+                    // VFO, so the operator keyed 145.800: the bird's own output.
+                    r.transmitting || r.rig_keyed
                 };
                 let now_ms = (t as u64).saturating_mul(1_000);
                 let mut eng = engine_lock(&dop_engine);
