@@ -522,6 +522,20 @@ const AUDIO_RETRY_MS: f64 = 2_000.0;
 /// no enumeration — which must never be done from this loop anyway (see `device.rs`: a concurrent
 /// `default_host()` faults natively and hard-kills the process).
 const AUDIO_DEATH_CONFIRM_MS: f64 = 1_500.0;
+
+/// After a device-death rebuild, how long before another one may run.
+///
+/// THE DEBOUNCE BELONGS HERE, not on the banner. A card that FLAPS — dies, re-enumerates, dies
+/// again on a ~2 s cycle — otherwise gets a full device-graph teardown and reopen every cycle, and
+/// each one runs `flush_output()` + `ptt(false)` + `halt_tx_for_context_change()`. Damping the
+/// BANNER instead would have left that churn running at exactly the same rate while removing the
+/// blinking that was the operator's only cue it was happening — steady warning, same aborted overs.
+///
+/// Suppressing the rebuild fixes both at once: the card is left alone, and the banner stops
+/// flapping as a CONSEQUENCE, because there is no successful reopen in between to clear it.
+/// Longer than the ~2 s flap cycle measured on a USB codec that drops and re-enumerates, and
+/// short enough that a genuine recovery is picked up promptly.
+const AUDIO_REBUILD_DEBOUNCE_MS: f64 = 5_000.0;
 /// How often to read the NEXT transmit meter while keyed — the mirror image of the RX health
 /// poll. One meter is read per interval (round-robin over SWR/ALC/Po/COMP), so at 150 ms each
 /// meter refreshes ~1.7×/s: live enough to set mic gain against the moving ALC bar, while never
@@ -2021,6 +2035,9 @@ struct RadioLoop {
     /// A confirmed device death that arrived mid-over. Held until the key is up — see the
     /// no-rebuild-while-keyed rule at the rebuild site.
     audio_rebuild_pending: Option<String>,
+    /// Earliest time a DEVICE-DEATH rebuild may run again. Only death is debounced: an operator
+    /// changing device, a radio switch or launch must still take effect immediately.
+    audio_rebuild_floor: f64,
     /// The NATIVE RF panadapter worker (Flex SmartSDR VITA / Icom CI-V) for the ACTIVE radio, if
     /// it has one. Reconciled each step from `native_spectrum_kind(want)`: started when the active
     /// radio gains a native scope, dropped (threads stopped + pan removed) when it loses it or the
@@ -2284,6 +2301,7 @@ impl RadioLoop {
             audio_retry_at: None,
             audio_suspect: None,
             audio_rebuild_pending: None,
+            audio_rebuild_floor: 0.0,
             spectrum_src: None,
             spectrum_src_key: None,
             dax_src: None,
@@ -3156,8 +3174,10 @@ impl RadioLoop {
             // operator stop may do that. If the card is genuinely gone the over is already dead,
             // so waiting for the key to come up costs nothing real; if it is not gone, waiting is
             // exactly right. `rig.keyed` is true for EVERY keying path (slot, tune, voice, CW).
-            if self.audio_rebuild_pending.is_some() && !rig.keyed {
+            if self.audio_rebuild_pending.is_some() && !rig.keyed && now >= self.audio_rebuild_floor
+            {
                 self.audio_rebuild_pending = None;
+                self.audio_rebuild_floor = now + AUDIO_REBUILD_DEBOUNCE_MS;
                 self.force_audio_rebuild = true;
             }
             // A dual-radio switch forces the rebuild (a new radio's device must be opened even if the
@@ -14087,6 +14107,64 @@ mod tests {
     }
 
     #[test]
+    fn a_flapping_card_is_rebuilt_at_the_debounce_rate_not_the_flap_rate() {
+        // A card that dies, re-enumerates and dies again on a ~2 s cycle must not get a full
+        // device-graph teardown every cycle. Each rebuild runs flush_output() + ptt(false) +
+        // halt_tx_for_context_change(), so unbounded churn means repeatedly aborted overs.
+        //
+        // The debounce is on the REBUILD, deliberately, not on the banner: damping the banner
+        // would have left this churn running at exactly the same rate while removing the blinking
+        // that was the operator's only cue it was happening.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+
+        let mut ra = mock_reopen_audio();
+        state
+            .step(&engine, &mut backend, &mut rig, &sinks, 0.0, &mut ra, &mut rr, &mut station)
+            .unwrap();
+        engine.lock().unwrap().set_audio_error(None);
+
+        let rebuilds = std::cell::Cell::new(0u32);
+        let mut ra_counting = |t: &Transport| {
+            rebuilds.set(rebuilds.get() + 1);
+            mock_reopen_audio()(t)
+        };
+
+        // Twenty seconds of a card flapping on a 2 s cycle: an error, then silence, over and over.
+        let mut t = 10.0;
+        while t < 20_000.0 {
+            backend.stream_error = Some("capture stream: device no longer available".to_string());
+            // silent ticks — never delivers, so every cycle confirms death
+            for _ in 0..4 {
+                state
+                    .step(
+                        &engine, &mut backend, &mut rig, &sinks, t, &mut ra_counting, &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+                t += 500.0;
+            }
+        }
+
+        // 20 s at a 2 s flap would be ~10 rebuilds without the debounce; with a 5 s floor it is
+        // bounded by the floor instead. Assert the BOUND, not an exact count, so the test pins the
+        // property rather than the arithmetic.
+        let n = rebuilds.get();
+        let ceiling = (20_000.0 / AUDIO_REBUILD_DEBOUNCE_MS).ceil() as u32 + 1;
+        assert!(
+            n <= ceiling,
+            "a flapping card must be rebuilt at the DEBOUNCE rate, not the flap rate: {n} rebuilds \
+             in 20 s, ceiling {ceiling}"
+        );
+        assert!(n >= 1, "but it must still recover at all — got {n} rebuilds");
+    }
+
+    #[test]
     fn a_dead_card_waits_for_the_key_to_come_up_before_rebuilding() {
         // NO REBUILD WHILE KEYED. The rebuild path unconditionally runs flush_output() +
         // ptt(false) + halt_tx_for_context_change(), so firing it mid-over aborts a transmission
@@ -14272,7 +14350,12 @@ mod tests {
         let mut ra_failing =
             |_t: &Transport| Err("device \"USB Audio Device\" not available".to_string());
         // Probation again, then silence past the window — the device really is gone this time.
-        for t in [60.0, 60.0 + AUDIO_DEATH_CONFIRM_MS + 1.0] {
+        // PAST THE DEBOUNCE FLOOR the first rebuild set: a death-triggered rebuild is rate
+        // limited (AUDIO_REBUILD_DEBOUNCE_MS), so a second one inside that window is suppressed by
+        // design. This scenario is about the FAILED reopen leaving a banner up, not about the
+        // rate limit, so it runs after the floor has expired.
+        let t0 = 20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0 + AUDIO_REBUILD_DEBOUNCE_MS + 1.0;
+        for t in [t0, t0 + AUDIO_DEATH_CONFIRM_MS + 1.0] {
             state
                 .step(
                     &engine,
