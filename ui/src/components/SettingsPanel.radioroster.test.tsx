@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
+import { ConfirmHost } from '../confirm'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -104,20 +105,25 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
+/** The panel WITH a confirm host, as App renders it — Remove asks through `confirmDialog`,
+ *  which fails closed without a mounted host. */
 function renderPanel() {
   return render(
-    <SettingsPanel
-      activeRadioId={0}
-      scale={1 as never}
-      scaleMode={'auto' as never}
-      scaleCap={1 as never}
-      onScaleModeChange={() => {}}
-      onScaleCapChange={() => {}}
-      density={'comfortable' as never}
-      onDensityChange={() => {}}
-      onResetLayout={() => {}}
-      features={features}
-    />,
+    <>
+      <SettingsPanel
+        activeRadioId={0}
+        scale={1 as never}
+        scaleMode={'auto' as never}
+        scaleCap={1 as never}
+        onScaleModeChange={() => {}}
+        onScaleCapChange={() => {}}
+        density={'comfortable' as never}
+        onDensityChange={() => {}}
+        onResetLayout={() => {}}
+        features={features}
+      />
+      <ConfirmHost />
+    </>,
   )
 }
 
@@ -161,7 +167,6 @@ describe('the roster Remove button', () => {
   })
 
   it('removing the radio being EDITED retargets the form instead of leaving a dangling id', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     api.get('removeRadio').mockImplementation(() => Promise.resolve({ ok: true }))
     renderPanel()
     fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
@@ -177,6 +182,11 @@ describe('the roster Remove button', () => {
         /roster/i.test((b as HTMLButtonElement).title) && !(b as HTMLButtonElement).disabled,
     )!
     fireEvent.click(enabled)
+
+    // Answer the in-app confirmation (window.confirm is inert in the webview; the flow asks
+    // through ConfirmHost now).
+    await waitFor(() => expect(screen.getByText('Remove IC-9700?')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Remove radio' }))
 
     await waitFor(() => expect(api.get('removeRadio')).toHaveBeenCalledWith(1))
     // The form must fall back to the active radio: with the id left dangling the banner

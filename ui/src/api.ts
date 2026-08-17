@@ -1956,6 +1956,14 @@ export async function getAllRigModels(): Promise<[number, string][]> {
   return invoke<[number, string][]>('get_all_rig_models')
 }
 
+/** Models that need NO serial port — Dummy/NET/FLRig and the software-CAT profiles.
+ *  The rule lives in Rust (`rigmodels::portless_rig_models`) and is fetched rather than
+ *  duplicated here: its membership has changed before, and a stale copy would block saves that
+ *  are in fact correct. An empty array means the rule could not be read. */
+export async function getPortlessRigModels(): Promise<number[]> {
+  return invoke<number[]>('get_portless_rig_models')
+}
+
 /** Zero-config: scan connected USB radios → suggested model + port + paired audio. */
 export async function detectRigs(): Promise<DetectedRig[]> {
   return invoke<DetectedRig[]>('detect_rigs')

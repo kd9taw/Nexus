@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { confirmDialog } from '../confirm'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState } from '../types'
 import { Waterfall } from './Waterfall'
 import { CockpitHeader } from './CockpitHeader'
@@ -739,7 +740,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // small and several look alike.
   const deleteImage = async (g: { path: string; mode: string; finishedUtc: string }) => {
     const what = `${g.mode} received ${fmtUtc(g.finishedUtc)}`
-    if (!window.confirm(`Delete the ${what}?\n\nThe image file is removed and cannot be recovered.`))
+    if (
+      !(await confirmDialog({
+        title: `Delete the ${what}?`,
+        body: 'The image file is removed and cannot be recovered.',
+        confirmLabel: 'Delete image',
+        danger: true,
+      }))
+    )
       return
     await withErrorToast(async () => {
       await sstvDeleteImage(g.path)

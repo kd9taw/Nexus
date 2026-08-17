@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react'
 import { DetachedPanel } from './DetachedPanel'
+import { confirmDialog } from './confirm'
 import { selectPeer, workSpot, setFrequency, getNeedAlerts } from './api'
 import { readEnabledModes } from './useFeatures'
 import type { NeedAlert } from './types'
@@ -130,6 +131,43 @@ describe('DetachedPanel selection forwarding', () => {
     render(<DetachedPanel panel="connect" />)
     fireEvent.click(screen.getByTestId('deselect'))
     expect(mockedSelectPeer).toHaveBeenCalledWith(null)
+  })
+})
+
+describe('DetachedPanel destructive confirmations', () => {
+  // A torn-off window is a SEPARATE JS REALM, not another branch of the main window's tree.
+  // `confirmDialog` resolves through a module-level host, and `<ConfirmHost/>` mounted only in
+  // App — so in this document the global was null, the call logged and answered "no", and the
+  // ✕ on a conversation did nothing at all. Same symptom as the window.confirm bug this PR
+  // fixes, one layer up.
+  // Every branch, not just the two that mount <Toasts/>: the body returns from nine places and
+  // a host present in one tree but absent in another is the same silent failure, moved. The
+  // host is mounted once around the whole panel, so this holds for branches added later too.
+  // A representative spread rather than all nine: a branch that mounts <Toasts/> (waterfall),
+  // two that do not (connect, needed), and the unknown-panel fallback. 'sats' and 'operate' are
+  // left out because they need api exports this file's hand-written mock does not carry — the
+  // host is mounted around the body, so no branch can differ anyway.
+  it.each(['connect', 'waterfall', 'needed', 'nonexistent-panel'])(
+    'the %s pop-out can ask a destructive question and get a real answer',
+    async (panel) => {
+      render(<DetachedPanel panel={panel} />)
+      const answer = confirmDialog({ title: 'Delete the conversation with DL1ABC?' })
+      await waitFor(() =>
+        expect(screen.getByText('Delete the conversation with DL1ABC?')).toBeTruthy(),
+      )
+      screen.getByRole('button', { name: 'Confirm' }).click()
+      await expect(answer).resolves.toBe(true)
+    },
+  )
+
+  it('answers NO when dismissed, so a destructive action never proceeds unasked', async () => {
+    render(<DetachedPanel panel="connect" />)
+    const answer = confirmDialog({ title: 'Delete the conversation with DL1ABC?' })
+    await waitFor(() =>
+      expect(screen.getByText('Delete the conversation with DL1ABC?')).toBeTruthy(),
+    )
+    screen.getByRole('button', { name: 'Cancel' }).click()
+    await expect(answer).resolves.toBe(false)
   })
 })
 
