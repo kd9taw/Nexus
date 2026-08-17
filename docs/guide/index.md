@@ -1,6 +1,6 @@
 # Nexus User Guide
 
-Nexus is a free, open-source ham radio workstation for Windows, Linux and
+Nexus is a free, open-source ham radio workstation for Windows, macOS, Linux and
 Raspberry Pi that puts the whole station — digital, phone, CW, satellites,
 propagation, DX chasing, logging, and awards — into one modern app. This guide
 is the per-section reference: pick the section you're working in and jump to its

@@ -11,7 +11,7 @@ come here for the complete picture.
 ## What you need
 
 - **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **Mac with Apple Silicon** (M-series, macOS 12 or later), or a **64-bit Raspberry Pi**
-  (Pi 3/4/5). All three build from the same tree and ship together every release.
+  (Pi 3/4/5). All four platforms build from the same tree and ship together every release.
   Intel Macs are source-build only. On a slower Pi, **Settings ▸ Digital ▸ Decode depth ▸
   Fast** keeps FT8 and FT4 decoding in real time.
 - **On a PC, Linux means Ubuntu 24.04 or newer** — Debian 13 (trixie), Fedora 40+, Mint 22
@@ -32,7 +32,9 @@ come here for the complete picture.
   [Troubleshooting → drivers](troubleshooting.md#driver-hint-usb-bridge-chip-detected-but-the-rig-wont-open).)
   On **Linux and the Pi**, CAT uses the system Hamlib instead: the `.deb` pulls
   `libhamlib-utils` in automatically, and AppImage users run
-  `sudo apt install libhamlib-utils` once.
+  `sudo apt install libhamlib-utils` once. On **macOS**, CAT uses Homebrew's Hamlib:
+  `brew install hamlib` in Terminal, then restart Nexus (Nexus searches the
+  Homebrew/MacPorts prefixes itself — no PATH setup needed).
 
 The installer is roughly **250 MB** because it carries the WebView2 runtime,
 Hamlib, and the DSP stack so a bare PC works with no internet. Expect the
@@ -42,7 +44,9 @@ WebView2 step to take a few quiet minutes — that is normal, let it finish.
 
 ## Download
 
-Five files ship per release:
+Six installer files ship per release (alongside them the release page also carries
+the self-updater's own artifacts and the `SHA256SUMS` list — this table is the
+files you download by hand):
 
 | File | Platform |
 |---|---|
@@ -80,6 +84,12 @@ In PowerShell, from the folder where you saved the installer:
 Get-FileHash .\Nexus_<version>_x64-setup.exe -Algorithm SHA256
 ```
 
+On macOS or Linux, in a terminal:
+
+```sh
+shasum -a 256 Nexus_<version>_aarch64.dmg
+```
+
 Compare the printed hash against the value on the release page — they must match
 exactly (case doesn't matter). If they differ, delete the file and download again
 from the official source above.
@@ -90,10 +100,12 @@ from the official source above.
 
 ## Install and the SmartScreen warning
 
-Run the installer. The published binaries are cross-compiled and **unsigned**, so
-Windows SmartScreen shows a blue *"Windows protected your PC"* dialog. This is
-expected for an unsigned installer and does not indicate a problem with the file —
-which is exactly why the SHA-256 check above is worth doing.
+Run the installer. The published Windows and Linux binaries are cross-compiled and
+**unsigned**, so Windows SmartScreen shows a blue *"Windows protected your PC"* dialog.
+This is expected for an unsigned installer and does not indicate a problem with the
+file — which is exactly why the SHA-256 check above is worth doing. (The macOS DMG is
+the exception: it is signed and notarized, so Gatekeeper opens it without a warning —
+see the macOS section below.)
 
 Click **More info**, then **Run anyway**.
 
@@ -109,11 +121,28 @@ program files land under your user profile (`%LOCALAPPDATA%\Programs\` for the
 default NSIS per-user install), and a Start-menu entry is created for your account
 only.
 
+### macOS
+
+The DMG is **signed and notarized**, so there is no Gatekeeper warning to click
+through:
+
+1. Open `Nexus_<version>_aarch64.dmg`.
+2. Drag **Nexus** into **Applications**, then eject the disk image.
+3. Launch Nexus from Applications (or Spotlight). Running it from inside the mounted
+   disk image works once, but self-update needs the app in Applications, so move it
+   first.
+4. For CAT rig control, install Hamlib once: `brew install hamlib` in Terminal, then
+   restart Nexus. (Homebrew itself is at [brew.sh](https://brew.sh).)
+
+On first launch macOS asks for **microphone access** — that is the rig's RX audio
+path; Nexus decodes nothing without it. If you declined it, re-enable it under
+**System Settings ▸ Privacy & Security ▸ Microphone** and relaunch.
+
 ---
 
 ## Upgrading
 
-**Nexus updates itself on Windows and on the Linux AppImage.** A new version
+**Nexus updates itself on Windows, on macOS, and on the Linux AppImage.** A new version
 downloads quietly in the background and then offers to install. Nothing installs
 behind your back and nothing happens on a schedule: the button waits for you, and it
 stands down while you are transmitting, tuning, in a contact or running CQ, and tells
@@ -137,7 +166,8 @@ header against the release you installed.
 ## Uninstalling
 
 On Windows, uninstall from **Settings ▸ Apps ▸ Installed apps** (or the Start-menu
-uninstaller) like any other program. On Linux and the Pi, remove the package with
+uninstaller) like any other program. On macOS, drag **Nexus** from Applications to
+the Trash. On Linux and the Pi, remove the package with
 your package manager (`apt remove`), or delete the AppImage file. Every route removes
 the program files but **leaves your data** — settings and logbook — in place, so
 reinstalling later picks up exactly where you left off. If you want a truly clean
@@ -147,11 +177,14 @@ removal, delete the data folders below by hand after uninstalling.
 
 ## Where your data lives
 
-Windows keys off `%APPDATA%`; Linux and Raspberry Pi key off `$XDG_CONFIG_HOME`, which
-is `~/.config` unless you have set it. The folder is called `tempo` on both, from the
-app's original name.
+Windows keys off `%APPDATA%`; macOS, Linux and Raspberry Pi key off `$XDG_CONFIG_HOME`,
+which is `~/.config` unless you have set it. The folder is called `tempo` everywhere,
+from the app's original name. Yes, on a Mac that means `~/.config/tempo`, not
+`~/Library/Application Support` — deliberate, so a settings backup restores across
+platforms. `~/.config` is hidden in Finder: press **⌘⇧.** in an Open dialog, or use
+**Go ▸ Go to Folder…**.
 
-| What | Windows | Linux / Raspberry Pi | Notes |
+| What | Windows | macOS / Linux / Raspberry Pi | Notes |
 |---|---|---|---|
 | Settings | `%APPDATA%\tempo\settings.json` | `~/.config/tempo/settings.json` | JSON, camelCase keys; partial files merge with defaults, so it's safe to hand-edit |
 | **Logbook** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.4 — **this is the file to back up** |
@@ -169,14 +202,16 @@ Two things worth understanding:
   re-entered; your contacts can't. Back it up. It's plain ADIF, so any logger can
   read it, and Nexus round-trips it faithfully.
 - **UI preferences don't roam with settings.** Theme, UI scale, and layout live in the
-  webview's own store — WebView2 on Windows, WebKitGTK on Linux and the Pi — not in
+  webview's own store — WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux
+  and the Pi — not in
   `settings.json`. Copying `settings.json` to another machine carries your rig and
   station config but not your theme or window layout, and clearing that store resets
   them to defaults.
 
 Credentials for online services (LoTW, QRZ, ClubLog, eQSL, HRDLog) are **not** in
-any of these files — they live in the OS keychain (Windows Credential Manager, or the
-Secret Service keyring on Linux and the Pi) and are never written to config or logs.
+any of these files — they live in the OS keychain (Windows Credential Manager, the
+macOS Keychain, or the Secret Service keyring on Linux and the Pi) and are never
+written to config or logs.
 
 ---
 
@@ -187,8 +222,8 @@ Before a reinstall, a PC migration, or just periodically, copy:
 - `log.adi` — your logbook (**the important one**)
 - `settings.json` — your rig/station config, to save re-entering it
 
-Both live in `%APPDATA%\tempo\` on Windows and `~/.config/tempo/` on Linux and the
-Pi. To restore, install Nexus, then drop those files back into that folder before
+Both live in `%APPDATA%\tempo\` on Windows and `~/.config/tempo/` on macOS, Linux
+and the Pi. To restore, install Nexus, then drop those files back into that folder before
 launching. Online-service credentials will need to be re-entered from Settings,
 since they don't leave the origin machine's keychain.
 

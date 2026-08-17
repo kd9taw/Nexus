@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The docs caught up with macOS shipping.** The FAQ, README, install guide, manual
+  and wiki no longer say "macOS does not ship" — the Mac build (signed, notarized
+  Apple Silicon DMG, self-updating) has been out since 1.5.0. The install guide gains
+  real macOS sections: drag-to-Applications install, upgrade, uninstall, where your
+  data lives (`~/.config/tempo` — same place as Linux, on purpose), a `shasum`
+  checksum example, and the one Mac-only gotcha: on first launch macOS asks for
+  microphone access, and declining it silently kills all decoding — Troubleshooting's
+  "No decodes" checklist now starts with **System Settings ▸ Privacy & Security ▸
+  Microphone**. The old "put rigctld on PATH" advice for Mac is gone everywhere; the
+  actual mechanism is `brew install hamlib` (Nexus searches the Homebrew/MacPorts
+  prefixes itself — a Finder-launched app never sees your shell PATH).
+
 - **WSPR and FST4W beaconing works the way WSJT-X's does.** Four fixes from one
   report (#101): the TX watchdog no longer halts a beacon a few intervals into a
   session — beaconing is unattended repeated transmission by design, and WSJT-X

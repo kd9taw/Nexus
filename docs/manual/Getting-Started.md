@@ -10,12 +10,12 @@ Grab the latest installer from the Nexus releases page:
 
 **<https://sourceforge.net/projects/nexus-ham-radio/files/latest/download>**
 
-The file is a standard Windows `.exe` setup — per-user, no administrator rights required. The installer bundles everything offline:
+On Windows the file is a standard `.exe` setup — per-user, no administrator rights required. The installer bundles everything offline:
 
 - **WebView2** runtime (installs cleanly on air-gapped machines)
 - **Hamlib** (`rigctld.exe`, `libhamlib-4.dll`, and companion DLLs) — CAT rig control works with no separate Hamlib install on Windows
 
-macOS and Linux users must have `rigctld` on `PATH`; Nexus will find it automatically.
+On macOS, download the `.dmg` (Apple Silicon; signed and notarized, so no Gatekeeper hoop), drag **Nexus** to **Applications**, and for CAT run `brew install hamlib` once in Terminal — Nexus finds Homebrew's `rigctld` itself, no PATH setup. Linux users install the system Hamlib once (`sudo apt install libhamlib-utils` for the AppImage; the `.deb` pulls it in automatically).
 
 ---
 
@@ -25,7 +25,7 @@ Run the installer. Because the binary is currently unsigned, Windows SmartScreen
 
 Click **More info**, then **Run anyway** to proceed. If you prefer to verify the binary yourself or avoid the prompt entirely, build from source: [Building from Source](Building-from-Source.md).
 
-The app installs per-user. Settings are written to `%APPDATA%\tempo\settings.json` and the logbook is `%APPDATA%\tempo\log.adi`. Theme and UI-scale preferences are stored in browser localStorage and stay on the local machine — they do not travel with a copied `settings.json`.
+The app installs per-user. Settings are written to `%APPDATA%\tempo\settings.json` and the logbook is `%APPDATA%\tempo\log.adi` (on macOS, Linux and the Pi both live in `~/.config/tempo/`). Theme and UI-scale preferences are stored in browser localStorage and stay on the local machine — they do not travel with a copied `settings.json`.
 
 ---
 
@@ -126,8 +126,8 @@ See [Operate: FT8 / FT4](Operate-FT8-FT4.md) for the full click model, return-to
 
 | What | Location |
 |---|---|
-| All radio/station settings | `%APPDATA%\tempo\settings.json` (JSON, camelCase keys, partial files merge with defaults) |
-| Logbook | `%APPDATA%\tempo\log.adi` (ADIF v3.1.4) |
+| All radio/station settings | `%APPDATA%\tempo\settings.json` on Windows; `~/.config/tempo/settings.json` on macOS, Linux and the Pi (JSON, camelCase keys, partial files merge with defaults) |
+| Logbook | `%APPDATA%\tempo\log.adi` on Windows; `~/.config/tempo/log.adi` on macOS, Linux and the Pi (ADIF v3.1.4) |
 | UI theme | localStorage key `tempo-theme` |
 | UI scale | localStorage key `tempo-ui-scale` |
 | Wizard seen flag | localStorage key `nexus.features.wizardSeen` |
@@ -167,7 +167,7 @@ UI scale has four steps: **90%, 100%, 110%, 125%**. The default is **125%**, cho
 
 ## Limits / not yet
 
-- The installer bundles Hamlib for **Windows only**. Linux and macOS users need `rigctld` on `PATH`.
+- The installer bundles Hamlib for **Windows only**. Linux users install `libhamlib-utils` once; macOS users run `brew install hamlib` once (Nexus searches the Homebrew/MacPorts prefixes itself — "on PATH" is not the mechanism, since a Finder-launched app never sees your shell PATH).
 - Rig auto-detection requires the full `radio` Cargo feature (the headless/UI-dev build returns empty lists for ports, audio, and detected rigs).
 - The curated rig model table covers ~50 radios. For a rig not in the table, run an external `rigctld` and select **NET rigctl** (model 2) in the dropdown.
 - Generic-cable rigs (CH340, FTDI dongle reporting only "USB Serial") get a driver hint and port fill but no model match — the operator must select the model manually.

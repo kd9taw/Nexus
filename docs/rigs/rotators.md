@@ -17,7 +17,8 @@ hand.
 Everything lives in **Settings ▸ Radio ▸ Rig & CAT ▸ Antenna rotator**:
 
 1. Pick your **rotator model** from the dropdown.
-2. Set its **serial port** (COM7, `/dev/ttyUSB1`, …) and **baud** (GS-232
+2. Set its **serial port** (COM7 on Windows, `/dev/cu.usbserial-…` on macOS,
+   `/dev/ttyUSB1` on Linux) and **baud** (GS-232
    defaults to 9600).
 3. **Save.** Nexus launches the control daemon automatically.
 

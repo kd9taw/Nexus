@@ -12,7 +12,7 @@ Yes. Nexus is **GPLv3** open-source software. Source lives at [kd9taw/nexus](htt
 
 ### What operating systems does Nexus run on?
 
-**Windows, Linux and Raspberry Pi** all ship, built from the same tree every release: an NSIS installer, an AppImage, a PC `.deb`, and a `.deb` per live Raspberry Pi OS base. **macOS is not packaged yet** and no mobile or web client exists — see [Roadmap](Roadmap.md).
+**Windows, macOS, Linux and Raspberry Pi** all ship, built from the same tree every release: an NSIS installer, a signed and notarized Apple Silicon `.dmg` (since 1.5.0), an AppImage, a PC `.deb`, and a `.deb` per live Raspberry Pi OS base. Intel Macs are source-build only, and no mobile or web client exists — see [Roadmap](Roadmap.md).
 
 ---
 
@@ -43,7 +43,7 @@ For Field Day specifically, Nexus pushes each contact to N3FJP over TCP (ADDDIRE
 
 ### Do I need to install Hamlib separately?
 
-**On Windows, no.** The installer bundles `rigctld.exe` plus the required DLLs (`libhamlib-4.dll`, `libusb-1.0.dll`, and the MinGW runtime). Nexus spawns and manages rigctld internally on port 4532 — you never run it manually. On Linux and macOS you must have `rigctld` on PATH (or build with the bundled resources manually) because those platform installers do not include it yet.
+**On Windows, no.** The installer bundles `rigctld.exe` plus the required DLLs (`libhamlib-4.dll`, `libusb-1.0.dll`, and the MinGW runtime). Nexus spawns and manages rigctld internally on port 4532 — you never run it manually. On Linux, install the system Hamlib once (the `.deb` pulls `libhamlib-utils` in for you; AppImage users run `sudo apt install libhamlib-utils`). On macOS, `brew install hamlib` in Terminal, then restart Nexus — Nexus searches the Homebrew/MacPorts prefixes itself, so no PATH setup is needed (a Finder-launched app never sees your shell PATH anyway).
 
 The bundled Hamlib model table covers approximately 50 radios (Icom, Yaesu, Kenwood, Elecraft, FlexRadio, Xiegu, QRP Labs, and others), verified against Hamlib 4.7.1. For a radio not on that list, run an external `rigctld` for it and connect Nexus as **NET rigctl** (model 2, in the dropdown).
 
@@ -113,7 +113,7 @@ Yes — a live single-signal decoder follows the station at your marker pitch an
 
 ### Does Nexus run on Linux or macOS?
 
-The desktop shell is packaged for **Windows, Linux and Raspberry Pi**, all from the same tree. **macOS is not packaged yet**; the codebase is cross-platform Rust and Tauri, so it is a packaging and testing job rather than a port. You can also build any platform from source — see [Building from Source](Building-from-Source.md).
+The desktop shell is packaged for **Windows, macOS (Apple Silicon), Linux and Raspberry Pi**, all from the same tree. The macOS build ships since 1.5.0 as a signed, notarized `.dmg` and self-updates; Intel Macs build from source. You can also build any platform from source — see [Building from Source](Building-from-Source.md).
 
 ---
 
