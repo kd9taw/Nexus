@@ -2146,6 +2146,7 @@ export default function App() {
         theme={theme}
         onTune={handleTune}
         paletteScope={FT_PALETTE_SCOPE}
+        txBlanks // FT surface — a 13 s over may go dark; see the prop's doc.
       />
       <OperateDecodes
         decodes={snap.recentDecodes}

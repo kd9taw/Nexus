@@ -91,6 +91,101 @@ let agcScratch = new Float64Array(0)
 export const TRACE_HOLD_MS = { fast: 120, normal: 250, slow: 400 } as const
 
 /**
+ * How long one spectrum-row fetch may be in flight before the render loop gives up on it.
+ *
+ * Two orders of magnitude above the slowest normal row cadence (480 ms under reduced motion),
+ * so a merely slow backend is never abandoned mid-answer, and short enough that an operator
+ * watching a stalled display sees it come back rather than concluding the app is dead.
+ */
+export const ROW_FETCH_STUCK_MS = 5000
+
+/**
+ * The single-flight latch the waterfall and the rig scope both poll behind — with a way out.
+ *
+ * ⚠️ WHY THIS IS A CLASS AND NOT TWO BOOLEANS (field reports, 2026-08-17: "the waterfall
+ * stops"). Both render loops guarded their async row fetch with a bare `drawing` flag so a slow
+ * row simply skips its tick. `invoke` has NO TIMEOUT, so one call that never settles — neither
+ * resolves nor rejects — latched that flag for the life of the mount: the rAF loop kept
+ * spinning and the overlay kept repainting, so the display looked alive while no row was ever
+ * fetched again. Decodes arrive on their own channel and kept coming, which is what made this
+ * read as "the waterfall died but the radio is fine" instead of as a hang.
+ *
+ * The escape needs a GENERATION COUNTER, not just a flag reset, and that is the part worth
+ * having in one tested place rather than copied into two hot loops: once the watchdog gives a
+ * call up, that call may still resolve later, and it must then neither draw (its row is stale
+ * and the history ring must stay 1:1 with what was blitted) nor clear the latch (which by then
+ * belongs to a live fetch). Both are the same bug — a zombie call touching state it no longer
+ * owns — and both are closed by refusing to recognise a generation that has moved on.
+ *
+ * Nothing here cancels anything. There is no cancellation to have: the promise is whatever the
+ * IPC bridge returned. A wedged bridge simply gets re-asked on the next tick instead of being
+ * waited on forever.
+ */
+export class RowFetchLatch {
+  private busy = false
+  /** Clock reading at which the in-flight fetch started. Meaningful only while `busy` —
+   * `busy` is the sole authority on idleness, because 0 is a legitimate clock reading and a
+   * sentinel here would make the watchdog blind at exactly one moment. */
+  private since = 0
+  /** Bumped by every claim AND by every abandonment, so a generation is never reused. */
+  private gen = 0
+  private warned = false
+
+  /** `label` names the surface in the one console warning; `limitMs` is the patience. */
+  constructor(
+    private readonly label: string,
+    private readonly limitMs: number = ROW_FETCH_STUCK_MS,
+  ) {}
+
+  /** True while a fetch owns the latch. */
+  get inFlight(): boolean {
+    return this.busy
+  }
+
+  /**
+   * Give up on a fetch that has been in flight past the limit, freeing the latch for the next
+   * tick. Returns true if it just did — call this BEFORE testing `inFlight`.
+   *
+   * Warns at most once per instance: a wedged bridge would otherwise flood the console at
+   * frame rate, which buries the one line that explains the symptom.
+   */
+  abandonIfStuck(now: number): boolean {
+    if (!this.busy || now - this.since <= this.limitMs) return false
+    this.gen++
+    this.busy = false
+    this.since = 0
+    if (!this.warned) {
+      this.warned = true
+      console.warn(
+        `[${this.label}] spectrum row fetch did not settle within ${this.limitMs} ms; ` +
+          'abandoning it and resuming the poll',
+      )
+    }
+    return true
+  }
+
+  /** Claim the latch for a new fetch. Returns its generation, or `null` if one is in flight. */
+  begin(now: number): number | null {
+    if (this.busy) return null
+    this.busy = true
+    this.since = now
+    return ++this.gen
+  }
+
+  /** Does `gen` still own the latch? A call the watchdog abandoned does not, and must not draw. */
+  owns(gen: number): boolean {
+    return gen === this.gen
+  }
+
+  /** Release the latch — ignored unless `gen` still owns it. */
+  end(gen: number): void {
+    if (gen !== this.gen) return
+    this.busy = false
+    this.since = 0
+  }
+}
+
+/**
  * Fraction of a held trace peak still standing `ms` after the signal stops — `exp(-ms/tau)`.
  *
  * Time-based rather than per-frame so the fade runs at the same speed under reduced-motion's

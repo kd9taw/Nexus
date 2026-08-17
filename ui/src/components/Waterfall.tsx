@@ -11,6 +11,7 @@ import {
   parkFloor,
   resampleRow,
   resolveColormap,
+  RowFetchLatch,
   WATERFALL_ZOOMS,
   WF_FLOOR_PCT,
   coerceZoomSpan,
@@ -128,6 +129,17 @@ interface Props {
    * inheriting a pick made in another mode. Unset = the shared master palette, which is
    * what the RTTY and SSTV waterfalls want (they move with the CW/Phone scopes). */
   paletteScope?: string
+  /** Paint a DARK BAND for the duration of our own transmission (and freeze the visual AGC
+   * with it). See the fill site in `drawRow` for the full argument.
+   *
+   * ⚠️ DEFAULT FALSE, and the default is the point. This is an FT-surface behavior: an FT8/FT4
+   * over is 13 seconds, so a black band is read as "that was us transmitting" and the picture
+   * is honest about having no receiver during it. The SAME component draws the RTTY cockpit's
+   * and SSTV's band, where an over runs MINUTES — there a scrolling black band is
+   * indistinguishable from a dead waterfall, and field reports (2026-08-17) read it as exactly
+   * that. Those surfaces keep the pre-1.5 behavior of painting the rows they are served, which
+   * under the backend's transmit hold is the last real picture of the band. */
+  txBlanks?: boolean
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -159,6 +171,7 @@ export function Waterfall({
   hint,
   rowMs = 120,
   paletteScope,
+  txBlanks = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -180,6 +193,7 @@ export function Waterfall({
   )
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
+  const txBlanksRef = useRef(txBlanks)
   const themeRef = useRef(theme)
   const rxOffRef = useRef(rxOffsetHz)
   const txOffRef = useRef(txOffsetHz)
@@ -227,6 +241,7 @@ export function Waterfall({
   const rebuildRef = useRef<(() => void) | null>(null)
 
   txRef.current = transmitting
+  txBlanksRef.current = txBlanks
   themeRef.current = theme
   rxOffRef.current = rxOffsetHz
   txOffRef.current = txOffsetHz
@@ -277,7 +292,10 @@ export function Waterfall({
     const octx = overlay?.getContext('2d') ?? null
 
     let running = true
-    let drawing = false // single-flight guard: never overlap async drawRow calls
+    // Single-flight guard WITH a watchdog: never overlap async drawRow calls, and never let
+    // one that does not settle latch the waterfall dead for the life of the mount. See
+    // `RowFetchLatch` for the failure this closes and why the generation counter is load-bearing.
+    const latch = new RowFetchLatch('waterfall')
     let acc = 0
     let last = performance.now()
     // Row cadence comes from the rowMs prop (via ref — this effect runs once): 120 on the FT
@@ -445,7 +463,7 @@ export function Waterfall({
       ro.observe(canvas)
     }
 
-    const drawRow = async () => {
+    const drawRow = async (myGen: number) => {
       // Fetch FIRST, so the scroll + new-row blit stay atomic and 1:1 with data:
       // an empty/failed row must NOT scroll (that would duplicate + smear the
       // bottom line and desync the AGC/legend from the displayed pixels).
@@ -455,6 +473,11 @@ export function Waterfall({
       } catch {
         return
       }
+      // Superseded while we were awaiting: the watchdog gave this call up for lost and the
+      // waterfall has moved on. Resolving late must not append a row out of order — the
+      // history ring and the leading-edge blit are the same picture, and a stale row would
+      // put a wrong scanline into both.
+      if (!latch.owns(myGen)) return
       const row = spec.row
       if (!row || row.length === 0) return
       // The FT8/FT4 waterfall shows the AUDIO passband (0–4000 Hz) and is NOT source-aware, so a
@@ -505,7 +528,18 @@ export function Waterfall({
       // in this file exists to prevent). Zeroing `frow` itself puts the floor into BOTH
       // consumers by construction: the leading-edge write and the retained history. The
       // AGC is frozen on the same flag, so the darkness cannot re-create the key-up clamp.
-      if (txRef.current) frow.fill(0)
+      //
+      // ⚠️ ONLY WHERE THE OVER IS SHORT — see the `txBlanks` prop. The dark band is honest
+      // ONLY because an FT8/FT4 over lasts 13 seconds: it reads as "that was us", and during
+      // it there genuinely is no receiver to picture. The same band under RTTY or SSTV runs
+      // for minutes, and a waterfall that scrolls solid black for minutes is
+      // indistinguishable from one that has died — field reports (2026-08-17) called exactly
+      // that "the waterfall stops". Those surfaces therefore paint the row they are served;
+      // the backend's transmit hold makes that the last real picture of the band rather than
+      // the muted codec, so the key-up clamp this whole mechanism exists to prevent cannot
+      // come back through this branch either.
+      const blanking = txBlanksRef.current && txRef.current
+      if (blanking) frow.fill(0)
 
       // visual-AGC over the VISIBLE window only, EMA-smoothed across frames.
       //
@@ -530,7 +564,12 @@ export function Waterfall({
       // pre-TX picture. The backend holds its published row through TX as well (the same
       // report's second seam), so this guard mostly sees the LAST REAL row anyway — it
       // remains because a monitor path or an in-flight row can still arrive keyed.
-      if (!txRef.current) {
+      //
+      // Paired with the fill above on the SAME condition, deliberately: the freeze is what
+      // stops the zeroed row from re-creating the key-up clamp, so a surface that does not
+      // blank must not freeze either — it is being served the real band and its AGC should
+      // track it. Splitting the two conditions is how the clamp comes back.
+      if (!blanking) {
         if (!agcInit) {
           agcFloor = floor
           agcCeil = ceil
@@ -773,16 +812,20 @@ export function Waterfall({
       acc += now - last
       last = now
       const rowMs = reducedMotion() ? ROW_MS_REDUCED : rowMsRef.current
-      // single-flight: only advance the waterfall when no fetch is in flight, so
-      // a slow row simply skips its tick (history stays exactly 1:1 with data).
-      if (acc >= rowMs && !drawing) {
-        acc = 0
-        drawing = true
-        drawRow()
-          .catch(() => {})
-          .finally(() => {
-            drawing = false
-          })
+      // A fetch that never settles must not latch the waterfall dead — give it up and let the
+      // next tick poll again. BEFORE the claim below, so the freed latch is usable this
+      // same tick.
+      latch.abandonIfStuck(now)
+      // single-flight: `begin` refuses while a fetch is in flight, so a slow row simply skips
+      // its tick (history stays exactly 1:1 with data) and `acc` keeps accumulating.
+      if (acc >= rowMs) {
+        const myGen = latch.begin(now)
+        if (myGen !== null) {
+          acc = 0
+          drawRow(myGen)
+            .catch(() => {})
+            .finally(() => latch.end(myGen))
+        }
       }
       // Overlay is decoupled from the data fetch: repaint every frame so the
       // markers, click-to-tune feedback, and decode chips stay live and never

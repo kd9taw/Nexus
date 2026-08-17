@@ -468,6 +468,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           theme={theme}
           active={active}
           rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
+          // NO `txBlanks` — deliberately, do not add it. An RTTY over has no fixed length and
+          // a latched one runs to the 10-minute ceiling; the FT surfaces' dark band would
+          // scroll solid black for all of it, which field reports (2026-08-17) read as a dead
+          // waterfall. See the prop's doc in Waterfall.tsx.
           transmitting={snap?.radio.transmitting ?? false}
           rxOffsetHz={(rtty.markHz + rtty.spaceHz) / 2}
           txOffsetHz={0}

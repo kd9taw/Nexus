@@ -10,6 +10,7 @@ import {
   normalize,
   resolveColormap,
   agcRange,
+  RowFetchLatch,
   SCOPE_WINDOW_DB,
   WF_FLOOR_PCT,
   scopeView,
@@ -326,7 +327,10 @@ export function PhoneScope({
     if (!ctx) return
 
     let running = true
-    let drawing = false
+    // Single-flight WITH a watchdog — see `RowFetchLatch`. The scope needs it at least as much
+    // as the waterfall does: there is no independent overlay repaint here, so one never-settling
+    // fetch froze the whole instrument (trace and all) for the life of the mount.
+    const latch = new RowFetchLatch('scope')
     let acc = 0
     let last = performance.now()
     // ~20 Hz — plenty smooth for a scope, and the row is now cached engine-side (computed once per
@@ -461,7 +465,7 @@ export function PhoneScope({
       ro.observe(canvas)
     }
 
-    const drawRow = async () => {
+    const drawRow = async (myGen: number) => {
       let spec
       try {
         // Ask for the row over the window this scope is DRAWING, not the whole 0-4000 Hz
@@ -478,6 +482,9 @@ export function PhoneScope({
       } catch {
         return
       }
+      // Superseded while awaiting — the watchdog gave this call up. Drawing now would put a
+      // stale trace and a stale waterfall row on screen out of order.
+      if (!latch.owns(myGen)) return
       const row = spec.row
       if (!row || row.length === 0) return
       // Surface which feed is live (only re-render on a change, not every 30 Hz frame).
@@ -829,14 +836,17 @@ export function PhoneScope({
       acc += now - last
       last = now
       const rowMs = reducedMotion() ? ROW_MS_REDUCED : ROW_MS
-      if (acc >= rowMs && !drawing) {
-        acc = 0
-        drawing = true
-        drawRow()
-          .catch(() => {})
-          .finally(() => {
-            drawing = false
-          })
+      // Give up on a fetch that never settles, so the scope resumes polling instead of sitting
+      // frozen but mounted. Before the claim, so the freed latch is usable now.
+      latch.abandonIfStuck(now)
+      if (acc >= rowMs) {
+        const myGen = latch.begin(now)
+        if (myGen !== null) {
+          acc = 0
+          drawRow(myGen)
+            .catch(() => {})
+            .finally(() => latch.end(myGen))
+        }
       }
       rafRef.current = requestAnimationFrame(loop)
     }

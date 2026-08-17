@@ -1564,6 +1564,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               theme={theme}
               active={active}
               rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
+              // NO `txBlanks` — deliberately, do not add it. Scottie DX is ~4.5 minutes of
+              // continuous keying; the FT surfaces' dark band would scroll solid black for the
+              // whole transmission, which is exactly what field reports (2026-08-17) called
+              // "the waterfall stops". See the prop's doc in Waterfall.tsx.
               transmitting={snap?.radio.transmitting ?? false}
               rxOffsetHz={0}
               txOffsetHz={0}

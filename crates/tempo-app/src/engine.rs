@@ -43,6 +43,11 @@ struct FeedRows {
     /// See [`SpectrumFeed::scope_row`] — this is the second slot, not a second feed.
     scope_req: Option<ScopeReq>,
     scope: Option<RowAverage>,
+    /// When the CURRENT transmit hold began, or `None` when not holding. Maintained on the
+    /// EDGES only (see [`SpectrumFeed::set_tx_hold`]) and read by the publishers to bound how
+    /// long a hold may keep the last real picture looking fresh — see
+    /// [`SpectrumFeed::TX_HOLD_MAX`].
+    tx_hold_since: Option<Instant>,
     /// The window length the rows in `scope` were computed at. Tracked SEPARATELY from
     /// `scope_req` because the request expires and this must not: a scope that goes away at
     /// Balanced and comes back at Sharp would otherwise find no request to compare against, and
@@ -186,6 +191,10 @@ pub struct SpectrumFeed {
     /// handle), so the RADIO LOOP — which owns the keying decision — sets this atomic every
     /// tick. The UI freezes its AGC on the same condition as a second seam for rows already
     /// in flight.
+    ///
+    /// ⚠️ THE HOLD IS BOUNDED IN TIME — see [`Self::TX_HOLD_MAX`]. A flag that is stuck true
+    /// upstream would otherwise keep the 2 s staleness fuse in [`Self::row`] permanently
+    /// disarmed, and a frozen display that still looks live is the worst of both failures.
     tx_hold: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -200,10 +209,56 @@ impl SpectrumFeed {
     /// rows), so a real reader never meets it.
     const MAX_AVG_FRAMES: u32 = 32;
 
+    /// Ceiling on how long ONE transmit hold may keep the last real picture looking fresh.
+    ///
+    /// ⚠️ WHY (field reports, 2026-08-17: "the waterfall just stops"). The hold works by
+    /// refreshing `RowAverage::at` on every dropped frame, which is exactly what disarms the
+    /// 2 s staleness fuse in [`Self::row`]. That is right for an over and wrong forever: while
+    /// the flag is up the display is frozen but indistinguishable from a live one, so an
+    /// upstream flag that never clears turns a diagnosable stall into a silent lie. Past this
+    /// age the stamp stops being refreshed, the existing fuse fires on its own schedule, and
+    /// the waterfall stops HONESTLY. Nothing is unkeyed and no latch is touched — this is a
+    /// display fuse, not a transmit control — and it self-heals the instant real publishes
+    /// resume, because a real publish restarts the window.
+    ///
+    /// SIX MINUTES, derived from the longest legitimate over rather than from comfort: SSTV
+    /// Scottie DX is ~4.5 minutes of continuous keying, the longest single transmission this
+    /// app produces. Six leaves headroom above it while staying on the same scale as the
+    /// wall-clock TX watchdog (`settings.tx_watchdog_min`, minutes) and below
+    /// [`Engine::RTTY_MAX_LATCH_MS`] (10 min), so a legitimate over can never reach it and a
+    /// stuck flag always does.
+    ///
+    /// ⚠️ THIS IS A SYMPTOM FUSE, NOT THE CURE. The flags that can stick are separate
+    /// root-cause bugs and are deliberately NOT touched here: a lost pointer-up leaves
+    /// `manual_ptt` applied; a CAT-broker client that disconnects while holding PTT leaves
+    /// [`Engine::broker_ptt`] set (engine.rs, `broker_ptt`); and RTTY's `rtty_busy_until`
+    /// re-push in `tempo_audio::service` extends `tx_until_ms` from inside the stream loop.
+    /// Each needs fixing where it is set.
+    const TX_HOLD_MAX: Duration = Duration::from_secs(6 * 60);
+
     /// Set/clear the transmit hold — the radio loop, every tick, from the keying state it owns.
+    ///
+    /// The steady state is still ONE relaxed atomic store per tick; only the EDGES take the
+    /// mutex, so the hold's age costs nothing to maintain on the hot path.
     pub fn set_tx_hold(&self, keyed: bool) {
-        self.tx_hold
-            .store(keyed, std::sync::atomic::Ordering::Relaxed);
+        if self
+            .tx_hold
+            .swap(keyed, std::sync::atomic::Ordering::Relaxed)
+            == keyed
+        {
+            return;
+        }
+        if let Ok(mut g) = self.rows.lock() {
+            g.tx_hold_since = keyed.then(Instant::now);
+        }
+    }
+
+    /// Is the hold that started at `since` still young enough to keep the last real picture
+    /// alive? `None` means the edge has not been recorded yet — a sub-microsecond window
+    /// between the atomic swap and the lock in [`Self::set_tx_hold`] — and is treated as young,
+    /// which is the pre-fuse behavior for the one frame that can land in it.
+    fn hold_is_young(since: Option<Instant>) -> bool {
+        since.is_none_or(|at| at.elapsed() < Self::TX_HOLD_MAX)
     }
 
     /// Publish the audio-FFT row (the rx-dsp thread) into the running average.
@@ -211,10 +266,14 @@ impl SpectrumFeed {
         if let Ok(mut g) = self.rows.lock() {
             // Under the TX hold the frame is a picture of the muted receiver, not the band —
             // drop it, and keep the LAST REAL picture's freshness alive so readers repeat it
-            // instead of going stale-empty mid-over (see `tx_hold`).
+            // instead of going stale-empty mid-over (see `tx_hold`). The frame is dropped for
+            // as long as the flag is up; only the FRESHNESS LIE is bounded, so a hold older
+            // than `TX_HOLD_MAX` lets the staleness fuse in `row` fire.
             if self.tx_hold.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(avg) = g.audio.as_mut() {
-                    avg.at = Instant::now();
+                if Self::hold_is_young(g.tx_hold_since) {
+                    if let Some(avg) = g.audio.as_mut() {
+                        avg.at = Instant::now();
+                    }
                 }
                 return;
             }
@@ -313,9 +372,12 @@ impl SpectrumFeed {
     /// a zoom or a cockpit swap can never blend two windows into one picture.
     pub fn publish_scope(&self, row: Spectrum) {
         if let Ok(mut g) = self.rows.lock() {
+            // Same bound as the audio slot — see `publish_audio` and `TX_HOLD_MAX`.
             if self.tx_hold.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(avg) = g.scope.as_mut() {
-                    avg.at = Instant::now();
+                if Self::hold_is_young(g.tx_hold_since) {
+                    if let Some(avg) = g.scope.as_mut() {
+                        avg.at = Instant::now();
+                    }
                 }
                 return;
             }
@@ -391,6 +453,16 @@ impl SpectrumFeed {
         if let Ok(mut g) = self.rows.lock() {
             if let Some(req) = g.scope_req.as_mut() {
                 req.at = Instant::now() - by;
+            }
+        }
+    }
+
+    /// Test-only: age the current TX hold to simulate a keying flag that stuck up.
+    #[cfg(test)]
+    pub fn backdate_tx_hold_for_test(&self, by: Duration) {
+        if let Ok(mut g) = self.rows.lock() {
+            if let Some(at) = g.tx_hold_since.as_mut() {
+                *at = Instant::now() - by;
             }
         }
     }
@@ -24724,6 +24796,63 @@ mod tests {
             (after.row[0] - 0.75).abs() < 1e-6,
             "after the hold the band reappears immediately, unblended: got {}",
             after.row[0]
+        );
+    }
+
+    /// A hold that outlives every legitimate over stops disarming the staleness fuse.
+    ///
+    /// The sibling of the test above, and the field-reported failure it exists for: an upstream
+    /// keying flag that never clears (a lost pointer-up, a CAT-broker client that vanished
+    /// holding PTT, an RTTY re-push) would otherwise refresh the freshness stamp forever, and
+    /// the operator gets a frozen waterfall that looks exactly like a live one. Past
+    /// `TX_HOLD_MAX` the stamp goes cold, the existing 2 s fuse fires, and the display stops
+    /// honestly — then heals the moment real frames come back.
+    #[test]
+    fn a_tx_hold_older_than_the_ceiling_stops_faking_freshness() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        feed.set_tx_hold(true);
+
+        // The muted receiver, published while keyed. Each round below ages the stamp past the
+        // 2 s fuse FIRST, so what is under test is purely whether the dropped frame refreshes
+        // it back to fresh — which is the whole mechanism of the hold.
+        let mut muted = spec(0.0, 4000.0, "audio");
+        muted.row = vec![0.001; 512];
+
+        // CONTROL: a young hold keeps the last real picture alive, exactly as during an over.
+        feed.backdate_audio_for_test(Duration::from_secs(30));
+        feed.publish_audio(muted.clone());
+        assert!(
+            !feed.row().expect("a slot exists").row.is_empty(),
+            "control: under a YOUNG hold the reader must still get the pre-TX picture"
+        );
+
+        // The same hold, older than any legitimate over.
+        feed.backdate_tx_hold_for_test(SpectrumFeed::TX_HOLD_MAX + Duration::from_secs(1));
+        feed.backdate_audio_for_test(Duration::from_secs(30));
+        feed.publish_audio(muted);
+        assert!(
+            feed.row().expect("a slot exists").row.is_empty(),
+            "a stuck hold must stop refreshing the stamp so the staleness fuse can fire — \
+             a frozen waterfall that looks live is the failure this bounds"
+        );
+
+        // Self-healing: a real frame is published the instant the flag clears, and the
+        // display comes straight back with no operator action.
+        feed.set_tx_hold(false);
+        let mut real = spec(0.0, 4000.0, "audio");
+        real.row = vec![0.75; 512];
+        feed.publish_audio(real);
+        let back = feed.row().expect("row");
+        assert_eq!(
+            back.row.len(),
+            512,
+            "the fuse must self-heal on the first real frame, not stay empty"
+        );
+        assert!(
+            (back.row[0] - 0.75).abs() < 1e-6,
+            "the healed row is the new real frame, unblended with the muted ones: got {}",
+            back.row[0]
         );
     }
 

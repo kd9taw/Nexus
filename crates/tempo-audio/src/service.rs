@@ -2253,6 +2253,16 @@ struct RadioLoop {
     /// Monitor/VoiceMic may write only over None or themselves, and clear only
     /// what they own.
     err_owner: ErrOwner,
+    /// A rebuilt capture device has OPENED but has not yet delivered a single frame.
+    ///
+    /// ⚠️ WHY (field reports, 2026-08-17: "the waterfall stops"). The reopen arm used to clear
+    /// the banner on OPEN success, and an open is not a recovery: a device that accepts the
+    /// open and then streams nothing left the operator with a dead waterfall, no decodes and
+    /// NO diagnosis — the one state where the app knows something is wrong and says nothing.
+    /// While this is set the banner says the reopen is waiting for samples, and it comes down
+    /// on the first tick the card actually delivers (`card_delivered`, the same authority the
+    /// death-confirmation path uses). Nothing here changes the rebuild itself.
+    audio_awaiting_samples: bool,
     /// Latest measured PC-clock-vs-UTC offset (ms, `local − UTC`), read from the
     /// engine each loop and SUBTRACTED from the system clock so TX/RX slots land
     /// on the true UTC grid even when the OS clock is skewed. 0 until measured.
@@ -2334,6 +2344,7 @@ impl RadioLoop {
             dax_saw_audio: false,
             dax_tee_set: false,
             err_owner: ErrOwner::None,
+            audio_awaiting_samples: false,
             early_done_slot: None,
             early_msk_done: None,
             boundary_keyed: None,
@@ -3250,6 +3261,23 @@ impl RadioLoop {
                     self.audio_rebuild_pending = Some(err);
                 }
             }
+            // THE REBUILT CARD HAS TO DELIVER BEFORE THE BANNER COMES DOWN. Placed here, ahead
+            // of the rebuild below, so the flag a rebuild sets later in THIS tick is never
+            // cleared by the capture that happened before it — `card_delivered` was read from
+            // the OLD backend at the top of `step`, and only the next tick's read is evidence
+            // about the new one.
+            if self.audio_awaiting_samples && card_delivered {
+                self.audio_awaiting_samples = false;
+                // Only if we still own the line: a device failure that arrived in between
+                // outranks this and must not be erased by a late first frame.
+                if self.err_owner == ErrOwner::Device {
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.set_audio_error(None);
+                    }
+                    self.err_owner = ErrOwner::None;
+                }
+            }
             // NO REBUILD WHILE KEYED. The rebuild path unconditionally runs flush_output() +
             // ptt(false) + halt_tx_for_context_change(), so letting it fire mid-over would abort a
             // transmission that the operator never asked to stop — and nothing but an explicit
@@ -3361,11 +3389,23 @@ impl RadioLoop {
                         if let Some((ring, rate)) = backend.spectrum_tap() {
                             self.rx_tap.publish_card(ring, rate);
                         }
+                        // ⚠️ AN OPEN IS NOT A RECOVERY — the banner stays up until the card
+                        // DELIVERS. Clearing it here (which is what this did) reported success
+                        // on the strength of `reopen_audio` returning `Ok`, and a device that
+                        // opens and then streams nothing is exactly the case the operator
+                        // cannot diagnose: no waterfall, no decodes, no message. The line is
+                        // handed to `audio_awaiting_samples`, and the clear moves to the first
+                        // tick `card_delivered` is true. `ErrOwner::Device` is kept for the
+                        // same span so monitor/voice-mic notices cannot take the line and
+                        // erase the wait.
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(None);
+                            eng.set_audio_error(Some(
+                                "Audio device reopened, waiting for samples…".to_string(),
+                            ));
                         }
-                        self.err_owner = ErrOwner::None;
+                        self.err_owner = ErrOwner::Device;
+                        self.audio_awaiting_samples = true;
                         self.audio_retry_at = None; // it opened — stop retrying
                                                     // The fresh backend has NO mic stream — a stale-true flag
                                                     // here fed the recorder empty audio for the rest of a
@@ -14495,6 +14535,174 @@ mod tests {
         );
     }
 
+    /// Drive a confirmed card death through to the rebuild.
+    ///
+    /// The shared preamble of the two delivery tests below: settle so nothing but the death
+    /// explains a rebuild, kill the stream, stay silent past the confirmation window. Returns
+    /// once the rebuild has run, with the loop parked on a freshly opened device that has
+    /// delivered NOTHING — whether it ever does is what each test then scripts, by queueing
+    /// (or not queueing) a capture chunk on `backend`, which the rebuild's swap now owns.
+    fn rebuild_after_death(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        backend: &mut MockBackend,
+    ) {
+        let mut rig = Rig::vox();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+        let mut ra = mock_reopen_audio();
+        state
+            .step(
+                engine,
+                backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        engine.lock().unwrap().set_audio_error(None);
+
+        backend.stream_error = Some("capture stream: device no longer available".to_string());
+        let mut ra_new = mock_reopen_audio();
+        // Probation…
+        state
+            .step(
+                engine,
+                backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra_new,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        // …then silence past the confirmation window: the card really is dead, rebuild.
+        state
+            .step(
+                engine,
+                backend,
+                &mut rig,
+                &sinks,
+                20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
+                &mut ra_new,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+    }
+
+    /// One `step` at `now`, with a rebuild closure that must never be called.
+    fn quiet_step(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        backend: &mut MockBackend,
+        now: f64,
+    ) {
+        let mut rig = Rig::vox();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+        let mut ra = mock_reopen_audio();
+        state
+            .step(
+                engine,
+                backend,
+                &mut rig,
+                &sinks,
+                now,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+    }
+
+    /// A device that OPENS and then streams nothing must keep the operator informed.
+    ///
+    /// ⚠️ THE FIELD REPORT THIS EXISTS FOR (2026-08-17, "the waterfall stops"). The reopen arm
+    /// cleared the banner on open success, so a card that accepted the open and then delivered
+    /// no frames produced the worst state the app can be in: dead waterfall, no decodes, and a
+    /// clean screen claiming everything is fine. An open is a promise, not a recovery.
+    #[test]
+    fn a_rebuilt_card_that_never_delivers_keeps_the_banner_up() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        // The replacement opens fine and never delivers a sample — the strandable case.
+        rebuild_after_death(&engine, &mut state, &mut backend);
+
+        // Several ticks of silence. Nothing about the passage of time is evidence of recovery.
+        for i in 0..5 {
+            quiet_step(
+                &engine,
+                &mut state,
+                &mut backend,
+                200.0 + f64::from(i) * 20.0,
+            );
+            let msg = engine.lock().unwrap().snapshot().radio.audio_error;
+            assert!(
+                msg.as_deref()
+                    .is_some_and(|m| m.contains("waiting for samples")),
+                "tick {i}: a reopened device that has delivered nothing must stay on the banner, \
+                 not report success — got {msg:?}"
+            );
+        }
+        assert!(
+            state.audio_awaiting_samples,
+            "and the loop must still know it is waiting"
+        );
+    }
+
+    /// …and the banner comes down the moment it actually delivers.
+    ///
+    /// The other half of the guard, and the half that keeps it from being a permanent scare:
+    /// the clear is triggered by the CARD, on the same `card_delivered` signal the death
+    /// confirmation reads, so a real recovery needs no timer and no operator action.
+    #[test]
+    fn a_rebuilt_card_that_delivers_clears_the_banner() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        rebuild_after_death(&engine, &mut state, &mut backend);
+
+        // CONTROL: still waiting before the first frame — otherwise "it cleared" would prove
+        // nothing about delivery.
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .snapshot()
+                .radio
+                .audio_error
+                .as_deref()
+                .is_some_and(|m| m.contains("waiting for samples")),
+            "control: the banner must be up before the card delivers"
+        );
+
+        // The rebuilt stream comes to life.
+        backend.queue_capture(vec![0.01_f32; 512]);
+        quiet_step(&engine, &mut state, &mut backend, 200.0);
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.audio_error,
+            None,
+            "the first delivered frame IS the recovery — the banner must come down on it"
+        );
+        assert!(
+            !state.audio_awaiting_samples,
+            "and the wait is over, not merely quiet"
+        );
+        assert_eq!(
+            state.err_owner,
+            ErrOwner::None,
+            "the audio-error line is released too, so a monitor/voice-mic notice can use it again"
+        );
+    }
+
     #[test]
     fn a_stream_killed_by_the_os_raises_the_banner_and_reopens_the_card() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
@@ -14570,11 +14778,18 @@ mod tests {
             "a dead stream must reopen the sound card — `audio_differs` is blind to a device \
              vanishing, so without this the card stays dead for the rest of the session"
         );
-        assert_eq!(
-            engine.lock().unwrap().snapshot().radio.audio_error,
-            None,
-            "a reopen that SUCCEEDED means the card is back; the banner must clear itself rather \
-             than leave a stale scare on screen"
+        // ⚠️ THIS ASSERTION USED TO BE `None` — "a reopen that SUCCEEDED means the card is
+        // back". It does not, and that is field-report #3 of 2026-08-17: an open only proves
+        // the device accepted the call. This mock has delivered nothing, so the honest state
+        // is a WAIT, not a recovery. The clear is pinned on delivery in
+        // `a_rebuilt_card_that_delivers_clears_the_banner`, and the strandable case in
+        // `a_rebuilt_card_that_never_delivers_keeps_the_banner_up`.
+        let waiting = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            waiting
+                .as_deref()
+                .is_some_and(|m| m.contains("waiting for samples")),
+            "a reopen that has not yet delivered a frame must say so, not report success: {waiting:?}"
         );
 
         // Edge-triggered: one death, one reaction. A latched report would rebuild every tick.
@@ -15241,10 +15456,21 @@ mod tests {
             .unwrap();
 
         let err = engine.lock().unwrap().snapshot().radio.audio_error.clone();
+        // The subject here is the RELEASE-BEFORE-PROBE ordering, and the banner is how it
+        // shows: holding the old card makes the replacement unopenable, which surfaces as the
+        // operator's "is not available". A clean open now leaves the delivery WAIT on the line
+        // instead of an empty one (this mock delivers no samples — see
+        // `a_rebuilt_card_that_never_delivers_keeps_the_banner_up`), so what this asserts is
+        // that the open SUCCEEDED, not that the line is empty.
         assert!(
-            err.is_none(),
+            !err.as_deref().is_some_and(|m| m.contains("not available")),
             "the rebuild must release the old card BEFORE probing the replacement; \
              holding it makes any device on the same card impossible to select. got: {err:?}"
+        );
+        assert!(
+            err.as_deref()
+                .is_some_and(|m| m.contains("waiting for samples")),
+            "and a fresh device that has not delivered yet must say exactly that: got {err:?}"
         );
         assert!(
             state.audio_retry_at.is_none(),

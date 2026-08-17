@@ -976,6 +976,11 @@ export function OperateCockpit({
                   onTune={onTune}
                   active={active}
                   paletteScope={FT_PALETTE_SCOPE}
+                  // An FT over is 13 s: the dark band reads as "that was us", and there is
+                  // genuinely no receiver to picture during it. Explicit here because the
+                  // default is OFF — the shared Waterfall also draws RTTY's and SSTV's band,
+                  // where an over runs minutes and a black band reads as a dead display.
+                  txBlanks
                 />
               )}
             </section>

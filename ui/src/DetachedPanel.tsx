@@ -306,6 +306,7 @@ export function DetachedPanel({ panel }: { panel: string }) {
           }}
           active
           paletteScope={FT_PALETTE_SCOPE}
+          txBlanks // the torn-off FT waterfall — same surface, same 13 s over.
         />
         <Toasts />
       </div>
