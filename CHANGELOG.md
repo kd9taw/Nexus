@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The docked Band activity strip tunes on scroll, like the pop-out band map.** The strip
+  is the same frequency scale the band map is, in the Phone and CW cockpits both, but a
+  wheel over it did nothing while the map, the readout digits and the waterfall all tuned.
+  It now rides the same wheel — your tuning step, your wheel sensitivity, and the same
+  stop-at-the-band-edge behavior as every other dial. (#96)
 - **macOS now says how to get Hamlib instead of quoting a Debian command.** A Mac operator
   whose IC-7300/IC-9700 wouldn't connect was told `sudo apt install libhamlib-utils` — a
   cure for the wrong operating system. On a Mac the message now says `brew install hamlib`,

@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import type { SpotRow, NeedTag } from '../types'
+import { useRef, useState } from 'react'
+import type { SpotRow, NeedTag, AppSnapshot } from '../types'
 import { bandRangeForLabel, cwRangeForLabel } from '../band'
+import { useWheelTune } from '../useWheelTune'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
@@ -27,6 +28,22 @@ interface Props {
   onWorkSpot: (s: SpotRow) => void
   /** When set, shows a "pop out" button that opens the full vertical band-map in its own window. */
   onPopOut?: () => void
+
+  // ── Tuning from the strip itself (#96) ─────────────────────────────────────────────────
+  // The pop-out band map wheel-tunes (#39); the docked strip is the same frequency scale in
+  // the same cockpits and stayed silent, which read as an inconsistency. Same shape as
+  // BandMap's: all optional, and with these absent the strip is exactly the read-only scale
+  // it was — which is what keeps the existing tests honest.
+  /** Sideband to preserve so a strip tune never flips the mode. */
+  sideband?: string
+  /** Tune only when CAT is up and nothing is transmitting. Absent ⇒ read-only strip. */
+  tuneEnabled?: boolean
+  /** Wheel step (Hz), the operator's tuning step — same value the cockpit dials use. */
+  stepHz?: number
+  /** Settings ▸ Radio wheel sensitivity, so the strip matches every other dial. */
+  wheelSensitivity?: number
+  /** Fresh snapshot after a tune, so the dial marker moves without waiting for a poll. */
+  onSnap?: (s: AppSnapshot) => void
 }
 
 
@@ -57,6 +74,11 @@ export function BandStrip({
   typeByCall,
   onWorkSpot,
   onPopOut,
+  sideband,
+  tuneEnabled,
+  stepHz,
+  wheelSensitivity,
+  onSnap,
 }: Props) {
   // Legend is opt-in but remembered — it answers "what do the colours mean?" once, then
   // stays out of the way. Default ON the first time so the key is discoverable.
@@ -69,6 +91,20 @@ export function BandStrip({
       return !v
     })
   }
+  // Wheel-tune the track, through the SAME hook the readout digits, the waterfall and the
+  // pop-out band map (#39) use — coalescer, band-edge handling, per-event step cap and the
+  // sensitivity setting are all the ones the operator already knows, never a second
+  // implementation that drifts. `enabled` false makes it inert (the read-only case).
+  // Called BEFORE the off-plan early return below: hooks must run on every render.
+  const trackEl = useRef<HTMLDivElement | null>(null)
+  useWheelTune(trackEl, {
+    dialMhz,
+    sideband: sideband || 'USB',
+    enabled: tuneEnabled === true,
+    stepHz: stepHz ?? 1000,
+    sensitivity: wheelSensitivity,
+    onSnap,
+  })
   // In the CW cockpit, clip the strip to the band's CW sub-band (band bottom → CW top) so it shows
   // ONLY the CW portion; the Phone cockpit still spans the whole allocation. But only while the dial
   // is actually IN that segment — if the operator tunes above CW top (into the data/phone part) fall
@@ -158,7 +194,13 @@ export function BandStrip({
         )}
       </div>
       {showLegend && <SpotLegend />}
-      <div className="bandstrip-track" title={`${band}: ${lo.toFixed(3)}–${hi.toFixed(3)} MHz`}>
+      <div
+        ref={trackEl}
+        className="bandstrip-track"
+        title={`${band}: ${lo.toFixed(3)}–${hi.toFixed(3)} MHz${
+          tuneEnabled === true ? ' — scroll to tune' : ''
+        }`}
+      >
         {shade && shade.width > 0 && (
           <div
             className="bandstrip-shade"

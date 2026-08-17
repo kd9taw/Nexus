@@ -1013,6 +1013,12 @@ export function CwCockpit({
             typeByCall={typeByCall}
             onWorkSpot={onWorkSpot}
             onPopOut={() => void openPanelWindow('bandmapCw')}
+            // Wheel-tune from the strip (#96): same step + sensitivity + gate as the scope above.
+            sideband={snap.radio.sideband || 'USB'}
+            tuneEnabled={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting}
+            stepHz={tuneStep}
+            wheelSensitivity={wheelSensitivity}
+            onSnap={onSnap}
           />
         </CockpitPaneFrame>
       )}

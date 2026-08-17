@@ -666,6 +666,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           typeByCall={typeByCall}
           onWorkSpot={onWorkSpot}
           onPopOut={() => void openPanelWindow('bandmapPhone')}
+          // Wheel-tune from the strip (#96): same step + sensitivity + gate as the scope above.
+          sideband={snap.radio.sideband || 'USB'}
+          tuneEnabled={snap.radio.catOk === true && !snap.radio.txBusyReason && !snap.radio.transmitting}
+          stepHz={tuneStep}
+          wheelSensitivity={wheelSensitivity}
+          onSnap={onSnap}
         />
       </CockpitPaneFrame>
     ) : null
