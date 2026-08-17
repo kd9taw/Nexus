@@ -147,6 +147,7 @@ import { Logbook } from './components/Logbook'
 import { RoamPanel } from './components/RoamPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Toasts } from './components/Toasts'
+import { ConfirmHost, confirmDialog } from './confirm'
 import { OnboardingBanner } from './components/OnboardingBanner'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
@@ -997,11 +998,14 @@ export default function App() {
   // the same guard. Unconditional is right: the recents list only renders threads that
   // have messages, so there is no empty-thread case to skip. The copy names the
   // non-obvious consequence — deleting also cancels still-queued outbound traffic.
-  const handleArchive = useCallback((peer: string) => {
+  const handleArchive = useCallback(async (peer: string) => {
     if (
-      !window.confirm(
-        `Delete the conversation with ${peer}? Any messages still waiting to send will be cancelled. This can't be undone.`,
-      )
+      !(await confirmDialog({
+        title: `Delete the conversation with ${peer}?`,
+        body: "Any messages still waiting to send will be cancelled. This can't be undone.",
+        confirmLabel: 'Delete conversation',
+        danger: true,
+      }))
     )
       return
     void withErrorToast(
@@ -2786,6 +2790,9 @@ export default function App() {
       </div>
 
       <Toasts />
+      {/* Destructive actions confirm through this, not window.confirm — which is inert in the
+          macOS webview and silently answered "no" to every one of them. See src/confirm.tsx. */}
+      <ConfirmHost />
       <Announcer />
 
       {radioPicker?.showPicker && (
