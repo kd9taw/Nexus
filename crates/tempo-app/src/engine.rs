@@ -1486,6 +1486,16 @@ pub struct Engine {
     /// [`clear_decode_context`]: Engine::clear_decode_context
     /// [`apply_decode_result`]: Engine::apply_decode_result
     decode_epoch: u64,
+    /// The decode epoch the IN-PROGRESS slot capture began under (#103). The epoch
+    /// guard above only catches jobs already in flight when the context switches; a
+    /// mid-slot band change leaves the capture ring holding the OLD band's air, and
+    /// the boundary job for that slot is built AFTER the switch — so stamping it with
+    /// the fresh [`decode_epoch`](Self::decode_epoch) laundered pre-QSY decodes into
+    /// the new band's roster. Boundary/Early jobs are stamped with THIS epoch instead;
+    /// the radio loop resets it to the live epoch at every consumed slot boundary
+    /// ([`begin_slot_capture`](Engine::begin_slot_capture)), where the ring rolls into
+    /// a capture that genuinely belongs to the current context.
+    capture_epoch: u64,
     /// Which kind of source [`source`](Self::source) currently is. Tracked so
     /// [`set_tier`](Engine::set_tier) only re-points the *native* source and a
     /// live companion isn't clobbered, and so [`ingest`](Engine::ingest) routes
@@ -3450,6 +3460,7 @@ impl Engine {
             source: Arc::new(Mutex::new(Box::new(default_source))),
             source_label: default_source_label,
             decode_epoch: 0,
+            capture_epoch: 0,
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
@@ -14081,6 +14092,12 @@ impl Engine {
     /// thread, no await), so the result always applies. Used by the headless test
     /// driver and as the in-process reference; the live loop uses the async split.
     pub fn ingest(&mut self, frame: &[f32], slot: u64) -> usize {
+        // The synchronous driver hands the frame in directly — there is no capture
+        // ring that could predate the context, so the capture epoch IS the live one.
+        // Without this resync a caller that QSYs and then ingests fresh audio would
+        // see its decodes dropped as stale (#103's guard misfiring on a path that
+        // has no staleness to guard against).
+        self.capture_epoch = self.decode_epoch;
         let job = self.build_decode_job(frame.to_vec(), slot, DecodePass::Boundary);
         let result = run_decode_job(job);
         match self.apply_decode_result(result) {
@@ -14089,13 +14106,31 @@ impl Engine {
         }
     }
 
+    /// The radio loop consumed a slot boundary: the capture ring now accumulates a
+    /// NEW slot's audio, which genuinely belongs to the current decode context.
+    /// Called AFTER the boundary job for the just-ended slot is built, so that job
+    /// still carries the epoch its audio was captured under (#103).
+    pub fn begin_slot_capture(&mut self) {
+        self.capture_epoch = self.decode_epoch;
+    }
+
     /// Build the OWNED decode job for `frame`/`slot` under the engine lock: capture
     /// the branch (Native / DX1 / Companion), the AP request context, the HARQ-reset
     /// flag and the current decode epoch, plus an `Arc` clone of the decoder. No heavy
     /// work — the actual decode runs later in [`run_decode_job`] off the engine mutex.
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
-        let epoch = self.decode_epoch;
+        // The epoch stamped here decides whether the RESULT still applies (see
+        // `apply_decode_result`). Boundary/Early decode the slot capture in progress,
+        // which began under `capture_epoch` — a mid-slot band change bumps
+        // `decode_epoch` while the ring still holds the OLD band's air, so stamping
+        // the live epoch would launder pre-QSY decodes into the new band's roster
+        // (#103). Redecode replays `last_rx`, whose fold is display-only and gated by
+        // its own history filter, so it keeps the live epoch (unchanged behavior).
+        let epoch = match pass {
+            DecodePass::Boundary | DecodePass::Early => self.capture_epoch,
+            DecodePass::Redecode => self.decode_epoch,
+        };
         // Companion: decodes arrive over UDP; the audio is irrelevant. Drain the
         // network source regardless of the selected tier.
         if self.source_kind == SourceKind::Companion {
@@ -14352,6 +14387,9 @@ impl Engine {
             // boundary's decodes); modes without `early_decode` take full frames only.
             return 0;
         }
+        // Synchronous driver: the frame is handed in, no capture ring — same resync
+        // as `ingest` (see there).
+        self.capture_epoch = self.decode_epoch;
         let job = self.build_decode_job(frame.to_vec(), slot, DecodePass::Early);
         let result = run_decode_job(job);
         match self.apply_decode_result(result) {
@@ -24299,6 +24337,85 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::TempoFast);
         assert_eq!(e.ingest_early(&[0.0f32; 48000], 1), 0);
+    }
+
+    /// #103 — pre-QSY audio must not decode into the new band. The in-flight epoch
+    /// guard only catches jobs built BEFORE the context switch; the slot's audio
+    /// captured before a mid-slot QSY is decoded in a boundary job built AFTER it,
+    /// which used to be stamped with the fresh epoch — so the old band's decodes
+    /// sailed through `apply_decode_result` and repopulated the roster the QSY had
+    /// just cleared. Boundary jobs now carry the epoch their CAPTURE began under.
+    #[test]
+    fn a_boundary_job_built_after_a_mid_slot_qsy_lands_stale() {
+        /// A source that always "hears" one CQ — what the old band's air decodes to.
+        struct CannedCq;
+        impl SignalSource for CannedCq {
+            fn label(&self) -> String {
+                "canned-cq".into()
+            }
+            fn mode_kind(&self) -> Option<modes::ModeKind> {
+                Some(modes::ModeKind::Ft8)
+            }
+            fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+                vec![cq_decode_from("W9XYZ")]
+            }
+            fn decode_a7(
+                &mut self,
+                _req: &modes::DecodeRequest,
+                _a7_final: bool,
+            ) -> Vec<modes::Decode> {
+                vec![cq_decode_from("W9XYZ")]
+            }
+        }
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.install_source(Box::new(CannedCq));
+        let frame = vec![0.0f32; 1024];
+
+        // POSITIVE CONTROL first — the async split (build → decode → apply), no QSY:
+        // the decode applies and populates the roster, so the Stale below is the
+        // guard firing and not a broken fixture.
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert!(
+            matches!(
+                e.apply_decode_result(run_decode_job(job)),
+                DecodeApplied::Boundary { .. }
+            ),
+            "control: an un-QSY'd boundary job applies"
+        );
+        assert_eq!(e.snapshot().stations.len(), 1, "control: and populates the roster");
+
+        // The loop rolls the ring into the next slot's capture, still on 20 m…
+        e.begin_slot_capture();
+        // …then the operator QSYs MID-SLOT: roster cleared, epoch bumped — but the
+        // ring still holds 20 m air.
+        e.set_frequency(7.074, "40m", "USB");
+        assert_eq!(e.snapshot().stations.len(), 0, "precondition: the QSY cleared the roster");
+
+        // The boundary job for that slot is built AFTER the QSY, from audio captured
+        // BEFORE it. It must land stale — never populate the new band's roster.
+        let job = e.build_decode_job(frame.clone(), 2, DecodePass::Boundary);
+        assert!(
+            matches!(e.apply_decode_result(run_decode_job(job)), DecodeApplied::Stale),
+            "a boundary job whose capture predates the QSY must land stale"
+        );
+        assert_eq!(
+            e.snapshot().stations.len(),
+            0,
+            "the old band's decode must not repopulate the new band's roster"
+        );
+
+        // And the very NEXT slot — captured wholly on 40 m — decodes normally again:
+        // one period is lost to the QSY, not the band.
+        e.begin_slot_capture();
+        let job = e.build_decode_job(frame, 3, DecodePass::Boundary);
+        assert!(
+            matches!(
+                e.apply_decode_result(run_decode_job(job)),
+                DecodeApplied::Boundary { .. }
+            ),
+            "the next slot's capture belongs to the new band and applies"
+        );
     }
 
     /// The a7 cross-cycle flag plumb through the decode split

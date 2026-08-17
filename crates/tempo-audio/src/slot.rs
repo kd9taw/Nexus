@@ -690,6 +690,12 @@ mod tests {
         currently_tx: bool,
         prev_was_tx: bool,
     ) -> (SlotAction, bool) {
+        // The live loop resyncs the capture epoch at every consumed boundary
+        // (`Engine::begin_slot_capture`). This driver's ring is filled by the test
+        // AFTER its fixture setup, so the capture belongs to the CURRENT context —
+        // resync first, or a fixture `set_tier` (an epoch bump) would make the
+        // boundary decode land stale (#103's guard misfiring on a fresh capture).
+        eng.begin_slot_capture();
         if slot_wants_decode(currently_tx, prev_was_tx, rx.is_empty()) {
             let frame = rx.frame();
             // Phase 1: dispatch (build the owned job) + the heavy decode.

@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Changing bands mid-period no longer lets the old band's last seconds decode into
+  the new one.** Audio captured before a QSY was still decoded at the period boundary
+  after it, so stations from the band you just left repopulated the roster the band
+  change had rightly cleared. That period's decode is now dropped — the next full
+  period on the new band decodes normally. Receive-side only. (#103)
 - **The Log QSO button no longer claims success for a QSO it refused to log.** The engine
   deliberately refuses a manual log when there is nothing to write — the contact already
   logged, no active QSO, no report exchanged yet — but the green "Logged QSO" toast showed

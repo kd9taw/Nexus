@@ -6693,6 +6693,14 @@ impl RadioLoop {
                     &mut eng, rig, backend, sinks, station, now, slot, false, None, None,
                 )?;
             }
+            // The boundary is consumed on every branch above, so the ring now
+            // accumulates the NEW slot's audio — which belongs to the current decode
+            // context. Resync the capture epoch AFTER the boundary job build, so the
+            // just-built job still carries the epoch its audio was captured under: a
+            // mid-slot band change leaves this slot's capture holding the old band's
+            // air, and its boundary decode must land stale, not populate the new
+            // band's roster (#103).
+            eng.begin_slot_capture();
         }
         drop(eng); // release before the PSK flush re-locks the engine
 
