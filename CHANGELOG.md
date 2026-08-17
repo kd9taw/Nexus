@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Log QSO button no longer claims success for a QSO it refused to log.** The engine
+  deliberately refuses a manual log when there is nothing to write — the contact already
+  logged, no active QSO, no report exchanged yet — but the green "Logged QSO" toast showed
+  anyway, so a double-click after auto-log looked like a second entry that later seemed to
+  vanish. A refusal now says so honestly: nothing was logged, and why. (#100)
 - **The docked Band activity strip tunes on scroll, like the pop-out band map.** The strip
   is the same frequency scale the band map is, in the Phone and CW cockpits both, but a
   wheel over it did nothing while the map, the readout digits and the waterfall all tuned.

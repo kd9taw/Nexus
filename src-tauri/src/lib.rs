@@ -10983,12 +10983,28 @@ fn qso_freetext(state: State<'_, SharedEngine>, text: String) -> Result<AppSnaps
     Ok(eng.snapshot())
 }
 
+/// Outcome of the operator "Log QSO" button (#100): whether a contact was actually
+/// logged (or held for the prompt-to-log popup), plus the fresh snapshot either way.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogQsoOutcome {
+    /// False when the engine refused — already logged, no active QSO/DX, or no report
+    /// exchanged yet. Every refusal is a deliberate logbook-integrity guard, and the UI
+    /// must not claim "Logged QSO" over one: the bool was being discarded here, so the
+    /// toast said success for a write that never happened.
+    logged: bool,
+    snapshot: AppSnapshot,
+}
+
 /// Operator "Log QSO": log the active QSO's contact now (inline cockpit button).
 #[tauri::command(async)]
-fn log_current_qso(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn log_current_qso(state: State<'_, SharedEngine>) -> Result<LogQsoOutcome, String> {
     let mut eng = engine_lock(&state);
-    eng.log_current_qso();
-    Ok(eng.snapshot())
+    let logged = eng.log_current_qso();
+    Ok(LogQsoOutcome {
+        logged,
+        snapshot: eng.snapshot(),
+    })
 }
 
 /// Confirm-and-log a QSO held by the prompt-to-log popup. `record` is the

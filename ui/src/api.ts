@@ -560,9 +560,11 @@ export async function qsoFreetext(text: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('qso_freetext', { text })
 }
 
-/** Operator "Log QSO": log the active QSO's contact now. Returns fresh snapshot. */
-export async function logCurrentQso(): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('log_current_qso', {})
+/** Operator "Log QSO": log the active QSO's contact now. `logged` is the engine's verdict
+ *  (#100) — false when nothing was loggable (already logged / no QSO / no report yet), and
+ *  the UI must not claim success then. Snapshot is fresh either way. */
+export async function logCurrentQso(): Promise<{ logged: boolean; snapshot: AppSnapshot }> {
+  return invoke<{ logged: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
 }
 
 /** Append a contact to the ADIF logbook. Returns the fresh snapshot. */

@@ -1787,14 +1787,21 @@ export default function App() {
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then((s) => {
-      if (s) {
-        setSnap(s)
-        pushToast('Logged QSO', 'success', 2500)
-        noteLoggedForDxClear()
-        refreshNeeds() // drop the just-worked station from the roster/needs immediately
-        // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
-        // (every log path, auto-log included); outcomes toast via uploadTick.
+    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then((r) => {
+      if (r) {
+        setSnap(r.snapshot)
+        // The engine's verdict, not the call returning (#100): every false is a deliberate
+        // logbook-integrity refusal (already logged, no active QSO, no report exchanged),
+        // and a green "Logged QSO" over one claimed a write that never happened.
+        if (r.logged) {
+          pushToast('Logged QSO', 'success', 2500)
+          noteLoggedForDxClear()
+          refreshNeeds() // drop the just-worked station from the roster/needs immediately
+          // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
+          // (every log path, auto-log included); outcomes toast via uploadTick.
+        } else {
+          pushToast('Nothing to log — the QSO already closed or no report was exchanged', 'info', 4000)
+        }
       }
     })
   }, [noteLoggedForDxClear, refreshNeeds])
