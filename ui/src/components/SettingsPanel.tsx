@@ -5332,7 +5332,13 @@ export function SettingsPanel({
           {/* ---- Beacons (WSPR / FST4W). A SEPARATE surface from the QSO modes:
                there is no exchange, only a schedule. Off by default — beaconing
                keys the radio unattended, so it is always an explicit choice. ---- */}
-          {tab === 'digital' && (
+          {tab === 'digital' && (() => {
+          // Round Robin is active only with a real rotation: a slot picked AND ≥2
+          // stations in it. slots=1 is degenerate (the rotation would claim every
+          // interval), so the engine falls back to the transmit-% schedule (#101b).
+          const rrActive = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) >= 2
+          const rrDegenerate = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) < 2
+          return (
           <fieldset className="settings-section" id="settings-beacons-wspr-fst4w">
             <legend>Beacons — WSPR &amp; FST4W</legend>
             <div className="settings-grid">
@@ -5343,14 +5349,26 @@ export function SettingsPanel({
                   type="number"
                   min={0}
                   max={100}
+                  disabled={rrActive}
+                  title={rrActive ? 'Round Robin is scheduling — this percentage is not used. Set the slot to 0 to schedule by percentage.' : undefined}
                   value={String(form.beaconTxPercent ?? 0)}
                   onChange={(e) => updateNum('beaconTxPercent', Number(e.target.value))}
                 />
                 <span className="settings-hint">
-                  Fraction of intervals to transmit on. 0 = listen only. A beacon that
-                  transmits every interval hears nothing, so a minority is the convention
-                  &mdash; 20&ndash;30% is typical. Below 40% Nexus also avoids
-                  back-to-back transmissions while still hitting the rate you asked for.
+                  {rrActive ? (
+                    <>
+                      <strong>Ignored while Round Robin is active</strong> &mdash; the
+                      rotation decides which intervals transmit. Set the slot to 0 to
+                      schedule by percentage again.
+                    </>
+                  ) : (
+                    <>
+                      Fraction of intervals to transmit on. 0 = listen only. A beacon that
+                      transmits every interval hears nothing, so a minority is the convention
+                      &mdash; 20&ndash;30% is typical. Below 40% Nexus also avoids
+                      back-to-back transmissions while still hitting the rate you asked for.
+                    </>
+                  )}
                 </span>
               </label>
               <label className="settings-field">
@@ -5385,7 +5403,7 @@ export function SettingsPanel({
                   0 = use the transmit-% schedule. Otherwise your slot in a coordinated
                   rotation: stations agreeing on the same slot count and each taking a
                   different slot never transmit at the same time, because the assignment
-                  is fixed by UTC.
+                  is fixed by UTC. A rotation needs at least 2 slots.
                 </span>
               </label>
               <label className="settings-field">
@@ -5399,7 +5417,15 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('beaconRrSlots', Number(e.target.value))}
                 />
                 <span className="settings-hint">
-                  How many stations are in the rotation. Ignored when the slot is 0.
+                  {rrDegenerate ? (
+                    <>
+                      <strong>A one-station rotation is no rotation</strong> &mdash; Round
+                      Robin needs at least 2 slots, so it is off and the transmit-%
+                      schedule applies.
+                    </>
+                  ) : (
+                    <>How many stations are in the rotation. Ignored when the slot is 0.</>
+                  )}
                 </span>
               </label>
             </div>
@@ -5410,7 +5436,8 @@ export function SettingsPanel({
               transmit you have not enabled.
             </span>
           </fieldset>
-          )}
+          )
+          })()}
 
           {/* ---- FST4 / FST4W: one period setting, shared. Same decoder, same
                slot clock; the tier picks QSO vs beacon. ---- */}

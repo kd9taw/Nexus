@@ -26,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WSPR and FST4W beaconing works the way WSJT-X's does.** Four fixes from one
+  report (#101): the TX watchdog no longer halts a beacon a few intervals into a
+  session — beaconing is unattended repeated transmission by design, and WSJT-X
+  exempts exactly these modes (each transmission is still hard-bounded by the period
+  clock, and your TX switch remains the stop); a Round-Robin rotation of one station
+  no longer transmits every interval — one slot is no rotation, so the transmit-%
+  schedule applies and Settings says so; your own beacon transmissions now appear in
+  ALL.TXT as Tx lines like every other mode's; and a WSPR spot ("CALL GRID DBM") now
+  files in the operating roster under its callsign with its grid, instead of the grid
+  showing up as a phantom station.
 - **N3FJP general logging now carries your reports, the operator's name, and power.**
   The ACLog push was sending only the contest fields, so RST sent/received, name and
   TX power logged in Nexus never reached the ACLog side. The Field Day push is

@@ -474,6 +474,12 @@ mod tests {
             // it does not clamp on an on-time over. Swept anyway: the clamp is what
             // makes a pathological stall unrepresentable rather than merely unlikely.
             (2_520.0, 3_750.0, "FT2"),
+            // The BEACON modes (#101a): now that WSPR/FST4W are exempt from the
+            // wall-clock TX watchdog (operator-approved, matching WSJT-X), this clamp
+            // is the ONLY in-flight bound on a beacon over — so it is swept explicitly.
+            // WSPR: 110.6 s of tones in a 120 s period; FST4W-1800: ~1770 s in 1800 s.
+            (110_600.0, 120_000.0, "WSPR"),
+            (1_770_000.0, 1_800_000.0, "FST4W-1800"),
         ] {
             let slot_start = 1_000.0 * period_ms;
             // Every 10 ms of phase across a whole slot.

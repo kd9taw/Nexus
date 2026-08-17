@@ -1580,6 +1580,11 @@ pub struct Engine {
     /// than be rebuilt per slot — rebuilding would reset the spread and skew the
     /// achieved duty cycle.
     beacon_sched: tempo_core::beacon::BeaconScheduler,
+    /// The last beacon slot an ALL.TXT `Tx` line was written for (#101c): `poll_tx`
+    /// runs many times inside one interval and each returns the same plan, so the
+    /// writer needs its own once-per-slot latch or every poll would append a
+    /// duplicate line.
+    beacon_txline_slot: Option<u64>,
     /// The last beacon slot a transmit decision was taken for, so one decision is
     /// made per interval no matter how often `poll_tx` is called within it.
     beacon_decided_slot: Option<u64>,
@@ -3170,8 +3175,10 @@ pub struct TxPlan {
     pub slot: u64,
     pub tier: Tier,
     pub waveform: TxWaveform,
-    /// Beacon overs run the wall-clock watchdog at COMMIT, matching the order
-    /// the single-shot path used (build, then check).
+    /// A WSPR/FST4W beacon over. Beacons are EXEMPT from the wall-clock TX
+    /// watchdog (operator-approved 2026-08-17, matching WSJT-X — see the
+    /// `plan.beacon` branch in [`Engine::commit_tx`]); the flag now only marks
+    /// the transmitting state at commit.
     beacon: bool,
     /// Everything the TX gate evaluated when this plan was made — see
     /// [`TxGateStamp`].
@@ -3492,6 +3499,7 @@ impl Engine {
             // Seeded from the callsign so two stations do not share a draw
             // sequence; the percentage is applied from settings on each decision.
             beacon_sched: tempo_core::beacon::BeaconScheduler::new(0, 0x5EED),
+            beacon_txline_slot: None,
             beacon_decided_slot: None,
             beacon_tx_this_slot: false,
             chat_cq: false,
@@ -13498,7 +13506,13 @@ impl Engine {
             self.beacon_decided_slot = Some(slot);
             self.beacon_sched
                 .set_tx_percent(self.settings.beacon_tx_percent);
-            self.beacon_tx_this_slot = if self.settings.beacon_rr_slot > 0 {
+            // Round Robin is ACTIVE only with a real rotation: a slot picked AND at
+            // least two stations in it (#101b). `slots = 1` made the RR arithmetic
+            // claim every interval — transmit-every-interval sold as a rotation — so
+            // a degenerate config falls back to the transmit-% schedule instead.
+            let rr_active =
+                self.settings.beacon_rr_slot > 0 && self.settings.beacon_rr_slots >= 2;
+            self.beacon_tx_this_slot = if rr_active {
                 // FST4W Round Robin: a deterministic assignment so coordinated
                 // stations never collide. A pure function of UTC, which `slot`
                 // counts periods of.
@@ -13534,6 +13548,33 @@ impl Engine {
         if modes::tx_mode(kind).is_none() {
             self.app.set_transmitting(false);
             return None;
+        }
+        // ALL.TXT parity (#101c): a beacon over is a transmission like any other,
+        // but this path returns ABOVE the QSO arm's Tx-line writer — so a WSPR/FST4W
+        // session produced an RX-only ALL.TXT with the station's own transmissions
+        // invisible, to tailing loggers and to us. Same shape as the QSO writer
+        // (plan time, SNR/DT 0, audio = our TX offset), same 5000-line cap. Latched
+        // per slot: unlike the QSO arm (whose sequencer yields the text once),
+        // this plan is re-produced by every poll inside the interval.
+        if self.settings.write_all_txt && self.beacon_txline_slot != Some(slot) {
+            self.beacon_txline_slot = Some(slot);
+            let mode = format!("{:?}", self.app.tier()).to_uppercase();
+            self.station
+                .all_txt_pending
+                .push(crate::alltxt::all_txt_line(
+                    now_unix_secs(),
+                    self.settings.dial_mhz,
+                    true,
+                    &mode,
+                    0,
+                    0.0,
+                    self.tx_offset_hz,
+                    &msg,
+                ));
+            let len = self.station.all_txt_pending.len();
+            if len > 5000 {
+                self.station.all_txt_pending.drain(0..len - 5000);
+            }
         }
         Some(TxPlan {
             slot,
@@ -14061,23 +14102,19 @@ impl Engine {
             self.app.set_transmitting(false);
             return Vec::new();
         }
-        // The BEACON path runs the wall-clock watchdog HERE rather than in the
-        // planner, preserving the order the single-shot path used (build, then
-        // check): a build that produces nothing still leaves the watchdog clock
-        // unstarted, exactly as before.
+        // BEACON MODES ARE EXEMPT FROM THE WALL-CLOCK TX WATCHDOG — operator-approved
+        // 2026-08-17 ("Match WSJT-X"). The watchdog's premise is idleness: repeated TX
+        // with no operator action means a station left keying by mistake. WSPR/FST4W
+        // beaconing IS unattended repeated transmission by design, so the wall clock
+        // used to trip a perfectly compliant beacon a few intervals into every session
+        // (#101a). WSJT-X exempts exactly these modes — mainwindow.cpp gates its
+        // tx-watchdog check on `m_mode != "WSPR" && m_mode != "FST4W"`. The non-beacon
+        // watchdog (poll_tx's QSO/chat arm) is untouched, and every beacon over stays
+        // hard-bounded by the slot clamp (`tempo_audio::slot::tx_deadline_ms` — PTT is
+        // never held past the period boundary), so an exempt beacon still cannot key
+        // continuously; stopping one remains the operator's TX latch, exactly as
+        // upstream.
         if plan.beacon {
-            let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
-            if limit_secs > 0 {
-                let now = now_unix_secs();
-                let start = *self.tx_watchdog_start.get_or_insert(now);
-                if now.saturating_sub(start) >= limit_secs {
-                    self.tx_watchdog = true;
-                    self.tx_enabled = false;
-                    self.slot_tx_abort = true; // watchdog = hard kill (see plan_tx)
-                    self.app.set_transmitting(false);
-                    return Vec::new();
-                }
-            }
             self.app.set_transmitting(true);
         }
         vec![wave]
@@ -19857,6 +19894,46 @@ mod tests {
             row.from.as_deref(),
             Some("EK70"),
             "control: the FT8 grammar misparse this fix exists for"
+        );
+    }
+
+    #[test]
+    fn a_wspr_beacon_files_in_the_roster_under_the_callsign_not_the_grid() {
+        // #101d — the same #55 misparse, at the OTHER ingest. The recent-decodes feed
+        // has special-cased WSPR since #55, but the roster ingest still ran "CALL
+        // GRID DBM" through the FT8 grammar, so the operating roster filed a station
+        // called "EK70" (the grid in the call column) with no grid at all.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let wspr = modes::Decode {
+            message: "TI4JWC EK70 30".into(),
+            sync: 1.0,
+            snr: -19,
+            dt: 0.2,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            mode: Some(modes::ModeKind::Wspr),
+        };
+        e.ingest_decodes_for_test(&[wspr.clone()], 1);
+        let stations = e.snapshot().stations;
+        let s = stations
+            .iter()
+            .find(|s| s.call == "TI4JWC")
+            .expect("the beacon files under its CALL field");
+        assert_eq!(s.grid.as_deref(), Some("EK70"), "…with the GRID field as its grid");
+        assert!(
+            !stations.iter().any(|s| s.call == "EK70"),
+            "the grid must not appear as a station: {stations:?}"
+        );
+
+        // Positive control — the misparse is real and the MODE TAG gates the fix: the
+        // same text untagged still goes through the FT8 grammar and files the grid.
+        let mut c = Engine::new("KD9TAW", "EN52", 0);
+        c.ingest_decodes_for_test(&[modes::Decode { mode: None, ..wspr }], 1);
+        assert!(
+            c.snapshot().stations.iter().any(|s| s.call == "EK70"),
+            "control: the FT8-grammar misparse this fix exists for"
         );
     }
 
@@ -31727,30 +31804,103 @@ mod tests {
     }
 
     #[test]
-    fn a_beacon_is_bounded_by_the_tx_watchdog_like_everything_else() {
-        // The wall-clock watchdog is implemented inline in poll_tx's QSO arm, ~240
-        // lines BELOW the beacon branch, so beacons had no duration bound at all:
-        // Settings offers "TX watchdog: 6 min" and it silently did not cover the two
-        // modes most likely to be left running unattended.
+    fn a_beacon_is_exempt_from_the_tx_watchdog_but_a_qso_is_not() {
+        // ⚠️ DELIBERATE REVERSAL of `a_beacon_is_bounded_by_the_tx_watchdog_like_
+        // everything_else` — operator-approved 2026-08-17 ("Match WSJT-X"). The
+        // watchdog's premise is idleness; WSPR/FST4W beaconing is unattended repeated
+        // TX by design, and the wall clock was tripping a compliant beacon a few
+        // intervals into every session (#101a). WSJT-X exempts exactly these modes
+        // (mainwindow.cpp: m_mode != "WSPR" && m_mode != "FST4W").
+        for tier in BEACON_TIERS {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            s.tx_watchdog_min = 1;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+
+            assert!(!e.poll_tx(0).is_empty(), "precondition: the {tier:?} beacon keys");
+
+            // Backdate the watchdog clock far past its limit: the beacon must keep
+            // its schedule regardless.
+            e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+            assert!(
+                !e.poll_tx(1).is_empty(),
+                "a {tier:?} beacon over must not be killed by the wall-clock watchdog"
+            );
+            assert!(!e.tx_watchdog, "no trip is reported for a {tier:?} beacon");
+            assert!(e.tx_enabled(), "TX stays armed — stopping a beacon is the latch");
+        }
+
+        // The OTHER direction, in the same breath: the non-beacon watchdog is
+        // untouched. A directed QSO over past the same backdated limit still trips.
+        let mut q = Engine::new("KD9TAW", "EN52", 0);
+        q.call_station("W9XYZ");
+        q.settings.tx_watchdog_min = 1;
+        q.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(q.poll_tx(0).is_empty(), "control: a QSO over is still refused");
+        assert!(q.tx_watchdog, "control: and the trip is visible");
+        assert!(!q.tx_enabled(), "control: and TX is disarmed");
+    }
+
+    #[test]
+    fn a_wspr_beacon_over_writes_one_all_txt_tx_line() {
+        // #101c: the beacon path returns above the QSO arm's ALL.TXT Tx-line writer,
+        // so a WSPR/FST4W session produced an RX-only ALL.TXT — the station's own
+        // transmissions invisible to tailing loggers and to us. Exactly ONE line per
+        // over: poll_tx runs many times inside an interval and re-produces the plan
+        // each time, so an unlatched writer would duplicate the line per poll.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Wspr);
         let mut s = e.settings().clone();
         s.beacon_tx_percent = 100;
         s.beacon_power_dbm = 37;
-        s.tx_watchdog_min = 1;
+        s.write_all_txt = true;
         e.apply_settings(s);
         e.set_tx_enabled(true);
+        let _ = e.take_all_txt_pending(); // drop anything setup produced
 
-        assert!(!e.poll_tx(0).is_empty(), "precondition: the beacon keys");
+        assert!(!e.poll_tx(4).is_empty(), "precondition: the beacon keys");
+        let _ = e.poll_tx(4); // the loop polls repeatedly inside the same interval
+        let lines = e.take_all_txt_pending();
+        let tx: Vec<&String> = lines.iter().filter(|l| l.contains(" Tx ")).collect();
+        assert_eq!(tx.len(), 1, "exactly one Tx line per beacon over: {lines:?}");
+        assert!(
+            tx[0].contains("KD9TAW EN52 37"),
+            "the line carries the beacon message: {}",
+            tx[0]
+        );
+        assert!(tx[0].contains("WSPR"), "and the mode: {}", tx[0]);
+    }
 
-        // Backdate the watchdog past its limit, as the probe did.
-        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+    #[test]
+    fn a_degenerate_one_slot_round_robin_falls_back_to_the_percent_schedule() {
+        // #101b: `slots = 1` made the RR arithmetic claim every interval — a beacon
+        // that transmits every interval hears nothing, sold as a "rotation". A
+        // degenerate config now means Round-Robin-off: the transmit-% schedule
+        // governs, in BOTH directions.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Fst4w);
+        let mut s = e.settings().clone();
+        s.beacon_rr_slot = 1; // a slot picked…
+        s.beacon_rr_slots = 1; // …in a one-station "rotation"
+        s.beacon_power_dbm = 37;
+        s.beacon_tx_percent = 100;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        assert!(
+            !e.poll_tx(0).is_empty(),
+            "the percent schedule (100%) governs — not the refused rotation"
+        );
+        let mut s = e.settings().clone();
+        s.beacon_tx_percent = 0;
+        e.apply_settings(s);
         assert!(
             e.poll_tx(1).is_empty(),
-            "the beacon kept keying past the watchdog limit"
+            "0% = listen only, honored under a degenerate Round Robin too"
         );
-        assert!(e.tx_watchdog, "the trip must be visible to the operator");
-        assert!(!e.tx_enabled(), "a trip disarms TX");
     }
 
     /// Drive a directed QSO until `call_cap` withholds the over, and return the next
