@@ -2973,6 +2973,20 @@ button.nb-chip:hover {
 }
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */
+/* Export date range (#98) — compact from/to beside Export ADIF. Vars only, so both themes hold. */
+.log-export-range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.log-export-date {
+  font-size: 12px;
+  padding: 0 var(--space-2);
+  width: 9em;
+}
 .log-actions {
   display: inline-flex;
   gap: var(--space-2);

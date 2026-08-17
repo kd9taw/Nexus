@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Export a date range from the logbook.** Compact from/to date pickers now sit beside
+  Export ADIF — set either or both and the ADIF/CSV export carries only the QSOs in that
+  UTC date range, which is what a POTA activation or one weekend's contest needs. Leave
+  them empty and the export is the whole log, exactly as before. The per-operator export
+  is deliberately untouched: it is the submission path, and a leftover date silently
+  truncating an uploaded log would be the worse surprise. (#98)
+
 - **PSK31 receive.** A new PSK screen on the Digital rail decodes the classic narrow-band
   keyboard mode — open it, tune a watering hole (14.070 is the busy one), click a warble
   trace on the waterfall and the text prints, with faint characters marking doubtful copy.

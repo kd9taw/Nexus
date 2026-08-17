@@ -221,6 +221,9 @@ export function Logbook({
   const [spotSeed, setSpotSeed] = useState<{ call: string; freq: number; mode: string } | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('time')
   const [sortAsc, setSortAsc] = useState(false)
+  // Export date range (#98) — "YYYY-MM-DD" UTC or '' = unbounded. Both empty = whole log.
+  const [exportFrom, setExportFrom] = useState('')
+  const [exportTo, setExportTo] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const syncRef = useRef<HTMLInputElement>(null)
   const potaRef = useRef<HTMLInputElement>(null)
@@ -748,19 +751,48 @@ export function Logbook({
           >
             Sync QRZ
           </button>
+          {/* Export date range (#98): bounds the ADIF/CSV exports below by UTC QSO date,
+              inclusive. Empty = unbounded — no dates at all is the whole log, as before.
+              The per-operator export stays deliberately unfiltered: it is the compliance
+              path (POTA/FD submissions), and a stray leftover date silently truncating an
+              uploaded log is the worse failure. */}
+          <label className="log-export-range" title="Export only QSOs on/after this UTC date (empty = from the beginning)">
+            <span>from</span>
+            <input
+              type="date"
+              className="settings-input log-export-date"
+              value={exportFrom}
+              onChange={(e) => setExportFrom(e.target.value)}
+            />
+          </label>
+          <label className="log-export-range" title="Export only QSOs on/before this UTC date (empty = to the end)">
+            <span>to</span>
+            <input
+              type="date"
+              className="settings-input log-export-date"
+              value={exportTo}
+              onChange={(e) => setExportTo(e.target.value)}
+            />
+          </label>
           <button
             type="button"
             className="export-btn"
             disabled={log.length === 0}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('adif')
+                const text = await exportGeneralLog('adif', exportFrom, exportTo)
+                // Count what the file actually holds — with a date range the log length lies.
+                const n = (text.match(/<eor>/gi) ?? []).length
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.adi`, text)
-                pushToast(`Exported ${log.length} QSOs → ${path}`, 'success')
+                pushToast(`Exported ${n} QSO${n === 1 ? '' : 's'} → ${path}`, 'success')
               }, 'Export failed')
             }
-            title="Save the whole logbook as an ADIF file in your Downloads folder"
+            title={
+              exportFrom || exportTo
+                ? 'Save the selected date range as an ADIF file in your Downloads folder'
+                : 'Save the whole logbook as an ADIF file in your Downloads folder'
+            }
           >
             Export ADIF
           </button>
@@ -800,13 +832,19 @@ export function Logbook({
             disabled={log.length === 0}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('csv')
+                const text = await exportGeneralLog('csv', exportFrom, exportTo)
+                // Rows minus the header — with a date range the log length lies.
+                const n = Math.max(0, text.trim().split('\n').length - 1)
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.csv`, text)
-                pushToast(`Exported ${log.length} QSOs → ${path}`, 'success')
+                pushToast(`Exported ${n} QSO${n === 1 ? '' : 's'} → ${path}`, 'success')
               }, 'Export failed')
             }
-            title="Save the whole logbook as a CSV spreadsheet in your Downloads folder"
+            title={
+              exportFrom || exportTo
+                ? 'Save the selected date range as a CSV spreadsheet in your Downloads folder'
+                : 'Save the whole logbook as a CSV spreadsheet in your Downloads folder'
+            }
           >
             Export CSV
           </button>

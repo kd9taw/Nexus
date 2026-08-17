@@ -15605,8 +15605,13 @@ impl Engine {
     }
 
     /// See [`StationCore::export_logbook`].
-    pub fn export_logbook(&self, format: &str) -> String {
-        self.station.export_logbook(format)
+    pub fn export_logbook(
+        &self,
+        format: &str,
+        from_unix: Option<u64>,
+        to_unix: Option<u64>,
+    ) -> String {
+        self.station.export_logbook(format, from_unix, to_unix)
     }
 
     /// Distinct operators in the log (#25).

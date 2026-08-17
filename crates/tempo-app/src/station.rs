@@ -1241,10 +1241,17 @@ impl StationCore {
 
     /// Export the **general** logbook (Chat/QSO contacts, any mode) as ADIF or
     /// CSV. Independent of Field Day's contest log (`Engine::export_log`).
-    pub fn export_logbook(&self, format: &str) -> String {
+    /// `from_unix`/`to_unix` bound the QSO start time inclusively (#98); both
+    /// `None` = the whole log, byte-identical to the unbounded export.
+    pub fn export_logbook(
+        &self,
+        format: &str,
+        from_unix: Option<u64>,
+        to_unix: Option<u64>,
+    ) -> String {
         match format.to_ascii_lowercase().as_str() {
-            "csv" => self.logbook.csv(),
-            _ => self.logbook.adif(),
+            "csv" => self.logbook.csv_in_range(from_unix, to_unix),
+            _ => self.logbook.adif_in_range(from_unix, to_unix),
         }
     }
 

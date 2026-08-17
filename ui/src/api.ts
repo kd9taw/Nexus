@@ -816,9 +816,14 @@ export async function getFeedHealth(): Promise<FeedHealth> {
   return invoke<FeedHealth>('get_feed_health')
 }
 
-/** Export the general logbook as ADIF or CSV text. */
-export async function exportGeneralLog(format: 'adif' | 'csv'): Promise<string> {
-  return invoke<string>('export_general_log', { format })
+/** Export the general logbook as ADIF or CSV text. Optional `from`/`to` are UTC
+ *  "YYYY-MM-DD" dates bounding the QSO time inclusively (#98); empty/absent = all. */
+export async function exportGeneralLog(
+  format: 'adif' | 'csv',
+  from?: string,
+  to?: string,
+): Promise<string> {
+  return invoke<string>('export_general_log', { format, from: from || null, to: to || null })
 }
 
 /** The absolute path where the ALL.TXT decode log is written (to show in Settings). */

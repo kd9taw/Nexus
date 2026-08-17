@@ -7600,10 +7600,32 @@ fn export_log(state: State<'_, SharedEngine>, format: String) -> Result<String, 
 
 /// Export the **general** logbook (all Chat/QSO contacts, any mode) as
 /// `format` ("adif" | "csv"). Independent of the Field Day contest log.
+///
+/// `from`/`to` (#98): optional `"YYYY-MM-DD"` UTC dates bounding the QSO start time
+/// inclusively — the raw value of an HTML date input. Absent or empty = unbounded on
+/// that side, so no dates at all is the whole log, byte-identical to before. A
+/// malformed date is an ERROR, never silently ignored: dropping a bound would ship a
+/// full log the operator believes is filtered.
 #[tauri::command(async)]
-fn export_general_log(state: State<'_, SharedEngine>, format: String) -> Result<String, String> {
+fn export_general_log(
+    state: State<'_, SharedEngine>,
+    format: String,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<String, String> {
+    let parse = |d: Option<String>| -> Result<Option<(u64, u64)>, String> {
+        match d.as_deref().map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(s) => tempo_core::logbook::day_bounds_utc(s)
+                .map(Some)
+                .ok_or_else(|| format!("bad export date {s:?} (expected YYYY-MM-DD)")),
+        }
+    };
+    // A day bound is (start, end) of that UTC day: `from` uses the day's start, `to` its end.
+    let from_unix = parse(from)?.map(|b| b.0);
+    let to_unix = parse(to)?.map(|b| b.1);
     let eng = engine_lock(&state);
-    Ok(eng.export_logbook(&format))
+    Ok(eng.export_logbook(&format, from_unix, to_unix))
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
