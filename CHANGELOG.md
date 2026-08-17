@@ -5,6 +5,34 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **macOS now says how to get Hamlib instead of quoting a Debian command.** A Mac operator
+  whose IC-7300/IC-9700 wouldn't connect was told `sudo apt install libhamlib-utils` — a
+  cure for the wrong operating system. On a Mac the message now says `brew install hamlib`,
+  the FAQ covers macOS, and the in-app guide no longer claims Hamlib ships inside the
+  installer on platforms where it doesn't. (WSJT-X and the Mac loggers link the Hamlib
+  *library*; Nexus drives CAT through the `rigctld` *program*, a separate package — those
+  apps working is not evidence rigctld is installed.)
+- **The rig port picker on macOS no longer lists the tty twin of every port.** The #92
+  collapse (1.6.0) filtered rig *detection* but not the Settings picker, so `/dev/tty.*`
+  rows still sat beside their `/dev/cu.*` twins — and a picked `tty.*` hangs on carrier
+  detect instead of failing. The picker now gets the same collapse; a lone `tty.*` with no
+  `cu.*` twin is still kept.
+- **Removing a radio: the button is always there now, and a refusal says why.** Nexus
+  refuses to remove the active radio, but expressed that by not rendering the Remove button
+  at all — from the operator's chair, "the radio won't delete." It now renders disabled
+  with the rule spelled out: make another radio active first. A
+  refused removal is a visible error instead of a silent success, and deleting the radio
+  the rig form was editing no longer leaves later Saves silently writing to a profile that
+  is gone.
+- **The signed macOS bundle carries the microphone entitlement.** Hardened-runtime apps
+  need `com.apple.security.device.audio-input` before macOS will even offer the microphone
+  permission prompt; without it, RX audio capture can open and deliver silence. The
+  entitlement ships in the bundle now.
+
 ## [1.6.1] — 2026-08-17
 
 ### Fixed

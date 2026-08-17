@@ -9273,11 +9273,23 @@ fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     Ok(eng.snapshot())
 }
 
-/// Remove a radio from the roster (no-op on the active or last radio). Returns the snapshot.
+/// Remove a radio from the roster. Returns the snapshot.
+///
+/// A refusal (active or last radio) is an `Err`, not a silent no-op: the bare
+/// `eng.remove_radio(id);` this used to be made a refused delete indistinguishable from
+/// success at the IPC boundary, so the UI's error toast could never fire (Mac field
+/// report, 2026-08-17 — "the 9700 won't delete"). The UI hides Remove on the active
+/// card, but auto band-routing can change the active radio behind an open panel.
 #[tauri::command(async)]
 fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.remove_radio(id);
+    if !eng.remove_radio(id) {
+        return Err(
+            "Can't remove this radio: it's your operating radio (make another one active \
+             first) or the only radio on the roster."
+                .into(),
+        );
+    }
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: remove_radio save failed: {e}");
     }

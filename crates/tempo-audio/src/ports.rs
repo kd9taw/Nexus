@@ -31,6 +31,8 @@ pub fn available_ports() -> Vec<String> {
                 names.push(v);
             }
         }
+        #[cfg(target_os = "macos")]
+        let names = collapse_tty_twin_names(names);
         names
     })
     .unwrap_or_else(|_| {
@@ -106,6 +108,33 @@ fn linux_virtual_ports(dev: &std::path::Path) -> Vec<String> {
 #[cfg(not(feature = "serial"))]
 pub fn available_ports() -> Vec<String> {
     Vec::new()
+}
+
+/// Name-level twin collapse for the plain string list ([`available_ports`]).
+///
+/// Same rule as [`collapse_tty_twins`]: a `/dev/tty.X` whose `/dev/cu.X` twin is present is
+/// dropped; a lone `tty.*` is kept (it is then the only node there is). The #92 collapse was
+/// applied only to [`available_usb_ports`], which feeds detection and the auto-test sweep —
+/// but the Settings rig picker reads THIS list, so it still offered the tty twin, and a
+/// picked `tty.*` HANGS on carrier detect instead of failing (Mac field report, 2026-08-17).
+///
+/// Pure string logic, compiled everywhere so the test runs on every platform; only the
+/// macOS enumeration calls it.
+#[cfg_attr(not(all(feature = "serial", target_os = "macos")), allow(dead_code))]
+fn collapse_tty_twin_names(names: Vec<String>) -> Vec<String> {
+    let callouts: std::collections::HashSet<&str> = names
+        .iter()
+        .filter_map(|n| n.strip_prefix("/dev/cu."))
+        .collect();
+    let drop: Vec<String> = names
+        .iter()
+        .filter(|n| {
+            n.strip_prefix("/dev/tty.")
+                .is_some_and(|rest| callouts.contains(rest))
+        })
+        .cloned()
+        .collect();
+    names.into_iter().filter(|n| !drop.contains(n)).collect()
 }
 
 /// A USB serial port plus the descriptor fields zero-config setup reads to identify
@@ -277,6 +306,30 @@ mod tests {
         // A missing/unreadable /dev must yield an empty list, never a panic — this runs every
         // time the Settings tab opens.
         assert!(linux_virtual_ports(std::path::Path::new("/nonexistent-xyz")).is_empty());
+    }
+
+    /// The rig picker's string list gets the same twin collapse as detection — the #92 fix
+    /// filtered [`available_usb_ports`] only, so the picker kept offering `/dev/tty.*` rows
+    /// that hang a CAT probe on carrier detect. Non-mac names pass through untouched.
+    #[test]
+    fn the_pickers_name_list_collapses_tty_twins_too() {
+        let got = collapse_tty_twin_names(vec![
+            "/dev/cu.usbserial-A".into(),
+            "/dev/tty.usbserial-A".into(),
+            "/dev/tty.lonelyport".into(),
+            "COM5".into(),
+            "/dev/ttyUSB0".into(),
+        ]);
+        assert_eq!(
+            got,
+            vec![
+                "/dev/cu.usbserial-A".to_string(),
+                "/dev/tty.lonelyport".into(),
+                "COM5".into(),
+                "/dev/ttyUSB0".into(),
+            ],
+            "the cu twin survives, its tty twin goes, everything else is untouched"
+        );
     }
 
     #[test]

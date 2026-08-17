@@ -1262,7 +1262,15 @@ export function SettingsPanel({
     if (!window.confirm(`Remove ${r?.name ?? 'this radio'}? This deletes its CAT/audio config and can't be undone.`)) {
       return
     }
-    void withErrorToast(() => removeRadio(id), 'Could not remove the radio').then((s) => s && reloadRadios())
+    void withErrorToast(() => removeRadio(id), 'Could not remove the radio').then((s) => {
+      if (!s) return
+      // If the deleted radio was the one the rig form is editing, retarget the form: a
+      // dangling editingRadioId routes every later Save through update_radio_profile(<gone
+      // id>), which no-ops on a missing id — so station-wide edits (callsign, credentials)
+      // silently stop persisting with no error.
+      setEditingRadioId((cur) => (cur === id ? activeRadioId : cur))
+      reloadRadios()
+    })
   }
   const handleRenameRadio = (id: number, name: string) => {
     void withErrorToast(() => renameRadio(id, name), 'Could not rename the radio').then((s) => s && reloadRadios())
@@ -2509,12 +2517,20 @@ export function SettingsPanel({
                           Make active
                         </button>
                       )}
-                      {multi && !isActive && (
+                      {multi && (
+                        // Rendered DISABLED on the active card, never absent: a missing button
+                        // reads as a bug ("the 9700 won't delete" — Mac field report,
+                        // 2026-08-17), a disabled one with a title teaches the rule.
                         <button
                           type="button"
                           className="settings-refresh danger"
                           onClick={() => handleRemoveRadio(r.id)}
-                          title="Remove this radio from the roster"
+                          disabled={isActive}
+                          title={
+                            isActive
+                              ? 'This is your operating radio — make another radio active first, then remove this one.'
+                              : 'Remove this radio from the roster'
+                          }
                         >
                           Remove
                         </button>

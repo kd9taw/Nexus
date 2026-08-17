@@ -270,7 +270,16 @@ export function GettingStartedGuide({ onClose }: Props) {
                     </div>
                   </div>
 
-                  <WizardShot caption="Setup wizard ▸ step 2 · Hamlib ships inside the installer">
+                  <WizardShot
+                    // "Ships inside the installer" is true on Windows only (the .deb declares it;
+                    // a Mac gets it from Homebrew) — a Mac field report followed this caption to a
+                    // dead end, so the claim is platform-aware now.
+                    caption={`Setup wizard ▸ step 2 · ${
+                      navigator.userAgent.includes('Mac')
+                        ? 'CAT needs Homebrew Hamlib — in Terminal: brew install hamlib'
+                        : 'Hamlib ships inside the installer'
+                    }`}
+                  >
                     <WizardDots cur={2} />
                     <p className="wizard-title">How does the radio connect?</p>
                     <p className="wizard-sub">

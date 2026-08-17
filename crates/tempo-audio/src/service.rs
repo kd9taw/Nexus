@@ -8097,9 +8097,25 @@ fn open_cat(
 /// (`libhamlib4`), a different package from the `rigctld` *binary* — so "but WSJT-X works" is
 /// true and is not evidence that Hamlib's tools are installed.
 ///
+/// macOS gets its own sentence: nothing ships rigctld there and nothing can declare it, so the
+/// cure is Homebrew — telling a Mac operator `sudo apt install` (which this did until a
+/// 2026-08-17 field report) names a cure for the wrong operating system.
+///
 /// The raw error is kept in every arm; it is what support asks for.
 fn rigctld_launch_failed(e: &std::io::Error) -> String {
+    rigctld_launch_failed_for(cfg!(target_os = "macos"), e)
+}
+
+/// Split out with the platform as data so both messages are testable on any platform.
+fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
     if e.kind() == std::io::ErrorKind::NotFound {
+        if mac {
+            return format!(
+                "Hamlib's rigctld isn't installed. In Terminal: brew install hamlib, then \
+                 restart Nexus (Homebrew itself is at brew.sh). WSJT-X or a logger working \
+                 proves only the Hamlib LIBRARY is there — Nexus needs the rigctld program. ({e})"
+            );
+        }
         return format!(
             "Hamlib's rigctld isn't installed. On Debian/Ubuntu: sudo apt install \
              libhamlib-utils (the Nexus .deb pulls it in; the AppImage can't, so it has to be \
@@ -9025,10 +9041,13 @@ mod tests {
     #[test]
     fn a_missing_hamlib_says_what_to_install_instead_of_os_error_2() {
         use std::io::{Error, ErrorKind};
-        let msg = rigctld_launch_failed(&Error::new(
-            ErrorKind::NotFound,
-            "No such file or directory (os error 2)",
-        ));
+        let not_found = || {
+            Error::new(
+                ErrorKind::NotFound,
+                "No such file or directory (os error 2)",
+            )
+        };
+        let msg = rigctld_launch_failed_for(false, &not_found());
         assert!(
             msg.contains("libhamlib-utils"),
             "must name the package that fixes it: {msg}"
@@ -9036,6 +9055,20 @@ mod tests {
         assert!(
             msg.contains("os error 2"),
             "the raw error stays — support asks for it: {msg}"
+        );
+        // macOS names Homebrew, never apt — a Mac field report (2026-08-17) got the
+        // Debian/Ubuntu sentence, a cure for the wrong operating system.
+        let msg = rigctld_launch_failed_for(true, &not_found());
+        assert!(
+            msg.contains("brew install hamlib"),
+            "a Mac must be told the Homebrew cure: {msg}"
+        );
+        assert!(!msg.contains("apt install"), "and never the apt one: {msg}");
+        assert!(msg.contains("os error 2"), "{msg}");
+        // The public entry point picks the branch for the platform it compiled on.
+        assert_eq!(
+            rigctld_launch_failed(&not_found()),
+            rigctld_launch_failed_for(cfg!(target_os = "macos"), &not_found())
         );
         // Not a missing binary: no install advice, because installing would not help.
         let msg = rigctld_launch_failed(&Error::new(

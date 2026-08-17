@@ -84,6 +84,12 @@ On **Linux and the Raspberry Pi**, CAT uses the system Hamlib instead of a bundl
 copy: the `.deb` pulls `libhamlib-utils` in automatically, and AppImage users run
 `sudo apt install libhamlib-utils` once.
 
+On **macOS**, CAT needs Hamlib's tools from Homebrew: `brew install hamlib` in
+Terminal, then restart Nexus. (Homebrew itself is at [brew.sh](https://brew.sh).)
+WSJT-X or your logger working without it proves only the Hamlib *library* is
+present — Nexus drives the radio through the `rigctld` *program*, a separate
+package those apps don't use.
+
 ### Will Nexus transmit on its own?
 
 **Never on launch.** Nexus starts passive — it listens. Every transmission is an

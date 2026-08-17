@@ -94,6 +94,9 @@
       "deb": {
         "depends": ["libhamlib-utils", "libgfortran5", "libfftw3-single3"]
       }
+    },
+    "macOS": {
+      "entitlements": "Entitlements.plist"
     }
   },
   "plugins": {
