@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { confirmDialog } from '../confirm'
+import { checkRigForm, blocks, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   exportSettingsBundle,
@@ -31,6 +32,7 @@ import {
   downloadEqslReport,
   downloadLotwReport,
   getAllRigModels,
+  getPortlessRigModels,
   getAudioDevices,
   getBandPlan,
   getRigModels,
@@ -592,6 +594,10 @@ export function SettingsPanel({
   // (0.9.6 design rule), so searchability arrives as a filter field that narrows the options.
   const [rigFilter, setRigFilter] = useState('')
   const [serialPorts, setSerialPorts] = useState<string[]>([])
+  /** Findings from the last save attempt — warnings stay visible after a save that proceeded. */
+  const [rigChecks, setRigChecks] = useState<RigCheck[]>([])
+  /** Models needing no serial port, from the backend. Empty = rule unread; see checkRigForm. */
+  const [portlessRigModels, setPortlessRigModels] = useState<number[]>([])
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
   const [portLabels, setPortLabels] = useState<Record<string, string>>({})
@@ -839,6 +845,11 @@ export function SettingsPanel({
       .catch(() => mounted && setStatus('idle'))
     getRigModels()
       .then((m) => mounted && setRigModels(m))
+      .catch(() => {})
+    // The backend's own "needs no serial port" rule, fetched once. On failure it stays empty and
+    // the pre-save port check declines to block — see checkRigForm.
+    getPortlessRigModels()
+      .then((m) => mounted && Array.isArray(m) && setPortlessRigModels(m))
       .catch(() => {})
     getSerialPortsDetailed()
       .then((infos) => mounted && applyPorts(infos))
@@ -1948,6 +1959,20 @@ export function SettingsPanel({
       // silently-greyed Save button with a context-free "required" error.
       setTab('station')
       setError('Enter your callsign on the Station tab before saving.')
+      return
+    }
+    // Check the RADIO before saving it. Until now the callsign was the only validated field, so
+    // every way of getting the rig wrong saved silently and then behaved like broken hardware —
+    // the symptom always shows up far from the cause. Errors block and name the fix; warnings are
+    // stated and the operator proceeds, because an unusual-but-correct station must never be
+    // locked out of its own configuration by a heuristic.
+    const rigProblems = checkRigForm(form, serialPorts, portlessRigModels)
+    setRigChecks(rigProblems)
+    if (blocks(rigProblems)) {
+      setTab('radio')
+      setError(
+        rigProblems.find((c) => c.level === 'error')?.message ?? 'Check the radio settings.',
+      )
       return
     }
     setStatus('saving')
@@ -8549,6 +8574,16 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-actions">
+          {/* Warnings from the last save. They did NOT block it -- the save went through -- so
+              they are stated once and left visible rather than interrupting. An operator whose
+              setup is unusual but correct must be able to read them and carry on. */}
+          {rigChecks
+            .filter((c) => c.level === 'warning')
+            .map((c) => (
+              <span className="settings-warn" role="status" key={c.message}>
+                {c.message}
+              </span>
+            ))}
           {error && <span className="settings-error" role="alert">{error}</span>}
           {status === 'saved' && !error && (
             <span className="settings-ok" role="status">Saved</span>

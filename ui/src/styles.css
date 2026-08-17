@@ -9863,6 +9863,14 @@ select.settings-input {
   font-size: 13px;
   font-weight: 600;
 }
+/* A pre-save check that did NOT block the save. Distinct from .settings-error in colour, because
+   the difference that matters to the operator is "this stopped you" versus "this is worth
+   knowing" — and both can be on screen at once. */
+.settings-warn {
+  color: var(--alert-warning);
+  font-size: 13px;
+  font-weight: 600;
+}
 .settings-ok {
   color: var(--state-good);
   font-size: 13px;
