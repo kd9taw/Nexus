@@ -310,6 +310,46 @@ fn alsa_card_token(name: &str) -> Option<&str> {
 /// hold the ALSA handles that the lazy drop exists to release (see pass 1). Pass 2 runs only
 /// on the error path, so the second enumeration is paid only when the exact name already
 /// missed.
+/// Whether this host's `Device` addresses the whole CARD (both directions — ALSA,
+/// CoreAudio: one AudioDeviceID carries capture and render) or a single-direction
+/// ENDPOINT (WASAPI: `input_devices()` yields only eCapture endpoints, and asking one
+/// for an output config is a refusal by design).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DeviceGrain {
+    Card,
+    Endpoint,
+}
+
+/// The running host's grain. Windows is the one endpoint-grained host cpal gives us;
+/// macOS must stay `Card` — a CoreAudio duplex USB codec is one device with both
+/// directions under one name, and the sharing shortcut is CORRECT there.
+pub(crate) const HOST_GRAIN: DeviceGrain = if cfg!(target_os = "windows") {
+    DeviceGrain::Endpoint
+} else {
+    DeviceGrain::Card
+};
+
+/// The one-card-for-both-directions decision (#2, #8), made platform-honest: on an
+/// endpoint-grained host two directions NEVER share a device, however alike their
+/// names — a shared Windows friendly name is the NORMAL presentation of a USB rig
+/// interface, not evidence of a shared handle (#99, #104).
+pub(crate) fn shares_one_device(grain: DeviceGrain, out_name: Option<&str>, in_name: &str) -> bool {
+    if grain == DeviceGrain::Endpoint {
+        return false;
+    }
+    out_name
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .is_some_and(|want| {
+            let want_base = split_device_ordinal(want).0;
+            want_base == in_name
+                || matches!(
+                    (alsa_card_token(want_base), alsa_card_token(in_name)),
+                    (Some(w), Some(h)) if w == h
+                )
+        })
+}
+
 pub(crate) fn resolve_configured<D, I, F>(
     mk_devices: F,
     name: Option<&str>,
@@ -609,27 +649,29 @@ impl CpalBackend {
         // `hw:CARD=X`: the output's saved `plughw:CARD=X` no longer matches the resolved
         // name by string, but it IS the same card, so it must still clone rather than
         // re-probe a busy device (regressing the very CM108 both-directions case above).
-        let same_card = out_name
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-            .zip(in_dev.name().ok())
-            .is_some_and(|(want, have)| {
-                let want_base = split_device_ordinal(want).0;
-                want_base == have
-                    || matches!(
-                        (alsa_card_token(want_base), alsa_card_token(&have)),
-                        (Some(w), Some(h)) if w == h
-                    )
-            });
-        let out_dev = if same_card {
-            in_dev.clone()
-        } else {
-            resolve_configured(
+        // ⚠️ BUT ONLY WHERE A DEVICE *IS* A CARD. On WASAPI a cpal Device is a
+        // single-direction ENDPOINT (`input_devices()` yields only eCapture), and a
+        // USB rig interface gets ONE Windows friendly name for BOTH endpoints — so
+        // this shortcut cloned a capture endpoint as the output device and
+        // `default_output_config()` answered "The requested stream type is not
+        // supported by the device", failing the whole duplex open. Issues #99
+        // (Xiegu DE-19) and #104 (QRP Labs QDX), both Windows 11, both regressions
+        // from exactly this line's introduction in 1.3.0. `shares_one_device`
+        // carries the platform grain; the probe below is the belt-and-braces: even
+        // where sharing is believed correct, a clone that cannot produce an output
+        // config falls back to real resolution rather than failing the open.
+        let same_card = in_dev
+            .name()
+            .ok()
+            .is_some_and(|have| shares_one_device(HOST_GRAIN, out_name, &have));
+        let out_dev = match same_card.then(|| in_dev.clone()) {
+            Some(d) if d.default_output_config().is_ok() => d,
+            _ => resolve_configured(
                 || host.output_devices().ok(),
                 out_name,
                 host.default_output_device(),
                 "output",
-            )?
+            )?,
         };
 
         let in_cfg = in_dev.default_input_config().map_err(|e| e.to_string())?;
@@ -1139,6 +1181,41 @@ mod tx_level_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// #99 (Xiegu DE-19) + #104 (QRP Labs QDX), both Windows 11: WASAPI gives BOTH
+    /// endpoints of one USB-audio rig the SAME friendly name, and `input_devices()`
+    /// yields only capture endpoints — so cloning the input as the output handed the
+    /// output stream a capture endpoint and cpal answered "The requested stream type
+    /// is not supported by the device", failing the whole duplex open. Two directions
+    /// never share a device on an endpoint-grained host, however alike their names.
+    #[test]
+    fn a_windows_endpoint_pair_sharing_one_friendly_name_is_not_one_device() {
+        use super::{shares_one_device, DeviceGrain};
+        let qdx = "Digital Audio Interface (2- QDX Transceiver)";
+        assert!(!shares_one_device(DeviceGrain::Endpoint, Some(qdx), qdx));
+        // ...and the ALSA cases the shortcut exists for (#2, #8) still share one card.
+        assert!(shares_one_device(
+            DeviceGrain::Card,
+            Some("plughw:CARD=CODEC,DEV=0"),
+            "plughw:CARD=CODEC,DEV=0"
+        ));
+        assert!(shares_one_device(
+            DeviceGrain::Card,
+            Some("plughw:CARD=CODEC,DEV=0"),
+            "hw:CARD=CODEC,DEV=0"
+        ));
+        // Blank/absent output name never shares, either grain.
+        assert!(!shares_one_device(
+            DeviceGrain::Card,
+            None,
+            "hw:CARD=CODEC,DEV=0"
+        ));
+        assert!(!shares_one_device(
+            DeviceGrain::Card,
+            Some("  "),
+            "hw:CARD=CODEC,DEV=0"
+        ));
+    }
     use super::{pick_device, resolve_configured, NamedDevice};
     use std::cell::RefCell;
     use std::collections::HashSet;

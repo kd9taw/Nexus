@@ -5,7 +5,22 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.6.0] — 2026-08-16
+## [Unreleased]
+
+### Fixed
+
+- **Windows: USB rig interfaces work again — the DE-19/QDX audio regression from 1.3.0.**
+  Reported with a clean regression window (#99, Xiegu DE-19; #104, QRP Labs QDX): audio
+  failed to open with "the requested stream type is not supported." A 1.3.0 Linux fix taught
+  the audio open to share one device handle when the input and output names match — right on
+  Linux, where a device is the whole sound card, and wrong on Windows, where a device is a
+  one-direction endpoint and a USB rig interface carries the same name on both. Nexus was
+  handing the output stream a capture endpoint. Sharing is now platform-aware, and even where
+  sharing is believed correct, a handle that can't produce an output config falls back to
+  real resolution instead of failing the open. Until you have this fix: renaming the rig's
+  Playback device in Windows Sound settings works around it.
+
+## [1.6.0]## [1.6.0] — 2026-08-16
 
 ### Fixed
 
