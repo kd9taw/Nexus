@@ -13510,8 +13510,7 @@ impl Engine {
             // least two stations in it (#101b). `slots = 1` made the RR arithmetic
             // claim every interval — transmit-every-interval sold as a rotation — so
             // a degenerate config falls back to the transmit-% schedule instead.
-            let rr_active =
-                self.settings.beacon_rr_slot > 0 && self.settings.beacon_rr_slots >= 2;
+            let rr_active = self.settings.beacon_rr_slot > 0 && self.settings.beacon_rr_slots >= 2;
             self.beacon_tx_this_slot = if rr_active {
                 // FST4W Round Robin: a deterministic assignment so coordinated
                 // stations never collide. A pure function of UTC, which `slot`
@@ -19915,13 +19914,17 @@ mod tests {
             rv: None,
             mode: Some(modes::ModeKind::Wspr),
         };
-        e.ingest_decodes_for_test(&[wspr.clone()], 1);
+        e.ingest_decodes_for_test(std::slice::from_ref(&wspr), 1);
         let stations = e.snapshot().stations;
         let s = stations
             .iter()
             .find(|s| s.call == "TI4JWC")
             .expect("the beacon files under its CALL field");
-        assert_eq!(s.grid.as_deref(), Some("EK70"), "…with the GRID field as its grid");
+        assert_eq!(
+            s.grid.as_deref(),
+            Some("EK70"),
+            "…with the GRID field as its grid"
+        );
         assert!(
             !stations.iter().any(|s| s.call == "EK70"),
             "the grid must not appear as a station: {stations:?}"
@@ -24460,20 +24463,31 @@ mod tests {
             ),
             "control: an un-QSY'd boundary job applies"
         );
-        assert_eq!(e.snapshot().stations.len(), 1, "control: and populates the roster");
+        assert_eq!(
+            e.snapshot().stations.len(),
+            1,
+            "control: and populates the roster"
+        );
 
         // The loop rolls the ring into the next slot's capture, still on 20 m…
         e.begin_slot_capture();
         // …then the operator QSYs MID-SLOT: roster cleared, epoch bumped — but the
         // ring still holds 20 m air.
         e.set_frequency(7.074, "40m", "USB");
-        assert_eq!(e.snapshot().stations.len(), 0, "precondition: the QSY cleared the roster");
+        assert_eq!(
+            e.snapshot().stations.len(),
+            0,
+            "precondition: the QSY cleared the roster"
+        );
 
         // The boundary job for that slot is built AFTER the QSY, from audio captured
         // BEFORE it. It must land stale — never populate the new band's roster.
         let job = e.build_decode_job(frame.clone(), 2, DecodePass::Boundary);
         assert!(
-            matches!(e.apply_decode_result(run_decode_job(job)), DecodeApplied::Stale),
+            matches!(
+                e.apply_decode_result(run_decode_job(job)),
+                DecodeApplied::Stale
+            ),
             "a boundary job whose capture predates the QSY must land stale"
         );
         assert_eq!(
@@ -31821,7 +31835,10 @@ mod tests {
             e.apply_settings(s);
             e.set_tx_enabled(true);
 
-            assert!(!e.poll_tx(0).is_empty(), "precondition: the {tier:?} beacon keys");
+            assert!(
+                !e.poll_tx(0).is_empty(),
+                "precondition: the {tier:?} beacon keys"
+            );
 
             // Backdate the watchdog clock far past its limit: the beacon must keep
             // its schedule regardless.
@@ -31831,7 +31848,10 @@ mod tests {
                 "a {tier:?} beacon over must not be killed by the wall-clock watchdog"
             );
             assert!(!e.tx_watchdog, "no trip is reported for a {tier:?} beacon");
-            assert!(e.tx_enabled(), "TX stays armed — stopping a beacon is the latch");
+            assert!(
+                e.tx_enabled(),
+                "TX stays armed — stopping a beacon is the latch"
+            );
         }
 
         // The OTHER direction, in the same breath: the non-beacon watchdog is
@@ -31840,7 +31860,10 @@ mod tests {
         q.call_station("W9XYZ");
         q.settings.tx_watchdog_min = 1;
         q.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
-        assert!(q.poll_tx(0).is_empty(), "control: a QSO over is still refused");
+        assert!(
+            q.poll_tx(0).is_empty(),
+            "control: a QSO over is still refused"
+        );
         assert!(q.tx_watchdog, "control: and the trip is visible");
         assert!(!q.tx_enabled(), "control: and TX is disarmed");
     }
@@ -31866,7 +31889,11 @@ mod tests {
         let _ = e.poll_tx(4); // the loop polls repeatedly inside the same interval
         let lines = e.take_all_txt_pending();
         let tx: Vec<&String> = lines.iter().filter(|l| l.contains(" Tx ")).collect();
-        assert_eq!(tx.len(), 1, "exactly one Tx line per beacon over: {lines:?}");
+        assert_eq!(
+            tx.len(),
+            1,
+            "exactly one Tx line per beacon over: {lines:?}"
+        );
         assert!(
             tx[0].contains("KD9TAW EN52 37"),
             "the line carries the beacon message: {}",

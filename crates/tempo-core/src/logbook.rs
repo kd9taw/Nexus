@@ -2095,13 +2095,24 @@ mod tests {
     #[test]
     fn day_bounds_rejects_malformed_dates() {
         assert!(day_bounds_utc("2026-08-11").is_some());
-        for bad in ["", "2026", "2026-13-01", "2026-00-10", "2026-08-32", "2026-08-11-05", "next-tuesday"] {
+        for bad in [
+            "",
+            "2026",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-08-32",
+            "2026-08-11-05",
+            "next-tuesday",
+        ] {
             assert!(day_bounds_utc(bad).is_none(), "{bad:?} must not parse");
         }
         // The bounds cover the whole UTC day, inclusive.
         let (lo, hi) = day_bounds_utc("2023-11-14").unwrap();
         assert_eq!(hi - lo, 86_399);
-        assert!(lo <= 1_700_000_000 && 1_700_000_000 <= hi, "22:13:20 UTC falls inside its day");
+        assert!(
+            lo <= 1_700_000_000 && 1_700_000_000 <= hi,
+            "22:13:20 UTC falls inside its day"
+        );
     }
 
     #[test]
