@@ -189,6 +189,7 @@
   "sstvRxAutoArm": true,
   "sstvDefaultTxMode": "auto",
   "sstvTxPowerPct": null,
+  "pskRxAutoArm": true,
   "alertMyCall": true,
   "alertCq": false,
   "alertNew": true,

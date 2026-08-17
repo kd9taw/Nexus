@@ -298,6 +298,9 @@ const SHELLS: Array<[string, Array<Set<string>>]> = [
   ['.layout.single.phone-cockpit', shellChain('phone-cockpit')],
   ['.layout.single.cw-cockpit', shellChain('cw-cockpit')],
   ['.layout.single.rtty-cockpit', shellChain('rtty-cockpit')],
+  // PSK (Keyboard Modes Phase 1) rides RTTY's region-less shell rule — one
+  // comma group in styles.css, but the cascade is computed per shell here.
+  ['.layout.single.psk-cockpit', shellChain('psk-cockpit')],
   ['.layout.single.sstv-view', shellChain('sstv-view')],
   // APRS is the sixth cockpit and was ABSENT from this census until 2026-08-04: nothing had
   // ever computed its shell, and it was the one surface in the tree with no deficit valve —
@@ -507,7 +510,11 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
     expect(finalDecl('.sstv-tx-bar', 'bottom')).toBe('0')
   })
 
-  for (const shell of ['.layout.single.rtty-cockpit', '.layout.single.sstv-view']) {
+  for (const shell of [
+    '.layout.single.rtty-cockpit',
+    '.layout.single.psk-cockpit',
+    '.layout.single.sstv-view',
+  ]) {
     it(`${shell} sets the fill-frame floor knob (--cockpit-fill-min, em units)`, () => {
       // Region-less cockpits: the bare fill frame's inline `min-height:
       // var(--cockpit-fill-min, 0)` is the ONLY floor channel a sheet cannot outrank —
@@ -903,39 +910,43 @@ describe('the band-scope strip is sized by its HOST, never by the shared base ru
   }
 })
 
-describe('the RTTY waterfall floor YIELDS (RTTY is the one scope with no Splitter)', () => {
+describe('the RTTY/PSK waterfall floor YIELDS (the scopes with no Splitter)', () => {
   // `.rtty-cockpit .waterfall-wrap` shares the strip shape with `.ph-scope-panel`, and
   // carried the same `min-height: 120px` — but RTTY gives the operator no drag handle,
   // so on a short or pinned-zoom window that floor is unrecoverable: the strip simply
   // takes its 120 px out of a window that has ~400 to spend. The shell valve keeps it
   // from TRAPPING anything, which is why this is a share bug and not a safety bug.
-  const chain = [...shellChain('rtty-cockpit'), new Set(['waterfall-wrap'])]
+  // PSK shares the strip rule (one comma group) and the same no-Splitter shape, so it
+  // is computed separately here — a split of that group could regress one alone.
+  for (const shell of ['rtty-cockpit', 'psk-cockpit']) {
+    const chain = [...shellChain(shell), new Set(['waterfall-wrap'])]
 
-  it('resolves a min-height at all (the canvas needs real device pixels)', () => {
-    const win = winningValue(chain, blockLonghand('min-height'))
-    expect(win, '.rtty-cockpit .waterfall-wrap: nothing declares min-height').not.toBeNull()
-    // Not "delete the floor" — at a normal window the strip must still be a strip.
-    const v = win!.value
-    expect(
-      lengthPx(v, { fontPx: 14, vhEff: 768 }),
-      `.rtty-cockpit .waterfall-wrap min-height is \`${v}\` — at a 768 window the floor must ` +
-        'still keep a drawable strip (≥ 6em).',
-    ).toBeGreaterThanOrEqual(6 * 14)
-  })
-
-  it('never claims more than 30% of the effective viewport', () => {
-    const v = winningValue(chain, blockLonghand('min-height'))!.value
-    for (const vhEff of [1440, 768, 439, 384, 300]) {
-      const floor = lengthPx(v, { fontPx: 14, vhEff })
-      expect(floor, `min-height \`${v}\` is unreadable as a length`).not.toBeNull()
+    it(`.${shell} resolves a min-height at all (the canvas needs real device pixels)`, () => {
+      const win = winningValue(chain, blockLonghand('min-height'))
+      expect(win, `.${shell} .waterfall-wrap: nothing declares min-height`).not.toBeNull()
+      // Not "delete the floor" — at a normal window the strip must still be a strip.
+      const v = win!.value
       expect(
-        floor!,
-        `.rtty-cockpit .waterfall-wrap min-height is \`${v}\` = ${floor}px at --vh-eff ${vhEff} ` +
-          `— ${((100 * floor!) / vhEff).toFixed(0)}% of the window for a glance strip, and RTTY ` +
-          'has no Splitter to take it back. Write the floor to yield: min(Xem, share).',
-      ).toBeLessThanOrEqual(0.3 * vhEff)
-    }
-  })
+        lengthPx(v, { fontPx: 14, vhEff: 768 }),
+        `.${shell} .waterfall-wrap min-height is \`${v}\` — at a 768 window the floor must ` +
+          'still keep a drawable strip (≥ 6em).',
+      ).toBeGreaterThanOrEqual(6 * 14)
+    })
+
+    it(`.${shell} never claims more than 30% of the effective viewport`, () => {
+      const v = winningValue(chain, blockLonghand('min-height'))!.value
+      for (const vhEff of [1440, 768, 439, 384, 300]) {
+        const floor = lengthPx(v, { fontPx: 14, vhEff })
+        expect(floor, `min-height \`${v}\` is unreadable as a length`).not.toBeNull()
+        expect(
+          floor!,
+          `.${shell} .waterfall-wrap min-height is \`${v}\` = ${floor}px at --vh-eff ${vhEff} ` +
+            `— ${((100 * floor!) / vhEff).toFixed(0)}% of the window for a glance strip, with ` +
+            'no Splitter to take it back. Write the floor to yield: min(Xem, share).',
+        ).toBeLessThanOrEqual(0.3 * vhEff)
+      }
+    })
+  }
 })
 
 describe("the scope Splitter's declared range is the range the sheet HONOURS", () => {

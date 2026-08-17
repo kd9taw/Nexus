@@ -18961,18 +18961,24 @@ button.sat-chip:disabled {
    APRS did (operator screenshot, 0.20.5) before `.aprs-host` was added here. Every
    full-view host needs this; it is not optional chrome. */
 .rtty-host,
+.psk-host,
 .sstv-host,
 .aprs-host {
   display: contents;
 }
 .rtty-host[hidden],
+.psk-host[hidden],
 .sstv-host[hidden],
 .aprs-host[hidden] {
   display: none;
 }
 /* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same
-   fix as `.layout.single.cw-cockpit`. */
+   fix as `.layout.single.cw-cockpit`. PSK is RTTY's region-less shape (one
+   content pane, no region), so it rides the same rule — and the same
+   `--cockpit-fill-min` knob, whose allowlist in cockpit-panes.test.ts names all
+   three shells. */
 .layout.single.rtty-cockpit,
+.layout.single.psk-cockpit,
 .layout.single.sstv-view {
   display: flex;
   flex-direction: column;
@@ -19028,7 +19034,8 @@ button.sat-chip:disabled {
    the canvas has real device pixels to draw into. A flex:1 stage collapses to 0
    in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then
    skip every row. */
-.rtty-cockpit .waterfall-wrap {
+.rtty-cockpit .waterfall-wrap,
+.psk-cockpit .waterfall-wrap {
   flex: 0 0 auto;
   /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
   height: calc(0.22 * var(--vh-eff, 100vh));
@@ -19085,11 +19092,25 @@ button.sat-chip:disabled {
    `--cockpit-pane-flex`, so the inline fallback is already `1 1 0`.) 10em ≈ the frame head
    + the 6em transcript floor; a shorter window flows to the shell's own `overflow-y: auto`
    valve, never to a clip. */
-.rtty-stream .cw-decode-text {
+.rtty-stream .cw-decode-text,
+.psk-stream .cw-decode-text {
   /* was height:14em — let it fill the pane and scroll internally (it already has overflow-y:auto). */
   flex: 1 1 0;
   min-height: 0;
   height: auto;
+}
+/* PSK "RX only" badge beside the mode badge — the honest label for a cockpit
+   whose transmit half is a later phase (reuses the backend-pill look). */
+.psk-rx-pill {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-left: var(--space-2);
 }
 /* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
    rebuild — the child combinator stopped matching once the rows moved inside the pinned

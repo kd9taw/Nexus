@@ -1253,6 +1253,24 @@ export interface RttyState {
   heardCq: string | null
 }
 
+/** Live PSK31 receive state (the `get_psk_state` poll). RX ONLY — no PSK
+ * transmit path exists this phase, so unlike `RttyState` there is deliberately
+ * no TX surface here for a control to wire to. */
+export interface PskState {
+  armed: boolean
+  /** AFC correction from the netted center (Hz; slew-limited, clamped ±25). */
+  afcHz: number
+  /** The demodulator's quality squelch reads a signal right now. */
+  signal: boolean
+  /** Audio center (Hz) the decoder is netted on (the waterfall cursor). */
+  centerHz: number
+  /** The decoded-text ring tail (caps at ~4000 chars; oldest drop off). */
+  text: string
+  /** Per-character confidence 0–100, parallel to `text`'s chars — render low
+   * values faint (the phase-margin soft metric). */
+  charConf: number[]
+}
+
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
  * of the Nexus local data dir, beside its gallery.json metadata). */
 export interface SstvGalleryEntry {
@@ -2655,6 +2673,10 @@ export interface Settings {
   /** SSTV drive, percent. null/undefined = never touch the rig's power (the shipped
    * behaviour); a value both seeds the screen's slider and is applied at Send. */
   sstvTxPowerPct?: number | null
+  /** Whether opening the PSK view starts the receiver. Default TRUE, so an ABSENT
+   * key must read as on — `!== false`, never `!!`. The gate is in the engine
+   * (`Engine::psk_auto_arm`), beside the session decline memory. */
+  pskRxAutoArm?: boolean
   /** Alert (beep + flash) when a decode is directed at my callsign. */
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */

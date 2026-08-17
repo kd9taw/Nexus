@@ -595,6 +595,20 @@ Comma-separated chip lists for the quick text you fire from each surface:
   AFSK in USB/DATA-U) so the on-air sense stays correct." Applies to TX and the
   RX decoder.
 
+### PSK
+
+PSK31 receive needs no setup: open the PSK screen, tune a watering hole
+(14.070 is the classic), click a warble trace on the waterfall and the text
+prints. The click nets the *decoder* — it never moves the rig — and a
+slew-limited AFC (never more than ±25 Hz) rides small drift for you. PSK31 is
+receive-only in this release; transmit is on the keyboard-modes roadmap.
+
+- **Start receiving when PSK opens** — on by default: entering the screen arms
+  the decoder, so a signal on the band prints without touching anything. Turn
+  it off to arm by hand (the Arm RX button in the decoded-text pane) — for
+  instance on a shared rig you monitor from. Stopping the receiver yourself is
+  remembered for the rest of the session either way.
+
 ### SSTV
 
 **Receiving**

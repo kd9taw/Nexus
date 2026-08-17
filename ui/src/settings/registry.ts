@@ -256,6 +256,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'mark', 'space'],
   },
   {
+    id: 'psk',
+    label: 'PSK',
+    tab: 'digital',
+    keywords: ['psk31', 'bpsk', 'varicode', 'keyboard', 'ragchew', 'warble', '14.070',
+      'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan'],
+  },
+  {
     id: 'sstv',
     label: 'SSTV',
     tab: 'digital',

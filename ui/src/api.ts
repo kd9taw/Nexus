@@ -16,6 +16,7 @@ import type {
   CwDecodeResult,
   MeterReadout,
   SkimHit,
+  PskState,
   RttyState,
   SstvState,
   ClubLogPushResult,
@@ -1745,6 +1746,42 @@ export async function rttyAutoAnswer(call: string): Promise<RttyState> {
 /** Kill the live auto session: abort the sequencer, drop the queue, unkey. */
 export async function rttyAutoAbort(): Promise<RttyState> {
   return invoke<RttyState>('rtty_auto_abort')
+}
+
+/** Arm/disarm the PSK31 RX decoder (session-only; RX decode, never TX — no PSK
+ * transmit path exists). Stopping it is remembered for the session, so the
+ * view-entry auto-arm cannot restart it behind the operator. */
+export async function pskArm(on: boolean): Promise<PskState> {
+  return invoke<PskState>('psk_arm', { on })
+}
+
+/** Arm the decoder because the operator ENTERED the PSK view (the APRS/SSTV
+ * auto-arm doctrine). Receive-only by construction; the engine owns the policy
+ * (only upgrades from off, honours the session decline + the Settings opt-out). */
+export async function pskAutoArm(): Promise<PskState> {
+  return invoke<PskState>('psk_auto_arm')
+}
+
+/** Live PSK state (poll while the PSK cockpit is visible). */
+export async function getPskState(): Promise<PskState> {
+  return invoke<PskState>('get_psk_state')
+}
+
+/** Clear the decoded-PSK transcript (display only). */
+export async function pskClear(): Promise<PskState> {
+  return invoke<PskState>('psk_clear')
+}
+
+/** Drop + rebuild the PSK demodulator (a fresh slew-limited AFC pull from the
+ * netted center). RX only. */
+export async function pskAfcReset(): Promise<PskState> {
+  return invoke<PskState>('psk_afc_reset')
+}
+
+/** Net the PSK decoder onto a new audio center (Hz) — a waterfall click, the
+ * single-signal click-to-tune. Moves the DECODER, never the rig. RX only. */
+export async function pskNet(hz: number): Promise<PskState> {
+  return invoke<PskState>('psk_net', { hz })
 }
 
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX

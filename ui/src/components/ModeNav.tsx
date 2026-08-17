@@ -19,6 +19,7 @@ import {
   Bookmark,
   Settings,
   Type,
+  Keyboard,
   Image as ImageIcon,
   MapPin,
   RotateCcw,
@@ -48,8 +49,8 @@ interface Props {
   onDigitalMode: (m: DigitalMode) => void
 }
 
-/** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · SSTV). */
-export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'sstv' | 'aprs'
+/** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · PSK · SSTV · APRS). */
+export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'psk' | 'sstv' | 'aprs'
 
 interface DigitalSub {
   mode: DigitalMode
@@ -88,6 +89,13 @@ const DIGITAL_SUBS: DigitalSub[] = [
     icon: Type,
     title: 'RTTY — Baudot teletype (45.45 baud): streaming decode + F-key macros',
     active: (v) => v === 'rtty',
+  },
+  {
+    mode: 'psk',
+    label: 'PSK',
+    icon: Keyboard,
+    title: 'PSK31 — narrow-band keyboard mode: click a trace on the waterfall, read the ragchew (receive)',
+    active: (v) => v === 'psk',
   },
   {
     mode: 'sstv',

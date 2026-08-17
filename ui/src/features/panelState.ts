@@ -717,6 +717,28 @@ export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
   panelIds: RTTY_PANEL_IDS,
 }
 
+/** PSK cockpit's removable panels (Keyboard Modes Phase 1 — RECEIVE ONLY).
+ *  RTTY's shape: `scope` is the band waterfall (see SCOPE_PANEL_ID), `stream` the decoded
+ *  transcript. The CockpitHeader is not a panel.
+ *
+ *  THE STOP LINE HOLDS HERE BY CONSTRUCTION, the APRS way rather than the RTTY way: this
+ *  cockpit renders NO control that starts a transmission — no send box, no macros, no
+ *  TX-enable latch, no dock — because no PSK TX path exists in the engine this phase.
+ *  With nothing on the screen able to start a transmission, "at least one stop control
+ *  renders outside every removable pane" is satisfied vacuously, and there is nothing to
+ *  add to stop-line.test.tsx's sweeps (its census entry is this comment). The pane's Arm
+ *  RX / Re-acquire / Clear controls are decoder controls: none touches PTT, and the
+ *  structure test (PskCockpit.structure.test.tsx) pins the no-TX-control census. When
+ *  Phase 2 brings PSK TX, that build adds the dock + latch + Esc census AND the sweep
+ *  entry — the RTTY pattern, not an amendment to this one. */
+export const PSK_PANEL_IDS = [SCOPE_PANEL_ID, 'stream'] as const
+export type PskPanelId = (typeof PSK_PANEL_IDS)[number]
+
+export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
+  view: 'psk',
+  panelIds: PSK_PANEL_IDS,
+}
+
 /**
  * EVERY vocabulary in the app, so the stop-line name backstop cannot silently miss one.
  * It missed the Operate cockpit for the whole life of the rule — the guard listed the four
@@ -735,6 +757,7 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
   PHONE_PANELS,
   CW_PANELS,
   RTTY_PANELS,
+  PSK_PANELS,
 ]
 
 /**

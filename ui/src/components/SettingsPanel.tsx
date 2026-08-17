@@ -5919,6 +5919,38 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- PSK — receive-only this phase (Keyboard Modes Phase 1). ONE deliberate
+               setting: the auto-arm opt-out. PSK31 must work with ZERO configuration —
+               open the screen, click a trace, read the text — so everything else
+               (netted frequency, AFC, squelch) is cockpit/decoder state, not schema. ---- */}
+          {tab === 'digital' && (
+          <fieldset className="settings-section" id="settings-psk">
+            <legend>PSK</legend>
+            <div className="settings-field">
+              <label className="settings-toggle">
+                <span className="settings-label">Start receiving when PSK opens</span>
+                <button
+                  type="button"
+                  role="switch"
+                  // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
+                  aria-checked={form.pskRxAutoArm !== false}
+                  className={`toggle${form.pskRxAutoArm !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('pskRxAutoArm', form.pskRxAutoArm === false)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              <span className="settings-hint">
+                The PSK screen starts the decoder as soon as you open it — click a trace on
+                the waterfall and the text prints, no setup. Turn this off to arm the
+                receiver by hand (the Arm RX button in the decoded-text pane). Stopping the
+                receiver yourself is already remembered for the rest of the session. PSK31
+                is receive-only for now; transmit is on the keyboard-modes roadmap.
+              </span>
+            </div>
+          </fieldset>
+          )}
+
           {/* ---- SSTV — what the SSTV screen starts on, and the ISS pass auto-arm. The ISS
                switch used to live in Rig & CAT, where nothing about it is a rig model, port,
                baud, framing or keying; it is here now, beside the rest of SSTV. ---- */}

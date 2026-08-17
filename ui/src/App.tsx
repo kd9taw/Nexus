@@ -64,7 +64,7 @@ import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
-import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
@@ -81,6 +81,7 @@ import { AwardsJourney } from './components/AwardsJourney'
 import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
+import { PskCockpit } from './components/PskCockpit'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
@@ -407,6 +408,7 @@ export default function App() {
   const phonePanels = usePanelLayout(PHONE_PANELS)
   const cwPanels = usePanelLayout(CW_PANELS)
   const rttyPanels = usePanelLayout(RTTY_PANELS)
+  const pskPanels = usePanelLayout(PSK_PANELS)
 
   // One-shot on launch: check the release feed for a newer version (throttled to once/day + cached,
   // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
@@ -1866,6 +1868,13 @@ export default function App() {
         setView(m)
         return
       }
+      if (m === 'psk') {
+        // PSK is RX-only this phase — entry asserts nothing on the rig (it is
+        // deliberately NOT in RIG_MODE_BY_VIEW); the cockpit auto-arms its
+        // decoder, which taps RX audio and nothing else.
+        setView(m)
+        return
+      }
       // PRESERVE the operator's tier if it is already one this screen owns.
       // This used to read `tierRef.current === 'FT4' ? 'FT4' : 'FT8'`, which
       // silently forced anything else back to FT8 — so selecting Q65 (or any of
@@ -2374,11 +2383,12 @@ export default function App() {
       workspace = null
       break
     case 'rtty':
+    case 'psk':
     case 'sstv':
     case 'aprs':
-      // Same keep-alive pattern as Operate: RTTY's decoded stream, SSTV's
-      // always-armed VIS receiver, and APRS's decode list must survive
-      // navigation, so all three live in persistent hosts below. Nothing in the slot.
+      // Same keep-alive pattern as Operate: RTTY's + PSK's decoded streams,
+      // SSTV's always-armed VIS receiver, and APRS's decode list must survive
+      // navigation, so all four live in persistent hosts below. Nothing in the slot.
       workspace = null
       break
     case 'connect':
@@ -2578,6 +2588,7 @@ export default function App() {
           effectiveView === 'operate' ||
           effectiveView === 'chat' ||
           effectiveView === 'rtty' ||
+          effectiveView === 'psk' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
           // Satellites: the bird's own surfaces ARE the frequency authority here
@@ -2590,10 +2601,11 @@ export default function App() {
         hideDigitalChrome={
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
-          // RTTY/SSTV/APRS are free-running modes with their OWN band selectors — the
+          // RTTY/PSK/SSTV/APRS are free-running modes with their OWN band selectors — the
           // top control is fed the DIGITAL (FT8) plan, and the tier tiles / slot
           // clock / DT readout are slot-sync furniture that means nothing here.
           effectiveView === 'rtty' ||
+          effectiveView === 'psk' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
           effectiveView === 'sats'
@@ -2748,6 +2760,19 @@ export default function App() {
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
+              />
+            </div>
+          )}
+          {isViewEnabled('psk') && (
+            <div className="psk-host" hidden={effectiveView !== 'psk'}>
+              <PskCockpit
+                snap={snap}
+                onSnap={setSnap}
+                active={effectiveView === 'psk'}
+                onSetFrequency={handleSetFrequency}
+                theme={theme}
+                wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+                panels={pskPanels}
               />
             </div>
           )}

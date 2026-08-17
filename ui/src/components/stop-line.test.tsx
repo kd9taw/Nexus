@@ -491,6 +491,13 @@ describe('the stop line, computed against the real cockpits', () => {
         'OperateCockpit.structure.test.tsx — "every protected control renders INSIDE ' +
         '.cockpit-qso with every panel id removed" (PRESENCE-ONLY: all ids at once, no ' +
         'baseline, no disabled comparison)',
+      psk:
+        'PskCockpit.structure.test.tsx — RECEIVE-ONLY cockpit: "renders NO control that ' +
+        'starts or stops a transmission" pins that no PSK TX path exists to guard, so THE ' +
+        'STOP LINE holds by construction (the APRS shape, but WITH a vocabulary). A sweep ' +
+        'with an empty stopControls would assert nothing; the no-TX census is the guard. ' +
+        'Keyboard Modes Phase 2 (PSK TX) must replace that census with a real sweep case ' +
+        'here — its structure test says so at the top.',
     }
     const here = new Set(CASES.map((c) => c.view))
     for (const vocab of ALL_PANEL_VOCABULARIES) {

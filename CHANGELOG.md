@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PSK31 receive.** A new PSK screen on the Digital rail decodes the classic narrow-band
+  keyboard mode — open it, tune a watering hole (14.070 is the busy one), click a warble
+  trace on the waterfall and the text prints, with faint characters marking doubtful copy.
+  The receiver starts by itself when the screen opens (turn that off in Settings ▸ Digital
+  ▸ PSK; stopping it by hand is remembered for the session), the click nets the decoder
+  rather than the rig, and a gentle AFC (never more than ±25 Hz) rides small drift.
+  Receive-only for now — PSK31 transmit and QPSK31 are next on the keyboard-modes roadmap.
+
 ### Fixed
 
 - **macOS now says how to get Hamlib instead of quoting a Debian command.** A Mac operator
