@@ -36,6 +36,23 @@ describe('confirmDialog', () => {
     await expect(answer).resolves.toBe(true)
   })
 
+  it('answers a superseded question NO instead of leaving its await hanging forever', async () => {
+    render(<ConfirmHost />)
+    const first = confirmDialog({ title: 'Delete radio 1?' })
+    await waitFor(() => expect(screen.getByText('Delete radio 1?')).toBeTruthy())
+
+    // A second question arrives before the first is answered — the fire-and-forget call sites in
+    // RadioProgView do not await one another. The first used to be dropped unresolved, so its
+    // caller waited for the lifetime of the window.
+    const second = confirmDialog({ title: 'Delete radio 2?' })
+    await expect(first).resolves.toBe(false)
+
+    // And the survivor is genuinely still live, not collateral damage from settling the first.
+    await waitFor(() => expect(screen.getByText('Delete radio 2?')).toBeTruthy())
+    screen.getByRole('button', { name: 'Confirm' }).click()
+    await expect(second).resolves.toBe(true)
+  })
+
   it('resolves false on Cancel', async () => {
     render(<ConfirmHost />)
     const answer = confirmDialog({ title: 'Reset everything?' })

@@ -17,7 +17,7 @@
  * must never proceed unconfirmed. The opposite default would turn a missing dialog into a silent
  * deletion, which is the worse half of the same bug.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './components/ui/Dialog'
 
 export interface ConfirmOptions {
@@ -51,16 +51,31 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
 /** Mount ONCE, near the app root. */
 export function ConfirmHost() {
   const [req, setReq] = useState<Request | null>(null)
+  // The same request the state holds, kept where a callback can settle it without reading
+  // through a render. Resolving inside a `setReq` updater would be a side effect in a function
+  // React is free to call twice (StrictMode), and `close` reading `req` would answer whichever
+  // request that closure captured rather than the one on screen.
+  const pending = useRef<Request | null>(null)
 
   useEffect(() => {
-    present = setReq
+    present = (next) => {
+      // A second question arriving while one is open REPLACES it, so the one being replaced must
+      // be answered on its way out or its `await` never settles and the caller waits for the
+      // lifetime of the window. Answered NO: the operator never saw it, and an unseen
+      // destructive question is a refusal. Reachable from the fire-and-forget call sites in
+      // RadioProgView, which do not await one another.
+      pending.current?.resolve(false)
+      pending.current = next
+      setReq(next)
+    }
     return () => {
       present = null
     }
   }, [])
 
   const close = (ok: boolean) => {
-    req?.resolve(ok)
+    pending.current?.resolve(ok)
+    pending.current = null
     setReq(null)
   }
 

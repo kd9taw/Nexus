@@ -21801,3 +21801,15 @@ tr.sel .aprs-sym {
   gap: var(--space-2);
   margin-top: var(--space-4);
 }
+/* The affirmative button of a DESTRUCTIVE confirm (`danger: true`). Without this the class was
+   inert — there is no `.settings-save.danger` or bare `.danger` rule — so all eleven destructive
+   confirms painted as an ordinary accent save button, and the one visual cue that this button
+   deletes something was simply absent. Filled rather than outlined, following
+   `.logconfirm-log.danger`: it IS the primary action of its dialog, just a dangerous one. */
+.settings-save.danger {
+  background: var(--state-weak);
+  color: #fff;
+}
+.settings-save.danger:hover:not(:disabled) {
+  filter: brightness(1.06);
+}

@@ -7,7 +7,7 @@
 // self-fetches its spectrum), and its action callbacks drive the same engine, so state
 // stays consistent across every window.
 import { useEffect, useMemo, useState } from 'react'
-import { confirmDialog } from './confirm'
+import { confirmDialog, ConfirmHost } from './confirm'
 import type {
   AppSnapshot,
   BandChannel,
@@ -91,7 +91,27 @@ function loadOperateLayout(): OperateLayout {
   return surfaceGet('nexus.operate.layout') === 'classic' ? 'classic' : 'roster'
 }
 
+/** A torn-off window is a SEPARATE JS REALM, not another branch of the main window's tree, so
+ *  it needs its own confirm host: `confirmDialog` resolves through a module-level global, and in
+ *  this document that global is `null` until something mounts one here. Without it the guarded
+ *  action fails closed — it logs and answers "no" — which is how the ✕ on a conversation in this
+ *  panel did nothing at all.
+ *
+ *  Mounted ONCE around the whole panel rather than beside each `<Toasts/>`, because the body
+ *  below returns from nine separate branches and only two of them mount toasts. Per-branch would
+ *  reproduce the very bug this fixes: a host present in one tree and absent in another, failing
+ *  silently in whichever branch someone forgets. The dialog portals (`RD.Portal`), so where this
+ *  sits in the tree has no bearing on layout — only on whether it exists at all. */
 export function DetachedPanel({ panel }: { panel: string }) {
+  return (
+    <>
+      <DetachedPanelBody panel={panel} />
+      <ConfirmHost />
+    </>
+  )
+}
+
+function DetachedPanelBody({ panel }: { panel: string }) {
   const [theme] = useTheme()
   // Pop-outs follow field mode: a separate document re-applies the attribute itself, the
   // same way it mirrors the theme — outdoors is a fact about the station, not a window.
