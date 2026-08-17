@@ -41,6 +41,7 @@ pub mod rtty;
 pub mod spectrum;
 pub mod store;
 pub mod text;
+pub mod textmode;
 pub mod timing;
 pub mod tx;
 pub mod wavfile;

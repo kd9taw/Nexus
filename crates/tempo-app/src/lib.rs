@@ -16,6 +16,7 @@ pub mod alltxt;
 pub mod bandplan;
 pub mod dto;
 pub mod engine;
+pub mod keyboard;
 pub mod privileges;
 pub mod station;
 pub mod update;

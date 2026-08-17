@@ -2994,37 +2994,18 @@ enum RttyOp {
 /// Uppercase + drop anything with no ITA2 mapping — the ONE filter every RTTY TX
 /// path runs, so what is queued (or typed into a latched stream) is exactly what
 /// keys, and the two paths can never disagree about which characters exist.
+///
+/// RTTY's instantiation of the per-mode [`crate::keyboard::kb_filter`]; the
+/// alphabet lives on the mode descriptor so PSK31's full-ASCII varicode is a
+/// different `Charset` rather than a second filter.
 fn rtty_filter(text: &str) -> String {
-    text.chars()
-        .map(|c| c.to_ascii_uppercase())
-        .filter(|&c| tempo_core::rtty::encodable(c))
-        .collect()
+    crate::keyboard::kb_filter(crate::keyboard::RTTY, text)
 }
 
 /// What the radio loop should key this tick on behalf of the continuous-TX latch
-/// ([`Engine::poll_rtty_stream`]).
-///
-/// Three explicit answers rather than an empty-string sentinel: "nothing typed"
-/// and "not transmitting" are opposite instructions to a keyed transmitter, and a
-/// consumer that had to infer the difference from an empty buffer would sooner or
-/// later infer it wrong.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RttyStreamTick {
-    /// Not streaming. The loop must not key on the latch's behalf — and if it was,
-    /// the latch has just been dropped and the abort armed, so it unkeys.
-    Idle,
-    /// Streaming and every gate is up, but the loop asked for no characters this
-    /// tick because its audio look-ahead is already full. Stay keyed, key nothing.
-    /// This exists so the loop can run the gate re-check on EVERY tick without
-    /// having to feed on every tick — the predicate is the safety, the feeding is
-    /// only the feature.
-    Ahead,
-    /// Key these typed characters (never empty).
-    Text(String),
-    /// Latched with nothing typed: key the RTTY IDLE (a LTRS diddle) to hold the
-    /// carrier and the far end's sync. Never silence under a held PTT.
-    Diddle,
-}
+/// ([`Engine::poll_rtty_stream`]) — the mode-generic [`crate::keyboard::KbTick`]
+/// under the name RTTY's call sites have always used.
+pub use crate::keyboard::KbTick as RttyStreamTick;
 
 /// The `rtty_state` seq-state string the UI switches on.
 fn seq_state_label(s: tempo_core::rtty::SeqState) -> &'static str {
@@ -11438,12 +11419,23 @@ impl Engine {
     /// cannot see, because typing resets the watchdog (see `rtty_type`): a stuck
     /// key, an autorepeat, a wedged compose field. Mirrors [`MAX_TUNE_MS`]: a
     /// latched carrier gets a ceiling that no setting and no input can raise.
-    pub const RTTY_MAX_LATCH_MS: u64 = 10 * 60 * 1000;
+    ///
+    /// Now RTTY's entry in [`crate::keyboard::RTTY`], where every keyboard mode's
+    /// ceiling lives; kept here under its own name because it is what the ceiling
+    /// is called everywhere it is discussed.
+    pub const RTTY_MAX_LATCH_MS: u64 = crate::keyboard::RTTY.max_latch_ms;
 
     /// Cap on the un-keyed type-ahead buffer. A human types far slower than
     /// 45.45 baud drains (6.6 char/s), so this only bites a runaway producer —
     /// and it bounds how long a latch-off takes to drain.
-    const RTTY_TYPE_BUF_CAP: usize = 1000;
+    ///
+    /// The cap itself now lives on [`crate::keyboard::RTTY`] and is applied by
+    /// the shared type-ahead, so nothing outside the tests reads this name any
+    /// more — it is kept because it is what the cap is called wherever it is
+    /// discussed, and a test that names the mode descriptor instead would stop
+    /// pinning the engine's own answer.
+    #[allow(dead_code)]
+    const RTTY_TYPE_BUF_CAP: usize = crate::keyboard::RTTY.type_buf_cap;
 
     /// Turn continuous TX on/off — the cockpit's TX button.
     ///
@@ -11472,7 +11464,7 @@ impl Engine {
             // so the hard ceiling has to bound the whole keyed period and not just
             // the part with the operator's intent still up. `drop_rtty_latch` is
             // what clears it, together with everything else.
-            self.rtty_latched = false;
+            self.rtty_latch().latch_off();
             return Ok(());
         }
         if self.rtty_latched {
@@ -11490,8 +11482,8 @@ impl Engine {
                     .to_string(),
             );
         }
-        self.rtty_latched = true;
-        self.rtty_latch_start_ms = Some(now_unix_millis());
+        let now = now_unix_millis();
+        self.rtty_latch().latch_on(now);
         // Keying up is an operator action, exactly like a send: restart the
         // watchdog clock so the ceiling is measured from here.
         self.reset_tx_watchdog();
@@ -11506,7 +11498,24 @@ impl Engine {
     /// The latched stream is running: the operator is latched, or the latch is
     /// down but what they typed is still going out.
     fn rtty_streaming(&self) -> bool {
-        self.rtty_latched || !self.rtty_type_buf.is_empty()
+        crate::keyboard::streaming(self.rtty_latched, &self.rtty_type_buf)
+    }
+
+    /// RTTY's instantiation of the shared keyboard-mode transmit machinery — the
+    /// latch predicate, its two wall clocks and the type-ahead, written once in
+    /// [`crate::keyboard`] and borrowed over RTTY's three fields here.
+    ///
+    /// A borrowed view rather than an owned struct so the fields stay flat on the
+    /// Engine: the second keyboard mode adds its own three and its own accessor,
+    /// and there is never a copy of a latch's state that can disagree with the
+    /// latch.
+    fn rtty_latch(&mut self) -> crate::keyboard::KeyboardLatch<'_> {
+        crate::keyboard::KeyboardLatch::new(
+            crate::keyboard::RTTY,
+            &mut self.rtty_latched,
+            &mut self.rtty_type_buf,
+            &mut self.rtty_latch_start_ms,
+        )
     }
 
     /// Feed typed characters into the live transmission. Uppercased and filtered
@@ -11525,14 +11534,8 @@ impl Engine {
         if !self.rtty_latched {
             return Err("Continuous TX is off — click TX first".to_string());
         }
-        let mut typed = 0usize;
-        for c in rtty_filter(text).chars() {
-            if self.rtty_type_buf.len() >= Self::RTTY_TYPE_BUF_CAP {
-                break;
-            }
-            self.rtty_type_buf.push_back(c);
-            typed += 1;
-        }
+        let filtered = rtty_filter(text);
+        let typed = self.rtty_latch().type_chars(&filtered);
         if typed > 0 {
             self.reset_tx_watchdog();
         }
@@ -11548,11 +11551,7 @@ impl Engine {
     /// abort when nothing was streaming would cut an unrelated over riding the
     /// same PTT — the same care `set_tx_enabled(false)`'s RTTY arm takes).
     pub fn drop_rtty_latch(&mut self) {
-        let was_streaming = self.rtty_streaming();
-        self.rtty_latched = false;
-        self.rtty_latch_start_ms = None;
-        self.rtty_type_buf.clear();
-        if was_streaming {
+        if self.rtty_latch().drop_latch() {
             self.rtty_abort = true;
             self.slot_tx_abort = true; // and the PTT tail (see rtty_stop)
         }
@@ -11568,60 +11567,64 @@ impl Engine {
     /// the far end's decoder in sync and what an MMTTY operator hears. Silence
     /// under a held PTT would read as a dropout and lose the far end's clock.
     pub fn poll_rtty_stream(&mut self, max_chars: usize) -> RttyStreamTick {
+        use crate::keyboard::{KbDrop, KbGates};
         use crate::settings::OperatingMode;
+        // The fast path, and the predicate re-checks it: nothing is running, so
+        // there is nothing to gate and nothing to cut. Kept here so a quiet tick
+        // costs no clock read and no privilege lookup.
         if !self.rtty_streaming() {
             return RttyStreamTick::Idle;
         }
-        // ⚠️ THE PER-TICK PREDICATE. Every gate `rtty_tx_gate` checks before a
-        // send is re-checked here before every chunk, because a latch outlives
-        // the moment it was granted and the gates do not. `poll_rtty_one`'s
-        // equivalent gate merely HOLDS the queue; holding is not an option for a
-        // keyed transmitter, so each of these DROPS THE LATCH and unkeys.
-        if !self.tx_enabled
-            || !self.tx_allowed()
-            || self.tuning
-            || self.settings.operating_mode != OperatingMode::Rtty
-        {
-            self.drop_rtty_latch();
-            return RttyStreamTick::Idle;
+        // ⚠️ THE PER-TICK PREDICATE, and it is not written here — it is
+        // [`crate::keyboard::KeyboardLatch::tick`], shared by every keyboard
+        // mode, with the gate-for-gate table in its doc. Every gate
+        // `rtty_tx_gate` checks before a send is re-checked before every chunk,
+        // because a latch outlives the moment it was granted and the gates do
+        // not. `poll_rtty_one`'s equivalent gate merely HOLDS the queue; holding
+        // is not an option for a keyed transmitter, so each of these DROPS THE
+        // LATCH and unkeys.
+        //
+        // What stays here is only what is RTTY's: which engine field answers
+        // each gate, and what each drop means to this mode's transmitter.
+        let gates = KbGates {
+            tx_enabled: self.tx_enabled,
+            tx_allowed: self.tx_allowed(),
+            tuning: self.tuning,
+            in_section: self.settings.operating_mode == OperatingMode::Rtty,
+            now_ms: now_unix_millis(),
+            now_secs: now_unix_secs(),
+            watchdog_limit_secs: self.settings.tx_watchdog_min as u64 * 60,
+            watchdog_start_secs: self.tx_watchdog_start,
+        };
+        let res = self.rtty_latch().tick(gates, max_chars);
+        // The watchdog clock the predicate started, if it got that far (the
+        // `get_or_insert` half — a tick a gate already ended must not date an
+        // unattended run).
+        if let Some(start) = res.watchdog_start {
+            self.tx_watchdog_start = Some(start);
         }
-        let now = now_unix_millis();
-        // Ceiling 1 — the hard per-over cap no typing can extend.
-        if let Some(start) = self.rtty_latch_start_ms {
-            if now.saturating_sub(start) >= Self::RTTY_MAX_LATCH_MS {
+        match res.drop {
+            None => res.tick,
+            Some(why) => {
+                if why == KbDrop::Watchdog {
+                    // A trip disarms TX so it stays stopped, and takes the queued
+                    // overs with it — identical to `poll_rtty_one`'s.
+                    self.tx_watchdog = true;
+                    self.tx_enabled = false;
+                    self.rtty_queue.clear();
+                }
                 self.drop_rtty_latch();
-                self.rtty_keyer_error = Some(format!(
-                    "Continuous TX unkeyed at its {}-minute ceiling — click TX again to carry on",
-                    Self::RTTY_MAX_LATCH_MS / 60_000
-                ));
-                return RttyStreamTick::Idle;
+                if why == KbDrop::Ceiling {
+                    // An unexplained unkey reads as a fault — say why.
+                    self.rtty_keyer_error = Some(format!(
+                        "Continuous TX unkeyed at its {}-minute ceiling — click TX again to \
+                         carry on",
+                        Self::RTTY_MAX_LATCH_MS / 60_000
+                    ));
+                }
+                res.tick
             }
         }
-        // Ceiling 2 — the ordinary wall-clock TX watchdog, identical to
-        // `poll_rtty_one`'s (a trip disarms TX, so it stays stopped). Typing
-        // restarts its clock; walking away does not.
-        let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
-        if limit_secs > 0 {
-            let now_s = now_unix_secs();
-            let start = *self.tx_watchdog_start.get_or_insert(now_s);
-            if now_s.saturating_sub(start) >= limit_secs {
-                self.tx_watchdog = true;
-                self.tx_enabled = false;
-                self.rtty_queue.clear();
-                self.drop_rtty_latch();
-                return RttyStreamTick::Idle;
-            }
-        }
-        // Every gate above has been re-checked; from here it is only about what
-        // to key. A zero budget means the loop is already fed far enough ahead.
-        if max_chars == 0 {
-            return RttyStreamTick::Ahead;
-        }
-        if self.rtty_type_buf.is_empty() {
-            return RttyStreamTick::Diddle;
-        }
-        let n = max_chars.min(self.rtty_type_buf.len());
-        RttyStreamTick::Text(self.rtty_type_buf.drain(..n).collect())
     }
 
     // ----- RTTY auto-sequencer — the pure `tempo_core::rtty::RttySeq` state

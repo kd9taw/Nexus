@@ -25,6 +25,7 @@ use tempo_app::engine::{
     engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine, RttyStreamTick,
     SatCatBackend,
 };
+use tempo_app::keyboard;
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
 
@@ -1665,14 +1666,28 @@ const SSTV_FEED_AHEAD_MS: f64 = 10_000.0;
 /// can stall it by; one character (165 ms) of margin over that is comfortable and
 /// the ring never underruns to silence (`device.rs` returns 0.0 when it does,
 /// which under a held PTT reads on the air as a dropout).
-const RTTY_STREAM_AHEAD_CHARS: f64 = 2.0;
+///
+/// RTTY's entry in the per-mode [`KeyboardMode`] descriptor, kept under its own
+/// name here because that is what this bound is called wherever it is discussed.
+/// The loop reasons in MILLISECONDS, which is [`KeyboardMode::stream_ahead_ms`] —
+/// character times are how the bound is SPECIFIED (a mode's stuck-carrier window
+/// scales with its character time), not how it is applied.
+///
+/// Read only by the tests that pin the bound, which is deliberate: they must
+/// assert against the name the bound is documented under, not against whatever
+/// the loop happens to compute.
+#[allow(dead_code)]
+const RTTY_STREAM_AHEAD_CHARS: f64 = keyboard::RTTY.stream_ahead_chars;
 
 /// Most characters the latched stream may render in ONE tick, whatever the
 /// look-ahead deficit says. Bounds the work (and the audio) a single tick can
 /// commit when the loop has been stalled — a macro dropping 25 characters into
 /// the type buffer must not turn into 4 seconds of audio in the ring, because
 /// that is 4 seconds of `tx_until_ms` a wedged loop would then hold PTT for.
-const RTTY_STREAM_MAX_CHUNK: usize = 4;
+///
+/// Read only by the tests, for the same reason as `RTTY_STREAM_AHEAD_CHARS`.
+#[allow(dead_code)]
+const RTTY_STREAM_MAX_CHUNK: usize = keyboard::RTTY.stream_max_chunk;
 
 /// The live continuous-TX ("latched") RTTY stream — the generator state that has
 /// to survive across radio-loop ticks, which is the whole difference between a
@@ -4937,13 +4952,13 @@ impl RadioLoop {
                     // RTTY_STREAM_AHEAD_CHARS the queued audio is. Zero when the ring is
                     // already fed far enough — and the engine is still called, because
                     // the GATE CHECK must run on every tick even when the feed does not.
-                    let char_ms = 7.5 * (1000.0 / baud);
+                    let char_ms = keyboard::RTTY.char_ms(baud);
                     let ahead_ms = (self.rtty_busy_until - now).max(0.0);
-                    let deficit = RTTY_STREAM_AHEAD_CHARS * char_ms - ahead_ms;
+                    let deficit = keyboard::RTTY.stream_ahead_ms(baud) - ahead_ms;
                     let want = if deficit <= 0.0 {
                         0
                     } else {
-                        ((deficit / char_ms).ceil() as usize).min(RTTY_STREAM_MAX_CHUNK)
+                        ((deficit / char_ms).ceil() as usize).min(keyboard::RTTY.stream_max_chunk)
                     };
                     eng.poll_rtty_stream(want)
                 } else {
@@ -5042,7 +5057,7 @@ impl RadioLoop {
                     if let Some(mut st) = self.rtty_stream.take().filter(|_| self.may_key()) {
                         let code = st.enc.diddle();
                         let bits = tempo_core::rtty::code_bits(&[code]);
-                        let chunk_ms = 7.5 * (1000.0 / baud);
+                        let chunk_ms = keyboard::RTTY.char_ms(baud);
                         if !st.key_cfg.3 {
                             let buf = st.afsk.char_chunk(&bits, true);
                             if !buf.is_empty() {
@@ -5107,7 +5122,11 @@ impl RadioLoop {
                             _ => vec![st.enc.diddle()],
                         };
                         let bits = tempo_core::rtty::code_bits(&codes);
-                        let chunk_ms = (codes.len() as f64) * 7.5 * (1000.0 / baud);
+                        // Multiplied out in the ORIGINAL association ((n × frame) ×
+                        // rate) rather than n × char_ms: float multiplication does
+                        // not associate, and this feeds a transmit deadline.
+                        let chunk_ms =
+                            (codes.len() as f64) * keyboard::RTTY.frame_bits * (1000.0 / baud);
                         // The AFSK waveform is rendered here, from the RESUMABLE
                         // generator that carries the oscillator phase, the cross-fade
                         // weight and the fractional bit clock across chunks. Calling
@@ -5238,7 +5257,7 @@ impl RadioLoop {
                 if sched.total_ms > 0.0 {
                     // Hold the next queued message until this one has fully keyed
                     // out + one character of clear air (send-and-done, no diddle).
-                    self.rtty_busy_until = now + sched.total_ms + 7.5 * (1000.0 / baud);
+                    self.rtty_busy_until = now + sched.total_ms + keyboard::RTTY.char_ms(baud);
                     let mut handled = false;
                     // True FSK: the data bits ride the DTR/RTS keyline (the keyer
                     // thread times the edges against absolute deadlines; rig in RTTY
@@ -12727,6 +12746,75 @@ mod tests {
                 "{name}: audio kept being fed after the stop"
             );
         }
+    }
+
+    #[test]
+    fn the_per_mode_look_ahead_bound_is_rttys_exact_arithmetic() {
+        // Seam 4 of the keyboard-modes generalization, proved rather than
+        // claimed: the look-ahead safety bound moved from two constants and a
+        // hard-coded 7.5 in this file onto the per-mode descriptor, and the
+        // RTTY instantiation must be the SAME BOUND — bit for bit, because a
+        // float that differs in its last place still differs, and this number
+        // is how far a wedged loop may hold PTT.
+        //
+        // Both forms are computed here. The legacy side is written out in full
+        // (the literals this file carried before the extraction) so that a
+        // change to the descriptor cannot silently move the bound.
+        for baud in [45.45, 75.0, 45.0, 50.0, 100.0, 22.0] {
+            let legacy_char_ms = 7.5 * (1000.0 / baud);
+            let legacy_ahead_ms = 2.0 * legacy_char_ms;
+            assert_eq!(
+                keyboard::RTTY.char_ms(baud),
+                legacy_char_ms,
+                "the character time moved at {baud} baud"
+            );
+            assert_eq!(
+                keyboard::RTTY.stream_ahead_ms(baud),
+                legacy_ahead_ms,
+                "THE SAFETY BOUND MOVED at {baud} baud"
+            );
+            // …and the budget the loop actually derives from it, over the whole
+            // range of look-aheads a tick can find the ring in.
+            for step in 0..24 {
+                let ahead_ms = step as f64 * legacy_char_ms / 4.0;
+                let legacy_want = {
+                    let deficit = 2.0 * legacy_char_ms - ahead_ms;
+                    if deficit <= 0.0 {
+                        0
+                    } else {
+                        ((deficit / legacy_char_ms).ceil() as usize).min(4)
+                    }
+                };
+                let want = {
+                    let char_ms = keyboard::RTTY.char_ms(baud);
+                    let deficit = keyboard::RTTY.stream_ahead_ms(baud) - ahead_ms;
+                    if deficit <= 0.0 {
+                        0
+                    } else {
+                        ((deficit / char_ms).ceil() as usize).min(keyboard::RTTY.stream_max_chunk)
+                    }
+                };
+                assert_eq!(
+                    want, legacy_want,
+                    "the per-tick budget changed at {baud} baud, {ahead_ms:.1} ms ahead"
+                );
+            }
+        }
+        // The constants this file still exposes are the descriptor's, not copies.
+        assert_eq!(RTTY_STREAM_AHEAD_CHARS, 2.0);
+        assert_eq!(RTTY_STREAM_MAX_CHUNK, 4);
+        // The bound is per-MODE, not a constant the loop remembers: a mode with
+        // different numbers gets a different bound from the same arithmetic.
+        let other = keyboard::KeyboardMode {
+            frame_bits: 10.0,
+            stream_ahead_chars: 3.0,
+            ..keyboard::RTTY
+        };
+        assert_eq!(other.stream_ahead_ms(50.0), 3.0 * (10.0 * (1000.0 / 50.0)));
+        assert_ne!(
+            other.stream_ahead_ms(45.45),
+            keyboard::RTTY.stream_ahead_ms(45.45)
+        );
     }
 
     #[test]
