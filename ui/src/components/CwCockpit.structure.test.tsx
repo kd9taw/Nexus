@@ -303,6 +303,29 @@ describe('CwCockpit pane-grid shell', () => {
     expect(document.querySelector('.cockpit-txdock .cw-macro')).not.toBeNull()
   })
 
+  // ── THE SCOPE STRIP IS A PANEL NOW (operator, 2026-08-16) — the Phone twin of this pair.
+  it('the scope strip is SHOWN by default — the ⊞ entry is an option, not a new default', async () => {
+    await renderCockpit()
+    expect(document.querySelector('.ph-scope-panel'), 'the scope went missing on a stock layout').not.toBeNull()
+  })
+
+  it("⊞ 'Scope' unticked takes the strip AND its splitter, and the region takes the height", async () => {
+    await renderCockpit({ panels: fakePanels(['scope']) })
+    expect(document.querySelector('.ph-scope-panel'), 'the strip survived its own hide').toBeNull()
+    expect(
+      document.querySelector('.pane-splitter'),
+      'the scope splitter is still in the shell with no scope to size',
+    ).toBeNull()
+    const region = document.querySelector('.cockpit-panes')
+    expect(region, 'hiding the scope took the pane region with it').not.toBeNull()
+    expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
+    // `scopeCtl` is a DIFFERENT entry — the controls that command the rig's own panadapter,
+    // in the region below — and hiding the display must not reach it. (It needs a live native
+    // scope feed to mount at all, which this fixture's stubbed PhoneScope never reports, so
+    // what is asserted here is that the two ids are not wired to each other.)
+    expect(document.querySelector('[data-pane="scope"]'), 'the strip is a shell child, never a frame').toBeNull()
+  })
+
   it('three columns group decode+sent | aux | log (decode leads the wide track)', async () => {
     decodeState.sent = ['CQ CQ DE KD9TAW K']
     await renderCockpit()

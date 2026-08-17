@@ -237,7 +237,9 @@ export function processDecodes(
   // (a pre-scope settings file with it off keeps everything off, no migration).
   const dxccOk = bandScopeOk(settings.alertDxccBands, dialMhz, 'all')
   const gridOk = bandScopeOk(settings.alertGridBands, dialMhz, 'vhf')
-  const rareOk = bandScopeOk(settings.alertRareGridBands, dialMhz, 'all')
+  // 'vhf' fallback matches the backend default — an absent setting must not resurrect the
+  // HF rare-grid chatter the default was changed to remove (operator, 2026-08-15).
+  const rareOk = bandScopeOk(settings.alertRareGridBands, dialMhz, 'vhf')
   for (const d of decodes) {
     const call = d.from
 
@@ -245,8 +247,10 @@ export function processDecodes(
     // consuming the dedup key, so a later fresh event can still alert).
     if (partner && call?.toUpperCase() === partner) continue
 
-    // User watch list FIRST: an explicitly-watched call/prefix/entity is the loudest tier and
-    // pre-empts the generic new/CQ logic (deduped once per filter+call so it doesn't spam).
+    // User watch list FIRST: an explicitly-watched call/prefix/entity/grid is the loudest tier
+    // and pre-empts the generic new/CQ logic (deduped once per filter+call so it doesn't spam).
+    // Deliberately ABOVE the band-scope gates: a grid the operator typed in must fire on HF
+    // even though unworked-grid chatter is HF-quiet by default.
     if (watchlist && watchlist.length) {
       const hit = matchWatchlist(d, watchlist)
       if (hit) {

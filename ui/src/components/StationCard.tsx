@@ -81,7 +81,14 @@ export function StationCard({
                 </span>
               ) : null
             })}
-            {station.worked && <span className="b4-chip" title="Worked before">B4</span>}
+            {station.worked && (
+              <span
+                className={`b4-chip${station.workedBand ? ' b4-band' : ''}`}
+                title={station.workedBand ? 'Worked before on this band' : 'Worked before (another band)'}
+              >
+                B4
+              </span>
+            )}
             {/* Loud on the PRIMARY line (with need/B4/unread) so an ultra-rare grid
                 is unmistakable — the tiny line-2 gem was too easy to miss. */}
             <RarityChip rarity={station.gridRarity} />

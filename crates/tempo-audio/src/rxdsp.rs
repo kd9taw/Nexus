@@ -130,6 +130,15 @@ impl RxDsp {
             self.meter * RX_METER_DECAY + rms * (1.0 - RX_METER_DECAY)
         };
         meters.set_rx_level(self.meter);
+        // The RAW tick RMS, retained for the MSK144 Fast Graph — a meteor ping is exactly the
+        // fast attack the meter ballistics above exist to smooth away, so the graph gets the
+        // unshaped sample. Same thread, same capture list; the ring lives inside MeterFeed so
+        // the safety argument (no new handle here) holds unchanged.
+        let unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        meters.push_fast_power(unix_ms, rms);
         let pcm = self.rs.process(&dev);
         if pcm.is_empty() {
             return false;

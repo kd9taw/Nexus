@@ -55,6 +55,10 @@ pub struct Station {
     pub presence: Presence,
     /// True if this callsign is in the logbook (worked before) — for B4 styling.
     pub worked: bool,
+    /// Worked before ON THE CURRENT BAND (and mode, when `b4_match_mode` is set) — WSJT-X's
+    /// second, stronger B4 scope (its `Highlight::CallBand` beside `Highlight::Call`).
+    #[serde(default)]
+    pub worked_band: bool,
     /// DXCC entity name (country), resolved from the callsign — DX chasers scan
     /// the roster by country. `None` unless a DXCC resolver is wired.
     #[serde(default)]
@@ -138,6 +142,10 @@ pub struct DecodeRow {
     pub signoff: bool,
     /// True if the sender is in the logbook (worked before).
     pub worked: bool,
+    /// Worked before ON THE CURRENT BAND (and mode, when `b4_match_mode` is set) — WSJT-X's
+    /// second, stronger B4 scope (its `Highlight::CallBand` beside `Highlight::Call`).
+    #[serde(default)]
+    pub worked_band: bool,
     /// Sender's DXCC entity name (country), resolved from the callsign. `None`
     /// unless a DXCC resolver is wired (always None in headless tests). DX chasers
     /// scan by country, so this rides on every decode + roster row.
@@ -214,6 +222,19 @@ pub enum Tier {
     Ft8,
     #[serde(rename = "FT4")]
     Ft4,
+    /// **FT2** (Decodium, IU8LMC) — FT4 with a halved symbol time. **Transmits and
+    /// receives.**
+    ///
+    /// ⚠️ Decodium's FT2, not the abandoned WSJT-X experiment of the same name —
+    /// the on-air FT2 population runs Decodium, so its behaviour is the
+    /// compatibility baseline. Sits beside FT8/FT4 as a slotted digital tier and
+    /// inherits the same QSO sequencer.
+    ///
+    /// Carries NO settings, unlike Q65/FST4/MSK144: the T/R period is fixed at
+    /// 3.75 s — the tightest slot in the app — so there is nothing for the operator
+    /// to choose and no `Settings` field to plumb.
+    #[serde(rename = "FT2")]
+    Ft2,
     /// WSJT-X FST4 (QSO mode) — **transmits and receives**, verified on-air
     /// compatible by having stock WSJT-X `jt9 -7` decode our transmission at every
     /// period. The T/R period comes from `Settings::fst4_period_s`.
@@ -264,11 +285,12 @@ impl Tier {
     /// Every variant, in declaration order. The one place a tier list lives, so
     /// a test can drive them all — see `bandplan::tests::tier_all_lists_every_tier`,
     /// which fails to compile if a variant is added without being listed here.
-    pub const ALL: [Tier; 10] = [
+    pub const ALL: [Tier; 11] = [
         Tier::TempoFast,
         Tier::TempoDeep,
         Tier::Ft8,
         Tier::Ft4,
+        Tier::Ft2,
         Tier::Fst4,
         Tier::Fst4w,
         Tier::Q65,
@@ -288,6 +310,7 @@ impl Tier {
             Tier::TempoDeep => "Tempo Deep",
             Tier::Ft8 => "FT8",
             Tier::Ft4 => "FT4",
+            Tier::Ft2 => "FT2",
             Tier::Fst4 => "FST4",
             Tier::Fst4w => "FST4W",
             Tier::Q65 => "Q65",
@@ -329,6 +352,9 @@ impl Tier {
             Tier::TempoFast => Some(ModeKind::TempoFast),
             Tier::Ft8 => Some(ModeKind::Ft8),
             Tier::Ft4 => Some(ModeKind::Ft4),
+            // No parameter to validate: FT2's period is fixed at 3.75 s, so there
+            // is no `ft2_kind` degrade-don't-refuse helper to write.
+            Tier::Ft2 => Some(ModeKind::Ft2),
             Tier::Fst4 => Some(Self::fst4_kind(fst4_period_s, false)),
             Tier::Fst4w => Some(Self::fst4_kind(fst4_period_s, true)),
             Tier::Q65 => Some(Self::q65_kind(q65_period_s, q65_submode)),
@@ -387,6 +413,7 @@ impl Tier {
             ModeKind::TempoFast => Tier::TempoFast,
             ModeKind::Ft8 => Tier::Ft8,
             ModeKind::Ft4 => Tier::Ft4,
+            ModeKind::Ft2 => Tier::Ft2,
             // FST4 and FST4W are distinct tiers; the wspr flag is what tells them
             // apart, and a decode row must be labelled with the one that produced it.
             ModeKind::Fst4 { wspr: false, .. } => Tier::Fst4,
@@ -480,6 +507,11 @@ pub struct Conversation {
 #[serde(rename_all = "camelCase")]
 pub struct LinkState {
     pub tier: Tier,
+    /// The active tier's T/R period in seconds. The Fast Graph needs it (its X axis is one
+    /// period wide) and the UI must not hardcode it — MSK144's is a 5/10/15/30 setting, and
+    /// `decodeHistory.ts` mislabelled period boundaries for years by assuming 15.
+    #[serde(default)]
+    pub period_secs: f64,
     pub snr_db: f32,
     pub dt_sec: f32,
     pub freq_hz: f32,
@@ -855,7 +887,17 @@ pub struct QsoStatus {
     /// Signal report received about my own signal, if any.
     pub rx_report: Option<i32>,
     /// True if this station is calling CQ (running) vs answering (S&P).
+    ///
+    /// ⚠️ NOT the "am I running a CQ" flag, despite the doc line above (kept for wire
+    /// compatibility): `call_station_ctx` sets it true for a directed S&P call too, and
+    /// nothing clears it after the QSO. Surfaces that mean "a CQ run is in progress" read
+    /// [`Self::cq_running`] — the CQ/S&P strip lit Call CQ through every S&P contact and
+    /// forever after until this was split (operator-relayed report, 2026-08-16).
     pub running: bool,
+    /// True while a CQ RUN is actually in progress — the engine's `cq_running`, the flag
+    /// `resume_cq` and the auto-sequencer key off. This is what the CQ/S&P toggle shows.
+    #[serde(default)]
+    pub cq_running: bool,
     /// On-air text of the message queued for the next TX slot (the "Now sending"
     /// readout), or `None` when listening / the QSO is complete.
     #[serde(default)]
@@ -1810,6 +1852,11 @@ pub struct AppSnapshot {
     /// Peg-lock state (band selection won't auto-switch when true).
     #[serde(default)]
     pub radio_pegged: bool,
+    /// Mirror of `Settings::b4_match_mode` so display surfaces (the recall Dupe badge) apply
+    /// the same B4/Dupe scope the engine's worked-band sets were built with — two readers of
+    /// one setting must never disagree about what "worked before" means.
+    #[serde(default)]
+    pub b4_match_mode: bool,
     /// AI CW decoder (beta): enabled flag, status line, recent window decodes.
     #[serde(default)]
     pub ai_cw: AiCwStatus,

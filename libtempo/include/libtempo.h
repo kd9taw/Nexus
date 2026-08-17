@@ -629,6 +629,70 @@ int msk144_decode_frame(const int16_t *iwave /*[ntrperiod*12000]*/,
                         msk144_decode_t *out, int max_out);
 
 /*===========================================================================
+ * FT2: Decodium's fast slotted mode. TRANSMIT AND RECEIVE.
+ *===========================================================================*/
+
+/* ⭐ DECODIUM's FT2 (IU8LMC, decodium3-build), NOT upstream WSJT-X's abandoned
+ * experiment of the same name — the two are incompatible. FT4 with a halved
+ * symbol time: LDPC(174,91)+CRC14, 4-GFSK at 41.67 baud (~167 Hz occupied),
+ * 105 channel symbols = 2.52 s of audio in a 3.75 s T/R period, -10.8 to
+ * -12 dB. The on-air FT2 population runs Decodium, so Decodium is the
+ * compatibility baseline. See NOTICE for provenance.
+ *
+ * The decode entry point wraps ft2_triggered_decode — the flat text-lines
+ * subroutine Decodium's own runtime calls — over one fixed 45000-sample
+ * (3.75 s @ 12 kHz) window. One call per period; no slide, no period label. */
+#define FT2_NMAX  45000   /* decode window: 3.75 s @ 12 kHz                    */
+#define FT2_NN    103     /* sync+data channel symbols (encode output)         */
+#define FT2_NN2   105     /* + ramp-up/ramp-down symbols, what hits the air    */
+#define FT2_NWAVE 30240   /* FT2_NN2 * 288 samples = 2.52 s @ 12 kHz           */
+
+/* One FT2 decode. Byte-compatible with the ft8/ft4/msk144/q65 records
+ * (64 bytes, 4-byte aligned). */
+typedef struct {
+    float sync;          /* ALWAYS 0.0 — the FT2 line has no sync metric */
+    int   snr;           /* SNR estimate, dB                             */
+    float dt;            /* time offset, seconds (about -1.0 .. +1.0)    */
+    float freq;          /* audio frequency, Hz                          */
+    char  message[38];   /* NUL-terminated decoded message text          */
+    int   dtype;         /* 0 = ordinary decode, 1..4 = AP decode type n */
+    int   reserved;      /* unused, always 0                             */
+} ft2_decode_t;
+
+/*
+ * Decode every FT2 signal in one 3.75 s window.
+ *   iwave      : FT2_NMAX int16 samples @ 12 kHz — always the full window
+ *   nfa, nfb   : candidate search band edges (Hz)
+ *   ndepth     : 1..3 (3 = deepest, loosens sync/OSD thresholds; <=0 -> 3)
+ *   mycall/hiscall : NUL/space-terminated callsigns (may be ""); empty
+ *                    hiscall disables the AP types that need the DX call
+ *   nfqso      : QSO audio frequency (Hz) — candidate ordering follows it
+ *   out        : caller array of ft2_decode_t (capacity max_out)
+ *   max_out    : capacity of out
+ * Returns the number of decodes found (>= 0). NOT thread-safe.
+ */
+int ft2_decode_frame(const int16_t *iwave /*[FT2_NMAX]*/,
+                     int nfa, int nfb, int ndepth,
+                     const char *mycall, const char *hiscall,
+                     int nfqso,
+                     ft2_decode_t *out, int max_out);
+
+/*
+ * Encode a message: text -> the FT2_NN channel tones (0..3).
+ * Returns FT2_NN on success, -1 if the message will not pack.
+ */
+int ft2_encode_msg(const char *msg, int msg_len, int *itone_out /*[FT2_NN]*/);
+
+/*
+ * Channel tones -> real audio at 12 kHz. Writes FT2_NWAVE samples — the
+ * generator appends the raised-cosine ramp-up/down symbols itself, which is
+ * the FT2_NN vs FT2_NN2 distinction. nsym must be FT2_NN; nwave_cap must be
+ * >= FT2_NWAVE. Returns FT2_NWAVE, or -1 on refusal.
+ */
+int ft2_gen_wave(const int *itone, int nsym, float f0,
+                 float *wave_out, int nwave_cap);
+
+/*===========================================================================
  * Q65: WSJT-X weak-signal mode for EME/VHF+ and ionoscatter. DECODE ONLY.
  *===========================================================================*/
 

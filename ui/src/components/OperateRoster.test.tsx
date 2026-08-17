@@ -249,7 +249,7 @@ describe('OperateRoster composes the surface gate with strongest-need ranking', 
   it('ranks from the strongest CLOSABLE need, not the strongest overall', () => {
     renderWith('30m', 'FT8')
     expect(screen.queryByText('MODE')).toBeNull() // the CW need is withheld here
-    expect(screen.queryByText('CNF')).not.toBeNull() // the closable one survives
+    expect(screen.queryByText('QSL')).not.toBeNull() // the closable one survives (short form of NEEDS QSL)
     // The row names the need it actually ranked from.
     expect(screen.queryByLabelText(/needed Confirm/)).not.toBeNull()
     expect(screen.queryByLabelText(/needed NewMode/)).toBeNull()

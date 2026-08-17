@@ -498,6 +498,14 @@ export function Waterfall({
       if (!flatBuf || flatBuf.length !== nBins) flatBuf = new Float32Array(nBins)
       flattenRow(row, flatBuf)
       const frow = flatBuf
+      // ⚠️ OUR OWN TX ZEROES THE ROW AT THE SOURCE (operator retest, 2026-08-16: the first
+      // dark-band fix darkened only the HISTORY copy, and the live hot path below paints
+      // `frow` independently — so the drawn waterfall still replayed the held row bright,
+      // and live and rebuild disagreed, the exact divergence the shared-mapping discipline
+      // in this file exists to prevent). Zeroing `frow` itself puts the floor into BOTH
+      // consumers by construction: the leading-edge write and the retained history. The
+      // AGC is frozen on the same flag, so the darkness cannot re-create the key-up clamp.
+      if (txRef.current) frow.fill(0)
 
       // visual-AGC over the VISIBLE window only, EMA-smoothed across frames.
       //
@@ -513,13 +521,24 @@ export function Waterfall({
       const vHi = Math.min(nBins, Math.ceil((viewHiRef.current - rowLo) / binHz))
       const visible = vHi - vLo >= 8 ? frow.slice(vLo, vHi) : frow
       const { floor, ceil } = agcRange(visible, WF_FLOOR_PCT)
-      if (!agcInit) {
-        agcFloor = floor
-        agcCeil = ceil
-        agcInit = true
-      } else {
-        agcFloor += (floor - agcFloor) * AGC_ALPHA
-        agcCeil += (ceil - agcCeil) * AGC_ALPHA
+      // ⚠️ THE AGC FREEZES WHILE TRANSMITTING — the post-TX red band (operator-relayed
+      // report, 2026-08-16). While keyed, the rig's codec returns a muted receiver, the row
+      // collapses toward digital silence, and this EMA followed it down; on key-up the
+      // returning band noise sat ~40 dB above the collapsed window and every bin clamped to
+      // the hot end of the palette for the EMA's ~2.7 s recovery — a full-width red band,
+      // 10-23 rows tall. Holding the window through TX means key-up resumes from the
+      // pre-TX picture. The backend holds its published row through TX as well (the same
+      // report's second seam), so this guard mostly sees the LAST REAL row anyway — it
+      // remains because a monitor path or an in-flight row can still arrive keyed.
+      if (!txRef.current) {
+        if (!agcInit) {
+          agcFloor = floor
+          agcCeil = ceil
+          agcInit = true
+        } else {
+          agcFloor += (floor - agcFloor) * AGC_ALPHA
+          agcCeil += (ceil - agcCeil) * AGC_ALPHA
+        }
       }
       // Park the black point WF_PARK_DB above the measured noise median and hold a minimum
       // window (see parkFloor) — the default that makes an empty band read black instead of a
@@ -550,6 +569,9 @@ export function Waterfall({
       // OWN frequency span (carried in the DTO) — the ring is what every cold path
       // (palette recolor, zoom, resize, scrollback) re-renders from.
       const tRow = new Float32Array(nBins)
+      // TX rows arrive already zeroed at the source above — the same floor lands here and
+      // on the leading-edge write, so an over reads as the quiet gap it actually was
+      // (WSJT-X's own picture) in the live scroll AND in every cold rebuild.
       for (let b = 0; b < nBins; b++) tRow[b] = normalize(frow[b], dispFloor, dispCeil)
       historyRef.current.push(tRow, rowLo, rowHi, Date.now())
 

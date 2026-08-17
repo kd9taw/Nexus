@@ -125,7 +125,7 @@ pub struct UsbPort {
 #[cfg(feature = "serial")]
 pub fn available_usb_ports() -> Vec<UsbPort> {
     use serialport::SerialPortType;
-    match serialport::available_ports() {
+    let ports = match serialport::available_ports() {
         Ok(ports) => ports
             .into_iter()
             .filter_map(|p| match p.port_type {
@@ -140,7 +140,42 @@ pub fn available_usb_ports() -> Vec<UsbPort> {
             })
             .collect(),
         Err(_) => Vec::new(),
-    }
+    };
+    #[cfg(target_os = "macos")]
+    let ports = collapse_tty_twins(ports);
+    ports
+}
+
+/// macOS lists every serial port TWICE: `/dev/cu.X` and `/dev/tty.X` are the same hardware.
+///
+/// They are offered side by side, differ by four characters, and look interchangeable — but only
+/// `cu.*` (callout) is usable for a rig. `tty.*` (dial-in) blocks on carrier detect, so choosing it
+/// does not fail, it HANGS, which is the hardest kind of wrong answer to diagnose. Listing it as an
+/// equal option is offering the operator a choice where one branch is always wrong.
+///
+/// Measured on a two-radio station: 22 rows for 2 radios, half of them tty twins.
+///
+/// A `tty.*` with NO `cu.*` twin is KEPT: it is then the only node there is, and dropping a real
+/// port would look exactly like a rig that stopped existing.
+#[cfg(all(feature = "serial", target_os = "macos"))]
+fn collapse_tty_twins(ports: Vec<UsbPort>) -> Vec<UsbPort> {
+    let callouts: std::collections::HashSet<&str> = ports
+        .iter()
+        .filter_map(|p| p.port_name.strip_prefix("/dev/cu."))
+        .collect();
+    let drop: Vec<String> = ports
+        .iter()
+        .filter(|p| {
+            p.port_name
+                .strip_prefix("/dev/tty.")
+                .is_some_and(|rest| callouts.contains(rest))
+        })
+        .map(|p| p.port_name.clone())
+        .collect();
+    ports
+        .into_iter()
+        .filter(|p| !drop.contains(&p.port_name))
+        .collect()
 }
 
 /// USB serial ports — empty without the `serial` feature (no enumeration backend).
@@ -151,6 +186,45 @@ pub fn available_usb_ports() -> Vec<UsbPort> {
 
 #[cfg(test)]
 mod tests {
+
+    /// macOS offers every serial port twice. `tty.*` blocks on carrier detect and HANGS rather
+    /// than failing, so it is never the right node for a rig — but it sits beside its `cu.*` twin
+    /// in the picker and looks interchangeable. A two-radio station showed 22 rows for 2 radios.
+    #[cfg(all(feature = "serial", target_os = "macos"))]
+    #[test]
+    fn tty_twins_collapse_but_a_lone_tty_survives() {
+        let mk = |n: &str| UsbPort {
+            port_name: n.to_string(),
+            vid: 0x10c4,
+            pid: 0xea70,
+            product: "CP2105".into(),
+            manufacturer: "Silicon Labs".into(),
+        };
+        let got = collapse_tty_twins(vec![
+            mk("/dev/cu.usbserial-A"),
+            mk("/dev/tty.usbserial-A"),
+            mk("/dev/tty.lonelyport"),
+            mk("/dev/cu.usbserial-B"),
+        ]);
+        let names: Vec<&str> = got.iter().map(|p| p.port_name.as_str()).collect();
+        assert!(
+            names.contains(&"/dev/cu.usbserial-A"),
+            "the callout survives: {names:?}"
+        );
+        assert!(
+            names.contains(&"/dev/cu.usbserial-B"),
+            "and so does the other one: {names:?}"
+        );
+        assert!(
+            !names.contains(&"/dev/tty.usbserial-A"),
+            "the dial-in twin must go: {names:?}"
+        );
+        assert!(
+            names.contains(&"/dev/tty.lonelyport"),
+            "a tty with NO cu twin is the only node there is and must be KEPT: {names:?}"
+        );
+        assert_eq!(got.len(), 3);
+    }
     use super::*;
 
     #[cfg(all(feature = "serial", target_os = "linux"))]

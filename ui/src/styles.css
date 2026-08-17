@@ -4688,6 +4688,14 @@ select optgroup {
   border-radius: 999px;
   padding: 1px 6px;
 }
+/* WSJT-X's stronger scope: worked before ON THIS BAND (CallBand). Solid where the plain chip
+   is hollow, so the two read apart at a glance. Uses --text-dim, deliberately not the need
+   palette — B4 is a fact about your log, not something to chase. */
+.b4-chip.b4-band {
+  color: var(--bg, #0b0f14);
+  background: var(--text-dim);
+  border-color: var(--text-dim);
+}
 
 /* Grid-rarity gem — ◆ rare (amber) / ◆◆ ultra-rare water-only (violet), beside
    calls/grids in the decode feed, rosters, and Needed board. Deliberately NOT
@@ -9370,6 +9378,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .watchlist-kind-dxcc {
   background: var(--state-ok, #2fbf71);
 }
+.watchlist-kind-grid {
+  background: var(--state-info, #5ba8f5);
+}
 .watchlist-value {
   font-family: var(--font-mono);
   font-weight: 700;
@@ -13372,10 +13383,14 @@ button.cq-skiptx1.on {
   font-size: 0.86rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
-/* Spots panel — the raw firehose table (8 cols: age · call · entity · band · freq ·
+/* Spots panel — the raw firehose table (9 cols: age · call · entity · state · band · freq ·
    mode · spotter · comment). Reuses the Needed board's row chrome, own column template. */
 .sp-grid .np-row {
-  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
+  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
+}
+.sp-state {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 .np-age {
   color: var(--text-dim);
@@ -14038,9 +14053,10 @@ button.cq-skiptx1.on {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 /* Call CQ is the primary action — give it the accent fill so it's easy to find. */
-.cq-role.cq-call {
-  border-color: var(--tx);
-}
+/* Call CQ wears the TX red ONLY while a CQ run is actually in progress (.active). At idle it
+ * used to carry a permanent red border — in this palette red means "TX-armed", which an idle
+ * S&P station is not, and it is what made the button read as highlighted all the time
+ * (operator-relayed report, 2026-08-16). Inactive it looks like its S&P sibling. */
 .cq-role.cq-call.active {
   background: var(--tx);
   border-color: var(--tx);
@@ -19311,6 +19327,21 @@ button.sat-chip:disabled {
   padding: 2px 5px;
   cursor: pointer;
 }
+.sstv-thumb-edit {
+  position: absolute;
+  top: 4px;
+  right: 30px;
+  opacity: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--tx);
+  border-radius: 4px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.sstv-thumb:hover .sstv-thumb-edit,
+.sstv-thumb-edit:focus-visible,
 .sstv-thumb:hover .sstv-thumb-del,
 .sstv-thumb-del:focus-visible {
   opacity: 1;
@@ -19399,6 +19430,73 @@ button.sat-chip:disabled {
   font-style: italic;
   font-size: var(--fs-body);
   text-align: center;
+}
+/* Overlay-compose stage: shrink-wraps the preview so the selection outline can be
+   positioned in percentages of the canvas box (never drawn INTO the canvas — the
+   canvas is the transmit buffer). */
+.sstv-stage-wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+.sstv-ov-outline {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.sstv-ov-presets {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.sstv-ov-presets-label {
+  color: var(--text-faint);
+  font-size: var(--fs-body);
+}
+.sstv-ov-presets button {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.sstv-ov-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.sstv-ov-row.selected {
+  outline: 1px dashed var(--accent);
+}
+.sstv-ov-row .sstv-ov-text {
+  flex: 1 1 10em;
+  min-width: 8em;
+  font-family: var(--font-mono);
+}
+.sstv-ov-swatches {
+  display: inline-flex;
+  gap: 3px;
+}
+.sstv-ov-swatch {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0;
+}
+.sstv-ov-swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sstv-ov-remove {
+  color: var(--state-weak);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 var(--space-1);
 }
 .sstv-tx-controls {
   display: flex;

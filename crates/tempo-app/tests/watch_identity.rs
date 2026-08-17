@@ -107,13 +107,17 @@ fn scripted_session() -> Engine {
     eng
 }
 
-/// Blank the fields that are genuinely derived from the wall clock, in place.
+/// Blank the fields that are genuinely derived from the wall clock, and round the one that is
+/// architecture-dependent, in place.
 ///
-/// EXACTLY four rules, and they are the contract of this harness:
+/// EXACTLY five rules, and they are the contract of this harness:
 /// * `nextSlotMs`     — slot countdown, fed from the audio service's clock.
 /// * `clockOffsetMs`  — measured PC-vs-UTC offset from the NTP probe.
 /// * `qsoStartUnix`   — the QSO start stamp (`now_unix_secs`).
 /// * `*Tick`          — UI change counters (`clearTick`, `workTick`, `uploadTick`).
+/// * `freqHz` (float) — the decoder's frequency ESTIMATE, rounded to whole Hz, not blanked;
+///   the long comment below is the justification, and it is the ONE field this harness
+///   deliberately loosens.
 ///
 /// Anything else that differs between runs is a FINDING, not a normalizer entry.
 fn normalize(v: &mut Value) {
@@ -126,6 +130,30 @@ fn normalize(v: &mut Value) {
                     || k.ends_with("Tick")
                 {
                     *val = Value::Null;
+                } else if k == "freqHz" {
+                    // ARCHITECTURE-DEPENDENT, so it cannot be pinned byte-exactly.
+                    //
+                    // This is the decoder's ESTIMATED frequency: an f32 out of an FFT and
+                    // interpolation chain. aarch64 contracts multiply-adds where x86-64 does not,
+                    // so the same input lands a fraction of a Hz apart on the two. Measured on a
+                    // clean checkout of this commit: 1499.9137 on aarch64-apple-darwin against the
+                    // committed 1499.9281 — 0.014 Hz, with every other field in the document byte
+                    // identical, decode text and roster attribution included. The signal is
+                    // synthesised at exactly 1500.0 Hz, so both are correct answers.
+                    //
+                    // Nulling it like the fields above would throw the check away; the frequency
+                    // the decoder reports IS receive output worth pinning. Round to whole Hz
+                    // instead: that absorbs the platform difference with ~35x margin while still
+                    // catching anything that would actually matter — a regression that moves this
+                    // lands on a different bin or fails to decode at all, never 0.014 Hz away.
+                    // Only the FLOAT estimate. The roster carries an integer freqHz of its own
+                    // (already rounded at the source), and turning that into 1500.0 would change
+                    // the document's shape for a field that never drifts.
+                    if val.is_f64() {
+                        if let Some(f) = val.as_f64() {
+                            *val = serde_json::json!(f.round() as i64);
+                        }
+                    }
                 } else {
                     normalize(val);
                 }

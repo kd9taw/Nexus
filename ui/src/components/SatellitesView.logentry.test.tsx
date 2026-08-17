@@ -593,7 +593,7 @@ describe('Satellites — logging the contact you just made', () => {
     // on a data mode to "Log a contact from another radio and pick the mode by
     // hand". That advice is only as good as the picker's option list, which is
     // LogEntry's `LOG_MODES` and nothing more — so it works on FT8 and FT4 and
-    // has no entry at all for Q65, JT65, MSK144, WSPR, FST4/FST4W or Tempo.
+    // has no entry at all for FT2, Q65, JT65, MSK144, WSPR, FST4/FST4W or Tempo.
     // Advice that fails when followed is worse than none, so the wording names
     // the two tiers it covers and sends the rest to the Logbook's free-text
     // Mode field. This test is what keeps those sentences honest: widen
@@ -609,7 +609,16 @@ describe('Satellites — logging the contact you just made', () => {
     expect(picker, 'the override has no mode picker at all').not.toBeNull()
     const offered = Array.from(picker!.options).map((o) => o.value)
     expect(offered).toEqual(['SSB', 'FM', 'AM', 'CW', 'RTTY', 'FT8', 'FT4'])
-    for (const tier of ['Q65', 'JT65', 'MSK144', 'WSPR', 'FST4', 'TempoFast', 'TempoDeep']) {
+    for (const tier of [
+      'FT2',
+      'Q65',
+      'JT65',
+      'MSK144',
+      'WSPR',
+      'FST4',
+      'TempoFast',
+      'TempoDeep',
+    ]) {
       expect(
         offered,
         `${tier} is now in the picker — the guide may stop sending it to the Logbook`,

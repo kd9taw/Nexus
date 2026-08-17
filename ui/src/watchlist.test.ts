@@ -66,10 +66,29 @@ describe('matchWatchlist', () => {
     expect(matchWatchlist(decode({}), [])).toBeNull()
   })
 
+  it('matches a watched grid square, exact and by field prefix', () => {
+    const exact: WatchFilter = { id: 'g1', kind: 'grid', value: 'FN42' }
+    const field: WatchFilter = { id: 'g2', kind: 'grid', value: 'EM7*' }
+    expect(matchWatchlist(decode({ grid: 'FN42' }), [exact])).toBe(exact)
+    expect(matchWatchlist(decode({ grid: 'fn42' }), [exact])).toBe(exact)
+    expect(matchWatchlist(decode({ grid: 'FN43' }), [exact])).toBeNull()
+    expect(matchWatchlist(decode({ grid: 'EM79' }), [field])).toBe(field)
+    expect(matchWatchlist(decode({ grid: 'EM89' }), [field])).toBeNull()
+  })
+
+  it('a grid-less decode never matches a grid watch — unknown is not a hit', () => {
+    // Most FT8 frames (reports, RRR, 73) carry no grid by protocol; only CQ and the
+    // first reply announce the square. Firing on "unknown" would alert on every frame.
+    const exact: WatchFilter = { id: 'g1', kind: 'grid', value: 'FN42' }
+    expect(matchWatchlist(decode({ grid: undefined }), [exact])).toBeNull()
+    expect(matchWatchlist(decode({ grid: '' }), [exact])).toBeNull()
+  })
+
   it('watchLabel prefers the friendly label, falls back to the value', () => {
     expect(watchLabel(call)).toBe('Falklands')
     expect(watchLabel(dxcc)).toBe('Bouvet')
     expect(watchLabel({ id: '5', kind: 'call', value: 'k1abc' })).toBe('K1ABC')
+    expect(watchLabel({ id: 'g1', kind: 'grid', value: 'fn42' })).toBe('grid FN42')
   })
 })
 
@@ -77,7 +96,14 @@ describe('persistence', () => {
   beforeEach(() => localStorage.clear())
 
   it('round-trips through localStorage and drops malformed entries', () => {
-    const list = [newWatchFilter('call', 'VP8*', { label: 'Falklands' }), newWatchFilter('dxcc', 'Bouvet')]
+    // The grid entry pins loadWatchlist's kind validator: it hard-codes the accepted
+    // kinds, so a new kind that misses it would save fine and then be SILENTLY dropped
+    // on the next launch — the one way this feature fails quietly.
+    const list = [
+      newWatchFilter('call', 'VP8*', { label: 'Falklands' }),
+      newWatchFilter('dxcc', 'Bouvet'),
+      newWatchFilter('grid', 'EM7*'),
+    ]
     saveWatchlist(list)
     expect(loadWatchlist()).toEqual(list)
   })

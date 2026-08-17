@@ -160,6 +160,34 @@ on.
 > validated on the air. Published Windows binaries are cross-compiled beta
 > builds.
 
+### Decodium FT2 — IU8LMC (ARI Caserta), on WSJT-X
+License: **GNU GPL, version 3** (GPLv3), inherited from WSJT-X.
+<https://github.com/iu8lmc/decodium3-build>
+
+The FT2 mode's modem sources at `libtempo/vendor/wsjtx/lib/ft2/` are vendored
+from **Decodium 3** (IU8LMC's fork of WSJT-X 3.0.0-rc1) — Decodium's FT2, the
+protocol with an on-air population, not the abandoned upstream experiment of
+the same name. The files carry no per-file headers (matching upstream WSJT-X
+`lib/` practice); the repository-level GPLv3 applies. Provenance, established
+by diff against upstream at vendor time (2026-08-16):
+
+- **K1JT / WSJT Development Group** — `genft2.f90`, `gen_ft2wave.f90`,
+  `ft2_downsample.f90`, `getcandidates2.f90`, `ft2_baseline.f90` are WSJT-X's
+  FT4 files mechanically renamed (halved symbol time via `ft2_params.f90`),
+  and `sync2d.f90` is WSJT-X's `sync4d` with one IU8LMC change (best-3-of-4
+  Costas scoring). `gfsk_pulse.f90` is upstream's, unmodified.
+- **IU8LMC** — `ft2_triggered_decode.f90` (the two-phase triggered decoder
+  and its AP ladder), `decode174_91_ft2.f90` (a layered/self-corrected
+  rewrite of K1JT's LDPC decoder), `get_ft2_bitmetrics.f90` (log-sum-exp
+  demapper + MMSE metric), `ft2_channel_est.f90` (Wiener channel estimation),
+  and the redesigned `ft2_params.f90`.
+
+Shared dependencies (the LDPC(174,91) codec, CRC-14, OSD, 77-bit packing,
+`four2a` and support routines) are the WSJT-X copies already vendored and
+credited above; Decodium's copies were verified byte-identical at vendor time
+and not re-vendored. Decodium's `normalizebmet` was deliberately not vendored
+— see `libtempo/CMakeLists.txt` for the duplicate-symbol rationale.
+
 ### AetherSDR — waterfall history + 3D stacked-spectrum
 License: **GNU GPL, version 3** (GPLv3). <https://github.com/aethersdr/AetherSDR>
 

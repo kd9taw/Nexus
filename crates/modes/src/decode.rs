@@ -124,6 +124,36 @@ impl From<msk144::Decode> for Decode {
     }
 }
 
+impl From<ft2::Decode> for Decode {
+    fn from(d: ft2::Decode) -> Self {
+        Self {
+            message: d.message,
+            // FT2's ABI returns no sync metric — Decodium's `ft2_decoded` prints
+            // one, but the value the C ABI carries back is the decode record, and
+            // sync is not in it.
+            sync: 0.0,
+            snr: d.snr,
+            dt: d.dt,
+            freq: d.freq,
+            // ⭐ THE ONE MODE HERE WHOSE AP TYPE IS FT8'S. Unlike Q65's `idec` or
+            // JT65's `ft`, FT2's `nap` IS an iaptype on the same 0..=4 scale — it
+            // is FT4's decoder with a halved symbol time, and it prints the same
+            // `a1`..`a4` annotation. So it goes straight into `nap`, and the decode
+            // row's WSJT-X 'a' marker (`ap: d.nap > 0` in engine.rs) is correct for
+            // it with no further wiring.
+            nap: d.ap_type,
+            // No [0,1] quality metric crosses the ABI (`Ft2DecodeT` has no qual
+            // field), so this stays 0.0 rather than inventing a number that would
+            // rank against FT8's real one — the same choice Q65/JT65/MSK144/WSPR
+            // already make.
+            qual: 0.0,
+            // No redundancy-version concept (that is FT1's IR-HARQ).
+            rv: None,
+            mode: None,
+        }
+    }
+}
+
 impl From<jt65::Decode> for Decode {
     fn from(d: jt65::Decode) -> Self {
         Self {

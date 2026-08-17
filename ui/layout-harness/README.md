@@ -13,6 +13,15 @@ rendered in an unreadable corner. This harness is the check that ends that class
 4. In the console: `measure()` at several container widths
    (`document.querySelector('.app').style.width='1024px'` … `'3436px'`)
 
+`measure()` also reports **pill-row geometry** — `pillLines`, `pillRowW`, `pillsSum`,
+`pillOverflow` — which is what to read when ADDING A TIER PILL. The row has no width
+budget written down anywhere, so measure it rather than reasoning about it: at the
+1024 floor the eleven pills shipped today come to 738.6 px in a one-line group with
+zero overflow, and `.tier-toggle` carries `flex-wrap: wrap` (styles.css, the LATER of
+its two rules — the earlier one at ~4504 does not, and reading only that one is how
+this gets mis-answered). Run the control too: delete the new pill in the console and
+re-measure. If the numbers do not move, the measurement is not seeing your pill.
+
 The assertion that must hold (adversarial-review verdict, wf_c2df16d3):
 - `sameLine` true at ≥1366 (chips on the pills line)
 - `chipsToTxGap` == resolved `--space-3` (chips joined to the Tx cluster, never floating)

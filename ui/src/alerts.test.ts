@@ -163,17 +163,25 @@ describe('per-alert band scopes (dialMhz gate)', () => {
     expect(toasts.mock.calls[0][0]).toContain('NEW DXCC')
   })
 
-  it('rare 💎 grid still fires on HF (rare scope all beats grid scope vhf)', () => {
-    processDecodes(
-      [decode({ from: 'N5GE', newGrid: true, grid: 'AA11', gridRarity: 'ultraRare' })],
-      settings,
-      undefined,
-      ctx,
-      undefined,
-      14.074,
-    )
+  it('rare 💎 grid is QUIET on HF by default, and fires when the rare scope is widened', () => {
+    // Operator ruling, 2026-08-15: "remove the grid alerts for HF bands by default." The rare
+    // tier shipped scoped 'all', making it the one grid alert still firing on HF — and on HF
+    // nearly every decode is an unworked grid, so even the rare subset read as chatter. The
+    // default is now 'vhf' like the plain scope; an HF grid-chaser widens it in Settings.
+    const rare = decode({ from: 'N5GE', newGrid: true, grid: 'AA11', gridRarity: 'ultraRare' })
+    processDecodes([rare], settings, undefined, ctx, undefined, 14.074)
+    expect(toasts, 'default: HF stays quiet, even for an ultra-rare grid').not.toHaveBeenCalled()
+
+    // The opt-in still works — this is a scope change, not a removal.
+    const wide = { ...settings, alertRareGridBands: 'all' } as unknown as Settings
+    processDecodes([rare], wide, undefined, ctx, undefined, 14.074)
     expect(toasts).toHaveBeenCalledTimes(1)
     expect(toasts.mock.calls[0][0]).toContain('ULTRA-RARE grid')
+
+    // And on VHF the default still fires — the gems were never the problem there.
+    const vhf = decode({ from: 'K0AA', newGrid: true, grid: 'BB22', gridRarity: 'ultraRare' })
+    processDecodes([vhf], settings, undefined, ctx, undefined, 144.174)
+    expect(toasts).toHaveBeenCalledTimes(2)
   })
 
   it('explicit Off silences grids even on VHF', () => {
@@ -209,6 +217,45 @@ describe('per-alert band scopes (dialMhz gate)', () => {
       50.313,
     )
     expect(toasts).not.toHaveBeenCalled()
+  })
+})
+
+describe('grid squares on the watch list', () => {
+  const ctx = { state: 'Listening', dxcall: null }
+  const hunt = [{ id: 'g1', kind: 'grid' as const, value: 'EM7*' }]
+
+  it('a watched grid fires the loud ⭐ watch tier and consumes the decode', () => {
+    processDecodes(
+      [decode({ from: 'K4ROV', grid: 'EM79', newGrid: true, gridRarity: 'common' })],
+      settings,
+      undefined,
+      ctx,
+      hunt,
+      50.313,
+    )
+    // Exactly ONE toast: the watch hit, not the watch hit plus a generic grid alert.
+    expect(toasts).toHaveBeenCalledTimes(1)
+    const [msg, , , opts] = toasts.mock.calls[0]
+    expect(msg).toContain('⭐ Watch')
+    expect(msg).toContain('grid EM7*')
+    expect(opts).toMatchObject({ prominent: true, actionLabel: 'Work' })
+  })
+
+  it('fires on HF — a square asked for by name outranks the HF grid-quiet default', () => {
+    // The 1.5.0 ruling scoped UNWORKED-grid chatter off HF. A grid the operator typed
+    // into the watch list is not chatter; the watch branch runs above the scope gates.
+    // (A different rover than the test above — the watch dedup is per filter+call and
+    // module-global, so reusing K4ROV would test the dedup, not the scope.)
+    processDecodes(
+      [decode({ from: 'W9ROV', grid: 'EM77', newGrid: true })],
+      settings,
+      undefined,
+      ctx,
+      hunt,
+      14.074,
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('⭐ Watch')
   })
 })
 

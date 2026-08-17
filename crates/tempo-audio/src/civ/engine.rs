@@ -397,6 +397,10 @@ pub(crate) mod tests_support {
         /// CI-V mode bytes per band (`06` on the selected band).
         pub main_mode: u8,
         pub sub_mode: u8,
+        /// The mode of the UNSELECTED VFO of the current band (`26 01`) — its
+        /// OWN register, which is the whole point: `06` cannot reach it, so a
+        /// split TX VFO keeps whatever mode was last put here.
+        pub unselected_mode: u8,
         /// DATA mode (`1A 06`) — the rear-jack/soundcard flag that turns USB into USB-D and
         /// FM into FM-D. Separate from the mode byte on a real Icom, and separate here, which
         /// is the whole point: "FM" and "FM-D" differ ONLY in this bit.
@@ -453,6 +457,9 @@ pub(crate) mod tests_support {
                         unselected_hz: 0,
                         main_mode: 0x01, // USB
                         sub_mode: 0x05,  // FM — the 9700's Sub-band default
+                        // LSB, and deliberately: the field report's TX VFO was
+                        // left in LSB by an earlier inverting linear pass.
+                        unselected_mode: 0x00,
                         data_mode: false,
                         no_satmode: false,
                         nak_main_select: 0,
@@ -564,6 +571,15 @@ pub(crate) mod tests_support {
                         // The unselected VFO of the CURRENT band — write-only here.
                         (0x25, Some(0x01)) if f.data.len() >= 6 => {
                             r.unselected_hz = bcd_to_freq(&f.data[1..]);
+                            None
+                        }
+                        // …and its MODE (`26 01 <mode> <data>`), a register of
+                        // its own. Separate from `main_mode`/`sub_mode` here for
+                        // the same reason it is separate on the radio: that is
+                        // exactly what made an unwritten TX VFO keep the last
+                        // pass's sideband.
+                        (0x26, Some(0x01)) if f.data.len() >= 2 => {
+                            r.unselected_mode = f.data[1];
                             None
                         }
                         // Satellite mode: read (1-byte data) / set (2-byte data).

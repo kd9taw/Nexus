@@ -1247,7 +1247,16 @@ export function SettingsPanel({
     })
   }
   const handleAddRadio = () => {
-    void withErrorToast(() => addRadio(), 'Could not add a radio').then((s) => s && reloadRadios())
+    // Adding does not switch the station onto the new radio -- see Engine::add_radio. Select it
+    // for EDITING instead, so the operator lands on the profile they just made and can configure
+    // it, while the rig they are actually operating keeps running.
+    void withErrorToast(() => addRadio(), 'Could not add a radio').then(async (s) => {
+      if (!s) return
+      reloadRadios()
+      const fresh = await getSettings()
+      const added = fresh.radios?.[fresh.radios.length - 1]
+      if (added) setEditingRadioId(added.id)
+    })
   }
   const handleRemoveRadio = (id: number) => {
     // Destructive + immediate + unrecoverable (drops the radio's CAT/audio config, its unique
@@ -2100,7 +2109,7 @@ export function SettingsPanel({
           type="button"
           className="settings-update-btn"
           onClick={() => void checkForUpdateManual()}
-          title="Check SourceForge for a newer Nexus release"
+          title="Check for a newer Nexus release"
         >
           Check for updates
         </button>
@@ -6679,7 +6688,7 @@ export function SettingsPanel({
                   <span className="settings-label">Rare grid 💎</span>
                   <select
                     className="settings-input"
-                    value={!form.alertNew ? 'off' : (form.alertRareGridBands ?? 'all')}
+                    value={!form.alertNew ? 'off' : (form.alertRareGridBands ?? 'vhf')}
                     aria-label="Rare grid alert bands"
                     onChange={(e) => changeAlertScope('alertRareGridBands', e.target.value)}
                   >
@@ -6780,6 +6789,33 @@ export function SettingsPanel({
               )}
             </div>
           </fieldset>
+          )}
+
+          {tab === 'logging' && (
+            <fieldset className="settings-section" id="settings-connections-b4">
+              <legend>Worked-before (B4) &amp; dupes</legend>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">Match mode too</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.b4MatchMode ?? false}
+                    className={`toggle${form.b4MatchMode ? ' on' : ''}`}
+                    onClick={() => updateBool('b4MatchMode', !form.b4MatchMode)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">
+                    Off (the default, and WSJT-X&rsquo;s): working a station on 40m marks them
+                    B4-on-band for 40m in every mode, and the log strip&rsquo;s Dupe badge counts
+                    any mode on the band. On: 40m FT8 and 40m phone are separate contacts — the
+                    solid B4 chip and the Dupe badge require the mode to match as well. The
+                    hollow B4 chip (worked anywhere) is unaffected either way.
+                  </span>
+                </label>
+              </div>
+            </fieldset>
           )}
 
           {/* ---- Network integrations ---- */}

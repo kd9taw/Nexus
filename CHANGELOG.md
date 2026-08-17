@@ -5,6 +5,222 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] — 2026-08-16
+
+### Fixed
+
+- **FT2 answers in the next slot, not three later.** The first on-air QSOs exposed it: FT2
+  keyed each over before the previous slot's decode had folded in, so every reply slipped a
+  full cycle and every message went out twice — both stations reading each other as "didn't
+  copy". FT2 now decodes the completed signal 1.15 s before the boundary and keys with fresh
+  state, exactly like FT4. Its transmission also now starts at the slot boundary, matching
+  the Decodium convention on the air, and the band roster no longer ages stations out four
+  times too fast on short slots.
+- **The Phone and CW scope window follows your radio's filter.** A 500 Hz CW filter inside
+  the old fixed 800 Hz window left dead margins that could never light — the window now spans
+  the filter (plus a little skirt), and Phone's default span is a new Auto preset that tracks
+  the rig's bandwidth.
+
+- **A satellite over can no longer be yanked onto the downlink by a stale keyed-state poll.**
+  Proven on the wire from the operator's CI-V capture: the mic went down, the once-a-second
+  PTT poll hadn't noticed yet, and the dial-keep pushed the downlink onto what was now the
+  transmit VFO. The rig's own reported frequency is now the evidence — if it reads the
+  pass's uplink, the rig is treated as keyed no matter what the last poll said — and the
+  PTT poll runs five times a second while a pass is up. Works for linear birds too, and a
+  bird's other documented uplink pairing (145.200 vs 144.490 on the ISS) counts as the pass,
+  not as you turning the knob. The pass also pins its transponder row at AOS, ending the
+  first-correction flip between rows the same capture caught.
+- **The Phone scope gives the voice three quarters of the panel.** The centered axis was
+  symmetric, so the (empty, filtered-away) far side of the dial cost half the display and
+  speech looked compressed into one section. The dial line now sits at the quarter mark —
+  left of center on USB, right on LSB — and the occupied sideband gets the rest.
+
+- **The setup wizard's example callsign is nobody's callsign.** The callsign and grid boxes
+  showed `KD9TAW` and `EN52` as hint text on a fresh install — readable as prefilled values,
+  and they are a real station's. The examples are now `N0CALL` and `FN31` everywhere hint
+  text names a callsign or grid.
+- **The Phone and CW scope centers your frequency, the way your rig's scope does.** Reported
+  from the bench: a station on your own frequency painted at the left edge of the passband.
+  The audio-fed scope's axis started at the dial and ran upward, so the dial sat on the far
+  left pixel with nothing marking it. The Phone scope now puts the **dial at the center** with
+  a labelled line — voice extends to the right on USB, to the left on LSB, exactly as a rig
+  draws it — and the CW scope centers on **your sidetone pitch**, so a zero-beat station and
+  the pitch hairline sit mid-window. The quiet half of the Phone display is honest: on the
+  soundcard feed the radio filtered that side away before Nexus ever heard it; rigs with a
+  native panadapter feed (Flex, CI-V scope) show real signal on both sides as before.
+
+- **Satellite passes stop losing their split half a second into an over.** Found on the air
+  (IC-9700, ISS V/V): a fast dial-read during a keyed over saw the transmit VFO's frequency,
+  read it as you turning the knob, and tore the split down — the rig dropped to simplex on
+  the downlink and keyed there. Three holes closed: the fast read and the dial-keep write now
+  wait while the rig is keyed, and an FM bird's own two frequencies are recognised as the
+  pass (within Doppler) instead of being structurally unrecognisable, which is what made
+  every FM satellite take the teardown path. Doppler keeps correcting the uplink through the
+  over. **Needs on-air verification.**
+- **The uplink mode is now stated, not assumed.** An FM bird's transmit VFO kept whatever
+  mode the previous pass left on it — this morning that was an inverting bird's LSB on
+  145.990. Nexus now commands the uplink mode whenever it owns the transmit leg (once per
+  pass, not per tick), and the write reaches the Icom's unselected VFO directly so it lands
+  on the register the rig actually transmits from. Same fix covers non-inverting linear birds.
+- **A same-band (V/V) pass takes the 9700 out of satellite mode first, and puts it back.**
+  The rig's satellite mode is crossband-only, so a V/V pass fought it and lost — Nexus now
+  probes the front-panel state, steps it aside for the pass, restores it after, and says so
+  in the CAT detail. Only a state Nexus changed is ever restored.
+- **FM uplinks carry their CTCSS tone.** The ISS repeater needs 67.0 Hz and Nexus was
+  actively zeroing it on satellite passes — the repeater could never open. Known FM birds
+  (ISS, SO-50, AO-91, PO-101) now key their published tone; the tone ends with the pass.
+
+### Added
+
+- **Text that carries your callsign IS your SSTV ident.** Put your call in any text overlay
+  and the corner ID plate retires — your layout identifies the picture, not the app's
+  stamp. Delete that text and the plate returns on the same draw. The manual "already in
+  the picture" checkbox still works as before.
+
+- **Every waterfall can now be hidden.** The scope strip in Phone, CW, RTTY, and SSTV joins
+  the ⊞ Panels menu (Operate's already lived there) — on by default, and a hide sticks until
+  you bring it back. The panes below take the freed height.
+
+- **FT2.** The fast slotted mode from the Decodium community (IU8LMC's WSJT-X fork) joins the
+  FT dropdown: FT4 with a halved symbol time — 3.75 s periods, ~167 Hz wide, decoding to
+  −10.8 dB — for when the band turnover is worth more than the last few dB. Nexus follows
+  Decodium's own band plan (a few kHz above each FT8 hole, 160 m through 23 cm), runs the
+  same auto-sequencer as FT8/FT4, shows a-priori decodes with the same `a` marker, and logs
+  as MFSK/FT2 so LoTW and the online logbooks accept the record. Built from Decodium's own
+  GPL modem sources (see NOTICE) and proven against its published sensitivity in the test
+  bench — **not yet validated on the air against a live Decodium station.**
+
+- **Text on your SSTV pictures.** The composer can now lay text over the picture before
+  transmitting, the way MMSSTV does. One-click **CQ**, **73** and **Reply** cards — Reply fills
+  in the other station's callsign from the newest FSK ID heard — plus free text. Two styles:
+  **Crisp**, the same pixel font as the burned-in ident, proven readable through the decoder;
+  and **Banner**, big display text with a thick outline. Eight colours, four sizes, and every
+  item carries a solid plate or an outline — that contrast edge is what keeps coloured text
+  readable on the far end. Drag text where you want it (or use the arrow keys); your station
+  ID always draws last, so nothing you add can cover it.
+- **Edit & resend from the SSTV gallery.** The pencil on a received picture loads it into the
+  composer — answer a station's picture with their picture and your text on it.
+- **Hunt a grid square by name.** The watch list (Settings ▸ Spots & Alerts) now takes grid
+  squares alongside callsigns and DXCC entities: enter `FN31` or `EM7*` and get the loud ⭐
+  alert the moment a station decodes from there, with the Work button ready. A square you ask
+  for by name alerts on every band — the HF grid-quiet default doesn't apply to it.
+
+## [1.5.0] — 2026-08-16
+
+### Added
+
+- **Nexus runs on the Mac.** A native Apple Silicon build (M-series, macOS 12+), signed and
+  notarized, with the same self-updater as Windows and Linux. CAT control uses Hamlib from
+  Homebrew (`brew install hamlib`); Intel Macs can build from source, which works out of the
+  box as of 1.5.0. First macOS release — treat it as fresh ground and report what you find.
+  *(Added to the 1.5.0 release 2026-08-16, after the initial publish — same source, new platform.)*
+
+- **MSK144 has a display built for meteor scatter.** Switch to MSK144 and the waterfall strip
+  becomes a time display — the Fast Graph, as WSJT-X draws it: seconds across one T/R period,
+  a green power trace where a ping is a spike you can see land, the current period above the
+  previous one, and a marker with the callsign at each decode. On meteor scatter every signal
+  sits at 1500 Hz and lives for milliseconds, so a frequency waterfall showed one unmoving
+  stripe while the actual event was invisible. A 5/10/15/30 s T/R selector sits beside the
+  mode pills — on meteor scatter the period is an operating decision, not configuration.
+- **MSK144 pings appear while the period is still running.** Nexus used to decode once at the
+  period boundary, so you watched a silent screen for 15 seconds and then got history. Pings
+  now reach the decode list about two seconds after they land, mid-period, with the T column
+  showing when in the period each one arrived.
+- **Worked-before comes in two strengths.** The B4 chip is hollow when you have worked the
+  callsign anywhere and solid when you have worked them on the band you are on now — the same
+  two scopes WSJT-X colours separately. A new setting (Logging ▸ Worked-before (B4) & dupes ▸
+  **Match mode too**, off by default like WSJT-X's) makes 40m FT8 and 40m phone count as
+  separate contacts for both the chips and the log strip's Dupe badge.
+- **The Spots panel shows the state it already filtered by**, as a sortable column, and the
+  Phone/CW band-strip flags carry the state in their tooltips.
+- **Program can take channels you type.** *Add by hand* enters a repeater or simplex channel
+  the directory has wrong or missing, and *Import CHIRP CSV* reads the same format Program
+  exports and CHIRP itself saves. Memories has had both for a while; now the workbench that
+  builds your radio's channel list does too.
+- **The rig scope's waterfall gets the scroll-direction button**, matching the FT8 waterfall,
+  and defaults the same way (newest at the top). RTTY and SSTV share the FT8 waterfall and
+  already had it.
+
+### Fixed
+
+- **A dead sound card recovers instead of failing silently and permanently** — contributed by
+  on8st. A capture stream error used to be logged once and never acted on: the audio thread
+  kept running against a card that would never deliver another sample, so the waterfall froze
+  until a restart. A stream error now puts the card on probation, silence confirms the death,
+  and the card is rebuilt — waiting for your key to come up first, so a recovery never cuts an
+  over. A card that flaps is rebuilt at a steady rate rather than the flap rate, and a machine
+  whose default device disappears entirely keeps retrying instead of giving up for the
+  session. (#73, #74)
+- **Adding a radio no longer switches the station onto it** — contributed by on8st. Pressing
+  "Add radio" silently moved the station onto the new, empty profile — tearing down the
+  working rig's CAT to bring up one with no port and no model, which froze the interface and
+  blanked the settings pane. A new roster entry is just a roster entry now; the form opens on
+  it for editing, and "Make active" stays the deliberate act it always was. (#91)
+- **Every serial port showed twice on macOS** — contributed by on8st. The system publishes
+  each USB-serial adapter as a tty/cu pair, and the rig picker listed both; the tty twin
+  could hang a CAT probe waiting for a carrier-detect line no radio asserts. Only the cu
+  entry is listed now. (#92)
+- **A rigctld that cannot actually run no longer wins the CAT probe** — contributed by on8st.
+  A Hamlib built from source can be first on PATH yet die before main with an unloadable
+  library; Nexus committed to it and CAT came up dead with no usable diagnosis. Every
+  candidate is now spawn-checked first, and one that cannot run is skipped for one that can.
+  (#70)
+- **Nexus builds on a Mac without hand-set linker paths** — contributed by on8st. The
+  gfortran and FFTW3f runtimes live under Homebrew's prefix, which Apple's linker does not
+  search; the build now asks the toolchain where its own libraries are. With the golden
+  fixture made portable across architectures (#90), the test suite passes on Apple Silicon
+  out of the box. (#69, #90)
+- **Working the ISS voice repeater no longer transmits on the bird's downlink.** Two faults,
+  both found on the air. A same-band (V/V) pass asked a Main/Sub mapping to do something those
+  radios cannot — Main and Sub can't both sit on 2 m — so nothing was written and TX stayed on
+  the downlink; a V/V pass now rides the A/B split, which is how those passes are worked. And
+  a rig keyed from the HAND MIC didn't count as transmitting, so half a second into an over
+  the Doppler tick and the dial-keep would retune the transmit VFO back onto the downlink. A
+  mic-keyed rig is now keyed everywhere.
+- **"Call CQ" stops claiming you are calling CQ.** The CQ/S&P toggle lit Call CQ through every
+  S&P contact and forever after, because it read a flag a directed call also sets — and the
+  AUTO-CQ pill made the same false claim. Both now read the real CQ-run state, and the idle
+  Call CQ button drops its permanent red border: in this app red means TX-armed, which an idle
+  station is not.
+- **Your own transmission scrolls as a dark band on the waterfall** — the honest "not
+  listening" gap, as WSJT-X and your rig's own scope draw it. It used to paint a full-width
+  red band after every over: while keyed the rig's muted receiver dragged the display's
+  auto-contrast down to digital silence, and key-up clamped the whole band to the palette's
+  hot end for a couple of seconds. The false rows are dropped at the source now and the
+  contrast holds through the over.
+- **CONFIRM is now NEEDS QSL, and says what it means.** The tag marks an entity, zone or grid
+  worked on this band but not yet confirmed — a fact about your award slot, never about the
+  callsign in the row. The old "Worked —" wording read as a claim about the station and made
+  NEEDS-QSL-without-B4 look like a bug; it is the normal case.
+- **CW keyed over CAT sends the whole macro.** Every one-character word — the closing K, a
+  bare ? — was silently rejected by the keying library, which reads a single-character message
+  on a Yaesu as a stored-memory number; a lone digit 1–5 would even have played the rig's
+  stored message instead of keying the digit. Padded past the trap. (#86)
+- **Ham Radio Deluxe forwarding actually forwards when it is the only connector enabled.** An
+  internal gate skipped the send loop unless some other upload service was also on, so an
+  HRD-only station queued contacts forever and sent none — while the app said "Logged". (#87)
+- **The update banner's "Not now" sticks.** Dismissing an update lasted until the hourly
+  re-check, which re-downloaded it and put the banner straight back. A dismissal now holds for
+  that version; a newer release still lands.
+- **Re-importing a log with PSK31 respelled as BPSK31 no longer doubles those contacts** — the
+  last spelling pair from the import-dedup work that shipped in 1.4.0. (#31)
+- **The "check for updates" tooltip stops naming SourceForge** — the check reads the project
+  site first, and the Download button opens GitHub Releases.
+- **Entering MSK144 parks both frequency offsets on 1500 Hz**, where the mode actually
+  transmits — the red TX marker could sit at 2400 Hz while the rig keyed 1500 — and the DT
+  column reads as T (time of the ping within the period) instead of painting every healthy
+  ping red with FT8's clock-skew colouring.
+
+### Changed
+
+- **HF is grid-quiet by default.** The rare-grid (💎) alerts now scope to VHF and up like the
+  plain grid alerts — on HF nearly every decode is an unworked grid, so even the rare tier
+  read as chatter. An HF grid-chaser widens it back in Settings ▸ Spots & Alerts.
+- **The FT8 cockpit no longer hosts the memory favorites strip.** Memories are repeaters,
+  nets and calling frequencies — Phone and CW things, and those cockpits keep the strip. In
+  the FT8 header a favorite chip was one click from retuning the rig off the band
+  mid-sequence. The recall hotkeys work everywhere, unchanged.
+
 ## [1.4.0] — 2026-08-15
 
 ### Fixed

@@ -47,6 +47,42 @@ fn err_fn(e: cpal::StreamError) {
     eprintln!("tempo-audio: cpal stream error: {e}");
 }
 
+/// The slot a dead decode-path stream reports itself into, drained by the radio loop.
+///
+/// `Mutex<Option<String>>` rather than a bare flag because the loop shows the operator WHAT the
+/// OS said, and the FIRST report is the informative one — a device that disappears kills the
+/// capture and playback streams within milliseconds of each other, and "capture stream: ..." is
+/// the useful half.
+pub(crate) type StreamErrSlot = std::sync::Arc<Mutex<Option<String>>>;
+
+/// Build a cpal error callback that RECORDS the failure instead of only printing it.
+///
+/// The decode path's streams used to share [`err_fn`], which `eprintln!`s and returns. That is
+/// invisible twice over: a Finder-launched `.app` has nowhere for stderr to go, and nothing in
+/// the loop ever learned the stream was dead. `RadioLoop::step` only reopens the sound card when
+/// the SETTINGS change, so a stream killed by the OS — device unplugged, a CoreAudio topology
+/// change when a Bluetooth headset connects, or a codec that drops off the bus by itself (an
+/// USB codec was measured doing exactly this, 2.0–2.4 s after every open) — left Nexus
+/// running with a blank waterfall, no decodes, no banner and no diagnosis. Recording the text
+/// here lets the loop raise the same banner a failed OPEN raises and arm the same retry, so the
+/// stream comes back by itself once the device does.
+///
+/// Keeps the `eprintln!` for the terminal-launched/CI case, and keeps only the FIRST error: the
+/// callback can fire repeatedly while the loop is between ticks, and later repeats say nothing new.
+fn err_recorder(
+    slot: &StreamErrSlot,
+    which: &'static str,
+) -> impl FnMut(cpal::StreamError) + Clone + Send + 'static {
+    let slot = slot.clone();
+    move |e| {
+        eprintln!("tempo-audio: cpal {which} stream error: {e}");
+        let mut held = slot.lock().unwrap_or_else(|p| p.into_inner());
+        if held.is_none() {
+            *held = Some(format!("{which} stream: {e}"));
+        }
+    }
+}
+
 /// Decay applied to the RX peak meter each input callback (per callback, not per
 /// sample): the meter falls smoothly when the signal goes quiet.
 const RX_METER_DECAY: f32 = 0.85;
@@ -366,6 +402,10 @@ pub struct CpalBackend {
     /// cpal `Stream` is what actually frees the ALSA handle; pausing does not.
     _in_stream: Option<Stream>,
     _out_stream: Option<Stream>,
+    /// Set by the capture/playback error callbacks when the OS kills a stream, drained each tick
+    /// by the radio loop via [`AudioBackend::take_stream_error`]. See [`err_recorder`] for why a
+    /// dead stream has to reach the loop at all.
+    stream_err: StreamErrSlot,
     in_ring: Arc<Mutex<VecDeque<f32>>>,
     out_ring: Arc<Mutex<VecDeque<f32>>>,
     /// Anti-aliased device-rate → 12 kHz decimator for the RX/decode path,
@@ -606,6 +646,11 @@ impl CpalBackend {
         // TX level starts at unity and is read by the output callback each block — see the field's
         // doc for why it is applied on the way OUT rather than baked in at generation.
         let tx_level = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+        // Shared by BOTH decode-path streams: either one dying means the sound card is gone, and
+        // the loop rebuilds the pair together, so one slot is the whole report.
+        let stream_err: StreamErrSlot = Arc::new(Mutex::new(None));
+        let err_capture = err_recorder(&stream_err, "capture");
+        let err_playback = err_recorder(&stream_err, "playback");
 
         // ---- headphone monitor shared state (DARK; nothing drains it until the
         // operator enables the monitor, which opens the output stream). Sized ~0.5 s
@@ -663,7 +708,7 @@ impl CpalBackend {
                     }
                     update_rx_meter(&rx_meter_cb, sum_sq, n);
                 },
-                err_fn,
+                err_capture.clone(),
                 None,
             ),
             SampleFormat::I16 => in_dev.build_input_stream(
@@ -693,7 +738,7 @@ impl CpalBackend {
                     }
                     update_rx_meter(&rx_meter_cb, sum_sq, n);
                 },
-                err_fn,
+                err_capture.clone(),
                 None,
             ),
             // Radio USB CODECs (e.g. the IC-9700) may advertise U8 or I32 capture
@@ -730,7 +775,7 @@ impl CpalBackend {
                     }
                     update_rx_meter(&rx_meter_cb, sum_sq, n);
                 },
-                err_fn,
+                err_capture.clone(),
                 None,
             ),
             SampleFormat::I32 => in_dev.build_input_stream(
@@ -764,7 +809,7 @@ impl CpalBackend {
                     }
                     update_rx_meter(&rx_meter_cb, sum_sq, n);
                 },
-                err_fn,
+                err_capture.clone(),
                 None,
             ),
             other => return Err(format!("unsupported input sample format: {other:?}")),
@@ -786,7 +831,7 @@ impl CpalBackend {
                         }
                     }
                 },
-                err_fn,
+                err_playback.clone(),
                 None,
             ),
             SampleFormat::I16 => out_dev.build_output_stream(
@@ -801,7 +846,7 @@ impl CpalBackend {
                         }
                     }
                 },
-                err_fn,
+                err_playback.clone(),
                 None,
             ),
             // Radio USB CODECs (e.g. the IC-9700) may advertise U8 or I32 playback
@@ -818,7 +863,7 @@ impl CpalBackend {
                         }
                     }
                 },
-                err_fn,
+                err_playback.clone(),
                 None,
             ),
             SampleFormat::I32 => out_dev.build_output_stream(
@@ -833,7 +878,7 @@ impl CpalBackend {
                         }
                     }
                 },
-                err_fn,
+                err_playback.clone(),
                 None,
             ),
             other => return Err(format!("unsupported output sample format: {other:?}")),
@@ -846,6 +891,7 @@ impl CpalBackend {
         Ok(Self {
             _in_stream: Some(in_stream),
             _out_stream: Some(out_stream),
+            stream_err,
             in_ring,
             out_ring,
             // The device output rate lives inside tx_rs now — play() resamples
@@ -897,6 +943,13 @@ impl AudioBackend for CpalBackend {
     }
     fn spectrum_tap(&self) -> Option<(Arc<SpscRing>, u32)> {
         Some((self.spectrum_tap.clone(), self.in_rate))
+    }
+
+    fn take_stream_error(&mut self) -> Option<String> {
+        self.stream_err
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
 
     fn capture(&mut self) -> Vec<f32> {

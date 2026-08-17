@@ -274,6 +274,7 @@ logs, and never shown back to the UI beyond "configured."
    | File | Platform |
    |---|---|
    | `Nexus_<version>_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
+   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; CAT via Homebrew Hamlib (`brew install hamlib`); Intel Macs build from source |
    | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place |
    | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed, pulls `libhamlib-utils` in for CAT |
    | `Nexus_<version>_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
@@ -303,7 +304,7 @@ New here? Start with **[Getting Started](docs/manual/Getting-Started.md)**.
 
 ## Status — the honest version
 
-**1.0.0 closes the beta period**, and what that claims is narrow: the modes, the rig control, the
+**Nexus left beta at 1.0.0**, and what that claims is narrow: the modes, the rig control, the
 logbook and the awards engine have been run on the air through that period, on more than one
 station and on rigs the author does not own. It does not claim nothing is left. Every line below
 still says what a thing does *not* do, and so does every entry in the changelog.
@@ -408,6 +409,12 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   copyright from the WSJT Development Group's, credited separately for that reason. Nexus does not
   vendor or link the same author's SuperFox polar-code tables, which are not free software — see
   **[NOTICE](NOTICE)**.
+- **[Decodium](https://github.com/iu8lmc/decodium3-build)** (GPLv3) — **IU8LMC** (ARI Caserta).
+  Nexus's **FT2** mode is built from Decodium's modem sources, vendored at
+  `libtempo/vendor/wsjtx/lib/ft2/`: the triggered decoder, LDPC scheduling, bit-metric and
+  channel-estimation chain are IU8LMC's work; the supporting files are K1JT's FT4 sources with
+  a halved symbol time. Decodium's on-air behavior is the compatibility baseline for the mode
+  (see **[NOTICE](NOTICE)** for the per-file provenance split).
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
 - **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the waterfall's 3D
   stacked-spectrum view (`ui/src/dss.ts`) and retained-history model

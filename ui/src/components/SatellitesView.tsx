@@ -119,7 +119,7 @@ const TP_ALIVE_CAP = 4
  *
  * ⭐ TIER-AWARE ON A DIGITAL SECTION (the sat-FT batch, 2026-08-10 — this used
  * to be the disclosed "records SSB on a digital tier" defect). The section is
- * reachable on FT8/FT4/Q65/JT65/MSK144/WSPR/FST4/Tempo, and the sideband those
+ * reachable on FT8/FT4/FT2/Q65/JT65/MSK144/WSPR/FST4/Tempo, and the sideband those
  * tiers are generated on says "USB" — an analogue voice mode standing in for a
  * data mode on a permanent record. When the active operating SECTION is
  * digital, the honest value is the TIER's own registered name, and the
@@ -2546,7 +2546,11 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
    * this pass", disclosed in the toast and on the card. */
   const pickTransponder = (name: string, index: number | null, label = '', auto = false) => {
     pickBusy.current = true
-    return setSatTransponder(name, index)
+    // `auto` travels to the backend as well as into the local mirror: it is the
+    // one thing the engine cannot work out for itself, and while a pass is
+    // engaged it decides whether a pick naming a different row is honored (an
+    // operator changing transponder) or refused (the chain re-running).
+    return setSatTransponder(name, index, auto)
       .then(() => {
         setTuned(index == null ? null : { name, index, auto })
         // An explicit None is a consent statement "Work this pass" must honor

@@ -539,16 +539,11 @@ const HOSTS: Array<{ file: string; what: string; chain: Array<Set<string>> }> = 
     what: 'CW',
     chain: [...headerChain('cw-cockpit'), new Set(['mem-strip'])],
   },
-  {
-    // Operate nests the strip one deeper, inside the `.cockpit-meta` cluster.
-    file: 'components/OperateCockpit.tsx',
-    what: 'Operate',
-    chain: [
-      ...headerChain('operate-cockpit'),
-      new Set(['cockpit-meta']),
-      new Set(['mem-strip']),
-    ],
-  },
+  // Operate deliberately hosts NO MemoryStrip (operator ruling, 2026-08-16): memories are
+  // repeaters, nets and calling frequencies — Phone/CW things — and a favorite chip in the
+  // FT8 header was one click from retuning the rig off the band mid-sequence. The census
+  // sweep below still guards the OTHER direction: if a strip ever returns to
+  // OperateCockpit.tsx, it arrives unregistered and this file goes red.
 ]
 
 /** Non-test .tsx sources under src/, relative to src/. */

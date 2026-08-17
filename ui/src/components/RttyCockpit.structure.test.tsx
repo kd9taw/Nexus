@@ -191,9 +191,36 @@ describe('RttyCockpit pane shell', () => {
   it("⊞ Panels 'removed' hides the stream pane and nothing else", async () => {
     await renderCockpit({ panels: fakePanels(['stream']) })
     expect(document.querySelector('[data-pane="stream"]')).toBeNull()
+    // The waterfall is a SEPARATE entry and must not go with it (2026-08-16).
+    expect(document.querySelector('.waterfall-wrap')).not.toBeNull()
     // Stop and Send are not gated by the menu — they have no id to gate.
     expect(document.querySelector('.cockpit-txdock .rtty-stop')).not.toBeNull()
     expect(document.querySelector('.cockpit-txdock .cw-send-btn')).not.toBeNull()
+  })
+
+  // ── THE WATERFALL IS A PANEL NOW (operator, 2026-08-16) ────────────────────────────
+  it('the waterfall is SHOWN by default — the ⊞ entry is an option, not a new default', async () => {
+    await renderCockpit()
+    expect(document.querySelector('.waterfall-wrap'), 'the waterfall went missing on a stock layout').not.toBeNull()
+  })
+
+  it("⊞ 'Waterfall' unticked leaves the transcript to take the height", async () => {
+    await renderCockpit({ panels: fakePanels(['scope']) })
+    expect(document.querySelector('.waterfall-wrap'), 'the waterfall survived its own hide').toBeNull()
+    // `.rtty-cockpit > .pane-frame` is this shell's only grower, so the 22%-of-viewport strip
+    // the tick freed goes to the transcript. It has to still be there to receive it.
+    expect(document.querySelector('[data-pane="stream"]'), 'nothing is left to take the freed height').not.toBeNull()
+  })
+
+  it('both ids unticked leaves the header and dock stop controls untouched', async () => {
+    // RTTY's whole ⊞ vocabulary is these two, so this is the cockpit where "hide everything"
+    // is closest to hiding the screen. THE STOP LINE says what must survive it, and the
+    // wiring half is computed in stop-line.test.tsx against the REAL header; this asserts the
+    // shell-level half — that neither id reaches the dock.
+    await renderCockpit({ panels: fakePanels(['scope', 'stream']) })
+    expect(document.querySelector('.waterfall-wrap')).toBeNull()
+    expect(document.querySelector('[data-pane="stream"]')).toBeNull()
+    expect(document.querySelector('.cockpit-txdock .rtty-stop'), 'the dock Stop went with the panes').not.toBeNull()
   })
 
   it('survives the keep-alive hide/show round trip with its structure intact', async () => {

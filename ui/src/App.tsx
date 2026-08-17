@@ -208,6 +208,7 @@ const DEFAULT_MACROS: Settings['macros'] = {
 const OPERATE_TIERS: Tier[] = [
   'FT8',
   'FT4',
+  'FT2',
   'Q65',
   'MSK144',
   'FST4',
@@ -407,7 +408,7 @@ export default function App() {
   const cwPanels = usePanelLayout(CW_PANELS)
   const rttyPanels = usePanelLayout(RTTY_PANELS)
 
-  // One-shot on launch: check SourceForge for a newer release (throttled to once/day + cached,
+  // One-shot on launch: check the release feed for a newer version (throttled to once/day + cached,
   // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
   useEffect(() => {
     void maybeCheckForUpdate()
@@ -2714,8 +2715,6 @@ export default function App() {
               onSetHoldTxFreq={handleSetHoldTxFreq}
               dxClearTick={dxClearTick}
               onSnap={setSnap}
-              onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-              onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
               onOpenSettings={openSettingsAt}
               wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
               preferRrr={settings?.preferRrr ?? false}

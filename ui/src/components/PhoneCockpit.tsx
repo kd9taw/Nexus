@@ -98,6 +98,12 @@ interface Props {
  *  convenience, and PTT / Stop TX / Tune are what hold the guarantee up. THE STOP LINE lives
  *  in features/panelState.ts. */
 const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
+  // The strip itself, in this cockpit's own word for it. NOT "Waterfall": what Phone shows
+  // there is a trace + waterfall of the passband (or the rig's RF panadapter when one is
+  // streaming), and the header above it already calls the thing a scope. `rigscope` below is
+  // a different entry — the controls that command the RADIO's scope — so the two labels have
+  // to read as different things at a glance, which is why one says Controls and this does not.
+  scope: 'Scope',
   rigscope: 'Rig Scope Controls',
   txmeters: 'TX Meters',
   dsp: 'DSP Functions',
@@ -156,12 +162,29 @@ const DSP_FUNCS = [
   { key: 'vox', label: 'VOX', title: 'Voice-Operated Transmit — hands-free keying (TX)' },
 ] as const
 
-/** Bandscope span presets — slices of the captured audio passband. */
+/** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
+ *  is the rig's: RF offset from the dial, dial at the 1/4 mark and the sideband filling the
+ *  rest (PhoneScope's `carrierCentered`). The engine is asked for exactly 0..width — receiver
+ *  audio is one-sided — so the preset is both what is captured and 3/4 of what is shown; the
+ *  remaining quarter is scopeView's guard band, which has no data by construction.
+ *
+ *  These were briefly labelled ±4k/±2.7k/±1.5k/±800, from the fortnight the axis was
+ *  symmetric. The Hz never changed meaning; the ± did, and the labels came off with it.
+ *
+ *  FROM THE OLD SLICES: 'Full' (0–4000) and 'Voice' (300–2700) are unchanged in meaning.
+ *  'Low' (200–1500) is now the plain 1.5k zoom. 'High' (1500–2900) has no carrier-referenced
+ *  equivalent — a window that excludes the dial cannot be drawn from it — so its slot became
+ *  the tighter 800 Hz zoom. */
 const SPANS = [
-  { label: 'Full', lo: 0, hi: 4000, title: 'Whole captured band (0–4000 Hz) — incl. the filter slopes' },
-  { label: 'Voice', lo: 300, hi: 2700, title: 'Voice energy (300–2700 Hz)' },
-  { label: 'Low', lo: 200, hi: 1500, title: 'Lower half — zoomed (200–1500 Hz)' },
-  { label: 'High', lo: 1500, hi: 2900, title: 'Upper half — zoomed (1500–2900 Hz)' },
+  // ⭐ 'Auto' tracks the rig's reported filter width (operator, 2026-08-16: a fixed span
+  // wider than the filter shows a dead stopband — on the audio feed those pixels can never
+  // light). widthHz 0 is the sentinel; the render resolves it from filterWidthHz, clamped
+  // 800..4000, falling back to the full 4 kHz when the rig doesn't report one.
+  { label: 'Auto', widthHz: 0, title: "Follows the radio's filter — the scope shows what the rig can pass" },
+  { label: 'Full', widthHz: 4000, title: 'The whole captured passband — 4 kHz of sideband from your dial' },
+  { label: 'Voice', widthHz: 2700, title: 'Voice energy — 2.7 kHz of sideband from your dial' },
+  { label: '1.5k', widthHz: 1500, title: 'Zoomed — 1.5 kHz of sideband from your dial' },
+  { label: '800', widthHz: 800, title: 'Tight — 800 Hz of sideband from your dial, for fine tuning' },
 ] as const
 
 /** RF panadapter zoom presets (used only when a native RF scope is streaming). Symmetric ±Hz
@@ -1075,6 +1098,26 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         </label>
       </CockpitHeader>
 
+      {/* THE SCOPE STRIP, ⊞-hideable since 2026-08-16. The shell's four-child census is
+          unchanged — header, scope, ONE pane region, TX dock — one of the four is simply
+          conditional now, exactly as Operate's waterfall has been since 0.15.0. The gate is
+          HERE, at the shell child, and not inside the section: a scope that rendered an empty
+          `.ph-scope-panel` would keep its `flex: 0 1 22%` basis and its 8em floor and hand the
+          operator back a bordered empty box instead of the height he asked to reclaim.
+          `.cockpit-panes` is `flex: 1 1 0` (cockpit-panes.css) — the region IS the sink, so
+          the freed height goes to the panes with no rule change.
+
+          The Splitter goes with it. It drags `--ph-scope-h`, the strip's flex basis, so on its
+          own it is a grab handle for something that is not there — and it is a shell child of
+          its own, which would leave a stranded 8px seam between the header and the region.
+          The var it wrote is untouched and still stored, so re-ticking restores the height he
+          dragged to rather than the 22% default.
+
+          Nothing on this strip stops a transmission (THE STOP LINE, features/panelState.ts):
+          it is a display plus click-to-tune, and Stop TX / Tune are in the header above, PTT in
+          the dock below, none of them reachable from the ⊞ menu. */}
+      {shown('scope') && (
+        <>
       <section className="ph-scope-panel">
         <div className="ph-scope-head">
           {(() => {
@@ -1087,7 +1130,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                 title={
                   rf
                     ? 'Native RF panadapter — the real RF spectrum around your dial, not the demodulated audio passband.'
-                    : 'Receiver AUDIO spectrum (200–2900 Hz of the demodulated passband) — not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.'
+                    : 'Receiver AUDIO spectrum on your rig’s axis: the centre line is your dial, and the passband sits on the side your sideband is on (USB above, LSB below) — the other half is quiet because an SSB receiver only hears one side. Not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.'
                 }
               >
                 {rf ? 'RF Panadapter' : 'Passband'}{' '}
@@ -1141,8 +1184,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             transmitting={snap.radio.transmitting}
             theme={theme}
             smeterDb={smeterDb}
-            viewLoHz={nativeRf ? rfSpan.lo : span.lo}
-            viewHiHz={nativeRf ? rfSpan.hi : span.hi}
+            viewLoHz={nativeRf ? rfSpan.lo : 0}
+            viewHiHz={nativeRf ? rfSpan.hi : (span.widthHz || Math.min(4000, Math.max(800, filterHz ?? 4000)))}
+            carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
             onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
@@ -1162,6 +1206,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         defaultPct={22}
         label="scope height"
       />
+        </>
+      )}
 
       {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
           useRegionCols OWNS data-cols (measured from the region itself, stamped

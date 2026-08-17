@@ -50,7 +50,7 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
   grid: { cls: 'need-grid', Icon: Grid3x3, label: 'GRID', title: 'New grid square on this band (VUCC is per band)' },
   state: { cls: 'need-state', Icon: MapPin, label: 'STATE', title: 'New US state on this band (5BWAS) — a hint from the grid; confirm from the log' },
   dxped: { cls: 'need-dxped', Icon: Tent, label: 'DXPED', title: 'Active DXpedition — limited-time window', iconOnly: true },
-  confirm: { cls: 'need-confirm', Icon: MailQuestion, label: 'CONFIRM', title: 'Worked — needs a confirmation (QSL)' },
+  confirm: { cls: 'need-confirm', Icon: MailQuestion, label: 'NEEDS QSL', title: 'This entity/zone/grid is worked on this band but not yet confirmed — a QSL from this station would close it. Not a claim about this callsign: B4 is the worked-this-call chip.' },
   pota: { cls: 'need-pota', Icon: TreePine, label: 'POTA', title: 'Live POTA activator', iconOnly: true },
   sota: { cls: 'need-sota', Icon: Mountain, label: 'SOTA', title: 'Live SOTA activator', iconOnly: true },
   wanted: { cls: 'need-wanted', Icon: Star, label: 'WANTED', title: 'On your wanted watch list' },
@@ -98,10 +98,13 @@ export const NEED_CHIP: Record<
   NewGrid: { label: 'GRID', short: 'GRID', cls: 'grid', title: 'New grid square on this band' },
   NewState: { label: 'STATE', short: 'ST', cls: 'state', title: 'New US state on this band — best-guess from the grid' },
   Confirm: {
-    label: 'CONFIRM',
-    short: 'CNF',
+    label: 'NEEDS QSL',
+    short: 'QSL',
     cls: 'confirm',
-    title: 'Worked — needs a confirmation',
+    // The subject is the AWARD SLOT (entity/zone/grid/state on this band), never the
+    // callsign in the row — CONFIRM-without-B4 is the normal case, not a bug (an operator
+    // reasonably read the old "Worked —" as a claim about the station, 2026-08-16).
+    title: 'Worked on this band but not yet confirmed — a QSL from this station would close it',
   },
   Dxped: {
     label: 'DXPED',

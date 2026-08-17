@@ -174,6 +174,19 @@ impl RowAverage {
 #[derive(Clone, Default)]
 pub struct SpectrumFeed {
     rows: Arc<Mutex<FeedRows>>,
+    /// TRANSMIT HOLD — while true, audio/scope publishes are DROPPED and the freshness stamp
+    /// of the last real picture is kept alive, so every consumer keeps drawing the pre-TX band.
+    ///
+    /// ⚠️ WHY (operator-relayed report, 2026-08-16: a full-width red band after every over).
+    /// While keyed, the rig's codec returns a MUTED receiver: the rows collapse to digital
+    /// silence, the UI's visual AGC follows them down, and key-up clamps the whole band to
+    /// the palette's hot end until the EMA recovers (~2.7 s, 10-23 rows). The rows during TX
+    /// are not a picture of the band — they are a picture of the mute switch. rxdsp cannot
+    /// know we are keyed (its capture list is its safety argument and holds no engine/rig
+    /// handle), so the RADIO LOOP — which owns the keying decision — sets this atomic every
+    /// tick. The UI freezes its AGC on the same condition as a second seam for rows already
+    /// in flight.
+    tx_hold: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SpectrumFeed {
@@ -187,9 +200,24 @@ impl SpectrumFeed {
     /// rows), so a real reader never meets it.
     const MAX_AVG_FRAMES: u32 = 32;
 
+    /// Set/clear the transmit hold — the radio loop, every tick, from the keying state it owns.
+    pub fn set_tx_hold(&self, keyed: bool) {
+        self.tx_hold
+            .store(keyed, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Publish the audio-FFT row (the rx-dsp thread) into the running average.
     pub fn publish_audio(&self, row: Spectrum) {
         if let Ok(mut g) = self.rows.lock() {
+            // Under the TX hold the frame is a picture of the muted receiver, not the band —
+            // drop it, and keep the LAST REAL picture's freshness alive so readers repeat it
+            // instead of going stale-empty mid-over (see `tx_hold`).
+            if self.tx_hold.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(avg) = g.audio.as_mut() {
+                    avg.at = Instant::now();
+                }
+                return;
+            }
             match g.audio.as_mut() {
                 Some(avg) => avg.push(row),
                 None => g.audio = Some(RowAverage::start(row)),
@@ -276,7 +304,8 @@ impl SpectrumFeed {
         (req.at.elapsed() < Self::SCOPE_REQ_TTL).then_some((req.lo, req.hi, req.win))
     }
 
-    /// Publish a row computed over the scope's own span (the rx-dsp thread).
+    /// Publish a row computed over the scope's own span (the rx-dsp thread). Held during TX
+    /// exactly like the audio slot — same mute, same false picture.
     ///
     /// Averaged exactly like the audio slot, and for the same reason — the producer runs at
     /// 20 ms and the scope reads at 50, so a latest-value slot would throw away three frames in
@@ -284,6 +313,12 @@ impl SpectrumFeed {
     /// a zoom or a cockpit swap can never blend two windows into one picture.
     pub fn publish_scope(&self, row: Spectrum) {
         if let Ok(mut g) = self.rows.lock() {
+            if self.tx_hold.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(avg) = g.scope.as_mut() {
+                    avg.at = Instant::now();
+                }
+                return;
+            }
             match g.scope.as_mut() {
                 Some(avg) => avg.push(row),
                 None => g.scope = Some(RowAverage::start(row)),
@@ -400,6 +435,49 @@ impl SpectrumFeed {
 #[derive(Clone, Default)]
 pub struct MeterFeed {
     inner: Arc<MeterCells>,
+    /// The fast-mode power trace (MSK144's Fast Graph) — see [`MeterFeed::push_fast_power`].
+    fast: Arc<Mutex<FastPowerRing>>,
+}
+
+/// Raw 20 ms RMS power samples, retained — the data behind the MSK144 Fast Graph.
+///
+/// WSJT-X's fast modes draw a green power-vs-time trace (`fast_green[]`, one sample per
+/// ~21-43 ms FFT hop of `hspec.f90`) because on a meteor-scatter mode the SIGNAL IS A PING:
+/// milliseconds long, all energy at 1500 Hz, invisible on a frequency waterfall and obvious on
+/// a time trace. `rxdsp::tick` already computes exactly this sample — the per-tick RMS at
+/// 20 ms — and used to destroy it into the meter ballistics. This ring keeps the raw series.
+///
+/// Sized for two 30 s periods at the 20 ms tick (3000 samples) with headroom — enough for the
+/// Fast Graph's current + previous panels at the longest offered T/R period.
+struct FastPowerRing {
+    /// (sequence, unix ms, raw RMS 0..1). Sequence is monotonic so a poller can ask for the
+    /// delta since its last read and detect gaps; RAW rms, not the ballistics-shaped meter —
+    /// a ping IS the attack the ballistics exist to smooth away.
+    buf: std::collections::VecDeque<(u64, u64, f32)>,
+    next_seq: u64,
+}
+
+impl Default for FastPowerRing {
+    fn default() -> Self {
+        Self {
+            buf: std::collections::VecDeque::with_capacity(Self::DEPTH),
+            next_seq: 0,
+        }
+    }
+}
+
+impl FastPowerRing {
+    const DEPTH: usize = 3200;
+}
+
+/// One Fast Graph power sample on the wire (`get_fast_power`).
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FastPowerSample {
+    pub seq: u64,
+    pub unix_ms: u64,
+    /// Raw tick RMS, 0..1 linear.
+    pub rms: f32,
 }
 
 /// The cells behind [`MeterFeed`]. `rx_level` is f32 bits; `smeter_cdb` encodes
@@ -437,6 +515,32 @@ impl MeterFeed {
         use std::sync::atomic::Ordering;
         f32::from_bits(self.inner.rx_level.load(Ordering::Relaxed))
     }
+    /// Retain one raw 20 ms RMS sample for the Fast Graph — the rx-dsp thread, every tick
+    /// that drained audio. Cheap when nobody reads it: a mutex push into a fixed ring.
+    pub fn push_fast_power(&self, unix_ms: u64, rms: f32) {
+        if let Ok(mut g) = self.fast.lock() {
+            let seq = g.next_seq;
+            g.next_seq += 1;
+            if g.buf.len() >= FastPowerRing::DEPTH {
+                g.buf.pop_front();
+            }
+            g.buf.push_back((seq, unix_ms, rms));
+        }
+    }
+
+    /// Samples with sequence >= `since` — the Fast Graph's poll delta. A `since` older than
+    /// the ring answers from the ring's start (the caller sees the gap in the sequences).
+    pub fn fast_power_since(&self, since: u64) -> Vec<FastPowerSample> {
+        let Ok(g) = self.fast.lock() else {
+            return Vec::new();
+        };
+        g.buf
+            .iter()
+            .filter(|(seq, _, _)| *seq >= since)
+            .map(|&(seq, unix_ms, rms)| FastPowerSample { seq, unix_ms, rms })
+            .collect()
+    }
+
     /// Store the CAT S-meter (dB rel S9), `None` = no reading (unsupported rig / dead link).
     /// Called by the radio loop at every place it observes or clears the engine's mirror.
     pub fn set_smeter_db(&self, db: Option<i32>) {
@@ -1550,6 +1654,41 @@ pub struct Engine {
     /// hold is released, because a binding without a hold names a rig nothing
     /// is about to drive.
     sat_binding: Option<SatBinding>,
+    /// The tracked pass is UP — the track loop's `tracking` phase, pushed in
+    /// every tick by [`Engine::set_sat_pass_engaged`]. Two things read it, and
+    /// both are about an over in flight: the row PIN below (a pass being worked
+    /// does not change transponder under the operator) and the radio loop's PTT
+    /// poll cadence, which tightens to `SAT_PASS_PTT_POLL_MS` while it is set.
+    /// Always false with no hold — releasing the transponder ends the pass by
+    /// definition.
+    sat_pass_engaged: bool,
+    /// The row the pass ENGAGED on: `(row index, the transponder as it stood at
+    /// engage)`. `None` outside an engaged pass.
+    ///
+    /// ⚠️ Why the frequencies are carried and not just the index. The index is a
+    /// position in the SatNOGS transmitter list for this bird, and that list is
+    /// a fetched snapshot: a re-pick naming the same row (the "Lock on" button,
+    /// a re-run of the work-pass chain) can resolve to DIFFERENT frequencies if
+    /// the snapshot moved under it. On the ISS — two documented voice pairings,
+    /// 145.200 and 144.490 against the same 145.800 downlink — that is what put
+    /// two uplinks on the split TX dial a second apart mid-pass (CI-V capture,
+    /// 2026-08-16). Pinning the VALUES is what makes the row stand.
+    sat_row_pin: Option<(usize, tempo_core::doppler::Transponder)>,
+    /// The bird's OTHER documented uplink centres (Hz) — every row of the same
+    /// satellite except the one held. Set by the command layer right after
+    /// [`Engine::set_sat_transponder`] (which clears it, so a stale list can
+    /// never outlive a pick) because only that layer has the transmitter list.
+    ///
+    /// The rig may be running a pairing we did not write: the ISS voice repeater
+    /// is 145.200 up in region 1 and 144.490 up in regions 2/3, and an operator
+    /// whose rig came up on the other one is still working THIS pass. So these
+    /// count as the pass's own frequencies for the channel hatch in
+    /// [`Engine::sat_observe_operator_tune`], and as keyed evidence for
+    /// [`Engine::sat_inferred_keyed`].
+    sat_alt_uplinks: Vec<u64>,
+    /// The rig is transmitting, INFERRED from the frequency it reported rather
+    /// than from its PTT line — see [`Engine::sat_inferred_keyed`].
+    sat_inferred_keyed: bool,
     /// The operator took the MODE back during a pass (they picked a sideband by
     /// hand). While set, [`Engine::sat_tx_mode`] says nothing at all: we never
     /// re-assert a sideband over the top of a choice the operator just made.
@@ -3051,6 +3190,42 @@ struct SatTune {
     sent: tempo_core::doppler::SentTuning,
 }
 
+/// How far off a CHANNELISED bird's own frequency a rig-reported dial may be
+/// and still be that channel rather than a QSY away from it (Hz).
+///
+/// The comparison it serves is against the frequencies actually standing on the
+/// rig — Doppler-CORRECTED once the pass is running, and the nominal centres
+/// only before the first correction, when the pick has just parked the rig
+/// exactly there. So this never has to absorb a full Doppler swing (which on
+/// 70 cm is ~11 kHz, three times this): it covers the drift between corrections
+/// plus an operator's FM fine-tune, and 3.5 kHz — the whole 2 m swing — is
+/// generous for both.
+///
+/// The ceiling is the FM channel grid: 25 kHz spacing means a neighbouring
+/// channel is 12.5 kHz away at worst, so at 3.5 kHz "still on the pass" can
+/// never swallow the channel next door.
+const SAT_CHANNEL_HOLD_TOLERANCE_HZ: u64 = 3_500;
+
+/// What a rig-reported dial frequency MEANS while a satellite pass is held —
+/// the answer [`Engine::sat_observe_operator_tune`] gives its one caller.
+///
+/// Three outcomes, because a bool could not express the middle one: "the pass
+/// still owns this dial, and there is nothing to adopt". Read as a decline, it
+/// took the caller's QSY path and cleared the split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SatObservation {
+    /// No pass owns the dial, or the operator has genuinely left the
+    /// transponder. The caller's ordinary knob-QSY bookkeeping applies —
+    /// INCLUDING handing the rig back to simplex.
+    NotOurs,
+    /// The operator tuned INSIDE the passband: adopt it as the live dial, and
+    /// the uplink follows them.
+    Tuned,
+    /// The pass's own frequency, come back off the rig. Nothing was tuned, so
+    /// nothing is adopted — and the split STANDS.
+    Held,
+}
+
 /// Every input the TX gate read when a plan was made. [`Engine::commit_tx`]
 /// refuses a plan whose stamp no longer matches: all of these are writable by
 /// Tauri commands on another thread while the radio loop has the engine RELEASED
@@ -3233,6 +3408,10 @@ impl Engine {
             sat_dial_owner: None,
             sat_last_rate: None,
             sat_binding: None,
+            sat_pass_engaged: false,
+            sat_row_pin: None,
+            sat_alt_uplinks: Vec::new(),
+            sat_inferred_keyed: false,
             sat_mode_released: false,
             split_tx_mhz: None,
             split_dirty: false,
@@ -4020,14 +4199,21 @@ impl Engine {
         self.settings.confirm_sat_uplink(id, map);
     }
 
-    /// Add a new (2nd/3rd…) radio to the roster and SWITCH TO IT (returns its id). Switching makes the
-    /// flat Rig/Audio form edit the NEW radio, so the operator configures the radio they just added —
-    /// NOT the previously-active radio (which is how a config could get clobbered). The new radio has
-    /// no model yet, so it comes up as VOX/no-CAT until configured.
+    /// Add a radio to the roster. Returns the new id.
+    ///
+    /// It does NOT switch to it, and that is the whole point: `add_radio_profile`'s own contract
+    /// already says "Does NOT change the active radio", and this used to violate it one line later.
+    ///
+    /// `set_active_radio` is not a roster edit -- it is a LIVE RIG SWITCH. It tears down the
+    /// working radio's CAT and tries to bring up one that has no serial port and no model, while
+    /// the engine lock is held. Reported by an operator on 2026-08-14: pressing "Add radio" froze
+    /// the interface and silently moved the station onto the new, EMPTY profile, leaving a blank
+    /// settings pane and no working rig.
+    ///
+    /// Creating a roster entry and choosing which rig you OPERATE are different acts, and the
+    /// second is TX-relevant. "Make active" already exists as a deliberate button.
     pub fn add_radio(&mut self) -> u32 {
-        let id = self.settings.add_radio_profile();
-        self.set_active_radio(id);
-        id
+        self.settings.add_radio_profile()
     }
 
     /// Remove a radio from the roster (no-op on the active or last radio). Pure roster edit.
@@ -4347,15 +4533,24 @@ impl Engine {
         // clears it, and on a satellite the split TX dial *is* the corrected
         // uplink. Dropping it because the operator nudged the receiver would put
         // them back on simplex — transmitting on their own downlink.
-        if self.sat_observe_operator_tune(hz) {
-            self.settings.dial_mhz = mhz;
-            let (band, sb) = (self.settings.band.clone(), self.settings.sideband.clone());
-            // MACHINERY provenance: the hand on the knob is the operator's, but the dial is
-            // a position inside a transponder passband that Doppler owns and keeps moving.
-            // It is the bird's frequency, not "the operator's 2 m phone dial".
-            self.record_dial(DialOrigin::Machinery);
-            self.app.set_radio(mhz, &band, &sb);
-            return;
+        match self.sat_observe_operator_tune(hz) {
+            SatObservation::Tuned => {
+                self.settings.dial_mhz = mhz;
+                let (band, sb) = (self.settings.band.clone(), self.settings.sideband.clone());
+                // MACHINERY provenance: the hand on the knob is the operator's, but the dial is
+                // a position inside a transponder passband that Doppler owns and keeps moving.
+                // It is the bird's frequency, not "the operator's 2 m phone dial".
+                self.record_dial(DialOrigin::Machinery);
+                self.app.set_radio(mhz, &band, &sb);
+                return;
+            }
+            // The pass's OWN frequency, read back off the rig — a channel bird's
+            // downlink, or (from a keyed rig in split) its uplink. Nobody tuned
+            // anything, so there is nothing to adopt and nothing to bank; the
+            // split especially must stand, because on a satellite the split TX
+            // dial IS the corrected uplink.
+            SatObservation::Held => return,
+            SatObservation::NotOurs => {}
         }
         // A knob QSY returns the rig to simplex, exactly like an app-commanded retune
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
@@ -5221,6 +5416,19 @@ impl Engine {
         self.sat_mode.filter(|c| !c.is_fm())
     }
 
+    /// The CTCSS tone the HELD bird's uplink needs, or `0.0` for "no tone".
+    ///
+    /// The HOLD is part of the question, like [`Self::sat_linear_mode`] and unlike
+    /// [`Self::sat_fm`]: an FM hold deliberately outlives its bird (the rig stays in FM), but a
+    /// TONE belongs to one uplink channel and nothing about it survives the bird. Left armed, it
+    /// would put SO-50's 67.0 Hz on the next terrestrial simplex call the operator made.
+    fn sat_uplink_tone_hz(&self) -> f32 {
+        self.sat_tune
+            .as_ref()
+            .and_then(|st| tempo_core::doppler::uplink_tone_hz(st.transponder.uplink_centre_hz))
+            .unwrap_or(0.0)
+    }
+
     /// Is an SSTV image QUEUED or on the air? While it is, every mode commanded has to be a
     /// DATA submode: the picture is SOUNDCARD audio, and a plain (mic-routed) mode keys with
     /// zero RF on a normally-wired rig.
@@ -5499,13 +5707,30 @@ impl Engine {
     /// the rig is in FM. APRS forces SIMPLEX / no tone so it never inherits the operator's
     /// Phone-section repeater shift (which would transmit the beacon off-frequency).
     ///
-    /// A satellite FM bird forces the same, and for a sharper version of the same reason: a bird
-    /// has no repeater shift at all — its uplink is the split TX dial (cross-band) or the one dial
-    /// it shares with the downlink (simplex) — so a stale terrestrial shift would key it somewhere
-    /// the operator never chose.
+    /// A satellite FM bird forces the same SHIFT, and for a sharper version of the same reason: a
+    /// bird has no repeater shift at all — its uplink is the split TX dial (cross-band) or the one
+    /// dial it shares with the downlink (simplex) — so a stale terrestrial shift would key it
+    /// somewhere the operator never chose.
+    ///
+    /// The TONE is where the bird and APRS part company, and it used to be forced to 0.0 for both.
+    /// APRS is toneless packet and must stay that way. An FM BIRD is a repeater in orbit, and
+    /// several of them gate on CTCSS exactly like a terrestrial one — ISS wants 67.0 Hz, SO-50
+    /// wants 67.0 Hz — so "no tone, always" meant Nexus could never open them
+    /// ([`tempo_core::doppler::uplink_tone_hz`] for the curated set; an unlisted bird still gets
+    /// 0.0, which is what every bird got before).
+    ///
+    /// ⚠️ NEEDS-BENCH (IC-9700, 2026-08-16). This tone is commanded through the ordinary FM
+    /// repeater path, which addresses the rig's SELECTED VFO — the downlink. On a rig whose tone
+    /// register is per-VFO, a CROSS-BAND pass would then be holding the tone on the receive VFO
+    /// while transmitting from the other one, and the uplink would still go out toneless. That is
+    /// the same per-VFO register lesson as [`Self::sat_tx_mode`]; closing it needs a tone verb that
+    /// names its VFO, which does not exist yet. Strictly better than 0.0 either way, and never
+    /// worse.
     pub fn fm_repeater_config(&self) -> (String, i64, f32) {
-        if self.aprs_fm || self.sat_fm() {
+        if self.aprs_fm {
             ("simplex".to_string(), 0, 0.0)
+        } else if self.sat_fm() {
+            ("simplex".to_string(), 0, self.sat_uplink_tone_hz())
         } else {
             (
                 self.settings.rptr_shift.clone(),
@@ -7815,13 +8040,17 @@ impl Engine {
         // ⚠️ SCOPED TO THE TIERS WHERE IT IS NEW. Halting on ANY armed tier switch
         // also disarms an FT8→FT4 change, which is shipped gold-standard behaviour
         // and not mine to alter — `tier_switch_keeps_message_layer` caught exactly
-        // that. FT8/FT4/FT1/DX1 keep their existing behaviour (their overs are
+        // that. FT8/FT4/FT2/FT1/DX1 keep their existing behaviour (their overs are
         // 13 s or less, and trailing one out reads as "the over finishes"); the
         // four new tiers, whose overs run from 26 s to 30 MINUTES, stand down.
+        //
+        // FT2 is on the SHORT side by a wide margin — a 3.02 s over in a 3.75 s
+        // period, the briefest of any tier here — so leaving it trails out inside a
+        // second, exactly like leaving FT4.
         let leaving_a_long_over = self.tx_enabled
             && !matches!(
                 from,
-                Tier::Ft8 | Tier::Ft4 | Tier::TempoFast | Tier::TempoDeep
+                Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::TempoFast | Tier::TempoDeep
             );
         if self.tier_is_rx_only(tier) || leaving_a_long_over {
             self.halt_tx();
@@ -7835,6 +8064,17 @@ impl Engine {
                     running: false,
                 };
             }
+        }
+        // ⭐ MSK144 PARKS BOTH OFFSETS ON 1500 Hz, exactly as WSJT-X does on entering the
+        // mode (mainwindow.cpp:8169-8173, clamp 1400-1600). The transmitter ALREADY keys
+        // 1500 regardless — `Msk144Mode::gen_wave` ignores `f0`, and the decoder pins the
+        // same centre — so offsets carried over from FT8 were a lie on screen: the red TX
+        // marker could sit at 2400 Hz while the rig transmitted at 1500. The display now
+        // says what the radio does. (Leaving MSK144 restores nothing: the operator retunes
+        // for the new mode as they always did, and WSJT-X keeps the same behaviour.)
+        if tier == Tier::Msk144 {
+            self.set_rx_offset(1500.0);
+            self.set_tx_offset(1500.0);
         }
         // Point the native signal source at the selected mode (FT1/FT8/FT4). DX1
         // decodes via its own robust path in `ingest`, so the source is left as-is.
@@ -7874,16 +8114,21 @@ impl Engine {
             // mode's own frequency in exactly this situation; the first plan entry
             // is that mode's calling channel (MSK144 → 6 m 50.260, FST4 → 2200 m).
             //
-            // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4 twins a flip
-            // is a timing change and the operator expects to STAY on band — the
-            // fallback used to land 70 cm FT4 (no plan row) on plan.first() =
+            // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4↔FT2 family a
+            // flip is a timing change and the operator expects to STAY on band —
+            // the fallback used to land 70 cm FT4 (no plan row) on plan.first() =
             // 80 m 3.575, dragging a UHF station to HF with no warning. On a
-            // missing row the twins now leave the dial put (mode_home's None
-            // semantics; the TX lockout still guards the air).
+            // missing row they now leave the dial put (mode_home's None semantics;
+            // the TX lockout still guards the air).
+            //
+            // FT2 is in that family, not among the specialty modes: its plan spans
+            // 160 m to 23 cm (a SUPERSET of FT8's — it adds 1.25 m), so a miss means
+            // a genuinely exotic band like 33 cm, and dragging that operator to
+            // 160 m is the same defect the 70 cm case describes.
             //
             // This is a BAND CHANGE, not an in-band nudge — `clear_decode_context`
             // at the top of this function has already flushed the stale context.
-            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4);
+            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2);
             let target = plan
                 .iter()
                 .find(|c| c.band.eq_ignore_ascii_case(&band))
@@ -8367,6 +8612,19 @@ impl Engine {
 
     /// Set the RX capture gain (≥1.0 multiplier on received audio before decode). Headroom for a
     /// quiet interface; clamped to 1.0–8.0 (+18 dB). Applied live by the audio service.
+    /// Set the MSK144 T/R period (s) — the cockpit's narrow write. Clamped to the mode's
+    /// own set {5,10,15,30}; anything else snaps to 15. NARROW deliberately: a full
+    /// settings apply resets the mode and clears the TX queue (issue #54), which is the
+    /// one thing a mid-pass period change must never do.
+    pub fn set_msk144_period(&mut self, secs: u16) {
+        let secs = if modes::mode::ModeKind::MSK144_PERIODS.contains(&secs) {
+            secs
+        } else {
+            15
+        };
+        self.settings.msk144_period_s = secs;
+    }
+
     pub fn set_rx_gain(&mut self, gain: f32) {
         self.settings.rx_gain = gain.clamp(1.0, 8.0);
     }
@@ -8443,6 +8701,12 @@ impl Engine {
             // PTT-hold padding, not airtime, and the radio loop strips it on a
             // late (mid-slot) start so the over never bleeds into the next period.
             Tier::Ft4 => 5.54,
+            // FT2 = 0.5 s lead-in + 2.52 s tones (105 sym × 288 sa @ 12 kHz). Unlike
+            // FT4 there is NO trailing padding in the buffer — `Ft2Mode::gen_wave`
+            // returns exactly lead + NWAVE — so 3.02 is the whole of it, and it is
+            // airtime rather than an over-estimate. That leaves 0.73 s of the 3.75 s
+            // slot, the tightest margin of any tier here.
+            Tier::Ft2 => 2.52,
             Tier::TempoFast => 3.55,
         }
     }
@@ -8474,8 +8738,27 @@ impl Engine {
         &mut self,
         tp: Option<(String, usize, tempo_core::doppler::Transponder)>,
     ) {
+        // Whatever happens below, the alternate-uplink list belongs to the
+        // outgoing pick. The command layer re-states it for the new one.
+        self.sat_alt_uplinks.clear();
         match tp {
             Some((label, index, t)) => {
+                // ⚠️ THE ROW PIN. While a pass is ENGAGED, a re-pick naming the
+                // row the pass engaged on keeps the frequencies it engaged
+                // with — the incoming pair is discarded. See `sat_row_pin`: the
+                // index is a position in a fetched list, so "the same row" and
+                // "the same transponder" are not the same claim, and the
+                // difference put two uplinks on the rig a second apart.
+                //
+                // A pick naming a DIFFERENT row is the operator choosing another
+                // transponder, which is theirs to do mid-pass; it re-pins. What
+                // cannot reach here is the work-pass chain's AUTO pick — the
+                // command layer refuses that one against `sat_row_pinned_against`
+                // rather than letting machinery change the operator's row.
+                let t = match self.sat_row_pin.as_ref() {
+                    Some((pinned, tp)) if self.sat_pass_engaged && *pinned == index => *tp,
+                    _ => t,
+                };
                 self.sat_tune = Some(SatTune {
                     label: label.clone(),
                     index: Some(index),
@@ -8483,6 +8766,9 @@ impl Engine {
                     state: tempo_core::doppler::DopplerState::default(),
                     sent: tempo_core::doppler::SentTuning::default(),
                 });
+                if self.sat_pass_engaged {
+                    self.sat_row_pin = Some((index, t));
+                }
                 self.set_sat_dial_owner(Some((label, 0)));
                 // Picking a transponder is the operator asking for this bird's
                 // tuning, which re-arms the uplink sideband after any earlier
@@ -8496,8 +8782,59 @@ impl Engine {
                 // A binding names the rig a HOLD is about to drive. With the
                 // hold gone it would name a rig nothing will move.
                 self.sat_binding = None;
+                // No hold, no pass: the engagement and everything derived from
+                // it (the row pin, the inferred-keyed belief) go with it. This
+                // is the LOS handback's path as well as the operator's own
+                // "None — leave the dial to me".
+                self.set_sat_pass_engaged(false);
             }
         }
+    }
+
+    /// The tracked pass is UP (the track loop's `tracking` phase) — or is not.
+    /// Pushed every tick by the loop that owns the pass, so a track that dies
+    /// without a handback cannot leave the state standing.
+    ///
+    /// The RISING edge is where the row is PINNED: whatever transponder is held
+    /// when the bird comes up is the one this pass is worked on. The falling
+    /// edge releases the pin and the inferred-keyed belief — both describe an
+    /// over on a pass, and there is no pass.
+    pub fn set_sat_pass_engaged(&mut self, on: bool) {
+        if on == self.sat_pass_engaged {
+            return;
+        }
+        self.sat_pass_engaged = on;
+        if on {
+            self.sat_row_pin = self
+                .sat_tune
+                .as_ref()
+                .and_then(|st| st.index.map(|i| (i, st.transponder)));
+        } else {
+            self.sat_row_pin = None;
+            self.sat_inferred_keyed = false;
+        }
+    }
+
+    /// Would a pick of `index` change the row this engaged pass is being worked
+    /// on? The AUTOMATIC pick — the work-pass chain's, which runs whenever that
+    /// chain is re-entered — asks this before acting, and stands down when the
+    /// answer is yes.
+    ///
+    /// It is asked at the COMMAND layer and not here for the one reason the
+    /// engine cannot settle: only the caller knows whether a human clicked. An
+    /// operator picking another transponder mid-pass is doing exactly what the
+    /// picker is for; machinery doing it is the defect.
+    pub fn sat_row_pinned_against(&self, index: usize) -> bool {
+        self.sat_pass_engaged
+            .then_some(self.sat_row_pin.as_ref())
+            .flatten()
+            .is_some_and(|(pinned, _)| *pinned != index)
+    }
+
+    /// The bird's other documented uplink centres — see [`Self::sat_alt_uplinks`].
+    /// Call it AFTER [`Self::set_sat_transponder`], which clears the list.
+    pub fn set_sat_alt_uplinks(&mut self, uplinks: Vec<u64>) {
+        self.sat_alt_uplinks = uplinks;
     }
 
     /// QSY to the HELD transponder's nominal centres — the click-to-tune half of
@@ -9048,10 +9385,29 @@ impl Engine {
     ///   all; a mode command onto a VFO we never tuned would be moving a radio
     ///   nobody handed us;
     /// - the operator has not taken the mode back
-    ///   ([`Engine::request_sideband_override`]);
-    /// - and the two legs actually DIFFER. An FM bird is FM both ways and a
-    ///   non-inverting linear is the same sideband both ways: there is nothing
-    ///   to command, and a CAT write that changes nothing can only lose.
+    ///   ([`Engine::request_sideband_override`]).
+    ///
+    /// ⚠️ It does NOT ask whether the two legs differ, and the reason is a
+    /// field report (IC-9700, V/U FM pass, 2026-08-16): the operator's TX VFO
+    /// was in LSB on an FM bird. This used to answer `None` whenever the uplink
+    /// mode equalled the downlink's — an FM bird is FM both ways, a
+    /// non-inverting linear is one sideband both ways — on the rationale that
+    /// "a CAT write that changes nothing can only lose".
+    ///
+    /// That rationale was false, and it was false about the very radio it was
+    /// written for. `M`/`X` do not address one shared mode register: Icom's
+    /// unselected VFO (and the Sub band in satellite mode) carries its OWN, and
+    /// nothing in this path had ever written it. So the TX VFO kept whatever
+    /// the LAST pass left there — an inverting linear bird's LSB — and the next
+    /// FM pass transmitted LSB into an FM repeater's uplink, which is silence
+    /// at the far end and indistinguishable from a bird that isn't hearing you.
+    /// The write is not a no-op; it is the only thing that makes the TX leg's
+    /// mode true. Owning the leg is the whole question.
+    ///
+    /// The churn that rationale was worried about is handled where it belongs,
+    /// downstream: the radio loop writes only when the ANSWER CHANGES
+    /// (`last_split_mode`), so a held pass still costs exactly one `X` per
+    /// distinct mode, not one per correction.
     ///
     /// Nothing is "restored" when the pass ends — the answer simply becomes
     /// `None` and the loop stops writing, which is exactly what releasing the
@@ -9070,8 +9426,10 @@ impl Engine {
         // read from the one write-side canon rather than a second guess at it,
         // so the two legs can never be derived from different beliefs.
         let down = self.rig_mode_effective();
-        let up = tempo_core::doppler::uplink_mode_for(&down, st.transponder.invert);
-        (!up.eq_ignore_ascii_case(&down)).then_some(up)
+        Some(tempo_core::doppler::uplink_mode_for(
+            &down,
+            st.transponder.invert,
+        ))
     }
 
     /// [`Engine::sat_tx_mode`], answered only for the split apply that carries
@@ -9154,6 +9512,22 @@ impl Engine {
         if !is_sat_uplink {
             return Ok("VFOB");
         }
+        // ⭐ THE BIRD DECIDES BEFORE THE MAPPING DOES (ISS V/V field report, 2026-08-15).
+        //
+        // A provably SAME-BAND pass is worked on A/B split, whatever the mapping says, because
+        // on every rig in `MAIN_SUB_SAT_RIGS` satellite Main/Sub is CROSS-BAND BY DESIGN —
+        // Main and Sub cannot both sit on 2 m. Asked for Main/Sub on a V/V bird, the native
+        // backend wrote an uplink that had nowhere to land and Hamlib refused and wrote
+        // nothing; both left TX on Main, which IS the downlink. The operator keyed on the
+        // bird's own output frequency.
+        //
+        // This is not new policy — it is the policy this function already applied on the OTHER
+        // branch, where `ab_cross_band_refusal` returns `None` for a same-band pair and lets it
+        // ride VFO B. That branch was simply unreachable from a Main/Sub mapping, so the band
+        // question was never asked of the operators most likely to be on a satellite.
+        if self.sat_pass_is_same_band(tx_hz) {
+            return Ok("VFOB");
+        }
         if !self.settings.sat_vfo_map.is_main_sub() {
             // A/B rides VFO B everywhere EXCEPT where the radio's A/B pair
             // cannot reach the uplink's band at all.
@@ -9212,14 +9586,30 @@ impl Engine {
     /// The cure clause is per rig ([`Self::sat_native_civ_cure`]) and only two
     /// of the four have one, so the message that reaches the operator is
     /// composed here rather than being a const.
+    /// Are this pass's two legs PROVABLY on one band?
+    ///
+    /// Fails CLOSED, and that is the whole discipline: an unnameable dial (`band_for_dial`
+    /// stops at 23 cm, so QO-100 and the IC-905 microwave birds have no label) answers `false`,
+    /// not `true`. "We cannot prove one band" must never become "treat it as one band" — the
+    /// same-band answer is what authorises an A/B write, and authorising one on a pair we could
+    /// not compare is exactly the unverified cross-band write the 0.24.2 fix exists to stop.
+    fn sat_pass_is_same_band(&self, tx_hz: u64) -> bool {
+        let Some(st) = self.sat_tune.as_ref() else {
+            return false;
+        };
+        let band = |hz: u64| crate::bandplan::band_for_dial(hz as f64 / 1_000_000.0);
+        let (down, up) = (band(st.sent.downlink_hz), band(tx_hz));
+        down.is_some() && down == up
+    }
+
     fn ab_cross_band_refusal(&self, tx_hz: u64) -> Option<String> {
         if !self.settings.sat_vfo_map.drives_uplink() || !self.settings.sat_main_sub_rig() {
             return None;
         }
-        let st = self.sat_tune.as_ref()?;
-        let band = |hz: u64| crate::bandplan::band_for_dial(hz as f64 / 1_000_000.0);
-        let (down, up) = (band(st.sent.downlink_hz), band(tx_hz));
-        if down.is_some() && down == up {
+        self.sat_tune.as_ref()?;
+        // Same-band is handled before the mapping branch in `sat_split_tx_vfo`; kept here too
+        // so this predicate stays true standing alone rather than depending on its caller.
+        if self.sat_pass_is_same_band(tx_hz) {
             return None;
         }
         Some(format!(
@@ -9332,6 +9722,122 @@ impl Engine {
             .map(|st| (st.label.as_str(), st.index))
     }
 
+    /// The held pass's two legs AS THEY STAND ON THE RIG: what was last WRITTEN
+    /// to each, falling back to that leg's nominal centre when nothing has been.
+    /// `(downlink, uplink)`; `None` with no hold, and either may be 0 when the
+    /// transponder has no such leg (a beacon has no uplink).
+    ///
+    /// PER LEG, not one choice for both — the distinction is load-bearing and
+    /// cost a debugging round. The pre-AOS writer records a downlink and leaves
+    /// `uplink_hz` at 0 whenever Doppler is not driving the transmit leg (an
+    /// unconfirmed mapping, a beacon), while the uplink itself is sitting on the
+    /// rig at its nominal centre. Choosing the sent PAIR because the downlink
+    /// had been sent therefore compared the uplink against zero, and the
+    /// operator's own uplink read back as a QSY.
+    ///
+    /// Either way the comparand is within a correction step of the truth, which
+    /// is what keeps [`SAT_CHANNEL_HOLD_TOLERANCE_HZ`] honest at its call sites:
+    /// a Doppler-shifted frequency is never measured against an unshifted centre.
+    fn sat_legs_on_rig(&self) -> Option<(u64, u64)> {
+        let st = self.sat_tune.as_ref()?;
+        let on_rig = |sent: u64, nominal: u64| if sent != 0 { sent } else { nominal };
+        Some((
+            on_rig(st.sent.downlink_hz, st.transponder.downlink_centre_hz),
+            on_rig(st.sent.uplink_hz, st.transponder.uplink_centre_hz),
+        ))
+    }
+
+    /// ⭐ THE FREQUENCY IS THE EVIDENCE. A rig reporting the pass's TRANSMIT leg
+    /// is a rig that is transmitting: on an Icom in split the selected VFO — the
+    /// one a plain dial read returns — IS the transmit VFO while keyed, so the
+    /// uplink coming back off the radio can mean nothing else.
+    ///
+    /// # Why an inference exists at all
+    ///
+    /// The PTT line is asked once a second (`RIG_PTT_POLL_MS`). The operator
+    /// keying a mic is instant, so between the key-down and the next poll there
+    /// is a window of up to a second in which every guard that reads "is the rig
+    /// keyed" is answering from a reading taken BEFORE the over started. In that
+    /// window the dial-keep pushed the DOWNLINK onto the rig's selected VFO —
+    /// which was the uplink — and yanked the over onto the bird's own output
+    /// (CI-V capture, IC-9700, 2026-08-16: 400 ms stale, the push 150 ms later).
+    ///
+    /// A stale poll must not outvote a live frequency. So this belief is set by
+    /// the observation itself and read by the same guards, and it is released by
+    /// either of the two things that can honestly end it: an observation of the
+    /// RECEIVE leg, or a PTT poll that says off from a FRESH read
+    /// ([`Self::observe_rig_ptt_read`]). The poll cadence tightens while a pass
+    /// is engaged so the second of those lands in ~200 ms instead of a second;
+    /// the first is what makes the belief releasable on a radio that cannot
+    /// report its PTT line at all.
+    ///
+    /// ⚠️ Both legs must be DISTINGUISHABLE or nothing is inferred. A simplex
+    /// channel carries the whole QSO on one frequency, and a bird whose legs sit
+    /// within the channel tolerance of each other offers no evidence either way —
+    /// inferring "keyed" there would latch on the pass's own receive frequency
+    /// and freeze the dial for the whole pass.
+    ///
+    /// Returns true when THIS observation is the transmit leg, which its caller
+    /// answers `Held` to on every transponder shape.
+    fn sat_note_keyed_leg(&mut self, tuned_hz: u64) -> bool {
+        let Some((down, up)) = self.sat_legs_on_rig() else {
+            return false;
+        };
+        if down == 0 {
+            return false;
+        }
+        let near = |f: u64| f != 0 && f.abs_diff(tuned_hz) <= SAT_CHANNEL_HOLD_TOLERANCE_HZ;
+        // The transmit leg, plus every other documented uplink for this bird —
+        // the rig may be running a pairing we did not write (`sat_alt_uplinks`),
+        // and a keyed reading of THAT uplink is still a keyed reading.
+        let mut tx_legs = std::iter::once(up)
+            .chain(self.sat_alt_uplinks.iter().copied())
+            .filter(|&f| f != 0 && f.abs_diff(down) > SAT_CHANNEL_HOLD_TOLERANCE_HZ);
+        // ⭐ THE BELIEF LIVES EXACTLY AS LONG AS THE RIG KEEPS SAYING SO. Set by
+        // a transmit-leg reading, dropped by ANY other reading — the receive leg,
+        // a knob move across the passband, a QSY off the bird entirely. That is
+        // the release that needs no PTT line, and it is the only one a radio with
+        // no `t` at all can ever produce.
+        //
+        // Nothing is lost by making it that strict. While the rig is keyed it
+        // keeps answering the SAME uplink, and the loop only observes a
+        // frequency that CHANGED — so no other reading can arrive until the
+        // operator unkeys. What must stay reachable is the reading itself: the
+        // 750 ms heavy poll is deliberately not gated on this belief (only the
+        // 180 ms fast reader is), or the guard would gate away its own way out.
+        let keyed = tx_legs.any(near);
+        self.sat_inferred_keyed = keyed;
+        keyed
+    }
+
+    /// The rig is transmitting, inferred from the frequency it reported rather
+    /// than from its PTT line — see [`Self::sat_note_keyed_leg`]. The radio loop
+    /// reads this alongside the polled `rig_keyed` and treats either as keyed.
+    pub fn sat_inferred_keyed(&self) -> bool {
+        self.sat_inferred_keyed
+    }
+
+    /// A PTT read just came back off the rig. `on` is what it said.
+    ///
+    /// Separate from [`Self::observe_rig_ptt`] because the two answer different
+    /// questions: that one adopts a CHANGE of belief (and is not called when the
+    /// poll merely confirms what we already thought), while this one records that
+    /// the question was ASKED and answered — which is the only thing that can
+    /// honestly retire an inferred key. A poll that says off while the frequency
+    /// still says uplink is a rig that has stopped transmitting and not yet been
+    /// re-read; the next read settles it either way.
+    pub fn observe_rig_ptt_read(&mut self, on: bool) {
+        if !on {
+            self.sat_inferred_keyed = false;
+        }
+    }
+
+    /// Is the tracked pass UP? The radio loop mirrors this per tick — see
+    /// [`Self::set_sat_pass_engaged`].
+    pub fn sat_pass_engaged(&self) -> bool {
+        self.sat_pass_engaged
+    }
+
     /// The operator turned the VFO knob during a pass — adopt it as their
     /// position in the passband, so the uplink follows them.
     ///
@@ -9341,35 +9847,102 @@ impl Engine {
     /// and it only works if the uplink moves with you (mirrored, on an
     /// inverting transponder).
     ///
-    /// Returns true when the tuning was adopted. Declines — leaving the tuning
-    /// untouched — when no pass owns the dial, when the range-rate for this
-    /// instant is not known yet, or when the dial is outside the passband,
-    /// which means the operator left the transponder rather than tuned within
-    /// it. Declining is the safe direction: the alternative is dragging
-    /// somebody's uplink to a passband edge because they QSY'd to 20 m.
-    pub fn sat_observe_operator_tune(&mut self, tuned_hz: u64) -> bool {
-        let (Some(st), Some(rate)) = (self.sat_tune.as_ref(), self.sat_last_rate) else {
-            return false;
+    /// [`SatObservation::Tuned`] when the tuning was adopted.
+    /// [`SatObservation::NotOurs`] — leaving the tuning untouched — when no
+    /// pass owns the dial, when the range-rate for this instant is not known
+    /// yet, or when the dial is outside the passband, which means the operator
+    /// left the transponder rather than tuned within it. Declining is the safe
+    /// direction: the alternative is dragging somebody's uplink to a passband
+    /// edge because they QSY'd to 20 m.
+    ///
+    /// [`SatObservation::Held`] is the third answer, and it exists because
+    /// `NotOurs` is not neutral at the call site — it TEARS THE PASS DOWN
+    /// (`observe_rig_freq` clears the split, which puts TX back on the
+    /// operator's own downlink). A frequency that is simply the pass's own,
+    /// come back off the rig, must never take that path.
+    pub fn sat_observe_operator_tune(&mut self, tuned_hz: u64) -> SatObservation {
+        // FIRST, and whatever the answer below turns out to be: what this
+        // frequency says about whether the rig is TRANSMITTING right now.
+        //
+        // A match on the TRANSMIT leg answers `Held` here, ahead of every arm
+        // below and for every transponder SHAPE. The channel hatch could
+        // already recognise a keyed rig's uplink; a LINEAR bird could not — its
+        // uplink is 300 MHz outside the downlink passband, so
+        // `follow_downlink_in_band` declines and the knob-QSY arm tears the pass
+        // down. Both shapes report the transmit VFO while keyed in split, so
+        // both need the same answer: nobody tuned anything, the rig is talking.
+        if self.sat_note_keyed_leg(tuned_hz) {
+            return SatObservation::Held;
+        }
+        let Some(st) = self.sat_tune.as_ref() else {
+            return SatObservation::NotOurs;
         };
         // Our OWN Doppler write, observed coming back off the rig, is not an
         // operator move. Re-adopting it would be very nearly a no-op — the
         // offset round-trips to within a hertz — but "very nearly" compounds
         // once per correction for a whole pass, and it would also mean every
-        // Doppler tick bumped the TX-gate identity.
+        // Doppler tick bumped the TX-gate identity. `Held`, not `NotOurs`:
+        // the frequency IS the pass's, so the split it rides has to stand.
         if st.sent.sent && tuned_hz == st.sent.downlink_hz {
-            return false;
+            return SatObservation::Held;
         }
+        // ⚠️ A CHANNELISED transponder — an FM bird — has NO PASSBAND, so
+        // `follow_downlink_in_band` declines every observation it is ever
+        // given (`half_width_hz == 0`), and every one of them used to fall
+        // through to the knob-QSY arm below. On the air (IC-9700, V/V pass,
+        // 2026-08-16) that arm's first act — clearing the split — dropped the
+        // rig to simplex mid-over and keyed the operator onto the bird's own
+        // downlink.
+        //
+        // So ask the question the passband arm cannot: is this the pass's own
+        // frequency? A channel has exactly two of them, and either one coming
+        // back means nothing was tuned. Anything else is a genuine QSY away
+        // from the bird, and the teardown below is the right answer to it.
+        if st.transponder.half_width_hz == 0 {
+            let (down, up) = self.sat_legs_on_rig().unwrap_or((0, 0));
+            // The UPLINK is in the list deliberately. A keyed Icom in split
+            // reports its TRANSMIT VFO, so the uplink is exactly what a read
+            // during an over hands back — the read paths are now gated on
+            // `rig_keyed`, and this is the backstop that makes any future
+            // reader safe by construction rather than by remembering.
+            //
+            // …and so are the bird's OTHER documented uplinks. A pairing we did
+            // not write is still this pass (`sat_alt_uplinks`): an ISS worked on
+            // 144.490 up while the pick carried 145.200 must not read as a QSY
+            // off the bird just because the operator's rig runs the other
+            // region's channel.
+            let ours = [down, up]
+                .iter()
+                .chain(self.sat_alt_uplinks.iter())
+                .any(|&f| f != 0 && f.abs_diff(tuned_hz) <= SAT_CHANNEL_HOLD_TOLERANCE_HZ);
+            return if ours {
+                SatObservation::Held
+            } else {
+                SatObservation::NotOurs
+            };
+        }
+        // ⚠️ THE RANGE RATE IS REQUIRED ONLY FROM HERE DOWN, and the ordering is
+        // deliberate. Siting a dial INSIDE a passband is Doppler arithmetic and
+        // cannot be done without the geometry — at AOS the shift is tens of kHz
+        // and an assumed zero would put the operator across the transponder. But
+        // the two answers above are frequency comparisons, and demanding a rate
+        // for them would make a pre-AOS pick (the normal flow: pick the bird,
+        // wait for the pass) answer `NotOurs` to its own parked frequency and
+        // tear down the split it had just set.
+        let Some(rate) = self.sat_last_rate else {
+            return SatObservation::NotOurs;
+        };
         let Some(state) =
             tempo_core::doppler::follow_downlink_in_band(&st.transponder, tuned_hz, rate)
         else {
-            return false;
+            return SatObservation::NotOurs;
         };
         let label = st.label.clone();
         if let Some(st) = self.sat_tune.as_mut() {
             st.state = state;
         }
         self.set_sat_dial_owner(Some((label, state.offset_hz)));
-        true
+        SatObservation::Tuned
     }
 
     /// THE per-leg drive answer — the ONE derivation of which legs Doppler is
@@ -12033,6 +12606,9 @@ impl Engine {
     /// Full snapshot, with mode + per-mode (QSO / Field Day) status filled in.
     pub fn snapshot(&self) -> AppSnapshot {
         let mut s = self.app.snapshot();
+        // The active tier's T/R period rides the link so the UI never hardcodes one —
+        // MSK144's is a 5/10/15/30 SETTING, and the Fast Graph's X axis is one period wide.
+        s.link.period_secs = self.active_slot_secs();
         // Mark roster stations worked-before (B4) from the persistent logbook, and
         // resolve each one's DXCC country (DX chasers scan the roster by country).
         //
@@ -12041,8 +12617,22 @@ impl Engine {
         // again every slot boundary; the old multiplicative sweep held the lock long enough to
         // stall the waterfall's spectrum fetch (which needs the same lock) for 1–2 s at low CPU.
         let worked = self.station.logbook.worked_call_set();
+        // The band-scope B4 index, built in the SAME single sweep discipline (a per-row
+        // logbook probe under the engine mutex is the 1-2 s waterfall stall). WSJT-X shows
+        // both scopes at once (Call and CallBand highlights); mode folds in only when the
+        // operator asked (`b4_match_mode`, default off — its HighlightByMode).
+        let fold_mode = self.settings.b4_match_mode;
+        s.b4_match_mode = fold_mode;
+        let worked_band_set = self.station.logbook.worked_band_set(fold_mode);
+        let cur_band_key = tempo_core::logbook::Logbook::band_key(
+            &self.settings.band,
+            self.adif_mode_for_tier(),
+            fold_mode,
+        );
         for st in &mut s.stations {
             st.worked = worked.contains(&st.call.to_ascii_uppercase());
+            st.worked_band =
+                worked_band_set.contains(&(st.call.to_ascii_uppercase(), cur_band_key.clone()));
             if let Some(resolve) = &self.station.dxcc_resolve {
                 st.country = resolve(&st.call);
             }
@@ -12238,6 +12828,7 @@ impl Engine {
                         .and_then(|c| self.dx_grid_resolved(c, station.dxgrid.clone())),
                     rx_report: station.rx_report,
                     running: *running,
+                    cq_running: self.cq_running,
                     tx_now: station.pending_text(),
                     stalled: station.stalled(),
                     tx_count: station.tx_count,
@@ -12385,6 +12976,13 @@ impl Engine {
                     .as_deref()
                     .map(|c| worked.contains(&c.to_ascii_uppercase()))
                     .unwrap_or(false);
+                // The stronger scope, same single-sweep set as the roster above.
+                let worked_band = from
+                    .as_deref()
+                    .map(|c| {
+                        worked_band_set.contains(&(c.to_ascii_uppercase(), cur_band_key.clone()))
+                    })
+                    .unwrap_or(false);
                 // New-grid (B3): the decode carries a Maidenhead grid we've never
                 // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
                 // because that is how grids are awarded (VUCC) — a grid worked on
@@ -12462,6 +13060,7 @@ impl Engine {
                     // matched frame is a signoff by construction.
                     signoff: parsed.is_signoff() || fox_mux.is_some(),
                     worked,
+                    worked_band,
                     country: entity,
                     new_dxcc,
                     new_band,
@@ -12503,6 +13102,7 @@ impl Engine {
                 // what's happening on the band, not what we sent.
                 signoff: false,
                 worked: false,
+                worked_band: false,
                 country: None,
                 new_dxcc: false,
                 new_band: false,
@@ -13283,15 +13883,28 @@ impl Engine {
         // counter at the active slot period suffices.
         let frame_time_ms = (slot as i64).wrapping_mul((self.active_slot_secs() * 1000.0) as i64);
         // A-priori (AP) context for the golden WSJT-X FT8/FT4 decoder: our callsign,
-        // the station we're working, and the QSO-progress index (0..5). Only FT8/FT4
-        // use WSJT-X AP; FT1 ignores these and stays on the empty/0 path.
+        // the station we're working, and the QSO-progress index (0..5). Only
+        // FT8/FT4/FT2 use WSJT-X AP; FT1 ignores these and stays on the empty/0 path.
+        //
+        // ⭐ FT2 IS HERE BECAUSE ITS AP IS FT8'S. `ft2_decode` reports an `nap` on
+        // the same 0..=4 iaptype scale and prints the same `a1`..`a4` annotation —
+        // it is FT4's decoder with a halved symbol time — and it takes the calls
+        // through the same mycall/hiscall path. Leaving FT2 out of this match is not
+        // a cosmetic gap: `hiscall` empty is precisely what DISABLES the AP types
+        // that need the DX call (see `ft2::decode_frame`), so every FT2 decode would
+        // have come back `nap = 0` and the decode row's 'a' marker would have been
+        // dead for the mode whose AP scale actually matches FT8's.
+        //
+        // `ap_progress` is carried for uniformity and is INERT for FT2:
+        // `ft2_triggered_decode` declares `nqsoprogress` and never references it, so
+        // `ft2_cabi.f90` pins it to 0 (see that file's dead-arguments banner).
         let (ap_mycall, ap_hiscall, ap_progress) = match (&self.mode, self.app.tier()) {
-            (Mode::Qso { station, .. }, Tier::Ft8 | Tier::Ft4) => (
+            (Mode::Qso { station, .. }, Tier::Ft8 | Tier::Ft4 | Tier::Ft2) => (
                 self.settings.mycall.clone(),
                 station.dxcall.clone().unwrap_or_default(),
                 station.state.nqso_progress(),
             ),
-            (Mode::FieldDay { .. }, Tier::Ft8 | Tier::Ft4) => {
+            (Mode::FieldDay { .. }, Tier::Ft8 | Tier::Ft4 | Tier::Ft2) => {
                 (self.settings.mycall.clone(), String::new(), 0)
             }
             _ => (String::new(), String::new(), 0),
@@ -14085,6 +14698,44 @@ impl Engine {
 
     /// Build a [`QsoRecord`] for a completed auto-sequenced QSO from the current
     /// settings (band / dial / tier) and the station's exchanged reports.
+    /// The ADIF mode name the active tier logs as — ONE source of truth, shared by
+    /// `qso_record` (what the log carries) and the B4 band-key (what the log is probed
+    /// with). If these ever diverged, mode-scoped B4 would silently never match.
+    fn adif_mode_for_tier(&self) -> &'static str {
+        match self.app.tier() {
+            Tier::TempoDeep => "TempoDeep",
+            Tier::Ft8 => "FT8",
+            Tier::Ft4 => "FT4",
+            // ⚠️ "FT2" is NOT in the ADIF MODE enumeration — it is Decodium's mode,
+            // not WSJT-X's. Stored verbatim anyway, for the same reason "TempoFast"
+            // and "TempoDeep" are: the log has to say what was actually worked, and
+            // a wrong-but-registered name (FT4, say) would claim award credit for a
+            // contact made in a different mode. The ADIF WRITER is what makes that
+            // uploadable — `logbook::adif_submode` rides FT2 out as MODE=MFSK +
+            // SUBMODE=FT2, the same cascade the Tempo modes use, because a bare
+            // MODE=FT2 is dropped outright by TQSL.
+            Tier::Ft2 => "FT2",
+            // "FST4" is the ADIF-registered mode name. Unreachable in practice while
+            // FST4 is receive-only (no TX means no completed QSO to log), but the
+            // right answer the moment that changes.
+            Tier::Fst4 => "FST4",
+            // FST4W is its own ADIF-registered mode name, not an FST4 submode.
+            Tier::Fst4w => "FST4W",
+            // "Q65" WITHOUT the submode: that is the ADIF-registered mode name,
+            // and ADIF has no field for the period/submode. The tier displays as
+            // "Q65-30A" because an operator needs to know which variant is being
+            // decoded, but a log entry must carry the registered name or award
+            // credit breaks. Same unreachable-while-receive-only note as FST4.
+            Tier::Q65 => "Q65",
+            // "MSK144" is the ADIF-registered mode name.
+            Tier::Msk144 => "MSK144",
+            Tier::Jt65 => "JT65",
+            // ADIF-registered. Unreachable while receive-only, like the others.
+            Tier::Wspr => "WSPR",
+            Tier::TempoFast => "TempoFast",
+        }
+    }
+
     fn qso_record(
         &self,
         dxcall: String,
@@ -14106,32 +14757,8 @@ impl Engine {
         // here and nowhere earlier. WSJT-X draws the same line: it strips `<`/`>` at every
         // point it consumes a call for logging or display.
         let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
-        // ADIF mode must reflect the tier actually used — FT8/FT4 contacts log as
-        // FT8/FT4 (award eligibility depends on it), not the native FT1 path.
-        let mode = match self.app.tier() {
-            Tier::TempoDeep => "TempoDeep",
-            Tier::Ft8 => "FT8",
-            Tier::Ft4 => "FT4",
-            // "FST4" is the ADIF-registered mode name. Unreachable in practice while
-            // FST4 is receive-only (no TX means no completed QSO to log), but the
-            // right answer the moment that changes.
-            Tier::Fst4 => "FST4",
-            // FST4W is its own ADIF-registered mode name, not an FST4 submode.
-            Tier::Fst4w => "FST4W",
-            // "Q65" WITHOUT the submode: that is the ADIF-registered mode name,
-            // and ADIF has no field for the period/submode. The tier displays as
-            // "Q65-30A" because an operator needs to know which variant is being
-            // decoded, but a log entry must carry the registered name or award
-            // credit breaks. Same unreachable-while-receive-only note as FST4.
-            Tier::Q65 => "Q65",
-            // "MSK144" is the ADIF-registered mode name.
-            Tier::Msk144 => "MSK144",
-            Tier::Jt65 => "JT65",
-            // ADIF-registered. Unreachable while receive-only, like the others.
-            Tier::Wspr => "WSPR",
-            Tier::TempoFast => "TempoFast",
-        }
-        .to_string();
+        // ADIF mode: one source of truth with the B4 band-key — see adif_mode_for_tier.
+        let mode = self.adif_mode_for_tier().to_string();
         // Resolve the DXCC entity (country) at log time — the key field for a
         // DXer. Uses the injected resolver; None in headless tests.
         let country = self
@@ -14943,6 +15570,35 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// Adding a radio must NOT move the station onto it. It used to call set_active_radio one line
+    /// after add_radio_profile, whose own doc comment says it does not change the active radio.
+    /// Operator report 2026-08-14: "Add radio" froze the UI and switched the station to the new
+    /// EMPTY profile -- no port, no model -- because that is a live rig switch under the engine
+    /// lock, not a roster edit.
+    #[test]
+    fn adding_a_radio_leaves_the_operator_on_the_radio_they_were_using() {
+        let mut eng = Engine::new("K2DEF", "FN31", 0);
+        // A fresh Engine has an empty roster, which no running app ever has: the first add also
+        // seeds the base profile. Establish the ordinary state before measuring.
+        eng.add_radio();
+        let original = eng.settings().active_radio;
+        let before = eng.settings().radios.len();
+
+        let added = eng.add_radio();
+
+        assert_eq!(
+            eng.settings().radios.len(),
+            before + 1,
+            "the roster must grow"
+        );
+        assert_ne!(added, original, "the new radio is a distinct profile");
+        assert_eq!(
+            eng.settings().active_radio,
+            original,
+            "the ACTIVE radio must not move -- switching rigs is the operator's decision"
+        );
+    }
     use super::*;
     use modes::Decode;
     // The station owns every write to the shared log now (`StationCore::append_to_log`),
@@ -17985,6 +18641,7 @@ mod tests {
         for tier in [
             Tier::Ft8,
             Tier::Ft4,
+            Tier::Ft2,
             Tier::Q65,
             Tier::Fst4,
             Tier::Msk144,
@@ -23303,6 +23960,50 @@ mod tests {
     /// the worker feeds into `modes::DecodeRequest` → the FFI), not at the UI.
     /// Guards the placebo-knob failure mode: a settings row that renders but
     /// never changes the decode is worse than no row.
+    /// PHASE C, END TO END: a ping mid-period reaches the operator BEFORE the boundary.
+    ///
+    /// The meteor-scatter case: a burst lands at ~3 s of a 15 s period and is gone.
+    /// Boundary-only decoding sat silent until the period ended; WSJT-X prints it within
+    /// ~0.3 s. This drives the exact path the audio loop uses for the repeating early pass —
+    /// a tail-padded partial buffer through `ingest_early` — and asserts the decode lands
+    /// with its T intact while the period is still running.
+    #[test]
+    fn an_msk144_ping_decodes_mid_period_through_the_early_pass() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Msk144);
+
+        // A "ping": the encoded frame keyed at 1500 Hz, placed ~3 s into an otherwise
+        // silent period buffer (the early pass pads the unheard tail with zeros exactly
+        // like this).
+        let mode = modes::make_mode(modes::mode::ModeKind::Msk144 { period_s: 5 });
+        let tones = mode.encode("KD9TAW W9XYZ EN37");
+        assert!(!tones.is_empty(), "control: the message packs");
+        let burst = mode.gen_wave(&tones, 12_000.0, 1_500.0);
+        assert!(!burst.is_empty(), "control: the wave generates");
+        let mut frame = vec![0.0f32; 15 * 12_000];
+        let at = 3 * 12_000;
+        // ~0.6 s of repeated frames — a healthy ping, not a single 72 ms copy.
+        let n = burst.len().min(7_200);
+        frame[at..at + n].copy_from_slice(&burst[..n]);
+
+        let got = e.ingest_early(&frame, 1);
+        assert!(
+            got >= 1,
+            "the ping must decode from the partial buffer — early_decode is the mode"
+        );
+        let d = e
+            .snapshot()
+            .recent_decodes
+            .into_iter()
+            .find(|d| d.message.contains("W9XYZ"))
+            .expect("the ping's message reaches the decode feed");
+        assert!(
+            (2.0..5.0).contains(&f64::from(d.dt_sec)),
+            "T must be the ping's time in the period (~3 s), got {}",
+            d.dt_sec
+        );
+    }
+
     #[test]
     fn decode_controls_reach_the_decode_job() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -23824,6 +24525,38 @@ mod tests {
         );
     }
 
+    /// The Fast Graph's data contract: raw samples, monotonic sequence, delta polling.
+    #[test]
+    fn the_fast_power_ring_serves_deltas_and_keeps_raw_rms() {
+        let m = MeterFeed::default();
+        for i in 0..5u64 {
+            m.push_fast_power(1_000 + i * 20, 0.1 * (i as f32 + 1.0));
+        }
+        let all = m.fast_power_since(0);
+        assert_eq!(all.len(), 5);
+        assert_eq!(all[0].seq, 0);
+        // RAW rms, not the ballistics-shaped meter — a ping IS the attack the meter smooths.
+        assert!((all[4].rms - 0.5).abs() < 1e-6);
+        let delta = m.fast_power_since(3);
+        assert_eq!(
+            delta.len(),
+            2,
+            "a poller asks only for what it has not seen"
+        );
+        assert_eq!(delta[0].seq, 3);
+        // The ring caps: sequences keep climbing while old samples fall off the front.
+        for i in 0..4000u64 {
+            m.push_fast_power(2_000 + i * 20, 0.0);
+        }
+        let tail = m.fast_power_since(0);
+        assert!(
+            tail.len() <= 3200,
+            "the ring must stay bounded, got {}",
+            tail.len()
+        );
+        assert_eq!(tail.last().unwrap().seq, 4004, "sequence survives eviction");
+    }
+
     fn spec(lo: f64, hi: f64, src: &str) -> Spectrum {
         Spectrum {
             row: vec![0.5; 512],
@@ -23953,6 +24686,44 @@ mod tests {
             "the first frame at the new window must stand alone, not blend with the four loud \
              frames from the old one: got {got}, want {quiet} (a blend reads {})",
             power_mean(&[loud, loud, loud, loud, quiet]),
+        );
+    }
+
+    /// THE TX HOLD: rows published while keyed are a picture of the muted receiver, not the
+    /// band — they must never reach a reader, and the last real picture must not go stale.
+    #[test]
+    fn the_tx_hold_drops_keyed_rows_and_keeps_the_last_real_picture_fresh() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        let before = feed.row().expect("published").row[0];
+
+        feed.set_tx_hold(true);
+        // The muted receiver: near-zero rows, exactly what a keyed rig's codec returns.
+        for _ in 0..8 {
+            let mut z = spec(0.0, 4000.0, "audio");
+            z.row = vec![0.001; 512];
+            feed.publish_audio(z);
+        }
+        let held = feed
+            .row()
+            .expect("still fresh — the hold refreshes the stamp");
+        assert!(
+            (held.row[0] - before).abs() < 1e-6,
+            "under the hold a reader repeats the pre-TX picture, never the mute: got {}",
+            held.row[0]
+        );
+
+        // Key-up: publishing resumes, and the first real frame stands alone (the
+        // RowAverage window was never polluted by the muted frames).
+        feed.set_tx_hold(false);
+        let mut real = spec(0.0, 4000.0, "audio");
+        real.row = vec![0.75; 512];
+        feed.publish_audio(real);
+        let after = feed.row().expect("row");
+        assert!(
+            (after.row[0] - 0.75).abs() < 1e-6,
+            "after the hold the band reappears immediately, unblended: got {}",
+            after.row[0]
         );
     }
 
@@ -24357,6 +25128,7 @@ mod tests {
 
         // Radio 1: CAT on COM7, keyline on COM9.
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.settings.ptt_method = "rts".to_string();
         e.settings.serial_port = "COM7".to_string();
         e.settings.ptt_serial_port = "COM9".to_string();
@@ -24413,7 +25185,8 @@ mod tests {
         e.settings.ensure_radio_profiles();
         e.settings.rig_model = 1042; // FTDX10 on radio 0 (rigctld 4532)
         e.settings.sync_active_from_flat();
-        let r1 = e.add_radio(); // IC-9700 → distinct rigctld port (4534), now active
+        let r1 = e.add_radio(); // IC-9700 → distinct rigctld port (4534), made active below
+        e.set_active_radio(r1);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
 
@@ -24488,7 +25261,8 @@ mod tests {
         e.settings.band = "20m".into();
         e.settings.dial_mhz = 14.074;
         e.settings.sync_active_from_flat();
-        let r1 = e.add_radio(); // IC-9700, now active
+        let r1 = e.add_radio(); // IC-9700, made active below
+        e.set_active_radio(r1);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
         e.set_radio_bands(r1, vec!["2m".into()]); // IC-9700 explicitly covers 2 m
@@ -24533,7 +25307,8 @@ mod tests {
         e.settings.band = "20m".into();
         e.settings.dial_mhz = 14.074;
         e.settings.sync_active_from_flat();
-        let r1 = e.add_radio(); // IC-9700, now active
+        let r1 = e.add_radio(); // IC-9700, made active below
+        e.set_active_radio(r1);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
         e.set_radio_bands(r1, vec!["2m".into()]); // 9700 covers 2 m (operator confirmed this is ON)
@@ -24560,9 +25335,11 @@ mod tests {
         e.settings.rig_model = 1042; // FTdx10 on radio 0 — catch-all coverage (HF everything)
         e.settings.sync_active_from_flat();
         let ic9700 = e.add_radio();
+        e.set_active_radio(ic9700);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
         let ft991a = e.add_radio();
+        e.set_active_radio(ft991a);
         e.settings.rig_model = 1035;
         e.settings.sync_active_from_flat();
         e.rename_radio(0, "FTdx10");
@@ -25023,6 +25800,7 @@ mod tests {
         e.settings.band = "20m".into();
         e.settings.dial_mhz = 14.250;
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.set_radio_bands(r1, vec!["2m".into()]); // the VHF radio
         e.set_active_radio(0); // operating HF when APRS opens
                                // The ACTIVE (HF) radio's caps say no 2 m…
@@ -25110,7 +25888,8 @@ mod tests {
         e.settings.serial_port = "COM_R0".into();
         e.settings.sync_active_from_flat(); // radio 0 profile now carries COM_R0
         let r0 = e.settings.active_radio;
-        let r1 = e.add_radio(); // radio 1 — now the ACTIVE radio
+        let r1 = e.add_radio(); // radio 1 — made active below
+        e.set_active_radio(r1);
         e.settings.serial_port = "COM_R1".into();
         e.settings.sync_active_from_flat(); // radio 1 profile + flat mirror carry COM_R1
         assert_eq!(e.settings.active_radio, r1);
@@ -25154,12 +25933,16 @@ mod tests {
         e.settings.sync_active_from_flat();
         e.rename_radio(0, "FTDX10");
 
-        // "+ Add radio" now SWITCHES to the new radio, so its config form edits the NEW radio (not the
-        // previously-active one — the clobber bug). Configure it via the flat form while it's active.
+        // Adding no longer switches the station onto the new radio -- that was scaffolding for the
+        // clobber bug (the flat form edits whatever is ACTIVE), and a non-active edit now routes
+        // through update_radio_profile, which
+        // `update_radio_profile_edits_a_nonactive_radio_without_touching_the_active_one` pins.
+        // This test is about SWITCHING, so it switches deliberately.
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         assert_eq!(
             e.settings.active_radio, r1,
-            "add_radio switches to the new radio"
+            "set_active_radio switches to the new radio"
         );
         e.settings.rig_model = 3081;
         e.settings.rig_model_name = "Icom IC-9700".into();
@@ -26319,6 +27102,7 @@ mod tests {
     fn health_names_the_radio_the_decoder_is_listening_to() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.rename_radio(r1, "FT-991A");
         e.set_radio_bands(r1, vec!["2m".into()]);
         e.set_active_radio(r1);
@@ -26334,6 +27118,7 @@ mod tests {
         e.settings.ensure_radio_profiles();
         e.rename_radio(0, "FTdx10");
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.rename_radio(r1, "IC-9700");
         e.set_active_radio(0);
         e.set_aprs_arm(AprsArm::Explicit);
@@ -26358,6 +27143,7 @@ mod tests {
             "one radio covers 2 m — nothing to disambiguate, so the chip stays quiet"
         );
         let r1 = e.add_radio();
+        e.set_active_radio(r1);
         e.set_radio_bands(r1, vec!["2m".into()]);
         e.set_frequency(144.390, "2m", "FM");
         assert_eq!(
@@ -26794,8 +27580,9 @@ mod tests {
         // Before any tick there is no range-rate, so a knob move is DECLINED
         // rather than sited with an assumed zero — at AOS the shift is tens of
         // kHz and guessing would put the operator across the passband.
-        assert!(
-            !e.sat_observe_operator_tune(435_645_000),
+        assert_eq!(
+            e.sat_observe_operator_tune(435_645_000),
+            SatObservation::NotOurs,
             "no range-rate yet ⇒ decline, never assume zero Doppler"
         );
 
@@ -26805,8 +27592,9 @@ mod tests {
         e.sat_doppler_tick(rate, 15_000, false);
 
         // The operator tunes UP 5 kHz to chase somebody.
-        assert!(
+        assert_eq!(
             e.sat_observe_operator_tune(435_645_000),
+            SatObservation::Tuned,
             "in-band knob move is adopted"
         );
         let now = e
@@ -26832,8 +27620,9 @@ mod tests {
         // A knob move OUT of the passband is the operator leaving, not tuning.
         // It must not be clamped to a passband edge (which would drag the
         // uplink there and leave them transmitting into someone else's QSO).
-        assert!(
-            !e.sat_observe_operator_tune(14_074_000),
+        assert_eq!(
+            e.sat_observe_operator_tune(14_074_000),
+            SatObservation::NotOurs,
             "a QSY to 20 m is not a passband offset"
         );
         assert_eq!(
@@ -26847,9 +27636,384 @@ mod tests {
         // identity and nudge the offset for the whole pass.
         let sent = e.sat_tuning_now(rate).unwrap().downlink_hz.unwrap();
         e.sat_doppler_tick(rate, 30_000, false);
+        assert_eq!(
+            e.sat_observe_operator_tune(sent),
+            SatObservation::Held,
+            "the dial we just wrote is ours, not theirs — and being ours, it must not \
+             take the QSY path that hands the rig back to simplex"
+        );
+    }
+
+    /// The ISS as SatNOGS lists it: ONE downlink, TWO documented voice pairings
+    /// (145.200 up in region 1, 144.490 in regions 2/3). The row the operator
+    /// picked, then the other one.
+    fn iss_voice_rows() -> (
+        tempo_core::doppler::Transponder,
+        tempo_core::doppler::Transponder,
+    ) {
+        use tempo_core::doppler::Transponder;
+        (
+            Transponder::channel(145_200_000, 145_800_000),
+            Transponder::channel(144_490_000, 145_800_000),
+        )
+    }
+
+    #[test]
+    fn a_keyed_rigs_uplink_is_read_as_keyed_and_not_as_a_knob_move() {
+        // ⭐ THE FREQUENCY IS THE EVIDENCE (CI-V capture, IC-9700, 2026-08-16).
+        // A rig answering with the pass's TRANSMIT leg is transmitting — on an
+        // Icom in split the selected VFO, which is what a plain dial read
+        // returns, IS the transmit VFO. The PTT poll can be up to a second
+        // behind that; the frequency cannot.
+        let (row0, _) = iss_voice_rows();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row0)));
         assert!(
-            !e.sat_observe_operator_tune(sent),
-            "the dial we just wrote is ours, not theirs"
+            !e.sat_inferred_keyed(),
+            "scene: nothing observed yet, nothing inferred"
+        );
+
+        // The uplink comes back off the rig.
+        assert_eq!(
+            e.sat_observe_operator_tune(145_200_000),
+            SatObservation::Held,
+            "the transmit leg is not somewhere the operator tuned to"
+        );
+        assert!(
+            e.sat_inferred_keyed(),
+            "…it is the rig saying it is transmitting"
+        );
+
+        // The RECEIVE leg retires it — the release that needs no PTT line, and
+        // the only one a radio with no `t` at all can ever produce.
+        assert_eq!(
+            e.sat_observe_operator_tune(145_800_000),
+            SatObservation::Held
+        );
+        assert!(
+            !e.sat_inferred_keyed(),
+            "back on the downlink is back on RX"
+        );
+
+        // So does a fresh PTT read that says off — the poll's half of it.
+        e.sat_observe_operator_tune(145_200_000);
+        assert!(e.sat_inferred_keyed());
+        e.observe_rig_ptt_read(false);
+        assert!(
+            !e.sat_inferred_keyed(),
+            "a fresh 'off' answers the question"
+        );
+
+        // ⚠️ AND A SIMPLEX CHANNEL INFERS NOTHING. One frequency carries both
+        // legs (145.825 packet), so an observation is no evidence either way —
+        // inferring here would latch on the pass's own receive frequency and
+        // freeze the dial for the rest of the pass.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some((
+            "ISS|APRS digipeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_825_000, 145_825_000),
+        )));
+        assert_eq!(
+            e.sat_observe_operator_tune(145_825_000),
+            SatObservation::Held
+        );
+        assert!(
+            !e.sat_inferred_keyed(),
+            "indistinguishable legs are no evidence — never a guess"
+        );
+    }
+
+    #[test]
+    fn a_linear_birds_uplink_is_held_too_not_torn_down() {
+        // The channel hatch could already recognise a keyed rig's uplink; a
+        // LINEAR bird could not, because its uplink is a whole band outside the
+        // downlink passband — `follow_downlink_in_band` declines and the
+        // knob-QSY arm clears the split, which on a satellite is the operator's
+        // corrected uplink. Both shapes report the transmit VFO while keyed, so
+        // both need the same answer.
+        let tp = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 435_640_000,
+            downlink_centre_hz: 145_965_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some(("RS-44|linear V/U".into(), 0, tp)));
+        e.sat_doppler_tick(0.0, 15_000, false); // a rate, so the passband arm is reachable
+        assert_eq!(
+            e.sat_observe_operator_tune(435_640_000),
+            SatObservation::Held,
+            "a keyed linear bird's uplink must not take the teardown path"
+        );
+        assert!(e.sat_inferred_keyed());
+        // And the passband still works for what it is for: an in-band move.
+        assert_eq!(
+            e.sat_observe_operator_tune(145_970_000),
+            SatObservation::Tuned,
+            "the operator chasing somebody across the passband is untouched"
+        );
+        assert!(
+            !e.sat_inferred_keyed(),
+            "and that observation is on the receive side, so the key belief goes"
+        );
+    }
+
+    #[test]
+    fn a_two_row_bird_keeps_the_row_the_pass_engaged_on() {
+        // ⭐ TWO ROWS FIGHTING (the same CI-V capture): the split TX dial took
+        // 144.490 and then 145.200 a second apart — consecutive corrections
+        // computed from DIFFERENT transponder rows of the same bird. A pass is
+        // worked on one uplink; the other one arriving mid-over is the operator
+        // transmitting where nobody is listening.
+        let (row0, row1) = iss_voice_rows();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row0)));
+        e.set_sat_alt_uplinks(vec![144_490_000]);
+        e.set_sat_pass_engaged(true);
+
+        // THE ROW IS PINNED. A re-pick naming the same row — "Lock on", the
+        // work-pass chain re-entered — resolves against a snapshot that may have
+        // moved under it; the frequencies it brings are discarded.
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row1)));
+        let c = e
+            .sat_doppler_tick(0.0, 15_000, false)
+            .expect("the first correction of the pass goes out");
+        assert_eq!(
+            c.uplink_hz,
+            Some(145_200_000),
+            "the row the pass engaged on is the row it is worked on — a re-pick of the \
+             SAME row index cannot swap the uplink underneath the operator"
+        );
+
+        // The AUTO pick — machinery, not a human — is refused a row change
+        // outright, which is the half the engine cannot decide for itself.
+        assert!(
+            e.sat_row_pinned_against(1),
+            "an automatic pick of another row while the pass is engaged: refused"
+        );
+        assert!(
+            !e.sat_row_pinned_against(0),
+            "…and re-picking the row being worked is not a change at all"
+        );
+
+        // An OPERATOR picking another transponder mid-pass is what the picker is
+        // for. It lands, and it re-pins.
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 1, row1)));
+        let c = e
+            .sat_doppler_tick(0.0, 60_000, false)
+            .expect("a fresh pick corrects immediately");
+        assert_eq!(
+            c.uplink_hz,
+            Some(144_490_000),
+            "the operator's own change of transponder is honored"
+        );
+        assert!(
+            e.sat_row_pinned_against(0),
+            "and the NEW row is the pinned one"
+        );
+
+        // LOS: the pin goes with the pass.
+        e.set_sat_pass_engaged(false);
+        assert!(
+            !e.sat_row_pinned_against(0),
+            "nothing is pinned when no pass is being worked"
+        );
+    }
+
+    #[test]
+    fn the_birds_other_documented_uplink_is_still_this_pass() {
+        // The rig may be running a pairing we did not write: the ISS voice
+        // repeater is 145.200 up in region 1 and 144.490 in regions 2/3, one
+        // downlink for both. An operator whose rig came up on the other channel
+        // is working THIS pass — read as a QSY, the split tears down and the
+        // next over goes out on the bird's own downlink.
+        let (row0, _) = iss_voice_rows();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row0)));
+        assert_eq!(
+            e.sat_observe_operator_tune(144_490_000),
+            SatObservation::NotOurs,
+            "scene: with only the picked row known, the other region's uplink is a QSY"
+        );
+
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, row0)));
+        e.set_sat_alt_uplinks(vec![144_490_000]);
+        assert_eq!(
+            e.sat_observe_operator_tune(144_490_000),
+            SatObservation::Held,
+            "told what the bird documents, the other pairing is the pass's own"
+        );
+        assert!(
+            e.sat_inferred_keyed(),
+            "and it is an UPLINK, so a rig sitting on it is a rig transmitting"
+        );
+
+        // Somewhere else entirely is still somewhere else.
+        e.observe_rig_ptt_read(false);
+        assert_eq!(
+            e.sat_observe_operator_tune(14_074_000),
+            SatObservation::NotOurs,
+            "a QSY to 20 m is a QSY to 20 m"
+        );
+
+        // The list belongs to the PICK: a new hold clears it rather than letting
+        // one bird's channels vouch for another's.
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        assert_eq!(
+            e.sat_observe_operator_tune(144_490_000),
+            SatObservation::NotOurs,
+            "the ISS's other channel is nothing to do with SO-50"
+        );
+    }
+
+    #[test]
+    fn an_fm_birds_uplink_carries_its_ctcss_tone() {
+        // An FM bird is a repeater in orbit and several gate on CTCSS exactly
+        // like a terrestrial one. The satellite path forced tone 0.0 — right
+        // for the SHIFT beside it (a bird has no repeater offset) and wrong for
+        // the tone, so an ISS or SO-50 uplink went out toneless and the
+        // repeater never opened. From the operator's chair that is
+        // indistinguishable from a bird that cannot hear them.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        let mut s = e.settings().clone();
+        s.phone_mode = "fm".into();
+        // A terrestrial repeater worked earlier in the day — the shift and tone
+        // that must NOT follow the operator onto a bird.
+        s.rptr_shift = "-".into();
+        s.ctcss_tone_hz = 100.0;
+        e.apply_settings(s);
+        assert_eq!(
+            e.fm_repeater_config(),
+            ("-".to_string(), e.settings().rptr_offset_hz(), 100.0),
+            "scene: the operator's own repeater settings, untouched while no bird is held"
+        );
+
+        // Picking a bird is a hold PLUS the tune that arms the FM class — the
+        // same two calls the satellite command makes.
+        let hold = |e: &mut Engine, label: &str, up: u64, down: u64| {
+            e.set_sat_transponder(Some((
+                label.into(),
+                0,
+                tempo_core::doppler::Transponder::channel(up, down),
+            )));
+            e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Fm, 1_000_000);
+        };
+
+        // ISS cross-band FM voice: 145.990 up, and it wants 67.0 Hz.
+        hold(&mut e, "ISS|FM voice repeater", 145_990_000, 437_800_000);
+        assert_eq!(
+            e.fm_repeater_config(),
+            ("simplex".to_string(), 0, 67.0),
+            "the BIRD's tone, and the terrestrial shift/offset dropped with it"
+        );
+
+        // An FM bird with no tone we can cite gets none — the honest answer,
+        // and the one every bird got before. Guessing would key a transmitter
+        // into a repeater that cannot hear it, with nothing on screen to say so.
+        hold(&mut e, "TEVEL-2|FM", 145_970_000, 436_400_000);
+        assert_eq!(
+            e.fm_repeater_config(),
+            ("simplex".to_string(), 0, 0.0),
+            "an uncited uplink carries no tone rather than a guessed one"
+        );
+
+        // The tone ends with the BIRD, not with the FM. `sat_fm` deliberately
+        // outlives a hold (the rig is still in FM, and the next channel is far
+        // more likely FM than not) — but a tone belongs to one uplink, and left
+        // armed it would ride the operator's next simplex call.
+        hold(&mut e, "ISS|FM voice repeater", 145_990_000, 437_800_000);
+        assert_eq!(e.fm_repeater_config().2, 67.0, "held: the tone is armed");
+        e.set_sat_transponder(None);
+        assert_eq!(
+            e.fm_repeater_config().2,
+            0.0,
+            "handed back: no tone survives the bird"
+        );
+    }
+
+    #[test]
+    fn a_channel_birds_own_frequencies_are_the_passes_not_an_operator_qsy() {
+        // ⭐ The escape hatch an FM bird never had. `follow_downlink_in_band`
+        // declines EVERY observation on a channel (`half_width_hz == 0` — there
+        // is no passband to be inside of), and at the call site a decline is not
+        // neutral: it is the knob-QSY path, whose first act is to hand the rig
+        // back to simplex. So on an FM pass every rig-reported frequency —
+        // including the pass's own, and including the UPLINK a keyed Icom
+        // reports — tore the pass down.
+        //
+        // The question a channel CAN answer is "is this one of my two
+        // frequencies?", and that is what this pins: both legs hold, a real QSY
+        // does not, and the boundary between them is a Doppler-sized tolerance
+        // rather than exact equality.
+        let fm = tempo_core::doppler::Transponder::channel(145_990_000, 145_800_000);
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(145.800, "2m", "FM");
+        e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, fm)));
+
+        // No range rate yet — a pre-AOS pick, which is the NORMAL flow. The
+        // hold answers anyway: siting a dial in a passband needs the geometry,
+        // recognising your own channel does not.
+        assert_eq!(
+            e.sat_observe_operator_tune(145_800_000),
+            SatObservation::Held,
+            "the downlink we are parked on is not somewhere the operator tuned to"
+        );
+        assert_eq!(
+            e.sat_observe_operator_tune(145_990_000),
+            SatObservation::Held,
+            "and neither is the UPLINK — which is exactly what a keyed rig in split reports"
+        );
+
+        // Doppler-sized slack on both sides of each leg: an FM channel is
+        // pulled a few kHz by the pass, and the operator's own fine-tune moves
+        // within it. Still the pass's.
+        for hz in [145_798_000, 145_802_000, 145_988_000, 145_992_000] {
+            assert_eq!(
+                e.sat_observe_operator_tune(hz),
+                SatObservation::Held,
+                "{hz} is within a Doppler step of a leg — still on the pass"
+            );
+        }
+
+        // AND THE OTHER DIRECTION, or this is half a test: leaving really does
+        // leave. A QSY to 20 m must still tear the pass down, split and all —
+        // that path is correct and must not be swallowed by the hatch.
+        assert_eq!(
+            e.sat_observe_operator_tune(7_074_000),
+            SatObservation::NotOurs,
+            "a QSY to another band is the operator leaving the bird"
+        );
+        // Same band, far enough out to be a different channel — the case the
+        // tolerance has to stay narrow for. 145.825 is the ISS APRS digipeater,
+        // 25 kHz off the voice downlink and a place operators really do go.
+        assert_eq!(
+            e.sat_observe_operator_tune(145_825_000),
+            SatObservation::NotOurs,
+            "the neighbouring channel is NOT this pass — the tolerance must never reach it"
+        );
+
+        // And the teardown is what `NotOurs` means at the real call site: the
+        // split goes, because on leaving a bird the operator must not be left
+        // transmitting on its uplink.
+        e.request_split(Some(145.990));
+        e.observe_rig_freq(145_990_000);
+        assert_eq!(
+            e.split_tx_mhz(),
+            Some(145.990),
+            "the pass's own uplink leaves the split alone"
+        );
+        e.observe_rig_freq(7_074_000);
+        assert_eq!(
+            e.split_tx_mhz(),
+            None,
+            "…and a genuine QSY away still hands the rig back to simplex"
         );
     }
 
@@ -26897,13 +28061,20 @@ mod tests {
         // and commanding it on the dial would deafen the operator.
         assert_eq!(e.rig_mode_effective(), "USB");
 
-        // A NON-inverting linear bird is the same sideband both ways, so there
-        // is nothing to command — and a CAT write that changes nothing can only
-        // lose (it fights a front-panel change and burns a slot on the bus).
+        // A NON-inverting linear bird is the same sideband both ways — and it
+        // is COMMANDED anyway, because "the same as the downlink" is a fact
+        // about our two legs, not about the register being written. The TX VFO
+        // has its own mode, nothing else in this path ever writes it, and the
+        // bird before this one may well have been inverting: unwritten, the
+        // transmit leg keeps that pass's LSB. Same-mode is not no-op.
         let mut straight = tp;
         straight.invert = false;
         e.set_sat_transponder(Some(("FO-29|linear".into(), 0, straight)));
-        assert_eq!(e.sat_tx_mode(), None, "non-inverting ⇒ same mode both legs");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("USB"),
+            "non-inverting ⇒ USB up as well as down, and the TX VFO is TOLD so"
+        );
 
         // Releasing the transponder (transponder cleared, or LOS) says nothing
         // further — exactly like the dial, which is handed back rather than
@@ -27053,10 +28224,19 @@ mod tests {
     }
 
     #[test]
-    fn an_fm_bird_is_the_same_mode_both_ways_so_nothing_is_commanded() {
-        // FM repeaters (the AO-91/SO-50 majority) are FM up and FM down. There
-        // is no sideband to mirror, so there is nothing to say — and saying it
-        // anyway would be a CAT write per pass that can only go wrong.
+    fn an_fm_bird_commands_fm_on_the_transmit_leg() {
+        // ⭐ THE REPLACED BELIEF. This test used to be called
+        // `an_fm_bird_is_the_same_mode_both_ways_so_nothing_is_commanded`, and
+        // it pinned exactly that: FM up, FM down, no sideband to mirror, so
+        // saying nothing was thought to be strictly safer than a CAT write that
+        // "changes nothing".
+        //
+        // The operator's V/U FM pass (IC-9700, 2026-08-16) transmitted LSB.
+        // Nothing had changed the transmit VFO's mode because nothing in this
+        // path had ever written it — Icom's unselected VFO carries its OWN mode
+        // register — so it was still holding the LSB an earlier inverting
+        // linear pass had left there. The write is not a no-op; it is the only
+        // thing that makes the transmit leg's mode true.
         let (mut e, tp) = sat_mode_engine(false, 145_990_000);
         {
             let mut s = e.settings().clone();
@@ -27070,13 +28250,32 @@ mod tests {
             ..tp
         };
         e.set_sat_transponder(Some(("AO-91|FM".into(), 0, fm)));
-        assert_eq!(e.sat_tx_mode(), None, "FM both legs ⇒ untouched");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("FM"),
+            "an FM bird is FM on the transmit leg too — and the TX VFO is TOLD so, \
+             or it keeps whatever the last pass left in it"
+        );
 
         // Even if a record claimed inversion, FM has no sideband to swap: the
-        // answer is still "nothing to command", never a guess.
+        // answer is FM, never a guessed sideband.
         let fm_inv = tempo_core::doppler::Transponder { invert: true, ..fm };
         e.set_sat_transponder(Some(("AO-91|FM".into(), 0, fm_inv)));
-        assert_eq!(e.sat_tx_mode(), None, "FM has no sideband to mirror");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("FM"),
+            "FM has no sideband to mirror — an inverting FM record is still FM up"
+        );
+
+        // The anti-churn guarantee the old rationale was really worried about
+        // is still intact, and it lives downstream where it belongs: the radio
+        // loop writes only when the ANSWER CHANGES (`last_split_mode`). The
+        // answer being STABLE across corrections is what makes that work.
+        assert_eq!(e.sat_tx_mode(), e.sat_tx_mode(), "a stable answer per hold");
+
+        // Releasing still says nothing — the hand-back rule is unchanged.
+        e.set_sat_transponder(None);
+        assert_eq!(e.sat_tx_mode(), None, "released ⇒ silent, never a restore");
     }
 
     // ===================== tune-on-pick (the S.A.T.-box behaviour) =====================
@@ -27856,6 +29055,51 @@ mod tests {
         half_width_hz: 250_000,
     };
 
+    /// A V/V PASS RIDES A/B SPLIT WHATEVER THE MAPPING SAYS — the ISS voice case.
+    ///
+    /// Field report (operator, 2026-08-15, IC-9700): satellite mapping set to Main/Sub, ISS
+    /// picked as `Mode V/V FM (crew R2+3)` — 145.800 down, 144.490 up. The rail showed both
+    /// legs correctly, so the engine had the right numbers; the radio sat on the downlink and
+    /// KEYED on the downlink. Transmitting on a bird's output is the one thing that must never
+    /// happen.
+    ///
+    /// The cause is which branch asks the band question. `ab_cross_band_refusal` compares the
+    /// two legs, and it was reachable ONLY from the `!is_main_sub()` arm — so a Main/Sub
+    /// operator never reached it. The Main/Sub arm went straight to `Ok("Sub")`, and on these
+    /// rigs satellite Main/Sub is CROSS-BAND BY DESIGN: Main and Sub cannot both sit on 2 m.
+    /// Native CI-V wrote an uplink that had nowhere to land; Hamlib returned the refusal and
+    /// wrote nothing. Both leave TX on Main, which is the downlink.
+    ///
+    /// The fix is what this file already says twice in prose and pins on the OTHER branch — "a
+    /// V/V bird: A/B is how it is done". A provably same-band pass now takes that path from
+    /// either mapping. Cross-band is untouched, which is why V/U keeps working.
+    #[test]
+    fn a_same_band_pass_rides_a_b_split_even_under_a_main_sub_mapping() {
+        for model in [3081u32, 3044, 3068, 3090] {
+            let mut e = main_sub_station(model);
+            confirm_map_for_all(&mut e, crate::settings::SatVfoMap::MainDownSubUp);
+            e.set_sat_transponder(Some(("ISS|V/V".into(), 0, SAME_BAND)));
+            e.sat_tune_nominal(SSB_BIRD, 3_000_000);
+            for cat in [NATIVE, HAMLIB] {
+                assert_eq!(
+                    e.sat_split_tx_vfo(145_990_000, cat),
+                    Ok("VFOB"),
+                    "model {model}: a V/V pass is worked on A/B, not on Main/Sub"
+                );
+            }
+            // CONTROL: the SAME rig and the SAME mapping on a CROSS-BAND bird must still take
+            // the Main/Sub path — otherwise this "fix" is just A/B everywhere and it would
+            // silently undo the 0.24.2 fix that refuses an unverified cross-band A/B write.
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(SSB_BIRD, 4_000_000);
+            assert_eq!(
+                e.sat_split_tx_vfo(145_965_000, NATIVE),
+                Ok("Sub"),
+                "model {model}: control — cross-band still rides Main/Sub"
+            );
+        }
+    }
+
     #[test]
     fn an_a_b_split_on_a_main_sub_icom_is_refused_only_when_it_would_cross_bands() {
         // Shipped behaviour before this branch: an A/B mapping on these four
@@ -28066,6 +29310,7 @@ mod tests {
         e.settings.rig_model = 1042; // FTdx10
         e.settings.sync_active_from_flat();
         let ic9700 = e.add_radio();
+        e.set_active_radio(ic9700);
         e.settings.rig_model = 3081; // IC-9700 — bands deliberately LEFT EMPTY
         e.settings.sync_active_from_flat();
         e.rename_radio(0, "FTdx10");
@@ -28589,7 +29834,8 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.ensure_radio_profiles();
         e.rename_radio(0, "FTdx10");
-        let ic9700 = e.add_radio(); // id 1, becomes active
+        let ic9700 = e.add_radio(); // id 1, made active below
+        e.set_active_radio(ic9700);
         e.rename_radio(ic9700, "IC-9700");
         e.confirm_sat_uplink(
             Some(ic9700),
@@ -28609,6 +29855,7 @@ mod tests {
             "precondition: the backend pruned the consent with the radio"
         );
         let reused = e.add_radio();
+        e.set_active_radio(reused);
         assert_eq!(reused, ic9700, "the freed id is reused — the trap");
 
         // A later Save sends the stale snapshot.
@@ -28639,7 +29886,8 @@ mod tests {
         // consent would be inherited by the next rig added.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.ensure_radio_profiles();
-        let b = e.add_radio(); // becomes active
+        let b = e.add_radio(); // made active below
+        e.set_active_radio(b);
         e.confirm_sat_uplink(None, Some(crate::settings::SatVfoMap::MainDownSubUp));
         assert!(
             e.settings().sat_uplink_confirmed(b),
@@ -28664,6 +29912,7 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.ensure_radio_profiles();
         let b = e.add_radio();
+        e.set_active_radio(b);
         // The mapping in force moves AFTER the poll the click was based on…
         e.confirm_sat_uplink(Some(0), Some(crate::settings::SatVfoMap::UplinkOnly));
         e.confirm_sat_uplink(Some(0), Some(crate::settings::SatVfoMap::ADownBUp));
@@ -28820,6 +30069,7 @@ mod tests {
         e.settings.rig_model = 1042; // FTdx10
         e.settings.sync_active_from_flat();
         let ic9700 = e.add_radio();
+        e.set_active_radio(ic9700);
         e.settings.rig_model = 3081;
         e.settings.sync_active_from_flat();
         e.rename_radio(0, "Yeasu");

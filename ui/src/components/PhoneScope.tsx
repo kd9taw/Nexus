@@ -37,6 +37,13 @@ const PHSCOPE_DSS_KEY = 'nexus.phonescope.dss'
  * PHSCOPE_DSS_KEY — the storage-scope test matches this declaration. */
 const PHSCOPE_WIN_KEY = 'nexus.phonescope.win'
 
+/** Persisted scroll direction for the rig scope's waterfall band — same contract as the FT8
+ * waterfall's FLOW_KEY (operator ask, 2026-08-16: the toggle everywhere a waterfall scrolls,
+ * default DOWN to match). Only the exact string 'up' opts out; anything else is the default,
+ * so a stale/foreign value can never pick a direction nobody chose. Static literal — the
+ * storage-scope test classifies keys off this declaration. */
+const PHSCOPE_FLOW_KEY = 'nexus.phonescope.flow'
+
 /**
  * The window-length control, in the order it cycles.
  *
@@ -80,11 +87,19 @@ interface Props {
    * on nav today so it's effectively always true). */
   active?: boolean
   /** Displayed audio window (Hz) within the captured 200–2900 row. Defaults = the
-   * full voice passband; the CW cockpit narrows to ~300–1100 so individual carriers
-   * are readable for tone placement. On a native RF panadapter row the same window
-   * is mapped onto RF around the dial (scopeView), so the width still applies. */
+   * full voice passband; the CW cockpit narrows to an 800 Hz window around the pitch
+   * (cwScopeWindow) so individual carriers are readable for tone placement. On a native
+   * RF panadapter row the same window is mapped onto RF around the dial (scopeView), so
+   * the width still applies. With `carrierCentered` the width is the OCCUPIED SIDEBAND's,
+   * and the axis adds a W/3 guard band on the empty side. */
   viewLoHz?: number
   viewHiHz?: number
+  /** PHONE only: draw the audio row on a rig-style axis — RF offset from the dial, with the
+   * dial (audio 0 Hz, the suppressed carrier) at the 1/4 mark on USB, the 3/4 mark on LSB,
+   * and the occupied sideband taking the other 3/4 of the panel. Off = the plain audio
+   * window, which is what CW uses (its axis is centered on the PITCH instead — see
+   * cwScopeWindow). Never applies to a native RF row; those are already dial-centered. */
+  carrierCentered?: boolean
   /** Draw a hairline at this audio frequency (the CW pitch) — tune a signal onto
    * the marker and you're zero-beat. Omitted = no marker. */
   markerHz?: number | null
@@ -162,6 +177,7 @@ export function PhoneScope({
   active = true,
   viewLoHz = 0,
   viewHiHz = 4000,
+  carrierCentered = false,
   markerHz = null,
   smeterDb = null,
   sideband = 'USB',
@@ -184,6 +200,7 @@ export function PhoneScope({
   const activeRef = useRef(active)
   const viewLoRef = useRef(viewLoHz)
   const viewHiRef = useRef(viewHiHz)
+  const carrierCenteredRef = useRef(carrierCentered)
   const markerRef = useRef(markerHz)
   const sidebandRef = useRef(sideband)
   const dialRef = useRef(dialHz)
@@ -207,6 +224,10 @@ export function PhoneScope({
   const [scopeWin, setScopeWin] = useState<ScopeWindow>(() =>
     resolveScopeWindow(surfaceGet(PHSCOPE_WIN_KEY)),
   )
+  /** Newest row at the TOP (scrolls down) — the default, matching the FT8 waterfall. */
+  const [newestAtTop, setNewestAtTop] = useState<boolean>(() => surfaceGet(PHSCOPE_FLOW_KEY) !== 'up')
+  const newestAtTopRef = useRef(newestAtTop)
+  newestAtTopRef.current = newestAtTop
   const scopeWinRef = useRef(scopeWin)
   scopeWinRef.current = scopeWin
   /** Scrollback offset in history rows while paused (0 = live tail). */
@@ -234,7 +255,9 @@ export function PhoneScope({
   const interactiveRef = useRef(interactive)
   const traceHoldRef = useRef(traceHoldMs)
   const lastRowRef = useRef<{ row: number[]; rowLo: number; rowHi: number } | null>(null)
-  const lastViewRef = useRef<{ lo: number; hi: number; rf: boolean } | null>(null)
+  // `mirrored` = the drawn axis runs against the row (LSB on a carrier-centered axis), so
+  // every pixel↔Hz conversion here negates: axis Hz is RF offset, row Hz is receiver audio.
+  const lastViewRef = useRef<{ lo: number; hi: number; rf: boolean; mirrored: boolean } | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{
     x0: number
@@ -267,6 +290,7 @@ export function PhoneScope({
   activeRef.current = active
   viewLoRef.current = viewLoHz
   viewHiRef.current = viewHiHz
+  carrierCenteredRef.current = carrierCentered
   markerRef.current = markerHz
   sidebandRef.current = sideband
   dialRef.current = dialHz
@@ -364,7 +388,7 @@ export function PhoneScope({
         retImg = new ImageData(retBuf, Wd, wfHd)
         retW = Wd
         retH = wfHd
-        historyRef.current.renderInto(retBuf, Wd, wfHd, vLo, vHi, lutRef.current, 0)
+        historyRef.current.renderInto(retBuf, Wd, wfHd, vLo, vHi, lutRef.current, 0, newestAtTopRef.current)
       }
       return retImg
     }
@@ -383,7 +407,7 @@ export function PhoneScope({
       }
       if (retBuf && retW > 0 && retH > 0) {
         const traceHd = Math.max(1, Math.round(devH * TRACE_FRAC))
-        historyRef.current.renderInto(retBuf, retW, retH, lastViewLo, lastViewHi, lut, offsetRef.current)
+        historyRef.current.renderInto(retBuf, retW, retH, lastViewLo, lastViewHi, lut, offsetRef.current, newestAtTopRef.current)
         try {
           // Clear the trace band to floor first — while paused/scrolled (or just back from 3D)
           // the live trace isn't being repainted, so wipe stale pixels before the band blit.
@@ -481,6 +505,7 @@ export function PhoneScope({
         sidebandSign(sidebandRef.current),
         dialRef.current,
         isSymmetricMode(sidebandRef.current),
+        carrierCenteredRef.current,
       )
       // Tell the host what's actually drawn (only on change) — the honest scope label.
       const feed = `${src}:${view.loHz}:${view.hiHz}`
@@ -494,13 +519,26 @@ export function PhoneScope({
       // Capture the row + drawn window for the pointer handlers (click hit-testing and
       // drag-box Hz↔px mapping happen against exactly what's on screen).
       lastRowRef.current = { row, rowLo, rowHi }
-      lastViewRef.current = { lo: view.loHz, hi: view.hiHz, rf: isRfScopeSource(src) }
+      lastViewRef.current = {
+        lo: view.loHz,
+        hi: view.hiHz,
+        rf: isRfScopeSource(src),
+        mirrored: view.mirrored,
+      }
 
       // AGC over the VISIBLE window only — a loud signal outside the view (e.g.
       // the FT8 cluster above a narrow CW window) must not compress what's shown.
+      //
+      // Bin indices are ROW Hz and the carrier-centered axis is not: a MIRRORED (LSB) axis
+      // runs the row backwards, so its bounds are the row's bounds negated and swapped. Undo
+      // that here, once. A symmetric ±W axis hid this — it negates to itself — but the
+      // asymmetric one does not, and unfixed an LSB view would window the wrong third of the
+      // row: the AGC floor and the ▲dB readout would be measured where the voice isn't.
       const nb = row.length
-      const vLo = Math.max(0, Math.floor(((view.loHz - rowLo) / span) * (nb - 1)))
-      const vHi = Math.min(nb, Math.ceil(((view.hiHz - rowLo) / span) * (nb - 1)) + 1)
+      const winLo = view.mirrored ? -view.hiHz : view.loHz
+      const winHi = view.mirrored ? -view.loHz : view.hiHz
+      const vLo = Math.max(0, Math.floor(((winLo - rowLo) / span) * (nb - 1)))
+      const vHi = Math.min(nb, Math.ceil(((winHi - rowLo) / span) * (nb - 1)) + 1)
       let visible: ArrayLike<number> = row
       if (vHi - vLo >= 8) {
         const n = vHi - vLo
@@ -527,11 +565,15 @@ export function PhoneScope({
       // all, because it is now the floor plus a constant and moves only when the floor does.
       // WF_FLOOR_PCT (the MEDIAN), not agcRange's 5% default — see SCOPE_WINDOW_DB.
       const floor = agcRange(visible, WF_FLOOR_PCT).floor
-      if (!agcInit) {
-        agcFloor = floor
-        agcInit = true
-      } else {
-        agcFloor += (floor - agcFloor) * AGC_ALPHA
+      // Frozen while keyed, same reason as the FT waterfall: the muted receiver drags the
+      // noise estimate to digital silence and key-up clamps the panel until the EMA recovers.
+      if (!txRef.current) {
+        if (!agcInit) {
+          agcFloor = floor
+          agcInit = true
+        } else {
+          agcFloor += (floor - agcFloor) * AGC_ALPHA
+        }
       }
       agcCeil = agcFloor + dbToSpan(SCOPE_WINDOW_DB)
       // Operator Gain/Zero on top, same semantics as the FT8 waterfall's controls: G widens
@@ -587,8 +629,21 @@ export function PhoneScope({
         magBufW = Wd
       }
       const mag = magBuf
+      // `mirrored` (LSB on the carrier-centered axis) reads the row backwards: the audio at
+      // f Hz is at dial−f, so it belongs LEFT of the dial. scopeView already reflected the
+      // axis BOUNDS for LSB, so negating the per-column Hz is all that is left to do here.
+      const mirrored = view.mirrored
       for (let x = 0; x < Wd; x++) {
-        const hz = lo + (x / Wd) * (hi - lo)
+        const axisHz = lo + (x / Wd) * (hi - lo)
+        const hz = mirrored ? -axisHz : axisHz
+        // Outside the captured row there is nothing to draw — the floor, explicitly. The
+        // carrier-centered axis puts its guard band here by design, and unguarded this
+        // indexed row[<0] → undefined → NaN, which paints black columns and breaks the
+        // trace path without throwing.
+        if (hz < rowLo || hz > rowHi) {
+          mag[x] = 0
+          continue
+        }
         const bin = ((hz - rowLo) / span) * (nBins - 1)
         const b0 = Math.floor(bin)
         const b1 = Math.min(nBins - 1, b0 + 1)
@@ -617,8 +672,21 @@ export function PhoneScope({
         binBuf = new Float32Array(nBins)
         binBufN = nBins
       }
-      for (let b = 0; b < nBins; b++) binBuf[b] = normalize(row[b], dispFloor, dispCeil)
-      historyRef.current.push(binBuf, rowLo, rowHi, Date.now())
+      // A MIRRORED row is stored mirrored — bins reversed, frame negated — rather than
+      // flagged for the renderers to flip later. The stored frame then says what the row
+      // means ON THE AXIS IT WAS DRAWN ON, so the 2D rebuild, the 3D stack and scrollback
+      // all reproduce the live picture through the mapping they already have, and rows
+      // received on the other sideband keep their own honest frame instead of being
+      // re-mirrored by a flag that only describes the present.
+      for (let b = 0; b < nBins; b++) {
+        binBuf[mirrored ? nBins - 1 - b : b] = normalize(row[b], dispFloor, dispCeil)
+      }
+      historyRef.current.push(
+        binBuf,
+        mirrored ? -rowHi : rowLo,
+        mirrored ? -rowLo : rowHi,
+        Date.now(),
+      )
 
       // PAUSED = review mode: history keeps filling (nothing is lost) but the scope is frozen;
       // the mouse wheel scrolls the band back via rebuildFromHistory. Skip the live draw.
@@ -631,12 +699,17 @@ export function PhoneScope({
         return
       }
 
-      // ---- Waterfall (bottom region): scroll the RETAINED buffer up 1 row + write the new
-      // bottom row from the LUT, then blit at y=traceHd. No getImageData readback. ----
+      // ---- Waterfall (bottom region): scroll the RETAINED buffer one row and write the
+      // new row at the leading edge, then blit at y=traceHd. Direction is the operator's
+      // (PHSCOPE_FLOW_KEY), read ONCE so the shift and the row it makes room for can never
+      // disagree — the same discipline as Waterfall.tsx. ----
       const img = retained(Wd, wfHd, lo, hi)
       const out = retBuf!
-      out.copyWithin(0, Wd * 4)
-      const base = (wfHd - 1) * Wd * 4
+      const rowBytes = Wd * 4
+      const topDown = newestAtTopRef.current
+      if (topDown) out.copyWithin(rowBytes, 0)
+      else out.copyWithin(0, rowBytes)
+      const base = topDown ? 0 : (wfHd - 1) * rowBytes
       for (let x = 0; x < Wd; x++) {
         const li = (mag[x] >= 1 ? 255 : Math.round(mag[x] * 255)) * 4
         const o = base + x * 4
@@ -698,6 +771,36 @@ export function PhoneScope({
       ctx.lineWidth = Math.max(1, scaleY)
       ctx.stroke()
 
+      // ---- Carrier line (Phone): the DIAL, at the 1/4 mark (USB) or the 3/4 mark (LSB) ----
+      //
+      // WHY THE GUARD BAND IS ALWAYS QUIET, and it is not a bug to be fixed later. This scope
+      // is fed by DEMODULATED RECEIVER AUDIO, which is one-sided: an SSB detector folds the
+      // wanted sideband down to 0–3 kHz and throws the image away, so there is no signal on
+      // the other side of the carrier to draw. That is why the axis is not centered — a
+      // centered dial spent half the panel on that side and squeezed the voice into ~30% of
+      // the width (operator screenshot, 2026-08-16). W/3 of empty is the whole cost of having
+      // the dial read as a line rather than an edge. A radio that streams its OWN panadapter
+      // (Flex, Icom CI-V) sends real RF and genuinely fills both sides; that feed takes the RF
+      // branch in scopeView and never reaches this code.
+      //
+      // The x is derived from AXIS COORDINATE 0, the one place the dial is defined, so the
+      // line cannot land anywhere but where the row was painted around it — change the
+      // geometry in scopeView and this follows with no edit here.
+      if (carrierCenteredRef.current && !isRfScopeSource(src)) {
+        const cx = Math.round(((0 - lo) / (hi - lo)) * Wd)
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'
+        ctx.lineWidth = Math.max(1, scaleY)
+        ctx.beginPath()
+        ctx.moveTo(cx, 0)
+        ctx.lineTo(cx, devH)
+        ctx.stroke()
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
+        ctx.font = `${Math.max(8, Math.round(10 * scaleY))}px system-ui, sans-serif`
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'top'
+        ctx.fillText('DIAL', cx + 3 * scaleY, 2 * scaleY)
+      }
+
       // ---- Pitch marker (CW): tune a carrier onto the hairline = zero-beat ----
       // (on a native RF row scopeView puts the marker exactly ON the dial)
       const markerAt = view.markerAtHz
@@ -757,7 +860,13 @@ export function PhoneScope({
     const rect = canvas.getBoundingClientRect()
     if (rect.width < 2 || !(view.hi > view.lo)) return null
     const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
-    return view.lo + frac * (view.hi - view.lo)
+    const axisHz = view.lo + frac * (view.hi - view.lo)
+    // ROW Hz is what every caller wants (hit-testing the row, clickTuneTarget's audio
+    // branch, the relative drag anchor) — so undo the axis mirror here, once, rather than
+    // at each of them. On the empty half this is a negative audio Hz, and that is the right
+    // answer: it says "this many Hz the other side of the dial", which is exactly how
+    // clickTuneTarget's `dial + sign·(af − lowcut)` then moves the dial toward the click.
+    return view.mirrored ? -axisHz : axisHz
   }
   // Imperative box positioning — pointer-rate (60 fps), decoupled from the 20 Hz canvas.
   const positionBox = (centerHz: number, widthHz: number) => {
@@ -1129,6 +1238,25 @@ export function PhoneScope({
         >
           {paused ? '▶' : '⏸'}
         </button>
+        <button
+          type="button"
+          className={`ph-scope-btn${!newestAtTop ? ' on' : ''}`}
+          aria-pressed={!newestAtTop}
+          title={
+            newestAtTop
+              ? 'Scrolls down — the newest row appears at the TOP and history travels downward. Click for newest at the bottom.'
+              : 'Scrolls up — the newest row appears at the BOTTOM and history travels upward. Click for newest at the top.'
+          }
+          onClick={() => {
+            const next = !newestAtTop
+            setNewestAtTop(next)
+            newestAtTopRef.current = next
+            surfaceSet(PHSCOPE_FLOW_KEY, next ? 'down' : 'up')
+            rebuildRef.current?.()
+          }}
+        >
+          {newestAtTop ? 'Scrolls down' : 'Scrolls up'}
+        </button>
       </div>
       <div className="ph-scope-canvas-wrap">
         <canvas
@@ -1147,7 +1275,9 @@ export function PhoneScope({
             // Only in pause/review mode: wheel up = back in time, down = toward live.
             if (!pausedRef.current) return
             const h = historyRef.current
-            const step = e.deltaY < 0 ? 3 : -3
+            // Wheel-back follows the scroll direction, exactly as the FT8 waterfall's does.
+            const back = newestAtTopRef.current ? e.deltaY > 0 : e.deltaY < 0
+            const step = back ? 3 : -3
             const cur = offsetRef.current
             const next = Math.max(0, Math.min(h.maxOffset(1), cur + step))
             if (next !== cur) {

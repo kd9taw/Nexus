@@ -465,8 +465,15 @@ export function OperateRoster({
               >
                 <span className="or-call">
                   {s.call}
+                  {/* WSJT-X's two B4 scopes at once: solid = worked on THIS band (its
+                      CallBand highlight), hollow = worked anywhere (Call). One glance says
+                      which — and 'worked on 40m FT8, now on 40m phone' reads solid unless
+                      the operator opts into mode-scoped matching in Settings. */}
                   {s.worked && (
-                    <span className="b4-chip" title="Worked before">
+                    <span
+                      className={`b4-chip${s.workedBand ? ' b4-band' : ''}`}
+                      title={s.workedBand ? 'Worked before on this band' : 'Worked before (another band)'}
+                    >
                       B4
                     </span>
                   )}

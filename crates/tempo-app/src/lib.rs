@@ -34,10 +34,14 @@ use dto::{
 
 pub mod settings;
 
-/// Slots within this many of "now" count as [`Presence::Active`].
-const ACTIVE_WINDOW: u64 = 4;
-/// Slots within this many (but past [`ACTIVE_WINDOW`]) count as [`Presence::Idle`].
-const IDLE_WINDOW: u64 = 16;
+/// Seconds within which a station counts as [`Presence::Active`]. WALL CLOCK, not
+/// slots: these were slot counts (4 and 16) sized for FT8's 15 s period, which read
+/// as 60 s / 240 s — and then FT2's 3.75 s slots aged the whole roster 4× too fast
+/// (Active ≤ 15 s, gone in a minute; on-air report 2026-08-16). The presence a human
+/// reads is about time, so the windows are seconds and each tier converts.
+const ACTIVE_WINDOW_SECS: f32 = 60.0;
+/// Seconds within which (past the active window) a station counts as [`Presence::Idle`].
+const IDLE_WINDOW_SECS: f32 = 240.0;
 
 /// Max store-and-forward send attempts before a message is purged (so a message to a
 /// station that never rogers doesn't resend forever — the resend-loop backstop).
@@ -309,6 +313,7 @@ impl AppState {
                 // operators use. (Tier is runtime state, not persisted, so every
                 // launch starts on FT8.)
                 tier: Tier::Ft8,
+                period_secs: 15.0,
                 snr_db: 0.0,
                 dt_sec: 0.0,
                 freq_hz: 0.0,
@@ -822,9 +827,25 @@ impl AppState {
     /// presence relative to the current slot.
     fn station_dto(&self, h: &HeardStation) -> Station {
         let age = self.slot.saturating_sub(h.last_heard_slot);
-        let presence = if age <= ACTIVE_WINDOW {
+        // Display bucketing only, so the DEFAULT period per tier suffices — the
+        // parameterised modes (Q65/FST4/MSK144 at non-default periods) shift a
+        // presence bucket edge by a factor the eye doesn't read, and threading the
+        // live period settings into AppCore for a colour would be plumbing for its
+        // own sake.
+        let slot_secs: f32 = match self.link.tier {
+            Tier::Ft4 => 7.5,
+            Tier::Ft2 => 3.75,
+            Tier::TempoFast => 4.0,
+            Tier::Msk144 => 15.0,
+            Tier::Q65 | Tier::Fst4 | Tier::Fst4w | Tier::Jt65 | Tier::Wspr => 60.0,
+            _ => 15.0,
+        };
+        let slot_secs = slot_secs.max(0.1);
+        let active_slots = (ACTIVE_WINDOW_SECS / slot_secs).round().max(1.0) as u64;
+        let idle_slots = (IDLE_WINDOW_SECS / slot_secs).round().max(2.0) as u64;
+        let presence = if age <= active_slots {
             Presence::Active
-        } else if age <= IDLE_WINDOW {
+        } else if age <= idle_slots {
             Presence::Idle
         } else {
             Presence::Stale
@@ -839,6 +860,7 @@ impl AppState {
             presence,
             // Set by the engine from the logbook (worked-before); default false here.
             worked: false,
+            worked_band: false,
             // Resolved by the engine from the DXCC resolver; None at this layer.
             country: None,
             tier: h.mode.map(Tier::from_mode_kind),
@@ -877,6 +899,7 @@ impl AppState {
             radios: Vec::new(),
             active_radio_id: 0,
             radio_pegged: false,
+            b4_match_mode: false,
             link: self.link.clone(),
             chat_cq: String::new(), // Engine fills the run state in snapshot()
             stations,
@@ -1540,7 +1563,13 @@ mod tests {
     fn set_tier_selects_all_modes() {
         // All tiers are now live-selectable: FT1/FT8/FT4 native, DX1 robust.
         let mut app = AppState::new("K2DEF", "FN31");
-        for t in [Tier::TempoDeep, Tier::Ft8, Tier::Ft4, Tier::TempoFast] {
+        for t in [
+            Tier::TempoDeep,
+            Tier::Ft8,
+            Tier::Ft4,
+            Tier::Ft2,
+            Tier::TempoFast,
+        ] {
             app.set_tier(t);
             assert_eq!(app.tier(), t);
         }

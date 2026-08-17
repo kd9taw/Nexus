@@ -842,6 +842,24 @@ export function sidebandSign(sideband: string): 1 | -1 {
  * directly — clamped into the row, hi held ≥ lo+50 so an odd view never yields a
  * degenerate window (the pre-existing behavior, unchanged).
  *
+ * `carrierCentered` (Phone only) swaps that axis for the one a rig draws: RF OFFSET FROM THE
+ * DIAL, with audio 0 Hz — the suppressed carrier, which IS the dial — as a reference line
+ * inside the picture. Without it the dial is the leftmost pixel and every signal hangs off the
+ * left edge, which is what the operator saw against their FTdx10/IC-9700 (on air, 2026-08-16).
+ * `mirrored` tells the caller which way the row runs: USB audio f is at dial+f, LSB at dial−f,
+ * so an LSB signal paints LEFT of the dial. CW keeps the one-sided window (see cwScopeWindow),
+ * so this stays an explicit opt-in.
+ *
+ * The axis is ASYMMETRIC — [−W/3, +W] on USB, mirrored on LSB — and that is the fix for the
+ * second half of the same report (screenshot, 2026-08-16: "the voice is compressed into one
+ * section"). It shipped as ±W, which reads well on a rig streaming real RF but not here: this
+ * feed is DEMODULATED RECEIVER AUDIO, one-sided by construction, so half the panel was a side
+ * that can never carry a signal and the voice got ~30% of the width. Giving the occupied
+ * sideband 3/4 of the axis triples the detail; the W/3 guard band is what keeps the dial a
+ * reference LINE rather than the edge it was before carrier-centering, and it is display-only —
+ * the row is still requested (and read) as 0..W, so the guard has no data and paints as the
+ * out-of-row floor (see PhoneScope's column loop).
+ *
  * Native-panadapter rows span ABSOLUTE RF Hz, but the row center only APPROXIMATES the
  * dial: the Flex pan recenters only after >500 Hz dial moves (RETUNE_EPS), and an Icom
  * FIXED/edge-mode sweep may not track the dial at all — so when the live dial is known
@@ -863,11 +881,26 @@ export function scopeView(
   sign: 1 | -1,
   dialHz: number | null = null,
   symmetric = false,
-): { loHz: number; hiHz: number; markerAtHz: number | null } {
+  carrierCentered = false,
+): { loHz: number; hiHz: number; markerAtHz: number | null; mirrored: boolean } {
   if (!isRfScopeSource(source)) {
+    if (carrierCentered) {
+      // W of occupied sideband + W/3 of guard on the empty side, hung on the sideband's hand
+      // (see the header). The dial is axis 0, so it falls at the 1/4 mark on USB and the 3/4
+      // mark on LSB WITHOUT anyone stating that — every consumer derives its pixel from these
+      // two bounds, and there is no second constant that could drift out of step with them.
+      const width = Math.max(50, Math.abs(viewHiHz - viewLoHz))
+      const guard = width / 3
+      return {
+        loHz: sign < 0 ? -width : -guard,
+        hiHz: sign < 0 ? guard : width,
+        markerAtHz: markerHz == null ? null : sign * markerHz,
+        mirrored: sign < 0,
+      }
+    }
     const loHz = Math.max(rowLoHz, viewLoHz)
     const hiHz = Math.min(rowHiHz, Math.max(viewHiHz, loHz + 50))
-    return { loHz, hiHz, markerAtHz: markerHz }
+    return { loHz, hiHz, markerAtHz: markerHz, mirrored: false }
   }
   const center =
     dialHz != null && dialHz >= rowLoHz && dialHz <= rowHiHz ? dialHz : (rowLoHz + rowHiHz) / 2
@@ -879,7 +912,43 @@ export function scopeView(
     loHz: Math.max(rowLoHz, Math.min(a, b)),
     hiHz: Math.min(rowHiHz, Math.max(a, b)),
     markerAtHz: markerHz == null ? null : rf(markerHz),
+    mirrored: false,
   }
+}
+
+/** Width of the CW cockpit's audio scope window (Hz) — 800 over 512 bins = 1.5625 Hz/bin. */
+export const CW_SCOPE_SPAN_HZ = 800
+
+/**
+ * The CW cockpit's audio scope window, CENTERED ON THE OPERATOR'S PITCH.
+ *
+ * It was a hardcoded 300–1100, which centers a 600 Hz pitch and nothing else: at 900 Hz the
+ * signal you are zero-beating painted three quarters of the way across, at 400 Hz it sat on
+ * the left edge (operator, on air 2026-08-16 — a rig puts what you are tuned to in the
+ * middle). Same span, same bin resolution; only where it sits moved.
+ *
+ * A pitch below half the span floors at 0 rather than asking for a negative lo: the engine
+ * refuses that and silently answers with the whole 0–4000 row, which would cost the operator
+ * the resolution this narrow window exists for. Below 400 Hz the marker therefore sits left
+ * of center — the honest picture, since there is no audio below 0 Hz to show beside it.
+ */
+export function cwScopeWindow(
+  pitchHz: number,
+  filterHz?: number | null,
+): { loHz: number; hiHz: number } {
+  const p = Number.isFinite(pitchHz) ? pitchHz : 600
+  // ⭐ THE WINDOW TRACKS THE RIG'S FILTER (operator screenshot, 2026-08-16: a 500 Hz CW
+  // filter inside the fixed 800 Hz window left a dead stopband margin on each side — on an
+  // AUDIO-fed scope, pixels beyond the filter edge can never show anything). Span = the
+  // filter plus 25% of skirt so the roll-off is visible, floored at 300 Hz (bin resolution
+  // and the engine's span-≥50 rule both want a real window) and capped at the old 800 —
+  // wider than that is asking a CW filter to be what it isn't. Unknown filter → the old
+  // fixed span, unchanged behaviour.
+  const span = Number.isFinite(filterHz as number) && (filterHz as number) > 0
+    ? Math.min(CW_SCOPE_SPAN_HZ, Math.max(300, Math.round((filterHz as number) * 1.25)))
+    : CW_SCOPE_SPAN_HZ
+  const loHz = Math.max(0, Math.round(p - span / 2))
+  return { loHz, hiHz: loHz + span }
 }
 
 /** Waterfall view options for the picker. 0 = the default "Std" 0–3 kHz view (WSJT-X-like);

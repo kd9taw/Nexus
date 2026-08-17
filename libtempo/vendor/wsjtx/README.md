@@ -39,6 +39,16 @@ fixture — that is the licence leak"). Upstream is now pinned by sha256 fingerp
 by reproducing what it says. If you add a WSJT-X-derived measurement anywhere, record the
 **fingerprint**, not the text.
 
+**`lib/ft2/` is the one directory here whose upstream is NOT WSJT-X itself** (added
+2026-08-16): its eleven mode files are vendored from **Decodium 3** (IU8LMC's GPL-3 fork of
+WSJT-X 3.0.0-rc1, <https://github.com/iu8lmc/decodium3-build>) — Decodium's FT2, the variant
+with an on-air population, not upstream's abandoned experiment of the same name. Provenance
+per file is in `NOTICE` §"Decodium FT2": five are K1JT's FT4 files mechanically renamed, one
+is K1JT's `sync4d` with a single IU8LMC change, and the decoder chain
+(`ft2_triggered_decode`, `decode174_91_ft2`, `get_ft2_bitmetrics`, `ft2_channel_est`,
+`ft2_params`) is IU8LMC's. `gfsk_pulse.f90` in the same directory predates this and is
+upstream's. Same license terms as the rest of the tree (GPL-3.0-only, no per-file headers).
+
 ## Third-party code with its OWN copyright (not the WSJT group's)
 
 `lib/qra/` — **qracodes**, © 2016 Nico Palermo (IV3NWV) / Microtelecom Srl, **GPL-3.0-or-later**.

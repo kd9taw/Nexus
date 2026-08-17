@@ -19,12 +19,13 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { openPanelWindow, getSettings, notifyErase, setSettings } from '../api'
+import { openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period } from '../api'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
+import { FastGraph } from './FastGraph'
 import { Waterfall } from './Waterfall'
 import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { Splitter } from './Splitter'
@@ -40,8 +41,6 @@ import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
 import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
-import { MemoryStrip } from './MemoryStrip'
-import type { Memory } from '../features/memories'
 import { FrequencyControl } from './FrequencyControl'
 import { TuningStrip } from './TuningStrip'
 
@@ -124,9 +123,6 @@ interface Props {
   panels: PanelLayoutApi<OperatePanelId>
   /** Recall a saved memory (App applies settings + retune + cockpit switch).
    * Absent when the Memories feature is disabled — the MEM strip then hides. */
-  onRecallMemory?: (m: Memory) => void
-  /** Open the Memories section (manage/groups/import). */
-  onOpenMemories?: () => void
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
    * point at Settings stay plain text. */
   onOpenSettings?: (target: string) => void
@@ -149,6 +145,16 @@ interface Props {
 const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
   { tier: 'FT8', label: 'FT8', slot: '15s', title: 'Standard WSJT-X FT8 — 15 s T/R' },
   { tier: 'FT4', label: 'FT4', slot: '7.5s', title: 'Standard WSJT-X FT4 — 7.5 s T/R' },
+  // FT2 sits beside its siblings here because it IS one: a slotted digital QSO
+  // tier running the same FT8/FT4 sequencer, just faster. Decodium's mode, not
+  // WSJT-X's — hence the attribution in the tooltip, where the operator can see
+  // which population they are calling into.
+  {
+    tier: 'FT2',
+    label: 'FT2',
+    slot: '3.75s',
+    title: 'FT2 (Decodium) — 3.75 s T/R, FT4 with a halved symbol time',
+  },
 ]
 
 /** DXpedition special-op chip definitions. */
@@ -253,8 +259,6 @@ export function OperateCockpit({
   panels,
   active = true,
   companionAddr,
-  onRecallMemory,
-  onOpenMemories,
   onOpenSettings,
   wheelSensitivity,
 }: Props) {
@@ -709,6 +713,23 @@ export function OperateCockpit({
                 <span className="cm-slot">{m.slot}</span>
               </button>
             ))}
+            {tier === 'MSK144' && (
+              /* WSJT-X shows its T/R spinner on the main window exactly in fast mode
+                 (sbTR, mainwindow.cpp:8387) — the period is an operating decision on
+                 meteor scatter, not configuration, so it lives here and not only in
+                 Settings. Narrow write: a full settings apply is the #54 mid-QSO reset. */
+              <select
+                className="cockpit-mode cm-trperiod"
+                aria-label="MSK144 T/R period (seconds)"
+                title="T/R period — 15 s is the 6 m workhorse; 30 s eases deep-search on 2 m"
+                value={String(snap.link.periodSecs || 15)}
+                onChange={(e) => void setMsk144Period(Number(e.target.value)).then((s2) => onSnap?.(s2))}
+              >
+                {[5, 10, 15, 30].map((p) => (
+                  <option key={p} value={p}>{`${p}s`}</option>
+                ))}
+              </select>
+            )}
           </div>
         }
         bandControl={
@@ -886,14 +907,11 @@ export function OperateCockpit({
               Roster
             </button>
           </div>
-          {onRecallMemory && (
-            <MemoryStrip
-              dialMhz={snap.radio.dialMhz}
-              mode={tier === 'FT4' ? 'FT4' : 'FT8'}
-              onRecall={onRecallMemory}
-              onManage={onOpenMemories}
-            />
-          )}
+          {/* No MemoryStrip here, deliberately (operator ruling, 2026-08-16). Memories are
+              repeaters, nets and calling frequencies — Phone/CW things. In this header a
+              favorite chip was worse than clutter: one click retuned the rig off the FT8
+              band mid-sequence. Phone and CW keep the strip; the global recall hotkeys are
+              unaffected. */}
           <button
             type="button"
             className="cockpit-popout icon"
@@ -937,16 +955,29 @@ export function OperateCockpit({
         {wfState === 'docked' && (
           <>
             <section className="cockpit-waterfall panel">
-              <Waterfall
-                onPopOut={popOutWaterfall}
-                transmitting={snap.radio.transmitting}
-                rxOffsetHz={snap.radio.rxOffsetHz}
-                txOffsetHz={snap.radio.txOffsetHz}
-                theme={theme}
-                onTune={onTune}
-                active={active}
-                paletteScope={FT_PALETTE_SCOPE}
-              />
+              {tier === 'MSK144' ? (
+                /* MSK144 is a TIME display, not a frequency one — every signal sits at
+                 * 1500 Hz and lives for milliseconds, so the waterfall shows one unmoving
+                 * stripe while the actual event (the ping) is invisible. WSJT-X hides its
+                 * waterfall here and shows the Fast Graph; so does Nexus. Same strip, same
+                 * splitter — only the picture changes. */
+                <FastGraph
+                  periodS={snap.link.periodSecs || 15}
+                  decodes={snap.recentDecodes?.filter((d) => d.tier === 'MSK144')}
+                  theme={theme}
+                />
+              ) : (
+                <Waterfall
+                  onPopOut={popOutWaterfall}
+                  transmitting={snap.radio.transmitting}
+                  rxOffsetHz={snap.radio.rxOffsetHz}
+                  txOffsetHz={snap.radio.txOffsetHz}
+                  theme={theme}
+                  onTune={onTune}
+                  active={active}
+                  paletteScope={FT_PALETTE_SCOPE}
+                />
+              )}
             </section>
             <Splitter
               axis="y"

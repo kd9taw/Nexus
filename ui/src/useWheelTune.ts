@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { AppSnapshot } from './types'
 import { setFrequency } from './api'
@@ -207,8 +207,26 @@ export function useWheelTune(
     [flush, seed, clampToBand, reportEdge],
   )
 
+  // THE TARGET ELEMENT, SAMPLED INTO STATE — so the attach effect below runs once per TARGET
+  // mount rather than once per HOOK mount. Writing a RefObject does not re-render, and every
+  // dep of that effect is stable, so it used to attach exactly once ever. That was invisible
+  // while every target rendered unconditionally; it stopped being invisible when the cockpit
+  // scope strips gained ⊞ entries (2026-08-16). Hide one and the listener is left on a
+  // detached node; tick it back and React writes a BRAND NEW node into the ref that nothing
+  // attaches to — scroll-to-tune silently dead on the strip whose tooltip still says "Scroll
+  // here to tune the VFO", with no error and nothing to see. State is the only thing here
+  // whose identity the effect can actually watch. BandMap's conditionally-rendered track had
+  // the same latent hole and is fixed by the same lines.
+  const [target, setTarget] = useState<HTMLElement | null>(() => ref.current)
+  // No dep array: a mount/unmount of the target is exactly what does NOT schedule anything of
+  // its own, so the compare has to ride on whatever render did happen. It settles in one pass
+  // (setState with an unchanged value is a no-op), so this cannot loop.
   useEffect(() => {
-    const el = ref.current
+    if (ref.current !== target) setTarget(ref.current)
+  })
+
+  useEffect(() => {
+    const el = target
     if (!el) return
 
     const onWheel = (e: WheelEvent) => {
@@ -259,7 +277,7 @@ export function useWheelTune(
       el.removeEventListener('wheel', onWheel)
       if (timerRef.current != null) window.clearTimeout(timerRef.current)
     }
-  }, [ref, flush, seed, clampToBand, reportEdge])
+  }, [target, flush, seed, clampToBand, reportEdge])
 
   return tuneBy
 }

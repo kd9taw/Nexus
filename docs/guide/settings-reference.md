@@ -774,6 +774,19 @@ stamp, so they read "not verified yet" after each restart until the next contact
 goes out. The QRZ callbook and RepeaterBook only ever look things up, so they
 carry no upload history at all.
 
+### Worked-before (B4) & dupes
+
+What "worked before" means, everywhere it appears. The B4 chip on the roster and decode feed
+comes in two strengths: hollow — you have worked this callsign somewhere, on any band — and
+solid — you have worked them **on the band you are on now**. The log strip's **Dupe** badge uses
+the on-band scope.
+
+**Match mode too** (off by default, matching WSJT-X): when off, working a station on 40m marks
+them B4-on-band for 40m in every mode, and a 40m contact in any mode reads as a dupe on 40m.
+Turn it on and 40m FT8 and 40m phone become separate contacts — the solid chip and the Dupe
+badge then require the mode to match as well. The hollow any-band chip is unaffected either
+way. Most awards count band slots, not band-and-mode slots, which is why off is the default.
+
 ### Integrations & Feeds
 
 **Local APIs & Loggers**

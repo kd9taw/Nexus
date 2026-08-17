@@ -11636,3 +11636,357 @@ line = 12
 class = 1
 size_bytes = 3
 reason = "The '   ' / 'OOO' flag from chkmsg (:48), stamped into the transmitted text at :54 `msgsent(20:22)=cok`. Three bytes, and it changes what goes on the air: 'OOO' is the JT65 EME shorthand marker. GUARD AND DATA MUST SHARE A CLASS — cok is written by the same chkmsg call that sets nspecial and flip, which select the shorthand branch at :70 and the ntest sync polarity at :50, and the message text it stamps is class 1. Splitting the flag from the text it modifies is exactly the guard/data split the manifest header prohibits. 3 B .bss (`nm -S`: `b cok.12`)."
+
+# ---------------------------------------------------------------------------
+# GROUP N — FT2 (Decodium, vendored 2026-08-16 for FT2 transmit + receive)
+#
+# Decodium's FT2 is FT4 with a halved symbol time, and its support files are
+# K1JT's FT4 files mechanically renamed (verified by diff at vendor time — the
+# hunks are the name, the include, and nothing else, except sync2d's
+# best-3-of-4 change, which touches no static). Where a symbol below has an
+# FT4 analog already classified in GROUP D, the verdict MIRRORS that row and
+# names it; the write-site line numbers were re-checked against the FT2 copy,
+# not assumed. Verdicts that have no FT4 analog (ctwk2, the triggered
+# decoder's rvec) were derived from the FT2 source directly.
+#
+# Disposition: like MSK144, the whole chain runs under one modem lock via
+# ft2_cabi (single caller, calls serialize). ft2_downsample's x is the one
+# class-1 row — same big-FFT reuse idiom as ft4_downsample's, same context
+# note.
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "first"
+file = "ft2/ft2_triggered_decode.f90"
+line = 62
+class = 2
+size_bytes = 4
+reason = "logical, DATA .true. at :62, SAVEd at :63. Written .false. once at the foot of the ctwk2 build (:79); sole gate on it. Class 2, must share ctwk2's class."
+
+[[symbol]]
+name = "ctwk2"
+file = "ft2/ft2_triggered_decode.f90"
+line = 31
+class = 2
+size_bytes = 16896
+reason = "complex ctwk2(2*NSS,-16:16) = 64*33*8 = 16896. Written ONLY inside if(first) (:70-78): 33 twkfreq1 reference waveforms at fixed candidate offsets, every input a compile-time constant (NSS, itwk index). Read every call in the fine-sync scan. Init-once, chain-independent — the same shape as sync2d's csynca..d. Class 2, coupled to `first` at :62."
+
+[[symbol]]
+name = "rvec"
+file = "ft2/ft2_triggered_decode.f90"
+line = 37
+class = 4
+size_bytes = 77
+reason = "integer*1 rvec(77), DATA at :59-:61 — the FT2 scramble vector (same values as genft2's). Read at :107/:118/:130/:396 in `mod(x + rvec, 2)` expressions; never on a left-hand side. Read-only DATA = class 4. Mirrors genft4.f90:26 rvec (GROUP D, class 4). Distinct storage from genft2.f90's copy."
+
+[[symbol]]
+name = "first"
+file = "ft2/getcandidates2.f90"
+line = 15
+class = 2
+size_bytes = 4
+reason = "logical, DATA .true. at :15, SAVEd at :16. Written .false. once after the window build. Mirrors ft4/getcandidates4.f90 first (GROUP D, class 2). Must share window's class."
+
+[[symbol]]
+name = "window"
+file = "ft2/getcandidates2.f90"
+line = 9
+class = 2
+size_bytes = 4608
+reason = "real window(NFFT1)=1152*4. Written FULLY inside if(first) via nuttal_window(window,NFFT1) at :22 — constants only. Read every call at :33. Mirrors ft4/getcandidates4.f90 window (GROUP D, class 2). Coupled to `first` at :15."
+
+[[symbol]]
+name = "first"
+file = "ft2/ft2_downsample.f90"
+line = 11
+class = 2
+size_bytes = 4
+reason = "logical, DATA .true. at :12, SAVEd at :13. Gates the window build only — NOT the x spectrum (that refresh is the caller's newdata flag). Mirrors ft4/ft4_downsample.f90:11 first (GROUP D, class 2). Must share window's class; see that row's coupling note."
+
+[[symbol]]
+name = "window"
+file = "ft2/ft2_downsample.f90"
+line = 9
+class = 2
+size_bytes = 20000
+reason = "real window(0:NFFT2-1), NFFT2=NMAX/NDOWN=5000, *4 = 20000. Written fully inside if(first) from compile-time constants, read every call. Mirrors ft4/ft4_downsample.f90:9 window (GROUP D, class 2), FT2 sizes (NDOWN=9)."
+
+[[symbol]]
+name = "x"
+file = "ft2/ft2_downsample.f90"
+line = 9
+class = 1
+size_bytes = 180008
+reason = "real x(NMAX)=45000*4, SAVEd at :13, EQUIVALENCEd with cx(0:NMAX/2) at :10 — one storage block, union size 180008 (cx = 22501*8). Written only under if(newdata) (x=dd then the in-place r2c four2a); read UNCONDITIONALLY by every candidate's downsample. It carries the full-band receive spectrum of one chain BETWEEN calls by design: ft2_triggered_decode drives newdata via its dobigfft flag (:143,:148-149) — big FFT once, then every candidate reads a spectrum it did not compute. Same idiom, same verdict, same context note as ft4/ft4_downsample.f90:9 x / :8 cx (GROUP D, class 1): copy the equivalence block ONCE, sized 180008, if FT2 ever joins the per-chain context. Until then ft2_cabi serializes all calls under the modem lock, single chain."
+
+[[symbol]]
+name = "first"
+file = "ft2/sync2d.f90"
+line = 18
+class = 2
+size_bytes = 4
+reason = "logical, DATA .true. at :18, SAVEd at :19. Gates twopi, csynca..d and fac. Mirrors ft4/sync4d.f90 first (GROUP D, class 2). Must carry the same class as ALL of csynca..d and fac — see fac's silent-deafness note."
+
+[[symbol]]
+name = "twopi"
+file = "ft2/sync2d.f90"
+line = 19
+class = 2
+size_bytes = 4
+reason = "implicit real*4, SAVE-only at :19. Written once inside if(first) as 8*atan(1) — constant. Mirrors ft4/sync4d.f90 twopi (GROUP D, class 2)."
+
+[[symbol]]
+name = "csynca"
+file = "ft2/sync2d.f90"
+line = 8
+class = 2
+size_bytes = 512
+reason = "complex csynca(2*NSS)=64*8=512 (FT2 NSS=32). Built once inside if(first) from icos4a + twopi — constants. Read via the p() statement function every call. Mirrors ft4/sync4d.f90:8 csynca (GROUP D, class 2). Coupled to first/fac."
+
+[[symbol]]
+name = "csyncb"
+file = "ft2/sync2d.f90"
+line = 8
+class = 2
+size_bytes = 512
+reason = "As csynca — constant Costas reference b. Mirrors ft4/sync4d.f90 csyncb (GROUP D, class 2)."
+
+[[symbol]]
+name = "csyncc"
+file = "ft2/sync2d.f90"
+line = 8
+class = 2
+size_bytes = 512
+reason = "As csynca — constant Costas reference c. Mirrors ft4/sync4d.f90 csyncc (GROUP D, class 2)."
+
+[[symbol]]
+name = "csyncd"
+file = "ft2/sync2d.f90"
+line = 8
+class = 2
+size_bytes = 512
+reason = "As csynca — constant Costas reference d. Mirrors ft4/sync4d.f90 csyncd (GROUP D, class 2)."
+
+[[symbol]]
+name = "fac"
+file = "ft2/sync2d.f90"
+line = 19
+class = 2
+size_bytes = 4
+reason = "implicit real*4, SAVE-only at :19. Written last in the if(first) block as 1.0/(2.0*NSS) — constant. Read through the p() statement function on EVERY call. Mirrors ft4/sync4d.f90:19 fac (GROUP D, class 2) INCLUDING its high-consequence coupling: if `first` stays shared while fac goes per-chain, chain 2 reads .bss 0.0, every sync is 0, and the chain goes silently deaf. fac, first and csynca..d move together or not at all."
+
+[[symbol]]
+name = "icos4a"
+file = "ft2/sync2d.f90"
+line = 13
+class = 4
+size_bytes = 16
+reason = "integer icos4a(0:3), DATA at :14 (0,1,3,2). Read to build csynca; never assigned. Read-only DATA = class 4. Mirrors ft4/sync4d.f90:13 icos4a (GROUP D)."
+
+[[symbol]]
+name = "icos4b"
+file = "ft2/sync2d.f90"
+line = 13
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :15. Class 4."
+
+[[symbol]]
+name = "icos4c"
+file = "ft2/sync2d.f90"
+line = 13
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :16. Class 4."
+
+[[symbol]]
+name = "icos4d"
+file = "ft2/sync2d.f90"
+line = 13
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :17. Class 4."
+
+[[symbol]]
+name = "first"
+file = "ft2/get_ft2_bitmetrics.f90"
+line = 61
+class = 2
+size_bytes = 4
+reason = "logical, DATA .true. at :61, SAVEd at :62. Sole gate on the `one` table build at :63-:69. Mirrors ft4/get_ft4_bitmetrics.f90:12 first (GROUP D, class 2). Must match `one`'s class."
+
+[[symbol]]
+name = "one"
+file = "ft2/get_ft2_bitmetrics.f90"
+line = 28
+class = 2
+size_bytes = 8192
+reason = "logical one(0:255,0:7) = 2048*4. Written FULLY inside if(first) at :63-:69 from bit arithmetic over the loop indices — no dummy argument, no chain data. Read every call by the demapper. Mirrors ft4/get_ft4_bitmetrics.f90:11 one (GROUP D, class 2). Coupled to `first` at :61."
+
+[[symbol]]
+name = "graymap"
+file = "ft2/get_ft2_bitmetrics.f90"
+line = 26
+class = 4
+size_bytes = 16
+reason = "integer graymap(0:3), DATA at :60 (0,1,3,2). Read in the tone mapping; never assigned. Read-only DATA = class 4. (FT4's demapper has no graymap symbol — this one is part of IU8LMC's rewrite — but the verdict follows from the source alone: one DATA site, zero writes.)"
+
+[[symbol]]
+name = "icos4a"
+file = "ft2/get_ft2_bitmetrics.f90"
+line = 25
+class = 4
+size_bytes = 16
+reason = "integer icos4a(0:3), DATA at :56. Read in the sync-quality/noise-estimation pass; never assigned. Class 4. Mirrors ft4/get_ft4_bitmetrics.f90:8 icos4a (GROUP D). Distinct storage from the sync2d and genft2 copies."
+
+[[symbol]]
+name = "icos4b"
+file = "ft2/get_ft2_bitmetrics.f90"
+line = 25
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :57. Class 4."
+
+[[symbol]]
+name = "icos4c"
+file = "ft2/get_ft2_bitmetrics.f90"
+line = 25
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :58. Class 4."
+
+[[symbol]]
+name = "icos4d"
+file = "ft2/get_ft2_bitmetrics.f90"
+line = 25
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :59. Class 4."
+
+[[symbol]]
+name = "icos4a"
+file = "ft2/ft2_channel_est.f90"
+line = 34
+class = 4
+size_bytes = 16
+reason = "integer icos4a(0:3), DATA at :38. Read at :71 to regenerate the known Costas tones for the Wiener estimate; never assigned. Read-only DATA = class 4. (IU8LMC-original file; verdict from source.)"
+
+[[symbol]]
+name = "icos4b"
+file = "ft2/ft2_channel_est.f90"
+line = 34
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :39. Class 4."
+
+[[symbol]]
+name = "icos4c"
+file = "ft2/ft2_channel_est.f90"
+line = 34
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :40. Class 4."
+
+[[symbol]]
+name = "icos4d"
+file = "ft2/ft2_channel_est.f90"
+line = 34
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :41. Class 4."
+
+[[symbol]]
+name = "npct"
+file = "ft2/ft2_baseline.f90"
+line = 13
+class = 4
+size_bytes = 4
+reason = "DATA npct/10/ — the percentile handed to pctile. Read only; no assignment anywhere. Mirrors ft4/ft4_baseline.f90:13 npct (GROUP D, class 4). implicit real*8 file, n-initial = integer*4."
+
+[[symbol]]
+name = "nseg"
+file = "ft2/ft2_baseline.f90"
+line = 13
+class = 4
+size_bytes = 4
+reason = "DATA nseg/10/ — baseline segment count. Read at :23/:26; never assigned. Mirrors ft4/ft4_baseline.f90:13 nseg (GROUP D, class 4)."
+
+[[symbol]]
+name = "icos4a"
+file = "ft2/genft2.f90"
+line = 27
+class = 4
+size_bytes = 16
+reason = "integer icos4a(4), DATA at :29. Read at :81 to place the sync group; never assigned. Class 4. Mirrors genft4.f90:27 icos4a (GROUP D). Fourth distinct storage of this name in the FT2 group."
+
+[[symbol]]
+name = "icos4b"
+file = "ft2/genft2.f90"
+line = 27
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :30, read at :83. Class 4."
+
+[[symbol]]
+name = "icos4c"
+file = "ft2/genft2.f90"
+line = 27
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :31. Class 4."
+
+[[symbol]]
+name = "icos4d"
+file = "ft2/genft2.f90"
+line = 27
+class = 4
+size_bytes = 16
+reason = "As icos4a. DATA at :32. Class 4."
+
+[[symbol]]
+name = "rvec"
+file = "ft2/genft2.f90"
+line = 26
+class = 4
+size_bytes = 77
+reason = "integer*1 rvec(77), DATA at :33 — the scramble vector, applied at :64. Never assigned. Read-only DATA = class 4. Mirrors genft4.f90:26 rvec (GROUP D). Distinct storage from ft2_triggered_decode's copy."
+
+[[symbol]]
+name = "first"
+file = "ft2/gen_ft2wave.f90"
+line = 8
+class = 2
+size_bytes = 4
+reason = "logical, DATA .true. at :9, SAVEd at :10. Gates pulse/twopi/dt/hmod. Mirrors ft4/gen_ft4wave.f90:9 first (GROUP D, class 2)."
+
+[[symbol]]
+name = "pulse"
+file = "ft2/gen_ft2wave.f90"
+line = 5
+class = 2
+size_bytes = 13824
+reason = "real pulse(3456)=288*4*3*4 bytes... = 13824. Written over pulse(1:3*nsps) inside if(first) where nsps is a DUMMY — first-caller-wins extent, exactly the ft4/gen_ft4wave.f90:5 pulse idiom (GROUP D, class 2 with the same trap). Verified safe TODAY: ft2_cabi.ft2_gen_wave is the ONLY caller and pins nsps=FT2_NSPS=288, so written extent 1:864 always equals read extent. TRAP IF A SECOND CALLER APPEARS with nsps/=288 (a subtractft2 vendoring would be one): the read range diverges from the written range. The cabi banner pins this."
+
+[[symbol]]
+name = "twopi"
+file = "ft2/gen_ft2wave.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "implicit real*4, SAVE-only at :10. Written once inside if(first) as 8*atan(1). Mirrors ft4/gen_ft4wave.f90:10 twopi (GROUP D, class 2)."
+
+[[symbol]]
+name = "dt"
+file = "ft2/gen_ft2wave.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "implicit real*4, SAVE-only at :10. Written once as dt=1.0/fsample where fsample is a DUMMY — the same first-caller-latch that made ft4/gen_ft4wave.f90:10 dt CLASS 1 (GROUP D overturn). The FT2 situation differs decisively: ft2_cabi.ft2_gen_wave is the ONLY caller in the tree (no subtractft2 is vendored, no other Fortran calls gen_ft2wave) and it passes the literal 12000.0, so the latched value is invariant for the life of the process. Class 2 ON THAT EVIDENCE. THE VERDICT FLIPS TO CLASS 1 the day a second caller with a different fsample appears — re-read the ft4 dt row before adding one."
+
+[[symbol]]
+name = "hmod"
+file = "ft2/gen_ft2wave.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "implicit real*4, SAVE-only at :10. Written hmod=1.0 (a literal) once inside if(first); read in dphi_peak. Mirrors ft4/gen_ft4wave.f90:10 hmod (GROUP D, class 2)."

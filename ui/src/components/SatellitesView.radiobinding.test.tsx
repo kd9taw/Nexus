@@ -335,7 +335,7 @@ describe('the radio binding line', () => {
     expect(screen.queryByTestId('sat-radio-binding')).toBeNull()
     api.getSatTransponder.mockImplementation(() => Promise.resolve(heldTuned()))
     fireEvent.click(await screen.findByLabelText('Work SSB/CW linear transponder'))
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 0))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 0, false))
     const bind = await screen.findByTestId('sat-radio-binding')
     expect(bind.textContent).toMatch(/IC-9700/)
   })

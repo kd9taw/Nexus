@@ -228,9 +228,19 @@ export async function getSatTrackStatus(): Promise<import('./types').SatTrackSta
  * Two layers agreeing on a hidden filter is not a contract; the backend now
  * indexes the list the caller was actually shown and REFUSES a dead pick by
  * name instead of shifting everything after it. Do not re-introduce a filter
- * on either side. */
-export async function setSatTransponder(name: string, index: number | null): Promise<void> {
-  return invoke('set_sat_transponder', { name, index })
+ * on either side.
+ *
+ * `auto` says WHO picked: false (the default) = the operator clicked this row,
+ * true = the "Work this pass" chain chose it. The backend needs the difference
+ * because that chain re-runs, and re-running it mid-pass used to move the
+ * operator onto another of the bird's documented pairings — an auto pick is
+ * refused while a pass is engaged on a different row, an operator's is not. */
+export async function setSatTransponder(
+  name: string,
+  index: number | null,
+  auto = false,
+): Promise<void> {
+  return invoke('set_sat_transponder', { name, index, auto })
 }
 
 /** The transponder the ENGINE holds right now (bird + the raw index into the
@@ -787,7 +797,8 @@ export async function getAllSpots(): Promise<import('./types').SpotRow[]> {
   return invoke<import('./types').SpotRow[]>('get_all_spots')
 }
 
-/** Check SourceForge for a newer Nexus release (Phase 1 update check). Rejects offline / on a
+/** Check the release feed (hamradiotools.io, SourceForge as fallback) for a newer Nexus
+ * release (Phase 1 update check). Rejects offline / on a
  * fetch error — callers treat that as a silent no-op. */
 export async function checkForUpdate(): Promise<import('./types').UpdateInfo> {
   return invoke<import('./types').UpdateInfo>('check_for_update')
@@ -2037,9 +2048,9 @@ export async function getSpectrumRow(_transmitting: boolean): Promise<Spectrum> 
  * Fetch one RIG SCOPE row, spread across the window the scope is actually drawing.
  *
  * Same 512 bins as `getSpectrumRow`, same bytes on the wire — but over `loHz..hiHz` instead of
- * the full 0-4000 Hz capture, so the CW cockpit's 300-1100 Hz view gets 1.5625 Hz bins rather
- * than 7.8125. The span request rides this call; there is nothing to set up and nothing to tear
- * down. Ask for a span the backend cannot honour (a native RF panadapter is live, or the numbers
+ * the full 0-4000 Hz capture, so the CW cockpit's 800 Hz pitch-centered view gets 1.5625 Hz
+ * bins rather than 7.8125. The span request rides this call; there is nothing to set up and
+ * nothing to tear down. Ask for a span the backend cannot honour (a native RF panadapter is live, or the numbers
  * are not a sane audio window) and it returns exactly what `getSpectrumRow` would have — so a
  * caller never has to branch on which row it got, only read the `loHz`/`hiHz` it came back with.
  */
@@ -2065,6 +2076,25 @@ export async function getScopeRow(
  * rather than to a blank scope.
  */
 export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
+
+/** Set the MSK144 T/R period (5/10/15/30 s) — the cockpit's narrow write. Deliberately not a
+ * full settings save, which resets the mode and clears the TX queue (#54). */
+export async function setMsk144Period(secs: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_msk144_period', { secs })
+}
+
+/** One Fast Graph power sample: raw 20 ms RMS, monotonic seq for delta polling. */
+export interface FastPowerSample {
+  seq: number
+  unixMs: number
+  rms: number
+}
+
+/** Fast-mode (MSK144) power trace since `sinceSeq` — the Fast Graph's poll. Meter bus only,
+ * no engine mutex, so pings keep rendering while the engine is busy decoding. */
+export async function getFastPower(sinceSeq: number): Promise<FastPowerSample[]> {
+  return invoke<FastPowerSample[]>('get_fast_power', { sinceSeq })
+}
 
 /** Fetch the live meters (RX audio level + CAT S-meter). Lock-free backend-side (no engine
  * mutex), so it is safe to poll fast and a CAT stall cannot freeze it — one shared ~100 ms
