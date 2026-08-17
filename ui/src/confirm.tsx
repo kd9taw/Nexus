@@ -10,8 +10,17 @@
  * operator on 2026-08-14 for Remove radio, then confirmed on Reset: no dialog, no effect, no
  * error. Fifteen destructive actions were built on it.
  *
- * The unit tests could never catch it: they mock `window.confirm` to return `true`, so the suite
- * exercises a dialog that does not exist in the real app.
+ * WHY THE SUITE MISSED IT. Not, as first written here, because tests mocked `window.confirm` to
+ * return `true` — nothing in the suite mocks it at all. It is simpler and worse: none of the
+ * converted paths had ANY coverage. A guard nothing exercises cannot fail, whatever it returns.
+ * `confirm.test.tsx` pins this primitive; `SettingsPanel.removeradio.test.tsx` pins one whole
+ * path end to end, which is what would actually have caught it.
+ *
+ * TWO `window.confirm` CALLS REMAIN, deliberately (SetupHealth's Prove TX, SstvView's ISS
+ * 145.800 guard). Both are transmit-path, so converting them is a TX-behaviour change needing
+ * sign-off rather than part of a UI pass. Note what they do on macOS meanwhile: both read the
+ * inert `false` as "no", so each BLOCKS its action. Safe — nothing keys — but Prove TX is a dead
+ * button there, and SSTV cannot be sent on 145.800 at all.
  *
  * FAIL CLOSED. If the host is not mounted, `confirmDialog` resolves FALSE — a destructive action
  * must never proceed unconfirmed. The opposite default would turn a missing dialog into a silent
