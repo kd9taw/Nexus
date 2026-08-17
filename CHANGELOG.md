@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused removal is a visible error instead of a silent success, and deleting the radio
   the rig form was editing no longer leaves later Saves silently writing to a profile that
   is gone.
+- **The ATU button reaches the FT modes.** Phone, CW and SSTV have carried the rig's
+  built-in-tuner button since it was added; the FT cockpit's TX cluster was missing it.
+  Same rules as everywhere: it appears only when the rig reports a tuner, sits beside
+  Tune, and every refusal is shown with its reason.
 - **The signed macOS bundle carries the microphone entitlement.** Hardened-runtime apps
   need `com.apple.security.device.audio-input` before macOS will even offer the microphone
   permission prompt; without it, RX audio capture can open and deliver silence. The

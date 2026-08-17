@@ -19,7 +19,7 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period } from '../api'
+import { atuTune, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period } from '../api'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
@@ -1008,6 +1008,13 @@ export function OperateCockpit({
           beacon={isBeacon(tier)}
           onSetTxEnabled={onSetTxEnabled}
           onSetTune={onSetTune}
+          onAtuTune={() =>
+            // A control that keys the transmitter must never fail silently: the backend
+            // returns every refusal (TX off, busy, lockout) WITH ITS REASON — show it.
+            void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
           onHaltTx={onHaltTx}
           onSetHoldTxFreq={onSetHoldTxFreq}
           onSetMode={onSetMode}

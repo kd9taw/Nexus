@@ -20,6 +20,11 @@ interface Props {
   radio?: RadioStatus
   onSetTxEnabled?: (on: boolean) => void
   onSetTune?: (on: boolean) => void
+  /** Run the RADIO's own built-in ATU (Phone/CW/SSTV have carried this since #19; the FT
+   * cockpit missed it — operator report 2026-08-17). Button renders only when the rig
+   * reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no ATU is
+   * worse than no button (CockpitHeader's rule, kept identical here). */
+  onAtuTune?: () => void
   onHaltTx?: () => void
   onSetHoldTxFreq?: (on: boolean) => void
   /** The active tier decodes but cannot transmit. NO SHIPPED TIER IS RX-ONLY TODAY —
@@ -86,6 +91,7 @@ export function OperateQsoStrip({
   radio,
   onSetTxEnabled,
   onSetTune,
+  onAtuTune,
   onHaltTx,
   onSetHoldTxFreq,
   rxOnly,
@@ -190,6 +196,23 @@ export function OperateQsoStrip({
           >
             Tune
           </button>
+          {onAtuTune && radio.atu != null && (
+            <button
+              type="button"
+              className="op-btn atu"
+              onClick={onAtuTune}
+              disabled={noTx}
+              title={
+                noTx
+                  ? noTxWhy
+                  : radio.atu
+                  ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
+                  : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is currently bypassed."
+              }
+            >
+              ATU
+            </button>
+          )}
           <button
             type="button"
             className="op-btn stop"
