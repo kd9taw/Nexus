@@ -9,7 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Windows: USB rig interfaces work again — the DE-19/QDX audio regression from 1.3.0.**
+- **The waterfall can no longer freeze and pretend to be live.** Field reports the day after
+  1.6.0: waterfalls stopping after seconds or minutes. Four defenses landed, one per route
+  into the symptom: a stuck transmit-hold now times out after six minutes instead of freezing
+  the display forever; the TX dark band no longer applies to RTTY and SSTV, whose minutes-long
+  overs made it read as a dead display (it remains on FT8, where it belongs); a wedged row
+  fetch is abandoned after five seconds instead of silently ending all display updates for
+  the session — on both the waterfall and the Phone/CW scope; and after an audio-device
+  rebuild, the error banner now stays up until the new device actually delivers samples,
+  so a recovery that silently failed can no longer clear its own warning.
+- **Windows: USB rig interfaces work again- **Windows: USB rig interfaces work again — the DE-19/QDX audio regression from 1.3.0.**
   Reported with a clean regression window (#99, Xiegu DE-19; #104, QRP Labs QDX): audio
   failed to open with "the requested stream type is not supported." A 1.3.0 Linux fix taught
   the audio open to share one device handle when the input and output names match — right on
