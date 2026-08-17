@@ -7085,6 +7085,13 @@ impl RadioLoop {
                                         freq_mhz: dial_mhz,
                                         when_unix: when,
                                         operator: operator.clone(),
+                                        // A Field Day exchange carries no reports/name/power
+                                        // — `None` emits nothing, keeping this contest line
+                                        // byte-identical (#106).
+                                        rst_sent: None,
+                                        rst_rcvd: None,
+                                        name: None,
+                                        power: None,
                                     };
                                     let res = if n3_use_enter {
                                         tempo_net::n3fjp::push_qso_enter(&n3_host, n3_port, &push)

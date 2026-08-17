@@ -14008,6 +14008,13 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
         freq_mhz: dto.freq_mhz,
         when_unix: dto.when_unix,
         operator: mycall,
+        // General-logging extras (#106): a plain (non-contest) QSO carries reports,
+        // a name and power, and the push was dropping all of them on the ACLog side.
+        rst_sent: dto.rst_sent.clone(),
+        rst_rcvd: dto.rst_rcvd.clone(),
+        name: dto.name.clone(),
+        // f64 Display trims a whole-watt value to "100", not "100.0".
+        power: dto.tx_power.map(|w| w.to_string()),
     };
     tempo_net::n3fjp::push_qso(&host, port, &push)
 }

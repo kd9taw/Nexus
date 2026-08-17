@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **N3FJP general logging now carries your reports, the operator's name, and power.**
+  The ACLog push was sending only the contest fields, so RST sent/received, name and
+  TX power logged in Nexus never reached the ACLog side. The Field Day push is
+  unchanged byte for byte — a contest exchange carries none of these. (#106)
 - **Changing bands mid-period no longer lets the old band's last seconds decode into
   the new one.** Audio captured before a QSY was still decoded at the period boundary
   after it, so stations from the band you just left repopulated the roster the band
