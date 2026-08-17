@@ -61,6 +61,12 @@ import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeWindow, isRfScopeSource, sidebandSign, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 
+/** AGC chip labels, in the order Engine::AGC_SPEEDS lists them: AUTO left of the three
+ *  time constants, OFF right of them — the order an operator reads as slowest-reacting
+ *  automation through to no AGC at all. */
+const AGC_LABELS = { auto: 'Auto', fast: 'Fast', mid: 'Mid', slow: 'Slow', off: 'Off' } as const
+
+
 /** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit). */
 const RF_SPANS = [
   { label: 'Full', lo: -1e9, hi: 1e9, title: "The rig's whole scope sweep (set the width on the radio)" },
@@ -333,7 +339,7 @@ export function CwCockpit({
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
-  const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
+  const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -978,7 +984,7 @@ export function CwCockpit({
             {snap.radio.agc != null && (
               <div className="ph-agc" role="group" aria-label="AGC speed" title="AGC time constant — Fast for CW/pileups, Slow for steady copy">
                 <span className="ph-dsplev-lbl">AGC</span>
-                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                {(['auto', 'fast', 'mid', 'slow', 'off'] as const).map((sp) => (
                   <button
                     key={sp}
                     type="button"
@@ -986,7 +992,7 @@ export function CwCockpit({
                     aria-pressed={agc === sp}
                     onClick={() => changeAgc(sp)}
                   >
-                    {sp === 'fast' ? 'Fast' : sp === 'mid' ? 'Mid' : 'Slow'}
+                    {AGC_LABELS[sp]}
                   </button>
                 ))}
               </div>

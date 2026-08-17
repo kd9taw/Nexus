@@ -44,6 +44,12 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 
+/** AGC chip labels, in the order Engine::AGC_SPEEDS lists them: AUTO left of the three
+ *  time constants, OFF right of them — the order an operator reads as slowest-reacting
+ *  automation through to no AGC at all. */
+const AGC_LABELS = { auto: 'Auto', fast: 'Fast', mid: 'Mid', slow: 'Slow', off: 'Off' } as const
+
+
 interface Props {
   /** Which panels this cockpit shows or hides (⊞ Panels). Owned by the HOST (App), never
    * here — the cockpit remounts on nav and would drop the record. Absent ⇒ every panel shows
@@ -272,7 +278,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
-  const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
+  const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -859,7 +865,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {snap.radio.agc != null && (
               <div className="ph-agc" role="group" aria-label="AGC speed" title="AGC time constant">
                 <span className="ph-dsplev-lbl">AGC</span>
-                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                {(['auto', 'fast', 'mid', 'slow', 'off'] as const).map((sp) => (
                   <button
                     key={sp}
                     type="button"
@@ -867,7 +873,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                     aria-pressed={agc === sp}
                     onClick={() => changeAgc(sp)}
                   >
-                    {sp === 'fast' ? 'Fast' : sp === 'mid' ? 'Mid' : 'Slow'}
+                    {AGC_LABELS[sp]}
                   </button>
                 ))}
               </div>

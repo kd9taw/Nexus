@@ -1189,7 +1189,7 @@ export async function setNrLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_nr_level', { level })
 }
 /** Set the AGC speed ("fast" | "mid" | "slow"). */
-export async function setAgc(speed: 'fast' | 'mid' | 'slow'): Promise<AppSnapshot> {
+export async function setAgc(speed: 'auto' | 'fast' | 'mid' | 'slow' | 'off'): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_agc', { speed })
 }
 
