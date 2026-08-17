@@ -8809,6 +8809,94 @@ fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, Str
     Ok(rtty_state_dto(&eng))
 }
 
+/// Live PSK31 receive state for the cockpit poll. RX ONLY — no PSK transmit
+/// path exists this phase, so unlike `RttyStateDto` there is deliberately no
+/// TX surface here for a control to wire to.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PskStateDto {
+    armed: bool,
+    /// AFC correction from the netted center (Hz; slew-limited, clamped ±25).
+    afc_hz: f32,
+    /// The demodulator's quality squelch reads a signal right now.
+    signal: bool,
+    /// Audio center (Hz) the decoder is netted on (waterfall cursor position).
+    center_hz: f32,
+    /// The decoded-text ring tail (caps at ~4000 chars; oldest drop off).
+    text: String,
+    /// Per-character confidence 0–100, parallel to `text`'s chars — render low
+    /// values faint (the phase-margin soft metric).
+    char_conf: Vec<u8>,
+}
+
+fn psk_state_dto(eng: &Engine) -> PskStateDto {
+    let s = eng.psk_state();
+    PskStateDto {
+        armed: s.armed,
+        afc_hz: s.afc_hz,
+        signal: s.signal,
+        center_hz: s.center_hz,
+        text: s.text,
+        char_conf: s.conf,
+    }
+}
+
+/// Arm/disarm the PSK31 RX decoder by an EXPLICIT operator act (session-only —
+/// never persisted, so the app never launches armed). Stopping it here is
+/// remembered for the session — `psk_auto_arm` will not restart it behind the
+/// operator. Returns the fresh state.
+#[tauri::command(async)]
+fn psk_arm(state: State<'_, SharedEngine>, on: bool) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_psk_armed(on);
+    Ok(psk_state_dto(&eng))
+}
+
+/// Arm the decoder because the operator ENTERED the PSK view. Receive-only by
+/// construction (no PSK TX path exists): only upgrades from off, refuses once
+/// the operator has explicitly stopped it this session, and refuses for good
+/// when the Settings opt-out is off. See `Engine::psk_auto_arm` for the policy.
+#[tauri::command(async)]
+fn psk_auto_arm(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_auto_arm();
+    Ok(psk_state_dto(&eng))
+}
+
+/// The live PSK state (poll while the PSK cockpit is visible).
+#[tauri::command(async)]
+fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let eng = engine_lock(&state);
+    Ok(psk_state_dto(&eng))
+}
+
+/// Clear the decoded-PSK transcript (display only; the decoder keeps running).
+#[tauri::command(async)]
+fn psk_clear(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_clear();
+    Ok(psk_state_dto(&eng))
+}
+
+/// Drop + rebuild the PSK demodulator (the cockpit's Re-acquire — a fresh
+/// slew-limited AFC pull from the netted center). RX only.
+#[tauri::command(async)]
+fn psk_afc_reset(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.request_psk_afc_reset();
+    Ok(psk_state_dto(&eng))
+}
+
+/// Net the PSK decoder onto a new audio center (Hz) from a waterfall click —
+/// the single-signal click-to-tune (the CW/RTTY precedent). RX-only decoder
+/// state, so it needs no TX/privilege gate and is safe during a transmission.
+#[tauri::command(async)]
+fn psk_net(state: State<'_, SharedEngine>, hz: f32) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_net(hz);
+    Ok(psk_state_dto(&eng))
+}
+
 /// Turn the RTTY auto-sequencer on/off. On builds the sequencer from the operator's
 /// identity + active exchange (Field Day class/section vs casual RST/name/QTH); off
 /// aborts any live session and stops TX. NEVER transmits — a session only ever
@@ -16318,6 +16406,12 @@ pub fn run() {
             rtty_auto_cq,
             rtty_auto_answer,
             rtty_auto_abort,
+            psk_arm,
+            psk_auto_arm,
+            get_psk_state,
+            psk_clear,
+            psk_afc_reset,
+            psk_net,
             sstv_arm,
             sstv_auto_arm,
             sstv_auto_disarm,
@@ -16629,11 +16723,12 @@ pub fn run() {
                     }
                 }
             }
-            // RTTY + SSTV RX decode threads — RX ONLY (arming is per-session
+            // RTTY + PSK + SSTV RX decode threads — RX ONLY (arming is per-session
             // runtime state; nothing here can key PTT or emit TX audio).
             #[cfg(feature = "radio")]
             {
                 tempo_audio::rttyrx::spawn_rtty_rx(app.state::<SharedEngine>().inner().clone());
+                tempo_audio::pskrx::spawn_psk_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::aprsrx::spawn_aprs_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::sstvrx::spawn_sstv_rx(
                     app.state::<SharedEngine>().inner().clone(),

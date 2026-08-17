@@ -1458,6 +1458,17 @@ pub struct Settings {
     /// it can lower power past the operator's cap but never raise it past one.
     #[serde(default)]
     pub sstv_tx_power_pct: Option<u8>,
+    /// Whether opening the PSK view starts the receiver.
+    ///
+    /// The SSTV/APRS auto-arm doctrine, applied to PSK31 from day one (operator
+    /// ruling 2026-08-17): there is exactly one reason to be on a receive screen
+    /// with a receiver, so entering the view arms it — and this is the opt-out
+    /// for the operator monitoring on a shared rig. The gate lives in
+    /// [`crate::engine::Engine::psk_auto_arm`], not the view, so a remount
+    /// cannot lose it; stopping the receiver by hand is separately remembered
+    /// for the session (the decline memory), exactly as SSTV/APRS do.
+    #[serde(default = "default_true")]
+    pub psk_rx_auto_arm: bool,
 
     // --- alerts / comforts ---
     /// Alert (sound + visual) when your callsign is decoded (someone calling you).
@@ -2721,6 +2732,7 @@ impl Default for Settings {
             sstv_rx_auto_arm: true,
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
+            psk_rx_auto_arm: true,
             alert_my_call: true,
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
@@ -4819,6 +4831,30 @@ mod tests {
         assert!(!off.sstv_rx_auto_arm);
         assert_eq!(off.sstv_default_tx_mode, "martin1");
         assert_eq!(off.sstv_tx_power_pct, Some(40));
+    }
+
+    /// The PSK section's one field, on the exact wire key the UI hand-writes —
+    /// the same interior-acronym trap the SSTV test above documents
+    /// (`pskRXAutoArm` would compile clean on both sides and never match).
+    #[test]
+    fn psk_settings_default_and_wire_key() {
+        let s = Settings::default();
+        assert!(
+            s.psk_rx_auto_arm,
+            "opening the PSK view arms the receiver — the easy-defaults premise"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"pskRxAutoArm\":true"),
+            "missing wire key pskRxAutoArm in {json}"
+        );
+        // An upgrader's file predates the key: behaviour unchanged. And an
+        // explicit opt-out survives the round trip (a default that ignored the
+        // file would pass the first assertion alone).
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(old.psk_rx_auto_arm);
+        let off: Settings = serde_json::from_str(r#"{"pskRxAutoArm":false}"#).unwrap();
+        assert!(!off.psk_rx_auto_arm);
     }
 
     #[test]

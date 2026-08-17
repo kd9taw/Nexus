@@ -2144,6 +2144,37 @@ pub struct Engine {
     /// over has fully keyed out — the edge the service tick turns into exactly one
     /// `on_tx_complete` (restarting the sequencer's reply timer).
     rtty_auto_over: bool,
+    // --- PSK31 RX (Keyboard Modes Phase 1 — RECEIVE ONLY; no PSK TX path exists,
+    // so nothing in this block can key the rig). ---
+    /// PSK31 RX decoder armed (session-only runtime state, never persisted — the
+    /// decoder must never come up armed at launch except via the view-entry
+    /// auto-arm policy in [`Engine::psk_auto_arm`], which is itself RX-only).
+    psk_armed: bool,
+    /// The operator explicitly stopped the PSK decoder this session, so entering
+    /// the PSK view must not quietly restart it behind them (the APRS/SSTV
+    /// decline-memory doctrine). Session-only; a manual arm retires it.
+    psk_auto_arm_declined: bool,
+    /// Drain buffer for the PSK decode thread: 12 kHz RX audio accumulates here
+    /// while armed; the thread empties it via [`Engine::take_psk_audio`]. Empty
+    /// (zero cost) while disarmed.
+    psk_audio: Vec<f32>,
+    /// Ring of decoded PSK31 characters (+ per-char phase-margin confidence),
+    /// capped at [`PSK_TEXT_CAP`] — the cockpit transcript. Pushed by the
+    /// decode thread.
+    psk_chars: VecDeque<tempo_core::textmode::DecodedChar>,
+    /// Latest AFC correction (Hz) reported by the PSK demodulator — slew-limited
+    /// and clamped to ±25 Hz around the netted center, by the demod's design.
+    psk_afc_hz: f32,
+    /// Whether the PSK demodulator's quality squelch currently reads a signal
+    /// (the cockpit's carrier indicator).
+    psk_signal: bool,
+    /// One-shot: drop + rebuild the RX demodulator (the cockpit's Re-acquire —
+    /// fresh AFC pull from the netted center).
+    psk_afc_reset: bool,
+    /// Audio center (Hz) the PSK decoder is netted on. `None` = un-netted, which
+    /// resolves to the 1 kHz PSK31 convention (the `PskConfig` default). A
+    /// waterfall click sets it via [`Engine::psk_net`]. RX only.
+    psk_center: Option<f32>,
     /// APRS (AFSK-1200 / AX.25) RX decoder arm state + HOW it was armed (session-only, never
     /// persisted). See [`AprsArm`] — the distinction gates the auto-ack, so it is TX-safety state.
     aprs_arm: AprsArm,
@@ -2265,6 +2296,9 @@ const AI_CW_WINDOW: usize = 180_000;
 const QSO_WAV_WINDOW: usize = 720_000;
 /// RTTY decoded-character ring cap: ~4000 chars ≈ tens of minutes of copy at 45.45 baud.
 const RTTY_TEXT_CAP: usize = 4000;
+/// PSK31 decoded-character ring cap — the RTTY sizing (PSK31 copies even slower,
+/// ~4 chars/s, so 4000 chars is comfortably tens of minutes of transcript).
+const PSK_TEXT_CAP: usize = 4000;
 /// AFSK RTTY mark tone (Hz) — mirrors `tempo_audio::rtty_afsk::MARK_HZ` (tempo-app can't
 /// depend on tempo-audio); used only to judge where the AFSK emission lands vs the dial.
 const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
@@ -2977,6 +3011,24 @@ pub struct RttyRxState {
     pub heard_cq: Option<String>,
 }
 
+/// Compact PSK31 state for the `get_psk_state` poll: armed flag, AFC, signal
+/// presence, the netted audio center, and the decoded-text ring with
+/// per-character confidence (0–100, parallel to `text`'s chars — render low
+/// values faint). RX ONLY — PSK TX does not exist this phase, so unlike
+/// [`RttyRxState`] there is deliberately no TX surface here to wire a control to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PskRxState {
+    pub armed: bool,
+    /// AFC correction from the netted center (Hz; slew-limited, clamped ±25).
+    pub afc_hz: f32,
+    /// The demodulator's quality squelch reads a signal right now.
+    pub signal: bool,
+    /// Audio center (Hz) the decoder is netted on (waterfall cursor position).
+    pub center_hz: f32,
+    pub text: String,
+    pub conf: Vec<u8>,
+}
+
 /// One operation applied to the RTTY auto-sequencer via [`Engine::rtty_drive`].
 enum RttyOp {
     /// Operator initiates a CQ run (a human-initiate gate).
@@ -3567,6 +3619,14 @@ impl Engine {
             rtty_keyer_error: None,
             rtty_seq: None,
             rtty_auto_over: false,
+            psk_armed: false,
+            psk_auto_arm_declined: false,
+            psk_audio: Vec::new(),
+            psk_chars: VecDeque::new(),
+            psk_afc_hz: 0.0,
+            psk_signal: false,
+            psk_afc_reset: false,
+            psk_center: None,
             aprs_arm: AprsArm::Off,
             aprs_stations: std::collections::HashMap::new(),
             aprs_uplink_queue: VecDeque::new(),
@@ -10293,6 +10353,13 @@ impl Engine {
                 self.rtty_audio.drain(0..drop);
             }
         }
+        if self.psk_armed {
+            self.psk_audio.extend_from_slice(samples);
+            if self.psk_audio.len() > RX_TAP_CAP {
+                let drop = self.psk_audio.len() - RX_TAP_CAP;
+                self.psk_audio.drain(0..drop);
+            }
+        }
         if self.aprs_arm.is_armed() {
             self.aprs_audio.extend_from_slice(samples);
             if self.aprs_audio.len() > RX_TAP_CAP {
@@ -11183,6 +11250,139 @@ impl Engine {
         self.rtty_center = Some(hz.clamp(300.0, 3700.0));
         // Rebuild the demod around the new center (zeros AFC + arms the reset).
         self.request_rtty_afc_reset();
+    }
+
+    // --- PSK31 RX (armed decoder on the RX audio path; decode runs in the
+    // tempo-audio `pskrx` thread). RX ONLY — no PSK TX path exists this phase,
+    // so nothing in this block can key the rig, and there is no gate to weaken. ---
+
+    /// Arm/disarm the PSK31 RX decoder by an EXPLICIT operator act. Session-only
+    /// (never persisted, so the app never launches armed). Arming starts a fresh
+    /// transcript; disarming keeps the transcript readable, stops the audio tap
+    /// immediately, and is REMEMBERED for the session (the decline memory), so
+    /// re-entering the view cannot restart the decoder behind the operator.
+    pub fn set_psk_armed(&mut self, on: bool) {
+        if on && !self.psk_armed {
+            self.psk_chars.clear();
+            self.psk_afc_hz = 0.0;
+            self.psk_signal = false;
+        }
+        if on {
+            // An explicit Arm is the operator's LATEST decision, so it retires an
+            // earlier Stop — the SSTV lesson: without this, stop → arm → (any
+            // automatic disarm) left every later view entry silently refusing to
+            // start the receiver, the field bug one step removed.
+            self.psk_auto_arm_declined = false;
+        } else {
+            self.psk_audio.clear();
+            // An operator who stopped the decoder has made a decision. Remember
+            // it for the rest of the session.
+            self.psk_auto_arm_declined = true;
+        }
+        self.psk_armed = on;
+    }
+
+    /// Arm the decoder because the operator ENTERED the PSK view — the APRS/SSTV
+    /// auto-arm doctrine (operator ruling 2026-08-17): a receive screen with a
+    /// dead receiver is the field bug, so entry starts it. Returns whether this
+    /// call armed it.
+    ///
+    /// Only ever an upgrade from disarmed; refuses once the operator has
+    /// explicitly stopped the decoder this session, and refuses for good when
+    /// Settings ▸ Digital ▸ PSK ▸ "Start receiving when PSK opens" is off. The
+    /// policy lives here rather than in the view so it survives a remount and is
+    /// testable without a webview. RX ONLY — there is no PSK TX path, so this
+    /// cannot key anything.
+    pub fn psk_auto_arm(&mut self) -> bool {
+        if self.psk_armed || self.psk_auto_arm_declined || !self.settings.psk_rx_auto_arm {
+            return false;
+        }
+        self.psk_chars.clear();
+        self.psk_afc_hz = 0.0;
+        self.psk_signal = false;
+        self.psk_armed = true;
+        true
+    }
+
+    /// Whether the PSK RX decoder is armed (read by the decode thread's gate).
+    pub fn psk_armed(&self) -> bool {
+        self.psk_armed
+    }
+
+    /// Drain the armed PSK audio tap (12 kHz mono since the last take). The
+    /// decode thread calls this under a brief lock; the demod runs off-lock.
+    pub fn take_psk_audio(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.psk_audio)
+    }
+
+    /// Record what the decode thread just produced: decoded characters (ring,
+    /// capped), the live AFC correction, and whether the quality squelch reads
+    /// a signal.
+    pub fn push_psk_decode(
+        &mut self,
+        chars: &[tempo_core::textmode::DecodedChar],
+        afc_hz: f32,
+        signal: bool,
+    ) {
+        self.psk_chars.extend(chars.iter().copied());
+        while self.psk_chars.len() > PSK_TEXT_CAP {
+            self.psk_chars.pop_front();
+        }
+        self.psk_afc_hz = afc_hz;
+        self.psk_signal = signal;
+    }
+
+    /// The compact PSK state the UI polls (`get_psk_state`).
+    pub fn psk_state(&self) -> PskRxState {
+        PskRxState {
+            armed: self.psk_armed,
+            afc_hz: self.psk_afc_hz,
+            signal: self.psk_signal,
+            center_hz: self.psk_center_hz(),
+            text: self.psk_chars.iter().map(|c| c.ch).collect(),
+            conf: self
+                .psk_chars
+                .iter()
+                .map(|c| (c.confidence.clamp(0.0, 1.0) * 100.0).round() as u8)
+                .collect(),
+        }
+    }
+
+    /// Clear the decoded-PSK transcript (the cockpit's Clear button). RX display
+    /// only — the demodulator keeps running.
+    pub fn psk_clear(&mut self) {
+        self.psk_chars.clear();
+    }
+
+    /// Request an RX demodulator rebuild (the cockpit's Re-acquire): the decode
+    /// thread drops its demod and builds a fresh one — a clean AFC pull from the
+    /// netted center. RX only.
+    pub fn request_psk_afc_reset(&mut self) {
+        self.psk_afc_reset = true;
+        self.psk_afc_hz = 0.0;
+        self.psk_signal = false;
+    }
+
+    /// Take + reset the one-shot demod-rebuild request (decode-thread only).
+    pub fn take_psk_afc_reset(&mut self) -> bool {
+        std::mem::take(&mut self.psk_afc_reset)
+    }
+
+    /// The audio center (Hz) the PSK demod nets around. Un-netted resolves to
+    /// the `PskConfig` default (the 1 kHz PSK31 convention) so the engine and
+    /// the demodulator can never disagree about where "un-netted" sits.
+    pub fn psk_center_hz(&self) -> f32 {
+        self.psk_center
+            .unwrap_or_else(|| tempo_core::psk::PskConfig::default().center_hz)
+    }
+
+    /// Net the PSK decoder onto a new audio center (Hz) — a waterfall click,
+    /// the single-signal click-to-tune (the CW/RTTY precedent). Clamps into the
+    /// audio passband, then rebuilds the demod around the new center. RX-only
+    /// decoder state, so this is safe during TX and needs no privilege gate.
+    pub fn psk_net(&mut self, hz: f32) {
+        self.psk_center = Some(hz.clamp(300.0, 3700.0));
+        self.request_psk_afc_reset();
     }
 
     // ----- RTTY transmit — operator-initiated, mirroring the CW send path. -----
@@ -16531,6 +16731,117 @@ mod tests {
         // Re-arming starts a fresh transcript (a new copy session).
         e.set_rtty_armed(true);
         assert!(e.rtty_state().text.is_empty());
+    }
+
+    #[test]
+    fn psk_arm_gates_tap_accumulates_ring_and_caps() {
+        use tempo_core::textmode::DecodedChar;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+
+        // Disarmed = zero added work: the tap stays empty however much audio flows.
+        e.feed_rx_audio(&[0.0; 256]);
+        assert!(e.take_psk_audio().is_empty(), "disarmed tap never fills");
+        assert!(!e.psk_state().armed);
+
+        // Armed: RX audio accumulates; take() drains it for the decode thread.
+        e.set_psk_armed(true);
+        e.feed_rx_audio(&[0.0; 256]);
+        e.feed_rx_audio(&[0.0; 100]);
+        assert_eq!(e.take_psk_audio().len(), 356);
+        assert!(e.take_psk_audio().is_empty(), "take drains");
+
+        // Synthesized decode push → state carries text + parallel confidence +
+        // AFC + signal presence.
+        let chars: Vec<DecodedChar> = "CQ de W1ABC"
+            .chars()
+            .map(|ch| DecodedChar {
+                ch,
+                confidence: 0.9,
+            })
+            .collect();
+        e.push_psk_decode(&chars, -12.5, true);
+        let s = e.psk_state();
+        assert!(s.armed);
+        assert_eq!(s.text, "CQ de W1ABC");
+        assert_eq!(s.conf.len(), s.text.chars().count());
+        assert_eq!(s.conf[0], 90, "0..1 confidence maps to 0..100");
+        assert!((s.afc_hz + 12.5).abs() < 1e-6);
+        assert!(s.signal);
+
+        // The ring caps at 4000 chars — oldest drop off the front.
+        let many = vec![
+            DecodedChar {
+                ch: 'X',
+                confidence: 1.0,
+            };
+            PSK_TEXT_CAP + 500
+        ];
+        e.push_psk_decode(&many, 0.0, true);
+        assert_eq!(e.psk_state().text.chars().count(), PSK_TEXT_CAP);
+
+        // Disarm: the tap stops immediately, but the transcript stays readable.
+        e.set_psk_armed(false);
+        e.feed_rx_audio(&[0.0; 64]);
+        assert!(e.take_psk_audio().is_empty());
+        let s = e.psk_state();
+        assert!(!s.armed);
+        assert_eq!(
+            s.text.chars().count(),
+            PSK_TEXT_CAP,
+            "transcript survives disarm"
+        );
+
+        // Re-arming starts a fresh transcript (a new copy session).
+        e.set_psk_armed(true);
+        assert!(e.psk_state().text.is_empty());
+    }
+
+    #[test]
+    fn psk_auto_arm_policy_mirrors_aprs_and_sstv() {
+        // The view-entry arm: on by default, once per need; an explicit stop is
+        // remembered for the session; an explicit arm retires the decline; the
+        // Settings opt-out refuses it entirely. The policy lives in the engine
+        // so a cockpit remount cannot lose it (the APRS armed-desync lesson).
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(e.psk_auto_arm(), "first view entry arms");
+        assert!(e.psk_armed());
+        assert!(!e.psk_auto_arm(), "already armed — entry is a no-op");
+
+        // The operator stops the decoder: view entry must NOT restart it.
+        e.set_psk_armed(false);
+        assert!(!e.psk_auto_arm(), "declined for the session");
+        assert!(!e.psk_armed());
+
+        // An explicit Arm is the operator's latest decision — it retires the
+        // decline (the SSTV stop→arm→auto-disarm regression, pinned here too).
+        e.set_psk_armed(true);
+        e.psk_armed = false; // an automatic disarm, NOT an operator stop
+        assert!(e.psk_auto_arm(), "explicit re-arm retired the decline");
+
+        // The persisted opt-out refuses the auto-arm outright; the explicit Arm
+        // button is unaffected.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.psk_rx_auto_arm = false;
+        assert!(!e.psk_auto_arm(), "setting off = never auto-arm");
+        e.set_psk_armed(true);
+        assert!(e.psk_armed(), "manual arm still works with the setting off");
+    }
+
+    #[test]
+    fn psk_net_clamps_and_rearms_the_demod() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Un-netted resolves to the demod's own default center — one source of truth.
+        assert_eq!(
+            e.psk_center_hz(),
+            tempo_core::psk::PskConfig::default().center_hz
+        );
+        e.psk_net(1500.0);
+        assert_eq!(e.psk_center_hz(), 1500.0);
+        assert!(e.take_psk_afc_reset(), "a net arms the demod rebuild");
+        assert!(!e.take_psk_afc_reset(), "take resets the one-shot");
+        // Passband clamp: a click off the audio edge cannot strand the decoder.
+        e.psk_net(50_000.0);
+        assert_eq!(e.psk_center_hz(), 3700.0);
     }
 
     #[test]
