@@ -81,7 +81,7 @@ fn mixed_case_band_labels_credit_the_same_slot() {
 #[test]
 fn digital_submode_spellings_all_credit_the_digital_slot() {
     for spelling in [
-        "FT8", "FT4", "MFSK", "MSK144", "RTTY", "PSK31", "PKT", "JS8", "FT1",
+        "FT8", "FT4", "FT2", "MFSK", "MSK144", "RTTY", "PSK31", "PKT", "JS8", "FT1",
     ] {
         let mut n = LogNeeds::new();
         n.add("RF9C", "30m", spelling, None, None, false);

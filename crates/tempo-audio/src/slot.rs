@@ -468,6 +468,12 @@ mod tests {
             (12_640.0, 15_000.0, "FT8"),
             (5_040.0, 7_500.0, "FT4"),
             (14_688.0, 15_000.0, "MSK144-15"),
+            // FT2: 2.52 s of tones from the slot start in a 3.75 s period. The SHORTEST
+            // period here, but not the tightest fit — 3020 + 250 ms of tail leaves
+            // ~980 ms of slack, more than MSK144-15's ~312 ms and unlike FT1's −250 ms
+            // it does not clamp on an on-time over. Swept anyway: the clamp is what
+            // makes a pathological stall unrepresentable rather than merely unlikely.
+            (2_520.0, 3_750.0, "FT2"),
         ] {
             let slot_start = 1_000.0 * period_ms;
             // Every 10 ms of phase across a whole slot.
@@ -484,6 +490,41 @@ mod tests {
                 phase += 10.0;
             }
         }
+    }
+
+    #[test]
+    fn ft2_has_real_slack_in_the_shortest_period_in_the_app() {
+        // ⭐ THE MARGIN CHECK FOR THE TIGHTEST SLOT CLOCK WE SHIP. FT2's 3.75 s
+        // period is shorter than FT1's 4 s, and FT1 "carries no slack at all" — so
+        // the question is whether FT2 inherits that hazard. It does NOT, and the
+        // reason is the buffer: FT1's gen_wave returns a FIXED full-period 4.000 s
+        // buffer, while FT2's returns exactly lead + tones and stops.
+        //
+        // Asserted rather than reasoned, because the failure mode is silent: a
+        // negative margin does not error, it quietly clamps every over and eats the
+        // tail that protects the end of the signal from soundcard output latency.
+        const FT2_AUDIO_MS: f64 = 2_520.0; // 30240 samples of tones from the slot start
+        const FT2_PERIOD_MS: f64 = 3_750.0;
+        let slack = FT2_PERIOD_MS - (FT2_AUDIO_MS + TX_TAIL_MS);
+        assert!(
+            slack > 0.0,
+            "FT2's over no longer fits its own period: {slack:.1} ms of slack. Do NOT widen the \
+             clamp to make this pass — the geometry changed, and an over that overruns \
+             transmits into the period we are supposed to be receiving in"
+        );
+        assert!(
+            (slack - 980.0).abs() < 1.0,
+            "FT2's slack moved from the 980 ms this build ships, to {slack:.1} ms"
+        );
+        // And the consequence that slack buys: an ON-TIME FT2 over is NOT clamped,
+        // so it keeps its whole tail — unlike FT1, which is clamped at every phase.
+        let slot_start = 1_000_000.0 * FT2_PERIOD_MS;
+        let got = tx_deadline_ms(slot_start, FT2_AUDIO_MS, FT2_PERIOD_MS);
+        assert_eq!(
+            got,
+            slot_start + FT2_AUDIO_MS + TX_TAIL_MS,
+            "an on-time FT2 over must reach its natural end, not the boundary clamp"
+        );
     }
 
     #[test]

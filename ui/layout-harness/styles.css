@@ -1696,10 +1696,28 @@ button.nb-chip:hover {
 }
 .conn-dot.on { background: var(--state-good); }
 .conn-dot.off { background: var(--text-faint); }
+/* Failing/paused uses the same ink as .conn-test-result.fail below — one "this connector
+   is not working" colour in this panel, not two. Amber is the never-verified case: not a
+   fault, not a clean bill of health. */
+.conn-dot.bad { background: var(--state-weak); }
+.conn-dot.warn { background: var(--state-ok); }
 .conn-name { font-weight: 700; min-width: 11ch; }
 .conn-id { color: var(--text-dim); min-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
 .conn-state.on { color: var(--state-good); }
 .conn-state.off { color: var(--text-faint); }
+.conn-state.bad { color: var(--state-weak); }
+.conn-state.warn { color: var(--state-ok); }
+/* A long service message must never wrap the row — it ellipsizes and the full text is on
+   the title attribute. Sits BEFORE .settings-test-btn, whose margin-left:auto would
+   otherwise push it to the far edge. */
+.conn-when {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 .settings-test-btn {
   margin-left: auto;
   padding: 2px var(--space-3);
@@ -1829,6 +1847,11 @@ button.nb-chip:hover {
   color: var(--text-dim);
   font-size: 0.85rem;
   margin-top: 2px;
+}
+/* Beam heading on the selected-station card, right after the entity name. */
+.connect-sel .cs-az {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .connect-sel .cs-spot {
   color: var(--text);
@@ -2002,6 +2025,15 @@ button.nb-chip:hover {
   font-size: var(--fs-micro);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Beam heading beside the entity on both chase panes. `flex:none` for the same
+   reason as everywhere else: the country name may truncate, the number may not. */
+.chase-az {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .chase-age {
@@ -3288,6 +3320,27 @@ button {
   cursor: pointer;
 }
 
+/* A placeholder is a HINT, not a value (issue #76 — "placeholders read as entered values in
+   dark mode"). ::placeholder is a pseudo-element with its own cascade: given no rule of its
+   own it INHERITS `color` from the field, and Chromium derives its default placeholder ink
+   from that currentColor. Every input that sets `color: var(--text)` — `.settings-input` and
+   ~30 other classes, ~125 placeholder attributes — therefore drew its hint at very nearly the
+   brightness of a real entry, so "127.0.0.1:5002" read as a configured host on dark. One bare
+   selector fixes all of them at once; the two class-scoped placeholder rules further down
+   (.composer-input, .np-search input) are (0,1,1) and (0,1,2) against this (0,0,2), so they
+   still win and nothing they style changes.
+   Colour only, NO italic — deliberate: those two shipped rules set colour alone, so italic
+   here would restyle two working inputs for something nobody reported, and most of these
+   hints are literal machine text (COM16, 127.0.0.1:5002, W9XYZ-9) where italic at 11-14px
+   costs exactly the character-by-character legibility they exist to demonstrate.
+   `opacity: 1` because Firefox applies its own opacity to ::placeholder and would fade the
+   ink straight back out. Guard: styles-placeholder.test.tsx. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
+
 h2 {
   margin: 0;
   font-size: 13px;
@@ -3531,11 +3584,42 @@ body.resizing {
   margin: 0 auto;
 }
 /* xl (effective width ≥ 2400): let the DATA surfaces — Logbook's 11-column table
-   and the Program workbench — use the room. Prose-shaped panels (Settings, POTA)
-   keep the 1100px measure above. */
+   and the Program workbench — use the room. POTA is prose-shaped and keeps the
+   1100px measure above; Settings USED to, and the rule below is why it no longer does. */
 [data-viewport='xl'] .layout.single > .panel.log-view,
 [data-viewport='xl'] .layout.single > .panel.radioprog {
   max-width: 1600px;
+}
+/* SETTINGS IS NOT PROSE-SHAPED, and calling it that cost it half the window.
+   (Operator, 2026-08-12: "make the settings full screen. It's small and in the middle.
+   You have the opportunity to put far more on the page vs scrolling.")
+
+   WHY THE OLD PREMISE WAS WRONG. A measure exists to stop a LINE of text getting so long
+   the eye loses the return sweep. Settings has almost no lines: its content is 40
+   `.settings-grid`s of `repeat(auto-fill, minmax(220px, 1fr))` labelled controls. Width
+   there buys COLUMNS, not longer lines — so the 1100px cap was not protecting legibility,
+   it was converting horizontal room into vertical scrolling, in the one view whose whole
+   complaint is that it is too deep to navigate. The genuinely prose-shaped fragments
+   inside it are capped individually further down (see THE PROSE AUDIT) — that is the
+   right altitude for a measure, because it is where the prose actually is.
+
+   WHY `none` AND NOT A BIGGER NUMBER. 1600px (Logbook's) still leaves a 320px gutter at
+   1920, which is the size the report came from — it would have answered the letter of
+   "wider" and none of "full screen". There is no content in here whose correctness
+   depends on the PANEL's width once the four caps below are in place; the panel is a
+   frame, so let it be the window.
+
+   WHY md AND UP, AND WHY THAT CANNOT MOVE THE FLOOR. md/lg/xl is *exactly* the set of
+   tiers where the 1100px cap could ever bind — classifyViewport starts md at 1100
+   effective px, so at xs/sm the cap is inert by arithmetic, not by luck. Scoping the
+   override to md+ therefore leaves the 1024×768 supported floor bit-identical rather
+   than merely "probably unchanged". Computed per tier in settings-width.test.tsx.
+   1920 lands in **lg**, not xl — an xl-only override (≥2400) would have left the
+   reported window untouched, which is the trap the rule above sets. */
+[data-viewport='md'] .layout.single > .panel.settings-panel,
+[data-viewport='lg'] .layout.single > .panel.settings-panel,
+[data-viewport='xl'] .layout.single > .panel.settings-panel {
+  max-width: none;
 }
 /* Connect must flex-FILL rather than block-scroll — its map needs a DEFINITE height
    (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
@@ -4603,6 +4687,14 @@ select optgroup {
   border: 1px solid color-mix(in srgb, var(--text-faint) 35%, transparent);
   border-radius: 999px;
   padding: 1px 6px;
+}
+/* WSJT-X's stronger scope: worked before ON THIS BAND (CallBand). Solid where the plain chip
+   is hollow, so the two read apart at a glance. Uses --text-dim, deliberately not the need
+   palette — B4 is a fact about your log, not something to chase. */
+.b4-chip.b4-band {
+  color: var(--bg, #0b0f14);
+  background: var(--text-dim);
+  border-color: var(--text-dim);
 }
 
 /* Grid-rarity gem — ◆ rare (amber) / ◆◆ ultra-rare water-only (violet), beside
@@ -7945,6 +8037,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-color: var(--state-weak);
   box-shadow: 0 0 18px color-mix(in srgb, var(--state-weak) 60%, transparent);
 }
+/* TX switched off (#81): the button is still LIVE — clicking it turns transmit back on — but
+   it must not wear the accent, which is this cockpit's "ready to key" colour. An operator who
+   reads colour before text saw a ready button over a rig that could not be keyed. Not the
+   `:disabled` styling either: that says "there is nothing you can do here", and there is. */
+.ph-ptt.txoff {
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border-color: var(--border);
+}
 .ph-lock {
   display: inline-flex;
   align-items: center;
@@ -8844,6 +8945,84 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-faint);
   font-family: var(--font-mono);
 }
+/* Find-a-setting search (settings header). Uses only theme variables so it follows both
+   themes without a second rule block — see the responsive/theming contract. */
+.settings-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  margin-right: var(--space-2);
+}
+.settings-search-icon {
+  position: absolute;
+  left: 6px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.settings-search-input {
+  width: 190px;
+  /* the header must not push the build stamp off a 1024-wide window; --vw-eff, not raw
+     vw, because raw viewport units are zoom-blind inside .app */
+  max-width: calc(var(--vw-eff) * 0.3);
+  font-size: 11px;
+  padding: 3px var(--space-2) 3px 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, transparent);
+  color: var(--text);
+}
+.settings-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.settings-search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  width: 320px;
+  max-width: calc(var(--vw-eff) * 0.6);
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.settings-search-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 5px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-search-hit.active,
+.settings-search-hit:hover {
+  background: var(--bg-hover, var(--border));
+}
+.settings-search-hit-label {
+  font-size: 12px;
+}
+.settings-search-hit-why {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.settings-search-empty {
+  padding: 6px var(--space-2);
+  font-size: 11px;
+  color: var(--text-dim);
+}
 .settings-update-btn {
   margin-left: var(--space-2);
   font-size: 10px;
@@ -8930,6 +9109,94 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
   align-content: start;
+}
+/* `auto-fit` IS A TRAP ONCE THE PANEL IS UNBOUND (2026-08-12, with the md+ widening).
+   auto-fit collapses the tracks that ended up empty and hands the freed space to the
+   `1fr` tracks that survive, so a track's width is (container ÷ number of ITEMS), not
+   (container ÷ number of TRACKS). At the old 1100px cap that was invisible; unbound it
+   is the whole regression. Of the 40 grids in SettingsPanel.tsx, 4 hold a single field
+   and 8 hold two — under auto-fit at 1920 those become one 1850px text input, or two
+   920px ones, which is worse than the scrolling it was meant to fix.
+
+   auto-fill keeps the empty tracks, so a field is ONE column wide regardless of how many
+   fields its section happens to have, and the room goes where the operator asked for it.
+   It is scoped to the widened tiers because at xs/sm the panel is still capped and
+   auto-fit's stretch is the layout that shipped — changing it there would move the
+   1024×768 floor for no reason.
+
+   ⚠️ AND THE FLOOR IS 300px, NOT THE 220px THE BASE RULE USES. This is the second half of
+   the same trap and it only shows up in a browser. auto-fill packs to the MINIMUM track,
+   so a wider panel buys MORE columns rather than wider ones — at 220px the tracks came out
+   NARROWER above the fold than at the 1024 floor (222-254px vs 452px), and the control that
+   paid for it was the Serial Port combobox, which shares its row with Refresh and Auto-test:
+   measured 106px at 1024, then 30px at 1280 and 54px at 1920. A 30px text input cannot show
+   "COM16", and this is the exact setup surface the whole reorg was for. 300px holds tracks
+   at 319-361px and the port input at 127-170px from 1100 all the way to 3440, while still
+   giving 3 columns at 1280 and 10 at 3440. Raise this floor, never re-cap the panel, if a
+   row is ever cramped again. */
+[data-viewport='md'] .settings-grid,
+[data-viewport='lg'] .settings-grid,
+[data-viewport='xl'] .settings-grid {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+/* ── THE PROSE AUDIT (2026-08-12) ──────────────────────────────────────────────────────
+   What the panel's max-width was silently doing for everything inside it, and now isn't.
+   Three shapes needed their own bound; the rest were audited and deliberately left alone.
+
+   1. PROSE. `.settings-hint` and `.settings-note` are real running text — the Rig tab's
+      "Data modes use plain SSB…" hint is ~130 words. A hint inside a grid cell is already
+      bounded by its 220px track, so this cap is inert for most of them; it exists for the
+      18 that are direct children of `.settings-section` and had nothing between them and
+      the panel edge. 72ch sits inside the range the rest of this sheet already uses for
+      readable text (62ch, 64ch, 78ch).
+
+   2. LONE CONTROLS. A `.settings-field` with no grid track to sit in gets no bound, so its
+      `<select>`/`.settings-input` would be as wide as the window. Worse, `.settings-toggle`
+      is `justify-content: space-between`: unbounded, the switch parts company with its own
+      label and ends up an eye-track away at the far right. 520px matches `.freq-table`,
+      the one measure this panel already had, so standalone controls line up with it.
+      ⚠️ SCOPED TO ALL `.settings-field`, NOT just direct children of `.settings-section`.
+      The direct-child form was the first cut and it MEASURED WRONG: a browser sweep of all
+      nine tabs at 2560 found eight more selects at 2454-2464px (Phone mode, Voice mic,
+      Keying backend, Baud rate, Shift, SSTV transmit mode) and two at 1028 (Keyer backend,
+      Sidetone pitch) sitting one level deeper than `>` reaches. Inside a grid cell the cap
+      is inert — a track is ~220px, well under 520 — so the broad selector costs nothing
+      and is the only form that actually catches them.
+
+   3. THE AUDIO SCOPE. `.settings-audio-scope` spans `1 / -1` and holds MiniSpectrum,
+      whose canvas is `width: 100%` with a backing store of clientWidth × DPR — so a
+      full-width panel buys a 3800px canvas on a 2× display to draw the same spectrum.
+      It gets more room than a plain control (it is an instrument; width is resolution)
+      but a hard ceiling.
+
+   LEFT UNBOUNDED, ON PURPOSE: `.radios-manager`, `.watchlist-items`, `.conn-log`,
+   `.conn-status-grid`, `.settings-cat-test`. Every one is a LIST OF ROWS or a wrapping
+   button row — wider rows are more room for the row's own fields, not a longer line to
+   read, and their content is already left-packed. `.freq-table` and `.freq-edit-row`
+   were bounded at 520px before any of this and are unaffected. */
+[data-viewport='md'] .settings-hint,
+[data-viewport='lg'] .settings-hint,
+[data-viewport='xl'] .settings-hint,
+[data-viewport='md'] .settings-note,
+[data-viewport='lg'] .settings-note,
+[data-viewport='xl'] .settings-note {
+  max-width: 72ch;
+}
+[data-viewport='md'] .settings-field,
+[data-viewport='lg'] .settings-field,
+[data-viewport='xl'] .settings-field {
+  max-width: 520px;
+}
+/* The radios roster stays unbounded (it is a list of rows), but the row's NAME input is
+   `flex: 1 1 auto` with nothing else in the row to absorb the slack, so it took the whole
+   window: measured 1715px at 1920 and 3235px at 3440. A radio name is "Radio 1" or
+   "FT-710 shack". Capping it also brings the ACTIVE badge back beside the name instead of
+   stranding it against the far edge. md+ only — at 1024 it is 824px and unchanged. */
+[data-viewport='md'] .radio-name-input,
+[data-viewport='lg'] .radio-name-input,
+[data-viewport='xl'] .radio-name-input {
+  max-width: 520px;
 }
 /* Features section: profile chips wrap; each category group gets a subheading. */
 .settings-profiles {
@@ -9110,6 +9377,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .watchlist-kind-dxcc {
   background: var(--state-ok, #2fbf71);
+}
+.watchlist-kind-grid {
+  background: var(--state-info, #5ba8f5);
 }
 .watchlist-value {
   font-family: var(--font-mono);
@@ -9748,6 +10018,19 @@ select.settings-input {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--text) 4%, var(--bg));
+}
+/* "no band-plan data for …" — the honest empty track when the dial is off the band plan
+   (listening off the ham bands is supported; operator ruling 2026-08-13). Same treatment as
+   the band map's `.bandmap-empty`, because it is the same sentence in the same situation. */
+.bandstrip-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-style: italic;
+  font-size: 12px;
 }
 .bandstrip-shade {
   position: absolute;
@@ -10901,6 +11184,20 @@ select.settings-input {
   text-overflow: ellipsis;
   max-width: 16ch;
   flex: none;
+}
+/* The beam heading, riding immediately after the country — where every other logger
+   puts it. `.decode-country` above already carries `margin-left:auto`, so the pair
+   floats to the right edge together and no other cell in `.decode-row` moves; this
+   one is `flex:none` and never ellipsises, so when the row narrows it is the COUNTRY
+   that truncates, not the number. ~5ch at the 1024 px floor. */
+.decode-az {
+  flex: none;
+  padding-left: var(--space-1);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .decode-work {
   flex: 0 0 auto;
@@ -13078,10 +13375,14 @@ button.cq-skiptx1.on {
   font-size: 0.86rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
-/* Spots panel — the raw firehose table (8 cols: age · call · entity · band · freq ·
+/* Spots panel — the raw firehose table (9 cols: age · call · entity · state · band · freq ·
    mode · spotter · comment). Reuses the Needed board's row chrome, own column template. */
 .sp-grid .np-row {
-  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
+  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
+}
+.sp-state {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 .np-age {
   color: var(--text-dim);
@@ -13221,6 +13522,26 @@ button.cq-skiptx1.on {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The entity cell became a two-part cell when the beam heading joined it (Needed
+   board AND Spots — they share this row chrome and have to read as one thing).
+   The NAME keeps the ellipsis; the heading is `flex:none` so a long country name
+   truncates instead of eating the number. No new grid column: `.np-row`'s
+   `grid-template-columns` is untouched, so nothing else on the row shifts. */
+.np-entity {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.np-entity > .np-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-az {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
 }
 .np-band,
 .np-zone {
@@ -13435,16 +13756,25 @@ button.cq-skiptx1.on {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* The row's column minimums are hard floors, and the pane above clips (`overflow: hidden`),
+     so this is the interposed scroller the layout contract requires: on a narrow pane the
+     rightmost columns become reachable instead of silently cut off. No scrollbar appears at
+     the widths the roster layout actually gets. */
+  overflow-x: auto;
   border-top: 1px solid var(--border);
 }
 .or-row {
   display: grid;
-  /* Call comes first (people scan by callsign), then the Need column — the "why work this station"
-     column carrying the need chips AND the rarity pill. Call is compact (callsigns are short; its
-     88px min still fits VE2OPR-length calls + the B4/L marks); Need is the WIDEST and flexible so it
-     has room for all the chips + a 💎 ULTRA pill without clipping. Anything past the (roomy) Need
-     cell is clipped by `.or-need` rather than bleeding into the next column. */
-  grid-template-columns: minmax(88px, 1fr) minmax(105px, 1.13fr) minmax(50px, 0.85fr) 54px 56px 48px 44px 48px;
+  /* Call comes first (people scan by callsign), then Calling — who they are working, the pair
+     read together as "K2DEF → W1ABC" — then the Need column, the "why work this station" column
+     carrying the need chips AND the rarity pill. Call is compact (callsigns are short; its
+     88px min still fits VE2OPR-length calls + the B4/L marks); Calling holds a bare callsign, so
+     it needs no room for marks; Need is the WIDEST and flexible so it has room for all the chips
+     + a 💎 ULTRA pill without clipping. Anything past the (roomy) Need cell is clipped by
+     `.or-need` rather than bleeding into the next column. State is a fixed two letters. */
+  grid-template-columns:
+    minmax(88px, 1fr) minmax(68px, 0.8fr) minmax(105px, 1.13fr) minmax(50px, 0.85fr)
+    40px 54px 56px 48px 44px 48px;
   align-items: center;
   gap: var(--space-2);
   /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. */
@@ -13536,7 +13866,9 @@ button.cq-skiptx1.on {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.or-calling,
 .or-country,
+.or-state,
 .or-gridc,
 .or-dist,
 .or-brg,
@@ -13546,6 +13878,8 @@ button.cq-skiptx1.on {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.or-calling,
+.or-state,
 .or-gridc,
 .or-dist,
 .or-brg,
@@ -13553,6 +13887,46 @@ button.cq-skiptx1.on {
 .or-age {
   font-family: var(--font-mono);
   font-size: 0.78rem;
+}
+/* State / province pill. The operator asked for the subdivision "as a pill icon like you do
+   the rest of them", so it takes the roster's pill geometry verbatim from `.need-chip` —
+   999px, 10.5px/800, 0.04em, the same var(--space-2) side padding — and differs in exactly two
+   places, each for a reason:
+
+   VERTICAL PADDING is 1px, not the need chip's 2px (this is `.b4-chip`'s value, the roster's
+   other pill). 1px is what keeps the row the height it already was; 2px would add ~3px to every
+   state-bearing row and the pane would show fewer stations for no gain.
+
+   COLOUR is the neutral --text ink over a --text-dim wash, NOT a need colour. A teal chip here
+   would read as "you need this state" beside a state the operator already has — the need
+   palette is a claim about their log, and this is a fact about the station. Ink is --text
+   rather than the --text-dim the plain cell used because the pill is the reason he asked: a
+   column he scans has to carry at a glance. Both variables are defined in both themes, so this
+   needs no light-theme override (nor a high-contrast one).
+
+   THE COST IS ZERO, measured in Chrome against this exact CSS at the width that forces every
+   column onto its minimum: the row's min-content width is 681px with the pill and 681px with
+   the plain text it replaces, and the row is 22px tall either way. The pill measures 31.5px in
+   the unchanged 40px cell — 8.5px of headroom, and that is the WORST case in the --font-mono
+   stack (the generic fallback here is wider than Consolas or SF Mono). It holds because every
+   code this can render is two characters: 50 US states, 13 ADIF Canadian subdivisions. A
+   three-character subdivision would need the column widened, and the row is already at a hard
+   673px + padding inside a pane that clips. */
+.or-state .or-subdiv {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text-dim) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+}
+/* A station calling CQ is the one to work — say so quietly rather than with a chip;
+   --text is defined in both themes. */
+.or-calling.cq {
+  color: var(--text);
+  font-weight: 700;
 }
 .or-snr {
   font-weight: 700;
@@ -13671,9 +14045,10 @@ button.cq-skiptx1.on {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 /* Call CQ is the primary action — give it the accent fill so it's easy to find. */
-.cq-role.cq-call {
-  border-color: var(--tx);
-}
+/* Call CQ wears the TX red ONLY while a CQ run is actually in progress (.active). At idle it
+ * used to carry a permanent red border — in this palette red means "TX-armed", which an idle
+ * S&P station is not, and it is what made the button read as highlighted all the time
+ * (operator-relayed report, 2026-08-16). Inactive it looks like its S&P sibling. */
 .cq-role.cq-call.active {
   background: var(--tx);
   border-color: var(--tx);
@@ -17311,6 +17686,15 @@ button.sat-chip:disabled {
   color: var(--accent);
   border-color: var(--accent);
 }
+/* Scroll-direction toggle — a worded button, so it must not be squeezed to an ellipsis in the
+   narrow docked header (the header wraps instead; see .waterfall-wrap > .panel-header). */
+.wf-flow {
+  white-space: nowrap;
+}
+.wf-flow.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .wf-popout:hover {
   color: var(--text);
 }
@@ -17452,6 +17836,18 @@ button.sat-chip:disabled {
 }
 .settings-audio-scope {
   grid-column: 1 / -1;
+}
+/* Item 3 of THE PROSE AUDIT (see `.settings-grid`). Spanning `1 / -1` used to mean "as
+   wide as a 1100px panel"; since the md+ widening it means "as wide as the window", and
+   what sits in here is MiniSpectrum — `.mini-spectrum-canvas { width: 100% }` with a
+   backing store of clientWidth × devicePixelRatio, redrawn per audio frame. Unbounded on
+   a 2560 display at 2× that is a 5000px-wide canvas rendering the same spectrum. 720px
+   is deliberately more than the 520px a plain control gets — this one is an instrument,
+   so width is frequency resolution — and deliberately finite. */
+[data-viewport='md'] .settings-audio-scope,
+[data-viewport='lg'] .settings-audio-scope,
+[data-viewport='xl'] .settings-audio-scope {
+  max-width: 720px;
 }
 
 .cw-macro-role {
@@ -18748,6 +19144,22 @@ button.sat-chip:disabled {
   padding: 2px 10px;
   margin-left: var(--space-2);
 }
+/* RTTY continuous-TX ("TX") latch, in the dock beside Stop. Latched, the transmitter is
+   KEYED and stays keyed — so the on-state reads in the same danger red as `.rtty-tx-pill`
+   above (and with the same literal fallback: `--danger` is not a defined variable, it is
+   this file's convention for the on-air red). A latched transmitter the operator cannot
+   see is the whole hazard of the feature; this must never be a subtle state change. */
+.rtty-tx-latch.on {
+  color: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+}
+.rtty-tx-latch.on .cw-macro-key,
+.rtty-tx-latch.on .cw-macro-label {
+  /* `.cw-macro-key` sets its own color explicitly (see the note by `.cw-macro-label`),
+     so the on-state has to reach the spans or only the border would change. */
+  color: var(--danger, #e5484d);
+}
+
 /* Their-call field in the macro row — feeds the {CALL} macro token. */
 .rtty-hiscall {
   width: 9em;
@@ -18907,6 +19319,21 @@ button.sat-chip:disabled {
   padding: 2px 5px;
   cursor: pointer;
 }
+.sstv-thumb-edit {
+  position: absolute;
+  top: 4px;
+  right: 30px;
+  opacity: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--tx);
+  border-radius: 4px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.sstv-thumb:hover .sstv-thumb-edit,
+.sstv-thumb-edit:focus-visible,
 .sstv-thumb:hover .sstv-thumb-del,
 .sstv-thumb-del:focus-visible {
   opacity: 1;
@@ -18995,6 +19422,73 @@ button.sat-chip:disabled {
   font-style: italic;
   font-size: var(--fs-body);
   text-align: center;
+}
+/* Overlay-compose stage: shrink-wraps the preview so the selection outline can be
+   positioned in percentages of the canvas box (never drawn INTO the canvas — the
+   canvas is the transmit buffer). */
+.sstv-stage-wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+.sstv-ov-outline {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.sstv-ov-presets {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.sstv-ov-presets-label {
+  color: var(--text-faint);
+  font-size: var(--fs-body);
+}
+.sstv-ov-presets button {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.sstv-ov-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.sstv-ov-row.selected {
+  outline: 1px dashed var(--accent);
+}
+.sstv-ov-row .sstv-ov-text {
+  flex: 1 1 10em;
+  min-width: 8em;
+  font-family: var(--font-mono);
+}
+.sstv-ov-swatches {
+  display: inline-flex;
+  gap: 3px;
+}
+.sstv-ov-swatch {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0;
+}
+.sstv-ov-swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sstv-ov-remove {
+  color: var(--state-weak);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 var(--space-1);
 }
 .sstv-tx-controls {
   display: flex;
@@ -19811,6 +20305,9 @@ tr.sel .aprs-sym {
 .pounce-what { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
 .pounce-what strong { font-size: 1.15rem; letter-spacing: 0.02em; }
 .pounce-entity { opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The beam heading on the pounce banner. `flex:none` because this is the one place
+   the number matters MORE than the country name: the operator is turning an antenna. */
+.pounce-az { flex: none; opacity: 0.85; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pounce-where { opacity: 0.9; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pounce-work {
   font-weight: 700;
@@ -19959,6 +20456,13 @@ tr.sel .aprs-sym {
 }
 .dxd-entity {
   color: var(--text-dim);
+}
+/* Beam heading beside the entity in the DXpedition digest — the payload has carried
+   this bearing since the view was built; only the octant was ever rendered. */
+.dxd-az {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .dxd-when {
   font-family: var(--font-mono);

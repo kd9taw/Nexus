@@ -50,8 +50,9 @@ pub enum ModeKind {
         period_s: u16,
         submode: u8,
     },
-    /// WSJT-X MSK144 — the METEOR-SCATTER mode. **RECEIVE-ONLY** — see
-    /// [`Capabilities::tx`].
+    /// WSJT-X MSK144 — the METEOR-SCATTER mode. Transmits and receives
+    /// ([`Capabilities::tx`] is true; the tone track keys 1500 Hz regardless of
+    /// the requested offset — the whole mode lives on one centre).
     ///
     /// Carries its T/R period for the same reason FST4 and Q65 do: the frame is
     /// `period_s * 12000` samples. `period_s` ∈ {5, 10, 15, 30}; 15 is the 6 m
@@ -67,6 +68,15 @@ pub enum ModeKind {
     Jt65 {
         submode: u8,
     },
+    /// **FT2** (Decodium, IU8LMC) — FT4 with a halved symbol time. Transmits and
+    /// receives.
+    ///
+    /// Carries nothing, unlike FST4/Q65/MSK144: the T/R period is FIXED at
+    /// **3.75 s**, so the frame length is a constant and there is no setting to
+    /// plumb. That 3.75 s is the tightest slotted period in the app — 2.52 s of
+    /// audio plus a 0.5 s lead-in leaves 0.73 s of slot, less slack than FT1's
+    /// 4 s, which already "carries no slack at all".
+    Ft2,
     /// WSPR — the propagation-BEACON mode. **RECEIVE-ONLY**.
     ///
     /// Carries nothing: one fixed 2-minute interval, one message form. It is
@@ -79,9 +89,10 @@ pub enum ModeKind {
 
 impl ModeKind {
     /// All modes shipped today, in display order.
-    pub const ALL: [ModeKind; 8] = [
+    pub const ALL: [ModeKind; 9] = [
         ModeKind::Ft8,
         ModeKind::Ft4,
+        ModeKind::Ft2,
         ModeKind::FST4_15,
         ModeKind::Q65_30A,
         ModeKind::MSK144_15,
@@ -228,6 +239,9 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => "FT8",
             ModeKind::Ft4 => "FT4",
+            // No period suffix: FT2 has exactly one T/R period, so "FT2" already
+            // identifies a signal on the air the way "FST4-60" has to.
+            ModeKind::Ft2 => "FT2",
             // FST4/FST4W name themselves by period the way WSJT-X does: "FST4-60",
             // "FST4W-300". The bare family name would not say which slot clock the
             // operator is on, and FST4W at 120 s vs 900 s are different operating
@@ -256,6 +270,10 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => 15.0,
             ModeKind::Ft4 => 7.5,
+            // 3.75 s — read from the crate, not restated. The TIGHTEST slot in the
+            // app; `capture_samples` (3.75 × 12000 = 45000) lands exactly on
+            // `ft2::NMAX`, so frame == capture here as it does for FT8.
+            ModeKind::Ft2 => ft2::TRPERIOD_S,
             // FST4 supports 15/30/60/120/300/900/1800 s upstream; the C ABI pins 15.
             ModeKind::Fst4 { period_s, .. } => f32::from(period_s),
             // The whole reason the period lives in the kind: slot timing follows it.
@@ -275,6 +293,7 @@ impl ModeKind {
         match self {
             ModeKind::Ft8 => ft8::NMAX,
             ModeKind::Ft4 => ft4::NMAX,
+            ModeKind::Ft2 => ft2::NMAX,
             ModeKind::Fst4 { period_s, .. } => fst4::nmax(period_s),
             // ... and so does the buffer contract: period*12000 samples.
             ModeKind::Q65 { period_s, .. } => q65::nmax(period_s),
@@ -512,6 +531,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
     match kind {
         ModeKind::Ft8 => Box::new(Ft8Mode),
         ModeKind::Ft4 => Box::new(Ft4Mode),
+        ModeKind::Ft2 => Box::new(Ft2Mode),
         ModeKind::Fst4 { period_s, wspr } => Box::new(Fst4Mode { period_s, wspr }),
         ModeKind::Q65 { period_s, submode } => Box::new(Q65Mode { period_s, submode }),
         ModeKind::Msk144 { period_s } => Box::new(Msk144Mode { period_s }),
@@ -724,6 +744,135 @@ impl Mode for Ft4Mode {
         .into_iter()
         .map(Into::into)
         .collect()
+    }
+}
+
+/// Slot lead-in for FT2, in seconds — how far into its 3.75 s T/R period the tones start.
+///
+/// ⭐ 0.0 — DECODIUM'S OWN CONVENTION, corrected 2026-08-16 after the timing audit.
+/// This shipped as 0.5, read off the decoder's `xdt = xibest/1333.33 − 0.5` as a
+/// slot contract. It is not one: Decodium decodes a FREE-RUNNING ring (never
+/// slot-aligned), so the −0.5 merely re-centres a rolling window — and their
+/// transmitter starts audio at the instant it keys, 0 ms into the slot (their
+/// nominal `delay_ms=100` for FT2 is DEAD CODE behind a `synchronize` flag that
+/// async FT2 always passes false). The original round-trip "proof" was the
+/// missing-positive-control trap: it encoded with our lead and decoded with our
+/// decoder, proving only that Nexus agreed with Nexus. At 0.0 a Nexus signal
+/// reads dt ≈ −0.5 in our own slot-aligned window — as does every Decodium
+/// station's — and both ends keep the full ±1.0 s search margin.
+///
+/// The geometry: 2.52 s of tones in a 3.75 s slot leaves ~0.98 s of slack —
+/// double what the 0.5 lead left, on the tightest slot clock in the app.
+pub(crate) const FT2_LEAD_IN_SECS: f32 = 0.0;
+
+/// **FT2** (Decodium, IU8LMC) — 3.75 s T/R, 4-GFSK at 41.67 baud. FT4 with a
+/// halved symbol time: LDPC(174,91)+CRC14, ~167 Hz occupied, −10.8 to −12 dB.
+///
+/// ⚠️ This is DECODIUM's FT2, not the abandoned upstream WSJT-X experiment of the
+/// same name — the on-air FT2 population runs Decodium, so Decodium's behaviour is
+/// the compatibility baseline. See the `ft2` crate header.
+///
+/// Unit struct, unlike `Fst4Mode`/`Q65Mode`/`Msk144Mode`: the T/R period is fixed
+/// at 3.75 s, so there is no parameter to carry and no setting to plumb.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ft2Mode;
+
+impl Mode for Ft2Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Ft2
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            tx: true,
+            // Decodium's `ft2_decoded` DOES carry a Fox-mode caller-collection block
+            // (`ncontest.eq.6`, decoder.f90:1932), so the mode is Fox-capable
+            // upstream. It is false here because Fox/Hound is a multi-stream
+            // transmit path we have not wired for FT2 — declaring it would offer the
+            // operator a control the engine cannot honour.
+            fox_hound: false,
+            ir_harq: false,
+            // 77-bit pack77, same as FT8/FT4 — including the 13-character free-text
+            // form (pinned by `overlong_text_packs_as_truncated_free_text` in the
+            // ft2 crate).
+            free_text: true,
+            // `ft2_decode_frame` takes no `ncontest`, so the contest exchanges the
+            // Fortran supports are not reachable through this ABI.
+            contest: false,
+            structured_identity: true,
+            // ⭐ EARLY PASS AT 3.05 s — and the first on-air QSOs are why (operator,
+            // 2026-08-16: "the QSO timing feels off"). This slot originally shipped
+            // with NO early pass on the reasoning that 3.75 s leaves nothing worth
+            // splitting — which routed FT2 into service.rs's key-IMMEDIATELY branch,
+            // where the boundary keys BEFORE the just-ended slot's decode folds in:
+            // every answer slipped a full cycle and every message went out twice.
+            // The reasoning missed that FT2's tones END at 3.02 s, so a pass at
+            // 3.05 s decodes the COMPLETE signal (not a partial like FT8's 11.8 s
+            // pass) 0.70 s before the boundary — measured 510 ms at depth 3, so it
+            // fits. A pass that misses the window degrades to exactly the old
+            // ordering; it can never regress. Decodium reaches the same ordering by
+            // decoding asynchronously and arming TX 100 ms after the decode.
+            early_decode: true,
+            // Split Operation applies for the same reason it does on FT4: a ~167 Hz
+            // signal tunes freely across the passband, so an offset outside
+            // 1500-2000 Hz can and should be reduced into the clean window with a
+            // compensating dial shift. (Contrast MSK144, which is 1 kHz wide and
+            // pinned to one centre.)
+            split_reduce: true,
+            // A QSO mode: it has an exchange to sequence, and it is the FT8/FT4
+            // exchange — FT2 inherits that state machine through the tier exactly as
+            // FT4 does.
+            beacon_only: false,
+        }
+    }
+
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        // Empty on a message that will not pack — the trait's documented safe
+        // failure; `gen_wave` below turns it into an empty waveform, so the radio
+        // loop keys nothing rather than transmitting garbage.
+        ft2::encode(msg).unwrap_or_default()
+    }
+
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        // ⚠️ `ft2::gen_wave` is FIXED at 12 kHz — the vendored generator has no
+        // sample-rate argument — so a caller asking for anything else must get
+        // silence rather than a waveform at the wrong pitch and duration.
+        if (fsample - ft2::SAMPLE_RATE).abs() > f32::EPSILON {
+            return Vec::new();
+        }
+        let Some(tones) = ft2::gen_wave(itone, f0) else {
+            return Vec::new();
+        };
+        // Slot-positioned per the trait contract: PREPEND the lead-in silence so
+        // the radio loop can play this straight at the slot boundary and the far
+        // start of the slot, Decodium's own convention. See `FT2_LEAD_IN_SECS`.
+        let lead = (FT2_LEAD_IN_SECS * fsample).round().max(0.0) as usize;
+        let mut wave = vec![0f32; lead + tones.len()];
+        wave[lead..].copy_from_slice(&tones);
+        wave
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        _nqso_progress: i32, // `ft2_triggered_decode` derives its own AP progression
+        nfqso: i32,
+        _frame_time_ms: i64, // no cross-frame state: one fixed window per period
+        _ap: bool,           // FT8's operator AP on/off — FT2's ABI has no such flag;
+        // AP runs off mycall/hiscall, and an empty hiscall is what disables the
+        // types that need the DX call.
+        _ap_cq_only: bool,
+    ) -> Vec<Decode> {
+        ft2::decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, nfqso)
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 }
 
@@ -1389,12 +1538,13 @@ impl Mode for Q65Mode {
     }
 }
 
-/// WSJT-X **MSK144** — the meteor-scatter mode. Receive-only.
+/// WSJT-X **MSK144** — the meteor-scatter mode. Transmits and receives.
 ///
 /// 72 ms frames repeated through the period, so one ionised trail lasting a tenth
-/// of a second can carry a whole message. Third receive-only mode in this tree:
-/// `encode`/`gen_wave` are left defaulted (empty) and `Capabilities.tx` is false,
-/// so [`tx_mode`] refuses to hand it to the transmit path.
+/// of a second can carry a whole message. `encode` and `gen_wave` are implemented
+/// below; `gen_wave` deliberately IGNORES the requested `f0` and keys the mode's
+/// fixed 1500 Hz centre — MSK144 lives on one frequency, and the tier switch parks
+/// the UI offsets there so the display says what the transmitter does.
 #[derive(Debug, Clone, Copy)]
 pub struct Msk144Mode {
     /// T/R period in seconds: 5, 10, 15 or 30.
@@ -1423,7 +1573,13 @@ impl Mode for Msk144Mode {
             free_text: true,
             contest: false,
             structured_identity: true,
-            early_decode: false,
+            // ⭐ IN-PERIOD DECODE IS THE MODE (2026-08-15, phase C). A meteor ping lands at
+            // any moment of the period and is gone; WSJT-X decodes continuously (mskrtd from
+            // hspec every ~0.3 s) and prints pings as they land, while a boundary-only pass
+            // sat silent for the whole period. The audio loop schedules REPEATED early passes
+            // for this tier (service.rs), each a cheap full-buffer slide — measured 23 ms for
+            // a full 15 s decode after the ntol fix, so the cost gate the plan set is open.
+            early_decode: true,
             split_reduce: false,
             // A QSO mode: it has an exchange to sequence. ⚠️ But a METEOR-SCATTER
             // one — the far end may hear a single 72 ms frame out of ~200 and a
@@ -1452,9 +1608,6 @@ impl Mode for Msk144Mode {
         // (msk144sim starts at sample 1), unlike Q65/FST4/WSPR.
         msk144::gen_wave(itone, self.period_s, fsample, msk144::TX_CENTRE_HZ).unwrap_or_default()
     }
-
-    // encode() and gen_wave() are DELIBERATELY not implemented — the trait defaults
-    // return empty, which is the safe failure if anything bypasses tx_mode.
 
     #[allow(clippy::too_many_arguments)]
     fn decode_frame(

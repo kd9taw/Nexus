@@ -267,6 +267,22 @@ pub const fn msk144_period_supported(period_s: u16) -> bool {
     matches!(period_s, 5 | 10 | 15 | 30)
 }
 
+/// FT2 decode window: 3.75 s @ 12 kHz. Always the full window — the decoder's
+/// dummy is explicit-shape and reads all of it.
+pub const FT2_NMAX: usize = 45_000;
+/// FT2 sync+data channel symbols — what [`ft2_encode_msg`] produces.
+pub const FT2_NN: usize = 103;
+/// FT2 total channel symbols on the air: [`FT2_NN`] + ramp-up + ramp-down.
+pub const FT2_NN2: usize = 105;
+/// Samples per FT2 symbol at 12 kHz — 41.67 baud (FT4's 576 halved).
+pub const FT2_NSPS: usize = 288;
+/// Samples in one FT2 transmission: `FT2_NN2 * FT2_NSPS` = 2.52 s @ 12 kHz.
+/// The generator writes the ramps itself, so buffers size on NN2, not NN.
+pub const FT2_NWAVE: usize = FT2_NN2 * FT2_NSPS;
+/// The FT2 T/R period in seconds. 3.75, from Decodium's own runtime
+/// (`mainwindow.cpp:15642`) and `NMAX = 3.75 * 12000`.
+pub const FT2_TRPERIOD_S: f32 = 3.75;
+
 /// JT65 buffer contract: 60 s @ 12 kHz. The full frame must be supplied even
 /// though only [`JT65_NPTS`] is read — `dd0` is an explicit-shape dummy.
 pub const JT65_NMAX: usize = 720_000;
@@ -353,6 +369,25 @@ impl Default for Jt65DecodeT {
     }
 }
 
+/// One decode from [`ft2_decode_frame`]. Layout matches `ft2_decode_t` in
+/// `libtempo.h` — the same 64 bytes as [`Ft8DecodeT`], NOT an alias: the last
+/// two fields are `dtype`/`reserved` like [`Msk144DecodeT`]'s.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Ft2DecodeT {
+    /// Always 0.0 — the FT2 output line carries no sync metric.
+    pub sync: c_float,
+    pub snr: c_int,
+    /// Time offset, seconds (about -1.0 .. +1.0 across the scan range).
+    pub dt: c_float,
+    pub freq: c_float,
+    pub message: [u8; 38],
+    /// 0 = ordinary decode, 1..=4 = a-priori decode of AP type n.
+    pub dtype: c_int,
+    /// Unused, always 0.
+    pub reserved: c_int,
+}
+
 /// One decode from [`msk144_decode_frame`]. Layout matches `msk144_decode_t` in
 /// `libtempo.h` — the same 64 bytes as [`Ft8DecodeT`], NOT an alias: the last two
 /// fields are `dtype`/`reserved` (int/int) where FT8 has `nap`/`qual`
@@ -371,6 +406,21 @@ pub struct Msk144DecodeT {
     pub dtype: c_int,
     /// Unused, always 0.
     pub reserved: c_int,
+}
+
+impl Default for Ft2DecodeT {
+    // Hand-written for the same [u8; 38] reason as every other decode record.
+    fn default() -> Self {
+        Self {
+            sync: 0.0,
+            snr: 0,
+            dt: 0.0,
+            freq: 0.0,
+            message: [0; 38],
+            dtype: 0,
+            reserved: 0,
+        }
+    }
 }
 
 impl Default for Msk144DecodeT {
@@ -786,6 +836,44 @@ extern "C" {
         nfqso: c_int,
         out: *mut Msk144DecodeT,
         max_out: c_int,
+    ) -> c_int;
+
+    /// Decode every FT2 signal in one [`FT2_NMAX`]-sample (3.75 s) window.
+    ///
+    /// Returns the number of decodes (>= 0). NOT thread-safe — hold
+    /// [`MODEM_LOCK`].
+    pub fn ft2_decode_frame(
+        iwave: *const i16, // [FT2_NMAX] — always the full window
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int, // 1..=3; <=0 ⇒ 3
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        nfqso: c_int,
+        out: *mut Ft2DecodeT,
+        max_out: c_int,
+    ) -> c_int;
+
+    /// Encode a message into the [`FT2_NN`] FT2 channel tones (0..=3).
+    ///
+    /// Returns [`FT2_NN`], or -1 if the message will not pack.
+    pub fn ft2_encode_msg(
+        msg: *const c_char,
+        msg_len: c_int,
+        itone_out: *mut c_int, // [FT2_NN]
+    ) -> c_int;
+
+    /// FT2 channel tones -> real audio at 12 kHz. Writes [`FT2_NWAVE`] samples
+    /// (the generator appends the ramp symbols itself). `nsym` must be
+    /// [`FT2_NN`]; `nwave_cap` must be >= [`FT2_NWAVE`].
+    ///
+    /// Returns [`FT2_NWAVE`], or -1 on refusal.
+    pub fn ft2_gen_wave(
+        itone: *const c_int, // [FT2_NN]
+        nsym: c_int,
+        f0: c_float,
+        wave_out: *mut c_float, // [nwave_cap]
+        nwave_cap: c_int,
     ) -> c_int;
 
     /// Decode every JT65 signal in one 60 s T/R period.

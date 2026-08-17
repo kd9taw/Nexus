@@ -10,9 +10,9 @@ come here for the complete picture.
 
 ## What you need
 
-- **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **64-bit Raspberry Pi**
+- **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **Mac with Apple Silicon** (M-series, macOS 12 or later), or a **64-bit Raspberry Pi**
   (Pi 3/4/5). All three build from the same tree and ship together every release.
-  macOS does not ship yet. On a slower Pi, **Settings ▸ Digital ▸ Decode depth ▸
+  Intel Macs are source-build only. On a slower Pi, **Settings ▸ Digital ▸ Decode depth ▸
   Fast** keeps FT8 and FT4 decoding in real time.
 - **On a PC, Linux means Ubuntu 24.04 or newer** — Debian 13 (trixie), Fedora 40+, Mint 22
   and anything else built on a C library of at least that vintage. Both PC Linux files are
@@ -47,6 +47,7 @@ Five files ship per release:
 | File | Platform |
 |---|---|
 | `Nexus_<version>_x64-setup.exe` | Windows 10/11 x64 — NSIS, per-user, bundles WebView2 and Hamlib |
+| `Nexus_<version>_aarch64.dmg` | macOS on Apple Silicon — signed + notarized; `brew install hamlib` for CAT |
 | `Nexus_<version>_amd64.AppImage` | Linux on a PC, portable — one file, updates itself in place (Ubuntu 24.04 or newer) |
 | `Nexus_<version>_pc_amd64.deb` | Debian / Ubuntu on a PC (Ubuntu 24.04 / Debian 13 or newer) |
 | `Nexus_<version>_pi_arm64_bookworm.deb` | Raspberry Pi OS bookworm, 64-bit |

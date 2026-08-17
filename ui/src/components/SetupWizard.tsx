@@ -545,7 +545,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               <input
                 type="text"
                 value={mycall}
-                placeholder="KD9TAW"
+                placeholder="N0CALL"
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(e) => setMycall(e.target.value.toUpperCase())}
@@ -556,7 +556,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               <input
                 type="text"
                 value={mygrid}
-                placeholder="EN52"
+                placeholder="FN31"
                 autoComplete="off"
                 spellCheck={false}
                 className={gridState === 'bad' ? 'bad' : ''}
@@ -573,7 +573,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 role={gridState === 'bad' ? 'alert' : undefined}
               >
                 {gridState === 'bad'
-                  ? 'Not a Maidenhead locator — 4 or 6 characters, like EN52 or EN52xa.'
+                  ? 'Not a Maidenhead locator — 4 or 6 characters, like FN31 or FN31pr.'
                   : 'Maidenhead locator (qrz.com shows yours). Give all 6 — 4 characters pins you to the middle of a ~100-mile square, and every distance and bearing is measured from there.'}
               </span>
             </label>

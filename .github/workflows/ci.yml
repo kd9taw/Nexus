@@ -490,13 +490,19 @@ jobs:
       # build.rs offers NEXUS_ALLOW_MISSING_AICW for exactly this case, and its absence
       # affects only the AI CW panel — nothing this job is trying to prove.
       # Homebrew keeps libgfortran under the gcc formula's own lib dir, which is not on the
-      # default linker search path — the modem links `-lgfortran` and `-lfftw3f`, so both prefixes
-      # have to be told to the linker or the build dies at the very last step.
+      # default linker search path — the modem links `-lgfortran` and `-lfftw3f`, so both
+      # prefixes have to reach the linker or the build dies at the very last step. That is
+      # tempo-fast-sys/build.rs's job now (it probes gfortran and pkg-config); this step
+      # exists to prove the probe works on a runner with nothing pre-arranged.
       - name: Compile src-tauri for macOS
         env:
           NEXUS_ALLOW_MISSING_AICW: 1
         run: |
-          export LIBRARY_PATH="$(brew --prefix gcc)/lib/gcc/current:$(brew --prefix fftw)/lib:${LIBRARY_PATH:-}"
+          # NO LIBRARY_PATH export here, deliberately. It used to supply exactly the two directories
+          # tempo-fast-sys/build.rs now derives (gcc's lib/gcc/current and fftw's lib), which meant
+          # this job passed whether or not the probe worked -- green either way is not a test. Without
+          # it, the job IS the positive control for the probe: if the derivation breaks, the link
+          # fails here rather than on a contributor's Mac.
           cargo build --release \
             --manifest-path src-tauri/Cargo.toml \
             --target aarch64-apple-darwin \

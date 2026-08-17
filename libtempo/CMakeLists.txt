@@ -360,6 +360,43 @@ set(LIBTEMPO_SOURCES
     ${LIB}/tweak1.f90                     # complex frequency shift
     ${LIB}/ft8/chkcrc13a.f90              # CRC-13 check on the 128,90 codeword
 
+    # --- FT2 native decode + encode (Decodium lib/ft2) : TRANSMIT AND RECEIVE ---
+    #     ⭐ DECODIUM's FT2 (IU8LMC, decodium3-build, GPL-3), NOT upstream's
+    #     abandoned lib/ft2 experiment — the two share a name and nothing else.
+    #     FT4 with halved symbol time: LDPC(174,91), 4-GFSK @ 41.67 baud,
+    #     105 channel symbols = 2.52 s in a 3.75 s T/R period. See NOTICE for the
+    #     provenance split (most files are K1JT's FT4 code mechanically renamed;
+    #     the decoder chain is IU8LMC's).
+    #
+    #     Entry point is ft2_triggered_decode — the flat text-lines subroutine
+    #     Decodium's own runtime calls — NOT the OO ft2_decode module.
+    #
+    #     ⚠️ normalizebmet is DELIBERATELY NOT VENDORED from Decodium's lib/ft2:
+    #     Nexus already links the free-standing normalizebmet from ft8/ft8b.f90
+    #     (FT4 and FST4 call it), and a second definition is a duplicate symbol.
+    #     Decodium's own builds resolve to the ft8b copy too (verified in their
+    #     shipped archives), so skipping the file reproduces their runtime
+    #     behaviour exactly.
+    #
+    #     Shared deps (osd174_91, get_crc14, ldpc_174_91_c_parity include,
+    #     twkfreq1, encode174_91, packjt77, four2a, pctile, polyfit,
+    #     nuttal_window, gfsk_pulse) are already linked by the FT8/FT4 blocks
+    #     above and are byte-identical to Decodium's copies — verified at vendor
+    #     time, 2026-08-16.
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft2_cabi.f90
+    ${LIB}/ft2/ft2_triggered_decode.f90   # the decoder: coarse scan + 10-pass ladder
+    ${LIB}/ft2/getcandidates2.f90         # candidate scan (FT4's, renamed)
+    ${LIB}/ft2/ft2_baseline.f90           # spectral baseline (FT4's, renamed)
+    ${LIB}/ft2/ft2_downsample.f90         # NDOWN=9 -> 1333.33 Hz (FT4's, renamed)
+    ${LIB}/ft2/sync2d.f90                 # Costas sync, best-3-of-4 (IU8LMC change)
+    ${LIB}/ft2/get_ft2_bitmetrics.f90     # log-sum-exp demapper + MMSE metric
+    ${LIB}/ft2/ft2_channel_est.f90        # Wiener channel estimate across Costas
+    ${LIB}/ft2/decode174_91_ft2.f90       # IU8LMC's layered/self-corrected LDPC
+    ${LIB}/ft2/genft2.f90                 # message -> 103 tones (FT4's, renamed)
+    ${LIB}/ft2/gen_ft2wave.f90            # tones -> 30240-sample GFSK waveform
+    #     (ft2_params.f90 is an include, pulled by the files above; gfsk_pulse.f90
+    #     in the same directory is already linked by the FT4 block.)
+
     # --- Q65 native decode (lib/qra/q65 + q65_decode.f90) : Nexus, RX-ONLY ---
     #     Q65 is the first vendored mode with a substantial C layer: the Q-ary RA
     #     LDPC codec is Nico Palermo's (IV3NWV) qracodes, C rather than Fortran,

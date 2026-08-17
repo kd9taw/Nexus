@@ -261,6 +261,170 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------------------
+  # macOS — Apple Silicon DMG, signed and notarized. First shipped 1.5.1 (operator's
+  # Apple Developer enrollment 2026-08-16).
+  #
+  # aarch64 ONLY, deliberately: the modem is Fortran, and Homebrew's gfortran is
+  # single-arch — a universal binary needs an x86_64 gfortran+FFTW toolchain the arm64
+  # runner does not have. Apple Silicon covers every Mac sold since 2020; Intel Macs
+  # build from source (which works out of the box as of 1.5.0 — see NOTICE/on8st PRs).
+  #
+  # Signing: APPLE_CERTIFICATE (base64 .p12) + APPLE_CERTIFICATE_PASSWORD into an
+  # ephemeral keychain; the identity is READ BACK from the keychain rather than stored
+  # as a secret, so a certificate renewal never needs a workflow edit. Notarization:
+  # App Store Connect API key (APPLE_API_KEY_ID / APPLE_API_ISSUER_ID /
+  # APPLE_API_KEY_CONTENT) — Tauri runs notarytool + stapling itself when those are in
+  # the environment. No Apple ID password anywhere.
+  # ---------------------------------------------------------------------------------------
+  macos:
+    name: macOS (Apple Silicon .dmg)
+    runs-on: macos-14
+    env:
+      CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$DEEPCW_RELEASE" --repo "${{ github.repository }}" \
+            --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
+          echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | shasum -a 256 -c -
+          echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | shasum -a 256 -c -
+
+      - name: Install build dependencies
+        run: brew install cmake ninja gcc fftw boost
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          targets: aarch64-apple-darwin
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Import the signing certificate into an ephemeral keychain
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PW="$(openssl rand -hex 24)"
+          KEYCHAIN="$RUNNER_TEMP/nexus-signing.keychain-db"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # The identity string, read back from what was actually imported.
+          ident=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          [ -n "$ident" ] || { echo "no Developer ID Application identity in the certificate"; exit 1; }
+          echo "APPLE_SIGNING_IDENTITY=$ident" >> "$GITHUB_ENV"
+          echo "signing as: $ident"
+
+      - name: Build the web UI
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build, sign and notarize the DMG
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          # notarytool wants the .p8 on disk; Tauri picks it up via APPLE_API_KEY_PATH.
+          printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
+          export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          ( cd src-tauri && cargo tauri build --target aarch64-apple-darwin \
+              --features radio,custom-protocol --bundles app,dmg )
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Verify the artifacts
+        run: |
+          set -euo pipefail
+          bundle=src-tauri/target/aarch64-apple-darwin/release/bundle
+          dmg=$(find "$bundle/dmg" -name '*.dmg' -print -quit)
+          tarball=$(find "$bundle/macos" -name '*.app.tar.gz' -print -quit)
+          [ -n "$dmg" ] || { echo "no DMG produced"; exit 1; }
+          app=$(find "$bundle/macos" -maxdepth 1 -name '*.app' -print -quit)
+          # Gatekeeper's own verdict on what shipped — signing AND notarization AND
+          # staple, the exact test a user's first double-click runs.
+          spctl -a -t exec -vv "$app"
+          xcrun stapler validate "$app"
+          # The model must be IN the bundle — the 2026-07-20 .deb shipped without it
+          # and nothing but looking inside the artifact can catch that class.
+          m="$app/Contents/Resources/resources/deepcw/model.onnx"
+          [ -s "$m" ] || { echo "DeepCW model missing from the .app"; exit 1; }
+          echo "$MODEL_SHA  $m" | shasum -a 256 -c -
+          mkdir -p out
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          cp "$dmg" "out/Nexus_${ver}_aarch64.dmg"
+          if [ -n "$tarball" ] && [ -f "$tarball.sig" ]; then
+            cp "$tarball" "out/Nexus_${ver}_aarch64.app.tar.gz"
+            cp "$tarball.sig" "out/Nexus_${ver}_aarch64.app.tar.gz.sig"
+          else
+            echo "note: no signed updater bundle (missing signing secrets?)"
+          fi
+          ( cd out && shasum -a 256 ./* )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-macos
+          path: out/*
+          if-no-files-found: error
+
+  smoke-macos:
+    name: Smoke — mount + launch the macOS artifact
+    needs: macos
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: nexus-macos
+          merge-multiple: true
+
+      - name: Mount the DMG and Gatekeeper-assess the app
+        run: |
+          set -euo pipefail
+          dmg=$(find dist -name '*.dmg' -print -quit)
+          [ -n "$dmg" ] || { echo "no dmg in the nexus-macos artifact"; exit 1; }
+          mnt=$(hdiutil attach "$dmg" -nobrowse | awk -F'\t' 'END{print $NF}')
+          app=$(find "$mnt" -maxdepth 1 -name '*.app' -print -quit)
+          [ -n "$app" ] || { echo "no .app inside the DMG"; exit 1; }
+          # A FRESH machine's verdict — this runner never saw the signing keychain.
+          spctl -a -t exec -vv "$app"
+          cp -R "$app" "$RUNNER_TEMP/Nexus.app"
+          hdiutil detach "$mnt"
+
+      - name: Launch the app and require it to stay alive
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/Nexus.app/Contents/MacOS/"* &
+          pid=$!
+          # Same bar as smoke-windows: first run does real work; after 45 s the
+          # only question is whether it is still running.
+          sleep 45
+          kill -0 "$pid" || { echo "app exited during startup — dead-on-arrival artifact"; exit 1; }
+          echo "alive after 45 s (pid $pid) — startup smoke passed"
+          kill "$pid" || true
+
+  # ---------------------------------------------------------------------------------------
   # Raspberry Pi — one .deb per live Pi OS base, native on the hosted arm64 runner.
   # (Same job as ci.yml's pi-deb; duplicated here so a tag builds everything in one run.)
   # ---------------------------------------------------------------------------------------
@@ -371,7 +535,7 @@ jobs:
     # Windows + Linux gate the release (operator's release order); the Pi .debs attach
     # in publish-pi as they finish and can never hold the primary artifacts hostage.
     # smoke-windows gates too: an installer that dies at launch must never publish.
-    needs: [linux-x86, windows, smoke-windows]
+    needs: [linux-x86, windows, smoke-windows, macos, smoke-macos]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # `actions: write` is for the downstream hand-off at the end of this job. Job-level
@@ -394,6 +558,11 @@ jobs:
         with:
           path: dist
           pattern: nexus-windows
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: nexus-macos
           merge-multiple: true
 
       - name: Derive + cross-check the version
@@ -463,8 +632,10 @@ jobs:
             platforms="$platforms$(printf '"%s":{"signature":"%s","url":"%s/%s"},' \
               "$1" "$(cat "$2.sig")" "$base" "$(basename "$2")")"
           }
+          mac=$(find dist -name '*_aarch64.app.tar.gz' -print -quit)
           add "windows-x86_64" "$win"
           add "linux-x86_64"   "$app"
+          add "darwin-aarch64" "$mac"
           if [ -z "$platforms" ]; then
             echo "No signed artifacts — skipping latest.json. Clients keep the notify-only path."
             exit 0

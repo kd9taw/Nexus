@@ -271,6 +271,7 @@ jobs:
           set -euo pipefail
           req=$(printf '%s\n' \
             "Nexus_${VER}_x64-setup.exe" \
+            "Nexus_${VER}_aarch64.dmg" \
             "Nexus_${VER}_amd64.AppImage" \
             "Nexus_${VER}_pc_amd64.deb" \
             "Nexus_${VER}_pi_arm64_bookworm.deb" \
@@ -329,7 +330,7 @@ jobs:
           # absent), which breaks in-app self-update for this version. release.yml
           # deliberately allows that, so this warns rather than fails — but it must never
           # pass unremarked.
-          for s in "Nexus_${VER}_x64-setup.exe.sig" "Nexus_${VER}_amd64.AppImage.sig"; do
+          for s in "Nexus_${VER}_x64-setup.exe.sig" "Nexus_${VER}_amd64.AppImage.sig" "Nexus_${VER}_aarch64.app.tar.gz.sig"; do
             [ -f "$s" ] || echo "::warning::$s is not in the release — this build is UNSIGNED and clients cannot self-update to it"
           done
 
@@ -555,6 +556,7 @@ jobs:
           base = f"https://github.com/kd9taw/Nexus/releases/download/{tag}"
           assets = {
               "windows":       f"Nexus_{ver}_x64-setup.exe",
+              "macos":         f"Nexus_{ver}_aarch64.dmg",
               "linuxAppimage": f"Nexus_{ver}_amd64.AppImage",
               "linuxDeb":      f"Nexus_{ver}_pc_amd64.deb",
               "piBookwormDeb": f"Nexus_{ver}_pi_arm64_bookworm.deb",
@@ -674,7 +676,8 @@ jobs:
           # version.json now advertises five URLs to every operator. A 404 here would be a
           # broken download button that nothing else in the pipeline can see.
           bad=0
-          for n in "Nexus_${VER}_x64-setup.exe" "Nexus_${VER}_amd64.AppImage" \
+          for n in "Nexus_${VER}_x64-setup.exe" "Nexus_${VER}_aarch64.dmg" \
+                   "Nexus_${VER}_amd64.AppImage" \
                    "Nexus_${VER}_pc_amd64.deb" "Nexus_${VER}_pi_arm64_bookworm.deb" \
                    "Nexus_${VER}_pi_arm64_trixie.deb"; do
             u="https://github.com/kd9taw/Nexus/releases/download/${TAG}/${n}"

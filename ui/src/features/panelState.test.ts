@@ -321,14 +321,42 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
   })
 
   it('lists the expected content panels per cockpit', () => {
-    expect([...SSTV_PANELS.panelIds]).toEqual(['txcompose', 'gallery'])
+    expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
-      'rigscope', 'txmeters', 'dsp', 'dspLevels', 'bandActivity', 'voiceKeyer',
+      'scope', 'rigscope', 'txmeters', 'dsp', 'dspLevels', 'bandActivity', 'voiceKeyer',
     ])
-    expect([...RTTY_PANELS.panelIds]).toEqual(['stream'])
+    expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'stream'])
     expect([...CW_PANELS.panelIds]).toEqual([
-      'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
+      'scope', 'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
     ])
+  })
+
+  it('every cockpit with a spectrum strip can hide it, and it is SHOWN until he says otherwise', () => {
+    // The operator's ask (2026-08-16): "add the waterfall in each window as an option to
+    // remove in the panels section — leave it ON by default, give me the option to turn it
+    // off." Default-shown is not a separate mechanism: an absent state means 'docked'
+    // (coercePanelLayout above), so a strip that has never been ticked renders, and only an
+    // EXPLICIT removal hides it — which is what makes the hide survive a reload.
+    //
+    // Operate's entry is `waterfall`, not `scope`, and deliberately: that id shipped in
+    // 0.15.0, carries the pop-out ('popped') state and is the one migrateWaterfallDetached
+    // keys on. Renaming it would drop every stored preference and break the re-dock. The
+    // four cockpits that gained a strip entry here share ONE id.
+    for (const [vocab, id] of [
+      [OPERATE_PANELS, 'waterfall'],
+      [PHONE_PANELS, 'scope'],
+      [CW_PANELS, 'scope'],
+      [RTTY_PANELS, 'scope'],
+      [SSTV_PANELS, 'scope'],
+    ] as const) {
+      expect(
+        (vocab.panelIds as readonly string[]).includes(id),
+        `the ${vocab.view} cockpit renders a spectrum strip with no ⊞ entry to hide it`,
+      ).toBe(true)
+      // Nothing stored ⇒ shown. The strip is display + click-to-tune and hosts no stop
+      // control in any cockpit, which is what admits it under THE STOP LINE.
+      expect(coercePanelLayout(vocab, {}).state[id]).toBeUndefined()
+    }
   })
 
   it('Phone can hide the voice keyer — it starts overs, it is not the way you end one', () => {

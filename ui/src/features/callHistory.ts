@@ -180,7 +180,19 @@ export function entitySlots(
 
 /** Summarize a call's prior contacts from the full log. Case-insensitive on the call;
  * `band` is the current operating band for the dupe check (pass '' to skip it). */
-export function callHistory(log: LoggedQso[], call: string, band: string): CallHistory {
+/**
+ * `mode` + `matchMode`: the Dupe badge's scope (operator-relayed report, 2026-08-16 — a
+ * 'Dupe 40m' shown for a station worked on 40m FT8 while running 40m phone). Default is
+ * call+band, WSJT-X's own default scope; passing `matchMode: true` (Settings ▸
+ * b4MatchMode) requires the MODE to match too, so a cross-mode contact is not a dupe.
+ */
+export function callHistory(
+  log: LoggedQso[],
+  call: string,
+  band: string,
+  mode = '',
+  matchMode = false,
+): CallHistory {
   const c = call.trim().toUpperCase()
   if (!c) return EMPTY
   const qsos = log.filter((q) => q.call.trim().toUpperCase() === c)
@@ -199,8 +211,11 @@ export function callHistory(log: LoggedQso[], call: string, band: string): CallH
     // Case-folded like every sibling (band_key, dedup_key, reconcile): LoTW
     // exports spell bands uppercase, so a raw compare left the dupe cue dark
     // for every imported contact.
-    if (band && (q.band ?? '').trim().toLowerCase() === band.trim().toLowerCase())
-      dupeThisBand = true
+    if (band && (q.band ?? '').trim().toLowerCase() === band.trim().toLowerCase()) {
+      const modeOk =
+        !matchMode || (q.mode ?? '').trim().toUpperCase() === mode.trim().toUpperCase()
+      if (modeOk) dupeThisBand = true
+    }
   }
   return {
     qsos,

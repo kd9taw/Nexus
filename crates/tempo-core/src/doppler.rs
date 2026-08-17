@@ -364,6 +364,43 @@ pub fn downlink_class(mode: Option<&str>) -> DownlinkClass {
     DownlinkClass::Usb
 }
 
+/// The CTCSS (PL) tone an FM bird's uplink needs to open it, in Hz — keyed by
+/// the UPLINK CHANNEL, which is the thing a tone actually belongs to.
+///
+/// Without this the satellite path forced "no tone" on every bird, so an FM
+/// uplink that gates on CTCSS could not be opened at all: the operator keyed a
+/// perfectly good uplink into a repeater that was not listening, which from
+/// their chair is indistinguishable from a bird that is off or not hearing them.
+///
+/// ⚠️ CURATED, AND DELIBERATELY SHORT. Every entry is an uplink this
+/// application already documents in its own satellite memory pack
+/// (`ui/src/features/packs.ts`), so the app holds ONE set of facts about these
+/// birds rather than two that can drift apart. `None` — the honest answer for
+/// every bird not listed — leaves the behaviour exactly as it was. A GUESSED
+/// tone is worse than none: it is a transmission that cannot work, and the
+/// operator has no way to see why.
+///
+/// Keyed by frequency rather than by name because the name is not stable: the
+/// TLE sets spell SO-50 "SAUDISAT 1C (SO-50)" and the ISS "ISS (ZARYA)", and a
+/// substring match against those is how you eventually give SwissCube the ISS's
+/// tone. An uplink channel is exact, and it is already in hand.
+pub fn uplink_tone_hz(uplink_centre_hz: u64) -> Option<f32> {
+    Some(match uplink_centre_hz {
+        // SO-50 (SaudiSat-1C), 145.850 up: 67.0 Hz PL to talk. NOT the 74.4 Hz
+        // tone that ARMS its 10-minute onboard timer — that is a separate,
+        // deliberate 2-second carrier before the pass, and it is not this.
+        145_850_000 => 67.0,
+        // ISS cross-band FM voice repeater (Kenwood D710GA, Columbus module),
+        // 145.990 up: 67.0 Hz PL — ARISS.
+        145_990_000 => 67.0,
+        // AO-91 (RadFxSat / Fox-1B), 435.250 up: 67.0 Hz PL.
+        435_250_000 => 67.0,
+        // PO-101 (Diwata-2), 437.500 up: 141.3 Hz PL.
+        437_500_000 => 141.3,
+        _ => return None,
+    })
+}
+
 /// The sideband pair for a transponder, given the downlink mode the satellite
 /// database reports. An inverting transponder swaps the uplink sideband — the
 /// single most-missed detail in satellite operating.

@@ -5753,11 +5753,29 @@ async fn set_sat_transponder(
     state: State<'_, SharedEngine>,
     name: String,
     index: Option<usize>,
+    auto: Option<bool>,
 ) -> Result<(), String> {
     let Some(index) = index else {
         engine_lock(&state).set_sat_transponder(None);
         return Ok(());
     };
+    // ⚠️ MACHINERY DOES NOT CHANGE THE ROW MID-PASS. `auto` = this pick came from
+    // the "Work this pass" chain rather than from a click on a transponder card,
+    // and that chain re-runs — from the schedule, from a pass alarm, from the
+    // detail pane. Re-entered during a pass it re-picks "the first workable row",
+    // which on a bird with two documented pairings (the ISS: 145.200 up in region
+    // 1, 144.490 in regions 2/3, one 145.800 downlink) is not necessarily the row
+    // the operator is working. That is how two uplinks reached the split TX dial a
+    // second apart (CI-V capture, 2026-08-16).
+    //
+    // Asked HERE and not in the engine for the one thing the engine cannot know:
+    // whether a human clicked. An operator choosing another transponder mid-pass
+    // is what the picker is for, and it re-pins (`Engine::set_sat_transponder`).
+    if auto.unwrap_or(false) && engine_lock(&state).sat_row_pinned_against(index) {
+        return Err(format!(
+            "{name}: a pass is being worked on another transponder — keeping it"
+        ));
+    }
     let tles = tle_snapshot();
     // Rename-surviving lookup: a ★'d old name still finds its bird (phase 4).
     let norad = resolve_bird(&tles, &tle_aliases(), &name)
@@ -5766,7 +5784,7 @@ async fn set_sat_transponder(
 
     let snap = satnogs_snapshot(vec![norad])
         .ok_or_else(|| "satellite data not fetched yet — open the bird's detail first".to_string())?;
-    let tp = snap
+    let rows: Vec<_> = snap
         .transmitters
         .iter()
         // ⚠️ INDEX THE SAME LIST `get_sat_detail` RETURNS — norad only, dead
@@ -5777,9 +5795,11 @@ async fn set_sat_transponder(
         // list the caller was actually shown is. A dead pick is refused here,
         // by name, rather than shifting everything after it.
         .filter(|t| t.norad == norad)
-        .nth(index)
-        .ok_or_else(|| format!("{name}: no transponder #{index}"))?
-        .clone();
+        .collect();
+    let tp = (*rows
+        .get(index)
+        .ok_or_else(|| format!("{name}: no transponder #{index}"))?)
+    .clone();
     if !tp.alive {
         return Err(format!(
             "{}: that transponder is marked inactive — pick a live one",
@@ -5815,17 +5835,34 @@ async fn set_sat_transponder(
     // takes a closed list, so a raw name handed down would be refused on the
     // wire and spend the loop's bounded set-mode budget.
     let class = tp.downlink_class();
+    let uplink = tp.uplink_centre_hz().unwrap_or(0);
+    // EVERY OTHER UPLINK THIS BIRD DOCUMENTS. The operator's rig may be running a
+    // pairing we did not write — the ISS voice repeater is 145.200 up in region 1
+    // and 144.490 in regions 2/3 against the same downlink — and a rig reporting
+    // one of those is still on this pass, not off it (`Engine::sat_alt_uplinks`).
+    // Dead rows included: a transmitter marked inactive cannot be PICKED, but its
+    // channel is still a documented pairing an operator's rig may be sitting on,
+    // and recognising a frequency costs nothing where selecting it would mislead.
+    let alt_uplinks: Vec<u64> = rows
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != index)
+        .filter_map(|(_, t)| t.uplink_centre_hz())
+        .filter(|&hz| hz != 0 && hz != uplink)
+        .collect();
     let mut eng = engine_lock(&state);
     eng.set_sat_transponder(Some((
         label,
         index,
         tempo_core::doppler::Transponder {
-            uplink_centre_hz: tp.uplink_centre_hz().unwrap_or(0),
+            uplink_centre_hz: uplink,
             downlink_centre_hz: down,
             invert: tp.invert,
             half_width_hz: half,
         },
     )));
+    // AFTER the pick, which clears the list — see `Engine::set_sat_alt_uplinks`.
+    eng.set_sat_alt_uplinks(alt_uplinks);
     // TUNE ON PICK — the click IS the consent for the dial, exactly as it is for
     // a spot, a repeater favourite or a band-map click. The hold is set FIRST so
     // the tune reads the transponder it is tuning to; a refused tune (Doppler
@@ -6624,7 +6661,20 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // another rig or a transponder release moves the label exactly
         // when it moves the behaviour.
         let (mode, consent, held, tx_mode) = {
-            let eng = engine_lock(&dop_engine);
+            let mut eng = engine_lock(&dop_engine);
+            // THE PASS IS UP (or is not) — pushed every tick rather than on the
+            // edges, so a track that dies without running its handback cannot
+            // leave the engine believing a pass is being worked, and so the
+            // armed/prepositioning ticks (which `continue` below, before the
+            // phase is named) say so too. `t >= aos` is exactly the phase the
+            // Doppler tick runs in: the armed hold ends at or before AOS.
+            //
+            // Two things downstream turn on it — the transponder row is PINNED
+            // while it stands, and the radio loop tightens its PTT poll to
+            // 200 ms (`Engine::set_sat_pass_engaged`). Both are about an over in
+            // flight, which is why the waiting phases are not it: the operator
+            // is not working the bird until it is up.
+            eng.set_sat_pass_engaged(t >= pass.aos_unix);
             let con = SatDopplerConsent::read(&eng);
             let held = eng.sat_transponder_held().is_some();
             (
@@ -6716,7 +6766,15 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                 live_rate = Some(rate);
                 let keyed = {
                     let eng = engine_lock(&dop_engine);
-                    eng.snapshot().radio.transmitting
+                    let r = eng.snapshot().radio;
+                    // ⚠️ BOTH kinds of keyed (field report, 2026-08-16, IC-9700 ISS V/V).
+                    // `transmitting` is the SLOT-TX indicator alone; an FM bird is worked on
+                    // the HAND MIC, which is hardware PTT the rig handles itself — invisible
+                    // there, but read back once a second into `rig_keyed` (#57). With only
+                    // the slot flag, the Doppler tick fired mid-over and wrote the DOWNLINK
+                    // correction — and during split TX the Icom's selected VFO is the TX
+                    // VFO, so the operator keyed 145.800: the bird's own output.
+                    r.transmitting || r.rig_keyed
                 };
                 let now_ms = (t as u64).saturating_mul(1_000);
                 let mut eng = engine_lock(&dop_engine);
@@ -7228,6 +7286,16 @@ fn get_scope_row(
     // Nothing published yet — the Companion/UDP path, exactly as in `get_spectrum_row`.
     let eng = engine_lock(&state);
     Ok(eng.spectrum_row())
+}
+
+/// Fast Graph power trace (MSK144): raw 20 ms RMS samples since `since_seq`. Same meter bus,
+/// no engine mutex — pings must render while the engine is busy decoding.
+#[tauri::command(async)]
+fn get_fast_power(
+    since_seq: u64,
+    meters: State<'_, tempo_app::engine::MeterFeed>,
+) -> Result<Vec<tempo_app::engine::FastPowerSample>, String> {
+    Ok(meters.fast_power_since(since_seq))
 }
 
 /// The live meters (RX audio level + CAT S-meter), read lock-free off the meter bus — never
@@ -9096,6 +9164,17 @@ fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSn
 /// Set the TX audio drive level (0.0–1.0) live — the "Pwr" slider. The radio loop
 /// applies it to the audio backend on the next slot; persisted so it survives
 /// restart. Returns the refreshed snapshot.
+#[tauri::command(async)]
+fn set_msk144_period(state: State<'_, SharedEngine>, secs: u16) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_msk144_period(secs);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: set_msk144_period save failed: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
+/// Set the TX audio drive level (0.0-1.0).
 #[tauri::command(async)]
 fn set_tx_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
@@ -15077,7 +15156,7 @@ fn fetch_latest_version() -> Result<Option<String>, String> {
     Ok(tempo_app::update::parse_latest_version(&body))
 }
 
-/// Check SourceForge for a newer release. Returns the current/latest versions and whether an
+/// Check the release feed for a newer version. Returns the current/latest versions and whether an
 /// update exists; the frontend decides whether to show the dismissible prompt. Returns `Err`
 /// offline or on a fetch error — the frontend treats that as a silent no-op (offline honesty).
 #[tauri::command]
@@ -15832,13 +15911,16 @@ pub fn run() {
                 // Recover a poisoned lock (conn_log pattern) — a panicked command
                 // holding the engine must not silently kill auto-upload forever.
                 let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                let (q, c, e, h, n, cl, dxk, cl_email, cl_key) = {
+                let (q, c, e, h, hrd, n, cl, dxk, cl_email, cl_key) = {
                     let s = eng.settings();
                     (
                         s.qrz_logbook_upload,
                         s.clublog_upload,
                         s.eqsl_upload,
                         s.hrdlog_upload,
+                        // HRD Logbook (QSO Forwarding, UDP 2333) — a DIFFERENT feature from
+                        // hrdlog_upload (HRDLog.net) above, and the distinction is issue #87.
+                        s.hrd_logging,
                         s.n3fjp_upload && !s.n3fjp_host.trim().is_empty(),
                         s.cloudlog_upload && !s.cloudlog_url.trim().is_empty(),
                         // DXKeeper: empty host = off. Carried as (host, base_port, uploads)
@@ -15860,7 +15942,14 @@ pub fn run() {
                 // broadcast deliberately does NOT appear here: it fires from the log funnel
                 // itself, so it never consumes a queued record that a still-disabled
                 // connector is waiting to be turned on for.)
-                if !(q || c || e || h || n || cl || dxk.is_some()) {
+                // ⚠️ `hrd` IS IN THIS LIST (issue #87, Luk73). Its drain lives at the tail of
+                // this loop, and hrd_logging was never added here — so a station running ONLY
+                // Ham Radio Deluxe forwarding hit this `continue` on every tick: the app said
+                // "Logged CALL", the queue silently filled to 256 and dropped, and wireshark
+                // correctly showed not one datagram on udp/2333. The comment above records the
+                // IDENTICAL bug being fixed for DXKeeper; the lesson generalises: every
+                // connector whose drain lives below must appear in this gate.
+                if !(q || c || e || h || hrd || n || cl || dxk.is_some()) {
                     // Nothing enabled: LEAVE the queue intact (bounded at 256) so
                     // flipping a toggle on later still uploads this session's
                     // recent QSOs — log-first-configure-later must not lose them.
@@ -16146,6 +16235,7 @@ pub fn run() {
             get_spectrum_row,
             get_scope_row,
             get_meters,
+            get_fast_power,
             set_mode,
             get_settings,
             set_settings,
@@ -16276,6 +16366,7 @@ pub fn run() {
             stop_qso_recording,
             set_tx_enabled,
             set_tx_level,
+            set_msk144_period,
             set_rx_gain,
             set_active_radio,
             set_peg_lock,
@@ -17100,6 +17191,7 @@ mod tests {
             heard_count: 1,
             presence: tempo_app::dto::Presence::Active,
             worked: false,
+            worked_band: false,
             country: None,
             tier: None,
             grid_rarity: None,
@@ -17189,6 +17281,7 @@ mod tests {
             heard_count: 1,
             presence: tempo_app::dto::Presence::Active,
             worked: false,
+            worked_band: false,
             country: None,
             tier: None,
             grid_rarity: None,

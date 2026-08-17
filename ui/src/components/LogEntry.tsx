@@ -474,8 +474,10 @@ export function LogEntry({
   }, [cwLive?.call, cwLive?.rst, cwLive?.name])
 
   const hist = useMemo(
-    () => callHistory(allLog, logCall, snap.radio.band),
-    [allLog, logCall, snap.radio.band],
+    // `mode` is this cockpit's LOG mode; the scope flag mirrors the engine's worked-band sets
+    // so the Dupe badge and the B4 chips can never disagree about what a dupe is.
+    () => callHistory(allLog, logCall, snap.radio.band, mode, snap.b4MatchMode ?? false),
+    [allLog, logCall, snap.radio.band, mode, snap.b4MatchMode],
   )
 
   // The award identity for the badges: cty.dat resolved from the CALL (a local

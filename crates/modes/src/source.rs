@@ -218,6 +218,16 @@ impl SignalSource for NativeSource {
 /// | `#` | JT65 | `jt65_decoded`, the `csync` field (`#`/`##`/`# `) |
 /// | `&` `^` | MSK144 | `mainwindow.cpp:8931` accepts both |
 ///
+/// ⚠️ **FT2 HAS NO CHARACTER HERE, AND CANNOT.** Decodium prints FT2 decodes with
+/// `' + '` (`decoder.f90:1923`, `ft2_decoded`'s format 1001) — byte-identical to
+/// FT4's marker, and `postDecode` (`mainwindow.cpp:16955`) puts that same token
+/// straight into the UDP Decode message's mode field. So a companion `+` is
+/// genuinely ambiguous on the wire, and mapping it to FT2 would mislabel every
+/// FT4 decode from every WSJT-X in the world for the sake of the rarer mode. FT2
+/// is matched by its FULL NAME only, which apps that send the name do supply;
+/// a `+` from a Decodium station lands on FT4, and the tier label is the only
+/// thing that is wrong.
+///
 /// ⭐ THE RETURNED PERIOD/SUBMODE ARE PLACEHOLDERS, and that is sound only because
 /// of what reads this. The single character does not carry a T/R period — a `:` is
 /// Q65 at any of 5 periods and 5 submodes. The one consumer is the decode row's
@@ -242,6 +252,8 @@ fn wsjtx_mode_to_kind(m: &str) -> Option<ModeKind> {
         "&" | "^" => Some(ModeKind::Msk144 { period_s: 15 }),
         other if other.eq_ignore_ascii_case("FT8") => Some(ModeKind::Ft8),
         other if other.eq_ignore_ascii_case("FT4") => Some(ModeKind::Ft4),
+        // Name only — see the ⚠️ above on why `+` is not mapped.
+        other if other.eq_ignore_ascii_case("FT2") => Some(ModeKind::Ft2),
         other if other.eq_ignore_ascii_case("Q65") => Some(ModeKind::Q65 {
             period_s: 60,
             submode: 0,

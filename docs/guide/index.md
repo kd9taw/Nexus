@@ -6,7 +6,7 @@ propagation, DX chasing, logging, and awards — into one modern app. This guide
 is the per-section reference: pick the section you're working in and jump to its
 page.
 
-1.0.0 closes the beta period. The habit the beta was written with does not
+Nexus left beta at 1.0.0. The habit the beta was written with does not
 close with it: where a feature is opt-in, or a number comes from simulation
 rather than the air, these pages say so, and each page ends with what its
 section does **not** do.

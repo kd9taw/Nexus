@@ -414,7 +414,7 @@ describe('every control still does what it did', () => {
     await act(async () => {
       fireEvent.click(beacon)
     })
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 0))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 0, false))
   })
 
   it('the ✕ closes the detail without disarming, and the badge is the way back', async () => {

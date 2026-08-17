@@ -1,3 +1,15 @@
+// ⚠️ DEAD TOOLING — the in-browser mock this drives was PURGED in June 2026 (the
+// demo-purge in 8c1ee081; ui/src/api.ts now hard-throws without the Tauri IPC bridge,
+// and says in its own header there is NO mock fallback). Running this today serves the
+// built app to headless Chrome and times out on `.app:not(.loading)` forever.
+// Verified 2026-08-16 while attempting the release-docs screenshot refresh.
+//
+// The manual images in docs/img/manual/ do NOT come from here and never did since the
+// purge: they are RAW CAPTURES of the real desktop app at a 1920x1080 logical window
+// (see build-manual-images.py's header for why that size), processed by
+// scripts/build-manual-images.py. Kept rather than deleted because the serving/capture
+// scaffolding is the right starting point if a standalone mock ever returns.
+//
 // Auto-capture Tempo UI screenshots from the in-browser mock — no rig needed.
 //
 // Builds nothing itself: run `npm --prefix ui run build` first, then this drives

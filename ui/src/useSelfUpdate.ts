@@ -53,7 +53,11 @@ export function useSelfUpdate(): SelfUpdate {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const handle = useRef<UpdaterHandle | null>(null)
-  const dismissed = useRef(false)
+  /// The version the operator dismissed. Written by `dismiss`, and READ by the hourly re-check
+  /// — it was a plain boolean that nothing read, so "Not now" lasted until the next hourly
+  /// tick re-ran the whole flow, re-downloaded, and put the banner straight back. Dismissal is
+  /// per-VERSION, deliberately: "not 1.4.1 now" must not also swallow 1.5.0 next month.
+  const dismissed = useRef<string | null>(null)
 
   // Check once at startup, then hourly. Deliberately NOT aggressive: a new build is not urgent,
   // and the check costs a network round-trip.
@@ -66,6 +70,9 @@ export function useSelfUpdate(): SelfUpdate {
       try {
         const up = await api.check()
         if (!alive || !up?.available) return
+        // Honour a dismissal for THIS version — the hourly tick must not resurrect a banner
+        // the operator just closed. A NEWER version than the dismissed one still lands.
+        if (dismissed.current != null && (up.version ?? '') === dismissed.current) return
         handle.current = up
         setVersion(up.version ?? null)
         setPhase('available')
@@ -153,9 +160,9 @@ export function useSelfUpdate(): SelfUpdate {
   }, [phase])
 
   const dismiss = useCallback(() => {
-    dismissed.current = true
+    dismissed.current = version
     setPhase('idle')
-  }, [])
+  }, [version])
 
   return { phase, version, blockReason, progress, error, install, dismiss }
 }

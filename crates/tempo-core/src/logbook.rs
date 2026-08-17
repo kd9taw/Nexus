@@ -708,6 +708,46 @@ impl Logbook {
             .collect()
     }
 
+    /// The worked-before index at BAND granularity, one sweep: `(CALL, BAND)` pairs, both
+    /// uppercased — beside [`Self::worked_call_set`] for the same single-sweep reason (a
+    /// per-row `worked_before_band` under the engine mutex is the waterfall stall).
+    ///
+    /// `fold_mode`: when set, the pair becomes `(CALL, BAND·MODE)` — WSJT-X's optional
+    /// "highlight by mode" scope (its `HighlightByMode`, default off), where working a station
+    /// on 40m FT8 does NOT mark them B4 for 40m phone. The raw uppercased ADIF mode is the
+    /// key, exactly as WSJT-X compares its own mode strings.
+    pub fn worked_band_set(&self, fold_mode: bool) -> std::collections::HashSet<(String, String)> {
+        note_log_sweep();
+        self.records
+            .iter()
+            .map(|r| {
+                let band = if fold_mode {
+                    format!(
+                        "{}\u{1}{}",
+                        r.band.to_ascii_uppercase(),
+                        r.mode.to_ascii_uppercase()
+                    )
+                } else {
+                    r.band.to_ascii_uppercase()
+                };
+                (r.call.to_ascii_uppercase(), band)
+            })
+            .collect()
+    }
+
+    /// The lookup key [`Self::worked_band_set`] stores for (`band`, `mode`) under `fold_mode`.
+    pub fn band_key(band: &str, mode: &str, fold_mode: bool) -> String {
+        if fold_mode {
+            format!(
+                "{}\u{1}{}",
+                band.to_ascii_uppercase(),
+                mode.to_ascii_uppercase()
+            )
+        } else {
+            band.to_ascii_uppercase()
+        }
+    }
+
     pub fn worked_before(&self, call: &str) -> bool {
         note_log_sweep();
         self.records
@@ -1330,6 +1370,17 @@ fn adif_submode(mode: &str) -> Option<&'static str> {
     match mode.trim().to_ascii_uppercase().as_str() {
         "TEMPOFAST" => Some("TEMPOFAST"),
         "TEMPODEEP" => Some("TEMPODEEP"),
+        // ⭐ FT2 RIDES HERE FOR THE SAME REASON THE TEMPO MODES DO, and leaving it
+        // out would have LOST CONTACTS. FT2 is Decodium's mode, not WSJT-X's, so it
+        // is in neither the ADIF MODE enumeration nor TQSL's own mode table — a
+        // bare <MODE:3>FT2 misses all three legs of the MODE%SUBMODE -> SUBMODE ->
+        // MODE cascade and the record is DROPPED with "Invalid MODE", exactly as
+        // the writer's note above describes for TempoFast.
+        //
+        // MFSK is the honest family here too, not a flag of convenience: FT2 is
+        // 4-GFSK at 41.67 baud — the same continuous-phase FSK family as FST4,
+        // which already lives under MFSK, and as FT4, whose symbol time it halves.
+        "FT2" => Some("FT2"),
         _ => None,
     }
 }
@@ -1348,6 +1399,9 @@ fn promoted_submode(sub: &str) -> Option<&'static str> {
         "TEMPOFAST" => Some("TempoFast"),
         "TEMPODEEP" => Some("TempoDeep"),
         "FT4" => Some("FT4"),
+        // The read side of the FT2 cascade above — without it our own export
+        // re-imports as bare "MFSK" and the mode is lost on the next full save.
+        "FT2" => Some("FT2"),
         "Q65" => Some("Q65"),
         "FST4" => Some("FST4"),
         "FST4W" => Some("FST4W"),
@@ -1427,6 +1481,12 @@ fn dedup_mode(mode: &str) -> String {
     let m = mode.trim().to_ascii_uppercase();
     match m.as_str() {
         "USB" | "LSB" => "SSB".to_string(),
+        // Same provably-one-mode rule: BPSK31 is a common logger spelling of ADIF's
+        // PSK31 (the B is the modulation the mode already means). The #31 record's last
+        // unfolded example; the broad data-mode respellings stay handled by the
+        // legacy-MFSK bridge in import_adif, and everything else stays unfolded —
+        // over-retention remains the failure this module prefers.
+        "BPSK31" => "PSK31".to_string(),
         _ => m,
     }
 }
@@ -1855,6 +1915,24 @@ fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// #31's last unfolded example: BPSK31 is a logger spelling of ADIF's PSK31 — one mode,
+    /// two strings. Re-importing a log round-tripped through such a logger must not double it.
+    #[test]
+    fn a_bpsk31_respelling_does_not_double_the_qso_on_reimport() {
+        let adif_a = "Nexus\n<EOH>\n<CALL:5>W9XYZ<BAND:3>20m<MODE:5>PSK31<QSO_DATE:8>20260801<TIME_ON:6>121500<EOR>";
+        let adif_b = "Nexus\n<EOH>\n<CALL:5>W9XYZ<BAND:3>20m<MODE:6>BPSK31<QSO_DATE:8>20260801<TIME_ON:6>121500<EOR>";
+        let mut lb = Logbook::new();
+        let (added, _, _) = lb.import_adif(adif_a);
+        assert_eq!(added.len(), 1, "control: the first import stores the QSO");
+        let (added2, skipped2, _) = lb.import_adif(adif_b);
+        assert_eq!(
+            (added2.len(), skipped2),
+            (0, 1),
+            "the respelled twin is the duplicate it is — one contact, two spellings"
+        );
+    }
+
     use super::*;
 
     // Regression for the operator's "export drops oldest QSOs" report (2026-07-23). Root
@@ -2185,6 +2263,7 @@ mod tests {
         for mode in [
             "FT8",
             "FT4",
+            "FT2",
             "TempoFast",
             "TempoDeep",
             "Q65",

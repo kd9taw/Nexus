@@ -9,7 +9,7 @@ in more depth in the [user guide](https://github.com/kd9taw/Nexus/tree/main/docs
 By the end you will have Nexus installed, your station and rig set up, a cockpit
 full of live decodes, and one FT8 QSO in your log.
 
-> **1.0.0 closes the beta period.** The FT8/FT4 core is built to WSJT-X's behaviour
+> **Nexus left beta at 1.0.0.** The FT8/FT4 core is built to WSJT-X's behaviour
 > and exercised on the air daily; it is the production part of the app. Where a
 > number still comes from the bench rather than the air, these pages say so, and
 > field reports are what close that gap.

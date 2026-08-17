@@ -288,7 +288,7 @@ describe('"Work this pass" runs the chain', () => {
     render(<SatellitesView />)
     fireEvent.click((await workButtons())[0])
     // Wire index 2: the RAW index of the linear (dead row 0 counts — the index trap).
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2, true))
     await waitFor(() => expect(api.startSatTrack).toHaveBeenCalledWith('RS-44', NOW + 720))
     // The auto-pick is disclosed, not silent (on the rail and on the card).
     expect((await screen.findAllByText(/picked for you/)).length).toBeGreaterThanOrEqual(1)
@@ -312,12 +312,12 @@ describe('"Work this pass" runs the chain', () => {
     // = nothing held) must win over the last local click.
     render(<SatellitesView focusSat="RS-44" />)
     fireEvent.click(await screen.findByLabelText('Work SSB/CW linear transponder'))
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2, false))
     api.setSatTransponder.mockClear()
     // (LOS passed: the engine reports no hold. Working the bird again must
     // run the auto-pick again.)
     fireEvent.click((await workButtons())[0])
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2, true))
     await waitFor(() => expect(api.startSatTrack).toHaveBeenCalled())
   })
 
@@ -355,17 +355,17 @@ describe('"Work this pass" runs the chain', () => {
     // Say None for RS-44 (pick first — the None radio starts checked, and a
     // click on a checked radio fires nothing).
     fireEvent.click(await screen.findByLabelText('Work SSB/CW linear transponder'))
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2, false))
     fireEvent.click(
       await screen.findByLabelText('Work no transponder — leave the dial to me'),
     )
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', null))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', null, false))
     api.setSatTransponder.mockClear()
     // Work AO-91: ITS auto-pick fires — that consent belongs to AO-91 alone.
     const rowFor = (name: string) => (b: HTMLElement) =>
       new RegExp(name).test(b.closest('tr, .sats-best-row')?.textContent ?? '')
     fireEvent.click((await workButtons()).find(rowFor('AO-91'))!)
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('AO-91', 2))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('AO-91', 2, true))
     api.setSatTransponder.mockClear()
     api.startSatTrack.mockClear()
     // Work RS-44 again: the None must still stand.
@@ -379,11 +379,11 @@ describe('"Work this pass" runs the chain', () => {
     // Pick, then explicitly hand the dial back (a fresh radio starts on None,
     // and clicking an already-checked radio fires nothing).
     fireEvent.click(await screen.findByLabelText('Work SSB/CW linear transponder'))
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', 2, false))
     fireEvent.click(
       await screen.findByLabelText('Work no transponder — leave the dial to me'),
     )
-    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', null))
+    await waitFor(() => expect(api.setSatTransponder).toHaveBeenCalledWith('RS-44', null, false))
     api.setSatTransponder.mockClear()
     fireEvent.click((await workButtons())[0])
     await waitFor(() => expect(api.startSatTrack).toHaveBeenCalled())

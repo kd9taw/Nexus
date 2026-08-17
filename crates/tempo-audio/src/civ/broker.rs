@@ -43,6 +43,11 @@ struct SatSplit {
     /// Sub band, and satellite-mode TX exits Sub, so the rig would transmit
     /// on the downlink frequency.
     sel_stray: bool,
+    /// The OPERATOR had satellite mode on, and we turned it off to run a
+    /// same-band A/B split. Distinct from `engaged`, which is satellite mode WE
+    /// engaged as the split itself: this is a state we found and borrowed, so
+    /// the release puts it back. Never set from a state we did not change.
+    op_satmode_off: bool,
 }
 
 /// rigctld-protocol backend that translates every verb to CI-V through the engine.
@@ -86,6 +91,7 @@ impl CivBackend {
                 engaged: false,
                 cap: None,
                 sel_stray: false,
+                op_satmode_off: false,
             }),
         }
     }
@@ -135,6 +141,81 @@ impl CivBackend {
             self.split.store(false, Ordering::Relaxed);
         }
         ok
+    }
+
+    /// Take the rig OUT of a satellite mode the OPERATOR put it in, so a
+    /// same-band A/B split can work at all. `false` = the split must not go
+    /// ahead. Callers hold the band lock.
+    ///
+    /// ⚠️ NEEDS-BENCH (IC-9700 — field report 2026-08-16, V/V pass).
+    ///
+    /// [`SatSplit::engaged`] covers only the satellite mode WE engaged as a
+    /// cross-band split. This is the other half, and the operator's normal
+    /// habit produces it: he works passes with SAT on at the front panel. On
+    /// this family satellite mode is CROSS-BAND BY CONSTRUCTION — Main and Sub
+    /// are different bands — and it fixes TX on Sub. A same-band pass (V/V,
+    /// U/U) cannot be expressed that way at all, so it rides `0F` A/B split;
+    /// and `0F 01` fired at a rig still in satellite mode asks for a TX VFO
+    /// that is not where the rig would transmit.
+    ///
+    /// Only a rig we KNOW is in satellite mode is touched: a NAK (no Sub band —
+    /// the IC-7300 family) and a busy/timed-out read both leave everything
+    /// alone, so no terrestrial pile-up split pays for this. A refusal to leave
+    /// it, though, refuses the split: firing `0F 01` anyway would transmit on a
+    /// band the operator never chose, silently.
+    fn clear_operator_satmode(&self, g: &mut SatSplit) -> bool {
+        if g.op_satmode_off {
+            return true; // already borrowed — re-probing per correction is bus noise
+        }
+        if !matches!(self.read_satmode(), Ok(Some(true))) {
+            return true; // not in it, has no such mode, or the link is busy: nothing to do
+        }
+        if !self.ack(commands::set_dsp_func(
+            self.addr,
+            commands::FUNC_SATMODE,
+            false,
+        )) {
+            super::diag::note(
+                "same-band split: the rig is in SATELLITE mode and would not leave it — \
+                 nothing sent; turn SATELLITE off at the front panel",
+            );
+            return false;
+        }
+        g.op_satmode_off = true;
+        super::diag::note(
+            "same-band split: the rig was in SATELLITE mode, which is cross-band only — \
+             turned it off for this pass; it goes back on when the split is released",
+        );
+        true
+    }
+
+    /// Put back the satellite mode [`Self::clear_operator_satmode`] borrowed.
+    /// Callers hold the band lock. ⚠️ NEEDS-BENCH with the same report.
+    ///
+    /// The flag is spent either way. Held through a REFUSED restore it would
+    /// make the next split skip its probe on a rig that may well still be in
+    /// satellite mode; cleared, the next split re-probes and re-decides from
+    /// what the rig actually says. The operator is told, because a front-panel
+    /// state we changed and could not change back is theirs to finish.
+    fn restore_operator_satmode(&self, g: &mut SatSplit) {
+        if !g.op_satmode_off {
+            return;
+        }
+        g.op_satmode_off = false;
+        if self.ack(commands::set_dsp_func(
+            self.addr,
+            commands::FUNC_SATMODE,
+            true,
+        )) {
+            super::diag::note(
+                "split released — SATELLITE mode put back on, as the operator had it",
+            );
+        } else {
+            super::diag::note(
+                "split released — the rig would not go back into SATELLITE mode; \
+                 turn SATELLITE back on at the front panel",
+            );
+        }
     }
 
     /// Read `16 5A` (satellite mode) back from the rig.
@@ -552,9 +633,18 @@ impl RigBackend for CivBackend {
                 return Some(true); // released — never 0F 00 at this rig
             }
         }
+        // The A/B split is SAME-BAND by construction on this family, so a rig
+        // the operator left in (cross-band) satellite mode has to come out of
+        // it first — and go back in when we hand the split back.
+        if on && !self.clear_operator_satmode(&mut g) {
+            return Some(false);
+        }
         let ok = self.ack(commands::set_split(self.addr, on));
         if ok {
             self.split.store(on, Ordering::Relaxed);
+            if !on {
+                self.restore_operator_satmode(&mut g);
+            }
         }
         Some(ok)
     }
@@ -597,11 +687,21 @@ impl RigBackend for CivBackend {
 
     fn set_split_mode(&self, mode: &str, _passband_hz: i32) -> Option<bool> {
         let mut g = self.band();
+        let Some(m) = Mode::from_name(mode) else {
+            return Some(false);
+        };
         if !g.engaged {
-            // A/B split has no native mode verb wired yet (`26 01` is a
-            // follow-up once verified against the manual) — `RPRT -11`, the
-            // honest "not implemented", exactly as before.
-            return None;
+            // ⚠️ NEEDS-BENCH (IC-9700 — field report 2026-08-16, V/U FM pass
+            // transmitted LSB). This used to answer `None` (`RPRT -11`, "not
+            // implemented"), which meant the A/B split — the shape every V/V
+            // pass and every terrestrial pile-up rides — had NO way to set its
+            // TX VFO's mode at all. `26 01` is that way: it addresses the
+            // current band's unselected VFO directly, the same register `25 01`
+            // writes the frequency into, so no VFO swap and no selection to
+            // restore. Unacked ⇒ `Some(false)`, and the caller says so out loud
+            // ("put VFO B in FM by hand") rather than leaving the operator to
+            // discover it on the air.
+            return Some(self.ack(commands::set_unselected_mode(self.addr, m)));
         }
         if !self.ensure_main(&mut g) {
             return Some(false); // same stray-selection refusal as the freq
@@ -609,9 +709,6 @@ impl RigBackend for CivBackend {
         // The uplink sideband (`X`, the inverting-bird LSB): command it on the
         // Sub band, selection restored, same discipline as the frequency —
         // including the remembered stray selection on a refused restore.
-        let Some(m) = Mode::from_name(mode) else {
-            return Some(false);
-        };
         let ok = self.select("Sub") && self.ack(commands::set_mode(self.addr, m, None));
         let restored = self.select("Main");
         g.sel_stray = !restored;
@@ -998,6 +1095,140 @@ mod tests {
             assert!(!r.satmode, "satellite mode released (16 5A 00)");
             assert!(!r.log.iter().any(|(cmd, _)| *cmd == 0x0F));
         }
+    }
+
+    #[test]
+    fn an_ab_split_sets_its_tx_vfos_mode_through_26_01() {
+        // ⭐ THE V/U FM FIELD REPORT (IC-9700, 2026-08-16): the TX VFO was in
+        // LSB on an FM bird. Two holes in series made that, and this is the
+        // second — the A/B split, which is the shape a same-band pass and every
+        // terrestrial pile-up ride, had NO mode verb at all. `set_split_mode`
+        // answered "not implemented", so whatever an earlier inverting linear
+        // pass left in the transmit VFO simply stayed there.
+        //
+        // ⚠️ NEEDS-BENCH: `26 01` is wired here against the fake radio and the
+        // manual, not yet against the operator's rig.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+
+        // The scene, exactly as the report describes it: the transmit VFO is
+        // holding LSB from the pass before.
+        assert_eq!(
+            regs.lock().unwrap().unselected_mode,
+            0x00,
+            "scene: the TX VFO carries the previous pass's LSB"
+        );
+
+        // A same-band A/B split, then the uplink's mode.
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 VFOB\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "X FM 0\n"), "RPRT 0\n");
+
+        let r = regs.lock().unwrap();
+        assert_eq!(
+            r.unselected_mode, 0x05,
+            "the TRANSMIT VFO is in FM — the register `06` cannot reach"
+        );
+        assert_eq!(
+            r.main_mode, 0x01,
+            "and the RECEIVE VFO is untouched: commanding the uplink's mode on \
+             the dial would deafen the operator"
+        );
+        // The bytes, because this is a class-wide CAT change and the frame is
+        // the claim: `26 01 <mode> <data>`, addressed like `25 01` beside it.
+        let f = r
+            .log
+            .iter()
+            .find(|(cmd, _)| *cmd == 0x26)
+            .expect("a 26 frame was sent");
+        assert_eq!(
+            f.1,
+            vec![0x01, 0x05, 0x00],
+            "26 01, FM, DATA off — and no trailing filter byte, so the rig keeps \
+             the filter the operator chose"
+        );
+        assert!(
+            !r.sel_sub,
+            "no VFO swap: `26 01` addresses the unselected VFO in place"
+        );
+    }
+
+    #[test]
+    fn an_ab_split_takes_a_rig_out_of_the_operators_satellite_mode_and_puts_it_back() {
+        // ⚠️ NEEDS-BENCH (IC-9700, field report 2026-08-16).
+        //
+        // The operator works passes with SATELLITE on at the front panel. On
+        // this family satellite mode is CROSS-BAND BY CONSTRUCTION — Main and
+        // Sub cannot share a band — so a V/V or U/U pass cannot be expressed
+        // that way at all and rides `0F` A/B split instead. Fired at a rig
+        // still in satellite mode, `0F 01` asks for a transmit VFO that is not
+        // where the rig would transmit.
+        //
+        // `engaged` covers only the satellite mode WE engaged; this is the
+        // other half, and it is the one the operator's own habit produces.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+
+        // The operator's front panel: SAT on, and nothing of ours put it there.
+        regs.lock().unwrap().satmode = true;
+        regs.lock().unwrap().log.clear();
+
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 VFOB\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert!(!r.satmode, "the rig is taken OUT of satellite mode");
+            assert!(r.split, "…and the same-band A/B split is on");
+            // ORDER IS THE CLAIM: satellite mode must be gone BEFORE `0F 01`,
+            // or the split lands on a rig that is still cross-band.
+            let off = r
+                .log
+                .iter()
+                .position(|(cmd, d)| {
+                    *cmd == 0x16 && d.first() == Some(&0x5A) && d.get(1) == Some(&0)
+                })
+                .expect("16 5A 00 was sent");
+            let split = r
+                .log
+                .iter()
+                .position(|(cmd, d)| *cmd == 0x0F && d.first() == Some(&0x01))
+                .expect("0F 01 was sent");
+            assert!(
+                off < split,
+                "satellite mode off BEFORE the split: {:?}",
+                r.log
+            );
+        }
+
+        // Handing the split back restores what we borrowed — and only what we
+        // borrowed. The operator set it; they get it back.
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 0 VFOB\n"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert!(r.satmode, "satellite mode put back, as the operator had it");
+            assert!(!r.split);
+        }
+
+        // ---- THE OTHER DIRECTION, or this proves nothing. A rig that was NOT
+        // in satellite mode must never be pushed into one on release: we only
+        // restore a state we actually changed.
+        {
+            let mut r = regs.lock().unwrap();
+            r.satmode = false; // the ordinary terrestrial rig, SAT never touched
+            r.log.clear();
+        }
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 VFOB\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 0 VFOB\n"), "RPRT 0\n");
+        let r = regs.lock().unwrap();
+        assert!(
+            !r.satmode,
+            "a rig we found in simplex is handed back in simplex"
+        );
+        assert!(
+            !r.log
+                .iter()
+                .any(|(cmd, d)| *cmd == 0x16 && d.first() == Some(&0x5A) && d.get(1) == Some(&1)),
+            "nothing may turn satellite mode ON that did not turn it off: {:?}",
+            r.log
+        );
     }
 
     #[test]

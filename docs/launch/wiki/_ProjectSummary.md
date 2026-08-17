@@ -11,7 +11,7 @@ Pi. GPL-3.0, built in Rust.
 &nbsp;·&nbsp; [Source](https://github.com/kd9taw/Nexus)
 &nbsp;·&nbsp; [hamradiotools.io](https://hamradiotools.io)
 
-> **1.0.0 closes the beta period, and here is what that claims.** The FT8/FT4 core
+> **Nexus left beta at 1.0.0, and here is what that claims.** The FT8/FT4 core
 > is the production tier: over a thousand automated tests, wire formats pinned by
 > test, field-verified end to end on Yaesu FTDX10 and FT-991A and on native-CI-V
 > Icom. APRS is on the air with its internet feed and receive-only iGate confirmed

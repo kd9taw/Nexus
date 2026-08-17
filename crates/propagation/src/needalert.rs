@@ -525,9 +525,9 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
         // "TempoFast" arm never matched and dropped Nexus's own tiers through to the
         // frequency fallback, which can answer Cw/Phone from the band plan alone and
         // fabricate a NewMode. Spell the tiers in upper case with the rest.
-        "FT8" | "FT4" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "RTTY" | "PSK" | "PSK31"
-        | "PSK63" | "JT65" | "JT9" | "JS8" | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI"
-        | "SSTV" => ModeClass::Digital,
+        "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "RTTY" | "PSK"
+        | "PSK31" | "PSK63" | "JT65" | "JT9" | "JS8" | "MFSK" | "MSK144" | "OLIVIA" | "DATA"
+        | "DIGI" | "SSTV" => ModeClass::Digital,
         _ => crate::model::classify_spot_mode(freq_mhz),
     }
 }

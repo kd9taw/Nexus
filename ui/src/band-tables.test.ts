@@ -117,10 +117,17 @@ describe('band.ts agrees with bandplan.rs on 4 m', () => {
   })
 
   it('labels every 4 m calling frequency the plans ship', () => {
-    const fourM = ['ft8_band_plan', 'jt65_band_plan', 'msk144_band_plan', 'wspr_band_plan']
+    const fourM = [
+      'ft8_band_plan',
+      'ft2_band_plan',
+      'jt65_band_plan',
+      'msk144_band_plan',
+      'wspr_band_plan',
+    ]
       .flatMap(rustPlan)
       .filter((r) => r.band === '4m')
-    expect(fourM.map((r) => r.mhz).sort()).toEqual([70.091, 70.102, 70.154, 70.23])
+    // 70.157 is FT2's — Decodium's only IARU-R1-restricted FT2 row.
+    expect(fourM.map((r) => r.mhz).sort()).toEqual([70.091, 70.102, 70.154, 70.157, 70.23])
     for (const r of fourM) expect(bandLabelForMhz(r.mhz), `${r.mhz} MHz`).toBe('4m')
   })
 })

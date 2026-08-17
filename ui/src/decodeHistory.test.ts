@@ -7,6 +7,7 @@ import {
   passesFilter,
   periodStartMs,
   RX_TOL_HZ,
+  TIER_PERIOD_SECS,
 } from './decodeHistory'
 import type { DecodeRow } from './types'
 
@@ -195,5 +196,12 @@ describe('period separator UTC', () => {
     expect(fmtUtc(periodStartMs(4, 'FT8'))).toBe('000100')
     // FT4 slot 9 = 67.5 s → period starts at 67.5 s = 00:01:07 UTC.
     expect(fmtUtc(periodStartMs(9, 'FT4'))).toBe('000107')
+    // FT2 slot 16 = 60 s at a 3.75 s period. The FRACTIONAL period is the point:
+    // FT2 is the only sub-4-second tier, so a table entry rounded to 4 (or left
+    // at FT8's 15) would put every FT2 period separator on the wrong second.
+    expect(TIER_PERIOD_SECS.FT2).toBe(3.75)
+    expect(fmtUtc(periodStartMs(16, 'FT2'))).toBe('000100')
+    // …and slot 17 lands on the 3.75 s grid, not a whole second.
+    expect(periodStartMs(17, 'FT2')).toBe(63_750)
   })
 })

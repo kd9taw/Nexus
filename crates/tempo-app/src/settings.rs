@@ -1475,9 +1475,22 @@ pub struct Settings {
     /// decode is an unworked grid, so the alert is noise (operator report).
     #[serde(default = "default_alert_grid_bands")]
     pub alert_grid_bands: String,
+    /// Fold MODE into the worked-before (B4) and Dupe checks — WSJT-X's "highlight by mode"
+    /// (`HighlightByMode`, default off there too). Off: working a station on 40m marks them
+    /// B4-on-band for 40m in every mode, which is how most operators and WSJT-X count it.
+    /// On: 40m FT8 and 40m phone are separate contacts for B4/Dupe purposes (operator-relayed
+    /// ask, 2026-08-16 — a 'Dupe 40m' shown for a station worked on FT8 while running phone).
+    #[serde(default)]
+    pub b4_match_mode: bool,
     /// Band scope for the rare/ultra 💎 grid alerts — separate from plain grids
-    /// so silencing HF grid chatter keeps the genuinely rare open-water gems.
-    #[serde(default = "default_alert_scope_all")]
+    /// so an operator CAN keep the open-water gems on HF by widening it.
+    ///
+    /// ⚠️ Default "vhf", matching the plain grid scope (operator ruling, 2026-08-15:
+    /// "remove the grid alerts for HF bands by default"). It shipped as "all", which made
+    /// the rare tier the one grid alert still firing on HF — and on HF nearly every decode
+    /// is an unworked grid, so even the rare subset reads as chatter. Grid awards are
+    /// VHF-centric; an HF grid-chaser opts in from Settings ▸ Spots & Alerts.
+    #[serde(default = "default_alert_grid_bands")]
     pub alert_rare_grid_bands: String,
     /// Mouse-wheel tuning sensitivity multiplier (1.0 = stock). <1 = less sensitive
     /// (needs more scroll per step — for over-energetic / high-res "free-spin" mice),
@@ -2720,7 +2733,8 @@ impl Default for Settings {
             alert_new: true,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
-            alert_rare_grid_bands: default_alert_scope_all(),
+            b4_match_mode: false,
+            alert_rare_grid_bands: default_alert_grid_bands(),
             wheel_tune_sensitivity: default_wheel_tune_sensitivity(),
             announce_verbosity: default_announce_verbosity(),
             sound_tx_state: false,

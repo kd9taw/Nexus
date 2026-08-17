@@ -425,7 +425,7 @@ export function OperateDecodes({
               className={`od-chip od-conf${hideConfirmed ? ' active' : ''}`}
               aria-pressed={hideConfirmed}
               onClick={() => pickHideConfirmed(!hideConfirmed)}
-              title="Hide stations already CONFIRMED (LoTW/card) on this band — chase what you still need. A station that's new on the band always shows."
+              title="Hide stations whose ENTITY is already confirmed (LoTW/card) on this band — chase what you still need. It is the country that is confirmed, not necessarily this callsign. A station that's new on the band always shows."
             >
               −Conf
             </button>
@@ -571,7 +571,17 @@ export function OperateDecodes({
                 </span>
                 <span className="decode-utc" title="UTC heard">{fmtUtc(d.at)}</span>
                 <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
-                <span className={`decode-dt ${dtClass(d.dtSec)}`} title="DT — time offset (s); large = clock/sync skew">
+                {/* On MSK144 dt is the ping's TIME WITHIN THE PERIOD (WSJT-X renames this
+                    column "T"), so it is legitimately 0..period and the FT8 clock-skew
+                    colouring would paint every healthy ping red. */}
+                <span
+                  className={`decode-dt ${d.tier === 'MSK144' ? 'ok' : dtClass(d.dtSec)}`}
+                  title={
+                    d.tier === 'MSK144'
+                      ? 'T — when in the period the ping landed (s)'
+                      : 'DT — time offset (s); large = clock/sync skew'
+                  }
+                >
                   {fmtDt(d.dtSec)}
                 </span>
                 <span className="decode-freq">{Math.round(d.freqHz)}</span>
@@ -615,7 +625,14 @@ export function OperateDecodes({
                       )}
                     </span>
                   )}
-                  {d.worked && <span className="b4-chip" title="Worked before">B4</span>}
+                  {d.worked && (
+                    <span
+                      className={`b4-chip${d.workedBand ? ' b4-band' : ''}`}
+                      title={d.workedBand ? 'Worked before on this band' : 'Worked before (another band)'}
+                    >
+                      B4
+                    </span>
+                  )}
                   {d.isCq && !d.directedToMe && <span className="decode-tag cq">CQ</span>}
                   {d.directedToMe && <span className="decode-tag me">YOU</span>}
                   {d.rv > 0 && (

@@ -28,6 +28,20 @@ pub use ft8::a7_reset as reset_ft8_a7;
 
 #[cfg(test)]
 mod tests {
+
+    /// FT2 MUST run the early pass — this flag routes it out of service.rs's
+    /// key-before-decode branch, where its first on-air QSOs answered every step one
+    /// full cycle late and sent every message twice (2026-08-16). The loop-level
+    /// ordering itself has no test harness yet (documented gap in the QSO review);
+    /// this pins the configuration that selects the correct branch.
+    #[test]
+    fn ft2_runs_an_early_pass() {
+        assert!(
+            crate::mode::make_mode(crate::mode::ModeKind::Ft2)
+                .capabilities()
+                .early_decode
+        );
+    }
     use super::*;
 
     const FS: f32 = 12_000.0;
@@ -56,6 +70,8 @@ mod tests {
         let off = match mode.kind() {
             ModeKind::Ft8 => 0,
             ModeKind::Ft4 => 0,
+            // FT2 self-positions too — `Mode::gen_wave` prepends FT2_LEAD_IN_SECS.
+            ModeKind::Ft2 => 0,
             // FST4 is RECEIVE-ONLY. Mode::encode returns empty for it, so the
             // assert above fires before this match is ever reached. This harness
             // is TX-dependent by construction and cannot serve a mode that does
@@ -133,7 +149,17 @@ mod tests {
             "a combination fell through to the family name"
         );
 
-        assert_eq!(ModeKind::ALL.len(), 8) // FT8, FT4, FST4, Q65, MSK144, JT65, WSPR, TempoFast;
+        // FT2's period is FIXED, so unlike FST4/Q65/MSK144 there is no
+        // period-carrying variant behind the one `ALL` entry.
+        let m2 = make_mode(ModeKind::Ft2);
+        assert_eq!(m2.name(), "FT2");
+        assert_eq!(m2.slot_secs(), 3.75);
+        assert_eq!(m2.frame_samples(), ft2::NMAX);
+        // 3.75 s × 12 kHz lands exactly on NMAX: frame == capture, as for FT8.
+        assert_eq!(ModeKind::Ft2.capture_samples(), ft2::NMAX);
+        assert!(m2.capabilities().tx);
+
+        assert_eq!(ModeKind::ALL.len(), 9) // FT8, FT4, FT2, FST4, Q65, MSK144, JT65, WSPR, TempoFast;
     }
 
     /// Each native mode decodes its own clean signal through a `Box<dyn
@@ -250,6 +276,80 @@ mod tests {
             wave[lead..].iter().any(|&s| s != 0.0),
             "tones follow the lead-in"
         );
+    }
+
+    #[test]
+    fn native_ft2_through_trait() {
+        native_roundtrip(ModeKind::Ft2);
+    }
+
+    #[test]
+    fn ft2_gen_wave_starts_at_the_slot_boundary_like_decodium() {
+        // ⭐ THE TX-PLACEMENT PROOF, corrected 2026-08-16. FT2 audio starts AT the
+        // slot boundary — Decodium's own transmit convention (their decoder is a
+        // free-running ring, so its `xdt = xibest/1333.33 − 0.5` is a window
+        // re-centring, not a slot contract; a slot-aligned window reads slot-start
+        // audio as dt ≈ −0.5, ours and theirs alike). The first version of this
+        // test asserted dt ≈ 0 with a 0.5 s lead — encoding with our lead and
+        // decoding with our decoder, it proved only that Nexus agreed with Nexus.
+        //
+        // Round trip: encode -> Mode::gen_wave -> the radio loop plays the buffer
+        // straight (sample 0 = slot t=0) -> Mode::decode_frame, read dt back.
+        let m = make_mode(ModeKind::Ft2);
+        let msg = "CQ KD9TAW EN52";
+        let tones = m.encode(msg);
+        assert_eq!(tones.len(), ft2::NN, "FT2 encodes 103 channel symbols");
+
+        let wave = m.gen_wave(&tones, FS, 1200.0);
+        assert_eq!(
+            wave.len(),
+            ft2::NWAVE,
+            "the buffer is exactly 2.52 s of tones — no lead-in, per Decodium"
+        );
+        assert!(
+            wave.len() < ModeKind::Ft2.capture_samples(),
+            "FT2's over must fit its 3.75 s slot: {} samples of {}",
+            wave.len(),
+            ModeKind::Ft2.capture_samples()
+        );
+
+        let dt_of = |w: &[f32]| -> f32 {
+            let frame = to_i16_frame(w, m.frame_samples(), 0, 8000.0);
+            let decs = m.decode_frame(&frame, 200, 2900, 3, "KD9TAW", "", 0, 1200, 0, true, false);
+            decs.iter()
+                .find(|d| d.message == msg)
+                .unwrap_or_else(|| panic!("FT2 did not decode its own transmission: {decs:?}"))
+                .dt
+        };
+
+        let dt = dt_of(&wave);
+        assert!(
+            (dt + 0.5).abs() < 0.06,
+            "slot-start FT2 audio reads dt ~= -0.5 in a slot-aligned window, got {dt:.3} s"
+        );
+
+        // POSITIVE CONTROL: the SAME audio shifted 0.5 s later must read dt ~= 0.
+        // If both read the same, the measurement distinguishes nothing and a
+        // placement regression would sail through.
+        let mut shifted = vec![0.0f32; (0.5 * FS) as usize];
+        shifted.extend_from_slice(&wave);
+        let dt_shifted = dt_of(&shifted);
+        assert!(
+            dt_shifted.abs() < 0.06,
+            "control: audio 0.5 s into the window must read dt ~= 0, got {dt_shifted:.3} s"
+        );
+    }
+
+    #[test]
+    fn ft2_gen_wave_refuses_a_sample_rate_it_cannot_honour() {
+        // `ft2::gen_wave` has no sample-rate argument — the vendored generator is
+        // fixed at 12 kHz. A caller asking for 48 kHz must get SILENCE (which keys
+        // nothing) rather than a buffer at the wrong pitch and duration.
+        let m = make_mode(ModeKind::Ft2);
+        let tones = m.encode("CQ KD9TAW EN52");
+        assert!(m.gen_wave(&tones, 48_000.0, 1500.0).is_empty());
+        // And a malformed tone vector is silent at the right rate too.
+        assert!(m.gen_wave(&[1, 2, 3], FS, 1500.0).is_empty());
     }
 
     #[test]

@@ -99,7 +99,12 @@ export function OperateQsoStrip({
   rotor,
   telemetry,
 }: Props) {
-  const running = qso?.running ?? false
+  // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
+  // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
+  // so this strip lit Call CQ solid through every S&P contact and forever after, and the
+  // AUTO-CQ pill claimed a CQ run that was not happening (operator-relayed report,
+  // 2026-08-16). cqRunning is the flag resume_cq and the sequencer actually key off.
+  const running = qso?.cqRunning ?? false
   const dxcall = qso?.dxcall ?? null
   const state = qso?.state ?? 'Idle'
   const txNow = qso?.txNow ?? null

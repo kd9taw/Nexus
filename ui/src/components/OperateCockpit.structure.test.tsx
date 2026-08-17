@@ -178,6 +178,40 @@ const ALL_REMOVED: Partial<Record<OperatePanelId, PanelState>> = Object.fromEntr
   OPERATE_PANEL_IDS.map((id) => [id, 'removed' as PanelState]),
 )
 
+// ── THE WATERFALL STRIP, BOTH STATES (operator, 2026-08-16) ─────────────────────────────
+// Operate needed no code change for the ask — `waterfall` has had a ⊞ entry since 0.15.0,
+// and it is the pattern the other four cockpits were built to on 2026-08-16. What was
+// missing is this: the behaviour was covered only incidentally, by the all-ids-removed
+// sweep below, which asserts what SURVIVES a hide and never that the hide happened. Pinned
+// here so the five cockpits are checked the same way, and so a regression in the one that
+// shipped first cannot hide behind the four that came after.
+describe('the waterfall strip is hideable, and shown until the operator says otherwise', () => {
+  it('renders on a stock layout (nothing stored ⇒ docked)', () => {
+    renderCockpit({})
+    expect(document.querySelector('.cockpit-waterfall'), 'the strip went missing on a stock layout').not.toBeNull()
+    expect(document.querySelector('[data-testid="waterfall-canvas"]')).not.toBeNull()
+  })
+
+  it("⊞ 'Waterfall' unticked takes the strip and its splitter, and the decode lists stay", () => {
+    renderCockpit({ waterfall: 'removed' })
+    expect(document.querySelector('.cockpit-waterfall'), 'the strip survived its own hide').toBeNull()
+    expect(document.querySelector('[data-testid="waterfall-canvas"]')).toBeNull()
+    // 'removed' is not 'popped': no re-dock bar, because there is no window to come back from.
+    expect(document.querySelector('.wf-redock'), 'a removal offered a re-dock bar').toBeNull()
+    // What the height is freed FOR.
+    expect(document.querySelector('.cockpit-body'), 'the body went with the strip').not.toBeNull()
+  })
+
+  it("'popped' is a THIRD state and still leaves the re-dock bar", () => {
+    // The distinction the shared `scope` id in the other four cockpits deliberately does not
+    // have — and the reason Operate keeps its own `waterfall` id rather than being renamed
+    // into the shared one (features/panelState.ts, SCOPE_PANEL_ID).
+    renderCockpit({ waterfall: 'popped' })
+    expect(document.querySelector('.cockpit-waterfall')).toBeNull()
+    expect(document.querySelector('.wf-redock'), 'a popped-out waterfall left no way back').not.toBeNull()
+  })
+})
+
 describe('the merged operating strip is the un-removable TX surface', () => {
   // This is Operate's half of THE STOP LINE (features/panelState.ts): the wiring check that
   // at least one control which stops a transmission renders OUTSIDE every ⊞-removable pane,
