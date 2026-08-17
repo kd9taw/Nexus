@@ -15726,7 +15726,11 @@ mod tests {
             eng.settings().radios.len(),
             live_only + 2,
             "a restore must bring the bundle's whole roster: {:?}",
-            eng.settings().radios.iter().map(|p| p.id).collect::<Vec<_>>()
+            eng.settings()
+                .radios
+                .iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>()
         );
         assert!(
             eng.settings().radios.iter().any(|p| p.id == second)
@@ -15734,7 +15738,8 @@ mod tests {
             "including the radios that exist only in the bundle"
         );
         assert_eq!(
-            eng.settings().active_radio, third,
+            eng.settings().active_radio,
+            third,
             "and the bundle's active radio, not the live one"
         );
         assert_eq!(
