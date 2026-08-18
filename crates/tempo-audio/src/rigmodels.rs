@@ -592,6 +592,7 @@ mod tests {
         assert_eq!(flex_slice_for_cat_addr("192.168.1.50:60001"), Some(1)); // B
         assert_eq!(flex_slice_for_cat_addr("127.0.0.1:60002"), Some(2)); // C
         assert_eq!(flex_slice_for_cat_addr("127.0.0.1:60003"), Some(3)); // D
+
         // Not a slice port / not an address at all → no claim (the caller falls back).
         assert_eq!(flex_slice_for_cat_addr("127.0.0.1:4992"), None);
         assert_eq!(flex_slice_for_cat_addr("COM7"), None);

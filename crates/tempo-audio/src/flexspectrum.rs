@@ -50,6 +50,48 @@ const RETUNE_EPS_MHZ: f64 = 0.0005;
 const REAP_BUDGET: Duration = Duration::from_millis(600);
 /// Poll interval while waiting out [`REAP_BUDGET`].
 const REAP_POLL: Duration = Duration::from_millis(10);
+/// First delay before a worker re-dials the radio after a lost or refused session.
+pub(crate) const RECONNECT_FIRST: Duration = Duration::from_millis(500);
+/// Ceiling on the reconnect backoff — a radio that is off for an hour must still be re-found
+/// within half a minute of coming back, without either worker retrying in a tight loop meanwhile.
+pub(crate) const RECONNECT_MAX: Duration = Duration::from_secs(30);
+/// A session that lasted this long counts as HEALTHY: the ladder resets, so an evening's second
+/// network blip waits half a second, not half a minute. Shorter than this and the radio is
+/// refusing us in a way that repeating faster will not fix.
+pub(crate) const SESSION_STABLE_AFTER: Duration = Duration::from_secs(10);
+/// How often a backing-off worker re-checks its stop flag. Must stay well inside [`REAP_BUDGET`]:
+/// a worker asleep in a backoff is a worker its `Drop` — which runs ON THE RADIO LOOP — is waiting
+/// for.
+const RECONNECT_POLL: Duration = Duration::from_millis(50);
+
+/// The next reconnect delay: double, capped. Pure, so the ladder is testable with no radio.
+pub(crate) fn next_backoff(prev: Duration) -> Duration {
+    (prev * 2).min(RECONNECT_MAX)
+}
+
+/// Wait out a reconnect delay, in slices, watching `stop`. Returns `false` when the worker must
+/// exit instead of re-dialling.
+///
+/// ⚠️ NOT A BUSY RETRY, AND NOT AN UNINTERRUPTIBLE SLEEP. Both Flex workers used to `return` the
+/// moment their session ended — a network blip, a radio reboot, a SmartSDR restart ended native
+/// audio and the native panadapter for the rest of the session, with nothing on screen saying so
+/// and no way back but a settings save (Flex audit 2026-08-17, #1043's no-reconnect leg). The
+/// opposite failure is just as real and this project has already shipped it once: a worker that
+/// retries without pacing starves the radio loop (#1000). Hence a doubling ladder, and a sleep
+/// broken into [`RECONNECT_POLL`] slices so teardown is never held up by one.
+pub(crate) fn backoff_wait(stop: &AtomicBool, delay: Duration) -> bool {
+    let until = Instant::now() + delay;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        let remaining = until.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return true;
+        }
+        std::thread::sleep(RECONNECT_POLL.min(remaining));
+    }
+}
 
 /// Stop-and-reap worker threads WITHOUT letting a network peer block the caller indefinitely.
 ///
@@ -368,107 +410,129 @@ impl FlexSpectrum {
             let engine = engine.clone();
             let meters = meters.clone();
             handles.push(std::thread::spawn(move || {
-                let Ok(mut flex) = FlexCat::connect(&ip) else {
-                    return;
-                };
-                // Dropped while we were connecting (bounded, but not instant): the radio has heard
-                // nothing from us, so leave it exactly as we found it rather than create a pan
-                // whose teardown would then race the worker that replaced us.
-                if stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                for cmd in register_commands(udp_port) {
-                    let _ = flex.send(&cmd);
-                }
-                // Keep the create's sequence number: its reply is what proves the pan we steer is
-                // one WE created (see `pan_status_is_ours`). `send` rather than `command` so the
-                // async status stream still comes through this loop.
-                let create_seq = flex
-                    .send(&create_pan_command(
-                        *center.lock().unwrap(),
-                        init_span,
-                        X_PIXELS,
-                        FPS,
-                    ))
-                    .ok();
-                let mut pan_id: Option<u32> = None;
-                let mut last_ka = Instant::now();
-                let mut last_center = *center.lock().unwrap();
-                let mut last_span = init_span;
-                let mut last_ref = init_ref;
+                // ONE SESSION PER TURN OF THIS LOOP. A dropped connection ends the session and the
+                // worker re-dials with backoff instead of dying (see `backoff_wait`).
+                let mut backoff = RECONNECT_FIRST;
                 while !stop.load(Ordering::Relaxed) {
-                    // Drain async status → learn the pan id + VITA stream id (send() left the
-                    // status stream for us; command() would have swallowed it).
-                    match flex.recv(Duration::from_millis(300)) {
-                        // OUR create's reply: the authoritative id of the pan we own.
-                        FlexRecv::Msg(FlexMsg::Reply { seq, code, msg })
-                            if Some(seq) == create_seq =>
-                        {
-                            if let Some(pid) = created_pan_id(code, &msg) {
-                                pan_id = Some(pid);
-                            }
+                    let Ok(mut flex) = FlexCat::connect(&ip) else {
+                        if !backoff_wait(&stop, backoff) {
+                            return;
                         }
-                        FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
-                            // ⚠️ ONLY OUR OWN PAN — `sub pan all` also delivers SmartSDR's
-                            // (audit #1012/#1023; the rule and its bench recipe are on
-                            // `pan_status_is_ours`).
-                            if let Some(st) = parse_pan_status(&body) {
-                                if pan_status_is_ours(pan_id, flex.handle(), &st) {
-                                    if let Some(pid) = st.pan_id {
-                                        pan_id = Some(pid);
-                                    }
-                                    if let Some(sid) = st.stream_id {
-                                        *stream_id.lock().unwrap() = Some(sid);
-                                    }
+                        backoff = next_backoff(backoff);
+                        continue;
+                    };
+                    // Dropped while we were connecting (bounded, but not instant): the radio has heard
+                    // nothing from us, so leave it exactly as we found it rather than create a pan
+                    // whose teardown would then race the worker that replaced us.
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let session_start = Instant::now();
+                    for cmd in register_commands(udp_port) {
+                        let _ = flex.send(&cmd);
+                    }
+                    // Keep the create's sequence number: its reply is what proves the pan we steer is
+                    // one WE created (see `pan_status_is_ours`). `send` rather than `command` so the
+                    // async status stream still comes through this loop.
+                    let create_seq = flex
+                        .send(&create_pan_command(
+                            *center.lock().unwrap(),
+                            init_span,
+                            X_PIXELS,
+                            FPS,
+                        ))
+                        .ok();
+                    let mut pan_id: Option<u32> = None;
+                    let mut last_ka = Instant::now();
+                    let mut last_center = *center.lock().unwrap();
+                    let mut last_span = init_span;
+                    let mut last_ref = init_ref;
+                    while !stop.load(Ordering::Relaxed) {
+                        // Drain async status → learn the pan id + VITA stream id (send() left the
+                        // status stream for us; command() would have swallowed it).
+                        match flex.recv(Duration::from_millis(300)) {
+                            // OUR create's reply: the authoritative id of the pan we own.
+                            FlexRecv::Msg(FlexMsg::Reply { seq, code, msg })
+                                if Some(seq) == create_seq =>
+                            {
+                                if let Some(pid) = created_pan_id(code, &msg) {
+                                    pan_id = Some(pid);
                                 }
                             }
-                            // Learn meter definitions (id → source/name/unit) as they arrive.
-                            for def in parse_meter_defs(&body) {
-                                meters.lock().unwrap().insert(def.index, def);
+                            FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
+                                // ⚠️ ONLY OUR OWN PAN — `sub pan all` also delivers SmartSDR's
+                                // (audit #1012/#1023; the rule and its bench recipe are on
+                                // `pan_status_is_ours`).
+                                if let Some(st) = parse_pan_status(&body) {
+                                    if pan_status_is_ours(pan_id, flex.handle(), &st) {
+                                        if let Some(pid) = st.pan_id {
+                                            pan_id = Some(pid);
+                                        }
+                                        if let Some(sid) = st.stream_id {
+                                            *stream_id.lock().unwrap() = Some(sid);
+                                        }
+                                    }
+                                }
+                                // Learn meter definitions (id → source/name/unit) as they arrive.
+                                for def in parse_meter_defs(&body) {
+                                    meters.lock().unwrap().insert(def.index, def);
+                                }
+                            }
+                            FlexRecv::Msg(_) | FlexRecv::Idle => {}
+                            // ⚠️ THE CONNECTION IS GONE — END THE SESSION, never keep looping on it
+                            // (audit #1000). This is the ONLY thing pacing this loop: a disconnected
+                            // channel returns instantly, so continuing free-runs, and every iteration
+                            // below takes the shared engine mutex twice, starving the radio loop and
+                            // the whole UI with it. The outer loop re-dials with backoff.
+                            FlexRecv::Closed => break,
+                        }
+                        if let Some(pid) = pan_id {
+                            // Retune the pan when the operator's dial moves.
+                            let want = pan_center_mhz(engine_dial_hz(&engine));
+                            if want > 0.0 && (want - last_center).abs() > RETUNE_EPS_MHZ {
+                                let _ = flex.send(&set_pan_center_command(pid, want));
+                                *center.lock().unwrap() = want;
+                                last_center = want;
+                            }
+                            // Apply the operator's span + reference controls when they change.
+                            let (want_span, want_ref) = engine_flex_controls(&engine);
+                            if (want_span - last_span).abs() > 1.0 {
+                                let _ = flex.send(&set_pan_bw_command(pid, want_span));
+                                *span_hz.lock().unwrap() = want_span;
+                                last_span = want_span;
+                            }
+                            if want_ref != last_ref {
+                                if let Some(r) = want_ref {
+                                    let _ = flex.send(&set_pan_ref_command(pid, r));
+                                }
+                                last_ref = want_ref;
                             }
                         }
-                        FlexRecv::Msg(_) | FlexRecv::Idle => {}
-                        // ⚠️ THE CONNECTION IS GONE — EXIT, do not loop (audit #1000). This is the
-                        // ONLY thing pacing this loop: a disconnected channel returns instantly, so
-                        // continuing free-runs, and every iteration below takes the shared engine
-                        // mutex twice, starving the radio loop and the whole UI with it. Nothing
-                        // below can work without the socket anyway; a Flex power-cycle or a
-                        // SmartSDR client drop now ends the worker instead of pinning a core.
-                        // (Reconnect-with-backoff is deliberately NOT here: it is its own change.)
-                        FlexRecv::Closed => break,
+                        if last_ka.elapsed() >= KEEPALIVE {
+                            let _ = flex.send("ping"); // keep the client session alive
+                            last_ka = Instant::now();
+                        }
                     }
+                    // End of THIS session. Remove only what we created — `pan_id` can now only have
+                    // come from our own create reply or from a status the radio stamped with OUR
+                    // client handle, so this can no longer delete the operator's SmartSDR panadapter
+                    // (audit #1012/#1023). On a dropped socket the send fails harmlessly and the radio
+                    // reaps a departed client's objects itself.
                     if let Some(pid) = pan_id {
-                        // Retune the pan when the operator's dial moves.
-                        let want = pan_center_mhz(engine_dial_hz(&engine));
-                        if want > 0.0 && (want - last_center).abs() > RETUNE_EPS_MHZ {
-                            let _ = flex.send(&set_pan_center_command(pid, want));
-                            *center.lock().unwrap() = want;
-                            last_center = want;
-                        }
-                        // Apply the operator's span + reference controls when they change.
-                        let (want_span, want_ref) = engine_flex_controls(&engine);
-                        if (want_span - last_span).abs() > 1.0 {
-                            let _ = flex.send(&set_pan_bw_command(pid, want_span));
-                            *span_hz.lock().unwrap() = want_span;
-                            last_span = want_span;
-                        }
-                        if want_ref != last_ref {
-                            if let Some(r) = want_ref {
-                                let _ = flex.send(&set_pan_ref_command(pid, r));
-                            }
-                            last_ref = want_ref;
-                        }
+                        let _ = flex.send(&remove_pan_command(pid));
                     }
-                    if last_ka.elapsed() >= KEEPALIVE {
-                        let _ = flex.send("ping"); // keep the client session alive
-                        last_ka = Instant::now();
+                    // Pan and stream ids are per-session: the UDP thread must filter against nothing
+                    // rather than against a dead id, or a reconnect's first sweeps are discarded.
+                    *stream_id.lock().unwrap() = None;
+                    // A session that stood up for a while was healthy — the next blip starts the
+                    // ladder over rather than inheriting a long wait.
+                    if session_start.elapsed() >= SESSION_STABLE_AFTER {
+                        backoff = RECONNECT_FIRST;
                     }
-                }
-                // Remove only what we created. `pan_id` can now only have come from our own
-                // create reply or from a status the radio stamped with OUR client handle, so this
-                // can no longer delete the operator's SmartSDR panadapter (audit #1012/#1023).
-                if let Some(pid) = pan_id {
-                    let _ = flex.send(&remove_pan_command(pid));
+                    if !backoff_wait(&stop, backoff) {
+                        return;
+                    }
+                    backoff = next_backoff(backoff);
                 }
             }));
         }
@@ -686,6 +750,52 @@ mod tests {
             "an error code with an id-shaped body is still a refusal"
         );
         assert_eq!(created_pan_id(0, ""), None);
+    }
+
+    /// The reconnect ladder: doubling, capped, never zero (audit #1043's no-reconnect leg).
+    #[test]
+    fn the_reconnect_ladder_doubles_up_to_the_ceiling() {
+        let mut d = RECONNECT_FIRST;
+        assert_eq!(next_backoff(d), RECONNECT_FIRST * 2);
+        for _ in 0..20 {
+            let next = next_backoff(d);
+            assert!(next > d || next == RECONNECT_MAX, "the ladder must climb");
+            assert!(next <= RECONNECT_MAX, "…and stop at the ceiling");
+            d = next;
+        }
+        assert_eq!(d, RECONNECT_MAX);
+    }
+
+    /// A WORKER ASLEEP IN A BACKOFF IS A WORKER ITS `Drop` IS WAITING FOR, and that `Drop` runs on
+    /// the radio loop (`reap_workers`). Both directions: a stop that is already set returns at
+    /// once, a stop that arrives mid-wait is noticed inside the reap budget, and an untouched wait
+    /// really does wait.
+    #[test]
+    fn a_backing_off_worker_gives_up_as_soon_as_it_is_stopped() {
+        let stop = Arc::new(AtomicBool::new(true));
+        let t = Instant::now();
+        assert!(!backoff_wait(&stop, RECONNECT_MAX));
+        assert!(t.elapsed() < Duration::from_millis(50), "returns at once");
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            flag.store(true, Ordering::Relaxed);
+        });
+        let t = Instant::now();
+        assert!(!backoff_wait(&stop, RECONNECT_MAX));
+        assert!(
+            t.elapsed() < REAP_BUDGET,
+            "a stop mid-backoff must be noticed inside the reap budget, not after {:?}",
+            t.elapsed()
+        );
+
+        // Positive control: with nothing stopping it, the wait is actually waited out.
+        let stop = Arc::new(AtomicBool::new(false));
+        let t = Instant::now();
+        assert!(backoff_wait(&stop, Duration::from_millis(120)));
+        assert!(t.elapsed() >= Duration::from_millis(100));
     }
 
     #[test]

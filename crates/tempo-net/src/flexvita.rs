@@ -511,7 +511,10 @@ mod tests {
     fn part_assembled_sweeps_are_bounded() {
         let mut r = FftReassembler::new();
         for frame in 0..50u32 {
-            assert_eq!(r.push(&parse_fft(&fft_payload(0, 1, 4, frame, &[1])).unwrap()), None);
+            assert_eq!(
+                r.push(&parse_fft(&fft_payload(0, 1, 4, frame, &[1])).unwrap()),
+                None
+            );
         }
         assert_eq!(r.inflight.len(), IN_FLIGHT_SWEEPS);
     }
@@ -534,7 +537,11 @@ mod tests {
     #[test]
     fn the_dax_sequencer_separates_loss_from_reordering() {
         let mut s = VitaSequence::default();
-        assert_eq!(s.observe(5), VitaGap::InSequence, "first packet of a stream");
+        assert_eq!(
+            s.observe(5),
+            VitaGap::InSequence,
+            "first packet of a stream"
+        );
         assert_eq!(s.observe(6), VitaGap::InSequence);
         // Two lost: 7 and 8 never arrived.
         assert_eq!(s.observe(9), VitaGap::Lost(2));

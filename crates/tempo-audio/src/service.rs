@@ -2185,9 +2185,17 @@ struct RadioLoop {
     /// When the current `dax_src` started, for the starvation check. `None` once starvation has
     /// been reported (the check is one-shot per source — it must not re-fire every tick).
     dax_started: Option<Instant>,
-    /// Has the current `dax_src` EVER delivered a sample? Once true the source is proven and the
-    /// starvation check is done for good; a later quiet band is just a quiet band.
-    dax_saw_audio: bool,
+    /// When the current `dax_src` last delivered a sample — the RX floor's rolling clock.
+    ///
+    /// ⚠️ THIS WAS A ONE-WAY LATCH (`dax_saw_audio: bool`) AND THAT LEFT A MID-SESSION DEATH
+    /// UNCOVERED (Flex audit 2026-08-17, #1001/#1043). `dax_starved`'s first arm was
+    /// `Some(_) if saw_audio => false`, so the first delivered sample disarmed the floor for the
+    /// rest of the session: a stream that worked and then STOPPED — a WAN drop, a radio reboot,
+    /// SmartSDR restarted, the DAX client evicted — left `dax_src` selected over the sound card
+    /// forever, with the operator deaf, no banner, and silence indistinguishable from a dead band.
+    /// A live DAX stream delivers packets continuously whatever the band is doing, so a rolling
+    /// check is safe where a "quiet band" objection would apply to real capture.
+    dax_last_audio: Option<Instant>,
     /// We wrote the current audio-error line with a voice-mic open failure, so we clear
     /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
     /// RX slot; the boundary decode then ingests only the stragglers).
@@ -2459,7 +2467,7 @@ impl RadioLoop {
             dax_src: None,
             dax_src_key: None,
             dax_started: None,
-            dax_saw_audio: false,
+            dax_last_audio: None,
             dax_tee_set: false,
             err_owner: ErrOwner::None,
             audio_awaiting_samples: false,
@@ -2616,7 +2624,7 @@ impl RadioLoop {
             self.dax_src_key = dax_key;
             // Reset the starvation bookkeeping with the source it belongs to.
             self.dax_started = None;
-            self.dax_saw_audio = false;
+            self.dax_last_audio = None;
             // …and the BANNER with it. `ErrOwner::Dax` was the one owner with no clear arm (every
             // sibling has one: Ptt, Device, SilentCapture, Monitor, VoiceMic), so a native-audio
             // failure left "RADIO STOPPED" on screen for the rest of the session — over a working
@@ -2650,18 +2658,22 @@ impl RadioLoop {
         }
     }
 
-    /// Native DAX RX was selected but nothing is arriving — drop back to the sound card and SAY
+    /// Native DAX RX is selected but nothing is arriving — drop back to the sound card and SAY
     /// so. Returns true when it fired (the caller clears `dax_src`).
     ///
     /// Pure decision, split out so it is testable without a Flex on the bench: the whole feature
     /// is unverifiable locally, so at minimum its FAILURE handling must not be.
-    fn dax_starved(started: Option<Instant>, saw_audio: bool, now: Instant) -> bool {
-        match started {
-            // Proven sources and already-reported ones are done: a quiet band must never trip this.
-            Some(_) if saw_audio => false,
-            Some(t) => now.duration_since(t) >= DAX_STARVE_AFTER,
-            None => false,
-        }
+    ///
+    /// ROLLING, not one-shot per source (audit #1001/#1043 — see [`RadioLoop::dax_last_audio`]):
+    /// the window runs from the last delivered sample, or from the start for a stream that never
+    /// delivered one, so "never worked" and "worked and then died" are the same check. `started ==
+    /// None` still means disarmed — either there is no DAX source or starvation has already been
+    /// reported for this one.
+    fn dax_starved(started: Option<Instant>, last_audio: Option<Instant>, now: Instant) -> bool {
+        let Some(started) = started else {
+            return false;
+        };
+        now.duration_since(last_audio.unwrap_or(started)) >= DAX_STARVE_AFTER
     }
 
     /// A capture buffer that arrived but carries NO signal at all: non-empty and every sample
@@ -3116,20 +3128,26 @@ impl RadioLoop {
             Some(dax) => {
                 let dax_audio = dax.take_audio();
                 if !dax_audio.is_empty() {
-                    self.dax_saw_audio = true;
+                    // The RX floor's rolling clock — a stream that stops is a stream that failed,
+                    // however long it worked first (audit #1001/#1043).
+                    self.dax_last_audio = Some(Instant::now());
                 }
                 dax_audio
             }
             None => soundcard,
         };
         // ⚠️ RX FLOOR. Taking DAX audio means IGNORING the sound card, so a DAX source that never
-        // streams (wrong IP, firewall, DAX off on the radio, slice never bound) leaves the
-        // operator completely deaf — and silence is indistinguishable from a dead band, so there
+        // streams (wrong IP, firewall, DAX off on the radio, slice never bound) — or one that
+        // streamed and then STOPPED (a WAN drop, a radio reboot, SmartSDR restarted) — leaves the
+        // operator completely deaf, and silence is indistinguishable from a dead band, so there
         // is nothing to notice. Give up on it, fall back, and say why. Same principle as the TX
         // floor in `open_serial_ptt`: a feature that fails must never cost the operator the radio.
-        if Self::dax_starved(self.dax_started, self.dax_saw_audio, Instant::now()) {
+        // The worker gets ~6 s to re-establish on its own first (`flexdax`'s reconnect backoff),
+        // which covers a brief blip; past that, hearing the radio wins over keeping the feature.
+        if Self::dax_starved(self.dax_started, self.dax_last_audio, Instant::now()) {
             self.dax_src = None;
             self.dax_started = None;
+            self.dax_last_audio = None;
             if self.dax_tee_set {
                 backend.set_tx_tee(None);
                 self.dax_tee_set = false;
@@ -14652,36 +14670,71 @@ mod tests {
         let t0 = Instant::now();
 
         // Just started, nothing yet — well inside the grace window, so no complaint.
-        assert!(!RadioLoop::dax_starved(Some(t0), false, t0));
+        assert!(!RadioLoop::dax_starved(Some(t0), None, t0));
         assert!(!RadioLoop::dax_starved(
             Some(t0),
-            false,
+            None,
             t0 + Duration::from_secs(2)
         ));
 
         // Past the window with nothing ever received → give up.
         assert!(RadioLoop::dax_starved(
             Some(t0),
-            false,
+            None,
             t0 + DAX_STARVE_AFTER
         ));
         assert!(RadioLoop::dax_starved(
             Some(t0),
-            false,
+            None,
             t0 + Duration::from_secs(60)
         ));
 
-        // A source that HAS delivered audio is proven. A quiet band, a between-slots gap, or a
-        // long listening pause must never trip this — that would yank a working native feed.
+        // A source that is DELIVERING is never yanked: a quiet band, a between-slots gap or a
+        // long listening pause all still deliver packets, so the clock keeps moving with them.
         assert!(!RadioLoop::dax_starved(
             Some(t0),
-            true,
+            Some(t0 + Duration::from_secs(600)),
             t0 + Duration::from_secs(600)
         ));
 
         // No DAX source selected at all: nothing to starve.
-        assert!(!RadioLoop::dax_starved(None, false, t0 + DAX_STARVE_AFTER));
-        assert!(!RadioLoop::dax_starved(None, true, t0 + DAX_STARVE_AFTER));
+        assert!(!RadioLoop::dax_starved(None, None, t0 + DAX_STARVE_AFTER));
+        assert!(!RadioLoop::dax_starved(
+            None,
+            Some(t0),
+            t0 + DAX_STARVE_AFTER
+        ));
+    }
+
+    /// A STREAM THAT WORKED AND THEN DIED IS STILL A FAILED STREAM (audit #1001/#1043).
+    ///
+    /// The old check latched on the first delivered sample (`Some(_) if saw_audio => false`), so
+    /// the RX floor covered only sources that NEVER worked. A WAN drop, a radio reboot or an
+    /// evicted DAX client mid-session left `dax_src` selected over the sound card for the rest of
+    /// the session: the operator deaf, no banner, and nothing anywhere watching the stream's
+    /// liveness. The window now runs from the LAST sample, not from the first.
+    #[test]
+    fn dax_that_dies_mid_session_falls_back_too() {
+        let t0 = Instant::now();
+        let worked_until = t0 + Duration::from_secs(300); // five good minutes of decodes
+
+        // Still inside the window after the last packet — a hiccup is not a death.
+        assert!(!RadioLoop::dax_starved(
+            Some(t0),
+            Some(worked_until),
+            worked_until + Duration::from_secs(2)
+        ));
+        // Past it: the stream is gone, and deafness is the worse failure.
+        assert!(RadioLoop::dax_starved(
+            Some(t0),
+            Some(worked_until),
+            worked_until + DAX_STARVE_AFTER
+        ));
+        assert!(RadioLoop::dax_starved(
+            Some(t0),
+            Some(worked_until),
+            worked_until + Duration::from_secs(60)
+        ));
     }
 
     /// The macOS mic-denial (TCC) discriminator: NON-EMPTY buffers of exact digital zeros.

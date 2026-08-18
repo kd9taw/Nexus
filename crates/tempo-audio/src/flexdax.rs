@@ -39,8 +39,8 @@ use std::time::{Duration, Instant};
 
 use tempo_app::engine::Engine;
 use tempo_net::flexcat::{
-    parse_create_stream_id, parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg, FlexRecv,
-    SliceStatus,
+    parse_create_stream_id, parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg,
+    FlexRecv, SliceStatus,
 };
 use tempo_net::flexvita::{
     build_dax_tx_packet, parse_dax_audio, parse_vita, VitaGap, VitaSequence, DAX_AUDIO_CLASS,
@@ -464,160 +464,196 @@ impl FlexDax {
             let stream_id = stream_id.clone();
             let tx_stream_id = tx_stream_id.clone();
             handles.push(std::thread::spawn(move || {
-                let Ok(mut flex) = FlexCat::connect(&ip) else {
-                    return;
-                };
-                // Dropped while we were connecting (bounded, but not instant): the radio has heard
-                // nothing from us, so leave it exactly as we found it. Without this, a worker that
-                // finally connects after its `FlexDax` is gone would create streams and re-route
-                // transmit audio behind the back of the worker that replaced it.
-                if stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                for cmd in register_dax_commands(udp_port) {
-                    let _ = flex.send(&cmd);
-                }
-                // Keep the create's sequence number: its reply is the authoritative source of OUR
-                // dax_rx stream id (audit #1013 — it used to be learned from whatever `stream …
-                // dax_channel=1` status happened to arrive, which is another client's stream as
-                // easily as ours). `send` rather than `command` so the status stream still reaches
-                // the loop below.
-                let rx_seq = flex.send(&dax_rx_create_command(DAX_CHANNEL)).ok();
-                // DAX TX: create the outbound stream (its create reply carries the stream id) and
-                // route the rig's transmit audio to it. Torn down on stop (TX back to the mic).
-                //
-                // ⚠️ OPERATOR RULING 2026-07-26, REAFFIRMED 2026-08-17 — THIS IS DELIBERATE, DO
-                // NOT "FIX" IT. `transmit_set_dax_command(true)` below has NO OPERATOR-FACING GATE
-                // of its own: turning on native Flex audio routes BOTH directions over DAX, RX and
-                // TX, from the one `flex_native_audio` toggle. It reads like an oversight (a
-                // TX-path command with no TX-specific gate) and has now been queried twice, hence
-                // this note.
-                //
-                // The alternative considered and REJECTED was splitting TX behind its own opt-in.
-                // Rejected because one toggle is what an operator actually wants — native audio
-                // means native audio — and a half-native path (DAX in, sound card out) is a
-                // configuration that mostly exists to be got wrong.
-                //
-                // The backlog's older "dax_tx stays gated" line means gated behind THIS toggle,
-                // not behind a second one. Teardown restores the mic on stop, so the rig is never
-                // left expecting DAX audio that stopped arriving.
-                //
-                // The ONE condition it does carry is not a second opt-in and leaves the ruling
-                // intact: we refuse to point the transmitter at a `dax_tx` stream that was never
-                // created. "Both directions from one toggle" is untouched; "route TX to a stream
-                // that does not exist" was never part of it — that was a bug that left the mic
-                // disconnected and nothing on the air (audit #1002 / #1044).
-                let mut tx_created: Option<u32> = None;
-                if let Ok((code, reply)) =
-                    flex.command(&dax_tx_create_command(), Duration::from_millis(600))
-                {
-                    if let Some(sid) = stream_from_create_reply(code, &reply) {
-                        *tx_stream_id.lock().unwrap() = Some(sid);
-                        tx_created = Some(sid);
-                    }
-                }
-                // ⚠️ CONDITIONAL ON THE CREATE — and that is NOT a re-gating of the ruling above.
-                // The ruling is about which TOGGLE owns the transmit path, and it stands: one
-                // toggle, both directions, no second opt-in. This guard is about a stream that
-                // does not exist. `transmit set dax=1` was sent unconditionally, so a create that
-                // timed out (600 ms is one round trip — a WAN link misses it) or was refused left
-                // the radio taking transmit audio from a DAX stream nothing would ever send on:
-                // the mic disconnected, Nexus's audio not reaching the air either, and — because
-                // teardown was gated on that same failed create — the mic still dead after Nexus
-                // exited (audit #1002 / #1044). Fail CLOSED: no stream, no re-route, sound card.
-                if tx_created.is_some() {
-                    let _ = flex.send(&transmit_set_dax_command(true));
-                }
-                let mut created: Option<u32> = None;
-                let mut bound_slice: Option<u32> = None;
                 // What the operator's slice DAX routing was before we touched it (see
-                // [`SliceDaxTracker`]) …
+                // [`SliceDaxTracker`]) — OUTSIDE the session loop deliberately: after a reconnect
+                // the radio may echo back the `dax=1` WE imposed, and the tracker's first-seen
+                // snapshot is what keeps the restore honest across sessions.
                 let mut slices = SliceDaxTracker::default();
-                // … and the merged per-slice picture the bind decision is made from (see
-                // [`SliceView`] — SmartSDR sends partial deltas, so a single line is never the
-                // whole state).
-                let mut view = SliceView::default();
-                let mut last_ka = Instant::now();
+                // ONE SESSION PER TURN. A dropped connection ends the session and the worker
+                // re-dials with backoff rather than dying silently (see `backoff_wait`).
+                let mut backoff = crate::flexspectrum::RECONNECT_FIRST;
                 while !stop.load(Ordering::Relaxed) {
-                    match flex.recv(Duration::from_millis(300)) {
-                        // OUR dax_rx create's reply: the authoritative stream id.
-                        FlexRecv::Msg(FlexMsg::Reply { seq, code, msg }) if Some(seq) == rx_seq => {
-                            if let Some(sid) = stream_from_create_reply(code, &msg) {
-                                *stream_id.lock().unwrap() = Some(sid);
-                                created = Some(sid);
-                            }
+                    let Ok(mut flex) = FlexCat::connect(&ip) else {
+                        if !crate::flexspectrum::backoff_wait(&stop, backoff) {
+                            return;
                         }
-                        FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
-                            // The async status confirms the id the reply granted — or, if that
-                            // reply was lost, supplies it, but ONLY for a stream the radio says is
-                            // ours (audit #1013/#1024/#1046; the rule is on `dax_stream_is_ours`).
-                            if let Some(st) = parse_dax_stream_status(&body) {
-                                if dax_stream_is_ours(created, flex.handle(), &st) {
-                                    if let Some(sid) = st.stream_id {
-                                        *stream_id.lock().unwrap() = Some(sid);
-                                        created = Some(sid);
-                                    }
+                        backoff = crate::flexspectrum::next_backoff(backoff);
+                        continue;
+                    };
+                    // Dropped while we were connecting (bounded, but not instant): the radio has heard
+                    // nothing from us, so leave it exactly as we found it. Without this, a worker that
+                    // finally connects after its `FlexDax` is gone would create streams and re-route
+                    // transmit audio behind the back of the worker that replaced it.
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let session_start = Instant::now();
+                    for cmd in register_dax_commands(udp_port) {
+                        let _ = flex.send(&cmd);
+                    }
+                    // Keep the create's sequence number: its reply is the authoritative source of OUR
+                    // dax_rx stream id (audit #1013 — it used to be learned from whatever `stream …
+                    // dax_channel=1` status happened to arrive, which is another client's stream as
+                    // easily as ours). `send` rather than `command` so the status stream still reaches
+                    // the loop below.
+                    let rx_seq = flex.send(&dax_rx_create_command(DAX_CHANNEL)).ok();
+                    // DAX TX: create the outbound stream (its create reply carries the stream id) and
+                    // route the rig's transmit audio to it. Torn down on stop (TX back to the mic).
+                    //
+                    // ⚠️ OPERATOR RULING 2026-07-26, REAFFIRMED 2026-08-17 — THIS IS DELIBERATE, DO
+                    // NOT "FIX" IT. `transmit_set_dax_command(true)` below has NO OPERATOR-FACING GATE
+                    // of its own: turning on native Flex audio routes BOTH directions over DAX, RX and
+                    // TX, from the one `flex_native_audio` toggle. It reads like an oversight (a
+                    // TX-path command with no TX-specific gate) and has now been queried twice, hence
+                    // this note.
+                    //
+                    // The alternative considered and REJECTED was splitting TX behind its own opt-in.
+                    // Rejected because one toggle is what an operator actually wants — native audio
+                    // means native audio — and a half-native path (DAX in, sound card out) is a
+                    // configuration that mostly exists to be got wrong.
+                    //
+                    // The backlog's older "dax_tx stays gated" line means gated behind THIS toggle,
+                    // not behind a second one. Teardown restores the mic on stop, so the rig is never
+                    // left expecting DAX audio that stopped arriving.
+                    //
+                    // The ONE condition it does carry is not a second opt-in and leaves the ruling
+                    // intact: we refuse to point the transmitter at a `dax_tx` stream that was never
+                    // created. "Both directions from one toggle" is untouched; "route TX to a stream
+                    // that does not exist" was never part of it — that was a bug that left the mic
+                    // disconnected and nothing on the air (audit #1002 / #1044).
+                    let mut tx_created: Option<u32> = None;
+                    if let Ok((code, reply)) =
+                        flex.command(&dax_tx_create_command(), Duration::from_millis(600))
+                    {
+                        if let Some(sid) = stream_from_create_reply(code, &reply) {
+                            *tx_stream_id.lock().unwrap() = Some(sid);
+                            tx_created = Some(sid);
+                        }
+                    }
+                    // ⚠️ CONDITIONAL ON THE CREATE — and that is NOT a re-gating of the ruling above.
+                    // The ruling is about which TOGGLE owns the transmit path, and it stands: one
+                    // toggle, both directions, no second opt-in. This guard is about a stream that
+                    // does not exist. `transmit set dax=1` was sent unconditionally, so a create that
+                    // timed out (600 ms is one round trip — a WAN link misses it) or was refused left
+                    // the radio taking transmit audio from a DAX stream nothing would ever send on:
+                    // the mic disconnected, Nexus's audio not reaching the air either, and — because
+                    // teardown was gated on that same failed create — the mic still dead after Nexus
+                    // exited (audit #1002 / #1044). Fail CLOSED: no stream, no re-route, sound card.
+                    if tx_created.is_some() {
+                        let _ = flex.send(&transmit_set_dax_command(true));
+                    }
+                    let mut created: Option<u32> = None;
+                    let mut bound_slice: Option<u32> = None;
+                    // The merged per-slice picture the bind decision is made from (see [`SliceView`] —
+                    // SmartSDR sends partial deltas, so a single line is never the whole state).
+                    // Per-session: the radio re-dumps every slice on `sub slice all`.
+                    let mut view = SliceView::default();
+                    let mut last_ka = Instant::now();
+                    while !stop.load(Ordering::Relaxed) {
+                        match flex.recv(Duration::from_millis(300)) {
+                            // OUR dax_rx create's reply: the authoritative stream id.
+                            FlexRecv::Msg(FlexMsg::Reply { seq, code, msg })
+                                if Some(seq) == rx_seq =>
+                            {
+                                if let Some(sid) = stream_from_create_reply(code, &msg) {
+                                    *stream_id.lock().unwrap() = Some(sid);
+                                    created = Some(sid);
                                 }
                             }
-                            // Bind the slice NEXUS IS OPERATING — the one its CAT link drives —
-                            // to our DAX channel, and re-bind when that changes (audit
-                            // #1014/#1025/#1026; the whole rule is on [`SliceView`]).
-                            if let Some(sl) = parse_slice_status(&body) {
-                                slices.observe(sl.num, sl.dax_channel);
-                                view.merge(&sl);
-                                let want = view.bind_target(flex.handle(), cat_slice);
-                                if let Some(n) = want {
-                                    if bound_slice != Some(n) {
-                                        // Let the slice we were on go FIRST: two slices both
-                                        // claiming channel 1 is the "DAX starvation" gotcha in
-                                        // this module's header, and the abandoned claims used to
-                                        // accumulate.
-                                        if let Some(old) = bound_slice {
-                                            restore_slice_dax(&mut flex, old, slices.restore(old));
+                            FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
+                                // The async status confirms the id the reply granted — or, if that
+                                // reply was lost, supplies it, but ONLY for a stream the radio says is
+                                // ours (audit #1013/#1024/#1046; the rule is on `dax_stream_is_ours`).
+                                if let Some(st) = parse_dax_stream_status(&body) {
+                                    if dax_stream_is_ours(created, flex.handle(), &st) {
+                                        if let Some(sid) = st.stream_id {
+                                            *stream_id.lock().unwrap() = Some(sid);
+                                            created = Some(sid);
                                         }
-                                        slices.claim(n);
-                                        let _ = flex.send(&slice_dax_command(n, DAX_CHANNEL));
-                                        bound_slice = Some(n);
+                                    }
+                                }
+                                // Bind the slice NEXUS IS OPERATING — the one its CAT link drives —
+                                // to our DAX channel, and re-bind when that changes (audit
+                                // #1014/#1025/#1026; the whole rule is on [`SliceView`]).
+                                if let Some(sl) = parse_slice_status(&body) {
+                                    slices.observe(sl.num, sl.dax_channel);
+                                    view.merge(&sl);
+                                    let want = view.bind_target(flex.handle(), cat_slice);
+                                    if let Some(n) = want {
+                                        if bound_slice != Some(n) {
+                                            // Let the slice we were on go FIRST: two slices both
+                                            // claiming channel 1 is the "DAX starvation" gotcha in
+                                            // this module's header, and the abandoned claims used to
+                                            // accumulate.
+                                            if let Some(old) = bound_slice {
+                                                restore_slice_dax(
+                                                    &mut flex,
+                                                    old,
+                                                    slices.restore(old),
+                                                );
+                                            }
+                                            slices.claim(n);
+                                            let _ = flex.send(&slice_dax_command(n, DAX_CHANNEL));
+                                            bound_slice = Some(n);
+                                        }
                                     }
                                 }
                             }
+                            FlexRecv::Msg(_) | FlexRecv::Idle => {}
+                            // ⚠️ THE CONNECTION IS GONE — END THE SESSION, never keep looping on it
+                            // (audit #1000). A disconnected channel returns instantly, and this
+                            // timeout is the only thing pacing this loop, so continuing free-runs a
+                            // core and fires a keepalive `ping` into a dead socket forever. Teardown
+                            // below still runs: the sends fail harmlessly, and the radio drops a
+                            // departed client's DAX routing on its own. The outer loop re-dials.
+                            FlexRecv::Closed => break,
                         }
-                        FlexRecv::Msg(_) | FlexRecv::Idle => {}
-                        // ⚠️ THE CONNECTION IS GONE — EXIT, do not loop (audit #1000). A
-                        // disconnected channel returns instantly, and this timeout is the only
-                        // thing pacing this loop, so continuing free-runs a core and fires a
-                        // keepalive `ping` into a dead socket forever. Teardown below still runs:
-                        // the sends fail harmlessly, and the radio drops a departed client's DAX
-                        // routing on its own.
-                        FlexRecv::Closed => break,
+                        if last_ka.elapsed() >= KEEPALIVE {
+                            let _ = flex.send("ping");
+                            last_ka = Instant::now();
+                        }
                     }
-                    if last_ka.elapsed() >= KEEPALIVE {
-                        let _ = flex.send("ping");
-                        last_ka = Instant::now();
+                    // Teardown, in the order the radio needs: transmit audio back to the MIC first,
+                    // then the slice routing we changed, then the streams we created.
+                    //
+                    // ⚠️ THE MIC RESTORE IS UNCONDITIONAL, deliberately. It used to live inside
+                    // `if let Some(sid) = tx_created`, so the one failure that most needed it — a
+                    // create whose reply missed its window, after `dax=1` had already gone out — was
+                    // exactly the case that skipped it, and the operator's microphone stayed dead
+                    // after Nexus exited with nothing on screen or in SmartSDR explaining why
+                    // (audit #1002). One line on the wire; `dax=0` is the state a radio with no DAX
+                    // client belongs in, and it costs nothing when we never enabled it.
+                    let _ = flex.send(&transmit_set_dax_command(false));
+                    if let Some(slice) = bound_slice {
+                        restore_slice_dax(&mut flex, slice, slices.restore(slice));
                     }
-                }
-                // Teardown, in the order the radio needs: transmit audio back to the MIC first,
-                // then the slice routing we changed, then the streams we created.
-                //
-                // ⚠️ THE MIC RESTORE IS UNCONDITIONAL, deliberately. It used to live inside
-                // `if let Some(sid) = tx_created`, so the one failure that most needed it — a
-                // create whose reply missed its window, after `dax=1` had already gone out — was
-                // exactly the case that skipped it, and the operator's microphone stayed dead
-                // after Nexus exited with nothing on screen or in SmartSDR explaining why
-                // (audit #1002). One line on the wire; `dax=0` is the state a radio with no DAX
-                // client belongs in, and it costs nothing when we never enabled it.
-                let _ = flex.send(&transmit_set_dax_command(false));
-                if let Some(slice) = bound_slice {
-                    restore_slice_dax(&mut flex, slice, slices.restore(slice));
-                }
-                // Remove only the streams we created: both ids now come from our own create
-                // replies (or, for RX, a status the radio stamped with our client handle), so
-                // `stream remove` can no longer delete another DAX client's stream (audit #1013).
-                if let Some(sid) = tx_created {
-                    let _ = flex.send(&dax_remove_command(sid));
-                }
-                if let Some(sid) = created {
-                    let _ = flex.send(&dax_remove_command(sid));
+                    // Remove only the streams we created: both ids now come from our own create
+                    // replies (or, for RX, a status the radio stamped with our client handle), so
+                    // `stream remove` can no longer delete another DAX client's stream (audit #1013).
+                    if let Some(sid) = tx_created {
+                        let _ = flex.send(&dax_remove_command(sid));
+                    }
+                    if let Some(sid) = created {
+                        let _ = flex.send(&dax_remove_command(sid));
+                    }
+                    // ⚠️ THE STREAM IDS DIE WITH THE SESSION. They are per-session handles, so a
+                    // reconnect gets new ones: leaving the old id in place would have the UDP thread
+                    // accept audio tagged with a stale id (or, worse, the TX pacer send an over to a
+                    // stream id the radio has reassigned). Clearing them also means "no audio", which
+                    // is exactly what the RX floor in `service.rs` watches for — so a reconnect that
+                    // never succeeds surfaces as the honest fallback-to-sound-card banner rather than
+                    // as silence.
+                    *stream_id.lock().unwrap() = None;
+                    *tx_stream_id.lock().unwrap() = None;
+                    // A session that stood up for a while was healthy — the next blip starts the
+                    // ladder over rather than inheriting a long wait.
+                    if session_start.elapsed() >= crate::flexspectrum::SESSION_STABLE_AFTER {
+                        backoff = crate::flexspectrum::RECONNECT_FIRST;
+                    }
+                    if !crate::flexspectrum::backoff_wait(&stop, backoff) {
+                        return;
+                    }
+                    backoff = crate::flexspectrum::next_backoff(backoff);
                 }
             }));
         }
@@ -673,8 +709,7 @@ impl FlexDax {
                     // 24k→12k phase stays continuous across it.
                     let mut mono12 = if let VitaGap::Lost(n) = gap {
                         lost += u64::from(n);
-                        lost_ms +=
-                            n as f64 * mono24.len() as f64 * 1000.0 / DAX_SAMPLE_RATE as f64;
+                        lost_ms += n as f64 * mono24.len() as f64 * 1000.0 / DAX_SAMPLE_RATE as f64;
                         resampler.process(&vec![0.0f32; n as usize * mono24.len()])
                     } else {
                         Vec::new()
@@ -1034,15 +1069,12 @@ mod tests {
             &status(0x0400_0000, OURS)
         ));
         // Fail closed while our own handle is still unknown.
-        assert!(!dax_stream_is_ours(
-            None,
-            None,
-            &status(0x0400_0000, OURS)
-        ));
+        assert!(!dax_stream_is_ours(None, None, &status(0x0400_0000, OURS)));
         // A channel we did not create is not ours whoever owns it.
-        let other_channel =
-            parse_dax_stream_status("stream 0x04000001 type=dax_rx dax_channel=2 client_handle=0x2ABC")
-                .expect("status");
+        let other_channel = parse_dax_stream_status(
+            "stream 0x04000001 type=dax_rx dax_channel=2 client_handle=0x2ABC",
+        )
+        .expect("status");
         assert!(!dax_stream_is_ours(None, Some(OURS), &other_channel));
 
         // Once the create reply has named our stream, only that id is ours.
@@ -1074,8 +1106,12 @@ mod tests {
         const OURS: u32 = 0x2ABC;
         let mut v = SliceView::default();
         // The `sub slice all` dump: A and B both in use, B has the operator's focus.
-        v.merge(&slice("slice 0 in_use=1 RF_frequency=14.074 active=0 client_handle=0x2ABC"));
-        v.merge(&slice("slice 1 in_use=1 RF_frequency=7.074 active=1 client_handle=0x2ABC"));
+        v.merge(&slice(
+            "slice 0 in_use=1 RF_frequency=14.074 active=0 client_handle=0x2ABC",
+        ));
+        v.merge(&slice(
+            "slice 1 in_use=1 RF_frequency=7.074 active=1 client_handle=0x2ABC",
+        ));
 
         assert_eq!(
             v.bind_target(Some(OURS), Some(0)),

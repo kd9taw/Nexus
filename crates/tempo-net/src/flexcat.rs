@@ -796,8 +796,10 @@ mod tests {
             rd.read_line(&mut line).expect("the command line");
             assert_eq!(line, "C1|stream create type=dax_tx\n");
             // The radio answers the EARLIER create with an async status first, then this reply.
-            peer.write_all(b"S2ABC|stream 0x04000000 type=dax_rx dax_channel=1 client_handle=0x2ABC\n")
-                .expect("status");
+            peer.write_all(
+                b"S2ABC|stream 0x04000000 type=dax_rx dax_channel=1 client_handle=0x2ABC\n",
+            )
+            .expect("status");
             peer.write_all(b"R1|0|0x84000000\n").expect("reply");
         });
 
@@ -823,7 +825,11 @@ mod tests {
     #[test]
     fn the_greeting_handle_is_captured_even_when_a_command_consumes_it() {
         let (mut peer, mut cat) = local_session();
-        assert_eq!(cat.handle(), None, "nothing claimed before the radio greets");
+        assert_eq!(
+            cat.handle(),
+            None,
+            "nothing claimed before the radio greets"
+        );
         let radio = std::thread::spawn(move || {
             let mut rd = BufReader::new(peer.try_clone().expect("clone"));
             let mut line = String::new();
