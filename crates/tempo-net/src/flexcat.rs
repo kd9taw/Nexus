@@ -20,13 +20,19 @@
 //! code is copied or bundled. "FlexRadio"/"SmartSDR" are trademarks used NOMINATIVELY (to state
 //! compatibility only). See the repo-root `NOTICE`, "Rig-control protocol interoperability".
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 /// The SmartSDR API TCP port.
 pub const FLEX_API_PORT: u16 = 4992;
+
+/// Ceiling on the frames [`FlexCat::command`] parks for [`FlexCat::recv`] (see `stash`). Deep
+/// enough for a whole reply window's worth of status on a busy radio, bounded so a caller that
+/// only ever issues commands cannot turn the radio's status stream into unbounded memory growth.
+const PENDING_CAP: usize = 512;
 
 /// How long [`FlexCat::connect`] may spend opening the TCP session before giving up.
 ///
@@ -330,6 +336,29 @@ pub struct FlexCat {
     stream: TcpStream,
     rx: mpsc::Receiver<FlexMsg>,
     seq: u32,
+    /// OUR SmartSDR client handle, from the `H<hex>` greeting — the only thing on this wire that
+    /// tells our objects from another client's.
+    ///
+    /// ⚠️ WHY IT LIVES ON THE READER THREAD AND NOT IN THE CALLER'S LOOP. A Flex is a MULTI-CLIENT
+    /// radio: the SmartSDR GUI, a Maestro, N1MM and a second Nexus window can all be attached, and
+    /// every `sub … all` subscription this crate issues delivers OTHER clients' objects too. The
+    /// handle was parsed into [`FlexMsg::Handle`] and then dropped on the floor by both worker
+    /// loops (their only arm is `Status`), so nothing downstream could answer "is this pan / this
+    /// stream / this slice mine?" — the root the 2026-08-17 Flex audit put under findings
+    /// #1012/#1013/#1014/#1016/#1017. Capturing it HERE means neither a worker's `_` arm nor a
+    /// `command` reply window (which drains the channel) can lose it.
+    ///
+    /// NEEDS-BENCH — the second half of #1017, deliberately not implemented: SmartSDR v3's
+    /// `client bind client_id=<gui client id>` associates this TCP session with a GUI client so
+    /// slice/pan writes land in the right place on a multiFLEX radio. Whether an UNBOUND client's
+    /// writes are accepted, refused, or land on a foreign client's objects is the radio's call and
+    /// cannot be settled from source. RECIPE: with SmartSDR GUI running, attach Nexus, run
+    /// `sub client all`, note the `client 0x… client_id=…` line, then compare `slice set` /
+    /// `display pan create` behaviour with and without a preceding `client bind`.
+    handle: Arc<Mutex<Option<u32>>>,
+    /// Frames [`command`](Self::command) pulled off the channel while waiting for its reply, so
+    /// [`recv`](Self::recv) still delivers them — see `stash`.
+    pending: Mutex<VecDeque<FlexMsg>>,
 }
 
 impl FlexCat {
@@ -362,18 +391,40 @@ impl FlexCat {
         stream.set_read_timeout(Some(Duration::from_millis(500)))?;
         let (tx, rx) = mpsc::channel();
         let reader = stream.try_clone()?;
+        let handle = Arc::new(Mutex::new(None::<u32>));
+        let handle_rd = handle.clone();
         std::thread::spawn(move || {
             let mut buf = BufReader::new(reader);
             let mut line = String::new();
             loop {
-                line.clear();
                 match buf.read_line(&mut line) {
                     Ok(0) => break, // peer closed
                     Ok(_) => {
-                        if tx.send(parse_line(&line)).is_err() {
+                        let msg = parse_line(&line);
+                        // A WHOLE line was consumed — only NOW may the buffer be reset (see the
+                        // timeout arm).
+                        line.clear();
+                        // Our client handle, captured for every consumer of this session (see
+                        // `FlexCat::handle`). Still forwarded on the channel: this is a tee, not
+                        // a filter.
+                        if let FlexMsg::Handle(h) = msg {
+                            *handle_rd.lock().unwrap() = Some(h);
+                        }
+                        if tx.send(msg).is_err() {
                             break; // consumer dropped
                         }
                     }
+                    // ⚠️ THE PARTIAL LINE STAYS IN THE BUFFER (Flex audit 2026-08-17, #1004).
+                    // `read_line` COMMITS the bytes it appended before a timeout — std's
+                    // `append_to_string` guard keeps them when they are valid UTF-8 — so the
+                    // `line.clear()` that used to head this loop threw away the first half of any
+                    // status the 500 ms read timeout happened to split, and then handed the TAIL
+                    // to `parse_line` as if it were a whole line, where a leading `0` matches no
+                    // tag and yields `Unknown`. Corruption, not just delay: a lost `display pan`
+                    // or `stream … type=dax_rx` status is the ONE place the pan / DAX stream ids
+                    // are learned, and a lost `meter` definition is an S-meter that never appears.
+                    // It takes a >500 ms mid-line stall — a WAN retransmit, not a LAN event.
+                    // Accumulate instead: the next read appends the rest and the line completes.
                     Err(ref e)
                         if matches!(
                             e.kind(),
@@ -383,12 +434,46 @@ impl FlexCat {
                 }
             }
         });
-        Ok(FlexCat { stream, rx, seq: 1 })
+        Ok(FlexCat {
+            stream,
+            rx,
+            seq: 1,
+            handle,
+            pending: Mutex::new(VecDeque::new()),
+        })
+    }
+
+    /// OUR client handle from the `H…` greeting, once the radio has sent it (`None` for the first
+    /// few ms of a session). Compare it against a status object's `client_handle` before steering
+    /// or removing that object — see the field docs on [`FlexCat::handle`].
+    pub fn handle(&self) -> Option<u32> {
+        *self.handle.lock().unwrap()
+    }
+
+    /// Park a frame [`command`](Self::command) pulled off the channel while waiting for its reply.
+    ///
+    /// ⚠️ THE ASYNC STATUS STREAM IS NOT COMMAND EXHAUST (Flex audit 2026-08-17, #1005/#1047).
+    /// `command` drains the channel for its whole reply window, and everything that was not the
+    /// matching reply used to be dropped — a window that opens microseconds after the `dax_rx`
+    /// create in `flexdax`, and whose length scales with RTT. The dax_rx stream id has exactly one
+    /// source (its create reply / the async `stream …` status), so the swallow could leave the
+    /// audio path permanently filtered out with the feature looking enabled. Bounded FIFO, so
+    /// order is preserved and nothing accumulates without limit.
+    fn stash(&self, msg: FlexMsg) {
+        let mut q = self.pending.lock().unwrap();
+        if q.len() >= PENDING_CAP {
+            q.pop_front();
+        }
+        q.push_back(msg);
     }
 
     /// Receive the next parsed message (blocks up to `timeout`), distinguishing an idle
     /// connection from a DEAD one — see [`FlexRecv`] for why that distinction is load-bearing.
+    /// Frames a `command` parked while awaiting its reply come out here first, in arrival order.
     pub fn recv(&self, timeout: Duration) -> FlexRecv {
+        if let Some(m) = self.pending.lock().unwrap().pop_front() {
+            return FlexRecv::Msg(m);
+        }
         match self.rx.recv_timeout(timeout) {
             Ok(m) => FlexRecv::Msg(m),
             Err(mpsc::RecvTimeoutError::Timeout) => FlexRecv::Idle,
@@ -397,14 +482,17 @@ impl FlexCat {
     }
 
     /// Send a command and wait for its `R<seq>|…` reply (up to `timeout`). Returns the reply
-    /// `(code, msg)` — `code == 0` is success. Intervening status/message frames are ignored here
-    /// (a full client would fan them out; the panadapter path only needs the create/set replies).
+    /// `(code, msg)` — `code == 0` is success. Intervening status/message frames are PARKED for
+    /// the next [`recv`](Self::recv) rather than dropped (see `stash`), so a command may be issued
+    /// on a session whose async status stream someone else is reading.
     pub fn command(&mut self, command: &str, timeout: Duration) -> std::io::Result<(u32, String)> {
         let seq = self.seq;
         self.seq = self.seq.wrapping_add(1).max(1);
         self.stream
             .write_all(encode_command(seq, command).as_bytes())?;
         let deadline = std::time::Instant::now() + timeout;
+        // Anything already parked is older than this command's reply, so it can only be status —
+        // leave it queued for `recv` and read the socket for the reply.
         while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
             match self.rx.recv_timeout(remaining) {
                 Ok(FlexMsg::Reply {
@@ -412,7 +500,7 @@ impl FlexCat {
                     code,
                     msg,
                 }) if rseq == seq => return Ok((code, msg)),
-                Ok(_) => {}
+                Ok(other) => self.stash(other),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 // The reader thread is gone (see `FlexRecv::Closed`). Waiting out the window
                 // would be a tight spin, since a disconnected channel returns instantly.
@@ -627,6 +715,118 @@ mod tests {
             FlexRecv::Closed,
             "Closed is terminal: every later recv says so too"
         );
+    }
+
+    /// A connected session against a local stand-in radio: the accepted peer socket (write to it
+    /// as the radio) + the client. The listener is dropped — the accepted connection outlives it.
+    fn local_session() -> (TcpStream, FlexCat) {
+        use std::net::TcpListener;
+        let srv = TcpListener::bind("127.0.0.1:0").expect("bind a local stand-in radio");
+        let addr = srv.local_addr().expect("addr");
+        let cat = FlexCat::connect_addr(addr, Duration::from_secs(2)).expect("connect");
+        let (peer, _) = srv.accept().expect("accept");
+        (peer, cat)
+    }
+
+    /// Poll `recv` for up to ~1 s and return the first message that matches `f`.
+    fn wait_for<T>(cat: &FlexCat, mut f: impl FnMut(FlexMsg) -> Option<T>) -> Option<T> {
+        for _ in 0..100 {
+            if let FlexRecv::Msg(m) = cat.recv(Duration::from_millis(10)) {
+                if let Some(v) = f(m) {
+                    return Some(v);
+                }
+            }
+        }
+        None
+    }
+
+    /// A LINE SPLIT BY THE 500 ms READ TIMEOUT MUST SURVIVE IT (audit #1004).
+    ///
+    /// `read_line` commits the bytes it appended before the timeout, and the loop's old
+    /// `line.clear()` threw them away — then parsed the TAIL as a whole line, which matches no tag
+    /// and becomes `Unknown`. The frames it corrupts are the ones that carry the pan / DAX stream
+    /// ids and the meter registry, so a WAN retransmit could silently cost the whole feature.
+    #[test]
+    fn a_line_split_by_the_read_timeout_is_reassembled_not_dropped() {
+        let (mut peer, cat) = local_session();
+        // First half of a status, no newline …
+        peer.write_all(b"S2ABC|display pan 0x40000000 center=14.1")
+            .expect("first half");
+        // … then a stall LONGER than the socket's 500 ms read timeout, so the reader wakes with a
+        // partial line in hand (the WAN-retransmit shape).
+        std::thread::sleep(Duration::from_millis(900));
+        peer.write_all(b"00 bandwidth=0.200000\n").expect("rest");
+
+        let body = wait_for(&cat, |m| match m {
+            FlexMsg::Status { body, .. } => Some(body),
+            other => panic!("a split line must not surface as {other:?}"),
+        });
+        assert_eq!(
+            body.as_deref(),
+            Some("display pan 0x40000000 center=14.100 bandwidth=0.200000"),
+            "the two halves must rejoin into the line the radio actually sent"
+        );
+    }
+
+    /// THE ASYNC STATUS STREAM IS NOT COMMAND EXHAUST (audit #1005/#1047).
+    ///
+    /// `command` drains the channel for its whole reply window. Everything that was not the
+    /// matching reply used to be dropped — including the `stream … type=dax_rx` status that is the
+    /// only place the DAX RX stream id is learned, which `flexdax` creates microseconds before it
+    /// calls `command`. Both halves asserted: the reply still arrives, and the status survives.
+    #[test]
+    fn a_command_parks_the_async_status_that_arrives_in_its_reply_window() {
+        let (mut peer, mut cat) = local_session();
+        let radio = std::thread::spawn(move || {
+            let mut rd = BufReader::new(peer.try_clone().expect("clone"));
+            let mut line = String::new();
+            rd.read_line(&mut line).expect("the command line");
+            assert_eq!(line, "C1|stream create type=dax_tx\n");
+            // The radio answers the EARLIER create with an async status first, then this reply.
+            peer.write_all(b"S2ABC|stream 0x04000000 type=dax_rx dax_channel=1 client_handle=0x2ABC\n")
+                .expect("status");
+            peer.write_all(b"R1|0|0x84000000\n").expect("reply");
+        });
+
+        let (code, msg) = cat
+            .command("stream create type=dax_tx", Duration::from_secs(2))
+            .expect("a reply inside the window");
+        assert_eq!((code, msg.as_str()), (0, "0x84000000"));
+
+        let st = wait_for(&cat, |m| match m {
+            FlexMsg::Status { body, .. } => parse_dax_stream_status(&body),
+            _ => None,
+        })
+        .expect("the status that arrived during the reply window must still be delivered");
+        assert_eq!(st.stream_id, Some(0x0400_0000));
+        radio.join().expect("stand-in radio");
+    }
+
+    /// OUR CLIENT HANDLE IS THE ONLY OWNERSHIP DISCRIMINATOR ON THIS WIRE (audit #1017).
+    ///
+    /// It was parsed into `FlexMsg::Handle` and dropped by both worker loops, so nothing could
+    /// tell our pan / stream / slice from the SmartSDR GUI's. Captured on the reader thread, it
+    /// survives even the case that used to lose it: a greeting consumed inside a `command` window.
+    #[test]
+    fn the_greeting_handle_is_captured_even_when_a_command_consumes_it() {
+        let (mut peer, mut cat) = local_session();
+        assert_eq!(cat.handle(), None, "nothing claimed before the radio greets");
+        let radio = std::thread::spawn(move || {
+            let mut rd = BufReader::new(peer.try_clone().expect("clone"));
+            let mut line = String::new();
+            rd.read_line(&mut line).expect("the command line");
+            // Greeting INSIDE the reply window — the frame `command` would have eaten.
+            peer.write_all(b"V1.4.0.0\nH2ABC\n").expect("greeting");
+            peer.write_all(b"R1|0|0x84000000\n").expect("reply");
+        });
+
+        cat.command("ping", Duration::from_secs(2)).expect("reply");
+        assert_eq!(
+            cat.handle(),
+            Some(0x2ABC),
+            "the session must know which client it is, whoever consumed the H line"
+        );
+        radio.join().expect("stand-in radio");
     }
 
     #[test]
