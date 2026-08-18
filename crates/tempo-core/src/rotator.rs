@@ -63,23 +63,70 @@ impl Default for RotatorConfig {
     }
 }
 
+/// Above this peak elevation a flip-capable mount takes the pass over the top. gpredict and
+/// SatPC32 both use ~85°; the number is the operator-visible meaning of "high pass", not a
+/// tuning knob.
+pub const FLIP_ABOVE_EL_DEG: f64 = 85.0;
+
+/// Does THIS pass want the flipped frame?
+///
+/// ⭐ **The decision belongs to the PASS, and putting it on the look angle is why "Allow flip"
+/// could never fire.** `point_for` used to flip when `el > 90.0`, and elevation above the
+/// horizon cannot exceed 90 by construction — `sat::look_at` computes it as
+/// `(zenith / range).asin().to_degrees()`, which `asin` bounds to [-90, 90], and even a true
+/// zenith pass fails the strict `>`. So the branch was unreachable in the whole tracking path
+/// (the unit test that "proved" it fed a synthetic 100° the propagator cannot produce), while
+/// Settings told the operator the box would stop the mast racing round at the top of a pass.
+/// It did not: the mast raced round on every high pass, exactly as if the box were off.
+///
+/// The CHOICE is made once, from the pass's peak elevation, and held: turning the flipped frame
+/// on and off mid-pass would perform the very 180° azimuth swing it exists to avoid. Which
+/// samples the frame then rewrites is [`point_for`]'s business, and it is not "all of them" —
+/// see the reference-bearing note there.
+///
+/// Only high passes, because the flip is not free: it commands elevations past 90°, which many
+/// mounts cannot reach at all, and on a low pass there is no mast race to avoid.
+pub fn flip_for_pass(max_el_deg: f64, cfg: &RotatorConfig) -> bool {
+    cfg.allow_flip && max_el_deg >= FLIP_ABOVE_EL_DEG
+}
+
 /// Where the rotator should actually be pointed for a look angle.
 ///
 /// # The flip
 ///
-/// A pass straight overhead sweeps azimuth through 180° in seconds. A mount that
-/// can drive past 90° elevation instead points at `az + 180°` and keeps going
-/// *over the top* — the antenna ends up in the same place in the sky without the
-/// mast racing round underneath it. Only when the operator says the rotator can
-/// do it; the default is the safe one.
-pub fn point_for(az_deg: f64, el_deg: f64, cfg: &RotatorConfig) -> (f64, f64) {
+/// A pass straight overhead sweeps azimuth through 180° in seconds. A mount that can drive past
+/// 90° elevation instead points at `az + 180°` and keeps going *over the top* — the antenna
+/// ends up in the same place in the sky without the mast racing round underneath it. Only when
+/// the operator says the rotator can do it (`allow_flip`) and only on a pass that needs it
+/// ([`flip_for_pass`]); the default is the safe one.
+///
+/// `flip_ref` is that decision: `None` for the ordinary frame, `Some(bearing)` to track this
+/// pass over the top about that REFERENCE BEARING — the azimuth the pass rises on.
+///
+/// ⭐ **The reference is what makes the flip do anything, and it is subtle enough to get wrong
+/// twice.** Mapping every sample to `az + 180` is not a flip: an overhead pass swings azimuth
+/// 180° at the peak, and a uniformly rotated frame swings by exactly the same 180°. What
+/// removes the swing is flipping only the HALF of the pass that lies on the far side of the
+/// rise bearing. A pass rising at 045° and setting at 225° is then commanded 045° for its whole
+/// length, with elevation running 0° → 90° → 180° straight through the zenith, and the mast
+/// never turns at all. That is the behaviour the setting promises.
+///
+/// The elevation ceiling follows the frame: 90° in the ordinary one, 180° in the flipped one.
+/// It has to, and the old code missed it twice over — `point_line_azel` then clamped every
+/// command to 90 on the wire, so even a flip that fired would have been clamped away.
+pub fn point_for(
+    az_deg: f64,
+    el_deg: f64,
+    cfg: &RotatorConfig,
+    flip_ref: Option<f64>,
+) -> (f64, f64) {
     let (mut az, mut el) = (az_deg, el_deg);
-    if cfg.allow_flip && el > 90.0 {
+    if flip_ref.is_some_and(|r| az_distance(az_deg, r) > 90.0) {
         az += 180.0;
         el = 180.0 - el;
     }
     az = (az + cfg.cal_az_deg).rem_euclid(360.0);
-    el = (el + cfg.cal_el_deg).clamp(0.0, 180.0);
+    el = (el + cfg.cal_el_deg).clamp(0.0, if flip_ref.is_some() { 180.0 } else { 90.0 });
     (az, el)
 }
 
@@ -158,6 +205,10 @@ pub const MISS_LIMIT: u32 = 5;
 #[derive(Debug, Clone)]
 pub struct TrackDriver {
     cfg: RotatorConfig,
+    /// The bearing this pass rises on, when it is being tracked over the top; `None` in the
+    /// ordinary frame. Decided once, at construction, from the pass's peak elevation — see
+    /// [`flip_for_pass`] and [`point_for`].
+    flip_ref: Option<f64>,
     /// What the rotator was last actually TOLD, in the CONTROLLER's frame. The
     /// deadband compares against this.
     last_cmd: Option<(f64, f64)>,
@@ -172,15 +223,40 @@ pub struct TrackDriver {
 }
 
 impl TrackDriver {
+    /// A driver for the ordinary frame — no flip. What every caller that has no pass in hand
+    /// wants, and what `for_pass` reduces to on a low pass or a mount that cannot flip.
     pub fn new(cfg: RotatorConfig) -> Self {
         TrackDriver {
             cfg,
+            flip_ref: None,
             last_cmd: None,
             last_aim: None,
             azel_ok: true,
             az_only_ticks: 0,
             misses: 0,
         }
+    }
+
+    /// A driver for ONE pass, which is what decides whether the flip applies — see
+    /// [`flip_for_pass`]. `aos_az_deg` is the bearing the pass rises on, which is the reference
+    /// the flipped frame turns about. Fixed here and never changed mid-pass.
+    pub fn for_pass(cfg: RotatorConfig, max_el_deg: f64, aos_az_deg: f64) -> Self {
+        TrackDriver {
+            flip_ref: flip_for_pass(max_el_deg, &cfg).then_some(aos_az_deg),
+            ..TrackDriver::new(cfg)
+        }
+    }
+
+    /// Is this pass being tracked over the top?
+    pub fn flipped(&self) -> bool {
+        self.flip_ref.is_some()
+    }
+
+    /// The last pair actually COMMANDED, in the controller's frame — what a position read back
+    /// off the controller is comparable with (`last_aim` is the boresight angle, which differs
+    /// by the calibration trim and by the flip).
+    pub fn last_cmd(&self) -> Option<(f64, f64)> {
+        self.last_cmd
     }
 
     /// Where the antenna was last aimed, as a boresight look angle, and whether
@@ -203,7 +279,7 @@ impl TrackDriver {
 
     /// Decide this tick from the bird's boresight look angle.
     pub fn step(&mut self, look_az: f64, look_el: f64) -> RotStep {
-        let (az, el) = point_for(look_az, look_el, &self.cfg);
+        let (az, el) = point_for(look_az, look_el, &self.cfg, self.flip_ref);
         if !worth_moving((az, el), self.last_cmd, &self.cfg) {
             return RotStep::Hold;
         }
@@ -233,7 +309,7 @@ impl TrackDriver {
     /// loop attempted, so the driver records what was really issued rather than
     /// what was wanted.
     pub fn record(&mut self, step: RotStep, outcome: RotOutcome, look_az: f64, look_el: f64) {
-        let (az, el) = point_for(look_az, look_el, &self.cfg);
+        let (az, el) = point_for(look_az, look_el, &self.cfg, self.flip_ref);
         match outcome {
             RotOutcome::Failed => {
                 self.misses += 1;
@@ -260,6 +336,56 @@ impl TrackDriver {
         };
         self.last_cmd = Some((az, el_reached));
         self.last_aim = Some((look_az, look_el));
+    }
+}
+
+/// How far the mast may sit from its last command before that is worth saying out loud.
+const LAG_LIMIT_DEG: f64 = 15.0;
+/// Below this, a controller has not moved between two reads — a G-5500 reports whole degrees
+/// and a slewing mast covers several per tick, so anything under a degree is standing still.
+const STUCK_MOVE_DEG: f64 = 1.0;
+/// Consecutive stuck-and-far reads before the operator is told. At the loop's 3 s cadence this
+/// is ~9 s of a mast that is neither where it was told to go nor on its way there.
+const LAG_STRIKES: u32 = 3;
+
+/// Is the mast actually following? Pure, so the answer is testable without one.
+///
+/// ⚠️ **A pass never read the rotator's position back at all** — the deadband compares the new
+/// target against the last COMMAND, so it self-satisfies, and the badge draws the commanded
+/// pair. A rotator that accepted every command and then jammed, lost a belt, or hit a stop was
+/// invisible for the whole pass; the sky dome's "pointing error" was computed from two numbers
+/// that agreed by construction.
+///
+/// The rule is deliberately NOT "the reading is far from the target": a legitimate slew to AOS
+/// is 180° of gap and takes a G-5500 half a minute. It is **far AND not moving** — a mast that
+/// is neither there nor on its way. Reported once per episode, and forgiven the moment it moves
+/// again, because the operator does not need a second line about the same jam.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LagWatch {
+    last_seen_az: Option<f64>,
+    strikes: u32,
+    reported: bool,
+}
+
+impl LagWatch {
+    /// Feed one position read against the azimuth last commanded (both in the CONTROLLER's
+    /// frame). `Some(gap)` exactly once per episode, when the mast has stopped short.
+    pub fn observe(&mut self, commanded_az: f64, measured_az: f64) -> Option<f64> {
+        let gap = az_distance(commanded_az, measured_az);
+        let moved = self
+            .last_seen_az
+            .is_none_or(|prev| az_distance(prev, measured_az) >= STUCK_MOVE_DEG);
+        self.last_seen_az = Some(measured_az);
+        if gap < LAG_LIMIT_DEG || moved {
+            self.strikes = 0;
+            self.reported = false;
+            return None;
+        }
+        self.strikes += 1;
+        (self.strikes >= LAG_STRIKES && !self.reported).then(|| {
+            self.reported = true;
+            gap
+        })
     }
 }
 
@@ -294,22 +420,157 @@ mod tests {
 
     #[test]
     fn the_flip_is_opt_in_and_takes_the_pass_over_the_top() {
+        let cfg = RotatorConfig::default();
+        // Not flipped: azimuth untouched and elevation held at the mount's 90° stop. A rotator
+        // that cannot flip must never be commanded past it.
+        assert_eq!(point_for(100.0, 88.0, &cfg, None), (100.0, 88.0));
+        assert_eq!(point_for(100.0, 100.0, &cfg, None), (100.0, 90.0));
+
+        // Flipped about a rise bearing of 100°: the half of the pass on THAT side is commanded
+        // unchanged, and the half on the far side is turned over the top — the same patch of
+        // sky, reached without the mast crossing under it.
+        let rise = Some(100.0);
+        assert_eq!(point_for(100.0, 80.0, &cfg, rise), (100.0, 80.0), "the near half is not rewritten");
+        assert_eq!(point_for(280.0, 80.0, &cfg, rise), (100.0, 100.0), "the far half comes over the top");
+        assert_eq!(point_for(280.0, 0.0, &cfg, rise), (100.0, 180.0), "…all the way to the far horizon");
+        // 90° away is the boundary and stays on the near side: an ambiguous sample must not
+        // flap between the two frames.
+        assert_eq!(point_for(190.0, 45.0, &cfg, rise), (190.0, 45.0));
+    }
+
+    #[test]
+    fn allow_flip_can_actually_FIRE_and_only_on_a_high_pass() {
+        // ⭐ THE DEFECT, pinned. The flip used to be gated on `el > 90.0`, and a look angle
+        // above the horizon cannot exceed 90 — `sat::look_at`'s elevation is an `asin`, bounded
+        // to [-90, 90]. So the branch was dead in every pass the propagator can produce, while
+        // Settings promised the mast would not race round at the top of a high one. It did.
+        //
+        // Old test's synthetic input, for the record: `point_for(100.0, 100.0, …)`. A 100°
+        // elevation is not a thing.
         let mut cfg = RotatorConfig::default();
-        // Default: no flip. A >90° look angle is clamped, never mirrored —
-        // a rotator that cannot flip must not be commanded past its stop.
-        let (az, el) = point_for(100.0, 100.0, &cfg);
-        assert_eq!(az, 100.0);
-        assert!(
-            el > 90.0,
-            "no flip ⇒ elevation is passed through, az untouched"
-        );
+        assert!(!cfg.allow_flip);
+        for max_el in [0.0, 45.0, 84.9, 85.0, 89.9, 90.0] {
+            assert!(
+                !flip_for_pass(max_el, &cfg),
+                "with the box off nothing flips, however high the pass"
+            );
+        }
 
         cfg.allow_flip = true;
-        let (az, el) = point_for(100.0, 100.0, &cfg);
-        assert_eq!(az, 280.0, "flip swings azimuth 180°");
-        assert_eq!(el, 80.0, "…and elevation comes back down the far side");
-        // Below the flip point nothing changes.
-        assert_eq!(point_for(100.0, 80.0, &cfg), (100.0, 80.0));
+        // A real zenith pass — the case the setting exists for — now flips, and so does one at
+        // exactly the threshold.
+        assert!(flip_for_pass(90.0, &cfg));
+        assert!(flip_for_pass(85.0, &cfg));
+        assert!(flip_for_pass(88.7, &cfg));
+        // …and an ordinary pass does not: flipping a low pass would spin the mast for nothing.
+        assert!(!flip_for_pass(84.9, &cfg));
+        assert!(!flip_for_pass(30.0, &cfg));
+    }
+
+    #[test]
+    fn a_flipped_pass_crosses_the_zenith_without_the_mast_racing_round() {
+        // The behaviour the operator was promised, over a pass that goes overhead: in the plain
+        // frame the azimuth swings ~180° in the seconds around the peak (this is the mast race);
+        // in the flipped frame it does not move at all, and the elevation walks up through 90
+        // and back down.
+        let cfg = RotatorConfig {
+            allow_flip: true,
+            ..RotatorConfig::default()
+        };
+        // A near-zenith pass sampled through the peak: it rises at 010°, climbs to 89°, goes
+        // over the top and the same track continues on the opposite bearing, 190°.
+        let pass = [(10.0, 86.0), (10.0, 89.0), (190.0, 89.0), (190.0, 86.0)];
+
+        let plain: Vec<f64> = pass.iter().map(|&(az, el)| point_for(az, el, &cfg, None).0).collect();
+        assert!(
+            az_distance(plain[1], plain[2]) > 170.0,
+            "the unflipped frame really does swing the mast round at the top: {plain:?}"
+        );
+
+        // 010° is where it rose, so that is the reference the flipped frame turns about.
+        let flipped: Vec<(f64, f64)> = pass
+            .iter()
+            .map(|&(az, el)| point_for(az, el, &cfg, Some(10.0)))
+            .collect();
+        for w in flipped.windows(2) {
+            assert!(
+                az_distance(w[0].0, w[1].0) < 1.0,
+                "a flipped pass must not swing the azimuth at all: {flipped:?}"
+            );
+        }
+        assert!(flipped.iter().all(|&(az, _)| (az - 10.0).abs() < 1e-9));
+        // Elevation instead walks straight up through 90 and out the far side — which is the
+        // whole point, and what the wire's old hard 90° clamp would have thrown away.
+        let els: Vec<f64> = flipped.iter().map(|&(_, el)| el).collect();
+        assert_eq!(els, vec![86.0, 89.0, 91.0, 94.0]);
+    }
+
+    #[test]
+    fn a_driver_built_for_a_pass_holds_one_frame_for_the_whole_pass() {
+        let cfg = RotatorConfig {
+            allow_flip: true,
+            ..RotatorConfig::default()
+        };
+        // Rises at 010°, peaks at 89° — a flip pass.
+        let mut d = TrackDriver::for_pass(cfg, 89.0, 10.0);
+        assert!(d.flipped());
+        // Still on the rise bearing: commanded as-is.
+        assert_eq!(d.step(10.0, 20.0), RotStep::PointAzEl { az: 10.0, el: 20.0 });
+        d.record(RotStep::PointAzEl { az: 10.0, el: 20.0 }, RotOutcome::AzElOk, 10.0, 20.0);
+        // Past the zenith, on the far bearing: the mast does not follow, the elevation does.
+        assert_eq!(d.step(190.0, 20.0), RotStep::PointAzEl { az: 10.0, el: 160.0 });
+        d.record(RotStep::PointAzEl { az: 10.0, el: 160.0 }, RotOutcome::AzElOk, 190.0, 20.0);
+        // …and the reported AIM is still the boresight look angle, so nothing the operator
+        // reads moves because of the flip.
+        assert_eq!(d.last_aim(), Some((190.0, 20.0)));
+        assert_eq!(d.last_cmd(), Some((10.0, 160.0)));
+
+        // A low pass on the same station keeps the plain frame.
+        assert!(!TrackDriver::for_pass(cfg, 40.0, 10.0).flipped());
+        assert!(!TrackDriver::new(cfg).flipped());
+    }
+
+    #[test]
+    fn a_mast_that_stopped_short_is_noticed_and_a_slewing_one_is_not() {
+        // A legitimate slew is a huge gap that closes: 180° at AOS takes a G-5500 half a minute,
+        // and calling that a fault would cry wolf on every pass.
+        let mut w = LagWatch::default();
+        let mut az = 10.0;
+        for _ in 0..10 {
+            az += 18.0; // ~6°/s over a 3 s tick
+            assert_eq!(w.observe(190.0, az), None, "a mast on its way is not stuck");
+        }
+        // Now it stops, 40° short. The first read after a move only ESTABLISHES the position;
+        // it takes a second to know nothing changed, and two more to call it a jam.
+        for _ in 0..3 {
+            assert_eq!(w.observe(190.0, 150.0), None);
+        }
+        let gap = w.observe(190.0, 150.0).expect("a jammed mast must be reported");
+        assert!((gap - 40.0).abs() < 1e-9, "and it says how far short: {gap}");
+        // Said once, not once a tick.
+        assert_eq!(w.observe(190.0, 150.0), None);
+        assert_eq!(w.observe(190.0, 150.0), None);
+
+        // It frees itself, moves, and stops short again: the episode ended, so the second jam
+        // gets its own report.
+        for _ in 0..3 {
+            assert_eq!(w.observe(190.0, 165.0), None);
+        }
+        assert!(w.observe(190.0, 165.0).is_some(), "a second jam is a second report");
+    }
+
+    #[test]
+    fn a_mast_sitting_exactly_where_it_was_told_is_never_reported() {
+        // The positive control's other half: a healthy rotator holds position for tick after
+        // tick, and that is not-moving too. Only the GAP separates it from a jam.
+        let mut w = LagWatch::default();
+        for _ in 0..20 {
+            assert_eq!(w.observe(190.0, 190.4), None);
+        }
+        // …and within the limit, still nothing, however long it sits.
+        for _ in 0..20 {
+            assert_eq!(w.observe(190.0, 180.0), None);
+        }
     }
 
     #[test]
@@ -319,9 +580,9 @@ mod tests {
             cal_el_deg: 1.5,
             ..RotatorConfig::default()
         };
-        assert_eq!(point_for(10.0, 20.0, &cfg), (5.0, 21.5));
+        assert_eq!(point_for(10.0, 20.0, &cfg, None), (5.0, 21.5));
         // Trim across the 0° boundary must wrap, not go negative.
-        assert_eq!(point_for(2.0, 20.0, &cfg).0, 357.0);
+        assert_eq!(point_for(2.0, 20.0, &cfg, None).0, 357.0);
     }
 
     #[test]

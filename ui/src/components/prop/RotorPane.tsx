@@ -3,12 +3,15 @@
 // Compass rose with the LIVE azimuth needle (polled while mounted), click-the-
 // rose or type to slew, STOP, and the WMM magnetic heading beside true so a
 // compass-zeroed controller reads the same number. Renders nothing when no
-// rotator is configured (PaneFrame falls back to the Basic hint) — honesty:
-// a needle with no rotctld behind it would be an ornament.
+// rotator is CONFIGURED (PaneFrame falls back to the Basic hint) — honesty:
+// a needle with no rotctld behind it would be an ornament. A configured rotator
+// that does not report its position keeps the pane, with "—" where the needle
+// would be: pointing and STOP do not depend on the readback.
 import { useEffect, useRef, useState } from 'react'
 import {
   getDeclination,
   getSatTrackStatus,
+  getSettings,
   pointRotator,
   readRotator,
   stopRotator,
@@ -38,10 +41,18 @@ export function RotorPane() {
   // Shown so the operator knows WHY the needle moves on its own — and so a manual
   // slew/STOP halts the LOOP, not just one command the loop's next 3 s tick redoes.
   const [satTrack, setSatTrack] = useState<SatTrackStatus | null>(null)
+  // Is a rotator CONFIGURED at all? Split from "is it reading back", because the two are
+  // different stations and only one of them should lose the pane — see the null branch below.
+  const [configured, setConfigured] = useState(false)
   const alive = useRef(true)
 
   useEffect(() => {
     alive.current = true
+    getSettings()
+      .then((st) => {
+        if (alive.current) setConfigured((st.rotatorModel ?? 0) > 0 || st.rotatorHost.trim() !== '')
+      })
+      .catch(() => {})
     const load = () => {
       readRotator()
         .then((v) => {
@@ -67,7 +78,18 @@ export function RotorPane() {
     }
   }, [])
 
-  if (az == null) return null // no rotator answering — Basic hint takes over
+  // ⭐ A ROTATOR YOU CANNOT READ IS STILL A ROTATOR YOU CAN POINT. This used to be
+  // `if (az == null) return null`, which deleted the rose, the click-to-slew, the typed bearing
+  // AND the STOP button the moment the readback failed — and readback fails for reasons that
+  // have nothing to do with pointing. Model 403 (Hy-Gain DCU-1/DCU-1X, a curated entry) has no
+  // `get_position` in the bundled Hamlib at all: it answers `p` with `RPRT -11` for ever while
+  // taking every `P` perfectly. Its owner had no compass, no slew and no stop.
+  //
+  // So the two states are separated: no rotator CONFIGURED renders nothing (most stations, and
+  // the pane frame's Basic hint takes over), while a rotator that is configured but not
+  // reporting keeps its whole control surface with an honest "—" where the needle would be. A
+  // fake needle would be the dishonest half; a missing STOP button is the dangerous one.
+  if (az == null && !configured) return null
 
   const slew = (deg: number) => {
     const d = ((Math.round(deg) % 360) + 360) % 360
@@ -87,9 +109,9 @@ export function RotorPane() {
     const rad = (deg - 90) * (Math.PI / 180)
     return { x: SIZE / 2 + len * Math.cos(rad), y: SIZE / 2 + len * Math.sin(rad) }
   }
-  const cur = needle(az, R - 8)
+  const cur = az != null ? needle(az, R - 8) : null
   const tgt = target != null ? needle(target, R - 2) : null
-  const mag = magneticDeg(az, declination)
+  const mag = az != null ? magneticDeg(az, declination) : null
 
   return (
     <section className="rotor-pane panel">
@@ -100,7 +122,11 @@ export function RotorPane() {
           className="rotor-rose"
           onClick={(e) => slew(azFromClick(e))}
           role="img"
-          aria-label={`Rotator at ${Math.round(az)} degrees — click to slew`}
+          aria-label={
+            az != null
+              ? `Rotator at ${Math.round(az)} degrees — click to slew`
+              : 'Rotator — position not reported; click to slew'
+          }
         >
           <circle cx={SIZE / 2} cy={SIZE / 2} r={R} className="rotor-ring" />
           {['N', 'E', 'S', 'W'].map((c, i) => {
@@ -126,15 +152,21 @@ export function RotorPane() {
               className="rotor-needle target"
             />
           )}
-          <line x1={SIZE / 2} y1={SIZE / 2} x2={cur.x} y2={cur.y} className="rotor-needle" />
+          {cur && <line x1={SIZE / 2} y1={SIZE / 2} x2={cur.x} y2={cur.y} className="rotor-needle" />}
           <circle cx={SIZE / 2} cy={SIZE / 2} r={3} className="rotor-hub" />
         </svg>
         <div className="rotor-side">
           <div
             className="rotor-az mono"
-            title={mag != null ? `${Math.round(az)}° true · ${mag}° magnetic (WMM)` : 'True bearing'}
+            title={
+              az == null
+                ? 'This rotator does not report its position — pointing still works'
+                : mag != null
+                  ? `${Math.round(az)}° true · ${mag}° magnetic (WMM)`
+                  : 'True bearing'
+            }
           >
-            {Math.round(az)}°T
+            {az == null ? '—°T' : `${Math.round(az)}°T`}
             {mag != null && <span className="rotor-mag"> {mag}°M</span>}
           </div>
           {satTrack && (
@@ -145,7 +177,7 @@ export function RotorPane() {
               ⟳ {satTrack.name}
             </div>
           )}
-          {target != null && Math.abs(((target - az + 540) % 360) - 180) > 2 && (
+          {target != null && (az == null || Math.abs(((target - az + 540) % 360) - 180) > 2) && (
             <div className="rotor-slewing" title="Commanded heading — the needle is on its way">
               → {target}°
             </div>
@@ -188,7 +220,11 @@ export function RotorPane() {
               ■ STOP
             </button>
           </div>
-          <p className="rotor-hint">click the rose or type a bearing · headings are TRUE</p>
+          <p className="rotor-hint">
+            {az == null
+              ? 'no position from this rotator — pointing and STOP still work'
+              : 'click the rose or type a bearing · headings are TRUE'}
+          </p>
         </div>
       </div>
     </section>

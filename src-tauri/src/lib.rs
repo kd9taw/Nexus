@@ -6572,7 +6572,17 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
     use tempo_core::rotator::{RotOutcome, RotStep};
     // Deadband, calibration trim, the az-only fallback and its recovery
     // probe, and the miss counter all live in the driver.
-    let mut driver = tempo_core::rotator::TrackDriver::new(rot_cfg);
+    // The FRAME is a property of this pass, not of a tick: a mount the operator has told us can
+    // go over the top takes a near-zenith pass that way, about the bearing the bird rises on,
+    // and an ordinary pass the ordinary way. Deciding it here is what makes "Allow flip" do
+    // anything at all — it used to be asked of the instantaneous look angle, which cannot
+    // exceed 90°, so the setting was a no-op and the mast raced round on every high pass.
+    let mut driver =
+        tempo_core::rotator::TrackDriver::for_pass(rot_cfg, pass.max_el_deg, pass.aos_az_deg);
+    // Is the mast actually going where it is told? The pass never asked before — the deadband
+    // compares the new target against the last COMMAND, so it agrees with itself, and a rotator
+    // that accepted everything and then jammed was invisible for the whole pass.
+    let mut lag = tempo_core::rotator::LagWatch::default();
     let update_badge = |dto: SatTrackDto| {
         if let Ok(mut g) = SAT_TRACK.lock() {
             if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
@@ -6862,6 +6872,29 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         }
         let outcome = send_rot_step(addr, step);
         driver.record(step, outcome, sat_az, sat_el);
+        // ⭐ ASK THE MAST WHERE IT ACTUALLY IS. Accepting a command is not arriving: a jam, a
+        // slipped belt, a hit stop or a controller in local all take `P` and answer `RPRT 0`
+        // while the antenna stays put, and every surface in the app was drawing the commanded
+        // pair. The rule is "far AND not moving", never "far" — a legitimate slew to AOS is
+        // 180° of gap and takes a G-5500 half a minute (`LagWatch`). Once per episode, to the
+        // connection log, which is where support asks the operator to look.
+        if outcome != RotOutcome::Failed {
+            if let (Some((caz, _)), Ok((meas_az, _))) =
+                (driver.last_cmd(), tempo_audio::rotator::read_position(addr))
+            {
+                if let Some(gap) = lag.observe(caz, meas_az) {
+                    conn_log(
+                        "Rotator",
+                        "warn",
+                        format!(
+                            "the rotator is not moving: commanded {caz:.0}°, reading \
+                             {meas_az:.0}° — {gap:.0}° short and stopped, while tracking {name}. \
+                             Check for a jam, a stop, or the controller left in local."
+                        ),
+                    );
+                }
+            }
+        }
         if outcome != RotOutcome::Failed {
             // Report the BORESIGHT aim the driver recorded, never the
             // controller command: the latter carries the calibration trim,
@@ -6906,6 +6939,23 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                 if loss.ends_pass() {
                     ending = loss;
                     break;
+                }
+                if !rotor_lost {
+                    // Say it ONCE, on the edge. The state reaches the badge, the Satellites
+                    // rail and the cockpit chip, but none of those is a record: an operator who
+                    // was not watching the screen during the pass had no way to learn the mast
+                    // stopped answering, and the connection log is the first thing support
+                    // asks for.
+                    conn_log(
+                        "Rotator",
+                        "error",
+                        format!(
+                            "the rotator stopped answering during the {name} pass \
+                             ({} commands in a row) — the track let the mast go and \
+                             kept the dial. Point the antenna yourself.",
+                            tempo_core::rotator::MISS_LIMIT
+                        ),
+                    );
                 }
                 rotor_lost = true;
             }
@@ -6983,9 +7033,43 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // the rotor and must not have its pointing yanked to a park position.
         if !rotor_lost && SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
             if let Some((paz, pel)) = tempo_core::rotator::post_pass_target(&rot_cfg) {
-                let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg);
-                if tempo_audio::rotator::point_azel(addr, paz, pel).is_err() {
-                    let _ = tempo_audio::rotator::point(addr, paz);
+                // The park is an ABSOLUTE position the operator configured, so it is not part
+                // of this pass's flipped frame — only the trim and the wrap apply.
+                let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg, None);
+                if let Err(e) = tempo_audio::rotator::point_azel(addr, paz, pel) {
+                    // ⭐ MAST SAFETY, and the old fallback had it backwards. It answered a
+                    // failed park by sending `point(addr, paz)` — which writes `P <az> 0`, i.e.
+                    // ELEVATION ZERO. A park exists to put the antenna somewhere wind-safe, and
+                    // `PostPass::Park`'s own doc says that is "usually el 90 or a mast rest";
+                    // driving a dish or a long boom flat into the wind instead is the hazard
+                    // the setting was chosen to avoid. Worse, it was silent: both calls
+                    // discarded their result, at the one moment in the pass when nobody is
+                    // watching.
+                    //
+                    // Azimuth alone is still right for a rotator that HAS no elevation axis —
+                    // there the park's elevation was never going anywhere and `P <az> 0` is the
+                    // only form it accepts. We know which this is: the driver learned it during
+                    // the pass. Anything else is a failed park, and the operator is told rather
+                    // than having the antenna put somewhere they did not ask for.
+                    if !driver.azel_ok() {
+                        if let Err(e) = tempo_audio::rotator::point(addr, paz) {
+                            conn_log(
+                                "Rotator",
+                                "error",
+                                format!("could not park the antenna at {paz:.0}° after the {name} pass: {e}"),
+                            );
+                        }
+                    } else {
+                        conn_log(
+                            "Rotator",
+                            "error",
+                            format!(
+                                "could not park the antenna at {paz:.0}° / {pel:.0}° after the \
+                                 {name} pass: {e}. It is still where the pass left it — check \
+                                 it before weather."
+                            ),
+                        );
+                    }
                 }
             }
         }
