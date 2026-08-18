@@ -623,6 +623,20 @@ impl RigctldProc {
     pub fn is_alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
+
+    /// Wrap an arbitrary child as a daemon handle — TEST SEAM ONLY, for the one thing that
+    /// cannot otherwise be staged: a daemon that has ALREADY EXITED. The radio loop's
+    /// liveness/respawn path (2026-08-17 Flex audit, wave-1 #44) turns on exactly that state,
+    /// and every real constructor here spawns a live rigctld.
+    #[cfg(test)]
+    pub(crate) fn from_child_for_test(child: Child) -> Self {
+        RigctldProc {
+            child,
+            said: Arc::new(Mutex::new(Said::default())),
+            #[cfg(windows)]
+            job: 0,
+        }
+    }
 }
 
 impl Drop for RigctldProc {

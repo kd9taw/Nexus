@@ -2275,6 +2275,27 @@ struct RadioLoop {
     /// An audio Rig-mode split engaged VFO B for an over — tear the rig split
     /// down once no over is pending (unless the cluster split owns VFO B).
     audio_rig_split: bool,
+    /// The rig's OWN split state, observed while Nexus was not holding split, as
+    /// `(split_on, tx_vfo, tx_freq_hz)` — what the teardown RESTORES.
+    ///
+    /// ⚠️ THE TEARDOWN USED TO WRITE AN ABSOLUTE `S 0 VFOA` (2026-08-17 Flex audit, wave-2 #22).
+    /// `apply_tx_dial_shift` engages split without ever reading what it found, so an over ended
+    /// by cancelling a split Nexus never turned on — the operator's own front-panel split, or on
+    /// a multi-client Flex the split a second client set. The audit's correction makes it worse
+    /// than the title says: `set_split_freq` also overwrote VFO B's FREQUENCY with no snapshot,
+    /// so even restoring the flag would leave the TX frequency clobbered. Blast radius is every
+    /// rig with Split Operation = Rig, not just Flex.
+    ///
+    /// Observed on the RX-side heavy poll rather than immediately before the key, DELIBERATELY:
+    /// two blocking round-trips inserted between `apply_tx_dial_shift` and PTT would change FT
+    /// transmit TIMING, which is sign-off territory (CLAUDE.md) and which a restore is not worth.
+    /// At most one heavy sub-cadence stale, and refreshed only while `!audio_rig_split` — i.e.
+    /// only ever the state that is not ours.
+    ///
+    /// `None` = never observed (the rig does not answer `s`, or the operator does not use Rig
+    /// split): the teardown then keeps its old absolute-OFF behaviour, which is the conservative
+    /// answer when we have no snapshot to put back.
+    rig_split_restore: Option<(bool, String, Option<u64>)>,
     /// Last time we ran the FULL rig read-back (dial + RF power + S-meter + mode + funcs), ms.
     last_rig_poll: f64,
     /// Last time we read the TRANSMIT meters (ms). 0.0 when the bars are blanked (not keyed), so
@@ -2539,6 +2560,7 @@ impl RadioLoop {
             cur_md: String::new(),
             fake_it_restore: None,
             audio_rig_split: false,
+            rig_split_restore: None,
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
             rig_keyed: false,
@@ -2951,6 +2973,34 @@ impl RadioLoop {
     ///
     /// UNKEYING is never gated. Dropping a key is safe on either radio and must always run.
     ///
+    /// ⚠️ WHAT THIS DELIBERATELY DOES **NOT** GATE ON: `rig_keyed` — the radio's own PTT read-back
+    /// (2026-08-17 Flex audit, wave-2 #18). The finding is real and correctly stated: Nexus will
+    /// key straight over a rig another client already has keyed, and the asymmetry is glaring —
+    /// a foreign program on OUR broker is arbitrated (`broker_ptt` refuses while `tx_owner()` is
+    /// Some), while the second client a Flex actually has (the SmartSDR GUI, Maestro, N1MM on
+    /// SmartSDR CAT's own ports) is invisible to that arbiter even though the fact that it is
+    /// keyed is already sitting in `self.rig_keyed`.
+    ///
+    /// It is NOT gated because THE SIGNAL IS NOT FIT TO REFUSE A KEY ON, and a refusal that
+    /// fires wrongly is worse than the gap it closes:
+    ///
+    /// - it is a 1 Hz POLL, so it is up to a second stale by construction — the same staleness
+    ///   [`Self::operator_keyed`] exists to compensate for on the READ side, where being wrong
+    ///   costs a deferred mirror rather than a lost over;
+    /// - it demonstrably FLASHES FALSE POSITIVES: on a slow network chain the poll can report
+    ///   keyed for up to a second after each of Nexus's own overs (same audit, wave-1 #9). Gating
+    ///   the FT slot boundary on that would silently drop the NEXT over — in FT8 a suppressed
+    ///   over is a lost QSO, and it presents as flakiness with nothing on screen;
+    /// - it was built for satellite PTT polling, not for arbitration, and there is no negative
+    ///   evidence in it at all: "no answer" and "not keyed" are the same value.
+    ///
+    /// So the condition is SURFACED instead, once, on the rising edge, beside the poll that
+    /// produces it — the operator is told another program has the transmitter while Nexus is
+    /// armed, and decides. Closing this properly needs a signal that can be trusted to refuse a
+    /// transmission: a real ownership fact off the SmartSDR API session (`client bind`, already
+    /// parsed for the native lane) rather than a stale generic poll. That is a TX-sequencing
+    /// change and needs maintainer sign-off before it goes near the FT path (CLAUDE.md).
+    ///
     /// Every applier is pinned against a CONTENDED switch, asserting on the outgoing
     /// radio's rigctld wire log: `a_contended_switch_never_keys_the_outgoing_radio` (mic),
     /// `a_deferred_switch_stops_the_tune_carrier_and_the_slot_over_too`, and the six
@@ -3165,6 +3215,7 @@ impl RadioLoop {
         self.nr_level_giveup = None;
         self.fake_it_restore = None;
         self.audio_rig_split = false;
+        self.rig_split_restore = None; // the OLD radio's split is not the new one's to restore
         self.last_rig_poll = 0.0; // poll the new rig's health/mode/S-meter immediately
         self.last_freq_poll = 0.0;
         self.last_smeter_poll = 0.0;
@@ -3413,6 +3464,42 @@ impl RadioLoop {
             // Falling edge of Test CAT's port hold → rebuild the CAT channel we dropped,
             // through the rig_differs branch below (same teardown-then-reopen path).
             let resume_after_hold = !cat_hold && self.cat_hold_active;
+            // ⚠️ OUR OWN rigctld HAS DIED — the ACTIVE radio's daemon, with nothing watching it
+            // (2026-08-17 Flex audit, wave-1 #44). `is_alive` was called in four places, all of
+            // them on the MONITOR pool; the active radio's tick path had no call site at all. So
+            // a crashed daemon left CAT dead until the operator re-saved Settings: the heavy poll
+            // only tripped `cat_ok = Some(false)` and re-probed a port with no listener forever
+            // (backing off to 30 s), and the sole respawn — `reopen_rig` — is reachable only from
+            // the transport-CHANGED branch, which an unchanged transport never enters.
+            //
+            // The consequence that makes this a TX-safety fix rather than a convenience one: the
+            // UNKEY path runs over that same socket. Die mid-transmission and there is no way to
+            // drop PTT over CAT at all.
+            //
+            // RESPAWNING IS THE SAFE ACTION HERE, not the risky one, and it is why the rebuild is
+            // not gated on being idle: while the daemon is dead there is no CAT channel to race —
+            // the pre-teardown `rig.ptt(false)` in the branch below goes to a dead socket and can
+            // do nothing — and a fresh daemon is the ONLY way back to a working unkey. The branch
+            // it routes through already carries the right order (flush audio → attempt unkey →
+            // halt TX for a context change → drop the daemon → reopen), and the rebuild is
+            // followed by an unkey through the NEW channel, since the first one could not land.
+            // Detection is a `try_wait`, so it costs nothing on the ordinary tick.
+            let daemon_died = !self.cat_hold_active
+                && !cat_hold
+                && self
+                    .rigctld_proc
+                    .as_mut()
+                    .is_some_and(|d| !CatDaemon::is_alive(d));
+            if daemon_died {
+                crate::civ::diag::note("rigctld died: respawning the active radio's CAT daemon");
+                let mut eng = engine_lock(engine);
+                eng.set_cat_status(
+                    Some(false),
+                    "the CAT helper (rigctld) stopped — restarting it. If this keeps happening, \
+                     check the radio's cable/port and Test CAT."
+                        .to_string(),
+                );
+            }
             if self.handoff_deferred {
                 // A radio switch is mid-flight but the handoff couldn't take the pool
                 // lock this tick — do NOT rebuild toward the new transport here, or we
@@ -3454,7 +3541,7 @@ impl RadioLoop {
                     let mut eng = engine_lock(engine);
                     eng.ack_cat_port_released();
                 }
-            } else if want.rig_differs(&self.applied) || resume_after_hold {
+            } else if want.rig_differs(&self.applied) || resume_after_hold || daemon_died {
                 self.cat_hold_active = false;
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down. Dropping rigctld_proc and swapping *rig first would strand
@@ -3495,6 +3582,16 @@ impl RadioLoop {
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
                 let (new_rig, proc, probe) = reopen_rig(&want, allow_coexist);
                 let (ok, detail) = (probe.ok, probe.detail);
+                // A daemon death must SURVIVE in the message the rebuild publishes, not just
+                // flash before it: the probe detail lands on the same status line a moment
+                // later, so a pre-rebuild note alone would be gone before anyone read it.
+                let detail = if daemon_died {
+                    format!("the CAT helper (rigctld) stopped and was restarted. {detail}")
+                        .trim_end()
+                        .to_string()
+                } else {
+                    detail
+                };
                 self.rig_asserted = false; // fresh rig: unclaimed caches make the retune re-assert this tick
                 *rig = new_rig;
                 self.rigctld_proc = proc;
@@ -3502,6 +3599,15 @@ impl RadioLoop {
                 // (`let _ =`), so a failed open-time tune must be retried. Leaving these at the OLD
                 // radio's values makes the retune block below (same tick) see `dial != last_dial` and
                 // re-apply until it sticks, instead of silently stranding the new rig off-frequency.
+                // ⚠️ AND UNKEY THROUGH THE NEW CHANNEL AFTER A DAEMON DEATH. The unkey above is
+                // "the last chance through a LIVE channel", which is exactly what a crashed
+                // daemon does not give us — that command went to a dead socket. A rig latched on
+                // by the dying daemon's last `T 1` has to be told again, over the channel that
+                // now exists. Unconditional and idempotent: an unkey is never gated, and on an
+                // idle rig it is a no-op (2026-08-17 Flex audit, wave-1 #44).
+                if daemon_died {
+                    let _ = rig.ptt(false);
+                }
                 self.mode_fail_count = 0; // fresh rig — the retune retry budget resets
                 self.mode_giveup = None; // and a fresh rig may well accept what the old rejected
                 self.mode_saw_reject = false;
@@ -4562,6 +4668,29 @@ impl RadioLoop {
                                         eng.request_filter_width(hz); // re-queue for the next cycle
                                     }
                                 }
+                            }
+                        }
+                        // SNAPSHOT THE RIG'S OWN SPLIT, so the over's teardown can put it back
+                        // instead of writing an absolute OFF (see `rig_split_restore`). Read here
+                        // — RX-time, sub-cadenced, budgeted — and never on the pre-key path,
+                        // because two blocking round-trips between the split engage and PTT would
+                        // change FT transmit timing. Only for an operator who actually uses Rig
+                        // split (nobody else pays a round-trip), and only while the split on the
+                        // rig is NOT ours to begin with.
+                        let wants_rig_split = matches!(
+                            engine_lock(engine).settings().split_mode,
+                            tempo_app::settings::SplitMode::Rig
+                        );
+                        if wants_rig_split
+                            && !self.audio_rig_split
+                            && self.rig_poll_ticks.is_multiple_of(4)
+                            && have_budget()
+                        {
+                            if let Some((on, vfo)) = rig.read_split() {
+                                // The TX frequency only matters when split is actually on — and
+                                // reading it on a rig with split off is a round-trip for nothing.
+                                let tx_hz = if on { rig.read_split_freq() } else { None };
+                                self.rig_split_restore = Some((on, vfo, tx_hz));
                             }
                         }
                         // Apply any pending DSP-func toggle from the UI promptly — the dial read
@@ -6475,6 +6604,23 @@ impl RadioLoop {
                         if on != self.rig_keyed {
                             self.rig_keyed = on;
                             eng.observe_rig_ptt(on);
+                            // ⚠️ SOMEONE ELSE HAS THE TRANSMITTER, AND NEXUS IS ARMED. Said
+                            // ONCE, on the rising edge, and it does NOT gate anything — see the
+                            // long note on `may_key` for why this signal is not fit to refuse a
+                            // key on. A Flex is where this is likeliest (the SmartSDR GUI,
+                            // Maestro or N1MM on SmartSDR CAT's own ports are a second client
+                            // Nexus's broker arbiter cannot see), but every CAT rig whose `t`
+                            // answers can produce it. 2026-08-17 Flex audit, wave-2 #18.
+                            if on && eng.tx_enabled() {
+                                let ok = self.cat_ok;
+                                eng.set_cat_status(
+                                    ok,
+                                    "the radio is keyed by something else (its mic, or another \
+                                     program) — Nexus transmit is still armed and will key on \
+                                     top of it"
+                                        .to_string(),
+                                );
+                            }
                         }
                         self.sat_inferred_keyed = eng.sat_inferred_keyed();
                     }
@@ -6569,7 +6715,29 @@ impl RadioLoop {
                 self.audio_rig_split = false;
                 // The cluster SPLIT-on-Work owns VFO B when active — leave it.
                 if !eng.cluster_split_active() {
-                    let _ = rig.set_split(false, "VFOA");
+                    // ⚠️ RESTORE WHAT WAS THERE, don't write an absolute OFF (2026-08-17 Flex
+                    // audit, wave-2 #22). This wrote `S 0 VFOA` unconditionally, so an over
+                    // ended by cancelling a split Nexus never engaged — the operator's own
+                    // front-panel split, or on a multi-client Flex the split a second client
+                    // set. And `apply_tx_dial_shift` had already overwritten the TX VFO's
+                    // FREQUENCY with no snapshot, so the flag was only half of it. Restoring
+                    // both mirrors the slice-DAX-binding restore the native lane got in the
+                    // same audit: leave the radio as we found it.
+                    //
+                    // No snapshot (the rig never answered `s`) → today's absolute OFF, which is
+                    // the conservative answer when there is nothing to put back: our own split
+                    // must not be left latched for a later in-window over to transmit on.
+                    match self.rig_split_restore.clone() {
+                        Some((true, vfo, tx_hz)) => {
+                            let _ = rig.set_split(true, &vfo);
+                            if let Some(hz) = tx_hz {
+                                let _ = rig.set_split_freq(hz);
+                            }
+                        }
+                        Some((false, _, _)) | None => {
+                            let _ = rig.set_split(false, "VFOA");
+                        }
+                    }
                 }
             }
         }
@@ -10188,6 +10356,235 @@ mod tests {
             }
         });
         (addr, log)
+    }
+
+    /// A rigctld that reports SPLIT ON to VFO B at 14.075, answers the dial, and takes
+    /// everything else — the multi-client shape: the operator (or a second SmartSDR client) had
+    /// split set before Nexus ever transmitted. Logs every line.
+    fn mock_split_on_rigctld() -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let reply = match l.as_str() {
+                        "f" => "14074000\n",
+                        "s" => "1\nVFOB\n",  // split IS on, TX on VFO B
+                        "i" => "14075000\n", // …at 14.075
+                        _ => "RPRT 0\n",
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// A DEAD rigctld IS NOTICED AND REBUILT (2026-08-17 Flex audit, wave-1 #44).
+    ///
+    /// `is_alive` had four call sites and every one of them was on the MONITOR pool: the ACTIVE
+    /// radio's tick path never asked. So a crashed daemon left CAT dead until the operator
+    /// re-saved Settings — the heavy poll only tripped `cat_ok = Some(false)` and re-probed a
+    /// port with no listener forever, and the sole respawn (`reopen_rig`) is reachable only from
+    /// the transport-CHANGED branch, which an unchanged transport never enters. The reason this
+    /// is a TX-safety fix and not a convenience one: the UNKEY runs over that same socket, so a
+    /// daemon that dies mid-transmission takes the ability to drop PTT with it.
+    #[test]
+    fn a_dead_rigctld_is_noticed_rebuilt_and_unkeyed_through_the_new_channel() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        // Nothing to retune this tick, so the scene is the daemon death and only that (a retune
+        // publishes its own CAT status onto the same line).
+        state.last_mode = engine.lock().unwrap().rig_mode_effective();
+        state.last_dial = engine.lock().unwrap().settings().dial_hz();
+
+        // A daemon handle whose process has ALREADY EXITED — the crash, staged.
+        let mut dead = std::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+            .args(if cfg!(windows) {
+                ["/C", "exit"]
+            } else {
+                ["-c", "exit 0"]
+            })
+            .spawn()
+            .expect("spawn a throwaway child");
+        let _ = dead.wait(); // reaped: try_wait now reports exited
+        state.rigctld_proc = Some(CatDaemon::Spawned(
+            crate::rigctld_proc::RigctldProc::from_child_for_test(dead),
+        ));
+
+        // Count the rebuilds this tick performs — `mock_reopen_rig` is the seam the branch uses.
+        let rebuilds = Arc::new(Mutex::new(0usize));
+        let r2 = Arc::clone(&rebuilds);
+        let mut reopen = move |_t: &Transport, _coexist: bool| -> RigOpen {
+            *r2.lock().unwrap() += 1;
+            (
+                Rig::vox(),
+                None,
+                CatProbe::status(Some(true), String::new()),
+            )
+        };
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut reopen,
+                &mut station,
+            )
+            .unwrap();
+
+        assert_eq!(
+            *rebuilds.lock().unwrap(),
+            1,
+            "a dead daemon is rebuilt on the very next tick, without the operator re-saving"
+        );
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(
+            said.contains("rigctld"),
+            "…and it is NAMED, not silently repaired: {said:?}"
+        );
+        // The handle is a live one again (the dead child was dropped with the old daemon).
+        assert!(
+            state.rigctld_proc.is_none(),
+            "the corpse is reaped; the mock hands back no daemon"
+        );
+    }
+
+    /// SPLIT TEARDOWN RESTORES WHAT IT FOUND (2026-08-17 Flex audit, wave-2 #22).
+    ///
+    /// The single drain point wrote an absolute `S 0 VFOA`, so ending one Nexus over cancelled a
+    /// split Nexus never engaged — the operator's own front-panel split, or on a multi-client
+    /// Flex the split a second client set. The audit's own correction makes it worse than the
+    /// title: `apply_tx_dial_shift` also overwrites VFO B's FREQUENCY with no snapshot, so
+    /// restoring the flag alone would still leave the operator's TX frequency clobbered. Blast
+    /// radius is EVERY rig with Split Operation = Rig, not just Flex.
+    ///
+    /// Both halves here: the observation that takes the snapshot (RX-time, never on the pre-key
+    /// path — two round-trips there would change FT transmit timing), and the restore.
+    #[test]
+    fn split_teardown_restores_the_operators_split_instead_of_forcing_it_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::Rig;
+            e.apply_settings(s);
+        }
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_split_on_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        // Sit the loop where the heavy poll runs and nothing needs retuning, so the tick's work
+        // is the observation and the teardown and not a mode/dial assert.
+        state.last_mode = engine.lock().unwrap().rig_mode_effective();
+        state.last_dial = engine.lock().unwrap().settings().dial_hz();
+        state.last_rig_poll = 0.0;
+        state.rig_poll_ticks = 3; // → 4 on this tick: the split-observe sub-cadence
+                                  // The two once-per-confirmation probes are already done. Not cosmetic: `\dump_state`
+                                  // has no single-line answer, so against a stub it blocks to the CAT deadline and eats
+                                  // the heavy poll's whole read budget (HEAVY_POLL_BUDGET_MS) — which is the budget doing
+                                  // its job, and would leave this scene asserting nothing.
+        state.rx_ranges_probed = true;
+        state.tuner_probed = true;
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100_000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert_eq!(
+            state.rig_split_restore,
+            Some((true, "VFOB".to_string(), Some(14_075_000))),
+            "the rig's own split is snapshotted while it is not ours: wire {:?}",
+            log.lock().unwrap()
+        );
+
+        // Now an over has ended holding OUR split. The teardown must put the operator's back.
+        log.lock().unwrap().clear();
+        state.audio_rig_split = true;
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100_020.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            sent.iter().any(|l| l == "S 1 VFOB"),
+            "split is restored ON, to the VFO it was on: {sent:?}"
+        );
+        assert!(
+            sent.iter().any(|l| l == "I 14075000"),
+            "…and so is the TX frequency our own split_freq overwrote: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l.starts_with("S 0")),
+            "the absolute OFF is exactly what must NOT be sent: {sent:?}"
+        );
+        assert!(!state.audio_rig_split, "our split is released either way");
+
+        // THE OTHER DIRECTION. With no snapshot — the rig never answered `s`, or the operator
+        // does not use Rig split — the conservative absolute OFF stands, because leaving our own
+        // split latched would transmit a later in-window over on a stale VFO B.
+        log.lock().unwrap().clear();
+        state.rig_split_restore = None;
+        state.audio_rig_split = true;
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100_040.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            sent.iter().any(|l| l == "S 0 VFOA"),
+            "nothing to restore → today's behaviour, unchanged: {sent:?}"
+        );
     }
 
     /// A REFUSED LEVEL WRITE MUST STOP BEING RE-SENT (2026-08-17 Flex audit, wave-2 #60).
