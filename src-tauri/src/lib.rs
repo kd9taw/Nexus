@@ -8080,8 +8080,9 @@ async fn probe_cat_ports(
         })
         .await
         .map_err(|e| e.to_string())?;
+        use tempo_audio::port_prober::ProbeOutcome;
         Ok(match hit {
-            Some(h) => {
+            ProbeOutcome::Hit(h) => {
                 let mhz = h.freq_hz as f64 / 1.0e6;
                 let detail = if h.model_seeded {
                     format!(
@@ -8106,7 +8107,7 @@ async fn probe_cat_ports(
                     model_seeded: h.model_seeded,
                 }
             }
-            None => CatProbeResult {
+            ProbeOutcome::NoAnswer => CatProbeResult {
                 found: false,
                 port_name: String::new(),
                 baud: 0,
@@ -8119,6 +8120,19 @@ async fn probe_cat_ports(
                          working. Set the Rig Model for the radio you are configuring and \
                          retry."
                     .to_string(),
+                model_seeded: false,
+            },
+            // rigctld itself would not spawn: no port was ever probed, so "check the cable"
+            // would blame hardware for an uninstalled Hamlib. The detail is the per-platform
+            // install cure, composed beside its CAT-open twin in tempo-audio.
+            ProbeOutcome::NoRigctld(detail) => CatProbeResult {
+                found: false,
+                port_name: String::new(),
+                baud: 0,
+                model: 0,
+                model_name: String::new(),
+                freq_mhz: 0.0,
+                detail,
                 model_seeded: false,
             },
         })
@@ -8185,7 +8199,16 @@ fn sync_rotctld(st: &tempo_app::settings::Settings) {
                     *slot = Some((proc, params));
                 }
                 Err(e) => {
-                    conn_log("Rotator", "error", format!("rotctld launch failed: {e}"));
+                    // The shared per-platform composer, not a raw `{e}`: a Mac without
+                    // Homebrew Hamlib was getting "rotctld launch failed: No such file or
+                    // directory (os error 2)" — no cause, no cure — while the rig's rigctld
+                    // twin had long named "brew install hamlib" for the identical fault
+                    // (mac QA audit, 2026-08-17).
+                    conn_log(
+                        "Rotator",
+                        "error",
+                        tempo_audio::rigctld_proc::hamlib_missing("rotctld", &e),
+                    );
                 }
             }
         }
@@ -9709,6 +9732,10 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                                 addr,
                                 native,
                                 bl::dual_com_ports(rig_model),
+                                // Platform as data (the rigctld_launch_failed_for
+                                // discipline): the no-answer walkthroughs talk Device
+                                // Manager on Windows and /dev/cu.* on a Mac.
+                                cfg!(target_os = "macos"),
                             ),
                             LadderKind::Hamlib { caps } => bl::compose_hamlib_ladder_message(
                                 &bl::run_hamlib(&port, baud, rig_model, gate, &caps),

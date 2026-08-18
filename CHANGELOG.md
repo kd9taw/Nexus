@@ -38,6 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   actual mechanism is `brew install hamlib` (Nexus searches the Homebrew/MacPorts
   prefixes itself — a Finder-launched app never sees your shell PATH).
 
+- **CAT trouble on a Mac is now diagnosed in Mac terms — and a missing Hamlib is never
+  blamed on your cable.** Three verdicts stopped guessing: Test CAT's baud ladder no
+  longer buries the correct "Hamlib's tools aren't installed — brew install hamlib"
+  diagnosis under a "close other CAT software" port guess (it was the probe tool itself
+  that failed to start, and no port was ever touched); Auto-test says the same instead
+  of "check the cable and that the rig is on" when its throwaway daemon can't spawn at
+  all; and a rotator's rotctld failing to launch names the per-platform install cure
+  instead of a raw "No such file or directory (os error 2)". The CI-V no-answer
+  walkthroughs and the Settings port hints also stop talking Windows at Mac operators:
+  /dev/cu.* examples and "the port list" instead of COM16 and "Windows Device Manager",
+  the dual-port Icom tie-break in cu.* name order instead of a driver label that only
+  exists on Windows, and no more advice to install a USB driver macOS already ships
+  in-kernel. Messages also stop claiming a "bundled" rigctld — nothing is bundled on
+  macOS or in the AppImage.
+
 - **WSPR and FST4W beaconing works the way WSJT-X's does.** Four fixes from one
   report (#101): the TX watchdog no longer halts a beacon a few intervals into a
   session — beaconing is unattended repeated transmission by design, and WSJT-X

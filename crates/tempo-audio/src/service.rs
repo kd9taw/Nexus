@@ -8122,23 +8122,12 @@ fn rigctld_launch_failed(e: &std::io::Error) -> String {
 }
 
 /// Split out with the platform as data so both messages are testable on any platform.
+///
+/// The body is shared with the sibling binaries (`rotctld`, `rigctl`) — the first fix landed
+/// here alone and both twins kept the raw "os error 2" until the mac QA audit (2026-08-17)
+/// found them; see [`crate::rigctld_proc::hamlib_missing_for`].
 fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        if mac {
-            return format!(
-                "Hamlib's rigctld isn't installed. In Terminal: brew install hamlib, then \
-                 restart Nexus (Homebrew itself is at brew.sh). WSJT-X or a logger working \
-                 proves only the Hamlib LIBRARY is there — Nexus needs the rigctld program. ({e})"
-            );
-        }
-        return format!(
-            "Hamlib's rigctld isn't installed. On Debian/Ubuntu: sudo apt install \
-             libhamlib-utils (the Nexus .deb pulls it in; the AppImage can't, so it has to be \
-             installed once by hand). WSJT-X working proves only the Hamlib LIBRARY is there — \
-             Nexus needs the rigctld program. ({e})"
-        );
-    }
-    format!("Could not launch the bundled rigctld (Hamlib): {e}")
+    crate::rigctld_proc::hamlib_missing_for(mac, "rigctld", e)
 }
 
 /// The single shared tail of both `open_cat` branches (coexist + spawn): the open-time
@@ -8250,8 +8239,11 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
     } else {
         (
             Some(false),
+            // "the CAT daemon (rigctld)", not "the bundled rigctld": nothing is bundled on
+            // macOS or in the AppImage, and claiming so sends the operator hunting for a
+            // file that was never shipped (mac QA audit, 2026-08-17).
             "CAT rig configured, but the control channel didn't open — check the rig model, \
-             serial port, and that the bundled rigctld could start (or a port conflict)."
+             serial port, and that the CAT daemon (rigctld) could start (or a port conflict)."
                 .to_string(),
         )
     }

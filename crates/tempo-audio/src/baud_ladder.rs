@@ -292,6 +292,17 @@ pub enum BaudProbe {
     Silence,
     /// The port could not be opened (OS error text verbatim).
     OpenFailed(String),
+    /// The PROBE TOOL itself could not be spawned (`rigctl` — `ErrorKind::NotFound`), so
+    /// this is not a verdict about the port: no rung ever touched it. Carries the
+    /// ready-to-show install cure ([`crate::rigctld_proc::hamlib_missing`]).
+    ///
+    /// ⭐ Why this is its own variant and not an [`BaudProbe::OpenFailed`]: on a Mac without
+    /// Homebrew Hamlib, the CAT open already produced the correct "brew install hamlib"
+    /// diagnosis — and then Test CAT's ladder mapped its own rigctl ENOENT into `OpenFailed`,
+    /// whose verdict blames the serial port ("close WSJT-X … and test again") and OVERWRITES
+    /// the good diagnosis last-writer-wins (mac QA audit, 2026-08-17). A missing prober must
+    /// out-rank every guess about hardware it never probed.
+    ProberMissing(String),
 }
 
 /// Classify the raw bytes one probe read back. Echoes of our own query (`from ==
@@ -319,7 +330,9 @@ pub fn classify_probe_bytes(raw: &[u8]) -> BaudProbe {
 pub struct LadderReport {
     pub port: String,
     pub configured_baud: u32,
-    /// `(baud, outcome)` in probe order; stops early after the first [`BaudProbe::Reply`].
+    /// `(baud, outcome)` in probe order; stops early after the first [`BaudProbe::Reply`]
+    /// (the diagnosis is complete) or [`BaudProbe::ProberMissing`] (every further rung
+    /// would fail identically — the tool is gone, not the rate).
     pub outcomes: Vec<(u32, BaudProbe)>,
     /// Rungs the sweep never got to because it ran out of its time budget. Normally empty —
     /// the budget is a guard against a pathologically slow backend, not a routine truncation
@@ -367,10 +380,16 @@ pub fn run_ladder_over(
             continue;
         }
         let outcome = probe(baud);
-        let done = matches!(outcome, BaudProbe::Reply { .. });
+        // Reply: the diagnosis is complete — a rate answered. ProberMissing: the probe TOOL
+        // is gone (deterministic — every further rung would spawn-fail identically), so
+        // walking on would only decorate a wrong "no rate answered" story with more rungs.
+        let done = matches!(
+            outcome,
+            BaudProbe::Reply { .. } | BaudProbe::ProberMissing(_)
+        );
         outcomes.push((baud, outcome));
         if done {
-            break; // the diagnosis is complete — a rate answered
+            break;
         }
     }
     LadderReport {
@@ -594,12 +613,24 @@ pub fn open_failure_line(output: &str) -> Option<String> {
 /// radio is opted into the native CI-V backend (adds the diagnostic-log pointer);
 /// `dual_ports` = the model enumerates two COM ports ([`dual_com_ports`]) — gates the
 /// "try the other COM port" advice out of single-port rigs' verdicts.
+///
+/// `mac` is the platform, as data, so both prose sets are testable on any box (the
+/// `rigctld_launch_failed_for` discipline). The no-answer arms walk the operator through
+/// the OS's own port UI, and until the mac QA audit (2026-08-17) every one of them talked
+/// Windows at a Mac: "Windows Device Manager (Ports)", the CP210x "Enhanced" driver label,
+/// and "install Icom's USB driver" — macOS ships the CP210x driver in-kernel and Icom
+/// publishes no Mac driver, so that advice dead-ends. On a Mac the same walkthrough is done
+/// in `/dev/cu.*` vocabulary; the dual-UART tie-break there is port ORDER (the Silicon Labs
+/// VCP driver names the CI-V "Enhanced" side plain `cu.SLAB_USBtoUART`, the dead "Standard"
+/// side gets a suffix), because the Windows driver labels this text leans on do not exist in
+/// the mac port names.
 pub fn compose_ladder_message(
     r: &LadderReport,
     model_name: &str,
     civ_addr: u8,
     native_selected: bool,
     dual_ports: bool,
+    mac: bool,
 ) -> String {
     let port = &r.port;
     let configured = r.configured_baud;
@@ -619,7 +650,8 @@ pub fn compose_ladder_message(
         let backend = if native_selected {
             "the native CI-V daemon"
         } else {
-            "the bundled rigctld (Hamlib)"
+            // Not "the bundled rigctld": nothing is bundled on macOS or in the AppImage.
+            "the CAT daemon (Hamlib rigctld)"
         };
         let diag = if native_selected {
             " If it keeps failing, turn on the CI-V diagnostic log (Settings » Radio) and send \
@@ -686,32 +718,63 @@ pub fn compose_ladder_message(
         .iter()
         .any(|(_, o)| matches!(o, BaudProbe::Noise))
     {
-        " The port did carry bytes at one rate, but not valid CI-V — that usually means a \
-         different device is on this COM port."
+        if mac {
+            " The port did carry bytes at one rate, but not valid CI-V — that usually means a \
+             different device is on this port."
+        } else {
+            " The port did carry bytes at one rate, but not valid CI-V — that usually means a \
+             different device is on this COM port."
+        }
     } else {
         ""
     };
-    let port_identity = if dual_ports {
-        format!(
+    // The port-identity walkthrough leans on the OS's own port UI, so it is per-platform
+    // prose: Device Manager and the CP210x driver's "Enhanced" label exist only on Windows;
+    // on a Mac the twins are told apart by /dev/cu.* NAME ORDER (see the fn doc).
+    let port_identity = match (dual_ports, mac) {
+        (true, true) => format!(
+            "This usually means {port} is not the rig's CI-V port: this Icom's USB shows up as \
+             TWO /dev/cu.* ports and only one speaks CI-V. With the Silicon Labs VCP driver the \
+             CI-V one is usually the FIRST of the pair (plain cu.SLAB_USBtoUART; the dead twin \
+             gets a numeric suffix) — try the rig's other cu.* port."
+        ),
+        (true, false) => format!(
             "This usually means {port} is not the rig's CI-V port: this Icom's USB shows up as \
              TWO COM ports and only one speaks CI-V. In Windows Device Manager (Ports), the \
              CI-V one is the CP210x port marked \"Enhanced\" (Icom's driver labels it \"Serial \
              Port A (CI-V)\"); the \"Standard\" / \"Serial Port B\" one never answers — try the \
              other COM port."
-        )
-    } else {
-        format!(
+        ),
+        (false, true) => format!(
+            "This usually means {port} is not the rig: {model_name} shows a single port — \
+             unplug the rig's USB cable and confirm {port} is the one that disappears from \
+             the port list, then reconnect."
+        ),
+        (false, false) => format!(
             "This usually means {port} is not the rig: {model_name} shows a single COM port — \
              unplug the rig's USB cable and confirm {port} is the one that disappears from \
              Device Manager (Ports), then reconnect."
-        )
+        ),
     };
-    format!(
-        "{model_name} on {port} never answered CI-V at any rate (tried {tried}).{noise} \
-         {port_identity} Also check: the radio is on; the rig menu CI-V Address is at its \
-         default ({civ_addr:02X}h); and if no COM ports appear at all, install Icom's USB \
-         driver."
-    )
+    // The closing "install Icom's USB driver" is Windows-only advice: macOS ships the CP210x
+    // driver in-kernel and Icom publishes no Mac driver, so on a Mac a rig with no port at
+    // all is a hardware/System-Information question, not a download.
+    if mac {
+        format!(
+            "{model_name} on {port} never answered CI-V at any rate (tried {tried}).{noise} \
+             {port_identity} Also check: the radio is on; the rig menu CI-V Address is at its \
+             default ({civ_addr:02X}h); and if no cu.* port appears at all, confirm the rig \
+             shows up in System Information » USB (the driver is built into macOS — there is \
+             nothing to install)."
+        )
+    } else {
+        format!(
+            "{model_name} on {port} never answered CI-V at any rate (tried {tried}).{noise} \
+             {port_identity} Also check: the radio is on; the rig menu CI-V Address is at its \
+             default ({civ_addr:02X}h); and if no COM ports appear at all, install Icom's USB \
+             driver."
+        )
+    }
 }
 
 /// The Hamlib ladder's verdict. Same job as [`compose_ladder_message`], different evidence and
@@ -735,6 +798,19 @@ pub fn compose_hamlib_ladder_message(r: &LadderReport, model_name: &str) -> Stri
         .map(|(b, _)| b.to_string())
         .collect::<Vec<_>>()
         .join(", ");
+    // The probe TOOL is missing — FIRST, above every verdict about the port, because no rung
+    // ever touched the port and every other arm would be a guess about hardware that was
+    // never probed. The carried message is the per-platform install cure, already composed
+    // where the spawn failed; it must reach the operator VERBATIM — this is the arm that
+    // stops the "close WSJT-X" guess from overwriting the correct "brew install hamlib"
+    // diagnosis (mac QA audit, 2026-08-17).
+    if let Some((_, BaudProbe::ProberMissing(msg))) = r
+        .outcomes
+        .iter()
+        .find(|(_, o)| matches!(o, BaudProbe::ProberMissing(_)))
+    {
+        return msg.clone();
+    }
     // The rig answered at the CONFIGURED rate when asked directly → the link is fine and the
     // CAT daemon between us and the port is what fell over.
     if let Some((_, BaudProbe::Reply { freq_hz })) = r
@@ -917,7 +993,7 @@ fn rigctl_read(
     rig_model: u32,
     keying: Option<crate::rig::SerialLine>,
     commands: &[&str],
-) -> Result<RigctlOutput, String> {
+) -> Result<RigctlOutput, std::io::Error> {
     let mut cmd = std::process::Command::new(crate::rigctld_proc::resolve_rigctl());
     cmd.args(probe_args(port, baud, rig_model, keying, commands));
     cmd.stdin(std::process::Stdio::null());
@@ -936,7 +1012,10 @@ fn rigctl_read(
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         }),
-        Err(e) => Err(e.to_string()),
+        // TYPED, not stringified: the caller must be able to tell "rigctl itself is not
+        // installed" (NotFound → [`BaudProbe::ProberMissing`]) from a port fault — flattening
+        // this to a String is exactly how the ENOENT got dressed up as a busy COM port.
+        Err(e) => Err(e),
     }
 }
 
@@ -957,7 +1036,13 @@ fn probe_rate_via_hamlib(
 ) -> BaudProbe {
     let out = match rigctl_read(port, baud, rig_model, keying, &["f"]) {
         Ok(out) => out,
-        Err(e) => return BaudProbe::OpenFailed(e),
+        // rigctl itself would not spawn. NotFound = Hamlib's tools are not installed — a
+        // different fault from any port fault, with a different (per-platform) cure; see
+        // [`BaudProbe::ProberMissing`] for the mac field failure this arm exists for.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return BaudProbe::ProberMissing(crate::rigctld_proc::hamlib_missing("rigctl", &e))
+        }
+        Err(e) => return BaudProbe::OpenFailed(e.to_string()),
     };
     // The port first, off STDERR, where Hamlib says so — see [`open_failure_line`]. A port
     // another program is holding is a different fault with a different cure, and reporting it as
@@ -968,7 +1053,12 @@ fn probe_rate_via_hamlib(
     match classify_hamlib_probe(&parse_rigctl_read(&out.stdout), caps) {
         BaudProbe::Reply { .. } => match rigctl_read(port, baud, rig_model, keying, &["f", "m"]) {
             Ok(confirm) => classify_hamlib_probe(&parse_rigctl_read(&confirm.stdout), caps),
-            Err(e) => BaudProbe::OpenFailed(e),
+            // A rung whose FIRST read spawned cannot lose the binary before the confirm in
+            // any real install, but the arm must still not invent a port fault out of it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                BaudProbe::ProberMissing(crate::rigctld_proc::hamlib_missing("rigctl", &e))
+            }
+            Err(e) => BaudProbe::OpenFailed(e.to_string()),
         },
         other => other,
     }
@@ -1786,7 +1876,7 @@ mod tests {
                 ),
             ],
         );
-        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, true, true);
+        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, true, true, false);
         assert!(m.contains("COM4"), "{m}");
         assert!(m.contains("19200"), "must name the answering rate: {m}");
         assert!(m.contains("14.074"), "must show the read frequency: {m}");
@@ -1809,7 +1899,7 @@ mod tests {
                 (19200, BaudProbe::Reply { freq_hz: None }),
             ],
         );
-        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true);
+        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, false);
         assert!(m.contains("19200"), "{m}");
         assert!(
             !m.contains("Link to [REMOTE]"),
@@ -1828,7 +1918,7 @@ mod tests {
                 (4800, BaudProbe::Silence),
             ],
         );
-        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true);
+        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, false);
         assert!(m.contains("Icom IC-7610"), "{m}");
         assert!(
             m.contains("115200") && m.contains("4800"),
@@ -1863,7 +1953,7 @@ mod tests {
                 (57600, BaudProbe::Silence),
             ],
         };
-        let m = compose_ladder_message(&r, "Icom IC-7300", 0x94, false, false);
+        let m = compose_ladder_message(&r, "Icom IC-7300", 0x94, false, false, false);
         assert!(!m.contains("TWO COM ports"), "{m}");
         assert!(!m.contains("Enhanced"), "{m}");
         assert!(!m.contains("other COM port"), "{m}");
@@ -1875,6 +1965,97 @@ mod tests {
         assert!(m.contains("CI-V Address"), "{m}");
         assert!(m.contains("94h"), "must name the 7300's address: {m}");
         assert!(m.contains("driver"), "{m}");
+    }
+
+    /// ⭐ FAILING-FIRST for the mac prose split. Every no-answer arm walked a Mac operator
+    /// through WINDOWS: "Windows Device Manager (Ports)", the CP210x "Enhanced" driver label,
+    /// and "install Icom's USB driver" — a driver macOS ships in-kernel and Icom does not
+    /// publish for the platform (mac QA audit, 2026-08-17). Platform as data, both branches
+    /// runnable on any box, exactly like `rigctld_launch_failed_for`.
+    #[test]
+    fn the_mac_verdicts_speak_dev_cu_never_device_manager() {
+        let silent = |bauds: &[u32]| LadderReport {
+            port: "/dev/cu.SLAB_USBtoUART".into(),
+            configured_baud: 115200,
+            not_tried: Vec::new(),
+            outcomes: bauds.iter().map(|b| (*b, BaudProbe::Silence)).collect(),
+        };
+        // Dual-UART Icom (IC-7610): the tie-break is /dev/cu.* name order, not a driver label.
+        let m = compose_ladder_message(
+            &silent(&[115200, 19200]),
+            "Icom IC-7610",
+            0x98,
+            false,
+            true,
+            true,
+        );
+        assert!(m.contains("TWO /dev/cu.* ports"), "{m}");
+        assert!(m.contains("cu.SLAB_USBtoUART"), "{m}");
+        assert!(!m.contains("Device Manager"), "{m}");
+        assert!(!m.contains("Enhanced"), "that is a Windows driver label: {m}");
+        assert!(
+            !m.contains("install Icom's USB driver"),
+            "macOS ships the driver in-kernel and Icom publishes no Mac driver: {m}"
+        );
+        assert!(m.contains("System Information"), "{m}");
+        assert!(m.contains("CI-V Address") && m.contains("98h"), "{m}");
+        // Single-port Icom (IC-7300): the unplug test names "the port list", no Device Manager.
+        let m = compose_ladder_message(
+            &silent(&[115200, 19200, 9600]),
+            "Icom IC-7300",
+            0x94,
+            false,
+            false,
+            true,
+        );
+        assert!(m.contains("the port list"), "{m}");
+        assert!(m.contains("unplug"), "{m}");
+        assert!(!m.contains("Device Manager"), "{m}");
+        assert!(!m.contains("COM"), "COM is Windows vocabulary: {m}");
+        // The noise sentence drops the COM vocabulary on a Mac too.
+        let mut r = silent(&[115200, 19200]);
+        r.outcomes[0].1 = BaudProbe::Noise;
+        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, true);
+        assert!(m.contains("not valid CI-V"), "{m}");
+        assert!(!m.contains("COM port"), "{m}");
+        // And the Windows branch is UNCHANGED by the split — same walkthrough as ever.
+        let m = compose_ladder_message(&silent(&[115200]), "Icom IC-7610", 0x98, false, true, false);
+        assert!(m.contains("Windows Device Manager (Ports)"), "{m}");
+        assert!(m.contains("Enhanced"), "{m}");
+        assert!(m.contains("install Icom's USB driver"), "{m}");
+    }
+
+    /// ⭐ FAILING-FIRST for the missing-prober overwrite (mac QA audit, 2026-08-17). On a Mac
+    /// without Homebrew Hamlib the CAT open already says "brew install hamlib" — and then Test
+    /// CAT's ladder spawn-failed rigctl (ENOENT), mapped it into `OpenFailed`, and the verdict
+    /// blamed the serial port ("close other CAT/logging software … and test again"), replacing
+    /// the correct diagnosis last-writer-wins. A missing prober must out-rank every guess
+    /// about hardware it never probed, and the sweep must stop at the first spawn failure
+    /// rather than decorate the wrong story with more rungs.
+    #[test]
+    fn a_missing_rigctl_is_named_and_never_dressed_up_as_a_busy_port() {
+        // The sweep stops at the first ProberMissing — the tool is gone, not the rate.
+        let mut probes = 0;
+        let cure = "Hamlib's rigctl isn't installed. In Terminal: brew install hamlib, then \
+                    restart Nexus. (No such file or directory (os error 2))";
+        let r = run_ladder_over(
+            "/dev/cu.usbserial-1420",
+            38400,
+            vec![38400, 9600, 4800],
+            || false,
+            |_| {
+                probes += 1;
+                BaudProbe::ProberMissing(cure.to_string())
+            },
+        );
+        assert_eq!(probes, 1, "every further rung fails identically");
+        assert_eq!(r.outcomes.len(), 1);
+        // The verdict is the carried install cure, verbatim — never a port guess.
+        let m = compose_hamlib_ladder_message(&r, "Yaesu FT-847");
+        assert_eq!(m, cure);
+        assert!(!m.contains("WSJT-X"), "{m}");
+        assert!(!m.contains("close other"), "{m}");
+        assert!(!m.contains("never answered"), "no port was ever probed: {m}");
     }
 
     #[test]
@@ -1889,12 +2070,12 @@ mod tests {
             )],
         );
         // Native backend selected → name it, and point at the CI-V diagnostic log.
-        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, true, true);
+        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, true, true, false);
         assert!(m.contains("answers CI-V directly"), "{m}");
         assert!(m.contains("native CI-V"), "{m}");
         assert!(m.contains("CI-V diagnostic log"), "{m}");
         // Hamlib backend → name rigctld, and no native-only log pointer.
-        let m2 = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true);
+        let m2 = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, false);
         assert!(m2.contains("rigctld"), "{m2}");
         assert!(!m2.contains("CI-V diagnostic log"), "{m2}");
     }
@@ -1910,7 +2091,7 @@ mod tests {
                 (4800, BaudProbe::OpenFailed("Access is denied.".into())),
             ],
         );
-        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true);
+        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, false);
         assert!(m.contains("Access is denied."), "{m}");
         assert!(m.contains("another program"), "{m}");
     }
@@ -1926,7 +2107,7 @@ mod tests {
                 (4800, BaudProbe::Silence),
             ],
         );
-        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true);
+        let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, false);
         assert!(m.contains("not valid CI-V"), "{m}");
     }
 }

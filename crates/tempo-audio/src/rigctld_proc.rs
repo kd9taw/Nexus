@@ -865,6 +865,46 @@ fn resolve_rigctld() -> std::ffi::OsString {
     }
 }
 
+/// Explain a Hamlib tool that could not be SPAWNED — the per-platform install cure, for
+/// whichever of the three binaries Nexus launches: `rigctld` (the CAT daemon), `rigctl`
+/// (the baud ladder's one-shot prober) or `rotctld` (the rotator daemon).
+///
+/// ONE composer on purpose. The first sweep of this defect fixed only `rigctld`
+/// (`service::rigctld_launch_failed`, whose doc carries the whole story), and the two
+/// sibling binaries kept shipping the pre-fix shape — a raw `No such file or directory
+/// (os error 2)` naming no cause and no cure (mac QA audit, 2026-08-17). All three install
+/// as ONE package on every platform Nexus targets, so the cure is identical and only the
+/// name differs; a per-binary copy is how the next sibling misses the next sweep.
+///
+/// `NotFound` is the one diagnosable kind and gets the install sentence; every other error
+/// keeps the generic wording (installing would not help), and the raw error is kept in all
+/// arms — it is what support asks for. Note the tail does NOT say "bundled": nothing is
+/// bundled on macOS or in the AppImage, and claiming so sends the operator hunting for a
+/// file that was never shipped.
+pub fn hamlib_missing_for(mac: bool, tool: &str, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        if mac {
+            return format!(
+                "Hamlib's {tool} isn't installed. In Terminal: brew install hamlib, then \
+                 restart Nexus (Homebrew itself is at brew.sh). WSJT-X or a logger working \
+                 proves only the Hamlib LIBRARY is there — Nexus needs the {tool} program. ({e})"
+            );
+        }
+        return format!(
+            "Hamlib's {tool} isn't installed. On Debian/Ubuntu: sudo apt install \
+             libhamlib-utils (the Nexus .deb pulls it in; the AppImage can't, so it has to be \
+             installed once by hand). WSJT-X working proves only the Hamlib LIBRARY is there — \
+             Nexus needs the {tool} program. ({e})"
+        );
+    }
+    format!("Could not launch {tool} (Hamlib): {e}")
+}
+
+/// [`hamlib_missing_for`] on the platform this binary was compiled for.
+pub fn hamlib_missing(tool: &str, e: &std::io::Error) -> String {
+    hamlib_missing_for(cfg!(target_os = "macos"), tool, e)
+}
+
 /// Build the `rotctld` argument vector — same shape as [`rigctld_args`] minus
 /// the network-rig special case (rotators are serial devices to Hamlib).
 pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<String> {
@@ -1595,6 +1635,45 @@ mod tests {
             rotctld_args(1, "", 9600, 4533),
             vec!["-m", "1", "-T", "127.0.0.1", "-t", "4533"]
         );
+    }
+
+    /// The shared missing-Hamlib composer, driven with the platform as data so both branches
+    /// run on any box (the `service::rigctld_launch_failed_for` discipline). What this pins
+    /// beyond that test: the TOOL NAME is threaded through — the first sweep fixed only
+    /// rigctld, and `rotctld`/`rigctl` kept shipping a raw "os error 2" with no cure (mac QA
+    /// audit, 2026-08-17) — and the tail never claims a "bundled" copy, which does not exist
+    /// on macOS or in the AppImage.
+    #[test]
+    fn every_hamlib_tool_gets_the_platform_cure_not_a_raw_os_error() {
+        use std::io::{Error, ErrorKind};
+        let not_found = || {
+            Error::new(
+                ErrorKind::NotFound,
+                "No such file or directory (os error 2)",
+            )
+        };
+        for tool in ["rigctld", "rigctl", "rotctld"] {
+            let mac = hamlib_missing_for(true, tool, &not_found());
+            assert!(mac.contains(tool), "must name the tool that failed: {mac}");
+            assert!(mac.contains("brew install hamlib"), "{mac}");
+            assert!(!mac.contains("apt install"), "never apt on a Mac: {mac}");
+            assert!(mac.contains("os error 2"), "the raw error stays: {mac}");
+            let linux = hamlib_missing_for(false, tool, &not_found());
+            assert!(linux.contains(tool), "{linux}");
+            assert!(linux.contains("libhamlib-utils"), "{linux}");
+            assert!(!linux.contains("brew"), "{linux}");
+        }
+        // The public entry point picks the branch for the platform it compiled on.
+        assert_eq!(
+            hamlib_missing("rotctld", &not_found()),
+            hamlib_missing_for(cfg!(target_os = "macos"), "rotctld", &not_found())
+        );
+        // Not a missing binary → no install advice (installing would not help), no
+        // "bundled" claim (nothing is bundled on two of the three platforms).
+        let other = hamlib_missing_for(true, "rotctld", &Error::other("boom"));
+        assert!(other.contains("rotctld") && other.contains("boom"), "{other}");
+        assert!(!other.contains("install"), "{other}");
+        assert!(!other.contains("bundled"), "{other}");
     }
 
     #[test]

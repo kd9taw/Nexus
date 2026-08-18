@@ -31,6 +31,24 @@ pub fn is_plausible_cat_freq(hz: u64) -> bool {
     (100_000..=500_000_000).contains(&hz)
 }
 
+/// What an Auto-test sweep concluded. `Hit`/`NoAnswer` are the two honest hardware verdicts;
+/// `NoRigctld` is the one that is NOT about hardware at all — the throwaway daemon itself
+/// could not be spawned (`ErrorKind::NotFound`), so no port was ever probed. Before this was
+/// typed, that case fell into the `NoAnswer` arm's "Check the cable and that the rig is on"
+/// — blaming the operator's wiring for an uninstalled Hamlib, with the real cause swallowed
+/// by a `let Ok(..) else continue` (mac QA audit, 2026-08-17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    /// A port answered — ready to write into settings.
+    Hit(ProbeHit),
+    /// Every candidate was probed; none answered.
+    NoAnswer,
+    /// `rigctld` would not spawn (NotFound): Hamlib's tools are not installed. Carries the
+    /// ready-to-show per-platform install cure ([`crate::rigctld_proc::hamlib_missing`]) so
+    /// the command layer cannot re-guess it.
+    NoRigctld(String),
+}
+
 /// The winning port found by [`probe_cat_ports`] — ready to write into settings.
 /// (The src-tauri command maps this to its own serde DTO; tempo-audio stays serde-free.)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,7 +218,7 @@ pub fn candidates_from(
 /// already own. The wizard's second-radio probe passes radio 1's port so the sweep never
 /// wastes a baud ladder on a port a live daemon is holding.
 #[cfg(feature = "serial")]
-pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -> Option<ProbeHit> {
+pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -> ProbeOutcome {
     use crate::rig::Rig;
     use crate::rigctld_proc::{spawn_rigctld, ControlLines};
     use std::time::Duration;
@@ -216,7 +234,7 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -
             .unwrap_or(PROBE_BAUDS);
         for &baud in bauds {
             // Throwaway daemon for this (port, baud, model) — killed on drop.
-            let Ok(proc) = spawn_rigctld(
+            let proc = match spawn_rigctld(
                 c.model,
                 &c.port_name,
                 baud,
@@ -228,8 +246,19 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -
                 // which is the FTDX10/FT-991 bench regression reintroduced blind.
                 crate::rigctld_proc::KeyingFacts::default(),
                 ControlLines::hold_low(),
-            ) else {
-                continue;
+            ) {
+                Ok(proc) => proc,
+                // The daemon BINARY is missing — deterministic, so every remaining candidate
+                // would fail identically. Say so once instead of sweeping candidates that
+                // cannot succeed and then blaming the cable (see [`ProbeOutcome::NoRigctld`]).
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return ProbeOutcome::NoRigctld(crate::rigctld_proc::hamlib_missing(
+                        "rigctld", &e,
+                    ));
+                }
+                // Any other spawn fault (a transient resource error) keeps the old behaviour:
+                // this candidate is skipped, the sweep goes on.
+                Err(_) => continue,
             };
             // Let rigctld open the port + settle, then ask for the dial frequency.
             std::thread::sleep(Duration::from_millis(700));
@@ -240,7 +269,7 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -
             drop(proc); // kill rigctld + free the serial port before the next attempt
             std::thread::sleep(Duration::from_millis(200));
             if let Some(freq_hz) = hz {
-                return Some(ProbeHit {
+                return ProbeOutcome::Hit(ProbeHit {
                     port_name: c.port_name,
                     baud,
                     model: c.model,
@@ -251,7 +280,7 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -
             }
         }
     }
-    None
+    ProbeOutcome::NoAnswer
 }
 
 /// Without the `serial` feature there is no port enumeration → nothing to probe.
@@ -260,8 +289,8 @@ pub fn probe_cat_ports(
     _fallback_model: u32,
     _tcp_port: u16,
     _exclude: &[String],
-) -> Option<ProbeHit> {
-    None
+) -> ProbeOutcome {
+    ProbeOutcome::NoAnswer
 }
 
 #[cfg(test)]

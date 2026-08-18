@@ -110,6 +110,12 @@ import { PROFILE_LIST } from '../features/profiles'
 import { checkForUpdateManual } from '../features/updateCheck'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 
+// Serial-port examples and walkthroughs are platform prose: a Mac's ports are /dev/cu.* and
+// there is no Device Manager, so a "COM16" placeholder or a CP210x "Enhanced" label is a dead
+// end there (mac QA audit, 2026-08-17). Same detection GettingStartedGuide uses for its
+// Hamlib caption.
+const IS_MAC = navigator.userAgent.includes('Mac')
+
 interface Props {
   /** Called after a successful save so the shell can refresh its snapshot. */
   onSaved?: () => void
@@ -2954,7 +2960,11 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.pttSerialPort}
-                    placeholder="e.g. COM16 — blank = use the CAT port"
+                    placeholder={
+                      IS_MAC
+                        ? 'e.g. /dev/cu.usbserial-1420 — blank = use the CAT port'
+                        : 'e.g. COM16 — blank = use the CAT port'
+                    }
                     onChange={(e) => update('pttSerialPort', e.target.value)}
                   />
                   <span className="settings-hint">
@@ -3273,7 +3283,11 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.serialPort}
-                    placeholder="Select or type, e.g. COM16"
+                    placeholder={
+                      IS_MAC
+                        ? 'Select or type, e.g. /dev/cu.usbserial-1420'
+                        : 'Select or type, e.g. COM16'
+                    }
                     onChange={(e) => update('serialPort', e.target.value)}
                   />
                   {/* Shared by the CAT + PTT port inputs. The label text shows the USB product
@@ -3306,23 +3320,37 @@ export function SettingsPanel({
                   </button>
                 </div>
                 <span className="settings-hint">
-                  COM / tty device for rig control — or Auto-test to find it.
+                  {/* Never say "tty device": on a Mac the tty.* node is exactly the twin the
+                      picker hides because it hangs CAT on carrier detect — cu.* is the one. */}
+                  {IS_MAC
+                    ? 'Serial device (/dev/cu.…) for rig control — or Auto-test to find it.'
+                    : 'COM / serial device for rig control — or Auto-test to find it.'}
                   {[3088, 3087, 3091, 3089, 3076].includes(form.rigModel) && (
                     <>
                       {' '}
                       <strong>Xiegu:</strong> the radio makes two serial ports — CAT is on the{' '}
-                      <strong>SERIAL-B</strong> one (often the higher COM number).
+                      <strong>SERIAL-B</strong> one
+                      {IS_MAC ? '.' : ' (often the higher COM number).'}
                     </>
                   )}
-                  {[3078, 3081].includes(form.rigModel) && (
-                    <>
-                      {' '}
-                      <strong>Icom:</strong> this radio makes two COM ports and only one speaks
-                      CI-V — in Device Manager it is the CP210x port marked{' '}
-                      <strong>Enhanced</strong> (Icom's driver: “Serial Port A (CI-V)”). The
-                      “Standard” / “Serial Port B” one never answers.
-                    </>
-                  )}
+                  {[3078, 3081].includes(form.rigModel) &&
+                    (IS_MAC ? (
+                      <>
+                        {' '}
+                        <strong>Icom:</strong> this radio makes two /dev/cu.* ports and only one
+                        speaks CI-V — with the Silicon Labs VCP driver it is usually the first of
+                        the pair (plain <strong>cu.SLAB_USBtoUART</strong>; the dead twin gets a
+                        numeric suffix). The other one never answers.
+                      </>
+                    ) : (
+                      <>
+                        {' '}
+                        <strong>Icom:</strong> this radio makes two COM ports and only one speaks
+                        CI-V — in Device Manager it is the CP210x port marked{' '}
+                        <strong>Enhanced</strong> (Icom's driver: “Serial Port A (CI-V)”). The
+                        “Standard” / “Serial Port B” one never answers.
+                      </>
+                    ))}
                 </span>
               </label>
 
@@ -3420,7 +3448,7 @@ export function SettingsPanel({
                       className="settings-input"
                       type="text"
                       value={form.rotatorPort ?? ''}
-                      placeholder="COM7 / /dev/ttyUSB1"
+                      placeholder={IS_MAC ? '/dev/cu.usbserial-1420' : 'COM7 / /dev/ttyUSB1'}
                       onChange={(e) => update('rotatorPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -3440,7 +3468,7 @@ export function SettingsPanel({
                   </div>
                 )}
                 <span className="settings-hint">
-                  Pick your rotator and its COM port — Nexus runs the control daemon for you
+                  Pick your rotator and its serial port — Nexus runs the control daemon for you
                   (same as the rig). Then use the Rotor pane in Connect, ↗ on Needed rows,
                   or the compass anywhere.
                 </span>
