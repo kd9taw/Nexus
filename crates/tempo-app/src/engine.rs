@@ -15748,6 +15748,68 @@ mod tests {
             "and its blocked-call list"
         );
     }
+    /// AND IT HAS TO SURVIVE A RELAUNCH — the persistence half, which the test above does not
+    /// touch and which was the headline of the bug.
+    ///
+    /// `apply_restored_settings` fixes what the running engine holds. But the operator's report was
+    /// that a restore "did nothing": the bundle was applied in memory and NEVER WRITTEN, so the
+    /// next launch read the old file back and every restored radio was gone again. Proving the
+    /// apply without proving the write leaves exactly that bug uncovered — an in-memory success
+    /// that evaporates, under a dialog that promised it could not be undone.
+    ///
+    /// So this goes through a real file: apply, save, load, and assert the roster came back.
+    #[test]
+    fn a_restored_roster_survives_a_relaunch() {
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        let live_only = eng.settings().radios.len();
+
+        // A bundle from another machine: the live roster plus two radios this station has never
+        // seen, and a different active radio.
+        let mut bundle = eng.settings().clone();
+        let second = 41;
+        let third = 42;
+        for id in [second, third] {
+            let mut p = bundle.radios[0].clone();
+            p.id = id;
+            p.name = format!("imported-{id}");
+            bundle.radios.push(p);
+        }
+        bundle.active_radio = third;
+
+        eng.apply_restored_settings(bundle);
+
+        // THE WRITE. A temp path per run so a parallel test never reads another's file.
+        let path = std::env::temp_dir().join(format!(
+            "nexus-restore-persist-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        eng.settings()
+            .save(&path)
+            .expect("a restore must reach the disk");
+
+        // THE RELAUNCH: a fresh read of that file is what the next start sees.
+        let reloaded = crate::settings::Settings::load(&path);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            reloaded.radios.len(),
+            live_only + 2,
+            "the bundle's whole roster must come back after a relaunch: {:?}",
+            reloaded.radios.iter().map(|p| p.id).collect::<Vec<_>>()
+        );
+        for id in [second, third] {
+            assert!(
+                reloaded.radios.iter().any(|p| p.id == id),
+                "radio {id} existed only in the bundle and must have been written"
+            );
+        }
+        assert_eq!(
+            reloaded.active_radio, third,
+            "and the bundle's active radio, not the pre-restore one"
+        );
+    }
 
     /// Adding a radio must NOT move the station onto it. It used to call set_active_radio one line
     /// after add_radio_profile, whose own doc comment says it does not change the active radio.

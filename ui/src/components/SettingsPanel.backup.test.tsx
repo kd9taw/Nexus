@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
+import { ConfirmHost } from '../confirm'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -108,8 +109,13 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
+/** The panel WITH the confirm host, which is how App renders it. #89 moved the destructive
+ *  paths off `window.confirm` (inert in this webview) onto the in-app dialog, so a test that
+ *  stubbed `window.confirm` would now pass while exercising nothing — the very shape of the
+ *  bug #89 fixed. Mounting the host makes Restore's question real and clickable. */
 function renderPanel() {
   return render(
+    <>
     <SettingsPanel
       activeRadioId={0}
       scale={1 as never}
@@ -121,7 +127,9 @@ function renderPanel() {
       onDensityChange={() => {}}
       onResetLayout={() => {}}
       features={features}
-    />,
+      />
+      <ConfirmHost />
+    </>,
   )
 }
 
@@ -166,16 +174,14 @@ describe('backing up the station', () => {
   }
 
   // RESTORE MUST REFRESH WHAT IS ON SCREEN. `import_settings_bundle` used to hand-roll
-  // `eng.apply_settings()` and return nothing, instead of routing through `set_settings` the way
-  // `reset_settings` does. So it applied the bundle to the running engine, persisted nothing, and
-  // handed the panel no snapshot -- which went on rendering the PRE-restore form. To the operator
-  // (2026-08-14) Restore appeared to do nothing at all.
+  // `eng.apply_settings()` and return nothing, so it applied the bundle to the running engine,
+  // persisted nothing, and handed the panel no snapshot -- which went on rendering the
+  // PRE-restore form. To the operator (2026-08-14) Restore appeared to do nothing at all.
   //
   // And the stale form stayed live, so the next Save wrote the OLD values back over the restored
   // ones: a silent revert of an explicit, confirmed, "this cannot be undone" action. Nothing
   // tested this path at all -- there was not one reference to importSettingsBundle in the suite.
   it('re-reads the settings after a restore, so the panel cannot show stale values', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const { container } = renderPanel()
     fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
 
@@ -195,12 +201,20 @@ describe('backing up the station', () => {
     const before = api.get('getSettings').mock.calls.length
     fireEvent.change(input, { target: { files: [file] } })
 
+    // The handler ASKS FIRST and only imports on an explicit yes, so the dialog has to be answered
+    // or nothing happens at all. Asserting the question appears is half the value of this test:
+    // a destructive restore that skipped it would pass every other assertion here.
+    await waitFor(() =>
+      expect(screen.getByText(/Replace your current setup with nexus-backup\.json\?/)).toBeTruthy(),
+    )
+    expect(api.get('importSettingsBundle')).not.toHaveBeenCalled()
+    screen.getByRole('button', { name: 'Restore' }).click()
+
     await waitFor(() => expect(api.get('importSettingsBundle')).toHaveBeenCalled())
     // The point: settings are re-read AFTER the import, not left to the stale form.
     await waitFor(() =>
       expect(api.get('getSettings').mock.calls.length).toBeGreaterThan(before),
     )
-    confirmSpy.mockRestore()
   })
 
   it('offers both halves — a backup is no use without a restore', async () => {
