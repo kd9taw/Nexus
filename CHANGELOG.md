@@ -33,6 +33,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Setup-health RX-audio light can finally say "No RX audio".** Its threshold was
+  written for the wrong dB scale, so with a radio configured the light was green even on a
+  stone-dead input — the one state it existed to catch. A silent capture now shows
+  "No RX audio" and points at the audio device settings.
+
+- **A capture that delivers only pure silence now says so — with the Mac's likely cause
+  named.** On macOS, denying the microphone permission doesn't error and doesn't stop the
+  audio stream; it just delivers exact digital silence forever, which every health check
+  read as "capture alive". After 15 seconds of that, a banner now explains it — and on a
+  Mac adds: if the RX meter never moves, check System Settings ▸ Privacy & Security ▸
+  Microphone. It clears itself the moment real audio arrives.
+
+- **"System default" audio input now notices its device vanishing on macOS.** With the
+  out-of-box device selection, unplugging the rig's USB audio (or a sleep/wake reshuffle)
+  silently stopped the audio with no banner and no recovery — only explicitly named
+  devices got disconnect detection. The default now resolves to the same device through
+  the path that watches for disconnects, so the usual "Sound card stopped — reopening"
+  self-heal covers it too.
+
 - **Pounce desktop notifications actually appear now — on the Mac for the first time.**
   The rare-DX alert used a browser notification API that Apple's webview simply does not
   have, and no platform ever asked the OS for permission, so the notification half of

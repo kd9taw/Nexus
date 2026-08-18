@@ -524,6 +524,20 @@ const AUDIO_RETRY_MS: f64 = 2_000.0;
 /// `default_host()` faults natively and hard-kills the process).
 const AUDIO_DEATH_CONFIRM_MS: f64 = 1_500.0;
 
+/// How long the sound card may deliver NON-EMPTY buffers of pure digital zeros before the
+/// banner names it (macOS only — see the pure-zero capture watch in `step`).
+///
+/// Why this exists: a macOS "Don't Allow" on the mic prompt neither errors nor stops the
+/// stream — CoreAudio keeps the callbacks coming with every sample exactly 0.0, forever. To
+/// every existing check that IS delivery (`card_delivered` counts buffers, not content), so
+/// the operator sits deaf at a flat waterfall with no diagnosis anywhere — the same failure
+/// family as DAX starvation ("silence is indistinguishable from a dead band"). Exact zero is
+/// the discriminator: a live capture chain always carries a nonzero noise floor in some LSB,
+/// so quiet-but-alive audio cannot trip this. 15 s keeps a squelched FM channel (which some
+/// rig codecs do render as true digital silence) from tripping it on every lull while still
+/// diagnosing a dead mic within the operator's first "why is nothing decoding" minute.
+const SILENT_CAPTURE_CONFIRM_MS: f64 = 15_000.0;
+
 /// After a device-death rebuild, how long before another one may run.
 ///
 /// THE DEBOUNCE BELONGS HERE, not on the banner. A card that FLAPS — dies, re-enumerates, dies
@@ -1747,6 +1761,11 @@ enum ErrOwner {
     /// Native Flex DAX RX audio was selected but no audio is arriving — otherwise the
     /// operator is simply deaf, with silence indistinguishable from a dead band.
     Dax,
+    /// The sound card is open and delivering, but every sample is digital zero for a
+    /// sustained window (macOS: the TCC mic-denial shape) — otherwise the operator is
+    /// deaf with every health check reading "capture alive". Its own owner so a real
+    /// device error outranks it and only its own writer clears it.
+    SilentCapture,
 }
 
 /// How long native DAX RX may deliver NOTHING before we call it broken, fall back to the
@@ -2278,6 +2297,11 @@ struct RadioLoop {
     /// on the first tick the card actually delivers (`card_delivered`, the same authority the
     /// death-confirmation path uses). Nothing here changes the rebuild itself.
     audio_awaiting_samples: bool,
+    /// When the sound card started delivering NON-EMPTY buffers of pure digital zeros
+    /// (macOS only — the TCC mic-denial shape; see `SILENT_CAPTURE_CONFIRM_MS`). None while
+    /// samples carry any signal at all. Sustained past the confirm window it raises the
+    /// "delivering pure silence" banner; the first nonzero sample clears both.
+    silent_capture_since: Option<f64>,
     /// Latest measured PC-clock-vs-UTC offset (ms, `local − UTC`), read from the
     /// engine each loop and SUBTRACTED from the system clock so TX/RX slots land
     /// on the true UTC grid even when the OS clock is skewed. 0 until measured.
@@ -2360,6 +2384,7 @@ impl RadioLoop {
             dax_tee_set: false,
             err_owner: ErrOwner::None,
             audio_awaiting_samples: false,
+            silent_capture_since: None,
             early_done_slot: None,
             early_msk_done: None,
             boundary_keyed: None,
@@ -2549,6 +2574,21 @@ impl RadioLoop {
             Some(t) => now.duration_since(t) >= DAX_STARVE_AFTER,
             None => false,
         }
+    }
+
+    /// A capture buffer that arrived but carries NO signal at all: non-empty and every sample
+    /// exactly 0.0 (`-0.0 == 0.0` folds the sign away). The discriminator for the macOS
+    /// mic-denial watch — a live chain's noise floor puts nonzero LSBs in real capture, so
+    /// quiet-but-alive audio cannot look like this. Pure, dax_starved-style, so the decision
+    /// is testable without CoreAudio on the bench.
+    fn capture_all_zero(samples: &[f32]) -> bool {
+        !samples.is_empty() && samples.iter().all(|&s| s == 0.0)
+    }
+
+    /// Has pure-zero delivery persisted past the confirm window? (`since` = when zeros began,
+    /// `now` = the loop clock, both in the same ms timebase as `AUDIO_DEATH_CONFIRM_MS`.)
+    fn silent_capture_confirmed(since: Option<f64>, now: f64) -> bool {
+        since.is_some_and(|t| now - t >= SILENT_CAPTURE_CONFIRM_MS)
     }
 
     /// Publish "Nexus is transmitting" to the native broker RIGHT NOW. Called at each keying
@@ -2962,6 +3002,10 @@ impl RadioLoop {
         // audio just below, and the corroboration below is about the sound card itself — not about
         // whatever source happens to be feeding the decoder.
         let card_delivered = !soundcard.is_empty();
+        // …and was what it delivered pure digital zeros? Also recorded before the DAX swap, for
+        // the macOS-only silence watch further down (`SILENT_CAPTURE_CONFIRM_MS`). Gated here so
+        // the per-sample scan costs the other platforms nothing.
+        let card_all_zero = cfg!(target_os = "macos") && Self::capture_all_zero(&soundcard);
         let captured = match self.dax_src.as_ref() {
             Some(dax) => {
                 let dax_audio = dax.take_audio();
@@ -3291,6 +3335,53 @@ impl RadioLoop {
                         eng.set_audio_error(None);
                     }
                     self.err_owner = ErrOwner::None;
+                }
+            }
+            // PURE-ZERO CAPTURE WATCH (macOS only — `card_all_zero` is compile-time false
+            // elsewhere). A denied mic prompt (TCC) keeps the CoreAudio stream "healthy"
+            // while delivering exact digital zeros forever: `card_delivered` stays true, no
+            // stream error ever arrives, and every path above reads the card as alive — the
+            // operator is deaf at a flat waterfall with no diagnosis anywhere (mac QA audit
+            // merged[47]). Same doctrine as DAX starvation: silence is indistinguishable
+            // from a dead band, so sustained bit-zero delivery gets SAID. The wording is a
+            // hint, not a verdict — a denial cannot be proven from in here (a squelched FM
+            // channel through some rig codecs is also true digital silence), which is why
+            // the banner says "if the meter never moves, check…". First nonzero sample
+            // clears it; only its own owner is cleared, so a real device error outranks it.
+            if card_delivered {
+                if card_all_zero {
+                    let since = *self.silent_capture_since.get_or_insert(now);
+                    if Self::silent_capture_confirmed(Some(since), now)
+                        && self.err_owner == ErrOwner::None
+                    {
+                        // The mac-specific cure is the only platform-specific sentence,
+                        // gated on its own so un-gating the watch later stays honest.
+                        let mac_hint = if cfg!(target_os = "macos") {
+                            " If the RX meter never moves, check System Settings > Privacy \
+                             & Security > Microphone — a denied mic permission delivers \
+                             exactly this silence."
+                        } else {
+                            ""
+                        };
+                        {
+                            let mut eng = engine_lock(engine);
+                            eng.set_audio_error(Some(format!(
+                                "Audio input is open but delivering pure silence — every \
+                                 sample is zero. Check the rig's USB audio cable and the \
+                                 input's level.{mac_hint}"
+                            )));
+                        }
+                        self.err_owner = ErrOwner::SilentCapture;
+                    }
+                } else {
+                    self.silent_capture_since = None;
+                    if self.err_owner == ErrOwner::SilentCapture {
+                        {
+                            let mut eng = engine_lock(engine);
+                            eng.set_audio_error(None);
+                        }
+                        self.err_owner = ErrOwner::None;
+                    }
                 }
             }
             // NO REBUILD WHILE KEYED. The rebuild path unconditionally runs flush_output() +
@@ -13853,6 +13944,38 @@ mod tests {
         // No DAX source selected at all: nothing to starve.
         assert!(!RadioLoop::dax_starved(None, false, t0 + DAX_STARVE_AFTER));
         assert!(!RadioLoop::dax_starved(None, true, t0 + DAX_STARVE_AFTER));
+    }
+
+    /// The macOS mic-denial (TCC) discriminator: NON-EMPTY buffers of exact digital zeros.
+    /// The two edges that must never trip it: an empty tick (that is the death-confirmation
+    /// path's business, not this one's) and a real noise floor — quiet is not denied.
+    #[test]
+    fn capture_all_zero_discriminates_denied_mic_from_quiet_and_empty() {
+        assert!(RadioLoop::capture_all_zero(&[0.0; 512]));
+        assert!(RadioLoop::capture_all_zero(&[0.0, -0.0, 0.0])); // -0.0 folds away
+        assert!(!RadioLoop::capture_all_zero(&[])); // no delivery ≠ silent delivery
+
+        // A single LSB of noise floor anywhere makes it live capture.
+        let mut floor = [0.0f32; 512];
+        floor[300] = 1.0e-7;
+        assert!(!RadioLoop::capture_all_zero(&floor));
+    }
+
+    /// The confirm window: zeros must PERSIST for SILENT_CAPTURE_CONFIRM_MS before the
+    /// banner fires — a squelch lull or a start-up gap must not raise it.
+    #[test]
+    fn silent_capture_confirms_only_after_the_window() {
+        let t0 = 10_000.0;
+        assert!(!RadioLoop::silent_capture_confirmed(None, t0));
+        assert!(!RadioLoop::silent_capture_confirmed(Some(t0), t0));
+        assert!(!RadioLoop::silent_capture_confirmed(
+            Some(t0),
+            t0 + SILENT_CAPTURE_CONFIRM_MS - 1.0
+        ));
+        assert!(RadioLoop::silent_capture_confirmed(
+            Some(t0),
+            t0 + SILENT_CAPTURE_CONFIRM_MS
+        ));
     }
 
     #[test]

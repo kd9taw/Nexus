@@ -435,6 +435,46 @@ where
     }
 }
 
+/// Swap a system-default device handle for its enumerated twin (macOS input; see the call
+/// site in [`CpalBackend::open`]).
+///
+/// cpal's CoreAudio backend registers its `kAudioDevicePropertyDeviceIsAlive` disconnect
+/// listener only when `!is_default`, and the handle from `default_input_device()` carries
+/// `is_default: true` — while its input AudioUnit is pinned to the concrete AudioDeviceID
+/// regardless, so a default-input stream neither follows a later default switch NOR reports
+/// its own death. Net effect: with the out-of-box "system default" ("") selection, a rig
+/// codec unplug or a sleep/wake renumbering stops callbacks with no StreamError — nothing
+/// arms `audio_suspect`, no banner, no self-heal; the [`err_recorder`] contract held on
+/// macOS only for explicitly NAMED devices (mac QA audit merged[48]). Re-resolving the
+/// default to the same device through the enumerator hands the stream a listener-carrying
+/// handle: death now reports, probation confirms it, and the rebuild re-resolves "" against
+/// whatever the default is by then.
+///
+/// First name match wins — the same heuristic [`pick_device`] uses for duplicate names. No
+/// match (a default the enumerator cannot see) or a failed enumeration keeps the original
+/// handle: exactly today's behavior, nothing new can fail. Lazy iteration with per-device
+/// drop, same as [`resolve_configured`] (load-bearing on ALSA; harmless elsewhere).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // called from the mac-gated open path + tests
+pub(crate) fn enumerated_default<D, I, F>(mk_devices: F, default: D) -> D
+where
+    D: NamedDevice,
+    I: Iterator<Item = D>,
+    F: Fn() -> Option<I>,
+{
+    let Some(want) = default.device_name() else {
+        return default;
+    };
+    if let Some(devs) = mk_devices() {
+        for d in devs {
+            if d.device_name().as_deref() == Some(want.as_str()) {
+                return d;
+            }
+            // `d` drops HERE, before the next probe — see resolve_configured.
+        }
+    }
+    default
+}
+
 /// Real sound-card backend. Keep it alive for the duration of operation — the
 /// cpal streams stop when this is dropped.
 pub struct CpalBackend {
@@ -632,12 +672,16 @@ impl CpalBackend {
         // can never drive cpal's native init at the same time. See AUDIO_HOST_LOCK.
         let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let host = cpal::default_host();
-        let in_dev = resolve_configured(
-            || host.input_devices().ok(),
-            in_name,
-            host.default_input_device(),
-            "input",
-        )?;
+        let in_default = host.default_input_device();
+        // macOS: the default-INPUT handle streams pinned to the concrete device but with NO
+        // disconnect listener — swap it for its enumerated twin so an unplug/sleep-wake death
+        // actually reports (see enumerated_default). Input only, deliberately: the empty
+        // OUTPUT gets cpal's DefaultOutput unit, which genuinely follows macOS default
+        // switches, and trading that away is not this fix's call to make.
+        #[cfg(target_os = "macos")]
+        let in_default = in_default.map(|d| enumerated_default(|| host.input_devices().ok(), d));
+        let in_dev =
+            resolve_configured(|| host.input_devices().ok(), in_name, in_default, "input")?;
         // ONE CARD FOR BOTH DIRECTIONS (#2 "either alone works, both fails"; #8's CM108):
         // the resolved input device holds the card's handle pair, so re-enumerating for
         // the output would probe the SAME card, find it busy, and drop it — the output
@@ -1427,12 +1471,49 @@ mod tests {
 
 #[cfg(test)]
 mod resolve_diagnostics {
-    use super::{resolve_configured, NamedDevice};
+    use super::{enumerated_default, resolve_configured, NamedDevice};
 
     impl NamedDevice for &'static str {
         fn device_name(&self) -> Option<String> {
             Some((*self).to_string())
         }
+    }
+
+    /// The macOS default-input disconnect fix (mac QA audit merged[48]): "" must resolve to
+    /// the ENUMERATED handle for the same device — the one cpal attaches its disconnect
+    /// listener to — not the `default_input_device()` handle. The (name, id) stand-in tells
+    /// the two apart the same way the pick_device ordinal tests do.
+    #[test]
+    fn enumerated_default_swaps_in_the_listener_carrying_twin() {
+        let got = enumerated_default(
+            || {
+                Some(
+                    vec![
+                        ("Built-in Microphone".to_string(), 1),
+                        ("Rig Codec".to_string(), 2),
+                    ]
+                    .into_iter(),
+                )
+            },
+            ("Rig Codec".to_string(), 0),
+        );
+        assert_eq!(got, ("Rig Codec".to_string(), 2));
+    }
+
+    /// No twin on the list, or no list at all → keep the original default handle: today's
+    /// exact behavior, so the swap can never make an open fail that used to succeed.
+    #[test]
+    fn enumerated_default_keeps_the_handle_when_no_twin_exists() {
+        let untouched = enumerated_default(
+            || Some(vec![("Other Mic".to_string(), 1)].into_iter()),
+            ("Rig Codec".to_string(), 0),
+        );
+        assert_eq!(untouched, ("Rig Codec".to_string(), 0));
+        let unenumerable = enumerated_default(
+            || None::<std::vec::IntoIter<(String, u32)>>,
+            ("Rig Codec".to_string(), 0),
+        );
+        assert_eq!(unenumerable, ("Rig Codec".to_string(), 0));
     }
 
     /// The success path must be untouched by the diagnostics — collecting the list to report
