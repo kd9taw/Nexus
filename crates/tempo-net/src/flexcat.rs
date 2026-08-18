@@ -480,7 +480,11 @@ impl FlexCat {
     /// connection from a DEAD one — see [`FlexRecv`] for why that distinction is load-bearing.
     /// Frames a `command` parked while awaiting its reply come out here first, in arrival order.
     pub fn recv(&self, timeout: Duration) -> FlexRecv {
-        if let Some(m) = self.pending.lock().unwrap().pop_front() {
+        // Take the parked frame into a LOCAL first: a guard built in an `if let` scrutinee lives
+        // through the whole body, and this one would then be held across a blocking `recv_timeout`
+        // (the same hazard the worker loops' stream-id reads are written to avoid).
+        let parked = self.pending.lock().unwrap().pop_front();
+        if let Some(m) = parked {
             return FlexRecv::Msg(m);
         }
         match self.rx.recv_timeout(timeout) {
