@@ -357,11 +357,12 @@ impl FlexDax {
                 // DAX TX: create the outbound stream (its create reply carries the stream id) and
                 // route the rig's transmit audio to it. Torn down on stop (TX back to the mic).
                 //
-                // ⚠️ OPERATOR RULING 2026-07-26 — THIS IS DELIBERATE, DO NOT "FIX" IT.
-                // `transmit_set_dax_command(true)` below is UNCONDITIONAL: turning on native Flex
-                // audio routes BOTH directions over DAX, RX and TX, from the one
-                // `flex_native_audio` toggle. It reads like an oversight (a TX-path command with
-                // no TX-specific gate) and has been queried once already, hence this note.
+                // ⚠️ OPERATOR RULING 2026-07-26, REAFFIRMED 2026-08-17 — THIS IS DELIBERATE, DO
+                // NOT "FIX" IT. `transmit_set_dax_command(true)` below has NO OPERATOR-FACING GATE
+                // of its own: turning on native Flex audio routes BOTH directions over DAX, RX and
+                // TX, from the one `flex_native_audio` toggle. It reads like an oversight (a
+                // TX-path command with no TX-specific gate) and has now been queried twice, hence
+                // this note.
                 //
                 // The alternative considered and REJECTED was splitting TX behind its own opt-in.
                 // Rejected because one toggle is what an operator actually wants — native audio
@@ -371,6 +372,12 @@ impl FlexDax {
                 // The backlog's older "dax_tx stays gated" line means gated behind THIS toggle,
                 // not behind a second one. Teardown restores the mic on stop, so the rig is never
                 // left expecting DAX audio that stopped arriving.
+                //
+                // The ONE condition it does carry is not a second opt-in and leaves the ruling
+                // intact: we refuse to point the transmitter at a `dax_tx` stream that was never
+                // created. "Both directions from one toggle" is untouched; "route TX to a stream
+                // that does not exist" was never part of it — that was a bug that left the mic
+                // disconnected and nothing on the air (audit #1002 / #1044).
                 let mut tx_created: Option<u32> = None;
                 if let Ok((code, reply)) =
                     flex.command(&dax_tx_create_command(), Duration::from_millis(600))
@@ -534,18 +541,24 @@ impl FlexDax {
                         std::thread::sleep(TX_PACER_TICK.min(next_at - now));
                         continue;
                     }
-                    let sid = *tx.stream_id.lock().unwrap();
-                    match (sid, tx.take_packet()) {
-                        (Some(sid), Some(chunk)) => {
+                    // No stream id yet → nothing may go on the air, and nothing is queued either
+                    // (`feed` refuses too). Checked BEFORE taking a packet, so a packet is never
+                    // drained and dropped on the floor.
+                    let Some(sid) = *tx.stream_id.lock().unwrap() else {
+                        next_at = now;
+                        std::thread::sleep(TX_IDLE_TICK);
+                        continue;
+                    };
+                    match tx.take_packet() {
+                        Some(chunk) => {
                             let pkt = build_dax_tx_packet(sid, counter, &chunk);
                             counter = (counter + 1) & 0x0F;
                             let _ = tx_sock.send_to(&pkt, radio);
                             next_at = advance_pacer(now, next_at);
                         }
-                        // Nothing to send (between overs, or the stream id is not learned yet).
-                        // Hold the clock at now, so an idle gap cannot bank credit that would
-                        // burst the START of the next over out at once.
-                        _ => {
+                        // Nothing queued (between overs). Hold the clock at now, so an idle gap
+                        // cannot bank credit that would burst the START of the next over out.
+                        None => {
                             next_at = now;
                             std::thread::sleep(TX_IDLE_TICK);
                         }
