@@ -56,6 +56,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FlexRadio native audio and panadapter (early access): Nexus now shares the radio
+  properly, listens to the right slice, and comes back after a network blip.** These are
+  the opt-in "Flex native DAX audio" and "Flex native panadapter" toggles in Settings —
+  both off by default and still unverified on real hardware, so nothing here changes
+  anything for an operator who has not turned them on. The theme is that the code assumed
+  it was the only client on the radio, and a Flex almost never is: SmartSDR's own window is
+  usually running, and a Maestro, N1MM or a second Nexus window can be too. What that cost:
+  the native panadapter would latch onto *any* panadapter on the radio — including
+  SmartSDR's own — then retune it, rescale it and delete it on the way out; native audio
+  would adopt whatever DAX stream held channel 1, even another program's, and remove it on
+  teardown. Nexus now creates and steers only its own, and removes nothing it did not
+  create. Which slice you hear was the other half: audio followed whichever slice had focus
+  while the dial, the waterfall and the log all came from the slice your CAT connection
+  drives, so on a two-slice radio you could be decoding one slice and logging another with
+  nothing saying so. Audio now follows the slice your CAT port names, re-binds when you
+  switch at the front panel (it never could before), and the S-meter shows your slice's
+  signal instead of whichever slice reported last. Also fixed: a dropped audio packet used
+  to be spliced over silently, shifting the timing of every decode after it — the gap is
+  now filled with its own length of silence and named in the log; ordinary network
+  reordering could leave the native waterfall completely blank; a lost connection or a
+  radio reboot ended native audio and the native panadapter for the rest of the session —
+  both now re-dial with a backoff; native audio that died mid-session left you deaf with no
+  warning, and now falls back to the sound card and says so, as it already did for audio
+  that never started; and the RX Gain slider, which did nothing at all on native audio, now
+  boosts a quiet slice exactly as it does on the sound card.
+
 - **FlexRadio native audio (early access): the transmit half is fixed, and it no longer
   freezes the app when the radio is unreachable.** This is the opt-in "Flex native DAX
   audio" toggle in Settings — off by default, and still unverified on real hardware, so
