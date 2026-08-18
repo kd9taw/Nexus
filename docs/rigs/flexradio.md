@@ -91,6 +91,40 @@ leave it off on every window but the slice-A one.
 
 ---
 
+## CW on a Flex
+
+CW works on the proven path, and you do not have to set anything up for it.
+Nexus's default keyer is **CAT**, which means Nexus hands each word to SmartSDR
+CAT and the radio makes the CW. Nothing is keyed through your sound card, and no
+keying cable is involved.
+
+- **The keyer speed follows the WPM control** in the CW screen — Nexus sends it
+  to the radio before each word.
+- **Below 10 MHz Nexus asks for CW-L**, which the SmartSDR CAT profile does not
+  offer under that name. Nexus notices the refusal and puts the radio in plain
+  **CW** instead. It is the same signal on the same frequency — CW-reverse only
+  changes which side of the carrier *you* listen on — so nothing about your
+  transmission changes. (Before this was fixed, the radio was left in whatever
+  mode it had been in while the keyer went on sending.)
+- **Stop TX** clears everything Nexus has not sent yet. Words are handed over one
+  at a time for exactly this reason, so the most that can still go out is the
+  word already inside the radio.
+
+The other keyer choices work on a Flex too, and are worth knowing about:
+
+| Keyer | On a Flex |
+|---|---|
+| **CAT** (default) | Nothing to set up. Best for macros and keyboard CW. |
+| **WinKeyer** | A K1EL keyer on a serial port. SmartSDR CAT can also present a Winkeyer port of its own — point Nexus at that port name. |
+| **Serial** | A DTR/RTS keyline. Needs a real serial port going to the radio, which a network Flex does not give you — use CAT or WinKeyer instead. |
+| **Soundcard** | Keys an audio tone through SSB. Works, but it is the roundabout way on a radio that has a real CW keyer. |
+
+**Not yet confirmed on real hardware** (please report): whether break-in/QSK
+mutes and unmutes the native DAX receive stream cleanly during a long macro, and
+whether Stop TX cuts the *one* word already inside the radio or lets it finish.
+
+---
+
 ## The native SmartSDR path (early access — read this first)
 
 Two toggles in **Settings ▸ Radio ▸ Rig & CAT** talk to the radio's own SmartSDR

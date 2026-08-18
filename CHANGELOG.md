@@ -73,6 +73,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CW on 160, 80 and 40 m now actually puts an SDR radio into CW.** Below 10 MHz Nexus asks
+  the radio for **CW-L**, which is the right thing to ask for and what most radios call it.
+  Four rig profiles do not offer it under that name — **FlexRadio SmartSDR CAT**, **SmartSDR
+  native**, **PowerSDR** and **Thetis** — and they refused the request outright. Nexus then
+  gave up and left the radio in whatever mode it happened to be in *while the keyer went right
+  on sending*, so a CW macro could go out of a radio still sitting in USB or a data mode, on
+  the three lowest CW bands, with nothing on screen naming the cause. Nexus now notices the
+  refusal and sets plain **CW** instead. It is the same signal on the same frequency —
+  CW-reverse only changes which side of the carrier you listen on — so nothing about your
+  transmission changes. The Flex setup guide gained a [CW section](docs/rigs/flexradio.md)
+  covering the keyer choices on that radio.
+
 - **Rotators: the baud now comes from the model, so five of them work for the first time.**
   If you own a **SPID Rot2Prog or Rot1Prog**, an **Idiom Press Rotor-EZ**, a **Hy-Gain
   DCU-1/DCU-1X** or a **Green Heron RT-21**, your rotator has never answered Nexus — and

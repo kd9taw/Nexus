@@ -8608,15 +8608,25 @@ fn width_reassert_after_default_rung(rig: &mut Rig, md: &str, sent_pb: i32) -> O
     ))
 }
 
-/// The plain sideband underneath a DATA/PKT submode — the LAST rung of the mode-set
-/// ladder. A rig whose CAT refuses the DATA submode (or a Hamlib backend that garbles
-/// it) still takes plain USB/LSB; landing there leaves the operator one rig-front-panel
-/// DATA press from working, instead of stranded on whatever mode was active before.
-/// `None` for non-DATA modes — there is nothing sensible to fall back to.
+/// The plain mode underneath a submode the rig would not take — the LAST rung of the
+/// mode-set ladder. A rig whose CAT refuses the DATA submode (or a Hamlib backend that
+/// garbles it) still takes plain USB/LSB; landing there leaves the operator one
+/// rig-front-panel DATA press from working, instead of stranded on whatever mode was
+/// active before. `None` when there is nothing sensible to fall back to.
 fn fallback_sideband(md: &str) -> Option<&'static str> {
     match md.trim().to_ascii_uppercase().as_str() {
         "PKTUSB" | "DATA-U" | "PKT-U" => Some("USB"),
         "PKTLSB" | "DATA-L" | "PKT-L" => Some("LSB"),
+        // CW-REVERSE → PLAIN CW (2026-08-17 Flex audit, critic gap #5). Nexus commands CWR
+        // below 10 MHz for every rig-shaped CW keyer, and four catalog models have no CWR in
+        // their Hamlib mode list at all — 2036 SmartSDR CAT, 23005 SmartSDR native, 2048
+        // PowerSDR, 2054 Thetis (measured: `rigctl --dump-caps` → `AM CW USB LSB FM PKTLSB
+        // PKTUSB`; a live `M CWR` at model 2036 answers `unsupported mode 'CWR'`). Without
+        // this rung the ladder gave up and left the rig in its previous mode while the keyer
+        // kept sending, which is the worse outcome: CW keyed out of a rig sitting in USB.
+        // Safe because CW-reverse is not a different emission — same dial, same transmitted
+        // signal; the reverse only flips which side of the carrier the RECEIVER listens on.
+        "CWR" | "CW-R" | "CWL" | "CW-L" => Some("CW"),
         // The FM data submode's plain form. NOT a sideband — the name is historical — but the
         // same question: what does this rig still speak underneath the DATA submode? Landing an
         // SSTV image on plain FM keeps the EMISSION right (an FM channel stays FM) and costs
@@ -9669,9 +9679,42 @@ mod tests {
         assert_eq!(fallback_sideband("DATA-U"), Some("USB"));
         assert_eq!(fallback_sideband("DATA-L"), Some("LSB"));
         // Non-DATA modes have no sensible sideband fallback — give up in place.
-        assert_eq!(fallback_sideband("CW"), None);
         assert_eq!(fallback_sideband("USB"), None);
         assert_eq!(fallback_sideband("FM"), None);
+    }
+
+    /// CW ON 160/80/40 m NEVER PUT AN SDR RIG INTO CW (2026-08-17 Flex audit, critic gap #5 —
+    /// "CW on a FlexRadio, completely unaudited").
+    ///
+    /// `Settings::rig_mode_on_sideband` commands **CWR** (CW-L) below 10 MHz for the CAT,
+    /// WinKeyer and serial-keyline keyers — the operator's own 2026-07-24 ruling. Measured
+    /// against the bundled Hamlib 4.7.1 (`rigctl --dump-caps`), FOUR catalog models carry no
+    /// CWR at all — `Mode list: AM CW USB LSB FM PKTLSB PKTUSB`:
+    ///   2036 FlexRadio SmartSDR CAT · 23005 SmartSDR native · 2048 PowerSDR · 2054 Thetis.
+    /// Driven against a SmartSDR-CAT emulator on this box, `M CWR` gets
+    /// `flex6k_set_mode: unsupported mode 'CWR'` → `RPRT -1`, so the ladder burned its whole
+    /// retry budget and gave up with the rig left in whatever mode it happened to be in —
+    /// while the CW keyer went right on sending (`KY …;` is accepted regardless).
+    ///
+    /// CW and CWR are the SAME EMISSION on the same dial frequency; CW-reverse only flips
+    /// which side of the carrier the receiver listens on. So plain `CW` is a true fallback,
+    /// not a compromise — it is what the operator would have set by hand — and it is strictly
+    /// safer than the previous behaviour, which keyed a CW macro into a rig still sitting in
+    /// USB or a data submode.
+    #[test]
+    fn a_rig_that_refuses_cw_reverse_still_gets_put_into_plain_cw() {
+        // Every spelling the mode ladder can be handed for CW-reverse.
+        assert_eq!(fallback_sideband("CWR"), Some("CW"));
+        assert_eq!(fallback_sideband(" cwr "), Some("CW"));
+        assert_eq!(fallback_sideband("CW-R"), Some("CW"));
+        assert_eq!(fallback_sideband("CWL"), Some("CW"));
+        assert_eq!(fallback_sideband("CW-L"), Some("CW"));
+        // Plain CW is already the floor — falling CW back to CW would loop the ladder.
+        assert_eq!(fallback_sideband("CW"), None);
+        // And it only fires on a real REJECTION: a run of link faults proves nothing about
+        // the rig's modes, so a silent link still gives up in place (same rule as DATA).
+        assert_eq!(giveup_fallback("CWR", true), Some("CW"));
+        assert_eq!(giveup_fallback("CWR", false), None);
     }
 
     /// THE TIMEWAVE NAVIGATOR REPORT (N0UMF, IC-7410). `mode_set_note` opened with a raw
