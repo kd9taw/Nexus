@@ -43,6 +43,19 @@ fn next_tx_sample(ring: &mut VecDeque<f32>, level: &AtomicU32) -> f32 {
     ring.pop_front().unwrap_or(0.0) * f32::from_bits(level.load(Ordering::Relaxed))
 }
 
+/// Clamp an RX Gain setting to the sane 1.0–8.0 (+18 dB) range, so a stray value cannot blow up
+/// the decode/monitor path.
+///
+/// ⚠️ ONE RULE FOR EVERY RX ROUTE. The slider multiplies captured audio in the cpal input
+/// callbacks; the native Flex DAX route bypasses those callbacks entirely (its audio arrives over
+/// UDP), so the control was simply INERT there — a quiet Flex slice could not be boosted, and the
+/// operator's first troubleshooting step did nothing (Flex audit 2026-08-17, #1049; the RX sibling
+/// of the TX-drive bypass, #1048). `service.rs` applies the same multiply to DAX audio through
+/// this same clamp, so the slider means one thing regardless of where the audio came from.
+pub(crate) fn clamp_rx_gain(gain: f32) -> f32 {
+    gain.clamp(1.0, 8.0)
+}
+
 fn err_fn(e: cpal::StreamError) {
     eprintln!("tempo-audio: cpal stream error: {e}");
 }
@@ -1148,11 +1161,11 @@ impl AudioBackend for CpalBackend {
     }
 
     /// Set the RX capture gain (a ≥1.0 multiplier applied to captured samples on the audio
-    /// thread). Live: the realtime input callback reads the atomic each block. Clamped to a
-    /// sane 1.0–8.0 (+18 dB) so a stray value can't blow up the decode/monitor path.
+    /// thread). Live: the realtime input callback reads the atomic each block. Clamped by
+    /// [`clamp_rx_gain`].
     fn set_rx_gain(&mut self, gain: f32) {
         self.rx_gain
-            .store(gain.clamp(1.0, 8.0).to_bits(), Ordering::Relaxed);
+            .store(clamp_rx_gain(gain).to_bits(), Ordering::Relaxed);
     }
 
     /// Discard queued-but-unplayed TX audio (hard Stop TX): clear the route the over is actually

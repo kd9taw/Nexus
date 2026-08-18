@@ -2676,6 +2676,21 @@ impl RadioLoop {
         now.duration_since(last_audio.unwrap_or(started)) >= DAX_STARVE_AFTER
     }
 
+    /// Apply the operator's RX Gain to a buffer that did NOT come through the sound card.
+    ///
+    /// The multiply and the clamp are the sound card's own ([`crate::device::clamp_rx_gain`], read
+    /// per block by every cpal input callback), so the slider means one thing whichever route the
+    /// audio took — that is the whole point (audit #1049). Pure, so it is testable without a Flex.
+    fn apply_rx_gain(samples: &mut [f32], gain: f32) {
+        let g = crate::device::clamp_rx_gain(gain);
+        if g == 1.0 {
+            return; // the default: no work, and no rounding either
+        }
+        for s in samples.iter_mut() {
+            *s *= g;
+        }
+    }
+
     /// A capture buffer that arrived but carries NO signal at all: non-empty and every sample
     /// exactly 0.0 (`-0.0 == 0.0` folds the sign away). The discriminator for the macOS
     /// mic-denial watch — a live chain's noise floor puts nonzero LSBs in real capture, so
@@ -3126,11 +3141,16 @@ impl RadioLoop {
         let card_all_zero = cfg!(target_os = "macos") && Self::capture_all_zero(&soundcard);
         let captured = match self.dax_src.as_ref() {
             Some(dax) => {
-                let dax_audio = dax.take_audio();
+                let mut dax_audio = dax.take_audio();
                 if !dax_audio.is_empty() {
                     // The RX floor's rolling clock — a stream that stops is a stream that failed,
                     // however long it worked first (audit #1001/#1043).
                     self.dax_last_audio = Some(Instant::now());
+                    // RX GAIN MEANS THE SAME THING ON EVERY ROUTE (audit #1049). The slider
+                    // multiplies inside the cpal input callbacks, which native DAX audio never
+                    // passes through — so it was inert here and a quiet Flex slice could not be
+                    // boosted at all. Applied on the way in, with the card's own clamp.
+                    Self::apply_rx_gain(&mut dax_audio, self.applied.rx_gain);
                 }
                 dax_audio
             }
@@ -14735,6 +14755,35 @@ mod tests {
             Some(worked_until),
             worked_until + Duration::from_secs(60)
         ));
+    }
+
+    /// THE RX GAIN SLIDER MUST WORK ON NATIVE DAX AUDIO TOO (audit #1049).
+    ///
+    /// It multiplies inside the cpal input callbacks, and DAX audio arrives over UDP and never
+    /// touches them — so the control was inert on that route: a quiet Flex slice could not be
+    /// boosted, which is the operator's first troubleshooting step. Asserted against the card's
+    /// own rule, clamp included.
+    #[test]
+    fn rx_gain_scales_dax_audio_exactly_as_it_scales_the_sound_card() {
+        let source = [0.25f32, -0.5, 0.0, 1.0];
+        for gain in [1.0f32, 2.0, 8.0] {
+            let mut buf = source.to_vec();
+            RadioLoop::apply_rx_gain(&mut buf, gain);
+            for (i, (&got, &s)) in buf.iter().zip(source.iter()).enumerate() {
+                assert_eq!(
+                    got,
+                    s * crate::device::clamp_rx_gain(gain),
+                    "sample {i} at RX Gain {gain}"
+                );
+            }
+        }
+        // The card's clamp, not a second opinion on it: below 1.0 is unity, above 8.0 is 8.0.
+        let mut buf = vec![0.5f32];
+        RadioLoop::apply_rx_gain(&mut buf, 0.1);
+        assert_eq!(buf, vec![0.5], "under-unity is clamped to unity");
+        let mut buf = vec![0.5f32];
+        RadioLoop::apply_rx_gain(&mut buf, 99.0);
+        assert_eq!(buf, vec![4.0], "+18 dB is the ceiling on both routes");
     }
 
     /// The macOS mic-denial (TCC) discriminator: NON-EMPTY buffers of exact digital zeros.
