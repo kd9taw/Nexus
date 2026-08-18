@@ -164,7 +164,8 @@ fn capture(window: &tauri::WebviewWindow) {
 /// Not covered, and cheaply: a process that dies without a close event (a native crash —
 /// see `main.rs`'s crash reporter — or a session logout) keeps the previous record. And
 /// `choose_radio`'s `app.exit(0)` relaunch skips it too, which is correct: that is the
-/// radio picker, a window the operator sees for a moment and never sizes.
+/// radio picker, a window the operator sees for a moment and never sizes (`quit_cleanup`
+/// preserves the skip via its geometry flag).
 pub fn install(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -176,6 +177,21 @@ pub fn install(app: &tauri::AppHandle) {
             capture(&w);
         }
     });
+}
+
+/// Snapshot the main window's geometry right now, if it still exists — the QUIT-path
+/// capture, called from `quit_cleanup` in `lib.rs`.
+///
+/// Exists because macOS Cmd+Q never sends `CloseRequested` to any window (NSApp
+/// `terminate:` tears the app down without a per-window close), so the handler
+/// [`install`] arms was never reached and a Mac operator who always quit with Cmd+Q got
+/// bug #10 back: every launch at the `tauri.conf.json` default box. On the window-close
+/// path the windows are already destroyed by the time the quit events fire, so the lookup
+/// misses and this is a no-op — `CloseRequested` captured the geometry moments earlier.
+pub fn capture_now(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        capture(&window);
+    }
 }
 
 #[cfg(test)]

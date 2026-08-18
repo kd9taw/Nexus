@@ -1427,6 +1427,11 @@ fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
         .arg(radio_profile_key(radio_id))
         .spawn()
         .map_err(|e| e.to_string())?;
+    // The window on screen right now is the radio picker, not a box the operator sized —
+    // `quit_cleanup` must not persist it over the base profile's real geometry (see
+    // QUIT_SKIP_GEOMETRY). This exit path never captured geometry before the Cmd+Q fix
+    // hooked capture into the quit events, and window_state's docs call that correct.
+    QUIT_SKIP_GEOMETRY.store(true, std::sync::atomic::Ordering::SeqCst);
     app.exit(0);
     Ok(())
 }
@@ -15472,6 +15477,85 @@ fn open_dxped_page(app: tauri::AppHandle, call: String, url: Option<String>) -> 
         .map_err(|e| e.to_string())
 }
 
+/// The quit cleanup ran — however many exit events arrive, it runs ONCE.
+///
+/// Why a guard instead of relying on idempotence: on Windows/Linux a window-close quit
+/// delivers `ExitRequested` and then `Exit`, and the cleanup's TX-unkey wait polls up to 3 s
+/// when the radio thread is wedged in a CAT read — running it twice would double the
+/// worst-case hang between the operator's quit and the process actually dying.
+static QUIT_CLEANUP_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `choose_radio`'s relaunch is exiting: skip the window-geometry snapshot.
+///
+/// That exit happens while the window is still the launch-time radio picker — a box the
+/// operator sees for a moment and never sizes — and `window_state`'s whole reason to exist is
+/// bug #10, a saved box the operator DID size. Persisting the picker's box would overwrite the
+/// base profile's real geometry with the `tauri.conf.json` default. The picker path skipped
+/// capture before the Cmd+Q fix (nothing hooked `app.exit`), and this flag keeps that exact
+/// behaviour now that `quit_cleanup` captures on every other quit.
+static QUIT_SKIP_GEOMETRY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Everything a quit must flush, in one place — reached from BOTH `RunEvent::ExitRequested`
+/// and `RunEvent::Exit` (see the `.run` closure for why two events mean one cleanup).
+///
+/// The mac QA audit (2026-08-17) found Cmd+Q skipping ALL of this: on macOS the default
+/// menu's Quit fires `terminate:` → tao's `applicationWillTerminate` → `RunEvent::Exit`
+/// directly — `ExitRequested`, where this logic used to live inline, is emitted only on
+/// last-window-destroyed and `app.exit()`, so a Cmd+Q quit ran no TX unkey, no journal
+/// flush, and no geometry capture. `RunEvent::Exit` is delivered synchronously inside
+/// `applicationWillTerminate` (tao `AppState::exit` → `handle_nonuser_event`), so blocking
+/// here still happens before the process dies.
+///
+/// TX SAFETY: the unkey block below is the close path's, moved verbatim — this change
+/// extends its COVERAGE to the Cmd+Q and restart paths, it does not alter its behaviour.
+fn quit_cleanup(app_handle: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    if QUIT_CLEANUP_RAN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    // Window geometry FIRST, while the windows still exist. On the Cmd+Q path (the reason
+    // this is here) every window is alive; on a window-close quit they are already destroyed
+    // and both captures no-op — `CloseRequested` snapshotted them before the teardown.
+    if !QUIT_SKIP_GEOMETRY.load(Ordering::SeqCst) {
+        window_state::capture_now(app_handle);
+        for (label, w) in app_handle.webview_windows() {
+            if label != "main" {
+                // No-op for anything that is not a band-map window, and skips minimized
+                // windows itself — safe to sweep the whole map.
+                capture_bandmap_window(&w);
+            }
+        }
+    }
+    // Unkey the transmitter before the process dies: signal the radio
+    // loop to drop PTT and give it a brief window to flush the un-key
+    // command to the rig. A stuck carrier on quit is a TX-safety
+    // hazard, so this blocks the exit for up to ~3 s.
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::service::SHUTDOWN.store(true, Ordering::Relaxed);
+        // Wait until the loop has actually unkeyed (SHUTDOWN_DONE),
+        // not a fixed sleep: the loop only reaches the un-key after
+        // its current step() returns, and a step can be blocked in a
+        // CAT read for up to ~2.5 s. Poll so the common case returns
+        // in tens of ms while the worst case still flushes the
+        // un-key before we let the process exit.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3_000);
+        while !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    persist_conversations(app_handle.state::<SharedEngine>().inner());
+    persist_field_day_log(app_handle.state::<SharedEngine>().inner());
+    // An opening still in progress at quit becomes a journaled episode —
+    // a 6m Es evening isn't lost because the app closed mid-opening.
+    if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
+        record_opening_episodes(tr.close_all(now_unix()));
+    }
+}
+
 /// Build and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16893,39 +16977,24 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building the Nexus application")
         .run(|app_handle, event| {
-            // Flush Tempo conversation history on app exit so a quit within the 15 s
-            // periodic-save window doesn't lose recent chat or resurrect an archived
-            // thread. ExitRequested fires on the app-level quit (Alt+F4 / menu quit).
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                // Unkey the transmitter before the process dies: signal the radio
-                // loop to drop PTT and give it a brief window to flush the un-key
-                // command to the rig. A stuck carrier on quit is a TX-safety
-                // hazard, so this blocks the exit for up to ~250 ms.
-                #[cfg(feature = "radio")]
-                {
-                    use std::sync::atomic::Ordering;
-                    tempo_audio::service::SHUTDOWN.store(true, Ordering::Relaxed);
-                    // Wait until the loop has actually unkeyed (SHUTDOWN_DONE),
-                    // not a fixed sleep: the loop only reaches the un-key after
-                    // its current step() returns, and a step can be blocked in a
-                    // CAT read for up to ~2.5 s. Poll so the common case returns
-                    // in tens of ms while the worst case still flushes the
-                    // un-key before we let the process exit.
-                    let deadline =
-                        std::time::Instant::now() + std::time::Duration::from_millis(3_000);
-                    while !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
-                        && std::time::Instant::now() < deadline
-                    {
-                        std::thread::sleep(std::time::Duration::from_millis(20));
-                    }
+            // Flush conversation history, Field Day log, opening episodes and window
+            // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
+            //
+            // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
+            // deliver different events and neither is a superset of the other:
+            //  - window close (all platforms) and `app.exit()`/`request_restart()`:
+            //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
+            //    exactly as it always did, and the second arm no-ops on the guard;
+            //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
+            //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
+            //    is never emitted on that path, which is how Cmd+Q used to skip the
+            //    whole cleanup. `Exit` arrives synchronously inside the terminate
+            //    callback, so the unkey wait still completes before the process dies.
+            match event {
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    quit_cleanup(app_handle);
                 }
-                persist_conversations(app_handle.state::<SharedEngine>().inner());
-                persist_field_day_log(app_handle.state::<SharedEngine>().inner());
-                // An opening still in progress at quit becomes a journaled episode —
-                // a 6m Es evening isn't lost because the app closed mid-opening.
-                if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
-                    record_opening_episodes(tr.close_all(now_unix()));
-                }
+                _ => {}
             }
         });
 }

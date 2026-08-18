@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **⌘Q now quits Nexus properly on the Mac.** The menu quit (and its ⌘Q shortcut)
+  bypassed the entire shutdown path: no wait for the transmitter to unkey, no
+  conversation or Field Day flush, and no window-geometry save — a Mac operator who
+  always quit with ⌘Q reopened at the default window box every launch, with the last
+  15 seconds of chat at risk. Every quit route now runs the same cleanup closing the
+  window does.
+
 - **The docs caught up with macOS shipping.** The FAQ, README, install guide, manual
   and wiki no longer say "macOS does not ship" — the Mac build (signed, notarized
   Apple Silicon DMG, self-updating) has been out since 1.5.0. The install guide gains
