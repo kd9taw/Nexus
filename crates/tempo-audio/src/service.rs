@@ -6735,10 +6735,11 @@ impl RadioLoop {
         // heavy decode ran on the worker thread (off this thread + the engine mutex);
         // here we non-blockingly pick up finished results and run the DEFERRED back
         // half under the engine lock. A Boundary result runs the slot's TX decision
-        // NOW that its decode is folded (preserving decode→TX ordering exactly); an
-        // Early result just publishes spots; a Stale result (tier/source switch since
-        // dispatch) is dropped. Draining BEFORE the new-boundary dispatch guarantees
-        // an early result's `early_seen` is set before the same-slot boundary filters
+        // NOW that its decode is folded (preserving decode→TX ordering exactly) —
+        // but ONLY while its slot is still the one on the clock; an Early result
+        // just publishes spots; a Stale result (tier/source switch since dispatch)
+        // is dropped. Draining BEFORE the new-boundary dispatch guarantees an early
+        // result's `early_seen` is set before the same-slot boundary filters
         // against it. At most one decode is ever in flight (the in-flight guard).
         while let Some(result) = self.decode.try_recv() {
             self.decode_in_flight = false;
@@ -6746,20 +6747,49 @@ impl RadioLoop {
                 DecodeApplied::Boundary {
                     slot: bslot, frame, ..
                 } => {
-                    self.finish_boundary(
-                        &mut eng,
-                        rig,
-                        backend,
-                        sinks,
-                        station,
-                        now,
-                        bslot,
-                        true,
-                        Some(frame),
-                        // The worker has just finished, so the modem is free — no
-                        // contention here, and no reason to release the engine.
-                        None,
-                    )?;
+                    // STALE-DRAIN GUARD (field incident 2026-08-17, KF4YHC, FTX-1):
+                    // a boundary decode that overruns the T/R period drains after
+                    // the NEXT boundary has re-stamped `boundary_keyed`, so the
+                    // same-slot guard inside `finish_boundary` no longer covers the
+                    // job's slot — and the deferred path then re-ran the whole TX
+                    // decision with the job's DISPATCH-TIME slot index. The parity
+                    // gate (`plan_tx`) trusts the caller's slot, so a stale even
+                    // index keyed a real wrong-parity over seconds into an odd
+                    // slot. A result whose slot is no longer the live one still
+                    // folds its decodes and emits its period below — it must never
+                    // reach the TX decision.
+                    let live = self.clock.slot_index(now);
+                    if bslot == live {
+                        self.finish_boundary(
+                            &mut eng,
+                            rig,
+                            backend,
+                            sinks,
+                            station,
+                            now,
+                            bslot,
+                            true,
+                            Some(frame),
+                            // The worker has just finished, so the modem is free — no
+                            // contention here, and no reason to release the engine.
+                            None,
+                        )?;
+                    } else {
+                        let cur_dial = eng.settings().dial_hz();
+                        self.emit_boundary_housekeeping(
+                            &mut eng,
+                            sinks,
+                            station,
+                            now,
+                            cur_dial,
+                            true,
+                            // The stale period's own keyed/tx record was overwritten
+                            // at the boundary that disarmed the guard; this flag only
+                            // shapes the WSJT-X status `decoding` field.
+                            false,
+                            Some(frame),
+                        )?;
+                    }
                 }
                 DecodeApplied::Early { n } => {
                     if n > 0 {
@@ -6872,7 +6902,11 @@ impl RadioLoop {
                     // in parallel; stragglers can't change an in-flight over there
                     // either) — and let the boundary decode chase stragglers alongside.
                     // `finish_boundary`'s boundary_keyed guard turns that decode's
-                    // drain into housekeeping-only, so the slot can never key twice.
+                    // SAME-slot drain into housekeeping-only; the guard is one deep
+                    // and re-stamped at every boundary, so a drain that arrives
+                    // after the NEXT boundary is caught by the drain arm's
+                    // stale-slot gate instead (the 2026-08-17 wrong-parity
+                    // incident — a >15 s decode replayed its even slot into :45+).
                     // Without a folded early pass (FT1/DX1, companion sources, first
                     // slot, busy worker) the deferred decode→TX ordering below is
                     // UNCHANGED — this deliberately narrows the new behavior to the
@@ -12482,6 +12516,180 @@ mod tests {
             backend.played.len(),
             played_after_key,
             "no second wave: the straggler drain is housekeeping only (double-TX guard)"
+        );
+    }
+
+    /// THE 2026-08-17 FIELD INCIDENT (KF4YHC, FTX-1, 1.6.1): a boundary decode that
+    /// overruns the T/R period drains AFTER the next boundary has re-stamped
+    /// `boundary_keyed`. The same-slot guard no longer covers the job's slot, and
+    /// the deferred path then re-ran the whole TX decision with the dispatch-time
+    /// (even) slot index — the parity gate trusts the caller's slot, so the
+    /// operator's own CQ keyed REAL RF seconds into an ODD slot, wrong parity,
+    /// visually confirmed at the rig. Latent since the 0.13/0.14 async-decode +
+    /// key-at-boundary pair; fires only when a decode outruns the 15 s period.
+    ///
+    /// Pins the fix: a Boundary result whose slot is not the one on the clock is
+    /// folded and emitted (housekeeping) but NEVER keys. The test steals the
+    /// worker's result, lets the odd boundary disarm the guard, then delivers the
+    /// stale result — exactly the field timeline, deterministic.
+    #[test]
+    fn stale_boundary_straggler_after_next_boundary_never_keys() {
+        // parity 0 → even slots transmit; FT8 → 15 s slots (the incident's mode).
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+
+        // Slot 0 boundary: nothing armed yet — consumed with no TX.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "nothing armed yet");
+
+        // A CQ RUN (the incident's state: CallingCq re-emits every own-parity slot),
+        // with the broadcast's immediate-TX arming stripped so only the boundary
+        // path under test can key.
+        {
+            let mut e = engine.lock().unwrap();
+            e.broadcast("CQ TEST W9XYZ EN37");
+            let _ = e.take_immediate_tx();
+        }
+        // Slot 1 boundary (odd): not our parity.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                15_020.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "odd slot: not our TX parity");
+
+        // Mid slot 1: capture RX audio + mark the early pass folded, so slot 2 keys
+        // AT its boundary and dispatches the straggler decode in parallel.
+        backend.queue_capture(vec![0.001f32; 12_000]);
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                22_000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        state.early_done_slot = Some(1);
+
+        // Slot 2 boundary: keys at t=0, straggler dispatched.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                30_020.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(rig.keyed, "keyed at the even boundary");
+        assert!(state.decode_in_flight, "straggler decode in flight");
+        let played_after_key = backend.played.len();
+
+        // STEAL the worker's result before any step can drain it — this emulates a
+        // 16-19 s decode: the channel stays empty across the next boundary, and the
+        // result arrives (is re-injected) only after it.
+        let stolen = {
+            let mut got = None;
+            for _ in 0..500 {
+                if let Some(r) = state.decode.try_recv() {
+                    got = Some(r);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            got.expect("the straggler decode finished and was intercepted")
+        };
+        // Replace the worker with a hand-held channel so the test controls delivery.
+        let (late_tx, late_rx) = std::sync::mpsc::channel::<DecodeResult>();
+        state.decode = DecodeWorker {
+            job_tx: None,
+            result_rx: late_rx,
+            handle: None,
+        };
+
+        // Slot 3 boundary (odd — the field's :45): the worker is still "busy" (its
+        // result is withheld above), so this boundary takes the busy branch exactly
+        // as the field's did; parity refuses the slot, and `boundary_keyed` is
+        // re-stamped to slot 3 — disarming the same-slot guard for the outstanding
+        // slot-2 result. NOTE: `slot_tx_phase` reads the REAL wall clock for the
+        // PTT-hold deadline (slot.rs `keyed_ms`), so in this synthetic-time harness
+        // the slot-2 over's PTT never drops — the discriminating signals are the
+        // PLAYED-WAVE COUNT and the deadline identity, not `rig.keyed`.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                45_100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert_eq!(
+            backend.played.len(),
+            played_after_key,
+            "odd boundary: parity refused — no new audio"
+        );
+        let tx_until_before_drain = state.tx_until_ms;
+
+        // NOW the stale result lands — 1.1 s into the odd slot, the field shape
+        // (:45+1 s). THE assertion: it must never key a new over.
+        late_tx.send(stolen).unwrap();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                46_100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(!state.decode_in_flight, "the stale result was drained");
+        assert_eq!(
+            backend.played.len(),
+            played_after_key,
+            "a stale boundary result must NEVER key: its slot is not the one on the \
+             clock — no wave may be built or played for it (wrong-parity TX, the \
+             2026-08-17 field incident)"
+        );
+        assert_eq!(
+            state.tx_until_ms, tx_until_before_drain,
+            "the stale drain must not touch the TX hold deadline (a re-key resets it)"
         );
     }
 

@@ -14445,8 +14445,12 @@ impl Engine {
             return Vec::new();
         };
         let wave = plan.waveform.build();
-        // One thread, no unlock between plan and commit → the planned slot IS the
-        // current slot.
+        // One thread, no unlock between plan and commit — but `slot` is the CALLER's
+        // claim, not a clock reading, so commit's `plan.slot != current_slot` check is
+        // vacuous on this path. A caller holding a stale slot index (a decode-worker
+        // result that outlived its period) sails through every freshness check here:
+        // slot liveness is the CALLER's obligation (the radio loop's drain arm gates
+        // on it — the 2026-08-17 wrong-parity incident is what happens otherwise).
         self.commit_tx(&plan, wave, slot)
     }
 

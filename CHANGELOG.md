@@ -47,6 +47,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An FT8/FT4 decode that overran the 15-second period could replay a transmission into
+  the wrong slot.** Field report, visually confirmed at the rig: with Tx 1st/even set, the
+  station's own CQ keyed real RF a few seconds into an odd slot. On a machine that stalls
+  long enough for a period's decode to outlive the period itself, the late result re-ran
+  the transmit decision with its original slot number — which still passed the even/odd
+  check, because that check trusts the slot it is handed. A decode result whose slot is no
+  longer the one on the clock now folds its decodes and reports its period but can never
+  key. Latent since 0.13 on every platform; it takes a badly stalled machine (a long AV
+  scan, heavy swapping) to trigger.
+
 - **The Setup-health RX-audio light can finally say "No RX audio".** Its threshold was
   written for the wrong dB scale, so with a radio configured the light was green even on a
   stone-dead input — the one state it existed to catch. A silent capture now shows
