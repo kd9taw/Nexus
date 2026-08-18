@@ -320,7 +320,7 @@ export default function App() {
   // click still QSYs. `followFreq` is true only for the three explicit mode tabs (Phone / CW /
   // Digital-Operate) — entering one drops the rig to that mode's home freq; the other digital
   // cockpits (chat/qso/…) set the mode only and keep their own band picker's frequency.
-  const lastOpModeRef = useRef<'digital' | 'phone' | 'cw' | 'rtty'>('digital')
+  const lastOpModeRef = useRef<'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'>('digital')
   // Guard refs for the rig-mode effect below. `opModeSeeded` is set once, by whichever comes
   // first: the persisted-operating-mode seed (that effect lives further down, where `settings`
   // is in scope) or a genuine view change — an operator's click outranks any seed, because the
@@ -360,10 +360,11 @@ export default function App() {
     //   from USB to D-U with no operator action and no way to tell why (#80).
     //   Listing the views that OWN a rig mode makes that class of bug unrepresentable: a new
     //   workspace view now asserts NOTHING until someone deliberately adds it here.
-    const RIG_MODE_BY_VIEW: Partial<Record<string, 'cw' | 'phone' | 'rtty' | 'digital'>> = {
+    const RIG_MODE_BY_VIEW: Partial<Record<string, 'cw' | 'phone' | 'rtty' | 'keyboard' | 'digital'>> = {
       cw: 'cw',
       phone: 'phone',
       rtty: 'rtty',
+      psk: 'keyboard', // the Keyboard Modes cockpit (PSK31) — one flat section
       operate: 'digital', // the FT8/FT4 cockpit
       chat: 'digital', // Tempo is a digital mode
     }
@@ -378,7 +379,8 @@ export default function App() {
     const changed = mode !== lastOpModeRef.current
     lastOpModeRef.current = mode
     const followFreq =
-      changed && (view === 'operate' || view === 'cw' || view === 'phone' || view === 'rtty')
+      changed &&
+      (view === 'operate' || view === 'cw' || view === 'phone' || view === 'rtty' || view === 'psk')
     void setOperatingMode(mode, followFreq)
       .then((s) => s && setSnap(s))
       .catch(() => {})
@@ -1881,9 +1883,10 @@ export default function App() {
         return
       }
       if (m === 'psk') {
-        // PSK is RX-only this phase — entry asserts nothing on the rig (it is
-        // deliberately NOT in RIG_MODE_BY_VIEW); the cockpit auto-arms its
-        // decoder, which taps RX audio and nothing else.
+        // Navigate; the [view] rig-mode effect asserts the Keyboard policy
+        // (always-USB PKTUSB) and re-homes to the band's PSK31 watering hole on
+        // a genuine mode change — the same path as CW/Phone/RTTY. The cockpit
+        // still auto-arms its RX decoder on entry.
         setView(m)
         return
       }
@@ -2782,6 +2785,7 @@ export default function App() {
                 onSnap={setSnap}
                 active={effectiveView === 'psk'}
                 onSetFrequency={handleSetFrequency}
+                onSetTxEnabled={handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}

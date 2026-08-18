@@ -717,20 +717,24 @@ export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
   panelIds: RTTY_PANEL_IDS,
 }
 
-/** PSK cockpit's removable panels (Keyboard Modes Phase 1 — RECEIVE ONLY).
+/** PSK cockpit's removable panels (Keyboard Modes; TX since Phase 2).
  *  RTTY's shape: `scope` is the band waterfall (see SCOPE_PANEL_ID), `stream` the decoded
- *  transcript. The CockpitHeader is not a panel.
+ *  transcript. The CockpitHeader and the TX dock are not panels.
  *
- *  THE STOP LINE HOLDS HERE BY CONSTRUCTION, the APRS way rather than the RTTY way: this
- *  cockpit renders NO control that starts a transmission — no send box, no macros, no
- *  TX-enable latch, no dock — because no PSK TX path exists in the engine this phase.
- *  With nothing on the screen able to start a transmission, "at least one stop control
- *  renders outside every removable pane" is satisfied vacuously, and there is nothing to
- *  add to stop-line.test.tsx's sweeps (its census entry is this comment). The pane's Arm
- *  RX / Re-acquire / Clear controls are decoder controls: none touches PTT, and the
- *  structure test (PskCockpit.structure.test.tsx) pins the no-TX-control census. When
- *  Phase 2 brings PSK TX, that build adds the dock + latch + Esc census AND the sweep
- *  entry — the RTTY pattern, not an amendment to this one. */
+ *  THE STOP LINE holds here the RTTY way (the Phase 1 "by construction" census is gone,
+ *  as its own comment demanded when TX arrived). The census — every holder OUTSIDE every
+ *  ⊞-removable pane, none with an id in this vocabulary: Stop TX (header, never
+ *  disabled), the dock's Esc/Stop macro (`disabled={!(sending || latched)}`, live from
+ *  the instant the continuous-TX latch goes up), the TX-enable latch (header arm —
+ *  `set_tx_enabled(false)` arms `psk_abort`, so it is a real stop here exactly as in
+ *  RTTY/SSTV), and Esc (keyboard-only ⇒ census-only, outside both sweeps by
+ *  construction). Swept in stop-line.test.tsx's PSK case, rendered with App's props
+ *  (`onSetTxEnabled` — the documented latch blindness). The continuous-TX ("TX") button
+ *  is a SENDER, not a stop (RTTY's ruling: off lets what was typed finish keying) and
+ *  must never be added to the sweep's stopControls. A fifth stop reaches a latched over
+ *  with no control pressed: the engine's per-tick gate re-check (`poll_psk_stream`),
+ *  which unkeys within one tick on a section change, a QSY out of privileges, a tune,
+ *  or a radio handoff. */
 export const PSK_PANEL_IDS = [SCOPE_PANEL_ID, 'stream'] as const
 export type PskPanelId = (typeof PSK_PANEL_IDS)[number]
 

@@ -1036,7 +1036,7 @@ export async function pickBand(band: string, mode?: string): Promise<AppSnapshot
  * on the current band (phone segment / CW segment / FT8 watering hole). Pass false for
  * incidental nav and the Needed click (which sets the spot's exact frequency itself). */
 export async function setOperatingMode(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard',
   followFreq: boolean,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_operating_mode', { mode, followFreq })
@@ -1784,9 +1784,10 @@ export async function rttyAutoAbort(): Promise<RttyState> {
   return invoke<RttyState>('rtty_auto_abort')
 }
 
-/** Arm/disarm the PSK31 RX decoder (session-only; RX decode, never TX — no PSK
- * transmit path exists). Stopping it is remembered for the session, so the
- * view-entry auto-arm cannot restart it behind the operator. */
+/** Arm/disarm the PSK31 RX decoder (session-only; RX decode — arming never
+ * keys, TX starts only from an explicit send). Stopping it is remembered for
+ * the session, so the view-entry auto-arm cannot restart it behind the
+ * operator. */
 export async function pskArm(on: boolean): Promise<PskState> {
   return invoke<PskState>('psk_arm', { on })
 }
@@ -1818,6 +1819,32 @@ export async function pskAfcReset(): Promise<PskState> {
  * single-signal click-to-tune. Moves the DECODER, never the rig. RX only. */
 export async function pskNet(hz: number): Promise<PskState> {
   return invoke<PskState>('psk_net', { hz })
+}
+
+/** Queue PSK31 text to transmit — an explicit operator send, the only way PSK
+ * TX starts. The engine re-validates every gate (TX-enable, privileges, the
+ * Keyboard section) and returns why a send was refused. While continuous TX is
+ * latched a send types into the live stream (the RTTY macro semantic). */
+export async function pskSend(text: string): Promise<PskState> {
+  return invoke<PskState>('psk_send', { text })
+}
+
+/** Continuous TX on/off — the PSK cockpit's TX button (the MMTTY-style latch).
+ * ON runs the same gate a send runs; OFF lets what was typed finish keying.
+ * NOT the emergency stop: Stop TX / Esc / the TX-enable latch cut instantly. */
+export async function pskSetLatched(on: boolean): Promise<PskState> {
+  return invoke<PskState>('psk_set_latched', { on })
+}
+
+/** Feed typed characters into the live latched transmission (one insertion at
+ * a time — PSK has no un-send). Refused unless continuous TX is latched. */
+export async function pskType(text: string): Promise<PskState> {
+  return invoke<PskState>('psk_type', { text })
+}
+
+/** Stop PSK now: abort the over in progress, drop the queue, unkey. */
+export async function pskStop(): Promise<PskState> {
+  return invoke<PskState>('psk_stop')
 }
 
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX

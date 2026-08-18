@@ -32,7 +32,7 @@ function rigModeMap(): Record<string, string> {
   expect(start, 'RIG_MODE_BY_VIEW must exist — it is the allowlist this whole test is about').toBeGreaterThan(-1)
   const body = APP.slice(start, APP.indexOf('}', start))
   const out: Record<string, string> = {}
-  for (const m of body.matchAll(/^\s*([a-z]+):\s*'(cw|phone|rtty|digital)'/gm)) out[m[1]] = m[2]
+  for (const m of body.matchAll(/^\s*([a-z]+):\s*'(cw|phone|rtty|keyboard|digital)'/gm)) out[m[1]] = m[2]
   return out
 }
 
@@ -43,6 +43,7 @@ describe('which views may command the rig mode', () => {
       cw: 'cw',
       phone: 'phone',
       rtty: 'rtty',
+      psk: 'keyboard',
       operate: 'digital',
       chat: 'digital',
     })

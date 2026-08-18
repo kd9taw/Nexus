@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PSK31 transmit.** The PSK screen now works both ways: type a line and press Enter for
+  a one-shot over, fire the F1–F4 macros (CQ / Answer / Exchange / 73), or click TX for
+  continuous transmit — stay keyed, idle on the classic PSK31 reversals, and what you type
+  goes out as you type it, mixed case and all. TX keys at the same spot you netted the
+  decoder (click the trace, answer on frequency), the rig is put in its data mode
+  automatically (USB-side on every band, the PSK31 convention), and a band picker offers
+  the standard watering holes — 14.070, 3.580, 7.070 and friends — showing only the bands
+  your license can key. Stop TX, the Esc/Stop button and Esc all cut a transmission
+  instantly, leaving the section or QSYing out of your privileges unkeys within a tick,
+  and a hard 10-minute ceiling bounds a continuous over no matter what. One deliberate
+  courtesy: Nexus transmits at a modest drive and the dock reminds you to keep the rig's
+  ALC near zero — an overdriven PSK31 signal splatters into the neighbors (IMD).
+
 - **Export a date range from the logbook.** Compact from/to date pickers now sit beside
   Export ADIF — set either or both and the ADIF/CSV export carries only the QSOs in that
   UTC date range, which is what a POTA activation or one weekend's contest needs. Leave
@@ -22,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The receiver starts by itself when the screen opens (turn that off in Settings ▸ Digital
   ▸ PSK; stopping it by hand is remembered for the session), the click nets the decoder
   rather than the rig, and a gentle AFC (never more than ±25 Hz) rides small drift.
-  Receive-only for now — PSK31 transmit and QPSK31 are next on the keyboard-modes roadmap.
+  Transmit ships in this release too (see the PSK31 transmit entry above); QPSK31 is next
+  on the keyboard-modes roadmap.
 
 - **Every Mac release is now checked harder before it ships.** The release pipeline
   proves the signed app still carries the microphone entitlement and usage prompt (the

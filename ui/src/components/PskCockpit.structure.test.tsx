@@ -1,21 +1,17 @@
 // @vitest-environment jsdom
 //
-// PSK COCKPIT SHELL STRUCTURE (Keyboard Modes Phase 1 — RECEIVE ONLY).
+// PSK COCKPIT SHELL STRUCTURE (Keyboard Modes Phase 2 — RX + TX).
 //
 // PSK follows RTTY's region-less shape of the pane-grid contract: one operator-content
-// block (the decoded stream) through CockpitPaneFrame, deliberately NO pane region —
-// and, unlike RTTY, deliberately NO TX DOCK, because no PSK transmit path exists in the
-// engine this phase. THE STOP LINE therefore holds BY CONSTRUCTION (the APRS way): with
-// nothing on the screen able to start a transmission there is nothing a stop control
-// would stop, and the no-TX-control census below is what pins that claim to the DOM.
-// When Phase 2 brings PSK TX, it must replace that census with the RTTY-style dock +
-// latch + Esc structure AND a stop-line.test.tsx sweep entry — not amend it.
-//
-// The other half of what these tests pin: the view-entry AUTO-ARM wiring (operator
-// ruling 2026-08-17) — entry calls pskAutoArm exactly once per activation edge (the
-// engine owns the decline memory and the Settings opt-out; the view must call the
-// policy, never reimplement it), and the pane's Arm button is the explicit
-// pskArm(false) stop the engine remembers.
+// block (the decoded stream) through CockpitPaneFrame, deliberately NO pane region, and
+// — since Phase 2 — the pinned .cockpit-txdock hosting every transmit control (macros,
+// the continuous-TX latch, Esc/Stop, the compose bar, the ALC drive hint). THE STOP LINE
+// is no longer held "by construction" (the Phase 1 no-TX census is gone, as that census's
+// own header demanded): it is held the way RTTY holds it — Stop TX + the TX-enable latch
+// in the header, the Esc/Stop macro in the dock, none with a ⊞ id — and the WIRING sweep
+// for that lives in stop-line.test.tsx's PSK case. What THIS file pins is the shell
+// census, the dock placement (transmit controls never inside a pane), and the view-entry
+// auto-arm wiring (engine-owned policy, called once per activation edge).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { PskCockpit } from './PskCockpit'
@@ -31,16 +27,25 @@ const state: { current: PskState } = {
     centerHz: 1000,
     text: 'CQ CQ de KD9TAW',
     charConf: [],
+    sending: false,
+    latched: false,
+    keyerError: null,
   },
 }
 
 vi.mock('../api', () => ({
   getPskState: vi.fn(async () => state.current),
+  getLicensedBandPlan: vi.fn(async () => []),
   pskArm: vi.fn(async () => state.current),
   pskAutoArm: vi.fn(async () => state.current),
   pskClear: vi.fn(async () => state.current),
   pskAfcReset: vi.fn(async () => state.current),
   pskNet: vi.fn(async () => state.current),
+  pskSend: vi.fn(async () => state.current),
+  pskSetLatched: vi.fn(async () => state.current),
+  pskType: vi.fn(async () => state.current),
+  pskStop: vi.fn(async () => state.current),
+  haltTx: vi.fn(async () => ({})),
 }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
@@ -64,7 +69,7 @@ const snap = {
     catOk: true,
     sideband: 'USB',
     transmitting: false,
-    txEnabled: false,
+    txEnabled: true,
     txAllowed: true,
   },
 } as unknown as AppSnapshot
@@ -94,77 +99,39 @@ async function renderCockpit(props: Partial<Parameters<typeof PskCockpit>[0]> = 
 }
 
 beforeEach(() => {
-  state.current = { ...state.current, armed: true, signal: false }
+  state.current = {
+    ...state.current,
+    armed: true,
+    signal: false,
+    sending: false,
+    latched: false,
+    keyerError: null,
+  }
   pskAutoArm.mockClear()
   pskArm.mockClear()
 })
 afterEach(cleanup)
 
 describe('PskCockpit pane shell', () => {
-  it('the shell holds no child kinds beyond the census — and NO TX dock', async () => {
-    // PSK's sanctioned kinds: header chrome, the waterfall, the ONE content frame.
-    // No .cockpit-txdock: this cockpit is receive-only and a dock is where TX
-    // controls would live. A new shell-level sibling updates this census
-    // deliberately or does not ship.
+  it('the shell holds no child kinds beyond the census', async () => {
+    // PSK's sanctioned kinds since Phase 2: header chrome, the waterfall, the
+    // keyer-error banner, the ONE content frame, and the TX dock — RTTY's
+    // census exactly. A new shell-level sibling updates this deliberately or
+    // does not ship.
+    state.current = { ...state.current, keyerError: 'the rig didn’t accept PTT' }
     await renderCockpit()
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
     expect(shell).not.toBeNull()
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.pane-frame']
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
         `unexpected shell-level child <${el.tagName.toLowerCase()} class="${el.className}">`,
       ).toBe(true)
     }
+    expect(document.querySelector('.cw-keyer-warn'), 'warn banner did not render — census untested').not.toBeNull()
     expect(shell.querySelectorAll(':scope > .pane-frame').length).toBe(1)
-    expect(document.querySelector('.cockpit-txdock'), 'an RX-only cockpit grew a TX dock').toBeNull()
-  })
-
-  it('renders NO control that starts or stops a transmission (THE STOP LINE, by construction)', async () => {
-    // The DOM half of the panelState.ts PSK vocabulary comment: no send box, no
-    // macros, no TX latch, no PTT, no Stop TX — nothing to key the rig and
-    // therefore nothing whose reachability the stop-line sweeps must guard.
-    // Two layers, so a renamed class cannot slip a sender past the census:
-    await renderCockpit()
-    for (const sel of ['.cw-send', '.cw-type', '.cw-send-btn', '.rtty-stop', '.rtty-tx-latch', '.cw-macros']) {
-      expect(document.querySelector(sel), `${sel} is TX furniture and must not render here`).toBeNull()
-    }
-    // …and by accessible name over every rendered button (the header is mocked
-    // out, but its census is CockpitHeader's own: this cockpit passes it no
-    // onStopTx / onSetTxEnabled / onTune / power, pinned by the source check below).
-    for (const btn of Array.from(document.querySelectorAll('button'))) {
-      const name = (btn.getAttribute('aria-label') ?? btn.textContent ?? '').trim()
-      expect(
-        /send|transmit|ptt|macro|\btx\b|\btune\b/i.test(name),
-        `button "${name}" reads as a TX control in a receive-only cockpit`,
-      ).toBe(false)
-    }
-  })
-
-  it('passes the header none of the TX affordances (source pin — the header is mocked above)', async () => {
-    // The census test mocks CockpitHeader, so this reads the component source the
-    // way the shells suite reads AprsCockpit's class list: the RX-only cockpit
-    // must not hand the real header a Stop TX, a TX-enable latch, a Tune key or
-    // a power block, and must keep the TX/RX pill off.
-    const { readFileSync } = await import('node:fs')
-    const { resolve } = await import('node:path')
-    // cwd is ui/ under vitest; import.meta.url is not a file: URL in the jsdom env.
-    const src = readFileSync(resolve(process.cwd(), 'src/components/PskCockpit.tsx'), 'utf8')
-    // Scope to the CockpitHeader element (up to the waterfall block): the
-    // Waterfall's own onTune is click-to-NET — an RX control — and must not
-    // trip a whole-file scan.
-    const start = src.indexOf('<CockpitHeader')
-    const end = src.indexOf('THE BAND WATERFALL')
-    expect(start, 'PskCockpit no longer renders CockpitHeader — rescope this pin').toBeGreaterThan(-1)
-    expect(end, 'the waterfall landmark comment moved — rescope this pin').toBeGreaterThan(start)
-    const header = src.slice(start, end)
-    expect(header).toContain('txState={false}')
-    for (const forbidden of ['onStopTx', 'onSetTxEnabled', 'onTune', 'onAtuTune', 'power=']) {
-      expect(
-        header.includes(forbidden),
-        `PskCockpit passes ${forbidden} to CockpitHeader — TX furniture in an RX-only cockpit`,
-      ).toBe(false)
-    }
+    expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
   })
 
   it('the waterfall polls at the live-instrument cadence (50 ms), not the FT default', async () => {
@@ -187,6 +154,55 @@ describe('PskCockpit pane shell', () => {
     expect(document.querySelectorAll('.cockpit-col').length).toBe(0)
   })
 
+  it('every transmit control lives in the pinned TX dock — never inside a pane', async () => {
+    await renderCockpit()
+    const dock = document.querySelector('.cockpit-txdock')
+    expect(dock, 'no .cockpit-txdock').not.toBeNull()
+    for (const sel of [
+      '.psk-macros', // F-key macros + their-call + TX latch + Stop
+      '.psk-tx-latch', // the continuous-TX latch (a SENDER, not a stop)
+      '.psk-stop', // the Esc/Stop abort specifically (on the stop-line census)
+      '.cw-send', // compose bar
+      '.cw-type',
+      '.cw-send-btn',
+      '.rtty-hiscall',
+      '.psk-drive-hint', // the ALC/IMD drive sentence (the plan's dock hint)
+    ]) {
+      const el = document.querySelector(sel)
+      expect(el, `${sel} missing`).not.toBeNull()
+      expect(el!.closest('.cockpit-txdock'), `${sel} is not in the TX dock`).not.toBeNull()
+      expect(
+        el!.closest('.pane-frame'),
+        `${sel} is inside a pane frame — a pane scrolls, transmit controls must not`,
+      ).toBeNull()
+    }
+    expect(dock!.querySelector('.pane-frame')).toBeNull()
+    // The dock comes AFTER the stream pane in the DOM (pinned at the bottom).
+    const pane = document.querySelector('[data-pane="stream"]')!
+    expect(pane.compareDocumentPosition(dock!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the Esc/Stop macro is live from the LATCH, not only from sending audio', async () => {
+    // The RTTY rule, pinned on PSK's own dock: `sending` is stamped by the
+    // radio loop from audio in flight, so it is false in the tick between the
+    // latch going up and the first chunk keying — a census stop control that
+    // is mounted and disabled then is the same loss as one that is gone.
+    state.current = { ...state.current, sending: false, latched: false }
+    await renderCockpit()
+    let stop = document.querySelector('.psk-stop') as HTMLButtonElement
+    expect(stop.disabled, 'idle: Stop has nothing to stop').toBe(true)
+    cleanup()
+    state.current = { ...state.current, sending: false, latched: true }
+    await renderCockpit()
+    stop = document.querySelector('.psk-stop') as HTMLButtonElement
+    expect(stop.disabled, 'latched but not yet keying: Stop must already be live').toBe(false)
+    cleanup()
+    state.current = { ...state.current, sending: true, latched: false }
+    await renderCockpit()
+    stop = document.querySelector('.psk-stop') as HTMLButtonElement
+    expect(stop.disabled, 'an over on the air: Stop is live').toBe(false)
+  })
+
   it("⊞ 'Waterfall' unticked leaves the transcript to take the height, and vice versa", async () => {
     await renderCockpit({ panels: fakePanels(['scope']) })
     expect(document.querySelector('.waterfall-wrap')).toBeNull()
@@ -195,6 +211,9 @@ describe('PskCockpit pane shell', () => {
     await renderCockpit({ panels: fakePanels(['stream']) })
     expect(document.querySelector('[data-pane="stream"]')).toBeNull()
     expect(document.querySelector('.waterfall-wrap'), 'the waterfall is a separate entry').not.toBeNull()
+    // Stop and Send are not gated by the menu — they have no id to gate.
+    expect(document.querySelector('.cockpit-txdock .psk-stop')).not.toBeNull()
+    expect(document.querySelector('.cockpit-txdock .cw-send-btn')).not.toBeNull()
   })
 
   it('survives the keep-alive hide/show round trip with its structure intact', async () => {
@@ -206,15 +225,12 @@ describe('PskCockpit pane shell', () => {
       rerender(<PskCockpit snap={snap} active={true} />)
     })
     expect(document.querySelector('[data-pane="stream"]')).not.toBeNull()
-    expect(document.querySelector('.cockpit-txdock')).toBeNull()
+    expect(document.querySelector('.cockpit-txdock')).not.toBeNull()
   })
 })
 
 describe('PSK view-entry auto-arm (the APRS/SSTV pattern, operator ruling 2026-08-17)', () => {
   it('entering the view calls the ENGINE policy exactly once per activation edge', async () => {
-    // The engine owns the decline memory + the Settings opt-out; the view's whole
-    // job is to report the entry. Once per rising edge — a re-render while active
-    // must not hammer the command.
     const { rerender } = await renderCockpit({ active: true })
     expect(pskAutoArm).toHaveBeenCalledTimes(1)
     await act(async () => {
@@ -238,8 +254,6 @@ describe('PSK view-entry auto-arm (the APRS/SSTV pattern, operator ruling 2026-0
   })
 
   it("the pane's Arm button is the EXPLICIT stop/start the engine remembers", async () => {
-    // Disarm goes through pskArm(false) — the act the engine latches as the
-    // session decline — never through some local state that a remount would lose.
     state.current = { ...state.current, armed: true }
     await renderCockpit()
     const btn = document.querySelector('.rtty-arm')! as HTMLButtonElement

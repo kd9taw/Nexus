@@ -1269,6 +1269,14 @@ export interface PskState {
   /** Per-character confidence 0–100, parallel to `text`'s chars — render low
    * values faint (the phase-margin soft metric). */
   charConf: number[]
+  /** A PSK over is on the air, queued behind one, or the latched stream is
+   * running — the TX indicator and the Esc/Stop macro's enable. */
+  sending: boolean
+  /** Continuous TX is latched (reported separately from `sending` so Stop is
+   * live from the instant the latch goes up — the RTTY rule). */
+  latched: boolean
+  /** The last TX failure to surface (PTT refused, the ceiling note). */
+  keyerError: string | null
 }
 
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder

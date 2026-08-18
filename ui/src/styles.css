@@ -19121,18 +19121,13 @@ button.sat-chip:disabled {
   min-height: 0;
   height: auto;
 }
-/* PSK "RX only" badge beside the mode badge — the honest label for a cockpit
-   whose transmit half is a later phase (reuses the backend-pill look). */
-.psk-rx-pill {
+/* PSK TX dock drive hint — the one operator-facing ALC/IMD sentence (the plan's
+   "modest default drive + a dock hint, no auto-ALC"). Quiet caption styling: it
+   is standing advice, not an alert, and must not compete with the Stop row. */
+.psk-drive-hint {
   font-size: var(--fs-label);
-  font-weight: 700;
-  letter-spacing: 0.06em;
   color: var(--text-dim);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 2px 10px;
-  margin-left: var(--space-2);
+  padding: 0 var(--space-1);
 }
 /* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
    rebuild — the child combinator stopped matching once the rows moved inside the pinned
