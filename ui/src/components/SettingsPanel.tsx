@@ -86,7 +86,7 @@ import { allTxtLocation, recordingsLocation, revealAllTxt, revealRecordings } fr
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
-import { FrequencyControl } from './FrequencyControl'
+import { SettingsStation } from './SettingsStation'
 import { SetupHealth } from './SetupHealth'
 import { ThemeSwitcher } from './ThemeSwitcher'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
@@ -184,40 +184,8 @@ const FD_SECTION_CODES = new Set(FD_SECTION_OPTIONS.map((s) => s.code))
 // Skipping rather than fabricating — the datalist + validation above already make the
 // section fast and correct to pick by hand.
 
-interface FieldDef {
-  key: FieldKey
-  label: string
-  type: 'text' | 'number'
-  placeholder: string
-  hint?: string
-}
-
-// Operator basics (band / dial / sideband are handled by FrequencyControl).
-const BASIC_FIELDS: FieldDef[] = [
-  { key: 'mycall', label: 'Callsign', type: 'text', placeholder: 'KD9TAW', hint: 'Your station callsign (required).' },
-  {
-    key: 'mygrid',
-    label: 'Grid',
-    type: 'text',
-    placeholder: 'EN52xa',
-    hint: 'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.',
-  },
-  { key: 'opName', label: 'Operator name', type: 'text', placeholder: 'Seth', hint: 'Used by the CW {NAME} macro and logging.' },
-  // #25 — who is AT THE KEY, as opposed to whose station it is. Two different questions, and
-  // ADIF has two fields because the answers differ: STATION_CALLSIGN is the callsign above,
-  // OPERATOR is this. Set it and every contact you log carries it, so a two-person activation
-  // can be split by operator afterwards instead of hand-edited. This setting already existed
-  // but only inside the Field Day view, where a POTA pair would never find it — and it only
-  // ever reached the N3FJP feed, never the operator's own log.
-  {
-    key: 'fdOperator',
-    label: 'Operator at the key',
-    type: 'text',
-    placeholder: 'leave blank if that is you',
-    hint: 'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op and nothing is stamped. Change it when you swap seats.',
-  },
-  { key: 'opState', label: 'State', type: 'text', placeholder: 'WI', hint: 'Your US state/province — the CW {MYSTATE} macro (ragchew QTH).' },
-]
+// Operator basics (band / dial / sideband are handled by FrequencyControl) live in
+// `SettingsStation.tsx` — extracted 2026-08-18 as the i18n pilot, DOM unchanged.
 
 const PTT_METHODS: { value: string; label: string }[] = [
   { value: 'cat', label: 'CAT (via rigctld)' },
@@ -2593,62 +2561,13 @@ export function SettingsPanel({
 
           {/* ---- Operator & radio ---- */}
           {tab === 'station' && (
-          <fieldset className="settings-section" id="settings-operator-radio">
-            <legend>Operator &amp; Radio</legend>
-            <div className="settings-grid">
-              {BASIC_FIELDS.map((f) => {
-                const value = form[f.key]
-                const invalid = f.key === 'mycall' && !String(value).trim()
-                return (
-                  <label className="settings-field" key={f.key}>
-                    <span className="settings-label">{f.label}</span>
-                    <input
-                      className={`settings-input${invalid && error ? ' invalid' : ''}`}
-                      type={f.type}
-                      value={String(value)}
-                      placeholder={f.placeholder}
-                      onChange={(e) => update(f.key, e.target.value)}
-                      aria-invalid={invalid && !!error}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    {f.hint && <span className="settings-hint">{f.hint}</span>}
-                  </label>
-                )
-              })}
-              <label className="settings-field">
-                <span className="settings-label">License Class</span>
-                <select
-                  className="settings-input"
-                  value={String(form.licenseClass ?? 'open')}
-                  onChange={(e) => update('licenseClass', e.target.value)}
-                >
-                  <option value="technician">Technician (US)</option>
-                  <option value="general">General (US)</option>
-                  <option value="extra">Amateur Extra (US)</option>
-                  <option value="open">Open — no transmit limits</option>
-                </select>
-                <span className="settings-hint">
-                  Sets your transmit privileges + the licensed-segment band dropdown. Open = no
-                  limits (outside the US).
-                </span>
-              </label>
-            </div>
-            <div className="settings-freq">
-              <span className="settings-label">Band &amp; Frequency</span>
-              <FrequencyControl
-                channels={bandPlan}
-                dialMhz={form.dialMhz}
-                band={form.band}
-                mode={form.sideband}
-                variant="full"
-                onSet={setFreq}
-              />
-              <span className="settings-hint">
-                Pick a band-plan channel, or type a dial frequency in MHz.
-              </span>
-            </div>
-          </fieldset>
+          <SettingsStation
+            form={form}
+            error={error}
+            bandPlan={bandPlan}
+            onUpdate={update}
+            onSetFreq={setFreq}
+          />
           )}
 
           {/* ---- Rig control ---- */}
