@@ -8,6 +8,7 @@ import {
   importSettingsBundle,
   saveTextToDownloads,
   setBlockedCalls as apiSetBlockedCalls,
+  type SerialPortInfo,
 } from '../api'
 import type {
   AudioDevices,
@@ -601,9 +602,17 @@ export function SettingsPanel({
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
   const [portLabels, setPortLabels] = useState<Record<string, string>>({})
-  const applyPorts = (infos: { name: string; label: string }[]) => {
+  /**
+   * The port rows exactly as the backend sent them, kept ALONGSIDE the names and labels above
+   * rather than replacing them. The pickers keep working on plain strings; only the two pre-save
+   * topology checks read these, and they read optional fields that are absent on every platform
+   * that cannot prove USB topology. See `checkRigForm`.
+   */
+  const [portInfos, setPortInfos] = useState<SerialPortInfo[]>([])
+  const applyPorts = (infos: SerialPortInfo[]) => {
     setSerialPorts(infos.map((i) => i.name))
     setPortLabels(Object.fromEntries(infos.map((i) => [i.name, i.label])))
+    setPortInfos(infos)
   }
   // Native CI-V bus diagnostic log: null = off, string = the log file path while capturing.
   // Transient (not persisted) — a support tool the operator arms to capture a fault. The
@@ -657,7 +666,10 @@ export function SettingsPanel({
     input: Record<string, string>
     output: Record<string, string>
   }>({ input: {}, output: {} })
+  /** The device rows as sent, for the same-radio check only — see `portInfos` above. */
+  const [audioInfos, setAudioInfos] = useState<AudioDevices>({ input: [], output: [] })
   const applyAudio = (d: AudioDevices) => {
+    setAudioInfos(d)
     setAudio({ input: d.input.map((x) => x.name), output: d.output.map((x) => x.name) })
     setAudioLabels({
       input: Object.fromEntries(d.input.map((x) => [x.name, x.label])),
@@ -1966,7 +1978,13 @@ export function SettingsPanel({
     // the symptom always shows up far from the cause. Errors block and name the fix; warnings are
     // stated and the operator proceeds, because an unusual-but-correct station must never be
     // locked out of its own configuration by a heuristic.
-    const rigProblems = checkRigForm(form, serialPorts, portlessRigModels)
+    const rigProblems = checkRigForm(
+      form,
+      serialPorts,
+      portlessRigModels,
+      portInfos,
+      audioInfos,
+    )
     setRigChecks(rigProblems)
     if (blocks(rigProblems)) {
       setTab('radio')

@@ -143,7 +143,82 @@ pub fn available_usb_ports() -> Vec<UsbPort> {
     };
     #[cfg(target_os = "macos")]
     let ports = collapse_tty_twins(ports);
+    // Topology runs SECOND, and only as a tie-break: the name rule above already removed every
+    // duplicate it can prove, and this catches the ones a name cannot see. With IOKit silent it
+    // returns the list untouched, so a machine where topology is unavailable behaves exactly as
+    // before.
+    #[cfg(target_os = "macos")]
+    let ports = collapse_usb_siblings(
+        ports,
+        &crate::usbtopo::serial_locations(),
+        &crate::usbtopo::serial_interfaces(),
+    );
     ports
+}
+
+/// Drop ports that USB topology proves are the same physical interface under another name.
+///
+/// THE CASE NAMES CANNOT SEE. A Silicon Labs bridge appears BOTH as
+/// `cu.usbserial-<serial><iface>` (Apple's driver) and as `cu.SLAB_USBtoUART<n>` (the vendor
+/// extension). Same silicon, same port, two unrelated strings — so `collapse_tty_twins` cannot
+/// pair them, and a two-radio station was offered 22 rows for 4 real ports.
+///
+/// A TIE-BREAK, NOT A REPLACEMENT. It runs after the name rule and only removes a port when the
+/// SAME USB device AND the SAME interface number already appear in the list. Anything it cannot
+/// key — no location, no interface number, or an empty map because IOKit answered nothing — is
+/// KEPT. Losing a real port here would look exactly like a rig that stopped existing, so the
+/// bias is deliberate: prove the duplicate or keep it.
+///
+/// Takes the maps as parameters rather than reading IOKit itself, so the ranking and the
+/// keep/drop decision are testable on any platform — which is the whole of what CI can check
+/// here.
+#[cfg(all(feature = "serial", target_os = "macos"))]
+fn collapse_usb_siblings(
+    ports: Vec<UsbPort>,
+    locations: &std::collections::HashMap<String, u32>,
+    interfaces: &std::collections::HashMap<String, u32>,
+) -> Vec<UsbPort> {
+    use std::collections::HashMap;
+    // Lower is better. `usbserial-` encodes the adapter's own serial number and which half of a
+    // dual bridge it is, so it survives a reboot and identifies itself; `SLAB_` is positional and
+    // renumbers. Keep the one an operator can recognise again tomorrow.
+    fn rank(name: &str) -> u8 {
+        let base = name.rsplit('/').next().unwrap_or(name);
+        if base.starts_with("cu.usbserial-") {
+            0
+        } else if base.starts_with("cu.SLAB_") {
+            1
+        } else {
+            2
+        }
+    }
+    if locations.is_empty() {
+        return ports; // IOKit said nothing — behave exactly as before
+    }
+    let mut best: HashMap<(u32, u32), usize> = HashMap::new();
+    let mut keep = vec![true; ports.len()];
+    for (i, p) in ports.iter().enumerate() {
+        let (Some(&loc), Some(&iface)) =
+            (locations.get(&p.port_name), interfaces.get(&p.port_name))
+        else {
+            continue; // unkeyable -> always kept
+        };
+        match best.get(&(loc, iface)) {
+            Some(&j) if rank(&ports[j].port_name) <= rank(&p.port_name) => keep[i] = false,
+            Some(&j) => {
+                keep[j] = false;
+                best.insert((loc, iface), i);
+            }
+            None => {
+                best.insert((loc, iface), i);
+            }
+        }
+    }
+    ports
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(p, k)| k.then_some(p))
+        .collect()
 }
 
 /// macOS lists every serial port TWICE: `/dev/cu.X` and `/dev/tty.X` are the same hardware.
@@ -186,6 +261,94 @@ pub fn available_usb_ports() -> Vec<UsbPort> {
 
 #[cfg(test)]
 mod tests {
+
+    /// THE SIBLING COLLAPSE, driven by injected maps — which is all CI can do here, and enough:
+    /// the ranking and the keep/drop decision are the whole of the logic. Measured case (ON8ST,
+    /// 2026-08-13): one Silicon Labs bridge appears as BOTH `cu.usbserial-01AF7FED0` (Apple's
+    /// driver) and `cu.SLAB_USBtoUART` (the vendor extension) — same silicon, same interface, two
+    /// unrelated strings that no name rule can pair.
+    #[cfg(all(feature = "serial", target_os = "macos"))]
+    #[test]
+    fn usb_siblings_collapse_to_the_name_that_identifies_itself() {
+        use std::collections::HashMap;
+        let mk = |n: &str| UsbPort {
+            port_name: n.to_string(),
+            vid: 0x10c4,
+            pid: 0xea70,
+            product: "CP2105".into(),
+            manufacturer: "Silicon Labs".into(),
+        };
+        let ports = vec![
+            mk("/dev/cu.SLAB_USBtoUART"), // same device+interface as the next one
+            mk("/dev/cu.usbserial-01AF7FED0"), // …and this is the one to keep
+            mk("/dev/cu.usbserial-01A98F800"), // a different rig entirely
+            mk("/dev/cu.unkeyable"),      // no topology at all
+        ];
+        let locs: HashMap<String, u32> = [
+            ("/dev/cu.SLAB_USBtoUART", 0x111000),
+            ("/dev/cu.usbserial-01AF7FED0", 0x111000),
+            ("/dev/cu.usbserial-01A98F800", 0x121000),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+        let ifaces: HashMap<String, u32> = [
+            ("/dev/cu.SLAB_USBtoUART", 0),
+            ("/dev/cu.usbserial-01AF7FED0", 0),
+            ("/dev/cu.usbserial-01A98F800", 0),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+
+        let got = collapse_usb_siblings(ports.clone(), &locs, &ifaces);
+        let names: Vec<&str> = got.iter().map(|p| p.port_name.as_str()).collect();
+        assert!(
+            names.contains(&"/dev/cu.usbserial-01AF7FED0"),
+            "the self-identifying name wins: {names:?}"
+        );
+        assert!(
+            !names.contains(&"/dev/cu.SLAB_USBtoUART"),
+            "its positional twin goes: {names:?}"
+        );
+        assert!(
+            names.contains(&"/dev/cu.usbserial-01A98F800"),
+            "a different device is not a duplicate: {names:?}"
+        );
+        assert!(
+            names.contains(&"/dev/cu.unkeyable"),
+            "no topology means KEEP — losing a real port looks like a dead rig: {names:?}"
+        );
+
+        // AND THE DEGRADE PATH. With IOKit silent the list must come back untouched, or a machine
+        // where topology is unavailable would behave differently from one where it never existed.
+        let untouched = collapse_usb_siblings(ports.clone(), &HashMap::new(), &HashMap::new());
+        assert_eq!(untouched.len(), ports.len(), "an empty map removes nothing");
+
+        // A SECOND INTERFACE OF ONE BRIDGE IS NOT A DUPLICATE — it is the other half, and CAT
+        // answers on only one of them. Keying on (device, interface) rather than device alone is
+        // what keeps it.
+        let two_halves = vec![
+            mk("/dev/cu.usbserial-01AF7FED0"),
+            mk("/dev/cu.usbserial-01AF7FED1"),
+        ];
+        let l2: HashMap<String, u32> = two_halves
+            .iter()
+            .map(|p| (p.port_name.clone(), 0x111000))
+            .collect();
+        let i2: HashMap<String, u32> = [
+            ("/dev/cu.usbserial-01AF7FED0", 0),
+            ("/dev/cu.usbserial-01AF7FED1", 1),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+        assert_eq!(
+            collapse_usb_siblings(two_halves, &l2, &i2).len(),
+            2,
+            "both halves of a dual bridge survive"
+        );
+    }
 
     /// macOS offers every serial port twice. `tty.*` blocks on carrier detect and HANGS rather
     /// than failing, so it is never the right node for a rig — but it sits beside its `cu.*` twin

@@ -4955,9 +4955,12 @@ name = "tempo-audio"
 version = "0.2.0"
 dependencies = [
  "alsa",
+ "core-foundation-sys",
+ "coreaudio-sys",
  "cpal",
  "deepcw",
  "hound",
+ "io-kit-sys",
  "png 0.17.16",
  "serde_json",
  "serialport",
