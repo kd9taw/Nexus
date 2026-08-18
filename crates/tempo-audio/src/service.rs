@@ -2162,9 +2162,10 @@ struct RadioLoop {
     /// The (radio-model, network?) key the current `spectrum_src` was started for, so a switch to a
     /// different native-scope rig tears down + restarts it, and same-radio ticks are a no-op.
     spectrum_src_key: Option<(u32, bool)>,
-    /// Native FlexRadio DAX RX audio worker (Phase 2). `Some` only while `flex_native_audio` is on
-    /// and a network Flex is active; its 12 kHz audio then replaces the soundcard as the RX source.
-    /// Opt-in + unverified-on-hardware, exactly like `spectrum_src`.
+    /// Native FlexRadio DAX audio worker (Phase 2). `Some` only while `flex_native_audio` is on
+    /// and a network Flex is active; its 12 kHz audio then replaces the soundcard as the RX source,
+    /// and its `tx_tee` replaces the soundcard as the TX route (BOTH directions — see the
+    /// `flexdax` module header). Opt-in + unverified-on-hardware, exactly like `spectrum_src`.
     dax_src: Option<crate::flexdax::FlexDax>,
     /// The key the current `dax_src` was started for (same tear-down/no-op discipline as spectrum).
     dax_src_key: Option<(u32, bool)>,
@@ -2606,6 +2607,15 @@ impl RadioLoop {
             // Reset the starvation bookkeeping with the source it belongs to.
             self.dax_started = None;
             self.dax_saw_audio = false;
+            // …and the BANNER with it. `ErrOwner::Dax` was the one owner with no clear arm (every
+            // sibling has one: Ptt, Device, SilentCapture, Monitor, VoiceMic), so a native-audio
+            // failure left "RADIO STOPPED" on screen for the rest of the session — over a working
+            // sound card, describing a fallback that had already happened — and, because the Ptt,
+            // SilentCapture, Monitor and VoiceMic writers are all gated on owning the line, it
+            // MASKED every later warning too (2026-08-17 Flex audit, wave-1 #49). This transition
+            // is the resolution: the operator turned the toggle off, fixed the address, or moved
+            // to another radio. A start that fails again re-raises it three lines below.
+            self.clear_audio_error_if_owned(engine, ErrOwner::Dax);
             if dax_enabled && !ip.is_empty() {
                 match crate::flexdax::FlexDax::start(engine.clone(), ip) {
                     Ok(d) => {
@@ -2667,6 +2677,21 @@ impl RadioLoop {
     fn publish_tx_intent_now(&self) {
         if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
             d.set_tx_intent(true);
+        }
+    }
+
+    /// Clear the shared audio-error banner IF `owner` still holds it, and hand the line back.
+    ///
+    /// The arbitration rule the inline clear arms all follow (`report_ptt`, the device,
+    /// silent-capture, monitor and voice-mic paths): a writer clears only its OWN status, so a
+    /// resolved warning never erases a more serious error that arrived after it.
+    fn clear_audio_error_if_owned(&mut self, engine: &Arc<Mutex<Engine>>, owner: ErrOwner) {
+        if self.err_owner == owner {
+            {
+                let mut eng = engine_lock(engine);
+                eng.set_audio_error(None);
+            }
+            self.err_owner = ErrOwner::None;
         }
     }
 
@@ -3116,7 +3141,8 @@ impl RadioLoop {
             self.rx.push(&captured);
         }
         // Keep the DAX TX tee in sync with the DAX source: install it when native audio starts (so
-        // backend.play also sends TX over DAX), clear it when it stops. TX schedule is unchanged.
+        // backend.play sends TX over DAX INSTEAD of the sound card — one route, never both), clear
+        // it when it stops. The TX schedule is unchanged either way.
         match (self.dax_src.as_ref(), self.dax_tee_set) {
             (Some(dax), false) => {
                 backend.set_tx_tee(Some(dax.tx_tee()));
@@ -14678,6 +14704,54 @@ mod tests {
             Some(t0),
             t0 + SILENT_CAPTURE_CONFIRM_MS
         ));
+    }
+
+    /// THE DAX BANNER MUST COME DOWN AGAIN (2026-08-17 Flex audit, wave-1 #49).
+    ///
+    /// `ErrOwner::Dax` was the one owner with no clear arm — every sibling has one — so a native-
+    /// audio failure left "RADIO STOPPED" on screen for the rest of the session, over a working
+    /// sound card, describing a fallback that had already happened. Worse, it MASKED everything
+    /// after it: the PTT, silent-capture, monitor and voice-mic writers are all gated on owning
+    /// the line, so a real problem could not be reported while it was stuck.
+    #[test]
+    fn a_dax_banner_clears_on_its_own_transition_and_leaves_another_owners_line_alone() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut state = loop_state();
+        let banner =
+            |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.audio_error.clone();
+
+        // The state a failed / starved native-audio start leaves behind: a Dax-owned banner with
+        // the worker's key still recorded.
+        engine
+            .lock()
+            .unwrap()
+            .set_audio_error(Some("Native Flex audio couldn't start (…)".to_string()));
+        state.err_owner = ErrOwner::Dax;
+        state.dax_src_key = Some((0, true));
+
+        // The operator does what fixes it — turns the toggle off, or moves to another radio — and
+        // the DAX key goes to None. THAT is the resolution, and it must take the banner with it.
+        state.reconcile_spectrum_source(&engine, 0, false);
+        assert_eq!(state.dax_src_key, None, "the transition happened");
+        assert!(
+            banner(&engine).is_none(),
+            "turning native audio off must take its banner down"
+        );
+        assert_eq!(state.err_owner, ErrOwner::None, "the line is handed back");
+
+        // …and the same transition must not clear a line another writer owns.
+        engine
+            .lock()
+            .unwrap()
+            .set_audio_error(Some("Audio device failed to open".to_string()));
+        state.err_owner = ErrOwner::Device;
+        state.dax_src_key = Some((0, true));
+        state.reconcile_spectrum_source(&engine, 0, false);
+        assert!(
+            banner(&engine).is_some(),
+            "a device error is not the DAX writer's to clear"
+        );
+        assert_eq!(state.err_owner, ErrOwner::Device);
     }
 
     #[test]
