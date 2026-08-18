@@ -89,12 +89,39 @@ const SQUELCH_CLOSE: f32 = 0.35;
 /// costs that character, so it must not happen on noise wobble).
 const SYNC_HYSTERESIS: f32 = 1.25;
 
+/// The QPSK squelch runs on cos(4·arg d) (all four axes are signal), which
+/// decays 4× faster with phase jitter than BPSK's cos(2·arg d) — at the −8 dB
+/// operating floor it rides ≈0.5–0.6 where BPSK's rides ≥0.8, so its gates
+/// sit lower. Still ≥3σ above the noise mean at the 20-symbol time constant
+/// (noise σ ≈ 0.11 there), so the noise-only negative control holds.
+const QPSK_SQUELCH_OPEN: f32 = 0.40;
+const QPSK_SQUELCH_CLOSE: f32 = 0.28;
+
+/// Which PSK sub-mode a demodulator (or the TX path) runs. The whole RX front
+/// end — NCO, decimation, matched filter, symbol sync — is shared; the fork is
+/// at the slicer ([`super::qpsk`] is the QPSK half: K=5 convolutional code,
+/// four-phase differential decisions, soft Viterbi).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PskModeKind {
+    /// BPSK31 — the Phase 1/2 mode, and the default everywhere.
+    #[default]
+    Bpsk31,
+    /// QPSK31 — same baud and varicode behind a rate-1/2 K=5 code.
+    Qpsk31,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PskConfig {
     /// Tuned audio center (Hz) — where the operator clicked on the waterfall.
     pub center_hz: f32,
     /// Slew-limited AFC (±25 Hz around `center_hz`). On by default.
     pub afc: bool,
+    /// Sub-mode: BPSK31 (default) or QPSK31.
+    pub mode: PskModeKind,
+    /// QPSK sideband polarity: `true` = reversed (LSB) — conjugates the
+    /// differential decision (±90° swap). Ignored in BPSK, whose 0°/180°
+    /// constellation is its own mirror image.
+    pub qpsk_reverse: bool,
 }
 
 impl Default for PskConfig {
@@ -104,6 +131,8 @@ impl Default for PskConfig {
             // around 1 kHz in the passband (DigiPan's default carrier).
             center_hz: 1000.0,
             afc: true,
+            mode: PskModeKind::Bpsk31,
+            qpsk_reverse: false,
         }
     }
 }
@@ -197,6 +226,12 @@ pub struct PskDemodulator {
     quality: f32,
     sql_open: bool,
     varicode: VaricodeDecoder,
+    // QPSK only (`Some` iff mode == Qpsk31): the soft Viterbi decoder, and
+    // the slow-averaged axis margin serving as the per-bit confidence (the
+    // Viterbi decorrelates its output bits from any one symbol, so a smoothed
+    // copy-quality reading is the honest metric — see `super::qpsk`).
+    vit: Option<super::qpsk::Viterbi>,
+    qconf: f32,
 }
 
 impl PskDemodulator {
@@ -224,6 +259,8 @@ impl PskDemodulator {
             quality: 0.0,
             sql_open: false,
             varicode: VaricodeDecoder::new(),
+            vit: (cfg.mode == PskModeKind::Qpsk31).then(super::qpsk::Viterbi::new),
+            qconf: 0.0,
         }
     }
 
@@ -267,18 +304,25 @@ impl PskDemodulator {
         self.sym_pos = (self.sym_pos + 1) % SYM_SPS;
         let d = m * prev_sym.conj();
 
-        // AFC: the squared signal removes the BPSK modulation; its sample-lag
-        // rotation is 2× the residual carrier offset, unambiguous to ±125 Hz.
+        // AFC: the squared signal removes the BPSK modulation (its sample-lag
+        // rotation is 2× the residual carrier offset, unambiguous to ±125 Hz);
+        // QPSK needs the FOURTH power — the square only collapses the 180s —
+        // giving 4× the offset, still unambiguous to ±62.5 Hz, well past the
+        // ±25 Hz clamp.
         if self.cfg.afc {
-            let v = m * m;
+            let sq = m * m;
+            let (v, fold) = match self.cfg.mode {
+                PskModeKind::Bpsk31 => (sq, 2.0f32),
+                PskModeKind::Qpsk31 => (sq * sq, 4.0),
+            };
             let w = v * self.afc_prev.conj();
             self.afc_prev = v;
             self.afc_acc += w;
             self.afc_count += 1;
             if self.afc_count >= AFC_BLOCK {
-                let two_omega = self.afc_acc.im.atan2(self.afc_acc.re); // rad/sample, ×2
-                let delta_hz =
-                    two_omega / 2.0 * (SAMPLE_RATE / DECIM as f32) / (2.0 * std::f32::consts::PI);
+                let folded_omega = self.afc_acc.im.atan2(self.afc_acc.re); // rad/sample, ×fold
+                let delta_hz = folded_omega / fold * (SAMPLE_RATE / DECIM as f32)
+                    / (2.0 * std::f32::consts::PI);
                 // Slew-limited proportional walk; the offset integrates.
                 let step = (AFC_GAIN * delta_hz).clamp(-AFC_MAX_STEP_HZ, AFC_MAX_STEP_HZ);
                 self.afc_hz = (self.afc_hz + step).clamp(-AFC_CLAMP_HZ, AFC_CLAMP_HZ);
@@ -314,29 +358,85 @@ impl PskDemodulator {
         // The sampling instant: slice, gate, decode.
         if p == self.sync_phase {
             let dn = norm_sq(d).sqrt();
-            if dn > 1e-12 {
-                // Signal-quality squelch metric: cos(2·arg d) — +1 with the
-                // differential on the 0/π axis (real BPSK), ~0 on noise.
-                let q_inst = (d.re * d.re - d.im * d.im) / (dn * dn);
+            {
+                // Signal-quality squelch metric: cos(2·arg d) for BPSK (the
+                // differential clusters on the 0/π axis), cos(4·arg d) for
+                // QPSK (all four axes are signal) — ≈1 on the mode's real
+                // constellation, ~0 on noise. DEAD AIR (a zero differential —
+                // digitally-silent capture) reads as 0, not as a freeze at
+                // the last value: a squelch that can only close on noise
+                // never closes on a muted chain, and QPSK's traceback drain
+                // hangs off the close.
+                let cos2 = if dn > 1e-12 {
+                    (d.re * d.re - d.im * d.im) / (dn * dn)
+                } else {
+                    0.0
+                };
+                let (q_inst, sq_open, sq_close) = match self.cfg.mode {
+                    PskModeKind::Bpsk31 => (cos2, SQUELCH_OPEN, SQUELCH_CLOSE),
+                    PskModeKind::Qpsk31 => (
+                        2.0 * cos2 * cos2 - 1.0,
+                        QPSK_SQUELCH_OPEN,
+                        QPSK_SQUELCH_CLOSE,
+                    ),
+                };
                 self.quality = decayavg(self.quality, q_inst, 20.0);
                 let was_open = self.sql_open;
                 self.sql_open = if self.sql_open {
-                    self.quality >= SQUELCH_CLOSE
+                    self.quality >= sq_close
                 } else {
-                    self.quality >= SQUELCH_OPEN
+                    self.quality >= sq_open
                 };
                 if was_open && !self.sql_open {
-                    // Signal gone: drop any partial code so band noise can't
-                    // weld half a character onto the next real one.
+                    // Signal gone. QPSK first DRAINS the Viterbi traceback —
+                    // the far station's last characters live in there, and
+                    // the on-air postamble is shorter than the survivor
+                    // window (they were received while the squelch was open,
+                    // so they print). THEN both modes drop any partial code
+                    // so band noise can't weld half a character onto the
+                    // next real one.
+                    if let Some(vit) = &mut self.vit {
+                        let conf = self.qconf;
+                        for bit in vit.flush() {
+                            if let Some(ch) = self.varicode.push(bit, conf) {
+                                out.push(ch);
+                            }
+                        }
+                        vit.reset();
+                    }
                     self.varicode.reset();
                 }
-                let bit = d.re > 0.0; // no reversal = 1
-                let conf = d.re.abs() / dn; // phase-error margin
-                if let Some(ch) = self.varicode.push(bit, conf) {
-                    // The squelch gates the printed OUTPUT only — sync, AFC
-                    // and the slicer keep running underneath (the RTTY rule).
-                    if self.sql_open {
-                        out.push(ch);
+                // Slicing needs a nonzero differential (dead air has no
+                // phase to decide on — the squelch above already read it).
+                if dn > 1e-12 {
+                    match &mut self.vit {
+                        // BPSK: the Phase 1 binary differential slicer.
+                        None => {
+                            let bit = d.re > 0.0; // no reversal = 1
+                            let conf = d.re.abs() / dn; // phase-error margin
+                            if let Some(ch) = self.varicode.push(bit, conf) {
+                                // The squelch gates the printed OUTPUT only —
+                                // sync, AFC and the slicer keep running
+                                // underneath (the RTTY rule).
+                                if self.sql_open {
+                                    out.push(ch);
+                                }
+                            }
+                        }
+                        // QPSK: four-phase soft decision → Viterbi → varicode.
+                        Some(vit) => {
+                            let (re, im) = (d.re / dn, d.im / dn);
+                            self.qconf =
+                                decayavg(self.qconf, super::qpsk::axis_margin(re, im), 16.0);
+                            let costs = super::qpsk::shift_costs(re, im, self.cfg.qpsk_reverse);
+                            if let Some(bit) = vit.step(costs) {
+                                if let Some(ch) = self.varicode.push(bit, self.qconf) {
+                                    if self.sql_open {
+                                        out.push(ch);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

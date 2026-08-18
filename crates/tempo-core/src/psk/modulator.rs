@@ -90,7 +90,7 @@ pub fn bpsk_samples(bits: &[bool], cfg: &PskTxConfig) -> Vec<f32> {
     PskStream::new(*cfg).chunk(bits, true)
 }
 
-/// A RESUMABLE BPSK31 generator — the state one latched transmission is.
+/// A RESUMABLE PSK31 generator — the state one latched transmission is.
 ///
 /// Differential mapping (the demodulator's slicer inverted): bit `1` = the
 /// polarity HOLDS through the next symbol, bit `0` = it REVERSES at the
@@ -101,15 +101,31 @@ pub fn bpsk_samples(bits: &[bool], cfg: &PskTxConfig) -> Vec<f32> {
 /// symbol with the key-down ramp (envelope to zero over its second half), so
 /// a transmission always leaves the air through zero amplitude — ending a
 /// carrier at full scale is a key click. n bits + tail ⇒ n+1 symbols.
+///
+/// GENERALIZED for QPSK31 (Keyboard Modes Phase 3): the polarity is a COMPLEX
+/// unit value rather than ±1, and a symbol boundary applies one of FOUR phase
+/// rotations. BPSK is the 0°/180° subset through [`PskStream::chunk`]; QPSK
+/// pushes ±90° as well through [`PskStream::push_rotation`] (see
+/// [`super::qpsk`], the only other caller). Boundary shaping is the
+/// raised-cosine I/Q interpolation between the two symbol values over the
+/// half-symbol either side of the boundary: for 180° the interpolation
+/// collapses algebraically to the Phase 2 envelope-through-zero (±sin(πu) —
+/// the BPSK waveform is unchanged), for ±90° the value crosses the CHORD
+/// (envelope dips to 1/√2 ≈ −3 dB, never to zero), and 0° stays flat. The
+/// spectrum discipline is therefore unchanged: every boundary is shaped, a
+/// hard 90° step would splatter exactly as a hard reversal would, and
+/// [`TX_DRIVE`] still bounds every sample.
 pub struct PskStream {
     cfg: PskTxConfig,
     /// Carrier phase (rad), carried across chunks — phase continuity.
     phase: f64,
-    /// Polarity of the PENDING (not yet rendered) symbol.
-    pol: f64,
-    /// The pending symbol begins with a shaped rise (a reversal ended the
-    /// previous one — or this is the stream's key-up).
-    start_shaped: bool,
+    /// Complex polarity (I, Q) of the PENDING (not yet rendered) symbol —
+    /// always exactly one of (±1, 0)/(0, ±1), so equality tests are exact and
+    /// rotations never accumulate rounding.
+    cur: (f64, f64),
+    /// Polarity of the last RENDERED symbol; `None` = nothing rendered yet,
+    /// so the pending symbol begins with the shaped key-up ramp from zero.
+    prev: Option<(f64, f64)>,
     /// Exact cumulative symbol count and the samples emitted for it — the
     /// fractional symbol clock (rounding never accumulates, the AFSK rule;
     /// at 12 kHz / 31.25 Bd a symbol is exactly 384 samples, but the
@@ -118,21 +134,31 @@ pub struct PskStream {
     n_out: u64,
 }
 
+/// Raised-cosine I/Q interpolation `w·a + (1−w)·b`, `w = ½(1+cos πv)` — the
+/// boundary-transition shaper (v runs 0→1 across the one-symbol window
+/// centered on the boundary).
+fn interp(a: (f64, f64), b: (f64, f64), v: f64) -> (f64, f64) {
+    let w = 0.5 * (1.0 + (PI * v).cos());
+    (w * a.0 + (1.0 - w) * b.0, w * a.1 + (1.0 - w) * b.1)
+}
+
 impl PskStream {
     pub fn new(cfg: PskTxConfig) -> Self {
         Self {
             cfg,
             phase: 0.0,
-            pol: 1.0,
+            cur: (1.0, 0.0),
             // The stream's first symbol ramps up from zero — the shaped key-up.
-            start_shaped: true,
+            prev: None,
             t_syms: 0.0,
             n_out: 0,
         }
     }
 
-    /// Render the pending symbol with the given boundary shaping.
-    fn render_symbol(&mut self, end_shaped: bool, out: &mut Vec<f32>) {
+    /// Render the pending symbol. `next` is the symbol value after it,
+    /// deciding the boundary transition at its end; `None` closes the
+    /// transmission with the key-down ramp to zero.
+    fn render_pending(&mut self, next: Option<(f64, f64)>, out: &mut Vec<f32>) {
         let fs = self.cfg.sample_rate.max(1) as f64;
         let dp = 2.0 * PI * self.cfg.center_hz as f64 / fs;
         self.t_syms += 1.0;
@@ -143,27 +169,58 @@ impl PskStream {
         while ((start + n) as f64) < target {
             n += 1;
         }
-        let start_shaped = self.start_shaped;
+        let cur = self.cur;
+        let prev = self.prev;
         for i in 0..n {
             let u = (i as f64 + 0.5) / n as f64; // position in symbol, 0..1
-            let env = if u < 0.5 {
-                if start_shaped {
-                    (PI * u).sin()
-                } else {
-                    1.0
+                                                 // The symbol value at this sample: held mid-symbol, interpolated
+                                                 // across a differing boundary, amplitude-ramped at key-up/down.
+            let (ci, cq) = if u < 0.5 {
+                match prev {
+                    None => (cur.0 * (PI * u).sin(), cur.1 * (PI * u).sin()),
+                    Some(p) if p != cur => interp(p, cur, u + 0.5),
+                    _ => cur,
                 }
-            } else if end_shaped {
-                (PI * u).sin()
             } else {
-                1.0
+                match next {
+                    None => (cur.0 * (PI * u).sin(), cur.1 * (PI * u).sin()),
+                    Some(nx) if nx != cur => interp(cur, nx, u - 0.5),
+                    _ => cur,
+                }
             };
             self.phase += dp;
             if self.phase > 2.0 * PI {
                 self.phase -= 2.0 * PI;
             }
-            out.push((TX_DRIVE as f64 * self.pol * env * self.phase.sin()) as f32);
+            // Audio = I·sin(ωt) + Q·cos(ωt): rotating (I,Q) by +90°
+            // (multiplying by j) ADVANCES the audio phase by +90° — the sign
+            // convention `super::qpsk`'s wire contract is stated in.
+            let (s, c) = self.phase.sin_cos();
+            out.push((TX_DRIVE as f64 * (ci * s + cq * c)) as f32);
         }
         self.n_out += n;
+    }
+
+    /// Advance the stream one symbol whose BOUNDARY applies the unit complex
+    /// rotation `rot`: render the pending symbol against the value the
+    /// rotation produces, then make that value pending. `pub(crate)`: the
+    /// QPSK wrapper in [`super::qpsk`] is the only caller outside this file.
+    pub(crate) fn push_rotation(&mut self, rot: (f64, f64), out: &mut Vec<f32>) {
+        // c′ = c·rot — exact on the {±1, ±j} lattice, so no drift accumulates.
+        let next = (
+            self.cur.0 * rot.0 - self.cur.1 * rot.1,
+            self.cur.0 * rot.1 + self.cur.1 * rot.0,
+        );
+        self.render_pending(Some(next), out);
+        self.prev = Some(self.cur);
+        self.cur = next;
+    }
+
+    /// Close the stream through the shaped key-down (the pending symbol's
+    /// envelope ramps to zero over its second half). `pub(crate)` for the
+    /// QPSK wrapper; BPSK callers use `chunk(&[], true)`.
+    pub(crate) fn close(&mut self, out: &mut Vec<f32>) {
+        self.render_pending(None, out);
     }
 
     /// Render the next chunk of wire bits (`false` = reversal). `tail` closes
@@ -175,16 +232,12 @@ impl PskStream {
         let spb = fs / self.cfg.baud as f64;
         let mut out = Vec::with_capacity(((bits.len() + 1) as f64 * spb) as usize + 1);
         for &b in bits {
-            // The pending symbol's end is decided by this bit; render it.
-            self.render_symbol(!b, &mut out);
-            if !b {
-                self.pol = -self.pol;
-            }
-            self.start_shaped = !b;
+            // bit 1 = the polarity holds (0°), bit 0 = it reverses (180°).
+            self.push_rotation(if b { (1.0, 0.0) } else { (-1.0, 0.0) }, &mut out);
         }
         if tail {
             // Close through zero amplitude — the shaped key-down.
-            self.render_symbol(true, &mut out);
+            self.close(&mut out);
         }
         out
     }
