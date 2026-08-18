@@ -15,19 +15,31 @@ type Handle = {
   available: boolean
   version?: string
   download?: (cb: (ev: { event: string; data?: { contentLength?: number; chunkLength?: number } }) => void) => Promise<void>
+  install?: () => Promise<void>
 }
 
 let nextCheck: () => Promise<Handle | null>
 const checkCalls: number[] = []
+/** Every `invoke(cmd)` the hook made through the api bridge, in order. */
+const invoked: string[] = []
 
 beforeEach(() => {
   vi.useFakeTimers()
   checkCalls.length = 0
+  invoked.length = 0
   ;(window as unknown as { __TAURI__: unknown }).__TAURI__ = {
     updater: {
       check: () => {
         checkCalls.push(Date.now())
         return nextCheck()
+      },
+    },
+    // The api.ts bridge: update_install_block answers "nothing blocks" so install()
+    // proceeds; restart_app just has to be SEEN — the assertion is that it is called.
+    core: {
+      invoke: (cmd: string) => {
+        invoked.push(cmd)
+        return Promise.resolve(cmd === 'update_install_block' ? null : undefined)
       },
     },
   }
@@ -93,5 +105,52 @@ describe('self-update dismissal', () => {
     })
     expect(result.current.phase).toBe('ready')
     expect(result.current.version).toBe('10.0.0')
+  })
+})
+
+describe('install and restart', () => {
+  // The mac QA audit (2026-08-17): the updater plugin's install() swaps the bundle on disk
+  // and resolves with the OLD build still running on macOS/Linux — nothing restarts unless
+  // WE do it. The hook must therefore invoke restart_app AFTER the plugin install resolves,
+  // never before (a restart mid-swap would relaunch a half-written bundle).
+  it('install() asks the backend to restart once the plugin install resolves', async () => {
+    let installed = false
+    nextCheck = () =>
+      Promise.resolve({
+        available: true,
+        version: '9.9.9',
+        download: () => Promise.resolve(),
+        install: () => {
+          installed = true
+          return Promise.resolve()
+        },
+      })
+    const { result } = renderHook(() => useSelfUpdate())
+    await settle()
+    expect(result.current.phase).toBe('ready')
+
+    act(() => result.current.install())
+    await settle()
+    expect(installed, 'control: the plugin install itself ran').toBe(true)
+    expect(invoked).toContain('restart_app')
+    expect(result.current.phase, 'still installing while the restart is in flight').toBe('installing')
+  })
+
+  it('a failing plugin install surfaces the error and never restarts', async () => {
+    nextCheck = () =>
+      Promise.resolve({
+        available: true,
+        version: '9.9.9',
+        download: () => Promise.resolve(),
+        install: () => Promise.reject(new Error('Read-only file system (os error 30)')),
+      })
+    const { result } = renderHook(() => useSelfUpdate())
+    await settle()
+
+    act(() => result.current.install())
+    await settle()
+    expect(result.current.phase).toBe('error')
+    expect(result.current.error).toContain('Read-only file system')
+    expect(invoked, 'a failed swap must not restart into the old bundle').not.toContain('restart_app')
   })
 })

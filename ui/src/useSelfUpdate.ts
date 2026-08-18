@@ -11,7 +11,7 @@
 // it at press time rather than caching means the answer cannot be stale.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { updateInstallBlock } from './api'
+import { restartApp, updateInstallBlock } from './api'
 
 type Phase = 'idle' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
 
@@ -147,6 +147,14 @@ export function useSelfUpdate(): SelfUpdate {
         setPhase('installing')
         try {
           await handle.current?.install?.()
+          // The plugin does NOT restart the app on macOS or the Linux AppImage — install()
+          // swaps the bundle on disk and resolves with the OLD build still running, so
+          // without this call the banner sat at "Nexus will restart…" forever (mac QA
+          // audit, 2026-08-17). The restart is ours to do, and it goes through the
+          // backend's ordinary quit cleanup (TX unkey wait, journal flushes, geometry) —
+          // the same path a window close takes. On Windows the NSIS installer exits the
+          // process mid-install(), so this line is never reached there.
+          await restartApp()
         } catch (e) {
           setError(String(e))
           setPhase('error')

@@ -15299,6 +15299,28 @@ fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>
     ))
 }
 
+/// Finish a self-update: restart Nexus through the ORDINARY quit path.
+///
+/// Exists because tauri-plugin-updater's `install()` restarts nothing on macOS or the Linux
+/// AppImage — its unix arms swap the bundle/AppImage on disk and return `Ok` with the OLD
+/// build still running, so the "Nexus will restart…" banner hung forever while the operator
+/// kept using the replaced binary (mac QA audit, 2026-08-17). Only Windows restarts by
+/// itself there: the NSIS branch execs the installer and exits the process mid-`install()`,
+/// which is why the frontend's call to this command is unreachable on Windows and harmless
+/// to leave unconditional.
+///
+/// `request_restart()`, not `restart()`: it delivers `RunEvent::ExitRequested` then
+/// `RunEvent::Exit`, so `quit_cleanup` runs before the swap-in — the TX-unkey wait, the
+/// journal flushes and the geometry capture, exactly as on a window close. Install is
+/// refused while the radio is busy (`update_install_block`), but TX could have been armed
+/// in the seconds the install itself took; routing the restart through the same
+/// safe-shutdown means a keyed rig is unkeyed, never hard-killed. (`restart()` on the main
+/// thread would skip those events entirely — its own docs say so.)
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.request_restart();
+}
+
 /// Our own update endpoint (schema 1): a `version.json` with a direct `"latest"` field. Primary,
 /// GitHub-first, and under our control — so update accuracy no longer depends on SourceForge's
 /// per-release "Default Download" flip.
@@ -16533,6 +16555,7 @@ pub fn run() {
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
             update_install_block,
+            restart_app,
             log_operators,
             export_settings_bundle,
             import_settings_bundle,

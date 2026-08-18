@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Installing an update on macOS and Linux now actually restarts Nexus.** The banner
+  said "Nexus will restart…" but on those platforms the updater only swapped the app
+  on disk and left the old build running — the banner hung there forever and nothing
+  restarted (Windows was fine; its installer restarts by itself). The restart now
+  happens, and it goes through the normal shutdown: transmitter unkeyed, logs and
+  window position saved, never a hard kill.
+
 - **⌘Q now quits Nexus properly on the Mac.** The menu quit (and its ⌘Q shortcut)
   bypassed the entire shutdown path: no wait for the transmitter to unkey, no
   conversation or Field Day flush, and no window-geometry save — a Mac operator who

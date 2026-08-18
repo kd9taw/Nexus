@@ -852,6 +852,15 @@ export async function updateInstallBlock(): Promise<string | null> {
   return invoke<string | null>('update_install_block')
 }
 
+/** Restart Nexus after a self-update install — through the backend's ordinary quit cleanup
+ * (TX unkey, journal flushes, window geometry), never a hard kill. The updater plugin's
+ * `install()` restarts nothing on macOS/Linux, so this call is what makes "Nexus will
+ * restart…" true there; on Windows the installer already exited the process before
+ * `install()` resolves, so this is never reached. */
+export async function restartApp(): Promise<void> {
+  return invoke<void>('restart_app')
+}
+
 /** One selectable radio in the launch picker. */
 export interface RadioLaunchOption {
   id: number
