@@ -9856,7 +9856,10 @@ mod tests {
         // The next over is judged on its own evidence.
         w.tick(4_000.0, false);
         w.tick(4_020.0, true);
-        assert!(!w.observe_po(4_600.0, Some(0.0)), "still inside the new over's window");
+        assert!(
+            !w.observe_po(4_600.0, Some(0.0)),
+            "still inside the new over's window"
+        );
         assert!(w.observe_po(4_020.0 + NO_RF_AFTER_MS + 1.0, Some(0.0)));
     }
 
@@ -9867,7 +9870,9 @@ mod tests {
     fn only_a_continuous_carrier_over_can_be_judged_on_a_zero_power_reading() {
         // Continuous for their whole length — an FT8/FT4 slot, RTTY either way, PSK31, an SSTV
         // image, an APRS beacon. A zero here is a real "nothing came out".
-        for md in ["PKTUSB", "PKTLSB", "PKTFM", "DATA-U", " data-l ", "RTTY", "rtty"] {
+        for md in [
+            "PKTUSB", "PKTLSB", "PKTFM", "DATA-U", " data-l ", "RTTY", "rtty",
+        ] {
             assert!(mode_keys_a_continuous_carrier(md), "{md} should be watched");
         }
         // Intermittent by nature. Phone and the voice keyer go quiet between words; a CW macro
@@ -9875,7 +9880,10 @@ mod tests {
         // USB/LSB, which this same test excludes). Watching any of them would accuse a station
         // that is working perfectly.
         for md in ["USB", "LSB", "FM", "CW", "CWR", "AM", ""] {
-            assert!(!mode_keys_a_continuous_carrier(md), "{md} must not be watched");
+            assert!(
+                !mode_keys_a_continuous_carrier(md),
+                "{md} must not be watched"
+            );
         }
     }
 
@@ -9885,31 +9893,52 @@ mod tests {
     fn the_no_rf_watch_arms_only_on_an_over_nexus_is_running_itself() {
         let mut s = loop_state();
         s.cur_md = "PKTUSB".to_string();
-        assert!(!s.rf_watchable(), "armed while RECEIVING — nothing is keyed at all");
+        assert!(
+            !s.rf_watchable(),
+            "armed while RECEIVING — nothing is keyed at all"
+        );
 
         s.tx_until_ms = Some(1_000.0); // an FT8 slot over
-        assert!(s.rf_watchable(), "a scheduled digital over is exactly what this watches");
+        assert!(
+            s.rf_watchable(),
+            "a scheduled digital over is exactly what this watches"
+        );
 
         s.tuning_keyed = true;
-        assert!(!s.rf_watchable(), "armed on a TUNE-UP — excluded by contract");
+        assert!(
+            !s.rf_watchable(),
+            "armed on a TUNE-UP — excluded by contract"
+        );
         s.tuning_keyed = false;
 
         s.manual_ptt_applied = true;
-        assert!(!s.rf_watchable(), "armed on live mic PTT — silence between words is normal");
+        assert!(
+            !s.rf_watchable(),
+            "armed on live mic PTT — silence between words is normal"
+        );
         s.manual_ptt_applied = false;
 
         s.cur_md = "CWR".to_string();
-        assert!(!s.rf_watchable(), "armed on a CW over — zero between elements is normal");
+        assert!(
+            !s.rf_watchable(),
+            "armed on a CW over — zero between elements is normal"
+        );
         s.cur_md = "USB".to_string();
         assert!(!s.rf_watchable(), "armed on a phone over");
         s.cur_md = "RTTY".to_string();
-        assert!(s.rf_watchable(), "an FSK RTTY over is continuous and must be watched");
+        assert!(
+            s.rf_watchable(),
+            "an FSK RTTY over is continuous and must be watched"
+        );
 
         // Someone ELSE holding the transmitter (mic at the radio, another program on the
         // broker) is not ours to judge — `rig_keyed` must not arm this on its own.
         s.tx_until_ms = None;
         s.rig_keyed = true;
-        assert!(!s.rf_watchable(), "armed on a transmitter Nexus did not key");
+        assert!(
+            !s.rf_watchable(),
+            "armed on a transmitter Nexus did not key"
+        );
     }
 
     /// …and the four ways it must STAY SILENT. A false "no RF" is worse than no check at all:
@@ -9923,7 +9952,10 @@ mod tests {
         let mut w = TxRfWatch::default();
         w.tick(0.0, true);
         for t in [600.0, 2_400.0, 6_000.0, 12_000.0] {
-            assert!(!w.observe_po(t, None), "a rig with no Po meter was accused at {t} ms");
+            assert!(
+                !w.observe_po(t, None),
+                "a rig with no Po meter was accused at {t} ms"
+            );
         }
 
         // 2. THE RADIO IS MAKING POWER. Including the end-of-over tail-off: once a non-zero
@@ -9955,7 +9987,10 @@ mod tests {
         let mut w = TxRfWatch::default();
         for t in [0.0, 2_000.0, 4_000.0, 30_000.0] {
             w.tick(t, false);
-            assert!(!w.observe_po(t, Some(0.0)), "an unwatched over was accused at {t} ms");
+            assert!(
+                !w.observe_po(t, Some(0.0)),
+                "an unwatched over was accused at {t} ms"
+            );
         }
     }
 

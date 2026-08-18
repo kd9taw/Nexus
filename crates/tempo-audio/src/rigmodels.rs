@@ -936,7 +936,10 @@ mod tests {
     #[test]
     fn the_smartsdr_cat_entry_names_the_8000_series_too() {
         let name = rig_model_name(2036).unwrap_or("");
-        assert!(name.contains("8"), "the 8000 series is invisible again: {name:?}");
+        assert!(
+            name.contains("8"),
+            "the 8000 series is invisible again: {name:?}"
+        );
         assert!(name.contains("6"), "the 6000 series was dropped: {name:?}");
         assert!(
             name.contains("SmartSDR CAT"),
