@@ -43,8 +43,8 @@ use tempo_net::flexcat::{
     SliceStatus,
 };
 use tempo_net::flexvita::{
-    build_dax_tx_packet, parse_dax_audio, parse_vita, DAX_AUDIO_CLASS, DAX_AUDIO_REDUCED_CLASS,
-    DAX_SAMPLE_RATE,
+    build_dax_tx_packet, parse_dax_audio, parse_vita, VitaGap, VitaSequence, DAX_AUDIO_CLASS,
+    DAX_AUDIO_REDUCED_CLASS, DAX_SAMPLE_RATE,
 };
 
 use crate::capture_resample::CaptureResampler;
@@ -58,6 +58,9 @@ const MODEM_RATE: u32 = 12_000;
 const RING_CAP: usize = 120_000;
 /// Keep the SmartSDR client session alive with periodic traffic.
 const KEEPALIVE: Duration = Duration::from_secs(5);
+/// How often the RX thread may name accumulated packet loss in the log. A line per lost datagram
+/// would itself be the problem on a lossy link.
+const LOSS_REPORT_EVERY: Duration = Duration::from_secs(30);
 /// The radio's VITA-49 UDP port (where we SEND DAX TX packets). Standard SmartSDR VITA port.
 const FLEX_VITA_PORT: u16 = 4993;
 /// Audio frames per DAX TX packet (AetherSDR `TX_SAMPLES_PER_PACKET`).
@@ -627,6 +630,13 @@ impl FlexDax {
             handles.push(std::thread::spawn(move || {
                 let mut resampler = CaptureResampler::new(DAX_SAMPLE_RATE, MODEM_RATE); // 24k → 12k
                 let mut dg = vec![0u8; 16 * 1024];
+                // Packet continuity for OUR stream (audit #1008/#1052 — see `VitaSequence`), plus
+                // a rate-limited count for the log: one line per gap would itself be the problem
+                // on a lossy link.
+                let mut seq = VitaSequence::default();
+                let mut lost: u64 = 0;
+                let mut lost_ms = 0.0f64;
+                let mut last_report = Instant::now();
                 while !stop.load(Ordering::Relaxed) {
                     let Ok((n, _)) = udp.recv_from(&mut dg) else {
                         continue; // timeout → re-check stop
@@ -647,10 +657,38 @@ impl FlexDax {
                         (Some(want), Some(got)) if want == got => {}
                         _ => continue,
                     }
+                    // ⚠️ A LOST DATAGRAM MUST COST ITS OWN AIRTIME AND NOTHING ELSE. The ring is a
+                    // pure sample store where position implies time, so splicing the next packet
+                    // straight on after a loss slides every later sample earlier by the missing
+                    // duration — the decode window's t=0 moves and every dt inside it is wrong,
+                    // silently (audit #1008/#1052).
+                    let gap = seq.observe(pkt.packet_count);
+                    if gap == VitaGap::Stale {
+                        continue; // duplicate / straggler: never write it mid-stream
+                    }
                     let Some(mono24) = parse_dax_audio(class, pkt.payload, pkt.has_trailer) else {
                         continue;
                     };
-                    let mono12 = resampler.process(&mono24);
+                    // Fill the hole with its own duration, through the SAME resampler so the
+                    // 24k→12k phase stays continuous across it.
+                    let mut mono12 = if let VitaGap::Lost(n) = gap {
+                        lost += u64::from(n);
+                        lost_ms +=
+                            n as f64 * mono24.len() as f64 * 1000.0 / DAX_SAMPLE_RATE as f64;
+                        resampler.process(&vec![0.0f32; n as usize * mono24.len()])
+                    } else {
+                        Vec::new()
+                    };
+                    mono12.extend_from_slice(&resampler.process(&mono24));
+                    // Say so — silence that is honest about its length is still silence, and an
+                    // operator chasing bad decodes deserves to see the loss in the log.
+                    if lost > 0 && last_report.elapsed() >= LOSS_REPORT_EVERY {
+                        eprintln!(
+                            "tempo-audio: Flex DAX RX has lost {lost} packet(s) this session \
+                             (~{lost_ms:.0} ms of audio, filled with silence)"
+                        );
+                        last_report = Instant::now();
+                    }
                     if mono12.is_empty() {
                         continue;
                     }
