@@ -1,31 +1,44 @@
-//! FlexRadio native DAX RX audio orchestrator (Phase 2) — behind the `device` feature.
+//! FlexRadio native DAX audio orchestrator (Phase 2) — behind the `device` feature.
 //!
-//! Native DAX RX audio: the rig's receive audio arrives over the SAME VITA-49 UDP path as the
-//! panadapter, so FT8/APRS/RTTY decode straight off the network instead of through the WDM-KS "DAX
-//! Audio RX" soundcard device — which is invisible under Remote Desktop (the documented
-//! DAX-under-RDP problem). Mirrors [`crate::flexspectrum`]:
+//! Native DAX audio: the rig's audio travels over the SAME VITA-49 UDP path as the panadapter, so
+//! FT8/APRS/RTTY decode straight off the network instead of through the WDM-KS "DAX Audio RX"
+//! soundcard device — which is invisible under Remote Desktop (the documented DAX-under-RDP
+//! problem). Mirrors [`crate::flexspectrum`], with three threads:
 //! - a **TCP control** thread ([`FlexCat`]) registers Nexus as a client, creates ONE `dax_rx`
 //!   stream on channel 1 + binds the active slice's audio to it, learns the stream's VITA id from
-//!   the async status, keeps the session alive, and removes the stream on teardown; and
+//!   the async status, creates the `dax_tx` stream and routes the rig's transmit audio to it, keeps
+//!   the session alive, and puts every one of those back on teardown;
 //! - a **UDP audio** thread receives VITA-49 datagrams, filters to that stream id (mandatory — the
 //!   `0x03E3` class is shared with plain remote audio), decodes ([`parse_dax_audio`]) to mono
 //!   24 kHz, resamples to the 12 kHz modem rate, and appends to a ring the engine drains as its RX
-//!   audio source.
+//!   audio source; and
+//! - a **TX pacer** thread that streams the modem's transmit audio to the radio in REAL TIME
+//!   ([`DaxTxSender`]).
 //!
-//! RX ONLY — nothing here touches TX (`backend.play` is unchanged); DAX TX is a separate,
-//! approval-gated follow-up. Opt-in via `flex_native_audio`; the command syntax is verified on a
-//! Flex. Only channel 1 is ever created (the "DAX starvation" gotcha: unused streams make the radio
+//! ⚠️ BOTH DIRECTIONS — NOT "RX ONLY". This header claimed "RX ONLY — nothing here touches TX"
+//! for as long as the opposite was shipped, and that stale sentence is what sent the 2026-08-17
+//! Flex audit hunting a transmit bug that is in fact a deliberate decision. What actually happens
+//! while `flex_native_audio` is on: RX audio arrives over DAX, AND the rig's transmit audio is
+//! re-routed to our `dax_tx` stream (`transmit set dax=1`) — so the operator's microphone is
+//! disconnected for as long as the feature is on, and the sound card carries no TX audio. That is
+//! the OPERATOR RULING of 2026-07-26 (reaffirmed 2026-08-17), restated in full at the
+//! `transmit set dax=1` call site: one toggle means native audio both ways. Teardown puts the mic
+//! and the slice's own DAX routing back.
+//!
+//! Opt-in via `flex_native_audio`, OFF by default, and never yet exercised against a real Flex.
+//! Only channel 1 is ever created (the "DAX starvation" gotcha: unused streams make the radio
 //! round-robin audio across all of them, starving the active one).
 
+use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::Engine;
 use tempo_net::flexcat::{
-    parse_create_stream_id, parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg,
+    parse_create_stream_id, parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg, FlexRecv,
 };
 use tempo_net::flexvita::{
     build_dax_tx_packet, parse_dax_audio, parse_vita, DAX_AUDIO_CLASS, DAX_AUDIO_REDUCED_CLASS,
@@ -47,6 +60,21 @@ const KEEPALIVE: Duration = Duration::from_secs(5);
 const FLEX_VITA_PORT: u16 = 4993;
 /// Audio frames per DAX TX packet (AetherSDR `TX_SAMPLES_PER_PACKET`).
 const TX_SAMPLES_PER_PACKET: usize = 128;
+/// Wall-clock airtime of one DAX TX packet: 128 samples at 24 kHz = 5.333 ms. The pacer's tick.
+const TX_PACKET_PERIOD: Duration =
+    Duration::from_nanos((TX_SAMPLES_PER_PACKET as u64 * 1_000_000_000) / DAX_SAMPLE_RATE as u64);
+/// Pacer sleep while a packet's slot is still in the future (a granularity floor, not a deadline —
+/// the pacer catches up from the wall clock, so a long OS sleep quantum costs jitter, not rate).
+const TX_PACER_TICK: Duration = Duration::from_millis(1);
+/// Pacer sleep while nothing is queued (between overs). Nothing is on the air, so precision here
+/// buys nothing and the wakeups are pure cost.
+const TX_IDLE_TICK: Duration = Duration::from_millis(20);
+/// How far behind schedule the pacer may fall before it resyncs to now instead of catching up. A
+/// descheduled thread must not be allowed to turn its backlog into a burst at the radio.
+const TX_MAX_CATCHUP: Duration = Duration::from_millis(100);
+/// Cap the paced-out TX queue at ~20 s of 24 kHz audio — one FT8 over is 12.6 s. A queue with no
+/// ceiling would turn a wedged pacer into unbounded memory growth.
+const TX_QUEUE_CAP: usize = DAX_SAMPLE_RATE as usize * 20;
 
 // ---- pure command helpers (unit-tested; exact SmartSDR syntax verified on a Flex) ----
 
@@ -89,43 +117,177 @@ pub fn transmit_set_dax_command(on: bool) -> String {
     format!("transmit set dax={}", u8::from(on))
 }
 
+/// The dax_tx stream id a `stream create` reply gives us — or `None`, meaning we have no stream and
+/// must NOT re-route the rig's transmit audio.
+///
+/// ⚠️ THE REPLY CODE IS PART OF THE ANSWER, and it was being discarded (`if let Ok((_, reply))`).
+/// `FlexCat::command` returns `Ok` for ANY matching reply, error frames included — `R7|50000015|bad`
+/// parses to a perfectly good `Reply` — so a REFUSED create was indistinguishable from a granted
+/// one, on a LAN, at zero latency. Fail closed: `code == 0` (the SmartSDR success convention) AND a
+/// parseable id, or nothing (audit #1002 / #1044).
+pub fn tx_stream_from_reply(code: u32, body: &str) -> Option<u32> {
+    if code != 0 {
+        return None;
+    }
+    parse_create_stream_id(body)
+}
+
+/// Remembers the slice DAX routing we FOUND, so teardown can put it back.
+///
+/// ⚠️ WHY A TRACKER RATHER THAN A FIELD READ AT THE BIND. `slice set N dax=1` is a persistent
+/// radio-side property; Nexus overwrote it and never restored it, so an operator running slice A on
+/// DAX channel 2 for WSJT-X found it moved to channel 1 permanently, with nothing anywhere saying
+/// Nexus did it (audit #1027 / #1054). The prior value IS on the wire — `SliceStatus.dax_channel` —
+/// but SmartSDR status lines are PARTIAL updates, so the message that triggers a bind usually
+/// carries no `dax=` key at all; it has to come from what was seen earlier (the full dump the radio
+/// sends on `sub slice all`). And once a slice is ours the radio echoes OUR `dax=1` straight back,
+/// so tracking must STOP at the claim, or the "restore" would write back the value we imposed.
+#[derive(Default)]
+pub struct SliceDaxTracker {
+    seen: HashMap<u32, u8>,
+    claimed: HashMap<u32, Option<u8>>,
+}
+
+impl SliceDaxTracker {
+    /// Note a `dax=<n>` carried by a slice status. Ignored for a slice we have already claimed.
+    pub fn observe(&mut self, slice: u32, dax_channel: Option<u8>) {
+        if let Some(channel) = dax_channel {
+            if !self.claimed.contains_key(&slice) {
+                self.seen.insert(slice, channel);
+            }
+        }
+    }
+
+    /// Take a slice over, freezing what it was first. Idempotent — re-claiming a slice we already
+    /// hold never overwrites the original snapshot.
+    pub fn claim(&mut self, slice: u32) {
+        let prior = self.seen.get(&slice).copied();
+        self.claimed.entry(slice).or_insert(prior);
+    }
+
+    /// What to write back for `slice`, or `None` when no `dax=` value for it was ever seen — we
+    /// then leave it alone rather than guess, since `dax=0` would be a second unasked-for change
+    /// to the operator's radio, not a restore.
+    pub fn restore(&self, slice: u32) -> Option<u8> {
+        self.claimed.get(&slice).copied().flatten()
+    }
+}
+
 // ---- DAX TX sender ----
 
-/// Encodes the modem's 12 kHz mono TX audio into DAX VITA-49 packets and sends them to the radio.
-/// Fed from `CpalBackend::play` via a tee closure while native Flex audio is active — so it carries
-/// exactly the audio the soundcard path would, leaving the TX schedule untouched. Upsamples 12k→24k,
-/// converts to int16 mono, and packetizes 128 samples per VITA packet. A no-op until the dax_tx
-/// stream id is learned (and `transmit set dax=1` taken), so nothing reaches the air prematurely.
+/// Encodes the modem's 12 kHz mono TX audio into DAX VITA-49 packets for the radio.
+///
+/// Installed into `CpalBackend` as its [`TxTee`] while native Flex audio is active, so it carries
+/// exactly the audio the soundcard path would and the TX schedule is untouched. `feed` (the radio
+/// loop, via `play`) upsamples 12k→24k and QUEUES; the pacer thread converts to int16 and sends,
+/// 128 samples per VITA packet, one packet per 5.333 ms of wall clock. Nothing is sent until the
+/// dax_tx stream id is learned, so nothing reaches the air prematurely.
+///
+/// ⚠️ TWO INVARIANTS THIS TYPE EXISTS TO HOLD, both from the 2026-08-17 Flex audit:
+/// 1. **The TX level is applied as the audio LEAVES** (`take_packet`), never as it is queued —
+///    the same rule, and the same reason, as `device::next_tx_sample`: the queue holds a whole
+///    13 s over, so a level baked in at `feed` time could not be changed by the Pwr slider (that
+///    was issue #14 on the soundcard path). Before this, the DAX route did not apply the level at
+///    ALL and put full-scale audio into the transmitter no matter where Pwr sat (#1048).
+/// 2. **It is PACED to real time.** `play` hands over an entire prebuilt over in ONE call; the old
+///    `feed` drained it straight to the socket, ~2,370 datagrams (~670 KB) in a few milliseconds
+///    for 12.6 s of audio (#1042). The radio expects a stream, not a flood.
 pub struct DaxTxSender {
-    sock: UdpSocket,
-    radio: SocketAddr,
+    /// Our dax_tx stream id, learned from the create reply. `None` = nothing may be sent.
     stream_id: Arc<Mutex<Option<u32>>>,
+    /// TX drive (f32 bits, 0.0–1.0) — the operator's Pwr slider, pushed down by the backend that
+    /// owns it (`CpalBackend::set_tx_level` / `set_tx_tee`), read per packet as it leaves.
+    level: AtomicU32,
     state: Mutex<TxSendState>,
 }
 
 struct TxSendState {
     resampler: CaptureResampler,
-    accum: Vec<i16>,
-    counter: u8,
+    /// 24 kHz mono audio waiting for its real-time send slot. UNSCALED — see invariant 1.
+    queue: VecDeque<f32>,
+}
+
+/// The pacer's clock rule: once a packet has been sent at `now`, when is the next one due?
+///
+/// Exactly one packet's airtime after the LAST due time — not after `now` — so the long-run rate is
+/// the radio's own sample rate no matter what the OS sleep granularity does to any single wakeup
+/// (Windows' default quantum is ~15 ms against a 5.3 ms packet, so catching up is the normal case,
+/// not an error case). The one exception is falling further behind than [`TX_MAX_CATCHUP`]: a
+/// thread that was descheduled for a second must resync rather than discharge its whole backlog at
+/// the radio, which is the burst this pacer exists to prevent. Pure, so the pacing is testable with
+/// no Flex on the bench (audit #1042).
+fn advance_pacer(now: Instant, next_at: Instant) -> Instant {
+    let next = next_at + TX_PACKET_PERIOD;
+    if now.saturating_duration_since(next) > TX_MAX_CATCHUP {
+        now
+    } else {
+        next
+    }
 }
 
 impl DaxTxSender {
+    /// The next packet's worth of samples, scaled by the level as it stands RIGHT NOW, or `None`
+    /// when less than a whole packet is queued.
+    fn take_packet(&self) -> Option<Vec<i16>> {
+        let level = f32::from_bits(self.level.load(Ordering::Relaxed));
+        let mut st = self.state.lock().unwrap();
+        if st.queue.len() < TX_SAMPLES_PER_PACKET {
+            return None;
+        }
+        Some(
+            st.queue
+                .drain(..TX_SAMPLES_PER_PACKET)
+                // Identical to the soundcard route: level first (`next_tx_sample`), then the
+                // clamp + full-scale conversion the device format applies (`device.rs`).
+                .map(|s| ((s * level).clamp(-1.0, 1.0) * 32767.0) as i16)
+                .collect(),
+        )
+    }
+}
+
+impl crate::backend::TxTee for DaxTxSender {
+    /// Queue an over. Called from the RADIO LOOP with the whole waveform in one buffer, so it must
+    /// never block and never send — the sending is the pacer's job.
     fn feed(&self, mono12: &[f32]) {
-        let Some(sid) = *self.stream_id.lock().unwrap() else {
+        if self.stream_id.lock().unwrap().is_none() {
             return; // stream not up yet → nothing on the air
-        };
+        }
         let mut st = self.state.lock().unwrap();
         let up = st.resampler.process(mono12); // 12k → 24k
-        for &s in &up {
-            st.accum.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+        st.queue.extend(up);
+        if st.queue.len() > TX_QUEUE_CAP {
+            let drop = st.queue.len() - TX_QUEUE_CAP;
+            st.queue.drain(..drop);
         }
-        while st.accum.len() >= TX_SAMPLES_PER_PACKET {
-            let chunk: Vec<i16> = st.accum.drain(..TX_SAMPLES_PER_PACKET).collect();
-            let counter = st.counter;
-            st.counter = (st.counter + 1) & 0x0F;
-            let pkt = build_dax_tx_packet(sid, counter, &chunk);
-            let _ = self.sock.send_to(&pkt, self.radio);
-        }
+    }
+
+    /// Adopt the backend's TX level (0.0–1.0).
+    fn set_level(&self, level: f32) {
+        self.level
+            .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Hard Stop TX for this route: discard everything queued but not yet paced out, so
+    /// `flush_output` cuts a native over exactly as it cuts a soundcard one. Returns the count
+    /// discarded (24 kHz samples). Without this, making the DAX route exclusive would have left
+    /// Stop TX with nothing to cut but a ring the over no longer travels through.
+    fn flush(&self) -> usize {
+        let mut st = self.state.lock().unwrap();
+        let n = st.queue.len();
+        st.queue.clear();
+        n
+    }
+}
+
+/// Put a slice's DAX routing back to what the radio reported before we claimed it.
+///
+/// `prior` is `None` when no `dax=` value for that slice was ever seen — we then leave the slice
+/// alone rather than guess. Writing `dax=0` there would be a second unasked-for change to the
+/// operator's radio, not a restore; SmartSDR dumps every slice's full state on `sub slice all`, so
+/// the value is normally in hand long before a bind fires.
+fn restore_slice_dax(flex: &mut FlexCat, slice: u32, prior: Option<u8>) {
+    if let Some(channel) = prior {
+        let _ = flex.send(&slice_dax_command(slice, channel));
     }
 }
 
@@ -161,13 +323,13 @@ impl FlexDax {
         })?;
         let tx_stream_id = Arc::new(Mutex::new(None::<u32>));
         let tx = Arc::new(DaxTxSender {
-            sock: tx_sock,
-            radio,
             stream_id: tx_stream_id.clone(),
+            // Unity until the backend pushes the operator's Pwr down (it does so on install, so
+            // this default is never what an over actually goes out at).
+            level: AtomicU32::new(1.0f32.to_bits()),
             state: Mutex::new(TxSendState {
                 resampler: CaptureResampler::new(MODEM_RATE, DAX_SAMPLE_RATE), // 12k → 24k
-                accum: Vec::new(),
-                counter: 0,
+                queue: VecDeque::new(),
             }),
         });
         let mut handles = Vec::new();
@@ -181,6 +343,13 @@ impl FlexDax {
                 let Ok(mut flex) = FlexCat::connect(&ip) else {
                     return;
                 };
+                // Dropped while we were connecting (bounded, but not instant): the radio has heard
+                // nothing from us, so leave it exactly as we found it. Without this, a worker that
+                // finally connects after its `FlexDax` is gone would create streams and re-route
+                // transmit audio behind the back of the worker that replaced it.
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
                 for cmd in register_dax_commands(udp_port) {
                     let _ = flex.send(&cmd);
                 }
@@ -203,53 +372,95 @@ impl FlexDax {
                 // not behind a second one. Teardown restores the mic on stop, so the rig is never
                 // left expecting DAX audio that stopped arriving.
                 let mut tx_created: Option<u32> = None;
-                if let Ok((_, reply)) =
+                if let Ok((code, reply)) =
                     flex.command(&dax_tx_create_command(), Duration::from_millis(600))
                 {
-                    if let Some(sid) = parse_create_stream_id(&reply) {
+                    if let Some(sid) = tx_stream_from_reply(code, &reply) {
                         *tx_stream_id.lock().unwrap() = Some(sid);
                         tx_created = Some(sid);
                     }
                 }
-                let _ = flex.send(&transmit_set_dax_command(true));
+                // ⚠️ CONDITIONAL ON THE CREATE — and that is NOT a re-gating of the ruling above.
+                // The ruling is about which TOGGLE owns the transmit path, and it stands: one
+                // toggle, both directions, no second opt-in. This guard is about a stream that
+                // does not exist. `transmit set dax=1` was sent unconditionally, so a create that
+                // timed out (600 ms is one round trip — a WAN link misses it) or was refused left
+                // the radio taking transmit audio from a DAX stream nothing would ever send on:
+                // the mic disconnected, Nexus's audio not reaching the air either, and — because
+                // teardown was gated on that same failed create — the mic still dead after Nexus
+                // exited (audit #1002 / #1044). Fail CLOSED: no stream, no re-route, sound card.
+                if tx_created.is_some() {
+                    let _ = flex.send(&transmit_set_dax_command(true));
+                }
                 let mut created: Option<u32> = None;
                 let mut bound_slice: Option<u32> = None;
+                // What the operator's slice DAX routing was before we touched it (see
+                // [`SliceDaxTracker`]).
+                let mut slices = SliceDaxTracker::default();
                 let mut last_ka = Instant::now();
                 while !stop.load(Ordering::Relaxed) {
-                    if let Some(FlexMsg::Status { body, .. }) =
-                        flex.recv(Duration::from_millis(300))
-                    {
-                        // Learn OUR dax_rx stream id from the async status (the create reply echoes
-                        // it). We created exactly one stream on DAX_CHANNEL, so a status for that
-                        // channel is ours.
-                        if let Some(st) = parse_dax_stream_status(&body) {
-                            if st.dax_channel == Some(DAX_CHANNEL) {
-                                if let Some(sid) = st.stream_id {
-                                    *stream_id.lock().unwrap() = Some(sid);
-                                    created = Some(sid);
+                    match flex.recv(Duration::from_millis(300)) {
+                        FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
+                            // Learn OUR dax_rx stream id from the async status (the create reply
+                            // echoes it). We created exactly one stream on DAX_CHANNEL, so a status
+                            // for that channel is ours.
+                            if let Some(st) = parse_dax_stream_status(&body) {
+                                if st.dax_channel == Some(DAX_CHANNEL) {
+                                    if let Some(sid) = st.stream_id {
+                                        *stream_id.lock().unwrap() = Some(sid);
+                                        created = Some(sid);
+                                    }
+                                }
+                            }
+                            // Bind the ACTIVE RX slice's audio to our DAX channel (never assume
+                            // slice 0; re-bind if the operator switches the active slice).
+                            if let Some(sl) = parse_slice_status(&body) {
+                                slices.observe(sl.num, sl.dax_channel);
+                                if sl.in_use == Some(true)
+                                    && sl.active == Some(true)
+                                    && bound_slice != Some(sl.num)
+                                {
+                                    // Let the slice we were on go FIRST: two slices both claiming
+                                    // channel 1 is the "DAX starvation" gotcha in this module's
+                                    // header, and the abandoned claims used to accumulate.
+                                    if let Some(old) = bound_slice {
+                                        restore_slice_dax(&mut flex, old, slices.restore(old));
+                                    }
+                                    slices.claim(sl.num);
+                                    let _ = flex.send(&slice_dax_command(sl.num, DAX_CHANNEL));
+                                    bound_slice = Some(sl.num);
                                 }
                             }
                         }
-                        // Bind the ACTIVE RX slice's audio to our DAX channel (never assume slice 0;
-                        // re-bind if the operator switches the active slice).
-                        if let Some(sl) = parse_slice_status(&body) {
-                            if sl.in_use == Some(true)
-                                && sl.active == Some(true)
-                                && bound_slice != Some(sl.num)
-                            {
-                                let _ = flex.send(&slice_dax_command(sl.num, DAX_CHANNEL));
-                                bound_slice = Some(sl.num);
-                            }
-                        }
+                        FlexRecv::Msg(_) | FlexRecv::Idle => {}
+                        // ⚠️ THE CONNECTION IS GONE — EXIT, do not loop (audit #1000). A
+                        // disconnected channel returns instantly, and this timeout is the only
+                        // thing pacing this loop, so continuing free-runs a core and fires a
+                        // keepalive `ping` into a dead socket forever. Teardown below still runs:
+                        // the sends fail harmlessly, and the radio drops a departed client's DAX
+                        // routing on its own.
+                        FlexRecv::Closed => break,
                     }
                     if last_ka.elapsed() >= KEEPALIVE {
                         let _ = flex.send("ping");
                         last_ka = Instant::now();
                     }
                 }
-                // Teardown: route TX back to the mic, then remove both DAX streams.
+                // Teardown, in the order the radio needs: transmit audio back to the MIC first,
+                // then the slice routing we changed, then the streams we created.
+                //
+                // ⚠️ THE MIC RESTORE IS UNCONDITIONAL, deliberately. It used to live inside
+                // `if let Some(sid) = tx_created`, so the one failure that most needed it — a
+                // create whose reply missed its window, after `dax=1` had already gone out — was
+                // exactly the case that skipped it, and the operator's microphone stayed dead
+                // after Nexus exited with nothing on screen or in SmartSDR explaining why
+                // (audit #1002). One line on the wire; `dax=0` is the state a radio with no DAX
+                // client belongs in, and it costs nothing when we never enabled it.
+                let _ = flex.send(&transmit_set_dax_command(false));
+                if let Some(slice) = bound_slice {
+                    restore_slice_dax(&mut flex, slice, slices.restore(slice));
+                }
                 if let Some(sid) = tx_created {
-                    let _ = flex.send(&transmit_set_dax_command(false));
                     let _ = flex.send(&dax_remove_command(sid));
                 }
                 if let Some(sid) = created {
@@ -303,6 +514,46 @@ impl FlexDax {
             }));
         }
 
+        // --- DAX TX pacer thread ---
+        //
+        // ⚠️ THE RADIO EXPECTS A STREAM, NOT A FLOOD. `play` hands the tee an entire prebuilt over
+        // in ONE call (slot.rs), and the encoder used to drain it straight to the socket: ~2,370
+        // datagrams, ~670 KB, of 12.6 s of audio, inside a few milliseconds — on the radio-loop
+        // thread, with the engine mutex held, right after PTT-up (audit #1042). This thread is the
+        // clock the DAX route never had. It owns the socket and the packet counter; the tee only
+        // queues.
+        {
+            let stop = stop.clone();
+            let tx = tx.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut counter: u8 = 0;
+                let mut next_at = Instant::now();
+                while !stop.load(Ordering::Relaxed) {
+                    let now = Instant::now();
+                    if now < next_at {
+                        std::thread::sleep(TX_PACER_TICK.min(next_at - now));
+                        continue;
+                    }
+                    let sid = *tx.stream_id.lock().unwrap();
+                    match (sid, tx.take_packet()) {
+                        (Some(sid), Some(chunk)) => {
+                            let pkt = build_dax_tx_packet(sid, counter, &chunk);
+                            counter = (counter + 1) & 0x0F;
+                            let _ = tx_sock.send_to(&pkt, radio);
+                            next_at = advance_pacer(now, next_at);
+                        }
+                        // Nothing to send (between overs, or the stream id is not learned yet).
+                        // Hold the clock at now, so an idle gap cannot bank credit that would
+                        // burst the START of the next over out at once.
+                        _ => {
+                            next_at = now;
+                            std::thread::sleep(TX_IDLE_TICK);
+                        }
+                    }
+                }
+            }));
+        }
+
         Ok(FlexDax {
             stop,
             handles,
@@ -320,21 +571,21 @@ impl FlexDax {
             .unwrap_or_default()
     }
 
-    /// A tee closure that encodes + sends TX audio over DAX. Install it into `CpalBackend` via
+    /// The TX-audio route for this feed. Install it into `CpalBackend` via
     /// [`crate::backend::AudioBackend::set_tx_tee`] while native Flex audio is active; every
-    /// `backend.play()` then also reaches the radio over DAX (the TX schedule is unchanged).
-    pub fn tx_tee(&self) -> crate::backend::TxTee {
-        let sender = self.tx.clone();
-        Arc::new(move |buf: &[f32]| sender.feed(buf))
+    /// `backend.play()` then reaches the radio over DAX **instead of** the sound card (the TX
+    /// schedule is unchanged — same audio, one route).
+    pub fn tx_tee(&self) -> crate::backend::TxTeeHandle {
+        self.tx.clone()
     }
 }
 
 impl Drop for FlexDax {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        for h in self.handles.drain(..) {
-            let _ = h.join();
-        }
+        // Bounded, never open-ended: this runs ON THE RADIO LOOP (see `flexspectrum::reap_workers`
+        // for why a plain join there is a network peer holding the transmitter).
+        crate::flexspectrum::reap_workers(self.handles.drain(..).collect(), || {});
     }
 }
 
@@ -365,5 +616,226 @@ mod tests {
         assert_eq!(dax_tx_create_command(), "stream create type=dax_tx");
         assert_eq!(transmit_set_dax_command(true), "transmit set dax=1");
         assert_eq!(transmit_set_dax_command(false), "transmit set dax=0");
+    }
+
+    use crate::backend::TxTee as _;
+
+    /// A sender with a known stream id, ready to be fed.
+    fn sender(level: f32) -> DaxTxSender {
+        let tx = DaxTxSender {
+            stream_id: Arc::new(Mutex::new(Some(0x8400_0000))),
+            level: AtomicU32::new(1.0f32.to_bits()),
+            state: Mutex::new(TxSendState {
+                resampler: CaptureResampler::new(MODEM_RATE, DAX_SAMPLE_RATE),
+                queue: VecDeque::new(),
+            }),
+        };
+        tx.set_level(level);
+        tx
+    }
+
+    /// The sound-card rule, from `device::next_tx_sample` + the device-format conversion:
+    /// multiply by the level as the sample LEAVES, then clamp and scale to full range.
+    fn card_rule(sample: f32, level: f32) -> i16 {
+        ((sample * level).clamp(-1.0, 1.0) * 32767.0) as i16
+    }
+
+    /// Put samples straight into the paced queue at the 24 kHz side, so an assertion is about the
+    /// LEVEL rule alone and not about the 12k→24k resampler (which has its own tests, and whose
+    /// windowed-sinc ripple would otherwise blur an exact comparison).
+    fn queue_24k(tx: &DaxTxSender, samples: &[f32]) {
+        tx.state
+            .lock()
+            .unwrap()
+            .queue
+            .extend(samples.iter().copied());
+    }
+
+    /// THE DRIVE CONTROL MUST MEAN THE SAME THING ON BOTH ROUTES (audit #1048).
+    ///
+    /// The DAX route ignored `tx_level` entirely — it converted at a hard-coded full scale, so the
+    /// radio got 0 dBFS audio wherever the operator put Pwr, an IMD/splatter path behind an
+    /// on-screen control that appeared to work. Asserted on actual emitted sample amplitudes,
+    /// against the sound card's own rule.
+    #[test]
+    fn the_tx_level_scales_dax_samples_exactly_as_the_sound_card_does() {
+        // A packet's worth of a waveform with both polarities and an over-range excursion, so the
+        // clamp is exercised too.
+        let input: Vec<f32> = (0..TX_SAMPLES_PER_PACKET)
+            .map(|i| {
+                let phase = i as f32 / TX_SAMPLES_PER_PACKET as f32;
+                1.4 * (phase * std::f32::consts::TAU).sin()
+            })
+            .collect();
+
+        for level in [1.0f32, 0.5, 0.1, 0.0] {
+            let tx = sender(level);
+            queue_24k(&tx, &input);
+            let packet = tx.take_packet().expect("a packet's worth is queued");
+            assert_eq!(packet.len(), TX_SAMPLES_PER_PACKET);
+            for (i, (&got, &s)) in packet.iter().zip(input.iter()).enumerate() {
+                assert_eq!(
+                    got,
+                    card_rule(s, level),
+                    "DAX sample {i} at Pwr {level} must carry the same amplitude the sound card \
+                     would send"
+                );
+            }
+            if level == 0.0 {
+                // Zero really is zero — the same promise `device::tx_level_tests` makes for the
+                // card, and the one the old DAX route broke most loudly (full scale at Pwr 0).
+                assert!(
+                    packet.iter().all(|&s| s == 0),
+                    "Pwr at 0 must put nothing on the air over DAX either"
+                );
+            }
+        }
+    }
+
+    /// The level is read AS THE AUDIO LEAVES, not as it is queued — issue #14's rule, which the
+    /// DAX route needs even more than the card does: it queues a whole 13 s over at once.
+    #[test]
+    fn a_level_change_reaches_audio_that_is_already_queued() {
+        let tx = sender(1.0);
+        queue_24k(&tx, &vec![1.0f32; 2 * TX_SAMPLES_PER_PACKET]);
+        assert_eq!(tx.take_packet().expect("queued")[0], card_rule(1.0, 1.0));
+        tx.set_level(0.25);
+        assert_eq!(
+            tx.take_packet().expect("still queued")[0],
+            card_rule(1.0, 0.25),
+            "moving Pwr must change audio that was queued before the move"
+        );
+    }
+
+    /// AN OVER IS A STREAM, NOT A FLOOD (audit #1042).
+    ///
+    /// `play` hands the tee an entire prebuilt over in ONE call, and the encoder used to drain it
+    /// straight to the socket — ~2,370 datagrams of 12.6 s of audio inside a few milliseconds.
+    /// Driving the shipped pacer rule with a virtual clock: one second of wall time may carry at
+    /// most one second of audio (plus the packet in flight), no matter how much is queued.
+    #[test]
+    fn a_queued_over_leaves_at_real_time_rather_than_all_at_once() {
+        let tx = sender(1.0);
+        // 12.64 s of FT8 at the modem rate — one full over, exactly as `play` delivers it.
+        tx.feed(&vec![0.5f32; (12.64 * MODEM_RATE as f32) as usize]);
+
+        let t0 = Instant::now();
+        let mut next_at = t0;
+        let mut sent = 0usize;
+        // One simulated second, stepped at the pacer's own tick.
+        for ms in 1..=1000u64 {
+            let now = t0 + Duration::from_millis(ms);
+            while now >= next_at {
+                if tx.take_packet().is_none() {
+                    break;
+                }
+                sent += 1;
+                next_at = advance_pacer(now, next_at);
+            }
+        }
+        let per_second = 1000.0 / (TX_PACKET_PERIOD.as_micros() as f64 / 1000.0);
+        assert!(
+            (sent as f64) <= per_second + 2.0,
+            "{sent} packets in one simulated second is a burst — real time is ~{per_second:.0}"
+        );
+        assert!(
+            (sent as f64) >= per_second - 2.0,
+            "{sent} packets in one simulated second starves the radio — real time is ~{per_second:.0}"
+        );
+        // …and the rest of the over is still queued, not discarded.
+        assert!(tx.take_packet().is_some(), "the over continues");
+    }
+
+    /// The pacer keeps the LONG-RUN rate exact across a coarse OS sleep quantum (Windows' default
+    /// is ~15 ms against a 5.3 ms packet), but resyncs rather than discharging a big backlog.
+    #[test]
+    fn the_pacer_catches_up_from_jitter_but_never_from_a_stall() {
+        let t0 = Instant::now();
+        assert_eq!(
+            advance_pacer(t0, t0),
+            t0 + TX_PACKET_PERIOD,
+            "on schedule → the next packet is due one airtime later"
+        );
+        // 20 ms late: still catching up (the deadline stays in the past, so the backlog drains).
+        let late = t0 + Duration::from_millis(20);
+        assert_eq!(advance_pacer(late, t0), t0 + TX_PACKET_PERIOD);
+        // A full second behind: resync to now instead of firing ~190 packets back to back.
+        let stalled = t0 + Duration::from_secs(1);
+        assert_eq!(advance_pacer(stalled, t0), stalled);
+    }
+
+    /// Stop TX must cut the route the over is actually on. With the DAX route exclusive,
+    /// `flush_output` clearing the soundcard ring would otherwise cut nothing at all.
+    #[test]
+    fn a_hard_stop_empties_the_dax_queue() {
+        let tx = sender(1.0);
+        tx.feed(&vec![0.5f32; 24_000]);
+        assert!(tx.flush() > 0, "there was queued audio to discard");
+        assert!(
+            tx.take_packet().is_none(),
+            "Stop TX leaves nothing queued for the pacer to send"
+        );
+    }
+
+    /// Nothing reaches the air before the radio has told us our stream id — the same guard that
+    /// makes a failed `stream create` safe.
+    #[test]
+    fn nothing_is_queued_until_the_stream_id_is_known() {
+        let tx = DaxTxSender {
+            stream_id: Arc::new(Mutex::new(None)),
+            level: AtomicU32::new(1.0f32.to_bits()),
+            state: Mutex::new(TxSendState {
+                resampler: CaptureResampler::new(MODEM_RATE, DAX_SAMPLE_RATE),
+                queue: VecDeque::new(),
+            }),
+        };
+        tx.feed(&vec![1.0f32; 4096]);
+        assert!(tx.take_packet().is_none(), "no stream id → nothing to send");
+    }
+
+    /// A REFUSED create must not look like a granted one (audit #1002/#1044): the reply code is
+    /// the difference, and it used to be thrown away — after which `transmit set dax=1` went out
+    /// anyway and pointed the transmitter at a stream nothing would ever send on.
+    #[test]
+    fn a_tx_stream_is_adopted_only_from_a_successful_create() {
+        assert_eq!(
+            tx_stream_from_reply(0, "0x84000000"),
+            Some(0x8400_0000),
+            "code 0 + an id = ours"
+        );
+        assert_eq!(
+            tx_stream_from_reply(0x5000_0015, "0x84000000"),
+            None,
+            "an ERROR code with an id-shaped body is still a refusal"
+        );
+        assert_eq!(tx_stream_from_reply(0x5000_0015, "bad"), None);
+        assert_eq!(tx_stream_from_reply(0, ""), None, "no id = no re-route");
+    }
+
+    /// The operator's slice routing is borrowed, not taken (audit #1027/#1054).
+    #[test]
+    fn the_slice_dax_routing_we_found_is_what_gets_restored() {
+        let mut t = SliceDaxTracker::default();
+        // The `sub slice all` dump: slice 2 was on channel 3 for the operator's other software.
+        t.observe(2, Some(3));
+        // The status that triggers the bind carries no `dax=` at all — a partial update.
+        t.observe(2, None);
+        t.claim(2);
+        assert_eq!(t.restore(2), Some(3), "put back what the radio reported");
+
+        // The radio now echoes OUR write back. That must not become the "prior" value.
+        t.observe(2, Some(DAX_CHANNEL));
+        t.claim(2);
+        assert_eq!(
+            t.restore(2),
+            Some(3),
+            "our own dax=1 must never be mistaken for what we found"
+        );
+
+        // A slice whose dax value was never seen is left alone rather than guessed at.
+        t.claim(5);
+        assert_eq!(t.restore(5), None);
+        // …and a slice we never claimed has nothing to restore.
+        assert_eq!(t.restore(9), None);
     }
 }

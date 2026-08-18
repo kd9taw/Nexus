@@ -537,9 +537,10 @@ pub struct CpalBackend {
     /// progress. `None` = no mic stream (recordings read the shared input). Opening /
     /// closing it never touches the main capture/TX streams.
     voice_mic: Option<CaptureStream>,
-    /// Optional TX-audio tee (Flex native DAX): when set, every [`Self::play`] also hands the 12 kHz
-    /// samples to this closure so TX audio reaches the radio over DAX in parallel with the soundcard.
-    tx_tee: Option<crate::backend::TxTee>,
+    /// Optional TX-audio tee (Flex native DAX): when set it REPLACES the sound card as the route
+    /// for transmit audio — [`Self::play`] hands the 12 kHz samples to the tee and queues nothing.
+    /// See [`crate::backend::TxTee`] for why it is exclusive rather than parallel.
+    tx_tee: Option<crate::backend::TxTeeHandle>,
 }
 
 /// A named mono capture stream + its ring. Downmixes the device to mono at its native
@@ -994,6 +995,59 @@ impl CpalBackend {
             tx_tee: None,
         })
     }
+
+    /// Route one buffer of 12 kHz TX audio: to the alternate route (Flex native DAX) when one is
+    /// installed, otherwise to the sound card. EXACTLY ONE of them, ever.
+    ///
+    /// ⚠️ THIS USED TO FEED BOTH, and that was a shipped transmit defect (2026-08-17 Flex audit,
+    /// finding #1051): the Flex configuration Nexus creates with its own one-click "Pair DAX audio"
+    /// button points `audio_out` at the "DAX TX" endpoint, so every native over arrived at the
+    /// radio twice — two routes, two resampler states, two latencies — and if the operator's output
+    /// device was the PC speakers instead, the modem tones played out loud in the room. The tee
+    /// carries the over or the card does.
+    ///
+    /// Split out of `play` (a one-line delegation now) so the rule is testable at all: a
+    /// `CpalBackend` cannot be built without a sound card, which is why the parallel feed shipped
+    /// with no test able to see it. Same doctrine as `service::dax_starved`.
+    fn route_tx(
+        tee: Option<&crate::backend::TxTeeHandle>,
+        tx_rs: &mut CaptureResampler,
+        out_ring: &Mutex<VecDeque<f32>>,
+        samples: &[f32],
+    ) {
+        if let Some(tee) = tee {
+            tee.feed(samples);
+            return;
+        }
+        // Anti-aliased, stateful UPsample 12 kHz → device rate (see `tx_rs`). The old
+        // `resample_linear` here put a periodic amplitude ripple on the constant-envelope
+        // FT8/FT4 waveform; the polyphase reconstruction keeps it flat like WSJT-X.
+        let dev = tx_rs.process(samples);
+        // UNSCALED on purpose — the level is applied by the output callback as each sample
+        // leaves. See `tx_level`: baking it in here is what made the Pwr slider unable to change
+        // audio that was already queued. (The DAX route applies it the same way, at the same
+        // point in its own path — as the packet leaves.)
+        let mut ring = out_ring.lock().unwrap_or_else(|e| e.into_inner());
+        ring.extend(dev.iter().copied());
+    }
+
+    /// Hard Stop TX: empty EVERY route, not merely the active one. Split out of `flush_output` for
+    /// the same reason as [`Self::route_tx`] — and it MUST follow it. Making the DAX route
+    /// exclusive without this would have left Stop TX clearing an output ring the transmission no
+    /// longer travels through, i.e. cutting nothing at all.
+    ///
+    /// Both are cleared, not just the installed one: the ring can still hold audio queued before a
+    /// tee was installed, and a stop that leaves audio anywhere is not a stop.
+    fn flush_tx(
+        tee: Option<&crate::backend::TxTeeHandle>,
+        out_ring: &Mutex<VecDeque<f32>>,
+    ) -> usize {
+        let mut ring = out_ring.lock().unwrap_or_else(|e| e.into_inner());
+        let n = ring.len();
+        ring.clear();
+        drop(ring);
+        n + tee.map_or(0, |t| t.flush())
+    }
 }
 
 /// Fold a callback's RMS into the smoothed RX meter. The stored value is the
@@ -1052,23 +1106,21 @@ impl AudioBackend for CpalBackend {
     }
 
     fn play(&mut self, samples: &[f32]) {
-        // Flex native DAX TX: also hand the modem's 12 kHz TX audio to the DAX encoder (parallel to
-        // the soundcard; the TX schedule is untouched — this is the same audio, another route).
-        if let Some(tee) = &self.tx_tee {
-            tee(samples);
-        }
-        // Anti-aliased, stateful UPsample 12 kHz → device rate (see `tx_rs`). The old
-        // `resample_linear` here put a periodic amplitude ripple on the constant-envelope
-        // FT8/FT4 waveform; the polyphase reconstruction keeps it flat like WSJT-X.
-        let dev = self.tx_rs.process(samples);
-        // UNSCALED on purpose — the level is applied by the output callback as each sample
-        // leaves. See `tx_level`: baking it in here is what made the Pwr slider unable to change
-        // audio that was already queued.
-        let mut ring = self.out_ring.lock().unwrap_or_else(|e| e.into_inner());
-        ring.extend(dev.iter().copied());
+        Self::route_tx(
+            self.tx_tee.as_ref(),
+            &mut self.tx_rs,
+            &self.out_ring,
+            samples,
+        );
     }
 
-    fn set_tx_tee(&mut self, tee: Option<crate::backend::TxTee>) {
+    /// Install / clear the alternate TX route (Flex native DAX), handing it the CURRENT TX level
+    /// as it goes in — the tee applies the level itself, and installing one without it would put
+    /// full-scale audio on the air until the operator next moved the slider.
+    fn set_tx_tee(&mut self, tee: Option<crate::backend::TxTeeHandle>) {
+        if let Some(t) = &tee {
+            t.set_level(f32::from_bits(self.tx_level.load(Ordering::Relaxed)));
+        }
         self.tx_tee = tee;
     }
 
@@ -1081,10 +1133,18 @@ impl AudioBackend for CpalBackend {
 
     /// Set the Tx audio level (0.0–1.0) applied to outgoing samples in [`play`].
     ///
+    /// Pushed to the alternate route too, if one is installed: the Pwr slider must mean the same
+    /// thing whichever way the over reaches the radio. It did not — the DAX route ignored the
+    /// level entirely and carried full-scale audio no matter where Pwr sat, an IMD/splatter path
+    /// with an on-screen control that appeared to work (2026-08-17 Flex audit, finding #1048).
+    ///
     /// [`play`]: AudioBackend::play
     fn set_tx_level(&mut self, level: f32) {
-        self.tx_level
-            .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        let level = level.clamp(0.0, 1.0);
+        self.tx_level.store(level.to_bits(), Ordering::Relaxed);
+        if let Some(tee) = &self.tx_tee {
+            tee.set_level(level);
+        }
     }
 
     /// Set the RX capture gain (a ≥1.0 multiplier applied to captured samples on the audio
@@ -1095,13 +1155,10 @@ impl AudioBackend for CpalBackend {
             .store(gain.clamp(1.0, 8.0).to_bits(), Ordering::Relaxed);
     }
 
-    /// Discard queued-but-unplayed TX audio (hard Stop TX): clear the output ring
-    /// so the current transmission is cut immediately, not at the slot's end.
+    /// Discard queued-but-unplayed TX audio (hard Stop TX): clear the route the over is actually
+    /// travelling on, so the transmission is cut immediately, not at the slot's end.
     fn flush_output(&mut self) -> usize {
-        let mut ring = self.out_ring.lock().unwrap_or_else(|e| e.into_inner());
-        let n = ring.len();
-        ring.clear();
-        n
+        Self::flush_tx(self.tx_tee.as_ref(), &self.out_ring)
     }
 
     /// Reconfigure the dark headphone monitor in place (start/stop/retune its output
@@ -1220,6 +1277,99 @@ mod tx_level_tests {
         let level = AtomicU32::new(0.0f32.to_bits());
         assert_eq!(next_tx_sample(&mut r, &level), 0.0);
         assert_eq!(next_tx_sample(&mut r, &level), 0.0);
+    }
+}
+
+/// The TX ROUTING rule: exactly one route carries an over, and a hard stop empties every route.
+#[cfg(test)]
+mod tx_route_tests {
+    use super::{CaptureResampler, CpalBackend, MODEM_RATE};
+    use crate::backend::{TxTee, TxTeeHandle};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    /// A stand-in for the Flex DAX route (the real one needs a Flex, a socket and three threads):
+    /// records what the backend hands it.
+    #[derive(Default)]
+    struct RecordingTee {
+        fed: Mutex<Vec<f32>>,
+        flushes: Mutex<usize>,
+    }
+
+    impl TxTee for RecordingTee {
+        fn feed(&self, samples: &[f32]) {
+            self.fed.lock().unwrap().extend_from_slice(samples);
+        }
+        fn set_level(&self, _level: f32) {}
+        /// A stand-in count, distinguishable from any ring length in these tests.
+        fn flush(&self) -> usize {
+            *self.flushes.lock().unwrap() += 1;
+            7
+        }
+    }
+
+    /// EXCLUSIVE, NOT PARALLEL (audit #1051). `play` fed BOTH routes, and Nexus's own one-click
+    /// Flex pairing points the output device at the radio's "DAX TX" endpoint — so the same over
+    /// arrived at the radio twice, by two paths with different rates and latencies. And with the
+    /// output device left on speakers, every native over played out loud in the room.
+    #[test]
+    fn an_installed_tee_carries_the_over_and_the_sound_card_gets_nothing() {
+        let tee = Arc::new(RecordingTee::default());
+        let handle: TxTeeHandle = tee.clone();
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, 48_000);
+        let ring = Mutex::new(VecDeque::new());
+        let over = vec![0.25f32; 600];
+
+        // No tee → the sound card carries it, exactly as it always has (the positive control:
+        // without this, the assertion below would pass on a route that never works at all).
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &over);
+        let queued_by_the_card = ring.lock().unwrap().len();
+        assert!(
+            queued_by_the_card > 0,
+            "the sound-card route must still queue when no tee is installed"
+        );
+        assert!(tee.fed.lock().unwrap().is_empty(), "no tee → nothing teed");
+
+        // Tee installed → the tee carries it, and the sound card queue does not grow by one sample.
+        CpalBackend::route_tx(Some(&handle), &mut tx_rs, &ring, &over);
+        assert_eq!(
+            &*tee.fed.lock().unwrap(),
+            &over,
+            "the tee gets the modem's 12 kHz samples, unresampled and unscaled"
+        );
+        assert_eq!(
+            ring.lock().unwrap().len(),
+            queued_by_the_card,
+            "the over must NOT also be queued to the sound card"
+        );
+    }
+
+    /// Stop TX has to cut the route the over is actually on — and any other route that still holds
+    /// audio. Clearing only `out_ring` while the DAX tee carries the transmission would be a stop
+    /// control that stops nothing.
+    #[test]
+    fn a_hard_stop_empties_every_route() {
+        let ring = Mutex::new(VecDeque::from(vec![0.1f32; 5]));
+        assert_eq!(
+            CpalBackend::flush_tx(None, &ring),
+            5,
+            "with no tee, the count is the sound-card ring's"
+        );
+        assert!(ring.lock().unwrap().is_empty());
+
+        let tee = Arc::new(RecordingTee::default());
+        let handle: TxTeeHandle = tee.clone();
+        let ring = Mutex::new(VecDeque::from(vec![0.1f32; 3]));
+        assert_eq!(
+            CpalBackend::flush_tx(Some(&handle), &ring),
+            3 + 7,
+            "both routes are emptied, and both counts are reported"
+        );
+        assert_eq!(*tee.flushes.lock().unwrap(), 1, "the tee was told to flush");
+        assert!(
+            ring.lock().unwrap().is_empty(),
+            "audio queued before the tee was installed is discarded too"
+        );
     }
 }
 

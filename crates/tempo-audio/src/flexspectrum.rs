@@ -26,7 +26,9 @@ use std::collections::HashMap;
 
 use tempo_app::dto::Spectrum;
 use tempo_app::engine::{engine_lock, Engine, MeterFeed};
-use tempo_net::flexcat::{parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, MeterDef};
+use tempo_net::flexcat::{
+    parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, FlexRecv, MeterDef,
+};
 use tempo_net::flexvita::{
     convert_meter_raw, dbm_to_watts, parse_fft, parse_meter_values, parse_vita, FftReassembler,
     FFT_PACKET_CLASS, METER_PACKET_CLASS,
@@ -41,6 +43,49 @@ const X_PIXELS: u32 = 2048;
 const KEEPALIVE: Duration = Duration::from_secs(5);
 /// Retune the pan when the dial moves more than this (MHz) — ~500 Hz.
 const RETUNE_EPS_MHZ: f64 = 0.0005;
+/// How long a worker `Drop` may hold the RADIO LOOP waiting for its threads (see [`reap_workers`]).
+/// Covers a healthy teardown — the control thread wakes within its 300 ms `recv`, the UDP thread
+/// within its 400 ms `recv_from` — so the ordinary toggle-off still completes in place.
+const REAP_BUDGET: Duration = Duration::from_millis(600);
+/// Poll interval while waiting out [`REAP_BUDGET`].
+const REAP_POLL: Duration = Duration::from_millis(10);
+
+/// Stop-and-reap worker threads WITHOUT letting a network peer block the caller indefinitely.
+///
+/// ⚠️ THE CALLER IS THE RADIO LOOP. `FlexSpectrum` and `FlexDax` are dropped from inside `step()` —
+/// a settings save, a radio switch, the DAX starvation fallback — and that loop is the only thing
+/// that can unkey the transmitter. A plain `join()` there hands a network peer the power to stall
+/// it: before the connect was bounded, a black-holed Flex IP froze the loop for the OS SYN timeout,
+/// ~21 s on Windows and ~127 s on Linux (Flex audit 2026-08-17, finding #1003).
+///
+/// So: wait up to `REAP_BUDGET` for the threads to notice their `stop` flag — which is all a
+/// healthy teardown needs, and keeps the common case ordered the way it has always been (the old
+/// worker's `stream remove` / pan removal completes before a restart creates the new one) — then
+/// hand whatever is still running to a detached reaper. `after` runs once every handle is joined,
+/// on whichever thread that turns out to be, because callers have teardown work that must not race
+/// a live worker (`withdraw_meters` must not be overwritten by a dying meter thread).
+pub(crate) fn reap_workers(handles: Vec<JoinHandle<()>>, after: impl FnOnce() + Send + 'static) {
+    let deadline = Instant::now() + REAP_BUDGET;
+    while Instant::now() < deadline && handles.iter().any(|h| !h.is_finished()) {
+        std::thread::sleep(REAP_POLL);
+    }
+    if handles.iter().all(|h| h.is_finished()) {
+        for h in handles {
+            let _ = h.join();
+        }
+        after();
+        return;
+    }
+    // Still wedged (a worker parked in a connect, a socket that will not wake): detach. The
+    // threads own everything they touch through `Arc`s, so they are safe to outlive us by the
+    // few hundred ms it takes them to fall out of their loops.
+    std::thread::spawn(move || {
+        for h in handles {
+            let _ = h.join();
+        }
+        after();
+    });
+}
 
 // ---- pure helpers (unit-tested) ----
 
@@ -250,6 +295,12 @@ impl FlexSpectrum {
                 let Ok(mut flex) = FlexCat::connect(&ip) else {
                     return;
                 };
+                // Dropped while we were connecting (bounded, but not instant): the radio has heard
+                // nothing from us, so leave it exactly as we found it rather than create a pan
+                // whose teardown would then race the worker that replaced us.
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
                 for cmd in register_commands(udp_port) {
                     let _ = flex.send(&cmd);
                 }
@@ -267,21 +318,30 @@ impl FlexSpectrum {
                 while !stop.load(Ordering::Relaxed) {
                     // Drain async status → learn the pan id + VITA stream id (send() left the
                     // status stream for us; command() would have swallowed it).
-                    if let Some(FlexMsg::Status { body, .. }) =
-                        flex.recv(Duration::from_millis(300))
-                    {
-                        if let Some(st) = parse_pan_status(&body) {
-                            if let Some(pid) = st.pan_id {
-                                pan_id = Some(pid);
+                    match flex.recv(Duration::from_millis(300)) {
+                        FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
+                            if let Some(st) = parse_pan_status(&body) {
+                                if let Some(pid) = st.pan_id {
+                                    pan_id = Some(pid);
+                                }
+                                if let Some(sid) = st.stream_id {
+                                    *stream_id.lock().unwrap() = Some(sid);
+                                }
                             }
-                            if let Some(sid) = st.stream_id {
-                                *stream_id.lock().unwrap() = Some(sid);
+                            // Learn meter definitions (id → source/name/unit) as they arrive.
+                            for def in parse_meter_defs(&body) {
+                                meters.lock().unwrap().insert(def.index, def);
                             }
                         }
-                        // Learn meter definitions (id → source/name/unit) as they arrive.
-                        for def in parse_meter_defs(&body) {
-                            meters.lock().unwrap().insert(def.index, def);
-                        }
+                        FlexRecv::Msg(_) | FlexRecv::Idle => {}
+                        // ⚠️ THE CONNECTION IS GONE — EXIT, do not loop (audit #1000). This is the
+                        // ONLY thing pacing this loop: a disconnected channel returns instantly, so
+                        // continuing free-runs, and every iteration below takes the shared engine
+                        // mutex twice, starving the radio loop and the whole UI with it. Nothing
+                        // below can work without the socket anyway; a Flex power-cycle or a
+                        // SmartSDR client drop now ends the worker instead of pinning a core.
+                        // (Reconnect-with-backoff is deliberately NOT here: it is its own change.)
+                        FlexRecv::Closed => break,
                     }
                     if let Some(pid) = pan_id {
                         // Retune the pan when the operator's dial moves.
@@ -394,12 +454,14 @@ impl FlexSpectrum {
 impl Drop for FlexSpectrum {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        for h in self.handles.drain(..) {
-            let _ = h.join();
-        }
-        // Joined first, then withdrawn: no meter thread survives to write a stale reading
-        // back onto either mirror after this clear.
-        withdraw_meters(&self.engine, &self.meters_out);
+        // Bounded, never open-ended: this runs ON THE RADIO LOOP (see `reap_workers`).
+        let engine = self.engine.clone();
+        let meters_out = self.meters_out.clone();
+        reap_workers(self.handles.drain(..).collect(), move || {
+            // Joined first, then withdrawn: no meter thread survives to write a stale reading
+            // back onto either mirror after this clear.
+            withdraw_meters(&engine, &meters_out);
+        });
     }
 }
 

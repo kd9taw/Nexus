@@ -21,12 +21,26 @@
 //! compatibility only). See the repo-root `NOTICE`, "Rig-control protocol interoperability".
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::mpsc;
 use std::time::Duration;
 
 /// The SmartSDR API TCP port.
 pub const FLEX_API_PORT: u16 = 4992;
+
+/// How long [`FlexCat::connect`] may spend opening the TCP session before giving up.
+///
+/// ⚠️ THIS BOUND IS RADIO-LOOP LIVENESS, not politeness. `connect` is the FIRST statement of both
+/// Flex worker control threads, and a thread parked in a bare `TcpStream::connect` cannot observe
+/// its `stop` flag — so the worker's `Drop`, which runs ON THE RADIO LOOP (a settings save, a radio
+/// switch, the DAX starvation fallback), waited out the OS SYN timeout: ~21 s on Windows, ~127 s on
+/// Linux for a black-holed address, e.g. a home LAN IP typed into the Flex field and then used from
+/// away (Flex audit 2026-08-17, finding #1003). While that join blocks, `step()` does not run: no
+/// capture drain, no slot boundary, no PTT deadline, no tune ceiling — the loop that unkeys the
+/// transmitter must never be blockable by a network peer. Every other network client in the tree
+/// already bounds its connect (n3fjp, aprsis, mqtt, dxkeeper, cluster, rigctld_server); this one
+/// did not.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One decoded line from the radio's TCP stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +303,27 @@ pub fn encode_command(seq: u32, command: &str) -> String {
     format!("C{seq}|{command}\n")
 }
 
+/// The outcome of one [`FlexCat::recv`].
+///
+/// ⚠️ `Idle` AND `Closed` ARE NOT THE SAME THING, and collapsing them into `None` is what turned a
+/// dropped connection into a busy-spin (Flex audit 2026-08-17, finding #1000). The reader thread
+/// owns the only `Sender` and `break`s out on peer-close or a hard I/O error, which DISCONNECTS the
+/// channel — and `recv_timeout` on a disconnected channel returns INSTANTLY, it does not wait out
+/// the timeout. A worker loop whose only pacing is that timeout then free-runs: the panadapter
+/// thread took the shared engine mutex twice per iteration, millions of iterations a second, and
+/// starved the radio loop and every Tauri command behind it until the operator turned the feature
+/// off. Callers must treat `Closed` as terminal — exit (or reconnect with backoff), never continue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlexRecv {
+    /// A parsed line from the radio.
+    Msg(FlexMsg),
+    /// The timeout elapsed with nothing to read. The connection is still up.
+    Idle,
+    /// The reader thread is gone: the radio closed the session or the socket errored. TERMINAL —
+    /// every later `recv` returns this immediately.
+    Closed,
+}
+
 /// A live TCP connection to a Flex's SmartSDR API. Spawns a reader thread that parses lines into a
 /// channel; `command` sends a `C…` line and awaits the matching `R…` reply.
 pub struct FlexCat {
@@ -301,7 +336,29 @@ impl FlexCat {
     /// Connect to `ip:4992` and start the reader thread. Reads the `V`/`H` greeting is left to the
     /// caller (they arrive as the first messages on the channel).
     pub fn connect(ip: &str) -> std::io::Result<FlexCat> {
-        let stream = TcpStream::connect((ip, FLEX_API_PORT))?;
+        // BOUNDED — see `CONNECT_TIMEOUT`. `connect_timeout` needs a resolved `SocketAddr`, so the
+        // (overwhelmingly common) literal-IP case parses straight through with no name lookup at
+        // all; a hostname falls back to `ToSocketAddrs`, matching `n3fjp::connect`.
+        let addr = format!("{ip}:{FLEX_API_PORT}");
+        let target: SocketAddr = addr.parse().or_else(|_| {
+            addr.to_socket_addrs()
+                .ok()
+                .and_then(|mut a| a.next())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "unresolvable Flex API address",
+                    )
+                })
+        })?;
+        Self::connect_addr(target, CONNECT_TIMEOUT)
+    }
+
+    /// The socket half of [`FlexCat::connect`], split out so the reader-thread lifecycle is
+    /// testable against a local listener — the API port is fixed, so a test cannot reach this
+    /// through `connect` without squatting on 4992.
+    fn connect_addr(target: SocketAddr, timeout: Duration) -> std::io::Result<FlexCat> {
+        let stream = TcpStream::connect_timeout(&target, timeout)?;
         stream.set_read_timeout(Some(Duration::from_millis(500)))?;
         let (tx, rx) = mpsc::channel();
         let reader = stream.try_clone()?;
@@ -329,9 +386,14 @@ impl FlexCat {
         Ok(FlexCat { stream, rx, seq: 1 })
     }
 
-    /// Receive the next parsed message (blocks up to `timeout`).
-    pub fn recv(&self, timeout: Duration) -> Option<FlexMsg> {
-        self.rx.recv_timeout(timeout).ok()
+    /// Receive the next parsed message (blocks up to `timeout`), distinguishing an idle
+    /// connection from a DEAD one — see [`FlexRecv`] for why that distinction is load-bearing.
+    pub fn recv(&self, timeout: Duration) -> FlexRecv {
+        match self.rx.recv_timeout(timeout) {
+            Ok(m) => FlexRecv::Msg(m),
+            Err(mpsc::RecvTimeoutError::Timeout) => FlexRecv::Idle,
+            Err(mpsc::RecvTimeoutError::Disconnected) => FlexRecv::Closed,
+        }
     }
 
     /// Send a command and wait for its `R<seq>|…` reply (up to `timeout`). Returns the reply
@@ -344,14 +406,21 @@ impl FlexCat {
             .write_all(encode_command(seq, command).as_bytes())?;
         let deadline = std::time::Instant::now() + timeout;
         while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
-            if let Ok(FlexMsg::Reply {
-                seq: rseq,
-                code,
-                msg,
-            }) = self.rx.recv_timeout(remaining)
-            {
-                if rseq == seq {
-                    return Ok((code, msg));
+            match self.rx.recv_timeout(remaining) {
+                Ok(FlexMsg::Reply {
+                    seq: rseq,
+                    code,
+                    msg,
+                }) if rseq == seq => return Ok((code, msg)),
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                // The reader thread is gone (see `FlexRecv::Closed`). Waiting out the window
+                // would be a tight spin, since a disconnected channel returns instantly.
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionAborted,
+                        "Flex API connection closed",
+                    ))
                 }
             }
         }
@@ -500,6 +569,64 @@ mod tests {
             Some(false)
         );
         assert!(parse_slice_status("meter 7.src=SLC").is_none());
+    }
+
+    /// A dropped API connection must be REPORTABLE, not silently indistinguishable from a quiet
+    /// one. Before this, `recv` returned `Option` and a disconnected channel came back as `None`
+    /// INSTANTLY — so the panadapter/DAX worker loops, whose only pacing is this timeout, spun as
+    /// fast as the CPU allowed and hammered the engine mutex (audit #1000).
+    ///
+    /// Both directions, on a real (localhost) socket: `Idle` while the peer holds it open, `Closed`
+    /// once it goes away.
+    #[test]
+    fn a_dropped_connection_reports_closed_rather_than_idling() {
+        use std::net::TcpListener;
+        let srv = TcpListener::bind("127.0.0.1:0").expect("bind a local stand-in radio");
+        let addr = srv.local_addr().expect("addr");
+        let cat = FlexCat::connect_addr(addr, Duration::from_secs(2)).expect("connect");
+        let (mut peer, _) = srv.accept().expect("accept");
+
+        // Positive control that the reader thread is alive and this is a real connection: a line
+        // written by the "radio" arrives parsed.
+        peer.write_all(b"V1.4.0.0\n").expect("greet");
+        let mut greeted = false;
+        for _ in 0..50 {
+            if let FlexRecv::Msg(FlexMsg::Version(v)) = cat.recv(Duration::from_millis(20)) {
+                assert_eq!(v, "1.4.0.0");
+                greeted = true;
+                break;
+            }
+        }
+        assert!(
+            greeted,
+            "the reader thread must deliver a line from the peer"
+        );
+
+        // Open but quiet → Idle (this is the state the 300 ms worker pacing depends on).
+        assert_eq!(
+            cat.recv(Duration::from_millis(50)),
+            FlexRecv::Idle,
+            "an open, quiet connection must idle out the timeout"
+        );
+
+        drop(peer);
+        drop(srv);
+        let mut closed = false;
+        for _ in 0..100 {
+            if cat.recv(Duration::from_millis(20)) == FlexRecv::Closed {
+                closed = true;
+                break;
+            }
+        }
+        assert!(
+            closed,
+            "a peer close must surface as Closed — reported as Idle it is the busy-spin"
+        );
+        assert_eq!(
+            cat.recv(Duration::from_millis(20)),
+            FlexRecv::Closed,
+            "Closed is terminal: every later recv says so too"
+        );
     }
 
     #[test]
