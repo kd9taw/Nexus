@@ -1024,6 +1024,16 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             if let Some((_, _, k)) = state.rtty_keyer.as_ref() {
                 k.clear();
             }
+            // Give the RADIO its own audio routing back before we tell the app it may die.
+            // `FlexDax`'s teardown is what sends `transmit set dax=0` — the operator's MICROPHONE —
+            // and puts the slice's DAX channel back, and it runs from that value's Drop. Dropping
+            // `state` happens after this function returns, i.e. after `quit_cleanup` has already
+            // been released to exit the process, so the restore was racing process death: exactly
+            // the "mic still dead after Nexus exits" harm the unconditional restore exists to
+            // prevent. Doing it HERE makes it part of the shutdown the exit path waits for, and it
+            // is bounded (`flexspectrum::reap_workers`, ~600 ms worst case) well inside that 3 s
+            // budget. No-op when native Flex audio was never on.
+            state.dax_src = None;
             SHUTDOWN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
