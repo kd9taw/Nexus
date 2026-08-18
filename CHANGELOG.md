@@ -111,6 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CW-reverse only changes which side of the carrier you listen on — so nothing about your
   transmission changes. The Flex setup guide gained a [CW section](docs/rigs/flexradio.md)
   covering the keyer choices on that radio.
+- **Dragging text on an SSTV picture makes it stay where you put it.** Text you dropped snapped
+  straight back to the middle. The drag itself was fine — the picture is redrawn from scratch
+  many times a second, and each redraw quietly restored the text to where it had last been
+  saved, which for a fresh caption is the centre. Letting go then saved that restored position,
+  so the snap-back stuck. Nudging with the arrow keys was never affected and still isn't.
 
 - **Rotators: the baud now comes from the model, so five of them work for the first time.**
   If you own a **SPID Rot2Prog or Rot1Prog**, an **Idiom Press Rotor-EZ**, a **Hy-Gain
