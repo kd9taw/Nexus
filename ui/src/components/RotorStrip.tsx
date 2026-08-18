@@ -231,9 +231,13 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
     // Control, which it has never been.
     const lost = satTrack?.rotorLost === true
     const lostName = lost ? 'Rotator stopped answering' : 'Rotator not answering'
+    // Name the LIKELIEST cause, not just the place to look. A rotator at the wrong line rate
+    // never answers and reads exactly like dead hardware, and until 1.7.0 every model was
+    // handed the same 9600 — so "check the baud" is the first thing to say to the operator
+    // whose SPID or Green Heron has never worked.
     const lostTitle = lost
-      ? 'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model/port in Settings ▸ Radio ▸ Rotator, or the external rotctld, and the Connections log'
-      : 'A rotator is configured but not answering — check the model/port in Settings ▸ Radio ▸ Rotator, or the external rotctld, and the Connections log'
+      ? 'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log'
+      : 'A rotator is configured but not answering — check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log'
     const lostStyle: CSSProperties = {
       display: 'inline-flex',
       alignItems: 'center',

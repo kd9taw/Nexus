@@ -73,6 +73,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rotators: the baud now comes from the model, so five of them work for the first time.**
+  If you own a **SPID Rot2Prog or Rot1Prog**, an **Idiom Press Rotor-EZ**, a **Hy-Gain
+  DCU-1/DCU-1X** or a **Green Heron RT-21**, your rotator has never answered Nexus — and
+  this is why. Nexus gave *every* rotator model the same 9,600 baud and told you in the
+  tooltip that was right, then forced it on the control daemon over the top of the rate
+  Hamlib knows your controller actually uses: 600 for the Rot2Prog, 1,200 for the
+  Rot1Prog, 4,800 for the Rotor-EZ, the DCU-1 and the RT-21. At the wrong line rate a
+  controller simply ignores you, which looks exactly like a dead cable or broken hardware.
+  Picking your model now fills in the rate its own backend declares, read out of the
+  Hamlib that ships in the installer rather than typed from a manual; where a model
+  genuinely accepts a range (the GS-232 family, EasyComm, SPID MD-01/02) your own setting
+  is left alone, as it should be. **If your rotator has never worked, re-pick your model
+  in Settings ▸ Radio ▸ Rotator** — and if the saved number cannot work, the hint under
+  the box now says so in words, with the number to use.
+
+- **A rotator command that got no answer was reported as success.** Nexus treated silence
+  from the rotator daemon as "done", so the compass slew, the ↗ point-at-call and a whole
+  satellite pass could report that the antenna had moved while it sat still — and the
+  "the rotator stopped answering, point it yourself" warning could never fire, because
+  every unanswered command was counted as a good one. Silence, a timeout and a hang-up are
+  all failures now, and the daemon's own refusal reaches you with its reason. The wait
+  before giving up is matched to what Hamlib itself allows your model, instead of being
+  shorter than it for almost every rotator in the list.
+
+- **A rotator daemon that died at launch was logged as "launched".** The commonest rotator
+  failure — a port that is not there, a port another program already has, a model number
+  the bundled Hamlib does not carry — kills the daemon within milliseconds, and Nexus
+  reported success and then went quiet forever; re-saving Settings did not bring it back.
+  It is noticed now, at launch and afterwards, restarted, and reported with **Hamlib's own
+  words for what went wrong** in the Connections log, where before there was nothing to
+  read at all.
+
+- **A Green Heron RT-21 refused the last tenth of a degree of the compass.** Bearings from
+  359.95° up were sent as `360.0`, which that controller's Hamlib backend rejects outright
+  (it declares a 359.9° ceiling). They are sent as 0.0° now — the same bearing, and one
+  every rotator accepts.
+
+- **"Allow flip" did nothing.** The setting promises to take a high satellite pass by
+  running elevation past 90° instead of swinging the mast 180° at the top of the pass, and
+  the condition it was gated on could never be true — so the mast raced round on every
+  high pass with the box ticked. It works now: above 85° peak elevation, a mount whose
+  owner has said it can go over the top keeps the antenna on the bearing the bird rose on
+  and runs elevation up through 90° and out the far side.
+
+- **A failed park at the end of a satellite pass drove the antenna FLAT.** If the park
+  command was refused, the fallback commanded elevation zero — laying a dish or a long
+  boom into the wind, which is the thing a park position exists to avoid — and said
+  nothing about it. The fallback is now azimuth-only for rotators that genuinely have no
+  elevation axis, and for everything else a park that did not complete is reported and the
+  antenna is left where the pass ended.
+
+- **A stuck or jammed mast was invisible during a pass.** Nexus never asked the rotator
+  where it actually was, so a controller that accepted every command and then stopped
+  moving — a jam, a hit stop, a slipped belt, a box left in local — tracked "perfectly" for
+  the whole pass. The position is read back now, and a mast that is neither on target nor
+  moving is called out in the Connections log. A rotator that stopped answering mid-pass
+  is logged there too, instead of only appearing on screen for whoever was watching.
+
+- **A rotator that cannot report its position no longer loses its controls.** Some models
+  genuinely have no read-back — the Hy-Gain DCU-1 is one — and the Connect rotor pane used
+  to delete itself entirely when the readout failed, taking the compass rose, the typed
+  bearing and the **STOP** button with it. It stays, with "—" where the needle would be.
+
+- **Rotator settings live in the Rotator section.** The model, port and baud were filed
+  under Rig & CAT, so the "Rotator not answering" chip — the one affordance the app has for
+  this failure — opened a section containing neither, and searching Settings for "rotator"
+  found only the pointing manners. Clicking the chip now lands on the model and the port.
+
+- **The rotator list: a wrong entry out, six models in.** "EA4TX ARS (az)" was Hamlib's
+  **parallel-port** backend offered with a serial port and a baud box — it could not work
+  as presented, and the brand name steered ARS-USB owners away from the GS-232 generic
+  entry that does (which now says so). Added, all of them models operators actually own:
+  SPID MD-01/02, Prosistel Combi-Track az+el, Hy-Gain DCU2/DCU3/YRC-1, DF9GR ERC, AMSAT
+  LVB Tracker, and the Kenpro GS-23/GS-232. Entries now say **(az)** or **(az/el)** where
+  the backend declares it, so an az/el owner is not steered onto the azimuth-only variant
+  of their own manufacturer. And a saved model that is not in the list shows its number
+  instead of an empty box.
+
 - **FlexRadio, the ORDINARY setup: your Flex settings stay put, the radio's address is
   kept, and a switched-on feature says what it needs.** Unlike the two entries below —
   which are about the opt-in "early access" toggles nobody is required to turn on — this

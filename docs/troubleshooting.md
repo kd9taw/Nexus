@@ -238,6 +238,65 @@ by NTP at all will eventually drift past the correction range.
 
 ---
 
+## Rotator
+
+### The compass reads "ROTOR —" and the antenna never moves
+
+Almost always one of three things, in this order.
+
+**1. The baud does not match the model.** This is the big one, and it looks
+exactly like broken hardware: the port opens, the daemon comes up, and the
+controller ignores every byte because it is listening at a different rate. There
+is no universal rotator baud — the SPID Rot2Prog runs at **600**, the Rot1Prog at
+**1200**, and the Idiom Press Rotor-EZ, Hy-Gain DCU-1 and Green Heron RT-21 at
+**4800**, while only the GS-232 family, the M2 RC2800 and the Prosistels use
+9600. Go to **Settings ▸ Radio ▸ Rotator** and **re-pick your model**: Nexus
+fills in the rate its Hamlib backend declares, and the hint under the baud box
+says in words when the saved number cannot work. (Before 1.7.0 every model was
+given 9600, which is why an owner of any of those five had a rotator that never
+answered.)
+
+**2. The port is wrong, or something else has it.** Same COM port rules as CAT —
+and if the port does not exist, the rotator daemon does not linger, it exits
+immediately.
+
+**3. The daemon is not running.** See below.
+
+### Reading the daemon's own error
+
+**Settings ▸ Radio ▸ Connections log**, filtered to **Rotator**, is where the
+answer is. Nexus captures `rotctld`'s stderr and prints Hamlib's own words:
+
+- `rotctld launched (model 901 on COM7 @ 600, :4533)` — it is up. Any failure
+  after this is on the wire, not the daemon.
+- `rotctld could not start … serial_open: serial port COM7 does not exist` — the
+  port name is wrong, or the adapter is unplugged.
+- `… serial port COM7 is already open` — another program (a logger, another copy
+  of Nexus, PstRotator) holds it. Close that first; a serial port has one owner.
+- `Hamlib's rotctld isn't installed` — macOS/Linux only, and it is not bundled
+  there. `brew install hamlib` / `sudo apt install libhamlib-utils`.
+- `the rotator stopped answering during the … pass` — the daemon is fine and the
+  controller went quiet mid-pass. Power, cable, or the controller left in local.
+
+### It turns, but the app says nothing about where it is
+
+Some rotators genuinely cannot report their position: Hamlib's Hy-Gain DCU-1
+backend has no read-back at all. The Rotor pane shows `—°T` and keeps the rose,
+the typed bearing and STOP — pointing works, the compass just has nothing to
+draw. That is the rotator, not a fault.
+
+### "Rotator not answering" but it is right there
+
+Click the chip — it opens **Settings ▸ Radio ▸ Rotator** on the model and port.
+Check the model number first (`rotctl -l` lists every one your Hamlib knows), the
+port second, the baud third. If you run your own `rotctld`, remember the external
+address field **overrides** the model and port entirely, and it needs the port:
+`192.168.1.50` on its own is not an address.
+
+Full setup guide: [Antenna rotator setup](rigs/rotators.md).
+
+---
+
 ## TX problems
 
 ### TX won't arm / Enable TX has no effect
