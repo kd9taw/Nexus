@@ -35,6 +35,7 @@ import { fmtDistanceKm, useUnits, type Units } from '../units'
 import { importPack, STARTER_PACKS, type Pack } from '../features/packs'
 import { saveTextToDownloads } from '../api'
 import { pushToast } from '../toast'
+import { modChord } from '../platform'
 
 export interface MemoriesViewProps {
   /** Current dial (MHz) + mode — what "Save current" captures. */
@@ -959,7 +960,7 @@ export function MemoriesView({
                       title={
                         offStrip
                           ? `Rank ${rank} — past the ${STRIP_FAVORITE_LIMIT} chips the cockpit MEM strip shows. Move it up with ▲.`
-                          : `Chip ${rank} on the cockpit MEM strip${rank <= 9 ? ` · Ctrl+${rank}` : ''}`
+                          : `Chip ${rank} on the cockpit MEM strip${rank <= 9 ? ` · ${modChord(rank)}` : ''}`
                       }
                     >
                       {rank}

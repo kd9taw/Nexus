@@ -25,6 +25,7 @@ import { WaterfallHistory, ageLabel } from '../waterfallHistory'
 import { drawDss } from '../dss'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { PalettePicker } from './PalettePicker'
+import { MOD_LABEL } from '../platform'
 
 /** Persist the operator's manual waterfall contrast (gain/zero) in localStorage; 0 = auto.
  * The palette lives in the shared master store (see `waterfallPalette.ts`).
@@ -849,14 +850,16 @@ export function Waterfall({
   // that:
   //   Shift+left = TX (red)   — stock WSJT-X
   //   RIGHT      = TX (red)   — JTDX (operator preference, 2026-07-26)
-  //   Ctrl+left  = both
+  //   Ctrl / ⌘   = both       — ⌘ because Qt maps WSJT-X's Ctrl to Cmd on macOS, and mac
+  //                             WebKit delivers Ctrl+left as a BUTTON-2 press (the OS
+  //                             right-click) — tuneTarget owns both wrinkles.
   // Right-click is ADDITIVE: stock WSJT-X has no right-button action, so adopting JTDX's here
   // takes nothing away from a WSJT-X operator and both conventions work side by side.
   // ⚠️ Nexus once mapped left=TX/right=RX, which moved the WRONG marker for anyone arriving
   // from WSJT-X. Do not "restore" that — left is RX in every mainstream client.
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onTune) return
-    const target = tuneTarget(e.button, e.ctrlKey, e.shiftKey)
+    const target = tuneTarget(e.button, e.ctrlKey, e.shiftKey, e.metaKey)
     if (!target) return // middle / back / forward must never retune the radio
     const rect = canvasRef.current!.getBoundingClientRect()
     const hz = Math.round(xToFreq(e.clientX - rect.left, rect.width, view.lo, view.hi))
@@ -868,7 +871,8 @@ export function Waterfall({
     <div className="waterfall-wrap">
       <div className="panel-header">
         <h2>Waterfall</h2>
-        <span className="wf-hint">{hint ?? 'left = RX · right / Shift = TX · Ctrl = both'}</span>
+        {/* MOD_LABEL: advertising "Ctrl" on a Mac names the OS right-click gesture — ⌘ there. */}
+        <span className="wf-hint">{hint ?? `left = RX · right / Shift = TX · ${MOD_LABEL} = both`}</span>
         <PalettePicker scope={paletteScope} />
         <select
           className="wf-palette wf-zoom"
@@ -1062,7 +1066,7 @@ export function Waterfall({
               rebuildRef.current?.()
             }
           }}
-          title="Click sets RX (WSJT-X) · Shift+click sets TX · Ctrl+click sets both"
+          title={`Click sets RX (WSJT-X) · Shift+click sets TX · ${MOD_LABEL}+click sets both`}
         />
         {/* Axis + Rx/Tx markers layer — transparent, cleared each frame, never scrolled. */}
         <canvas ref={overlayRef} className="waterfall-overlay" aria-hidden="true" />

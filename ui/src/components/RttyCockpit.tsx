@@ -26,6 +26,7 @@ import {
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
 
 interface Props {
@@ -642,15 +643,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           autoComplete="off"
           spellCheck={false}
         />
+        {/* The buttons ADVERTISE their F-keys; default Mac keyboards eat bare F-keys as
+            media keys, so the tooltip carries the cure there (mac QA audit). */}
         {MACROS.map((m) => (
           <button
             key={m.key}
             type="button"
             className="cw-macro"
             onClick={() => send(m.text)}
-            title={m.text
+            title={`${m.text
               .replace(/\{MYCALL\}/g, snap?.mycall ?? '{MYCALL}')
-              .replace(/\{CALL\}/g, hisCall.trim().toUpperCase() || '{CALL}')}
+              .replace(/\{CALL\}/g, hisCall.trim().toUpperCase() || '{CALL}')}${
+              IS_MAC ? `\n${FN_KEY_HINT}` : ''
+            }`}
           >
             <span className="cw-macro-key">{m.key}</span>
             <span className="cw-macro-label">{m.label}</span>

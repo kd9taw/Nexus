@@ -33,6 +33,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The waterfall's "move both markers" click works on the Mac.** Ctrl+click there is the
+  system right-click gesture — it silently moved only the TX marker — and ⌘-click (the
+  chord a mac WSJT-X operator's muscle memory sends) did nothing. Both now set RX and TX
+  together, the on-screen hint reads ⌘ on a Mac, and Ctrl+click keeps working everywhere
+  else exactly as before.
+
+- **Memory quick-recall answers to ⌘1–9 on the Mac.** The recall chord was Ctrl-only —
+  which macOS itself uses to switch desktops, so the press never even reached the app —
+  and Cmd was explicitly rejected. Either modifier now recalls a favorite on every
+  platform, and the chip tooltips advertise the platform's own chord.
+
+- **F-key advice for Mac keyboards.** The CW and RTTY macro buttons, the voice keyer, the
+  Operate Decode button and the WSJT-X switchers' guide advertise F-keys that a default
+  Mac keyboard treats as media keys; on a Mac their hints now say to hold Fn (or enable
+  standard function keys in System Settings). Nothing is rebound — the keys themselves
+  are unchanged.
+
 - **Every "open in your browser" link in the app now actually opens it.** The CAT-driver
   download link, the repeater directory credits, the contest-calendar rules links and APRS
   station pages were silently dead on every platform — the webview swallowed the click and

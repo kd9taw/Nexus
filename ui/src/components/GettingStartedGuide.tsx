@@ -578,6 +578,10 @@ export function GettingStartedGuide({ onClose }: Props) {
                 your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand
                 step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working — Nexus
                 speaks the full WSJT-X UDP protocol and they see it as a WSJT-X.
+                {/* Default Mac keyboards eat bare F-keys as media keys — same OS constraint
+                    WSJT-X's own mac docs call out; say it where the F-keys are advertised. */}
+                {navigator.userAgent.includes('Mac') &&
+                  ' On a Mac, hold Fn for the F-keys — or turn on "Use F1, F2, etc. keys as standard function keys" in System Settings ▸ Keyboard, as with WSJT-X.'}
               </p>
             </aside>
           </div>

@@ -112,9 +112,9 @@ import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 
 // Serial-port examples and walkthroughs are platform prose: a Mac's ports are /dev/cu.* and
 // there is no Device Manager, so a "COM16" placeholder or a CP210x "Enhanced" label is a dead
-// end there (mac QA audit, 2026-08-17). Same detection GettingStartedGuide uses for its
-// Hamlib caption.
-const IS_MAC = navigator.userAgent.includes('Mac')
+// end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
+// the modifier-chord labels needed it too.
+import { IS_MAC } from '../platform'
 
 interface Props {
   /** Called after a successful save so the shell can refresh its snapshot. */

@@ -1523,11 +1523,12 @@ export default function App() {
     [cwEnabled, phoneEnabled],
   )
 
-  // Global quick-recall hotkeys: Ctrl+1..9 recall the 1st..9th ★ favorite from ANY
+  // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
+  // Ctrl+digit is Mission Control's) recall the 1st..9th ★ favorite from ANY
   // section (the same action as clicking its MEM-strip chip — recallMemory tunes +
   // switches to the right cockpit). Rides a ref so the listener binds once and always
   // sees the latest recallMemory + enabled flag; favorites are read fresh at press time.
-  // Ctrl+Digit is clear of the cockpits' Alt+Digit (FT8 Tx) and F-key macros.
+  // Ctrl/⌘+Digit is clear of the cockpits' Alt+Digit (FT8 Tx) and F-key macros.
   const recallHotkeyRef = useRef({ recall: recallMemory, enabled: features.isOn('memories') })
   recallHotkeyRef.current = { recall: recallMemory, enabled: features.isOn('memories') }
   useEffect(() => {

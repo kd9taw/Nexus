@@ -22,6 +22,7 @@ import {
   type Memory,
   type MemoryKind,
 } from '../features/memories'
+import { modChord } from '../platform'
 
 export interface MemoryStripProps {
   /** Current dial (MHz) — what "＋ Save" captures + the active-chip highlight. */
@@ -77,9 +78,10 @@ export function MemoryStrip({ dialMhz, mode, onRecall, onManage }: MemoryStripPr
       </button>
       {shown.map((m, i) => {
         const active = Math.abs(m.rxMhz - dialMhz) < MATCH_EPS
-        // The first 9 favorites are recallable from any section via Ctrl+1..9 (App's
-        // global hotkey); surface it in the tooltip so it's discoverable.
-        const hotkey = i < 9 ? ` · Ctrl+${i + 1}` : ''
+        // The first 9 favorites are recallable from any section via Ctrl/⌘+1..9 (App's
+        // global hotkey); surface it in the tooltip so it's discoverable — in the
+        // platform's own vocabulary (Ctrl on a Mac is the Spaces chord, so it reads ⌘).
+        const hotkey = i < 9 ? ` · ${modChord(i + 1)}` : ''
         return (
           <button
             key={m.id}

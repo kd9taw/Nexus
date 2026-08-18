@@ -43,6 +43,7 @@ import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import { FrequencyControl } from './FrequencyControl'
 import { TuningStrip } from './TuningStrip'
+import { IS_MAC, FN_KEY_HINT } from '../platform'
 
 interface Props {
   /** Configured companion UDP listen address (Settings) — shown instead of a
@@ -861,7 +862,8 @@ export function OperateCockpit({
             type="button"
             className="cockpit-decode-btn"
             onClick={handleRedecode}
-            title="Re-decode the last period (F6)"
+            // The F6 the button advertises is a media key on default Mac keyboards.
+            title={`Re-decode the last period (F6)${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
           >
             Decode
           </button>

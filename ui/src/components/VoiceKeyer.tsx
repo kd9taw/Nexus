@@ -11,6 +11,7 @@ import {
   stopVoiceRecording,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { IS_MAC, FN_KEY_HINT } from '../platform'
 
 interface Props {
   /** Whether TX is enabled (Monitor). Playback/record are no-ops when off — we surface why. */
@@ -242,7 +243,11 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
       {/* No title of its own: the keyer renders inside a CockpitPaneFrame whose head
           already says "Voice keyer" — the old <h2> here would double it. */}
       <div className="vk-head">
-        <span className="vk-hint">click or press F1–F6 to send · Esc stops</span>
+        {/* Default Mac keyboards eat bare F-keys as media keys — say so where the binding
+            is advertised, or the feature silently reads as broken there (mac QA audit). */}
+        <span className="vk-hint" title={IS_MAC ? FN_KEY_HINT : undefined}>
+          {IS_MAC ? 'click or press Fn+F1–F6 to send · Esc stops' : 'click or press F1–F6 to send · Esc stops'}
+        </span>
         <span className="vk-spacer" />
         <button type="button" className="vk-stop" onClick={stop} title="Abort playback (Esc)">
           ■ Stop
