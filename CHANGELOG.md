@@ -73,6 +73,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Phone tells a FlexRadio operator when native DAX has taken their microphone.** Switching
+  on **Flex native DAX audio** — the early-access toggle you would turn on for FT8 — tells the
+  radio to take transmit audio from DAX. That is a *radio-wide* setting, not a Nexus one: while
+  it is on, your Flex's microphone is disconnected on every slice, in every program, SmartSDR's
+  own MOX included. Turn it on for digital, pick up the mic later for an SSB contact, and you
+  transmit silence with nothing anywhere saying why. The Phone screen now shows a **mic off
+  (DAX)** marker beside the frequency whenever native DAX audio is actually running, and says
+  what to do about it: turn Flex native DAX audio off in **Settings ▸ Radio ▸ Rig & CAT** and
+  the mic comes straight back. It appears only while the native audio really is live — not
+  merely because the toggle is on with no radio address, or after the audio path has already
+  fallen back to your sound card. The Flex setup guide gained a matching
+  [Phone (SSB) section](docs/rigs/flexradio.md).
+
 - **CW on 160, 80 and 40 m now actually puts an SDR radio into CW.** Below 10 MHz Nexus asks
   the radio for **CW-L**, which is the right thing to ask for and what most radios call it.
   Four rig profiles do not offer it under that name — **FlexRadio SmartSDR CAT**, **SmartSDR

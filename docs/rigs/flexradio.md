@@ -125,6 +125,29 @@ whether Stop TX cuts the *one* word already inside the radio or lets it finish.
 
 ---
 
+## Phone (SSB) on a Flex
+
+Plain SSB needs nothing special: set the band, pick Phone, and the mic on your
+Flex works the way it always does.
+
+**One thing will catch you out.** If you switched on **Flex native DAX audio**
+(the early-access toggle below) for FT8, your microphone is disconnected — on
+every slice, in every program, including SmartSDR's own MOX. That toggle tells
+the radio to take transmit audio from DAX, and that is a **radio-wide** setting,
+not a Nexus one. Pick up the mic and you will transmit silence with no error
+anywhere.
+
+Nexus now says so: with native DAX audio running, the Phone screen shows a
+**mic off (DAX)** marker beside the frequency. The fix is to turn **Flex native
+DAX audio** off in **Settings ▸ Radio ▸ Rig & CAT** — the mic comes straight
+back. Leaving Nexus normally does the same thing; a crash or a force-quit may
+not, and then you set it back in SmartSDR yourself.
+
+Nexus does not touch the Flex's transmit filter, processor or TX profile, so the
+audio bandwidth an SSB over occupies is whatever your SmartSDR profile last set.
+
+---
+
 ## The native SmartSDR path (early access — read this first)
 
 Two toggles in **Settings ▸ Radio ▸ Rig & CAT** talk to the radio's own SmartSDR

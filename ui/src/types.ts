@@ -1056,6 +1056,10 @@ export interface RadioStatus {
   rigMode?: string | null
   /** A CAT read succeeded — dial/mode are the rig's own values, not the persisted seed. */
   rigConfirmed?: boolean
+  /** Native Flex DAX audio is LIVE and carrying transmit audio, which means the radio's
+   * modulator takes DAX and the physical microphone is disconnected — radio-wide, on every
+   * slice and in every program. Display-only; the Phone cockpit warns on it. */
+  flexDaxTx?: boolean
   /** Transient Phone mode override ("USB"/"LSB"/"FM"), or null/absent = AUTO (band-derived). */
   sidebandOverride?: string | null
   /** The operator's phone (SSB) sub-band on the current band as [lo, hi) MHz, per license class

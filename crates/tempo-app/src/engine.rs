@@ -1543,6 +1543,10 @@ pub struct Engine {
     /// A rig read (freq) actually succeeded this session — the cockpit dial/mode are
     /// rig-confirmed rather than the persisted seed (read-only launch provenance).
     rig_confirmed: bool,
+    /// Native Flex DAX audio is LIVE, which means `transmit set dax=1` is standing on the
+    /// radio and the operator's MICROPHONE is disconnected. Display-only; see
+    /// [`Self::observe_flex_dax_tx`].
+    flex_dax_tx: bool,
     /// Per-area tier memory: the structured tier (FT8/FT4) last used in the DX
     /// area and the chat tier (FT1/DX1) last used in MSG — so switching areas
     /// round-trips without losing the operator's pick (the "FT4 lost through
@@ -3559,6 +3563,7 @@ impl Engine {
             recent_dt: VecDeque::new(),
             seen_decode: false,
             rig_confirmed: false,
+            flex_dax_tx: false,
             last_dx_tier: None,
             last_msg_tier: None,
             work_tick: 0,
@@ -4939,6 +4944,26 @@ impl Engine {
     /// rig state when the CAT breaker trips.
     pub fn set_rig_confirmed(&mut self, confirmed: bool) {
         self.rig_confirmed = confirmed;
+    }
+
+    /// Native Flex DAX audio just started or stopped carrying TRANSMIT audio.
+    ///
+    /// ⚠️ WHY THIS IS STATE AND NOT A SETTING READ-BACK (2026-08-17 Flex audit, critic gap
+    /// #6 — "the phone operator's microphone"). Starting native DAX sends
+    /// `transmit set dax=1`, which is a **radio-wide** setting: for as long as it stands the
+    /// Flex's modulator takes its audio from DAX and IGNORES the physical mic, on every
+    /// slice, in every client, including SmartSDR's own MOX. So an operator who turned
+    /// native audio on for FT8 and then picks up the mic for an SSB contact transmits
+    /// silence, and nothing anywhere says why.
+    ///
+    /// The `flex_native_audio` SETTING is not the same fact and must not be substituted: the
+    /// toggle can be on while no worker exists (no radio address, a failed start), and the
+    /// worker can be torn down by RX starvation — in both cases `transmit set dax=1` is not
+    /// standing and the mic is fine. This mirrors the TX tee actually installed in the audio
+    /// backend, which is exactly the condition. Display-only: it gates nothing and keys
+    /// nothing.
+    pub fn observe_flex_dax_tx(&mut self, on: bool) {
+        self.flex_dax_tx = on;
     }
 
     // --- Dual-radio: per-radio live read-back from the monitor thread (NON-active radios only) ---
@@ -13399,6 +13424,7 @@ impl Engine {
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
+        s.radio.flex_dax_tx = self.flex_dax_tx;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
         s.radio.cat_detail = self.cat_status.1.clone();

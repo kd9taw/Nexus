@@ -3365,6 +3365,9 @@ impl RadioLoop {
             if self.dax_tee_set {
                 backend.set_tx_tee(None);
                 self.dax_tee_set = false;
+                // The mic is the operator's again — see the tee-sync block below for why this
+                // transition has to reach the engine from BOTH places that clear the tee.
+                engine_lock(engine).observe_flex_dax_tx(false);
             }
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
                 {
@@ -3385,14 +3388,27 @@ impl RadioLoop {
         // Keep the DAX TX tee in sync with the DAX source: install it when native audio starts (so
         // backend.play sends TX over DAX INSTEAD of the sound card — one route, never both), clear
         // it when it stops. The TX schedule is unchanged either way.
+        //
+        // ⚠️ AND TELL THE ENGINE, because this transition is also the operator's MICROPHONE
+        // (2026-08-17 Flex audit, critic gap #6). The tee goes in exactly when the DAX worker
+        // sent `transmit set dax=1`, which is a RADIO-WIDE setting: while it stands, the Flex's
+        // modulator takes its audio from DAX and ignores the mic on every slice, in every client,
+        // SmartSDR's own MOX included. A phone operator who turned native audio on for FT8 then
+        // keys the mic into silence with nothing saying why. Pushed on the TRANSITION only (no
+        // per-tick engine lock), and from the tee rather than the `flex_native_audio` setting —
+        // the setting can be on with no worker at all (no radio address, failed start), and the
+        // worker can be dropped by the RX starvation guard above, and in both cases the mic is
+        // fine. The Phone cockpit renders it; nothing gates on it.
         match (self.dax_src.as_ref(), self.dax_tee_set) {
             (Some(dax), false) => {
                 backend.set_tx_tee(Some(dax.tx_tee()));
                 self.dax_tee_set = true;
+                engine_lock(engine).observe_flex_dax_tx(true);
             }
             (None, true) => {
                 backend.set_tx_tee(None);
                 self.dax_tee_set = false;
+                engine_lock(engine).observe_flex_dax_tx(false);
             }
             _ => {}
         }
