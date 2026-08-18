@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pounce desktop notifications actually appear now — on the Mac for the first time.**
+  The rare-DX alert used a browser notification API that Apple's webview simply does not
+  have, and no platform ever asked the OS for permission, so the notification half of
+  Pounce was silently dead everywhere. Alerts now go through the operating system's own
+  notification center; macOS asks you once, at your first alert (never at launch), and if
+  you decline, the alert sound and the in-app banner carry on exactly as before.
+
 - **The waterfall's "move both markers" click works on the Mac.** Ctrl+click there is the
   system right-click gesture — it silently moved only the TX marker — and ⌘-click (the
   chord a mac WSJT-X operator's muscle memory sends) did nothing. Both now set RX and TX

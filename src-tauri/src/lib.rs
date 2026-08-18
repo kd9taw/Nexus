@@ -15528,6 +15528,37 @@ fn open_dxped_page(app: tauri::AppHandle, call: String, url: Option<String>) -> 
         .map_err(|e| e.to_string())
 }
 
+/// Fire an OS notification (Pounce's "new one" alert). Routed through Rust — the
+/// notification plugin — because the web Notification API does not exist in WKWebView, so
+/// macOS had NO notification path at all; and nothing anywhere called
+/// `Notification.requestPermission()`, so even WebView2's implementation could never reach
+/// `granted`. Called from Rust like the opener commands, so no ACL capability entry.
+///
+/// Permission is resolved HERE, lazily on the first alert — never at launch. On desktop the
+/// plugin's permission calls are pass-through `Granted` and the real ask is the OS's own:
+/// macOS prompts the operator at the first delivery attempt, and a "Don't Allow" simply
+/// mutes the OS half from then on. That is acceptable by Pounce's own doctrine — the earcon
+/// is the PRIMARY channel and the in-app banner fires unconditionally (see usePounce.ts),
+/// so a suppressed notification never takes the alert down with it.
+#[tauri::command]
+fn os_notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri::plugin::PermissionState;
+    use tauri_plugin_notification::NotificationExt;
+    let n = app.notification();
+    if !matches!(n.permission_state(), Ok(PermissionState::Granted)) {
+        match n.request_permission() {
+            Ok(PermissionState::Granted) => {}
+            Ok(_) => return Err("notification permission denied".to_string()),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    n.builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 /// Open an arbitrary external http(s) link in the operator's default browser — the backing
 /// for the UI's `target="_blank"` anchor interceptor (`ui/src/externalLinks.ts`). Raw
 /// `<a target="_blank">` anchors are DEAD in the Tauri webview: the opener plugin's injected
@@ -16601,6 +16632,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(engine)
         .manage(spectrum_feed)
@@ -16656,6 +16688,7 @@ pub fn run() {
             open_qrz_page,
             open_dxped_page,
             open_external_url,
+            os_notify,
             app_version,
             radio_launch_info,
             choose_radio,

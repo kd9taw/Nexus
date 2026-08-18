@@ -56,6 +56,12 @@ tauri-build = { version = "2", features = [] }
 # to the webview via convertFileSrc under the sstv-gallery scope).
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
+# Pounce's OS notification. The web Notification API does not exist in WKWebView (and no
+# permission was ever requested on any platform), so the alert half of Pounce was dead
+# app-wide — this is the standard Tauri v2 plugin for the job, first-party like opener/
+# updater. Apache-2.0 OR MIT — compatible with our GPL-3.0-only. OSS-integration checklist
+# run 2026-08-17; NOTICE updated. Called from Rust (os_notify), so no ACL capability entry.
+tauri-plugin-notification = "2"
 # Signed self-update (0.17.17). Apache-2.0 OR MIT (Tauri first-party, same licence as tauri
 # itself, already vendored) — compatible with our GPL-3.0-only. OSS-integration checklist run
 # 2026-07-25; NOTICE updated.

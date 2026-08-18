@@ -418,6 +418,11 @@ principal third-party components, not a substitute for that gate:
 - **tauri-plugin-updater** (signed self-update: verifies a minisign signature over each
   installer before applying it) — MIT OR Apache-2.0.
 - **tauri-plugin-opener** (open a URL / file in the system handler) — MIT OR Apache-2.0.
+- **tauri-plugin-notification** (Pounce's rare-DX alert via the platform notification
+  center — the web Notification API does not exist in WKWebView) — Apache-2.0 OR MIT.
+  Its desktop backends **notify-rust** (Linux) — MIT OR Apache-2.0,
+  **mac-notification-sys** (macOS) — MIT/Apache-2.0, and **tauri-winrt-notification**
+  (Windows) — MIT OR Apache-2.0, arrive with it.
 - **cpal** (sound-card audio transport) — MIT OR Apache-2.0.
 - **alsa** (Linux only: reading ALSA's PCM device hints, so the audio picker can show the
   card description the operator's own system shows — cpal keeps only the raw PCM name) —

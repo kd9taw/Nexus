@@ -950,6 +950,13 @@ export async function openExternalUrl(url: string): Promise<void> {
   await invoke('open_external_url', { url })
 }
 
+/** Fire an OS notification through the Rust notification plugin — WKWebView has no web
+ *  Notification API, so this is the only path that exists on macOS. Rejects when the OS
+ *  refuses; the caller decides what a miss means (Pounce: nothing — sound is primary). */
+export async function osNotify(title: string, body: string): Promise<void> {
+  await invoke('os_notify', { title, body })
+}
+
 /**
  * Switch the top-level operating mode (and operator role). Returns the fresh
  * snapshot so callers can render the new mode immediately.
