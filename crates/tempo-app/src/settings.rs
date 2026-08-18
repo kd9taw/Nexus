@@ -3548,12 +3548,13 @@ impl Settings {
         }
         s.ensure_distinct_radio_ports(); // two live daemons (dual-radio) need distinct ports
         s.ensure_routing_targets(); // drop rules aimed at radios this config no longer has
+
         // Migration: the FLEX THREE became per-radio on 2026-08-18 (Flex audit wave-1 #30/#46).
         // A file written before that carries them ONLY on the flat `Settings`; its profiles have
-        // no such keys, so serde defaults them to ""/false — and the `sync_flat_from_active` on
-        // the next line would then copy those defaults OVER the operator's real address, losing it
-        // on the first launch of this build. Copy the flat value into the ACTIVE radio's profile
-        // first, which is exactly what it always described.
+        // no such keys, so serde defaults them to ""/false — and the `sync_flat_from_active` at
+        // the end of this function would then copy those defaults OVER the operator's real
+        // address, losing it on the first launch of this build. Copy the flat value into the
+        // ACTIVE radio's profile first, which is exactly what it always described.
         //
         // MUST run after `ensure_radio_profiles` (the profile has to exist) and BEFORE
         // `sync_flat_from_active` (which is the thing that would clobber it). Idempotent: after

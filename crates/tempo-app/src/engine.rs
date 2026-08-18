@@ -13446,9 +13446,7 @@ impl Engine {
                 // The network twin of the serial check (Flex audit wave-2 #20) — LAST in the
                 // chain because a shared COM port, a keyer clash and a shared codec are all
                 // certainly wrong, while a shared network endpoint is only usually wrong.
-                .or_else(|| {
-                    crate::settings::network_cat_address_conflicts(&self.settings.radios)
-                });
+                .or_else(|| crate::settings::network_cat_address_conflicts(&self.settings.radios));
         s.radio.tx_even = self.tx_even();
         s.radio.tx_cycle_auto = self.tx_cycle_auto;
         s.radio.tr_period_secs = self.active_slot_secs();

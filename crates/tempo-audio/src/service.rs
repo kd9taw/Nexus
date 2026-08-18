@@ -497,6 +497,27 @@ const MAX_QSO_REC_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
+/// How much WALL TIME one heavy poll may spend on blocking CAT read-back before it abandons the
+/// rest of this tick's reads and picks them up on the next heavy poll.
+///
+/// ⚠️ THE HEAVY POLL WAS THE ONE UNBUDGETED READER (2026-08-17 Flex audit, wave-2 #7). Its
+/// siblings are careful: the fast pollers are held to at most ONE blocking read per 20 ms tick,
+/// and the DSP funcs are round-robined one per cycle for exactly this reason. The heavy poll ran
+/// 5-7 blocking round-trips back to back — dial, RFPOWER, MICGAIN, NR, AGC, STRENGTH, plus
+/// mode/passband and one func on sub-ticks — with no elapsed check between them and each bounded
+/// only by the 2500 ms network deadline. On a LAN that is ~100 ms and invisible. Pointed at a
+/// genuinely remote rigctld — which the app explicitly supports, and which a SmartLink Flex is —
+/// at 200-300 ms per round trip it is 1.2-2.1 s inside ONE tick of a loop that must stay
+/// responsive to an unkey. Worse, `last_rig_poll` is stamped at the tick's ENTRY, so once the
+/// block exceeds 750 ms the next tick already satisfies the gate and the polls run back to back:
+/// the loop is essentially always inside one.
+///
+/// 250 ms: comfortably more than a whole LAN poll (so nothing changes for the ordinary station),
+/// and about one slow round trip, so a WAN link degrades its READ-BACK RATE instead of the loop
+/// period. Reads only — every WRITE and operator action in the block runs unbudgeted, because
+/// deferring the ATU press, a filter-width set, a func toggle or a RIT/XIT apply would trade a
+/// stalled reader for a dropped intent.
+const HEAVY_POLL_BUDGET_MS: u128 = 250;
 
 /// How often to re-attempt an audio device that failed to open (ms).
 ///
@@ -2120,6 +2141,26 @@ struct RadioLoop {
     /// have `MODE_SET_MAX_TRIES`). Cleared by a fresh operator pick, a rig handoff, and a CAT
     /// recovery — a give-up is a rate limit, never a permanent latch.
     agc_giveup: Option<String>,
+    /// The RF power / mic gain / NR level values this rig REFUSED — the same give-up the AGC
+    /// beside them has had since its own storm was found, and THE SAME DEFECT they still had
+    /// (2026-08-17 Flex audit, wave-2 #60).
+    ///
+    /// ⚠️ THE SWEEP THAT ADDED `agc_giveup` DID NOT REACH THESE THREE, and the shape is
+    /// identical: each applier advances its `last_*` cache only inside `.is_ok()`, so on a rig
+    /// or backend that answers anything but `RPRT 0` the change test stays permanently true and
+    /// the write goes out again on EVERY 20 ms tick — ~50 blocking CAT round-trips a second, for
+    /// the rest of the session, on the one thread that produces waterfall rows, drives the slot
+    /// boundary and owns PTT. That is the "waterfall hangs / small lag" report at 37× the rate
+    /// the func backoff was written for. A refusal is not rig-specific: any Hamlib backend that
+    /// does not implement a level answers this way, so the blast radius is every rig, not Flex.
+    ///
+    /// Keyed on the VALUE, exactly like `agc_giveup`, so a fresh operator move to a DIFFERENT
+    /// value is always tried — and cleared on a rig handoff and on every CAT re-confirm /
+    /// breaker recovery, which is what makes this a bounded retry rather than a latch: a
+    /// refusal caused by a dead link is retried the moment the link comes back.
+    rf_power_giveup: Option<f32>,
+    mic_gain_giveup: Option<f32>,
+    nr_level_giveup: Option<f32>,
     /// Open WAV sink while a QSO recording is streaming live RX capture to disk (audio
     /// bridge). The loop owns the file handle so the audio never has to live in RAM.
     qso_sink: Option<crate::voice::WavSink>,
@@ -2308,6 +2349,18 @@ struct RadioLoop {
     /// Consecutive STRENGTH read misses while the dial poll is succeeding, so a single
     /// transient timeout doesn't wrongly declare a capable rig's S-meter unsupported.
     smeter_misses: u8,
+    /// Earliest `rig_poll_ticks` at which a latched-off S-meter may be re-probed, and the backoff
+    /// applied when it fails again — the SAME pair as `func_retry_at`/`func_retry_backoff`, and
+    /// added for the same reason (2026-08-17 Flex audit, wave-2 #62).
+    ///
+    /// ⚠️ THE FUNC FIX DID NOT SWEEP THIS. The S-meter kept the fixed `rig_poll_ticks % 40 == 0`
+    /// cycle the funcs were explicitly backed off away from twelve lines below, so a rig with no
+    /// `RIG_LEVEL_STRENGTH` at all — which model 2036 is, exactly (`rigmodels`: "2036 has no
+    /// RIG_LEVEL_STRENGTH, so the S-meter goes dead") — paid THREE blocking `l STRENGTH` reads
+    /// every ~30 s for the life of the session, forever, on the thread that produces waterfall
+    /// rows. Same doubling ladder, same cap, reset by any successful read.
+    smeter_retry_at: u32,
+    smeter_retry_backoff: u32,
     /// Monotonic RX-poll counter, used to sub-cadence the slower CAT reads (mode) and to
     /// periodically re-probe a rig whose S-meter was found unsupported.
     rig_poll_ticks: u32,
@@ -2455,6 +2508,9 @@ impl RadioLoop {
             last_nr_level: None,
             last_agc: None,
             agc_giveup: None,
+            rf_power_giveup: None,
+            mic_gain_giveup: None,
+            nr_level_giveup: None,
             qso_sink: None,
             qso_started_ms: None,
             voice_mic_open: false,
@@ -2503,6 +2559,8 @@ impl RadioLoop {
             handoff_deferred: false,
             smeter_supported: None,
             smeter_misses: 0,
+            smeter_retry_at: 0,
+            smeter_retry_backoff: FUNC_RETRY_BACKOFF_BASE,
             rig_poll_ticks: 0,
             func_supported: [None; 5],
             func_misses: [0; 5],
@@ -3102,6 +3160,9 @@ impl RadioLoop {
         self.last_nr_level = None;
         self.last_agc = None;
         self.agc_giveup = None; // a fresh rig may well take the step the old one refused
+        self.rf_power_giveup = None; // …and so may it take the level this one refused
+        self.mic_gain_giveup = None;
+        self.nr_level_giveup = None;
         self.fake_it_restore = None;
         self.audio_rig_split = false;
         self.last_rig_poll = 0.0; // poll the new rig's health/mode/S-meter immediately
@@ -3124,6 +3185,8 @@ impl RadioLoop {
         self.split_on_sub = false;
         self.smeter_supported = None;
         self.smeter_misses = 0;
+        self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
+        self.smeter_retry_at = 0;
         // The NEW radio hasn't reported STRENGTH yet — show "—", not the old rig's needle.
         self.meter_feed.set_smeter_db(None);
         self.func_supported = [None; 5];
@@ -4162,12 +4225,19 @@ impl RadioLoop {
                     self.rx_ranges_probed = false;
                     self.smeter_supported = None;
                     self.smeter_misses = 0;
+                    self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
+                    self.smeter_retry_at = 0;
                     self.func_supported = [None; 5];
                     self.func_misses = [0; 5];
                     self.func_state = [None; 5];
                     self.tuner_probed = false;
                     self.level_supported = [None; 4];
                     self.level_misses = [0; 4];
+                    // The level give-ups are a rate limit, not a verdict: a write refused while
+                    // the link was half-open must be retried once the link is proven alive.
+                    self.rf_power_giveup = None;
+                    self.mic_gain_giveup = None;
+                    self.nr_level_giveup = None;
                     {
                         let mut eng = engine_lock(engine);
                         eng.set_cat_status(
@@ -4205,6 +4275,11 @@ impl RadioLoop {
                 && (self.cat_ok != Some(false) || now >= self.cat_retry_at)
                 && now - self.last_rig_poll >= RIG_POLL_MS
             {
+                // The tick's read budget starts HERE, before the dial probe, because the dial is
+                // the read that proves the link and the one whose timeout is most likely to eat
+                // the whole allowance. See `HEAVY_POLL_BUDGET_MS`; `have_budget` below is the
+                // gate every subsequent READ-BACK asks, and no WRITE asks.
+                let poll_started = Instant::now();
                 let breaker_probe = self.cat_ok == Some(false);
                 if breaker_probe {
                     // Schedule the NEXT attempt before trying this one, doubling the wait, so a
@@ -4219,7 +4294,13 @@ impl RadioLoop {
                 // Periodically re-probe a rig whose S-meter was found unsupported — a few
                 // STRENGTH misses can be a transient hiccup, not a real lack of support — so it
                 // recovers without needing a full CAT drop + reconfirm.
-                if self.smeter_supported == Some(false) && self.rig_poll_ticks.is_multiple_of(40) {
+                // …on the SAME doubling backoff its sibling below uses, not the fixed 40-poll
+                // cycle it kept when the funcs were fixed (see `smeter_retry_at`): re-arming
+                // costs three blocking STRENGTH reads (the give-up needs `smeter_misses >= 3`),
+                // and a rig that has no S-meter never stops paying them on a fixed cycle.
+                if self.smeter_supported == Some(false)
+                    && self.rig_poll_ticks >= self.smeter_retry_at
+                {
                     self.smeter_supported = None;
                     self.smeter_misses = 0;
                 }
@@ -4249,6 +4330,8 @@ impl RadioLoop {
                             self.cat_retry_at = 0.0;
                             self.smeter_supported = None;
                             self.smeter_misses = 0;
+                            self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
+                            self.smeter_retry_at = 0;
                             self.func_supported = [None; 5];
                             self.func_misses = [0; 5];
                             self.func_state = [None; 5];
@@ -4256,6 +4339,9 @@ impl RadioLoop {
                             self.level_supported = [None; 4];
                             self.level_misses = [0; 4];
                             self.agc_giveup = None; // the refusal may have been the dead link
+                            self.rf_power_giveup = None; // …and so may these three have been
+                            self.mic_gain_giveup = None;
+                            self.nr_level_giveup = None;
                             self.rx_ranges_probed = false;
                             {
                                 let mut eng = engine_lock(engine);
@@ -4305,6 +4391,14 @@ impl RadioLoop {
                                 eng.observe_rig_tuner(tuner);
                             }
                         }
+                        // ⚠️ THE READ BUDGET (see `HEAVY_POLL_BUDGET_MS`). Every read-back
+                        // below this line asks it; every WRITE and operator action below it does
+                        // NOT. A tick that has already spent its allowance abandons the rest of
+                        // its reads and picks them up on the next heavy poll — nothing is lost,
+                        // because each of these reads is a periodic mirror with its own miss
+                        // counter, and a skip touches no counter at all.
+                        let have_budget =
+                            || poll_started.elapsed().as_millis() < HEAVY_POLL_BUDGET_MS;
                         // RF power / mic gain / NR / AGC read-backs mirror the rig's real knob
                         // positions into the UI slider (kept separate from the commanded value —
                         // observe never fights a pending set; see observe_rig_power). Each is
@@ -4312,7 +4406,7 @@ impl RadioLoop {
                         // one — the K4 via QK4 Remote — doesn't time out and drop+reconnect the CAT
                         // socket every poll. Only AFTER the dial probe answered, so a half-open link
                         // can't eat a SECOND 2.5 s timeout on the same dead poll.
-                        if self.level_supported[LVL_RFPOWER] != Some(false) {
+                        if self.level_supported[LVL_RFPOWER] != Some(false) && have_budget() {
                             let ok = match rig.read_level("RFPOWER") {
                                 Ok(frac) => {
                                     {
@@ -4329,7 +4423,7 @@ impl RadioLoop {
                                 ok,
                             );
                         }
-                        if self.level_supported[LVL_MICGAIN] != Some(false) {
+                        if self.level_supported[LVL_MICGAIN] != Some(false) && have_budget() {
                             let ok = match rig.read_level("MICGAIN") {
                                 Ok(frac) => {
                                     {
@@ -4346,7 +4440,7 @@ impl RadioLoop {
                                 ok,
                             );
                         }
-                        if self.level_supported[LVL_NR] != Some(false) {
+                        if self.level_supported[LVL_NR] != Some(false) && have_budget() {
                             let ok = match rig.read_level("NR") {
                                 Ok(frac) => {
                                     {
@@ -4363,7 +4457,7 @@ impl RadioLoop {
                                 ok,
                             );
                         }
-                        if self.level_supported[LVL_AGC] != Some(false) {
+                        if self.level_supported[LVL_AGC] != Some(false) && have_budget() {
                             let ok = match rig.read_agc() {
                                 Some(v) => {
                                     {
@@ -4387,11 +4481,14 @@ impl RadioLoop {
                         // alive — if STRENGTH still returns nothing the rig has no CAT S-meter,
                         // so stop polling it (don't burn a round-trip every cycle) and leave the
                         // UI meter empty rather than faking one.
-                        if self.smeter_supported != Some(false) {
+                        if self.smeter_supported != Some(false) && have_budget() {
                             match rig.read_smeter_db() {
                                 Some(db) => {
                                     self.smeter_supported = Some(true);
                                     self.smeter_misses = 0;
+                                    // A real answer clears the backoff: a meter that works now
+                                    // must recover full responsiveness if it ever drops.
+                                    self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
                                     // Lock-free mirror first (the fast `get_meters` reader),
                                     // then the engine snapshot copy — same value, always both.
                                     self.meter_feed.set_smeter_db(Some(db));
@@ -4407,6 +4504,15 @@ impl RadioLoop {
                                     self.smeter_misses = self.smeter_misses.saturating_add(1);
                                     if self.smeter_misses >= 3 {
                                         self.smeter_supported = Some(false);
+                                        // Schedule the next re-probe and double the wait for the
+                                        // one after (capped) — the funcs' ladder, verbatim.
+                                        self.smeter_retry_at = self
+                                            .rig_poll_ticks
+                                            .saturating_add(self.smeter_retry_backoff);
+                                        self.smeter_retry_backoff = self
+                                            .smeter_retry_backoff
+                                            .saturating_mul(2)
+                                            .min(FUNC_RETRY_BACKOFF_MAX);
                                         // Don't leave the last good reading frozen on the UI —
                                         // both mirrors, so the fast reader goes "—" too.
                                         self.meter_feed.set_smeter_db(None);
@@ -4425,7 +4531,11 @@ impl RadioLoop {
                         // touch stale on some backends — fine for a display-only hint.
                         // Mode changes rarely — read it on a slower sub-cadence (every 4th
                         // poll) to keep the fast dial/health check tight on slow serial links.
-                        if self.rig_poll_ticks.is_multiple_of(4) {
+                        // Budgeted as a unit: skipping the `m` read also defers the filter-width
+                        // apply nested inside it, which is correct — `take_passband_request` is
+                        // never called, so the operator's click stays QUEUED for the next poll
+                        // rather than being drained against a mode we did not read.
+                        if self.rig_poll_ticks.is_multiple_of(4) && have_budget() {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let (m, pb) = rig.read_mode_passband();
                             {
@@ -4545,7 +4655,7 @@ impl RadioLoop {
                         // "runs 4 s, hangs a few, repeats" symptom. One-at-a-time bounds a tick's
                         // worst case to a single timeout. SET (immediate, optimistic) is unchanged,
                         // so slower GET confirmation costs no responsiveness.
-                        if self.rig_poll_ticks % 4 == 2 {
+                        if self.rig_poll_ticks % 4 == 2 && have_budget() {
                             let i = ((self.rig_poll_ticks / 4) as usize) % RIG_FUNCS.len();
                             if self.func_supported[i] != Some(false) {
                                 match rig.read_func(RIG_FUNCS[i]) {
@@ -6171,14 +6281,55 @@ impl RadioLoop {
             if let Some((p, force)) = power {
                 // Command on change OR when the cap must be re-asserted (`force`): a manual
                 // knob-up past the ceiling is pulled back down even though our target is unchanged.
-                if (force || Some(p) != self.last_rf_power) && rig.set_power(p).is_ok() {
-                    self.last_rf_power = Some(p);
+                //
+                // ⚠️ AND GIVE UP ON A VALUE THE RIG REFUSES (`rf_power_giveup`, Flex audit
+                // wave-2 #60). `last_rf_power` advances only on success, so without this a rig
+                // that answers anything but `RPRT 0` was re-sent the same doomed `L RFPOWER` on
+                // every 20 ms tick for the rest of the session. The give-up is per-VALUE, so
+                // moving the slider always tries again — and the cap's `force` leg is NOT
+                // weakened: a refusal means CAT cannot enforce the ceiling on this radio at all,
+                // which is a fact to state, not one to keep burning the loop over.
+                if (force || Some(p) != self.last_rf_power) && self.rf_power_giveup != Some(p) {
+                    match rig.set_power(p) {
+                        Ok(()) => {
+                            self.last_rf_power = Some(p);
+                            self.rf_power_giveup = None;
+                        }
+                        Err(_) => {
+                            self.rf_power_giveup = Some(p);
+                            let ok = self.cat_ok;
+                            let mut eng = engine_lock(engine);
+                            eng.set_cat_status(
+                                ok,
+                                "couldn't set RF power — the rig didn't take it; set power on \
+                                 the radio"
+                                    .to_string(),
+                            );
+                        }
+                    }
                 }
             }
             let mic = Some(engine_lock(engine)).and_then(|e| e.mic_gain());
             if let Some(mg) = mic {
-                if Some(mg) != self.last_mic_gain && rig.set_mic_gain(mg).is_ok() {
-                    self.last_mic_gain = Some(mg);
+                // Same give-up, same reason — see the RF-power leg above.
+                if Some(mg) != self.last_mic_gain && self.mic_gain_giveup != Some(mg) {
+                    match rig.set_mic_gain(mg) {
+                        Ok(()) => {
+                            self.last_mic_gain = Some(mg);
+                            self.mic_gain_giveup = None;
+                        }
+                        Err(_) => {
+                            self.mic_gain_giveup = Some(mg);
+                            let ok = self.cat_ok;
+                            let mut eng = engine_lock(engine);
+                            eng.set_cat_status(
+                                ok,
+                                "couldn't set mic gain — the rig didn't take it; set it on the \
+                                 radio"
+                                    .to_string(),
+                            );
+                        }
+                    }
                 }
             }
             // RX DSP levels: NR level (0..1) + AGC speed — applied on change like mic gain.
@@ -6187,8 +6338,26 @@ impl RadioLoop {
                 (e.nr_level(), e.agc_to_command())
             };
             if let Some(n) = nr {
-                if Some(n) != self.last_nr_level && rig.set_rx_level("NR", n).is_ok() {
-                    self.last_nr_level = Some(n);
+                // Same give-up, same reason — see the RF-power leg above. NR is the one of the
+                // three a Flex on model 2036 is most likely to refuse outright.
+                if Some(n) != self.last_nr_level && self.nr_level_giveup != Some(n) {
+                    match rig.set_rx_level("NR", n) {
+                        Ok(()) => {
+                            self.last_nr_level = Some(n);
+                            self.nr_level_giveup = None;
+                        }
+                        Err(_) => {
+                            self.nr_level_giveup = Some(n);
+                            let ok = self.cat_ok;
+                            let mut eng = engine_lock(engine);
+                            eng.set_cat_status(
+                                ok,
+                                "couldn't set the noise-reduction level — the rig didn't take \
+                                 it; set NR on the radio"
+                                    .to_string(),
+                            );
+                        }
+                    }
                 }
             }
             // AGC. `picked` is the operator's own click and OVERRIDES both guards below —
@@ -9978,6 +10147,166 @@ mod tests {
             }
         });
         (addr, log)
+    }
+
+    /// A rigctld that REFUSES every level write (`L …` → `RPRT -1`) while answering everything
+    /// else, logging each line — the shape of any Hamlib backend that does not implement a level,
+    /// which is what a Flex on model 2036 is for STRENGTH and friends.
+    fn mock_level_rejecting_rigctld() -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let reply = if l == "f" {
+                        "14074000\n"
+                    } else if l.starts_with("L ") {
+                        "RPRT -1\n" // the rig/backend does not implement this level
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// A REFUSED LEVEL WRITE MUST STOP BEING RE-SENT (2026-08-17 Flex audit, wave-2 #60).
+    ///
+    /// RF power, mic gain and NR each advanced their `last_*` cache only on success, so on a rig
+    /// that answers anything but `RPRT 0` the change test stayed permanently true and the write
+    /// went out again on EVERY 20 ms tick — ~50 blocking CAT round-trips a second for the rest of
+    /// the session, on the thread that produces waterfall rows, drives the slot boundary and owns
+    /// PTT. The AGC beside them was given exactly this give-up when its own storm was found; the
+    /// sweep did not reach these three.
+    ///
+    /// Blast radius is EVERY rig, not just Flex: any backend that does not implement a level
+    /// answers this way. Both directions are checked — it gives up, and a fresh operator value is
+    /// still tried.
+    #[test]
+    fn a_refused_level_write_gives_up_instead_of_re_sending_it_every_tick() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_rf_power(0.5);
+            e.set_mic_gain(0.4);
+            e.set_nr_level(0.3);
+        }
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_level_rejecting_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // 30 ticks at the real 20 ms cadence — before the fix that is 30 writes per level.
+        for i in 0..30 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(i) * 20.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        let count = |tok: &str| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.starts_with(&format!("L {tok} ")))
+                .count()
+        };
+        assert_eq!(count("RFPOWER"), 1, "RF power is tried ONCE, then given up");
+        assert_eq!(count("MICGAIN"), 1, "mic gain is tried ONCE, then given up");
+        assert_eq!(count("NR"), 1, "NR is tried ONCE, then given up");
+        assert_eq!(state.rf_power_giveup, Some(0.5));
+        assert_eq!(state.mic_gain_giveup, Some(0.4));
+        assert_eq!(state.nr_level_giveup, Some(0.3));
+        // …and the operator is told, rather than left with a slider claiming a level the radio
+        // never took.
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(
+            said.contains("didn't take it"),
+            "the refusal is stated once: {said:?}"
+        );
+
+        // THE OTHER DIRECTION — a give-up is a rate limit, not a latch. Moving the slider to a
+        // DIFFERENT value must be tried, or the operator can never recover from a transient.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_rf_power(0.8);
+        }
+        for i in 30..40 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(i) * 20.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            count("RFPOWER"),
+            2,
+            "a NEW value is tried once more — and then given up in turn"
+        );
+        assert_eq!(state.rf_power_giveup, Some(0.8));
+    }
+
+    /// The S-meter re-probe walks the SAME doubling ladder the DSP funcs do
+    /// (2026-08-17 Flex audit, wave-2 #62) — it kept the fixed 40-heavy-poll cycle the funcs
+    /// were explicitly backed off away from, so a rig with no `RIG_LEVEL_STRENGTH` (model 2036
+    /// has none at all) paid three blocking `l STRENGTH` reads every ~30 s forever.
+    ///
+    /// Pure arithmetic on the same constants the loop uses — the ladder, not the plumbing.
+    #[test]
+    fn the_smeter_reprobe_backs_off_like_the_funcs_do() {
+        let mut backoff: u32 = FUNC_RETRY_BACKOFF_BASE;
+        let mut at: u32 = 0;
+        let mut ticks: u32 = 0;
+        let mut waits = Vec::new();
+        for _ in 0..8 {
+            ticks = at.max(ticks); // the re-probe fires when the tick counter reaches `at`
+            at = ticks.saturating_add(backoff);
+            backoff = backoff.saturating_mul(2).min(FUNC_RETRY_BACKOFF_MAX);
+            waits.push(at - ticks);
+        }
+        assert_eq!(
+            waits,
+            vec![40, 80, 160, 320, 640, 1280, 2560, 2560],
+            "doubling, capped — never a fixed 40 forever"
+        );
+        // …and a working meter resets it, so a real drop-out recovers at full speed.
+        backoff = FUNC_RETRY_BACKOFF_BASE;
+        assert_eq!(backoff, FUNC_RETRY_BACKOFF_BASE);
     }
 
     #[test]
