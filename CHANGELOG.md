@@ -73,6 +73,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Nexus now notices when the radio is keyed and no RF is coming out.** Every check Nexus had
+  was on the *unkey* side: it made sure the transmitter came down. Nothing ever asked whether
+  anything went out in the first place. A transmit inhibit, an antenna port that only receives,
+  an amplifier interlock, a transmit profile pointed at an audio source that is not running —
+  each of them looks like a completely normal over: PTT is accepted, the meters move or don't,
+  the QSO is logged, PSK Reporter is told, and the first evidence is nobody coming back to you.
+  If your radio reports forward power over CAT, Nexus now watches that reading during an FT8,
+  RTTY, PSK or SSTV over, and after a couple of seconds of zero watts it says so in the radio
+  status line. It is a **message and nothing else** — it never stops or blocks a transmission.
+  It stays quiet on radios that do not report forward power (most do not), during a tune-up,
+  through the first moments of key-down, on phone and CW overs (silence between words and
+  between elements is normal), and it never repeats inside one over or fires once the radio has
+  been seen making power.
+
 - **Phone tells a FlexRadio operator when native DAX has taken their microphone.** Switching
   on **Flex native DAX audio** — the early-access toggle you would turn on for FT8 — tells the
   radio to take transmit audio from DAX. That is a *radio-wide* setting, not a Nexus one: while

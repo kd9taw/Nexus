@@ -608,6 +608,94 @@ const AUDIO_REBUILD_DEBOUNCE_MS: f64 = 5_000.0;
 /// more than one blocking CAT read lands per loop tick. RX health polling is suspended while
 /// keyed, so this reuses that bus headroom.
 const TX_METER_POLL_MS: f64 = 150.0;
+/// How long an over must have been running before a ZERO forward-power reading is believed.
+///
+/// Po refreshes every ~600 ms (one meter per 150 ms cycle, round-robin over four), so 2 s puts
+/// at least the third reading well clear of key-down — past the PTT/T-R relay settle, past the
+/// amplifier's own key-up delay, and past the first audio buffer reaching the modulator. Short
+/// enough to land inside an ordinary FT8 over (12.6 s) rather than after it.
+const NO_RF_AFTER_MS: f64 = 2_000.0;
+
+/// Watches one keyed over for the failure the transmit path has never been able to see:
+/// **PTT accepted, over ran, nothing radiated.**
+///
+/// 2026-08-17 Flex audit, completeness-critic gap #14. The unkey-verification work (#36/#37)
+/// hardened the DROP side of PTT; the KEY side has no proof-of-transmission at all. On a Flex the
+/// ways an accepted key yields zero RF are unusually many — TX inhibit on the RCA input, a TX
+/// profile whose mic source is a DAX stream that is not flowing, an RX-only antenna port, a slice
+/// that is not the TX slice, an amplifier interlock — and every one of them presents as a
+/// perfectly normal over: the meters are read for the display, the QSO is logged, PSKReporter is
+/// told, and the operator's first evidence is nobody answering. The Po meter that would prove it
+/// is *already being polled*; nothing ever asked it a question.
+///
+/// **This NOTIFIES and never acts** (the project's alerts rule: notify loudly, never move the
+/// radio unattended). It raises a status line and nothing else — no gate, no unkey, no refusal.
+///
+/// Four things it must never do, and each is a field of this struct or an argument to it:
+///  - **Fire on a rig that does not report forward power.** Most do not; on a Flex over SmartSDR
+///    CAT, model 2036 declares no `RFPOWER_METER`/`SWR`/`ALC` at all (`rigctl --dump-caps`:
+///    `Get level: RFPOWER KEYSPD SLOPE_LOW SLOPE_HIGH`), so `l RFPOWER_METER_WATTS` is refused
+///    and the reading is `None` — which is *silence here*, not a warning. A false "no RF" is
+///    worse than no check.
+///  - **Fire on a keying edge**, before the relay has closed and the first audio has arrived
+///    ([`NO_RF_AFTER_MS`]).
+///  - **Fire on an over whose carrier is legitimately intermittent** — live mic PTT, a voice
+///    message, a CW macro between elements, a tune-up. Those read zero watts as a matter of
+///    course, which is why the caller passes `watchable` rather than "keyed".
+///  - **Nag.** Once per episode, and never again once the radio has been seen making power in
+///    that episode: a station that transmitted and then tailed off to zero at the end of the
+///    over has proved itself, and the end of every SSB or CW over looks exactly like that.
+#[derive(Default)]
+struct TxRfWatch {
+    /// When the current watchable keyed episode began; `None` while receiving (or while keyed
+    /// in a way this check does not judge). Resetting it IS the episode reset.
+    keyed_since: Option<f64>,
+    /// The radio was seen making power during THIS episode, so the episode is proven and no
+    /// later zero can raise anything. Disarms the end-of-over tail-off false positive.
+    rf_seen: bool,
+    /// Already said, this episode. One notice per over.
+    warned: bool,
+}
+
+impl TxRfWatch {
+    /// One radio-loop tick. `watchable` = *Nexus is running an over on this radio whose carrier
+    /// should be continuous for its whole length*. Anything else — receiving, tuning, a mic-keyed
+    /// or CW over, another program holding the transmitter — ends the episode and clears it.
+    fn tick(&mut self, now: f64, watchable: bool) {
+        if watchable {
+            self.keyed_since.get_or_insert(now);
+        } else {
+            *self = Self::default();
+        }
+    }
+
+    /// Fold in one forward-power reading (watts) from the meter round-robin. `None` = the rig
+    /// did not answer or does not report this meter, which can never raise anything.
+    ///
+    /// Returns `true` exactly once per episode, on the reading that proves it.
+    fn observe_po(&mut self, now: f64, po_w: Option<f32>) -> bool {
+        let Some(po) = po_w else { return false };
+        if po > 0.0 {
+            self.rf_seen = true; // the radio IS transmitting — this episode is settled
+            return false;
+        }
+        let Some(since) = self.keyed_since else {
+            return false; // zero watts while receiving is just the truth
+        };
+        if self.rf_seen || self.warned || now - since < NO_RF_AFTER_MS {
+            return false;
+        }
+        self.warned = true;
+        true
+    }
+}
+
+/// What the operator is told when [`TxRfWatch`] fires. Names the checks in the order a Flex owner
+/// would work through them, and claims nothing about the cause — the radio reported zero watts,
+/// which is a fact; why is not.
+const NO_RF_NOTE: &str = "the radio is keyed but reporting ZERO forward power — nothing is going \
+                          out. Check TX inhibit, that the antenna port can transmit, and that the \
+                          radio's transmit audio source is the one Nexus is feeding";
 /// How often to ask the rig for its OWN PTT state (`t`) while Nexus is NOT keying (#57 —
 /// radio-side keying was invisible: mic PTT / a straight key showed RX and no meters).
 /// One short read-only round-trip per second on an otherwise idle link; the answer gates
@@ -2338,6 +2426,8 @@ struct RadioLoop {
     /// Round-robin index over the four TX meters (SWR/ALC/Po/COMP) — one read per throttled
     /// cycle, so a slow rig can never block the loop with four back-to-back reads.
     tx_meter_idx: usize,
+    /// Proof-of-transmission watch for the current over — see [`TxRfWatch`]. Notifies; never gates.
+    tx_rf: TxRfWatch,
     /// The rig's own PTT as last read via `t` — TRUE means the transmitter is keyed by
     /// something that is not Nexus (mic PTT, straight key). Polled only while Nexus is
     /// idle; gates the TX-meter poll and mirrors into the engine (`observe_rig_ptt`).
@@ -2597,6 +2687,7 @@ impl RadioLoop {
             rig_split_restore: None,
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
+            tx_rf: TxRfWatch::default(),
             rig_keyed: false,
             sat_inferred_keyed: false,
             sat_pass_engaged: false,
@@ -2654,6 +2745,26 @@ impl RadioLoop {
     /// for the two.
     fn operator_keyed(&self) -> bool {
         self.rig_keyed || self.sat_inferred_keyed
+    }
+
+    /// Is this tick an over the "keyed but no RF" watch may judge? (2026-08-17 Flex audit,
+    /// completeness-critic gap #14.)
+    ///
+    /// Half of that check's false-alarm defence, and it is deliberately NARROW: an over whose
+    /// carrier is legitimately intermittent reads zero watts as a matter of course, so watching
+    /// one would accuse a station that is working perfectly. Four conditions, each excluding a
+    /// real shape of over:
+    ///  - `tx_until_ms` — an over NEXUS scheduled. A transmitter another program (or the mic)
+    ///    is holding is not ours to judge, and `rig_keyed` deliberately does not arm this.
+    ///  - not tuning — a tune-up is excluded by the item's own contract.
+    ///  - not live mic PTT — silence between words is what an SSB over is made of.
+    ///  - a continuous-carrier mode ([`mode_keys_a_continuous_carrier`]) — which is what takes
+    ///    CW out, elements and all.
+    fn rf_watchable(&self) -> bool {
+        self.tx_until_ms.is_some()
+            && !self.tuning_keyed
+            && !self.manual_ptt_applied
+            && mode_keys_a_continuous_carrier(&self.cur_md)
     }
 
     /// The backend attribution for the CURRENTLY-owned CAT channel, appended to probe and
@@ -6641,6 +6752,16 @@ impl RadioLoop {
         {
             let keyed_now =
                 self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
+            // ⚠️ PROOF OF TRANSMISSION (2026-08-17 Flex audit, completeness-critic gap #14 —
+            // "'keyed but no RF' is never detected"). The Po meter read below is already the
+            // evidence; nothing ever asked it whether any RF actually came out. Arm the watch
+            // only for an over Nexus is running itself whose carrier should be CONTINUOUS for
+            // its whole length, because that is the only shape where a zero watt reading means
+            // anything: a tune-up is excluded by contract, live mic PTT and a voice message
+            // read zero between words, and a CW macro reads zero between elements — every one
+            // of those would be a false alarm, and a false "no RF" is worse than no check
+            // (see [`TxRfWatch`]). Phone and CW are therefore out by mode, not by luck.
+            self.tx_rf.tick(now, self.rf_watchable());
             // RADIO-SIDE keying (#57): while Nexus is idle, ask the rig for its own PTT —
             // a mic key or straight key at the radio is otherwise invisible to every TX
             // indicator in the app. Read-only (`t`, never `T`), once a second, and only
@@ -6711,9 +6832,21 @@ impl RadioLoop {
                     };
                     self.tx_meter_idx = self.tx_meter_idx.wrapping_add(1);
                     self.last_tx_meter_poll = now;
+                    // The same reading, asked a question as well as rendered. `None` (this
+                    // cycle read another meter, or the rig reports no Po at all) can never
+                    // raise anything — see [`TxRfWatch`].
+                    let no_rf = self.tx_rf.observe_po(now, po);
+                    let ok = self.cat_ok;
                     {
                         let mut eng = engine_lock(engine);
                         eng.observe_rig_tx_meters(swr, alc, po, comp);
+                        // NOTIFY, NEVER ACT (the project's alerts rule). This raises a status
+                        // line into the same lane as the foreign-key notice above and does
+                        // nothing else: it does not unkey, does not gate the next over, and
+                        // does not touch the transmit path. Once per over.
+                        if no_rf {
+                            eng.set_cat_status(ok, NO_RF_NOTE.to_string());
+                        }
                     }
                 }
             } else if self.last_tx_meter_poll != 0.0 {
@@ -8519,6 +8652,19 @@ fn mode_is_data(md: &str) -> bool {
     m.starts_with("PKT") || m.starts_with("DATA")
 }
 
+/// Is the mode Nexus commanded one whose over is a CONTINUOUS carrier for its whole length?
+///
+/// The discriminator for [`TxRfWatch`], and it is asked of the COMMANDED mode rather than of the
+/// operating section because the mode is what the section already resolved: every continuous over
+/// this app produces — an FT8/FT4 slot, RTTY (FSK `RTTY` or AFSK `PKT*`), PSK31, an SSTV image, an
+/// APRS beacon — is commanded into a DATA submode or into `RTTY`, while everything whose carrier
+/// is legitimately intermittent lands on a plain voice or CW word: Phone on USB/LSB/FM, the voice
+/// keyer with it, and CW on CW/CWR (or on USB/LSB for the soundcard keyer, which is excluded by
+/// the same test). Zero watts mid-over means something only in the first group.
+fn mode_keys_a_continuous_carrier(md: &str) -> bool {
+    mode_is_data(md) || md.trim().eq_ignore_ascii_case("RTTY")
+}
+
 /// Is `md` in the FM FAMILY — plain `FM` or its data submode `PKTFM`?
 ///
 /// FM is a CLASS, not a sideband, and since an SSTV image on an FM channel is sent in
@@ -9685,6 +9831,131 @@ mod tests {
         // Voice/CW never had a width to re-command — every combination stays NOCHANGE.
         for (changed, from, to) in [(false, A, B), (true, A, B), (false, A, C)] {
             assert_eq!(retune_passband("USB", changed, from, to), -1);
+        }
+    }
+
+    /// KEYED BUT NO RF — the check FIRES (2026-08-17 Flex audit, completeness-critic gap #14).
+    ///
+    /// A rig that reports forward power, an over that has been running past the settle window,
+    /// and a Po reading of zero. That is the TX-inhibit / RX-only-port / dead-mic-source case,
+    /// and until now it presented as a perfectly normal over all the way to the log.
+    #[test]
+    fn a_keyed_radio_reporting_zero_forward_power_is_called_out_once() {
+        let mut w = TxRfWatch::default();
+        w.tick(0.0, true);
+        // Inside the settle window nothing is claimed — a relay that has not closed and an
+        // amplifier's own key-up delay both read zero, and neither is a fault.
+        assert!(!w.observe_po(600.0, Some(0.0)));
+        assert!(!w.observe_po(NO_RF_AFTER_MS - 1.0, Some(0.0)));
+        // Past it, the zero is believed — once.
+        assert!(w.observe_po(NO_RF_AFTER_MS + 1.0, Some(0.0)));
+        assert!(
+            !w.observe_po(3_000.0, Some(0.0)),
+            "the notice repeated inside one over — a line that re-fires every 600 ms is noise"
+        );
+        // The next over is judged on its own evidence.
+        w.tick(4_000.0, false);
+        w.tick(4_020.0, true);
+        assert!(!w.observe_po(4_600.0, Some(0.0)), "still inside the new over's window");
+        assert!(w.observe_po(4_020.0 + NO_RF_AFTER_MS + 1.0, Some(0.0)));
+    }
+
+    /// WHICH OVERS THE NO-RF CHECK MAY JUDGE. Half of the false-alarm defence lives here rather
+    /// than in [`TxRfWatch`]: an over whose carrier is legitimately intermittent reads zero watts
+    /// as a matter of course, so it must never be watched at all.
+    #[test]
+    fn only_a_continuous_carrier_over_can_be_judged_on_a_zero_power_reading() {
+        // Continuous for their whole length — an FT8/FT4 slot, RTTY either way, PSK31, an SSTV
+        // image, an APRS beacon. A zero here is a real "nothing came out".
+        for md in ["PKTUSB", "PKTLSB", "PKTFM", "DATA-U", " data-l ", "RTTY", "rtty"] {
+            assert!(mode_keys_a_continuous_carrier(md), "{md} should be watched");
+        }
+        // Intermittent by nature. Phone and the voice keyer go quiet between words; a CW macro
+        // goes quiet between elements (and the SOUNDCARD keyer keys its tone through plain
+        // USB/LSB, which this same test excludes). Watching any of them would accuse a station
+        // that is working perfectly.
+        for md in ["USB", "LSB", "FM", "CW", "CWR", "AM", ""] {
+            assert!(!mode_keys_a_continuous_carrier(md), "{md} must not be watched");
+        }
+    }
+
+    /// THE ARMING PREDICATE ITSELF, on a real loop state — the wiring the two pure tests above
+    /// cannot see. Each `false` here is a whole class of over that must never be accused.
+    #[test]
+    fn the_no_rf_watch_arms_only_on_an_over_nexus_is_running_itself() {
+        let mut s = loop_state();
+        s.cur_md = "PKTUSB".to_string();
+        assert!(!s.rf_watchable(), "armed while RECEIVING — nothing is keyed at all");
+
+        s.tx_until_ms = Some(1_000.0); // an FT8 slot over
+        assert!(s.rf_watchable(), "a scheduled digital over is exactly what this watches");
+
+        s.tuning_keyed = true;
+        assert!(!s.rf_watchable(), "armed on a TUNE-UP — excluded by contract");
+        s.tuning_keyed = false;
+
+        s.manual_ptt_applied = true;
+        assert!(!s.rf_watchable(), "armed on live mic PTT — silence between words is normal");
+        s.manual_ptt_applied = false;
+
+        s.cur_md = "CWR".to_string();
+        assert!(!s.rf_watchable(), "armed on a CW over — zero between elements is normal");
+        s.cur_md = "USB".to_string();
+        assert!(!s.rf_watchable(), "armed on a phone over");
+        s.cur_md = "RTTY".to_string();
+        assert!(s.rf_watchable(), "an FSK RTTY over is continuous and must be watched");
+
+        // Someone ELSE holding the transmitter (mic at the radio, another program on the
+        // broker) is not ours to judge — `rig_keyed` must not arm this on its own.
+        s.tx_until_ms = None;
+        s.rig_keyed = true;
+        assert!(!s.rf_watchable(), "armed on a transmitter Nexus did not key");
+    }
+
+    /// …and the four ways it must STAY SILENT. A false "no RF" is worse than no check at all:
+    /// it sends an operator whose station is working perfectly to look for a fault, and the
+    /// second time it does that nobody reads the line again.
+    #[test]
+    fn the_no_rf_check_stays_silent_on_every_radio_that_cannot_prove_it() {
+        // 1. THE RIG DOES NOT REPORT POWER. Most do not. A Flex on SmartSDR CAT (model 2036)
+        //    declares no RFPOWER_METER at all — `l RFPOWER_METER_WATTS` is refused and the
+        //    reading is None — so the commonest radio in this audit must produce silence.
+        let mut w = TxRfWatch::default();
+        w.tick(0.0, true);
+        for t in [600.0, 2_400.0, 6_000.0, 12_000.0] {
+            assert!(!w.observe_po(t, None), "a rig with no Po meter was accused at {t} ms");
+        }
+
+        // 2. THE RADIO IS MAKING POWER. Including the end-of-over tail-off: once a non-zero
+        //    reading lands, the episode is settled and a later zero says nothing. Every SSB and
+        //    CW over ends looking exactly like this.
+        let mut w = TxRfWatch::default();
+        w.tick(0.0, true);
+        assert!(!w.observe_po(600.0, Some(45.0)));
+        assert!(
+            !w.observe_po(12_000.0, Some(0.0)),
+            "a station that transmitted was accused on its own tail-off"
+        );
+
+        // 3. A KEYING TRANSIENT. The over ends before the settle window is up — a CW word, a
+        //    short tune, a click on PTT. Nothing has been proved either way.
+        let mut w = TxRfWatch::default();
+        w.tick(0.0, true);
+        assert!(!w.observe_po(500.0, Some(0.0)));
+        w.tick(700.0, false); // unkeyed
+        w.tick(720.0, true); // …and keyed again
+        assert!(
+            !w.observe_po(2_100.0, Some(0.0)),
+            "the previous over's clock leaked into this one"
+        );
+
+        // 4. NOT A WATCHABLE OVER AT ALL — receiving, tuning, a mic-keyed or CW over, another
+        //    program holding the transmitter. Zero watts is unremarkable in every one of them,
+        //    so the caller never arms the watch and no reading can raise anything.
+        let mut w = TxRfWatch::default();
+        for t in [0.0, 2_000.0, 4_000.0, 30_000.0] {
+            w.tick(t, false);
+            assert!(!w.observe_po(t, Some(0.0)), "an unwatched over was accused at {t} ms");
         }
     }
 
