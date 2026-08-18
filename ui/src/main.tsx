@@ -5,6 +5,9 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable } from './features/durableStore'
+import { installExternalLinkInterceptor } from './externalLinks'
+import { isTauri, openExternalUrl } from './api'
+import { pushToast } from './toast'
 import './styles.css'
 // AFTER styles.css, deliberately: the cockpit pane grid's structural rules are all flat
 // single-class selectors, so an equal-specificity tie with anything in styles.css must
@@ -37,6 +40,20 @@ if (!panel) {
   } catch {
     /* localStorage unavailable — nothing to clear */
   }
+}
+
+// Every `<a target="_blank">` needs routing through Rust (externalLinks.ts has the whole
+// story: the opener plugin's injected handler swallows the click and its invoke is
+// ACL-denied). Main window AND pop-outs — panels render external anchors too (APRS cards).
+// In a plain browser (vite dev preview) there is no bridge and no plugin interceptor, so the
+// native `_blank` behavior is correct and we install nothing.
+if (isTauri()) {
+  installExternalLinkInterceptor((url) => {
+    openExternalUrl(url).catch((e) => {
+      // A dead link failing SILENTLY is the exact bug class this fixes — say so instead.
+      pushToast(`Could not open the link: ${e instanceof Error ? e.message : e}`, 'error')
+    })
+  })
 }
 
 // Outermost net. App carries its own boundary around the workspace (so a view crash

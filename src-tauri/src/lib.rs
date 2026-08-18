@@ -7789,6 +7789,35 @@ fn save_text_to_downloads(
     Ok(path.display().to_string())
 }
 
+/// Binary sibling of [`save_text_to_downloads`] for the Journey share card's PNG: on macOS
+/// wry cancels every `<a download>` navigation when no download handler is wired (WKWebView
+/// `shouldPerformDownload` → Cancel), so the blob-anchor fallback silently produced no file
+/// while the UI toasted success. The webview sends the PNG as standard base64 (the same
+/// wire shape as the SSTV transmit's RGB) and gets back the FULL saved path for its toast.
+#[tauri::command]
+fn save_png_to_downloads(
+    app: tauri::AppHandle,
+    filename: String,
+    base64: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .ok_or("Invalid file name")?;
+    let bytes = b64_decode(&base64)?;
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|e| format!("Could not locate your Downloads folder: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
 /// Arm or disarm the native CI-V bus diagnostic log. When enabled, every byte the CI-V
 /// engine reads/writes is recorded (timestamped + decoded) to a file in the operator's
 /// Downloads folder; returns that path so the UI can show it. Off by default and not
@@ -9225,8 +9254,8 @@ fn sstv_stop(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
 }
 
 /// Standard-alphabet base64 DECODE (RFC 4648, with or without padding) — the inverse of
-/// [`b64_encode`], for the raw RGB the webview sends on an SSTV transmit. Rejects any
-/// non-alphabet byte. One decode-only call site, so no new dependency.
+/// [`b64_encode`], for the raw RGB the webview sends on an SSTV transmit and the share-card
+/// PNG save. Rejects any non-alphabet byte. Two small call sites don't justify a dependency.
 fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
     fn val(c: u8) -> Option<u32> {
         match c {
@@ -15499,6 +15528,28 @@ fn open_dxped_page(app: tauri::AppHandle, call: String, url: Option<String>) -> 
         .map_err(|e| e.to_string())
 }
 
+/// Open an arbitrary external http(s) link in the operator's default browser — the backing
+/// for the UI's `target="_blank"` anchor interceptor (`ui/src/externalLinks.ts`). Raw
+/// `<a target="_blank">` anchors are DEAD in the Tauri webview: the opener plugin's injected
+/// click handler preventDefaults the click and then its `plugin:opener|open_url` invoke is
+/// denied by the capability ACL (we grant none — project convention is to open URLs from
+/// Rust commands, like [`open_qrz_page`], rather than widen the webview's ACL). The scheme
+/// is validated HERE, same principle as [`dxped_page_url`]: this is the trust boundary that
+/// hands a UI-supplied string (some of it third-party feed data) to the operator's browser.
+#[tauri::command]
+fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://"))
+        || url.contains(char::is_whitespace)
+    {
+        return Err("not an http(s) URL".to_string());
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// The quit cleanup ran — however many exit events arrive, it runs ONCE.
 ///
 /// Why a guard instead of relying on idempotence: on Windows/Linux a window-close quit
@@ -16595,6 +16646,7 @@ pub fn run() {
             export_log,
             export_general_log,
             save_text_to_downloads,
+            save_png_to_downloads,
             civ_diagnostic_log,
             all_txt_location,
             recordings_location,
@@ -16603,6 +16655,7 @@ pub fn run() {
             reveal_all_txt,
             open_qrz_page,
             open_dxped_page,
+            open_external_url,
             app_version,
             radio_launch_info,
             choose_radio,

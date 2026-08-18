@@ -33,6 +33,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every "open in your browser" link in the app now actually opens it.** The CAT-driver
+  download link, the repeater directory credits, the contest-calendar rules links and APRS
+  station pages were silently dead on every platform — the webview swallowed the click and
+  nothing happened. They now route through the same mechanism the QRZ links always used,
+  and ⌘-clicking a link works on the Mac too.
+
+- **Field Day exports save a real file on macOS.** All four export buttons (Cabrillo,
+  ADIF, summary, dupe sheet) went through a browser download path that macOS discards
+  outright; they now write straight into your Downloads folder like the Logbook exports,
+  and the confirmation names the saved path.
+
+- **The Journey share card no longer claims success while doing nothing on macOS.**
+  Copy-to-clipboard now uses the pattern Safari's engine accepts, and when the clipboard
+  refuses, the card is saved as a PNG in Downloads with the message naming the file — a
+  success message only ever reports a copy or a write that really happened.
+
 - **A crash or force-quit can no longer strand rigctld/rotctld on macOS and Linux.**
   Windows has always killed the CAT and rotator daemons with the app; on Mac and Linux
   a crash, a Force Quit, or a hung shutdown could leave one running — holding your

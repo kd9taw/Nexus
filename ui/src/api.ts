@@ -937,6 +937,19 @@ export async function saveTextToDownloads(filename: string, text: string): Promi
   return invoke<string>('save_text_to_downloads', { filename, text })
 }
 
+/** Binary sibling of saveTextToDownloads for the share-card PNG (base64-encoded bytes) —
+ *  on macOS wry cancels `<a download>` navigations outright, so a blob anchor saves nothing. */
+export async function savePngToDownloads(filename: string, base64: string): Promise<string> {
+  return invoke<string>('save_png_to_downloads', { filename, base64 })
+}
+
+/** Open an external http(s) link in the system browser. Backing for the app-wide
+ *  `target="_blank"` anchor interceptor (externalLinks.ts) — raw `_blank` anchors are dead
+ *  in the Tauri webview (the opener plugin's injected handler is ACL-denied). */
+export async function openExternalUrl(url: string): Promise<void> {
+  await invoke('open_external_url', { url })
+}
+
 /**
  * Switch the top-level operating mode (and operator role). Returns the fresh
  * snapshot so callers can render the new mode immediately.

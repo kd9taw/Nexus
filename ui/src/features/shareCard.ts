@@ -2,10 +2,13 @@
 // clean 1200×630 PNG (the standard social-card aspect) on an offscreen canvas
 // and put it on the CLIPBOARD — paste into a club chat, X/Mastodon, email.
 // Local-only: nothing is uploaded anywhere; the operator decides where it goes.
-// Clipboard-image write needs WebView2/Chromium ClipboardItem; when that's
-// unavailable we fall back to a plain PNG download.
+// Clipboard-image write needs ClipboardItem; when it is unavailable or refused
+// we fall back to a real Rust-side PNG save in Downloads (a browser `<a download>`
+// blob is CANCELLED outright by wry on macOS — it saved nothing while toasting
+// success, the shipped 1.5.0–1.6.1 mac bug).
 
 import { pushToast } from '../toast'
+import { savePngToDownloads } from '../api'
 
 export interface ShareCardData {
   /** The operator's callsign — the card's identity line. */
@@ -72,35 +75,43 @@ export function renderShareCard(d: ShareCardData): HTMLCanvasElement {
   return canvas
 }
 
-/** Render + copy to clipboard (fallback: download). Fire-and-forget with toasts. */
+/** Render + copy to clipboard (fallback: save a PNG in Downloads). Fire-and-forget; every
+ * toast reports something that actually HAPPENED — the copy resolved, or the file was
+ * written and the toast names its path. */
 export function shareCard(d: ShareCardData): void {
   const canvas = renderShareCard(d)
-  canvas.toBlob((blob) => {
-    if (!blob) {
-      pushToast('Could not render the share card', 'error')
-      return
-    }
-    const clip = navigator.clipboard as Clipboard | undefined
-    const CI = window.ClipboardItem
-    if (clip?.write && CI) {
-      clip
-        .write([new CI({ 'image/png': blob })])
-        .then(() => pushToast('Share card copied — paste it anywhere', 'success', 5000))
-        .catch(() => downloadBlob(blob, d))
-    } else {
-      downloadBlob(blob, d)
-    }
-  }, 'image/png')
+  const clip = navigator.clipboard as Clipboard | undefined
+  const CI = window.ClipboardItem
+  if (clip?.write && CI) {
+    // WebKit requires the ClipboardItem to be constructed IN the user gesture's own task —
+    // a Promise<Blob> value is the documented Safari pattern. Building the item inside
+    // toBlob's callback lands in a later task and rejects with NotAllowedError on macOS,
+    // which is why the old shape never copied there.
+    const blobPromise = new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error('Could not render the share card'))),
+        'image/png',
+      )
+    })
+    clip
+      .write([new CI({ 'image/png': blobPromise })])
+      .then(() => pushToast('Share card copied — paste it anywhere', 'success', 5000))
+      .catch(() => savePng(canvas, d))
+  } else {
+    void savePng(canvas, d)
+  }
 }
 
-function downloadBlob(blob: Blob, d: ShareCardData): void {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${d.call.toUpperCase()}-${d.headline.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.png`
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
-  pushToast('Share card saved as a PNG download', 'success', 5000)
+/** Rust-side save (the same Downloads path every other export uses). Success is toasted only
+ * after the write returned, failure surfaces the error — never a success toast for a no-op. */
+async function savePng(canvas: HTMLCanvasElement, d: ShareCardData): Promise<void> {
+  const name = `${d.call.toUpperCase()}-${d.headline.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.png`
+  try {
+    const dataUrl = canvas.toDataURL('image/png')
+    const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+    const path = await savePngToDownloads(name, base64)
+    pushToast(`Share card saved → ${path}`, 'success', 5000)
+  } catch (e) {
+    pushToast(`Could not save the share card: ${e instanceof Error ? e.message : e}`, 'error')
+  }
 }
