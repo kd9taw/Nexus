@@ -6177,15 +6177,24 @@ fn send_rot_step(addr: &str, step: tempo_core::rotator::RotStep) -> tempo_core::
         RotStep::Hold => RotOutcome::AzOk, // never reaches the wire
         RotStep::PointAzEl { az, el } => match tempo_audio::rotator::point_azel(addr, az, el) {
             Ok(()) => RotOutcome::AzElOk,
-            // Elevation refused. If plain azimuth lands, this is an az-only
-            // rotator (or a transient the driver will re-probe for).
-            Err(_) => {
+            // Elevation REFUSED — the daemon answered and said no (`RPRT -1` from the
+            // frontend's min_el/max_el check on a mount with no elevation axis). If plain
+            // azimuth then lands, this is an az-only rotator, or a transient the driver
+            // re-probes for.
+            //
+            // ⚠️ Only on an answered refusal. Silence is not a refusal: retrying azimuth
+            // after a timeout doubles the wait on a tick that has a satellite to keep up
+            // with, and a rotator that answers nothing is not an az-only rotator — it is
+            // gone. Before the rotctld client told the truth about replies this could not
+            // be asked, because a timeout arrived here as `Ok(())`.
+            Err(e) if e.kind() == std::io::ErrorKind::Other => {
                 if tempo_audio::rotator::point(addr, az).is_ok() {
                     RotOutcome::AzOnly
                 } else {
                     RotOutcome::Failed
                 }
             }
+            Err(_) => RotOutcome::Failed,
         },
         RotStep::PointAz { az } => {
             if tempo_audio::rotator::point(addr, az).is_ok() {
