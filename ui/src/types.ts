@@ -1253,9 +1253,9 @@ export interface RttyState {
   heardCq: string | null
 }
 
-/** Live PSK31 receive state (the `get_psk_state` poll). RX ONLY — no PSK
- * transmit path exists this phase, so unlike `RttyState` there is deliberately
- * no TX surface here for a control to wire to. */
+/** Live PSK state (the `get_psk_state` poll): the RX decoder + transcript,
+ * the selected sub-mode, and the TX side (sending / continuous-TX latch /
+ * keyer error) — `RttyState`'s shape for the Keyboard Modes cockpit. */
 export interface PskState {
   armed: boolean
   /** AFC correction from the netted center (Hz; slew-limited, clamped ±25). */
@@ -1264,6 +1264,11 @@ export interface PskState {
   signal: boolean
   /** Audio center (Hz) the decoder is netted on (the waterfall cursor). */
   centerHz: number
+  /** Selected sub-mode slug ('psk31' | 'qpsk31') — engine truth for the
+   * cockpit's selector. Optional: absent reads as 'psk31' (the default). */
+  mode?: string
+  /** QPSK sideband-reverse (LSB) toggle state. Optional: absent = normal. */
+  reverse?: boolean
   /** The decoded-text ring tail (caps at ~4000 chars; oldest drop off). */
   text: string
   /** Per-character confidence 0–100, parallel to `text`'s chars — render low

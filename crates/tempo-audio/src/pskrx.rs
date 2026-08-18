@@ -38,24 +38,31 @@ fn run(engine: Arc<Mutex<Engine>>) {
     // follows the engine's netted value (a waterfall click); a net or the
     // cockpit's Re-acquire drops + rebuilds it the same clean-acquire way.
     let mut demod: Option<PskDemodulator> = None;
-    // The center the demod was built with.
+    // The center and (sub-mode, reverse) the demod was built with.
     let mut applied = 0.0f32;
+    let mut applied_mode = (tempo_core::psk::PskModeKind::Bpsk31, false);
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
         std::thread::sleep(POLL);
-        let (armed, center, reset) = {
+        let (armed, center, reset, mode) = {
             let mut e = engine_lock(&engine);
-            (e.psk_armed(), e.psk_center_hz(), e.take_psk_afc_reset())
+            (
+                e.psk_armed(),
+                e.psk_center_hz(),
+                e.take_psk_afc_reset(),
+                e.psk_mode(),
+            )
         };
         if !armed {
             demod = None;
             continue;
         }
-        if reset || center != applied {
-            demod = None; // rebuild below: fresh AFC pull on the new center
+        if reset || center != applied || mode != applied_mode {
+            demod = None; // rebuild below: fresh acquire on the new center/mode
             applied = center;
+            applied_mode = mode;
         }
         let audio = engine_lock(&engine).take_psk_audio();
         if audio.is_empty() {
@@ -64,6 +71,8 @@ fn run(engine: Arc<Mutex<Engine>>) {
         let d = demod.get_or_insert_with(|| {
             PskDemodulator::new(PskConfig {
                 center_hz: applied,
+                mode: applied_mode.0,
+                qpsk_reverse: applied_mode.1,
                 ..PskConfig::default()
             })
         });

@@ -18,6 +18,7 @@ import {
   pskNet,
   pskSend,
   pskSetLatched,
+  pskSetMode,
   pskStop,
   pskType,
 } from '../api'
@@ -157,10 +158,19 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       .catch(() => pushToast('Could not switch the PSK decoder', 'error'))
   }
 
-  // Sub-mode selector — COCKPIT STATE, not settings (the sstvModes pattern).
-  // One entry today; QPSK31 slots in at Phase 3 as a second row in pskModes.ts.
-  const [modeSlug, setModeSlug] = useState('psk31')
+  // Sub-mode selector — COCKPIT STATE held by the ENGINE (the sstvModes
+  // pattern for the rows; engine-owned since Phase 3 because the RX thread
+  // and both TX paths must run the SAME mode). The engine refuses a switch
+  // mid-transmission — surfaced as a toast, the selector snaps back on the
+  // next poll. `reverse` is QPSK31's sideband polarity (LSB), same ownership.
+  const modeSlug = psk?.mode ?? 'psk31'
+  const reverse = psk?.reverse === true
   const mode = PSK_MODE_BY_SLUG[modeSlug] ?? PSK_MODES[0]
+  const setMode = (slug: string, rev: boolean) => {
+    void withErrorToast(() => pskSetMode(slug, rev), 'PSK mode switch refused').then((s) => {
+      if (s) setPsk(s)
+    })
+  }
 
   // Licensed PSK watering holes (built-in band plan, WSJT-X-style) — same
   // source the RTTY cockpit uses, filtered to data privileges.
@@ -306,7 +316,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 <select
                   className="settings-input psk-mode-select"
                   value={modeSlug}
-                  onChange={(e) => setModeSlug(e.target.value)}
+                  onChange={(e) => setMode(e.target.value, reverse)}
                   aria-label="PSK sub-mode"
                 >
                   {PSK_MODES.map((m) => (
@@ -316,6 +326,25 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                   ))}
                 </select>
               ) : null}
+              {/* QPSK31 is sideband-SENSITIVE (the ±90° rotations mirror on
+                  LSB, where BPSK's 0/180 don't care) — the selector-adjacent
+                  Rev toggle flips the demod's AND the modulator's rotation
+                  sense. Normal = USB, the Keyboard section's convention. */}
+              {modeSlug === 'qpsk31' && (
+                <button
+                  type="button"
+                  className={`rtty-arm psk-rev${reverse ? ' on' : ''}`}
+                  aria-pressed={reverse}
+                  onClick={() => setMode(modeSlug, !reverse)}
+                  title={
+                    reverse
+                      ? 'Reversed polarity (LSB) — decoding and transmitting with the ±90° phase shifts mirrored. Click for normal (USB, the standard).'
+                      : 'Normal polarity (USB, the standard). Click if a QPSK31 station warbles but prints garbage — an LSB station’s phase shifts are mirrored.'
+                  }
+                >
+                  Rev {reverse ? 'on' : 'off'}
+                </button>
+              )}
               {sending && (
                 <span className="rtty-tx-pill" title="PSK transmission on the air (Stop TX aborts)">
                   TX ▲

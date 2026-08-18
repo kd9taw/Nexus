@@ -8902,6 +8902,11 @@ struct PskStateDto {
     /// Audio center (Hz) the decoder is netted on (waterfall cursor position)
     /// — and where TX transmits (the transceive convention).
     center_hz: f32,
+    /// Selected sub-mode slug ("psk31" | "qpsk31") — cockpit state echoed
+    /// back so the selector renders the engine's truth.
+    mode: &'static str,
+    /// QPSK sideband-reverse (LSB) toggle state.
+    reverse: bool,
     /// The decoded-text ring tail (caps at ~4000 chars; oldest drop off).
     text: String,
     /// Per-character confidence 0–100, parallel to `text`'s chars — render low
@@ -8923,6 +8928,11 @@ fn psk_state_dto(eng: &Engine) -> PskStateDto {
         afc_hz: s.afc_hz,
         signal: s.signal,
         center_hz: s.center_hz,
+        mode: match s.mode {
+            tempo_core::psk::PskModeKind::Bpsk31 => "psk31",
+            tempo_core::psk::PskModeKind::Qpsk31 => "qpsk31",
+        },
+        reverse: s.reverse,
         text: s.text,
         char_conf: s.conf,
         sending: s.sending,
@@ -9028,6 +9038,27 @@ fn psk_afc_reset(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> 
 fn psk_net(state: State<'_, SharedEngine>, hz: f32) -> Result<PskStateDto, String> {
     let mut eng = engine_lock(&state);
     eng.psk_net(hz);
+    Ok(psk_state_dto(&eng))
+}
+
+/// Select the PSK sub-mode ("psk31" | "qpsk31") and the QPSK sideband-reverse
+/// polarity — the cockpit's selector and Reverse toggle (Keyboard Modes
+/// Phase 3). The engine refuses a switch while any PSK transmission is
+/// active (a mid-over switch would garble the far end's copy) and returns
+/// why; a change re-acquires the RX demodulator on the new mode.
+#[tauri::command(async)]
+fn psk_set_mode(
+    state: State<'_, SharedEngine>,
+    mode: String,
+    reverse: bool,
+) -> Result<PskStateDto, String> {
+    let kind = match mode.as_str() {
+        "psk31" => tempo_core::psk::PskModeKind::Bpsk31,
+        "qpsk31" => tempo_core::psk::PskModeKind::Qpsk31,
+        other => return Err(format!("unknown PSK mode {other:?}")),
+    };
+    let mut eng = engine_lock(&state);
+    eng.set_psk_mode(kind, reverse)?;
     Ok(psk_state_dto(&eng))
 }
 
@@ -16809,6 +16840,7 @@ pub fn run() {
             psk_clear,
             psk_afc_reset,
             psk_net,
+            psk_set_mode,
             psk_send,
             psk_set_latched,
             psk_type,

@@ -1735,7 +1735,7 @@ struct RttyStream {
     keyed: bool,
 }
 
-/// The live continuous-TX ("latched") PSK31 stream — the generator state that
+/// The live continuous-TX ("latched") PSK stream — the generator state that
 /// survives across radio-loop ticks, PSK's instantiation of the [`RttyStream`]
 /// pattern (soundcard only: there is no PSK keyline backend).
 ///
@@ -1743,16 +1743,53 @@ struct RttyStream {
 /// never leave a mid-phase carrier or a half-shaped reversal to be resumed
 /// into the NEXT transmission.
 struct PskTxStream {
-    /// Resumable BPSK generator — carrier phase, polarity and the pending
-    /// symbol's shaping carried across chunks (`tempo_core::psk::PskStream`).
-    gen: tempo_core::psk::PskStream,
+    /// Resumable generator for the mode the stream was built in — carrier
+    /// phase, polarity, pending-symbol shaping (and, for QPSK, the K=5
+    /// encoder register) carried across chunks. Both variants take VARICODE
+    /// bits, so every call site stays mode-blind.
+    gen: PskGen,
     /// The audio center this stream was built for. A re-net mid-over rebuilds
     /// the generator (an audible re-key — correct: the operator moved it)
     /// rather than splicing two carriers into one envelope.
     center_hz: f32,
+    /// The (sub-mode, reverse) pair this stream was built for. The engine
+    /// refuses `set_psk_mode` while anything streams, so unlike `center_hz`
+    /// this cannot change mid-over — carrying it here is the belt to that
+    /// suspender (a mismatch builds a fresh stream instead of splicing two
+    /// modulations into one carrier).
+    mode: (tempo_core::psk::PskModeKind, bool),
     /// PTT asserted for this stream — once per stream, not per chunk (see
     /// [`RttyStream::keyed`] for the CAT-round-trip rationale).
     keyed: bool,
+}
+
+/// The mode half of [`PskTxStream`]: BPSK's bit-reversal stream or QPSK's
+/// encoder+stream, one enum so the radio loop's chunk calls stay mode-blind.
+enum PskGen {
+    Bpsk(tempo_core::psk::PskStream),
+    Qpsk(tempo_core::psk::QpskStream),
+}
+
+impl PskGen {
+    fn new(cfg: tempo_core::psk::PskTxConfig, mode: (tempo_core::psk::PskModeKind, bool)) -> Self {
+        match mode.0 {
+            tempo_core::psk::PskModeKind::Bpsk31 => {
+                Self::Bpsk(tempo_core::psk::PskStream::new(cfg))
+            }
+            tempo_core::psk::PskModeKind::Qpsk31 => {
+                Self::Qpsk(tempo_core::psk::QpskStream::new(cfg, mode.1))
+            }
+        }
+    }
+
+    /// Varicode bits in, shaped audio out; `tail` closes the transmission
+    /// (QPSK additionally keys its encoder-flush idle before the key-down).
+    fn chunk(&mut self, bits: &[bool], tail: bool) -> Vec<f32> {
+        match self {
+            Self::Bpsk(g) => g.chunk(bits, tail),
+            Self::Qpsk(g) => g.chunk(bits, tail),
+        }
+    }
 }
 
 /// The SSTV image currently streaming to the rig: the whole pre-encoded 12 kHz buffer,
@@ -5505,7 +5542,7 @@ impl RadioLoop {
         {
             let psk_baud = tempo_core::psk::BAUD as f64;
             let ready = now >= self.psk_busy_until && self.may_key();
-            let (abort, msg, stream_tick, center_hz) = {
+            let (abort, msg, stream_tick, center_hz, psk_mode) = {
                 let mut eng = engine_lock(engine);
                 // Keep the cockpit's sending indicator honest each tick (the
                 // latched stream keeps it true through the look-ahead, like RTTY).
@@ -5542,6 +5579,9 @@ impl RadioLoop {
                     },
                     stream_tick,
                     eng.psk_center_hz(),
+                    // Sub-mode + QPSK reverse — engine truth, one read per
+                    // tick so the one-shot and the stream key the same mode.
+                    eng.psk_mode(),
                 )
             };
             if abort {
@@ -5589,14 +5629,22 @@ impl RadioLoop {
                 PskStreamTick::Text(_) | PskStreamTick::Diddle => {
                     // Build (or rebuild on a re-net mid-over) the generator. A
                     // rebuild restarts the key envelope — audible, and correct:
-                    // the operator moved the TX frequency.
-                    if self.psk_stream.as_ref().map(|s| s.center_hz) != Some(center_hz) {
+                    // the operator moved the TX frequency. (The mode half of
+                    // the compare cannot differ mid-over — the engine refuses
+                    // set_psk_mode while anything streams — see PskTxStream.)
+                    if self.psk_stream.as_ref().map(|s| (s.center_hz, s.mode))
+                        != Some((center_hz, psk_mode))
+                    {
                         self.psk_stream = Some(PskTxStream {
-                            gen: tempo_core::psk::PskStream::new(tempo_core::psk::PskTxConfig {
-                                center_hz,
-                                ..tempo_core::psk::PskTxConfig::default()
-                            }),
+                            gen: PskGen::new(
+                                tempo_core::psk::PskTxConfig {
+                                    center_hz,
+                                    ..tempo_core::psk::PskTxConfig::default()
+                                },
+                                psk_mode,
+                            ),
                             center_hz,
+                            mode: psk_mode,
                             keyed: false,
                         });
                     }
@@ -5645,18 +5693,26 @@ impl RadioLoop {
                 }
             }
             if let Some(text) = msg {
-                // One-shot over: idle preamble + varicode text + idle postamble,
-                // rendered whole at the tuned offset and played through the SAME
-                // TX audio output the FT8 modem uses — one route, so the
-                // operator's tx_level / drive / ALC discipline applies unchanged.
-                let bits = tempo_core::psk::psk_over_bits(&text);
-                let buf = tempo_core::psk::bpsk_samples(
-                    &bits,
-                    &tempo_core::psk::PskTxConfig {
-                        center_hz,
-                        ..tempo_core::psk::PskTxConfig::default()
-                    },
-                );
+                // One-shot over: idle preamble + varicode text + idle postamble
+                // (QPSK's postamble is its stream tail's encoder flush — same
+                // on-air shape), rendered whole at the tuned offset and played
+                // through the SAME TX audio output the FT8 modem uses — one
+                // route, so the operator's tx_level / drive / ALC discipline
+                // applies unchanged.
+                let cfg = tempo_core::psk::PskTxConfig {
+                    center_hz,
+                    ..tempo_core::psk::PskTxConfig::default()
+                };
+                let buf = match psk_mode.0 {
+                    tempo_core::psk::PskModeKind::Bpsk31 => {
+                        tempo_core::psk::bpsk_samples(&tempo_core::psk::psk_over_bits(&text), &cfg)
+                    }
+                    tempo_core::psk::PskModeKind::Qpsk31 => tempo_core::psk::qpsk_samples(
+                        &tempo_core::psk::qpsk_over_bits(&text),
+                        &cfg,
+                        psk_mode.1,
+                    ),
+                };
                 if !buf.is_empty() {
                     // Hold the next queued message until this one has fully keyed
                     // out + one character of clear air (send-and-done, no idle).

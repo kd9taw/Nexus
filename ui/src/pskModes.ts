@@ -22,7 +22,14 @@ export const PSK_MODES: PskMode[] = [
     baud: 31.25,
     hint: 'BPSK at 31.25 Bd — the classic narrow-band keyboard ragchew mode (G3PLX varicode)',
   },
-  // QPSK31 arrives with Keyboard Modes Phase 3 (K=5 convolutional + soft Viterbi).
+  {
+    slug: 'qpsk31',
+    name: 'QPSK31',
+    baud: 31.25,
+    hint:
+      'Four-phase PSK31 with error correction (rate-1/2 K=5 code + soft Viterbi) — same speed, ' +
+      'rides flutter and static crashes BPSK cannot; sideband-sensitive (see the Rev toggle)',
+  },
 ]
 
 export const PSK_MODE_BY_SLUG: Record<string, PskMode> = Object.fromEntries(

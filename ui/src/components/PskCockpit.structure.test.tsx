@@ -12,6 +12,7 @@
 // for that lives in stop-line.test.tsx's PSK case. What THIS file pins is the shell
 // census, the dock placement (transmit controls never inside a pane), and the view-entry
 // auto-arm wiring (engine-owned policy, called once per activation edge).
+import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { PskCockpit } from './PskCockpit'
@@ -43,6 +44,7 @@ vi.mock('../api', () => ({
   pskNet: vi.fn(async () => state.current),
   pskSend: vi.fn(async () => state.current),
   pskSetLatched: vi.fn(async () => state.current),
+  pskSetMode: vi.fn(async () => state.current),
   pskType: vi.fn(async () => state.current),
   pskStop: vi.fn(async () => state.current),
   haltTx: vi.fn(async () => ({})),
@@ -51,7 +53,14 @@ vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
 }))
-vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
+// The header stub RENDERS its modeIndicator: the sub-mode selector + the QPSK
+// Rev toggle live there (selector-adjacent), and the Phase 3 tests below pin
+// them. Everything else about the header stays stubbed out.
+vi.mock('./CockpitHeader', () => ({
+  CockpitHeader: (p: { modeIndicator?: ReactNode }) => (
+    <header className="cockpit-header">{p.modeIndicator}</header>
+  ),
+}))
 vi.mock('./Waterfall', () => ({
   // Capture the cadence prop: the liveliness pin below asserts PSK runs the waterfall
   // at the live-instrument 50 ms cadence (the RTTY value), not the FT default.
@@ -272,5 +281,81 @@ describe('PSK view-entry auto-arm (the APRS/SSTV pattern, operator ruling 2026-0
       fireEvent.click(btn2)
     })
     expect(pskArm).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)', () => {
+  const pskSetMode = api.pskSetMode as ReturnType<typeof vi.fn>
+
+  it('the selector lists both modes, renders the engine truth, and PSK31 is the default', async () => {
+    // `mode` absent from the poll (older engine / fresh state) reads as psk31.
+    await renderCockpit()
+    const sel = document.querySelector('.psk-mode-select') as HTMLSelectElement
+    expect(sel, 'no sub-mode selector').not.toBeNull()
+    expect(Array.from(sel.options).map((o) => o.value)).toEqual(['psk31', 'qpsk31'])
+    expect(sel.value).toBe('psk31')
+    cleanup()
+    // The selector renders what the ENGINE says, not local state.
+    state.current = { ...state.current, mode: 'qpsk31', reverse: false }
+    await renderCockpit()
+    const sel2 = document.querySelector('.psk-mode-select') as HTMLSelectElement
+    expect(sel2.value).toBe('qpsk31')
+  })
+
+  it('changing the selector asks the ENGINE (which may refuse mid-transmission)', async () => {
+    pskSetMode.mockClear()
+    await renderCockpit()
+    const sel = document.querySelector('.psk-mode-select') as HTMLSelectElement
+    await act(async () => {
+      fireEvent.change(sel, { target: { value: 'qpsk31' } })
+    })
+    expect(pskSetMode).toHaveBeenCalledWith('qpsk31', false)
+  })
+
+  it('the Rev toggle is selector-adjacent, QPSK-only, and flips the polarity through the engine', async () => {
+    // BPSK is polarity-insensitive — no dead toggle there.
+    state.current = { ...state.current, mode: 'psk31' }
+    await renderCockpit()
+    expect(document.querySelector('.psk-rev')).toBeNull()
+    cleanup()
+    state.current = { ...state.current, mode: 'qpsk31', reverse: false }
+    await renderCockpit()
+    const rev = document.querySelector('.psk-rev') as HTMLButtonElement
+    expect(rev, 'no Rev toggle in QPSK31').not.toBeNull()
+    // Selector-adjacent = inside the header's mode indicator, NOT a new TX
+    // control in the dock and NOT inside any ⊞-removable pane.
+    expect(rev.closest('.cockpit-header')).not.toBeNull()
+    expect(rev.closest('.pane-frame')).toBeNull()
+    expect(rev.getAttribute('aria-pressed')).toBe('false')
+    pskSetMode.mockClear()
+    await act(async () => {
+      fireEvent.click(rev)
+    })
+    expect(pskSetMode).toHaveBeenCalledWith('qpsk31', true)
+    cleanup()
+    state.current = { ...state.current, mode: 'qpsk31', reverse: true }
+    await renderCockpit()
+    const rev2 = document.querySelector('.psk-rev') as HTMLButtonElement
+    expect(rev2.getAttribute('aria-pressed')).toBe('true')
+    pskSetMode.mockClear()
+    await act(async () => {
+      fireEvent.click(rev2)
+    })
+    expect(pskSetMode).toHaveBeenCalledWith('qpsk31', false)
+  })
+
+  it('QPSK31 adds no shell-level child and no TX-dock control (the stop-line census holds)', async () => {
+    state.current = { ...state.current, mode: 'qpsk31', reverse: false }
+    await renderCockpit()
+    const shell = document.querySelector('main.layout.single.psk-cockpit')!
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.cockpit-txdock']
+    for (const el of Array.from(shell.children)) {
+      expect(
+        ALLOWED.some((s) => el.matches(s)),
+        `unexpected shell-level child <${el.tagName.toLowerCase()} class="${el.className}">`,
+      ).toBe(true)
+    }
+    expect(document.querySelector('.cockpit-txdock .psk-rev')).toBeNull()
+    expect(document.querySelector('.cockpit-txdock .psk-mode-select')).toBeNull()
   })
 })

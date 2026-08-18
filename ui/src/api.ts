@@ -1821,6 +1821,14 @@ export async function pskNet(hz: number): Promise<PskState> {
   return invoke<PskState>('psk_net', { hz })
 }
 
+/** Select the PSK sub-mode ('psk31' | 'qpsk31') + the QPSK sideband-reverse
+ * polarity — the cockpit's selector and Reverse toggle. The engine refuses a
+ * switch while any PSK transmission is active (returns why); a change
+ * re-acquires the RX demodulator on the new mode. */
+export async function pskSetMode(mode: string, reverse: boolean): Promise<PskState> {
+  return invoke<PskState>('psk_set_mode', { mode, reverse })
+}
+
 /** Queue PSK31 text to transmit — an explicit operator send, the only way PSK
  * TX starts. The engine re-validates every gate (TX-enable, privileges, the
  * Keyboard section) and returns why a send was refused. While continuous TX is

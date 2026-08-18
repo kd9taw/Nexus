@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **QPSK31.** The PSK screen's mode picker now offers QPSK31 beside PSK31 — same speed,
+  same feel, but with error correction: the four-phase signal carries a convolutional
+  code, so the flutter or static crash that prints a wrong character in PSK31 is simply
+  corrected. Receive and transmit both work — pick QPSK31, click a trace, and the same
+  macros, continuous TX and stop controls apply. One thing to know on the air: QPSK31
+  cares which sideband the other station transmits on. Nexus runs the standard (USB)
+  polarity; if a station warbles but prints garbage, click the Rev toggle beside the mode
+  picker. Mode and polarity switch only between overs — never mid-transmission.
+
 - **PSK31 transmit.** The PSK screen now works both ways: type a line and press Enter for
   a one-shot over, fire the F1–F4 macros (CQ / Answer / Exchange / 73), or click TX for
   continuous transmit — stay keyed, idle on the classic PSK31 reversals, and what you type
@@ -35,8 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The receiver starts by itself when the screen opens (turn that off in Settings ▸ Digital
   ▸ PSK; stopping it by hand is remembered for the session), the click nets the decoder
   rather than the rig, and a gentle AFC (never more than ±25 Hz) rides small drift.
-  Transmit ships in this release too (see the PSK31 transmit entry above); QPSK31 is next
-  on the keyboard-modes roadmap.
+  Transmit ships in this release too (see the PSK31 transmit entry above), and so does
+  QPSK31 (its own entry above).
 
 - **Every Mac release is now checked harder before it ships.** The release pipeline
   proves the signed app still carries the microphone entitlement and usage prompt (the

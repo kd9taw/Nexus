@@ -2191,6 +2191,16 @@ pub struct Engine {
     /// waterfall click sets it via [`Engine::psk_net`] — and TX transmits HERE
     /// (the transceive convention; the radio loop reads it per chunk).
     psk_center: Option<f32>,
+    /// PSK sub-mode (BPSK31 | QPSK31) — COCKPIT STATE (the sstvModes pattern:
+    /// selected in the cockpit, session-only, never persisted). One field read
+    /// by the RX decode thread AND both TX paths, so the demod and the
+    /// modulator can never disagree about the modulation. Set only via
+    /// [`Engine::set_psk_mode`], which refuses mid-transmission.
+    psk_mode: tempo_core::psk::PskModeKind,
+    /// QPSK31 sideband polarity (`true` = reversed/LSB): flips the ±90° shift
+    /// sense in the demod AND the modulator (the QPSK31 interop trap — BPSK
+    /// doesn't care). Cockpit state beside the mode; ignored in BPSK31.
+    psk_reverse: bool,
     // --- PSK31 TX (Keyboard Modes Phase 2) — the RTTY TX block's shape,
     // instantiated over the shared `crate::keyboard` machinery. Launch-safety:
     // nothing here runs on startup or on arm; the queue fills ONLY via
@@ -3073,6 +3083,11 @@ pub struct PskRxState {
     /// Audio center (Hz) the decoder is netted on (waterfall cursor position)
     /// — and where TX transmits (the transceive convention).
     pub center_hz: f32,
+    /// Selected sub-mode (BPSK31 | QPSK31) — cockpit state, echoed here so
+    /// the selector renders the engine's truth.
+    pub mode: tempo_core::psk::PskModeKind,
+    /// QPSK sideband-reverse (LSB) toggle state.
+    pub reverse: bool,
     pub text: String,
     pub conf: Vec<u8>,
     /// An over is on the air (stamped by the loop) OR messages are still
@@ -3704,6 +3719,8 @@ impl Engine {
             psk_signal: false,
             psk_afc_reset: false,
             psk_center: None,
+            psk_mode: tempo_core::psk::PskModeKind::Bpsk31,
+            psk_reverse: false,
             psk_queue: VecDeque::new(),
             psk_abort: false,
             psk_latched: false,
@@ -11460,6 +11477,8 @@ impl Engine {
             afc_hz: self.psk_afc_hz,
             signal: self.psk_signal,
             center_hz: self.psk_center_hz(),
+            mode: self.psk_mode,
+            reverse: self.psk_reverse,
             text: self.psk_chars.iter().map(|c| c.ch).collect(),
             conf: self
                 .psk_chars
@@ -11509,6 +11528,36 @@ impl Engine {
     pub fn psk_net(&mut self, hz: f32) {
         self.psk_center = Some(hz.clamp(300.0, 3700.0));
         self.request_psk_afc_reset();
+    }
+
+    /// The selected PSK sub-mode + QPSK sideband polarity — read per tick by
+    /// the RX decode thread and the radio loop's TX paths, so one field is
+    /// the truth for both directions.
+    pub fn psk_mode(&self) -> (tempo_core::psk::PskModeKind, bool) {
+        (self.psk_mode, self.psk_reverse)
+    }
+
+    /// Select the PSK sub-mode / sideband polarity — the cockpit's selector
+    /// and Reverse toggle. REFUSED while any PSK transmission is active (an
+    /// over keying, messages queued, or the latch streaming): a mid-over
+    /// switch would splice two modulations into one carrier and silently
+    /// garble the far end's copy — the operator stops first, deliberately.
+    /// A change re-acquires the RX demodulator on the new mode.
+    pub fn set_psk_mode(
+        &mut self,
+        mode: tempo_core::psk::PskModeKind,
+        reverse: bool,
+    ) -> Result<(), String> {
+        if (mode, reverse) == (self.psk_mode, self.psk_reverse) {
+            return Ok(());
+        }
+        if self.psk_sending || !self.psk_queue.is_empty() || self.psk_streaming() {
+            return Err("Stop the PSK transmission before switching modes".to_string());
+        }
+        self.psk_mode = mode;
+        self.psk_reverse = reverse;
+        self.request_psk_afc_reset();
+        Ok(())
     }
 
     // ----- PSK31 transmit (Keyboard Modes Phase 2) — the RTTY TX block's shape,
@@ -17160,6 +17209,55 @@ mod tests {
         e.set_license_class("technician");
         e.set_frequency(14.070, "20m", "USB");
         assert!(e.psk_send_text("cq").unwrap_err().contains("license"));
+    }
+
+    #[test]
+    fn psk_mode_is_cockpit_state_defaulting_bpsk() {
+        // Phase 3: the sub-mode + QPSK reverse are ENGINE state (one truth for
+        // the RX thread and both TX paths), defaulting BPSK31/normal, echoed
+        // through the poll for the selector to render.
+        use tempo_core::psk::PskModeKind;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert_eq!(e.psk_mode(), (PskModeKind::Bpsk31, false));
+        let s = e.psk_state();
+        assert_eq!((s.mode, s.reverse), (PskModeKind::Bpsk31, false));
+        e.set_psk_mode(PskModeKind::Qpsk31, true).unwrap();
+        assert_eq!(e.psk_mode(), (PskModeKind::Qpsk31, true));
+        let s = e.psk_state();
+        assert_eq!((s.mode, s.reverse), (PskModeKind::Qpsk31, true));
+        // A change re-acquires the RX demod (fresh AFC pull on the new mode).
+        assert!(
+            e.take_psk_afc_reset(),
+            "a mode switch must rebuild the demod"
+        );
+        // A no-op set does not thrash the demod.
+        e.set_psk_mode(PskModeKind::Qpsk31, true).unwrap();
+        assert!(!e.take_psk_afc_reset(), "a no-op switch rebuilt the demod");
+    }
+
+    #[test]
+    fn psk_mode_switch_is_refused_mid_transmission() {
+        // A mid-over switch would splice two modulations into one carrier —
+        // silently garbling the far copy — so it is refused while the latch
+        // streams, while messages are queued, and while an over is on the air.
+        use tempo_core::psk::PskModeKind;
+        let mut e = psk_latched_engine();
+        assert!(e.set_psk_mode(PskModeKind::Qpsk31, false).is_err());
+        e.psk_stop();
+        assert!(e.take_psk_abort());
+        e.set_psk_mode(PskModeKind::Qpsk31, false).unwrap();
+        // Queued (not yet keying) still refuses — the queue will key in the
+        // mode it was gated under.
+        e.psk_send_text("cq cq de w9xyz").unwrap();
+        assert!(e.set_psk_mode(PskModeKind::Bpsk31, false).is_err());
+        e.psk_stop();
+        let _ = e.take_psk_abort();
+        // On the air (stamped by the loop) refuses too.
+        e.set_psk_sending(true);
+        assert!(e.set_psk_mode(PskModeKind::Bpsk31, false).is_err());
+        e.set_psk_sending(false);
+        e.set_psk_mode(PskModeKind::Bpsk31, false).unwrap();
+        assert_eq!(e.psk_mode(), (PskModeKind::Bpsk31, false));
     }
 
     #[test]
