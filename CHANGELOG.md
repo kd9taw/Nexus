@@ -56,6 +56,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FlexRadio native audio (early access): the transmit half is fixed, and it no longer
+  freezes the app when the radio is unreachable.** This is the opt-in "Flex native DAX
+  audio" toggle in Settings — off by default, and still unverified on real hardware, so
+  nothing here changes anything for an operator who has not turned it on. With it on, both
+  directions ride the network, transmit included (the toggle's old "RX-only" wording was
+  simply wrong and has been rewritten). What was wrong with that transmit path: the Pwr
+  slider did nothing — the radio got full-scale audio wherever Pwr sat, Pwr at 0 included,
+  which is the drive-discipline problem the control exists to prevent; the same over was
+  sent twice, over DAX *and* out the configured sound device, so operators using the
+  one-click "Pair DAX audio" setup fed the radio two copies and anyone with speakers
+  selected heard every over in the room; a 12-second over was flung at the radio in a few
+  milliseconds instead of streamed in real time; and if the radio refused or was slow to
+  answer the request that sets the transmit stream up, Nexus switched the rig's audio to
+  DAX anyway and never switched it back — leaving the microphone dead even after Nexus
+  had quit. All four are fixed: one route carries an over, at the drive you set, paced in
+  real time, and the mic is always put back. Nexus also puts your slice's own DAX channel
+  back the way it found it now, instead of leaving it moved to channel 1 for good. Stop TX
+  cuts a native over the same way it cuts any other. Finally, a Flex address that does not
+  answer — a stale home LAN IP used from away, a VPN down — no longer freezes the app for
+  up to two minutes when the feature is switched off, and a Flex that reboots or drops the
+  connection no longer pins a CPU core.
+
 - **An FT8/FT4 decode that overran the 15-second period could replay a transmission into
   the wrong slot.** Field report, visually confirmed at the rig: with Tx 1st/even set, the
   station's own CQ keyed real RF a few seconds into an odd slot. On a machine that stalls

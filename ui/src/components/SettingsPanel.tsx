@@ -3647,11 +3647,15 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      Take this FlexRadio's RX audio straight off the network (VITA-49 DAX) instead of
-                      the "DAX Audio RX" sound device — which is <strong>invisible under Remote
-                      Desktop</strong>. Decoders then read the rig's audio directly.{' '}
-                      <strong>Unverified on hardware</strong>, RX-only, opt-in: needs the Flex IP set
-                      and SmartSDR reachable. If decodes stop, turn it back off. Save to apply.
+                      Carry this FlexRadio's audio straight over the network (VITA-49 DAX) instead of
+                      the "DAX Audio RX" / "DAX TX" sound devices — which are <strong>invisible under
+                      Remote Desktop</strong>. <strong>Both directions:</strong> the decoders read the
+                      rig's receive audio directly, and transmit audio goes out over DAX too, which
+                      disconnects the rig's microphone while this is on. Turning it off, switching
+                      radio or quitting Nexus puts the mic back.{' '}
+                      <strong>Unverified on hardware</strong>, opt-in: needs the Flex IP set and
+                      SmartSDR reachable. If decodes or transmit stop, turn it back off. Save to
+                      apply.
                     </span>
                   </label>
                 )}

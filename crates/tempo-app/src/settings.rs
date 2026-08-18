@@ -981,11 +981,16 @@ pub struct Settings {
     /// Takes effect on the next tick for an active network Flex.
     #[serde(default)]
     pub flex_native_pan: bool,
-    /// Opt-in to native FlexRadio DAX RX audio (VITA-49 audio stream) instead of the WDM-KS "DAX
-    /// Audio RX" soundcard device — which breaks under Remote Desktop. OFF by default: the worker +
-    /// SmartSDR command syntax are UNVERIFIED on a real Flex, so a tester enables it here. When on,
-    /// the rig's RX audio comes straight off the network and feeds the decoders like soundcard
-    /// audio. Mirrors `flex_native_pan`. RX only — DAX TX stays on the existing path.
+    /// Opt-in to native FlexRadio DAX audio (VITA-49 audio streams) instead of the WDM-KS "DAX
+    /// Audio RX" / "DAX TX" soundcard devices — which break under Remote Desktop. OFF by default:
+    /// the worker + SmartSDR command syntax are UNVERIFIED on a real Flex, so a tester enables it
+    /// here. BOTH DIRECTIONS, not RX only (which is what this said while the opposite shipped):
+    /// receive audio comes straight off the network and feeds the decoders like soundcard audio,
+    /// and transmit audio is routed to the radio over DAX as well — which disconnects the rig's
+    /// microphone for as long as the toggle is on. That is deliberate (operator ruling 2026-07-26):
+    /// one toggle means native audio both ways, since a half-native path is a configuration that
+    /// mostly exists to be got wrong. Turning it off, switching radio or exiting Nexus puts the mic
+    /// back. Mirrors `flex_native_pan`.
     #[serde(default)]
     pub flex_native_audio: bool,
 
