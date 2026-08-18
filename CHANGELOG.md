@@ -73,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FLEX-8400 and FLEX-8600 owners can find their radio in the list.** The rig picker, the
+  detected-radio row and the Flex page all said "FLEX-6xxx", so the current flagship line
+  appeared to be unsupported. It always worked — SmartSDR CAT presents the same commands for a
+  6000 and an 8000, and Nexus drives both through one profile — but nothing said so. The entry
+  is now "FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)".
+
 - **Nexus now notices when the radio is keyed and no RF is coming out.** Every check Nexus had
   was on the *unkey* side: it made sure the transmitter came down. Nothing ever asked whether
   anything went out in the first place. A transmit inhibit, an antenna port that only receives,
