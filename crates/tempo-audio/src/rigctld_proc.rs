@@ -1282,8 +1282,16 @@ pub fn hamlib_missing(tool: &str, e: &std::io::Error) -> String {
 
 /// Build the `rotctld` argument vector — same shape as [`rigctld_args`] minus
 /// the network-rig special case (rotators are serial devices to Hamlib).
+///
+/// `-vvv` for the same reason its rig twin carries it, and the rotator needed it more: Hamlib
+/// runs at `RIG_DEBUG_NONE` with no `-v`, so the stderr pipe drains an empty stream. rotctld
+/// does print its FATAL `rot_open` failure without any flag ("serial_open: serial port COM99
+/// does not exist / IO error", measured on the bundled 4.7.1) — but the commonest rotator fault
+/// is not a failed open, it is a port that opened and a controller that never answered, which
+/// is the `RIG_DEBUG_WARN` level `-vvv` buys. That is exactly the wrong-baud case this batch is
+/// about, and it is the one Hamlib can name and we cannot.
 pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<String> {
-    let mut args = vec!["-m".to_string(), model.to_string()];
+    let mut args = vec!["-vvv".to_string(), "-m".to_string(), model.to_string()];
     if !port.is_empty() {
         args.push("-r".to_string());
         args.push(port.to_string());
@@ -1340,13 +1348,21 @@ pub fn spawn_rotctld(
     let args = rotctld_args(model, port, baud, tcp_port);
     let mut cmd = Command::new(resolve_rotctld());
     cmd.args(&args);
+    // ⭐ CAPTURE THE ROTATOR DAEMON'S STDERR, which used to be thrown away. rotctld EXITS when
+    // it cannot open the port (measured on the bundled 4.7.1: `-r COM99` → "serial_open: serial
+    // port COM99 does not exist / IO error", then gone — unlike rigctld, which stays up because
+    // "the rig may be powered off"). Nexus logged "rotctld launched" for that, and the operator
+    // was left with a rotator that never answered and nothing anywhere naming a cause. Hamlib
+    // knew: wrong model, bad port, port busy, refused baud — all of it goes here.
+    cmd.stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
+    let said = drain_stderr(&mut child, "rotctld");
     #[cfg(windows)]
     let job = assign_kill_on_close_job(&child);
     // Unix stand-in for the job object: record the spawn so a crash/force-quit/wedged
@@ -1355,12 +1371,51 @@ pub fn spawn_rotctld(
     orphan_ledger::record(child.id(), "rotctld");
     Ok(RigctldProc {
         child,
-        // A rotator daemon's stderr is not piped, so it never says anything here. The field
-        // exists because the handle is shared with rigctld, not because rotctld is silent.
-        said: Arc::new(Mutex::new(Said::default())),
+        said,
         #[cfg(windows)]
         job,
     })
+}
+
+/// Drain a daemon's piped stderr on a detached thread into the ring [`RigctldProc::said`] reads,
+/// and into the CI-V diagnostic. The thread ends when the daemon exits.
+///
+/// ONE drain for both daemons, on purpose. It was written inline for `rigctld` and `rotctld`
+/// got none at all, which is how a rotator daemon that exits 27 ms after launch was reported as
+/// "launched" for two releases — the same shape as the `hamlib_missing_for` sweep that fixed
+/// only rigctld and left its two sibling binaries behind (mac QA audit, 2026-08-17).
+///
+/// `note` is a cheap relaxed load when logging is off, so this idles for free.
+fn drain_stderr(child: &mut Child, tag: &'static str) -> Arc<Mutex<Said>> {
+    let said = Arc::new(Mutex::new(Said::default()));
+    if let Some(stderr) = child.stderr.take() {
+        let sink = Arc::clone(&said);
+        std::thread::Builder::new()
+            .name(format!("{tag}-stderr"))
+            .spawn(move || {
+                let mut reader = std::io::BufReader::new(stderr);
+                let mut raw = Vec::new();
+                loop {
+                    raw.clear();
+                    // `read_until`, not `lines()`: a line Hamlib fills with the RIG's own bytes
+                    // is not UTF-8, and `lines().map_while(Result::ok)` ended the whole drain
+                    // there. See [`said_line`] — that line is the wrong-baud diagnosis.
+                    match reader.read_until(b'\n', &mut raw) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let Some(line) = said_line(&raw) else {
+                        continue;
+                    };
+                    crate::civ::diag::note(&format!("{tag}: {line}"));
+                    if let Ok(mut q) = sink.lock() {
+                        q.push(line);
+                    }
+                }
+            })
+            .ok();
+    }
+    said
 }
 
 /// Every `ptt_type` token Hamlib can report, split by whether it names a serial control line.
@@ -1625,40 +1680,11 @@ pub fn spawn_rigctld(
         args.join(" ")
     ));
     // Drain the daemon's stderr on a detached thread → the ring buffer AND the diagnostic.
-    // `note` is a cheap relaxed load when logging is off, so this idles for free; the thread
-    // ends when the daemon exits.
     //
     // The ring is the half that reaches EVERY operator: the CI-V log needs arming, and its
     // toggle is rendered only for an Icom on the native path, so for a Yaesu owner `note` has
     // always been a no-op ([`RigctldProc::said`]).
-    let said = Arc::new(Mutex::new(Said::default()));
-    if let Some(stderr) = child.stderr.take() {
-        let sink = Arc::clone(&said);
-        std::thread::Builder::new()
-            .name("rigctld-stderr".into())
-            .spawn(move || {
-                let mut reader = std::io::BufReader::new(stderr);
-                let mut raw = Vec::new();
-                loop {
-                    raw.clear();
-                    // `read_until`, not `lines()`: a line Hamlib fills with the RIG's own bytes
-                    // is not UTF-8, and `lines().map_while(Result::ok)` ended the whole drain
-                    // there. See [`said_line`] — that line is the wrong-baud diagnosis.
-                    match reader.read_until(b'\n', &mut raw) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-                    let Some(line) = said_line(&raw) else {
-                        continue;
-                    };
-                    crate::civ::diag::note(&format!("rigctld: {line}"));
-                    if let Ok(mut q) = sink.lock() {
-                        q.push(line);
-                    }
-                }
-            })
-            .ok();
-    }
+    let said = drain_stderr(&mut child, "rigctld");
     // On Windows, bind the daemon to a kill-on-close Job Object so it can't
     // outlive Tempo and keep the COM port locked.
     #[cfg(windows)]
@@ -2001,6 +2027,10 @@ mod tests {
         assert_eq!(
             rotctld_args(601, "COM7", 9600, 4533),
             vec![
+                // -vvv for the same reason rigctld carries it: at RIG_DEBUG_NONE the daemon
+                // prints nothing and the stderr pipe drains an empty stream, which is how a
+                // rotator that opened its port and never answered explained itself to nobody.
+                "-vvv",
                 "-m",
                 "601",
                 "-r",
@@ -2016,7 +2046,7 @@ mod tests {
         // No port (Dummy rotator for testing) → no -r/-s.
         assert_eq!(
             rotctld_args(1, "", 9600, 4533),
-            vec!["-m", "1", "-T", "127.0.0.1", "-t", "4533"]
+            vec!["-vvv", "-m", "1", "-T", "127.0.0.1", "-t", "4533"]
         );
     }
 

@@ -8189,11 +8189,36 @@ async fn probe_cat_ports(
 
 /// The spawned rotctld daemon (integrated rotator) + the params it was
 /// spawned with, so a settings change respawns only when something changed.
-static ROTCTLD: Mutex<Option<(tempo_audio::rigctld_proc::RigctldProc, (u32, String, u32))>> =
+type RotctldParams = (u32, String, u32, u16);
+static ROTCTLD: Mutex<Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>> =
     Mutex::new(None);
-/// The integrated daemon's local port (rotctld's upstream default; the rig's
-/// rigctld owns 4532, so there is no collision).
+/// Fallback local port for the integrated daemon — rotctld's own upstream default, used when a
+/// radio profile carries no allocated port (a settings file older than per-radio ports).
 const ROTCTLD_PORT: u16 = 4533;
+
+/// The TCP port the integrated rotctld runs on for the ACTIVE radio.
+///
+/// ⚠️ **This used to be the constant, and that made a validated setting a fiction.** Every radio
+/// profile allocates its own `rotctld_port` from 4533 up, `validate_radio_ports` refuses a
+/// duplicate and `ensure_distinct_radio_ports` repairs one — and then the daemon and every
+/// client hardcoded 4533 regardless, so the guarantee the validator gave was about a number
+/// nothing used. It is not merely tidiness: a radio with no rotator does not claim a rotctld
+/// port, so the NEXT radio's rigctld can be allocated 4533, and the operator can type 4533 into
+/// the rigctld TCP-port field by hand. Validation passed while two daemons wanted the same port,
+/// and the loser exited — silently, until this batch.
+///
+/// The field is honoured rather than deleted because the allocation is what keeps the singleton
+/// out of the rig daemons' way, and it costs one lookup: the port is read from the ACTIVE
+/// profile, not mirrored into the flat settings, so nothing can clobber the allocation on the
+/// way through a form that has never shown it.
+fn rotctld_port_for(st: &tempo_app::settings::Settings) -> u16 {
+    st.radios
+        .iter()
+        .find(|p| p.id == st.active_radio)
+        .map(|p| p.rotctld_port)
+        .filter(|p| *p != 0)
+        .unwrap_or(ROTCTLD_PORT)
+}
 
 /// The address every rotator command talks to: the ADVANCED external override
 /// when set, else the integrated daemon (when a model is configured), else
@@ -8203,43 +8228,101 @@ fn effective_rotator_addr(st: &tempo_app::settings::Settings) -> Option<String> 
     if !host.is_empty() {
         return Some(host.to_string());
     }
-    (st.rotator_model > 0).then(|| format!("127.0.0.1:{ROTCTLD_PORT}"))
+    let port = rotctld_port_for(st);
+    (st.rotator_model > 0).then(|| format!("127.0.0.1:{port}"))
 }
 
 /// Reconcile the integrated rotctld daemon with settings: spawn it when a
 /// model is configured (and no external override), respawn on param changes,
 /// kill it when unconfigured. Errors surface on the connection log — a dead
 /// rotctld must be visible, not silent.
+///
+/// ⭐ **"Launched" now means it is still there.** `spawn_rotctld` returning `Ok` only says the
+/// fork succeeded, and rotctld fails harder than rigctld does: it EXITS when it cannot open the
+/// port (measured on the bundled 4.7.1 — `-r COM99` prints `serial_open: … does not exist` /
+/// `IO error` and is gone ~27 ms later), where rigctld deliberately stays up because the rig may
+/// be powered off. So the commonest rotator failure logged "rotctld launched" as INFO and then
+/// nothing, forever, and re-saving Settings did not bring it back — the params matched, so this
+/// function took the "running with the right params" arm and never looked at the corpse. It
+/// looks now, in both places: after the spawn, and on every later sync.
 fn sync_rotctld(st: &tempo_app::settings::Settings) {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let params = (
         st.rotator_model,
         st.rotator_port.trim().to_string(),
         st.rotator_baud,
+        rotctld_port_for(st),
     );
     let Ok(mut g) = ROTCTLD.lock() else { return };
-    match (&mut *g, want) {
-        (Some((_, p)), true) if *p == params => {} // running with the right params
-        (slot, true) => {
+    // Liveness is a `&mut` question (`try_wait`), so it is asked BEFORE the match rather than in
+    // a pattern guard. A daemon that died takes the respawn path, which is SAFE here for the
+    // same reason the CAT daemon's rebuild is: while it is dead there is no rotator channel to
+    // race, no motion is in flight (the mast stopped when the daemon did), and a fresh one is
+    // the only route back. It cannot loop, either — this function runs on a settings save, a
+    // radio switch and at startup, never on a timer.
+    let running = g.as_mut().map(|(proc, p)| (*p == params, proc.is_alive()));
+    match (running, want) {
+        (Some((true, true)), true) => {} // running, with the right params
+        (was, true) => {
+            if let (Some((_, false)), Some((proc, _))) = (was, g.as_mut()) {
+                conn_log(
+                    "Rotator",
+                    "error",
+                    tempo_audio::service::with_daemon_error(
+                        "rotctld exited — the rotator is not under control. Restarting it."
+                            .to_string(),
+                        &proc.said(),
+                    ),
+                );
+            }
+            let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
             match tempo_audio::rigctld_proc::spawn_rotctld(
-                params.0,
-                &params.1,
-                params.2,
-                ROTCTLD_PORT,
+                params.0, &params.1, params.2, params.3,
             ) {
-                Ok(proc) => {
-                    conn_log(
-                        "Rotator",
-                        "info",
-                        format!(
-                            "rotctld launched (model {} on {} @ {}, :{ROTCTLD_PORT})",
-                            params.0,
-                            if params.1.is_empty() { "-" } else { &params.1 },
-                            params.2
-                        ),
-                    );
-                    *slot = Some((proc, params));
+                Ok(mut proc) => {
+                    let port = params.3;
+                    // Give it the moment it takes to fail. A rotctld that cannot open the port
+                    // is gone in tens of milliseconds; one that comes up is still here after a
+                    // quarter second and this costs a settings save that long, once.
+                    let deadline =
+                        std::time::Instant::now() + std::time::Duration::from_millis(250);
+                    while proc.is_alive() && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                    if proc.is_alive() {
+                        conn_log(
+                            "Rotator",
+                            "info",
+                            format!(
+                                "rotctld launched (model {} on {} @ {}, :{port})",
+                                params.0,
+                                if params.1.is_empty() { "-" } else { &params.1 },
+                                params.2
+                            ),
+                        );
+                        *slot = Some((proc, params));
+                    } else {
+                        // Hamlib's own words, chosen by the same ranker the CAT status pill
+                        // uses. They name the actual cause — wrong model, port that is not
+                        // there, port already open, a `-C` value it will not parse — and every
+                        // one of them was being discarded.
+                        conn_log(
+                            "Rotator",
+                            "error",
+                            tempo_audio::service::with_daemon_error(
+                                format!(
+                                    "rotctld could not start for model {} on {} @ {} — the \
+                                     rotator will not answer. Check the port and that the baud \
+                                     matches what this model needs.",
+                                    params.0,
+                                    if params.1.is_empty() { "(no port set)" } else { &params.1 },
+                                    params.2
+                                ),
+                                &proc.said(),
+                            ),
+                        );
+                    }
                 }
                 Err(e) => {
                     // The shared per-platform composer, not a raw `{e}`: a Mac without
@@ -8255,9 +8338,17 @@ fn sync_rotctld(st: &tempo_app::settings::Settings) {
                 }
             }
         }
-        (slot @ Some(_), false) => {
-            conn_log("Rotator", "info", "rotctld stopped (rotator unconfigured)");
-            *slot = None;
+        (Some(_), false) => {
+            // Name the REAL reason. An external rotctld address is a configured rotator, not an
+            // unconfigured one, and being told "rotator unconfigured" the moment you type one is
+            // how an advanced field reads as broken.
+            let why = if st.rotator_model > 0 {
+                "rotctld stopped — an external rotctld address now overrides the integrated daemon"
+            } else {
+                "rotctld stopped (rotator unconfigured)"
+            };
+            conn_log("Rotator", "info", why);
+            *g = None;
         }
         (None, false) => {}
     }

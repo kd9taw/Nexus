@@ -261,7 +261,7 @@ fn with_backend(detail: String, label: &str) -> String {
 ///
 /// Still at most two lines, still trimmed: this lands in a status pill, and a paragraph there
 /// is not read at all.
-fn with_daemon_error(detail: String, said: &[String]) -> String {
+pub fn with_daemon_error(detail: String, said: &[String]) -> String {
     // Newest first, de-duplicated digit-blind, then ordered by how much each line explains.
     // `sort_by` is stable, so newest-first survives inside each rank.
     let mut seen: Vec<(&str, Explains)> = Vec::new();
