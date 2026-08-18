@@ -422,26 +422,42 @@ jobs:
           --target x86_64-pc-windows-gnu
           --features radio,custom-protocol
 
-  # Job 5b — macOS compile check. ⚠️ A COMPILE CHECK, NOT A SUPPORTED PLATFORM.
+  # Job 5b — macOS compile check. A FAST LINK CHECK, NOT THE SHIPPING BUILD.
   #
-  # READ THIS BEFORE TREATING A GREEN RUN HERE AS ANYTHING: Nexus does not ship a macOS
-  # build. There is no release artifact, no SourceForge file, no version.json entry, no
-  # code signing identity and no notarization. This job exists for exactly one reason —
-  # two macOS fixes landed from an operator running Nexus on a Mac from source (a Hamlib
-  # PATH search and the microphone usage string), and without a job here the next change
-  # that breaks the darwin build would not be noticed until someone else tried it.
+  # ⚠️ THIS JOB'S NAME AND THIS COMMENT USED TO SAY "not a supported platform". THAT IS NO
+  # LONGER TRUE, and the wording outlived it long enough to mislead: macOS ships. The .dmg and
+  # a signed .app.tar.gz have been release assets since v1.5.0, `release.yml`'s publish step
+  # lists `macos` and `smoke-macos` in its `needs:` (so a broken darwin build blocks the WHOLE
+  # release, not just its own artifact), and `latest.json` has carried `darwin-aarch64` since
+  # v1.6.0 — macOS is on the signed auto-updater. Do not read this job's name, or any comment
+  # here, as the project's platform policy: the published artifacts are the authority.
   #
-  # It is deliberately the same shape as `windows-cross` above: prove it LINKS, ship
-  # nothing. No `cargo tauri build`, no .app bundle, no .dmg, no signing secrets. Making
-  # macOS supported is a separate decision with three gates on it (an Apple Developer ID
-  # carries a legal entity name into every signed binary, the signing secrets are
-  # credential handling, and a published artifact is a publish) — see issue #6. Do not
-  # add a bundle step here as an increment; that decision is not this job's to make.
+  # WHAT THIS JOB IS FOR, then. It is the same shape as `windows-cross` above — prove it
+  # LINKS, bundle nothing — and it runs on every PR, where the real macOS build only runs on
+  # a release tag. That is the whole point: it catches a darwin regression in ~10 minutes on
+  # the PR that caused it, instead of at release time when the fix competes with shipping. So
+  # there is still no `cargo tauri build`, no .app, no .dmg and no signing secrets here, and
+  # still no reason to add them — not because macOS is unsupported, but because duplicating
+  # `release.yml`'s bundle+sign+notarize path on every PR would cost ten minutes a run to
+  # re-prove what a tag already proves. Bundling belongs there; linking belongs here.
   #
-  # Unsigned and hardened-runtime-off is fine for a compile check. A SIGNED macOS build
-  # would additionally need `bundle.macOS.entitlements` with
-  # com.apple.security.device.audio-input, or the microphone is unreachable at runtime
-  # however good the Info.plist is. That belongs with the decision, not here.
+  # ⚠️ THE WARNING THIS COMMENT USED TO CARRY CAME TRUE, AND IS NOW FIXED — kept as a record
+  # rather than deleted in the rename, because the prediction was right and the reasoning is worth
+  # keeping. It said: a SIGNED build needs `bundle.macOS.entitlements` with
+  # com.apple.security.device.audio-input, or the microphone is unreachable at runtime however good
+  # the Info.plist is. Signing arrived in v1.5.0 and the entitlement did not, so v1.5.0–v1.6.1
+  # shipped unable to receive audio at all: the codec enumerates, the stream opens, and macOS feeds
+  # it silence, because on macOS every audio INPUT is TCC-gated — the rig's own USB codec included.
+  # The tell was Nexus never appearing in the Microphone permission list, the hardened runtime
+  # having refused the request before TCC could record it.
+  #
+  # Fixed by `de7695f5` (Entitlements.plist + bundle.macOS.entitlements) and gated in release.yml
+  # by `e0d993b2`; v1.7.0's .dmg carries the entitlement. Verified on the shipped artifacts:
+  # `codesign -d --entitlements -` reports audio-input on 1.7.0 and nothing on 1.6.1.
+  #
+  # Nothing here is this job's to fix, then or now: entitlements belong to `tauri.conf.json` and
+  # the signed-artifact check to `release.yml`. Adding a bundle step to THIS job would not have
+  # caught it either — a compile check signs nothing.
   #
   # NATIVE arch only (aarch64), not a universal binary and not x86_64. libtempo is a Fortran +
   # FFTW + Boost CMake project, so a universal build means building that native tree twice and
@@ -451,15 +467,10 @@ jobs:
   # ship — which is exactly how the first run failed (`ld: library 'gfortran' not found`, after the
   # Fortran itself had built fine). Apple Silicon is also what most Mac operators are on.
   #
-  # ⚠️ UNPROVEN UNTIL IT FIRST RUNS, and said plainly rather than discovered. The step
-  # list mirrors `windows-cross` exactly (same node, same UI build, same AICW escape
-  # hatch, same cargo invocation), but no macOS runner was available to author it
-  # against. The likely first failure is libtempo's CMake step not finding Homebrew's
-  # gfortran/fftw/boost under the `gcc` formula's versioned binary names — that is a
-  # brew-prefix/CMAKE_Fortran_COMPILER fix in this job, not a source problem. Expect one
-  # or two iterations; do not let a red run here be read as "macOS is broken".
+  # (The "unproven until it first runs" caveat that used to sit here is retired: it has run,
+  # many times, and the CMake/Homebrew failure it predicted was fixed rather than theoretical.)
   macos-check:
-    name: macOS compile check (not a shipped platform)
+    name: macOS compile check (fast link check; the shipping build is in release.yml)
     runs-on: macos-14
     steps:
       - name: Checkout
