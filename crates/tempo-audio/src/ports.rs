@@ -386,8 +386,7 @@ mod tests {
     fn a_stored_tty_twin_heals_to_cu_and_a_lone_tty_is_kept() {
         // The cu twin is live → substitute.
         assert_eq!(
-            heal_tty_twin_with("/dev/tty.usbserial-1420", |p| p
-                == "/dev/cu.usbserial-1420"),
+            heal_tty_twin_with("/dev/tty.usbserial-1420", |p| p == "/dev/cu.usbserial-1420"),
             Some("/dev/cu.usbserial-1420".to_string())
         );
         // No cu twin → the tty node is the only node there is; use it as-is.

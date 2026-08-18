@@ -1992,7 +1992,10 @@ mod tests {
         assert!(m.contains("TWO /dev/cu.* ports"), "{m}");
         assert!(m.contains("cu.SLAB_USBtoUART"), "{m}");
         assert!(!m.contains("Device Manager"), "{m}");
-        assert!(!m.contains("Enhanced"), "that is a Windows driver label: {m}");
+        assert!(
+            !m.contains("Enhanced"),
+            "that is a Windows driver label: {m}"
+        );
         assert!(
             !m.contains("install Icom's USB driver"),
             "macOS ships the driver in-kernel and Icom publishes no Mac driver: {m}"
@@ -2019,7 +2022,8 @@ mod tests {
         assert!(m.contains("not valid CI-V"), "{m}");
         assert!(!m.contains("COM port"), "{m}");
         // And the Windows branch is UNCHANGED by the split — same walkthrough as ever.
-        let m = compose_ladder_message(&silent(&[115200]), "Icom IC-7610", 0x98, false, true, false);
+        let m =
+            compose_ladder_message(&silent(&[115200]), "Icom IC-7610", 0x98, false, true, false);
         assert!(m.contains("Windows Device Manager (Ports)"), "{m}");
         assert!(m.contains("Enhanced"), "{m}");
         assert!(m.contains("install Icom's USB driver"), "{m}");
@@ -2055,7 +2059,10 @@ mod tests {
         assert_eq!(m, cure);
         assert!(!m.contains("WSJT-X"), "{m}");
         assert!(!m.contains("close other"), "{m}");
-        assert!(!m.contains("never answered"), "no port was ever probed: {m}");
+        assert!(
+            !m.contains("never answered"),
+            "no port was ever probed: {m}"
+        );
     }
 
     #[test]

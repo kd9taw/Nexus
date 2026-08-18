@@ -285,11 +285,7 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -
 
 /// Without the `serial` feature there is no port enumeration → nothing to probe.
 #[cfg(not(feature = "serial"))]
-pub fn probe_cat_ports(
-    _fallback_model: u32,
-    _tcp_port: u16,
-    _exclude: &[String],
-) -> ProbeOutcome {
+pub fn probe_cat_ports(_fallback_model: u32, _tcp_port: u16, _exclude: &[String]) -> ProbeOutcome {
     ProbeOutcome::NoAnswer
 }
 

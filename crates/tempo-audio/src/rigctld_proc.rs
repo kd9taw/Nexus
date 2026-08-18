@@ -1671,7 +1671,10 @@ mod tests {
         // Not a missing binary → no install advice (installing would not help), no
         // "bundled" claim (nothing is bundled on two of the three platforms).
         let other = hamlib_missing_for(true, "rotctld", &Error::other("boom"));
-        assert!(other.contains("rotctld") && other.contains("boom"), "{other}");
+        assert!(
+            other.contains("rotctld") && other.contains("boom"),
+            "{other}"
+        );
         assert!(!other.contains("install"), "{other}");
         assert!(!other.contains("bundled"), "{other}");
     }
