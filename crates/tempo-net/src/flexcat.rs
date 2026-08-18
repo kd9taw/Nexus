@@ -179,6 +179,11 @@ pub struct MeterDef {
     pub name: String,
     /// Unit string driving [`crate::flexvita::convert_meter_raw`]: `dBm`/`dBFS`/`SWR`/`Volts`/…
     pub unit: String,
+    /// WHICH source object the meter belongs to — for `SLC` meters, the slice number (`<i>.num=`).
+    /// `sub meter all` registers every slice's meters, so without this an S-meter reading from
+    /// another slice is indistinguishable from ours (audit #1016/#1028). Present on the wire all
+    /// along; there was simply no field to hold it. `None` when the radio omits it.
+    pub num: Option<u16>,
 }
 
 /// Parse a `meter <i>.src=…#<i>.nam=…#<i>.unit=…#…` status body into meter definitions. Unusually,
@@ -206,6 +211,7 @@ pub fn parse_meter_defs(body: &str) -> Vec<MeterDef> {
             "src" => def.source = value.to_string(),
             "nam" => def.name = value.to_string(),
             "unit" => def.unit = value.to_string(),
+            "num" => def.num = value.trim().parse().ok(),
             _ => {}
         }
     }
@@ -634,7 +640,9 @@ mod tests {
                 index: 7,
                 source: "SLC".into(),
                 name: "LEVEL".into(),
-                unit: "dBm".into()
+                unit: "dBm".into(),
+                // The slice the reading belongs to — parsed, not discarded (audit #1016/#1028).
+                num: Some(0),
             }
         );
         assert_eq!(defs[1].index, 12);

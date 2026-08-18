@@ -40,6 +40,7 @@ use std::time::{Duration, Instant};
 use tempo_app::engine::Engine;
 use tempo_net::flexcat::{
     parse_create_stream_id, parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg, FlexRecv,
+    SliceStatus,
 };
 use tempo_net::flexvita::{
     build_dax_tx_packet, parse_dax_audio, parse_vita, DAX_AUDIO_CLASS, DAX_AUDIO_REDUCED_CLASS,
@@ -210,6 +211,80 @@ impl SliceDaxTracker {
     }
 }
 
+/// A slice we can PROVE belongs to another client: both handles known and different. Unknown on
+/// either side is NOT foreign — the radio may simply not have told us yet, and refusing to bind on
+/// silence would make native audio a coin flip on a single-client desk.
+fn slice_is_foreign(st: &SliceStatus, our_handle: Option<u32>) -> bool {
+    matches!((st.client_handle, our_handle), (Some(theirs), Some(ours)) if theirs != ours)
+}
+
+/// The per-slice picture, merged across SmartSDR's PARTIAL status deltas.
+///
+/// ⚠️ TWO DEFECTS LIVE HERE, and the second is why this type exists rather than a pair of locals.
+///
+/// **#1025 — a status delta carries only the keys that changed.** The bind test was
+/// `in_use == Some(true) && active == Some(true)` evaluated against ONE status line, and
+/// `parse_slice_status` leaves every key the line did not carry as `None`. A front-panel or
+/// SmartSDR slice change sends `slice 1 active=1` on its own, which can never satisfy that `&&`,
+/// so the re-bind the code's own comment promised ("re-bind if the operator switches the active
+/// slice") could not fire at all. State has to be remembered across updates for the test to mean
+/// anything.
+///
+/// **#1014/#1026 — `active=1` is not "the slice Nexus is operating".** See
+/// [`crate::rigmodels::flex_slice_for_cat_addr`]: the CAT address names the slice the dial, the
+/// waterfall and the log all come from, so that is the slice the audio must follow. The active
+/// flag is the fallback for a CAT link whose port says nothing (a custom port, a virtual COM
+/// pair), and there it is at least ownership-filtered now.
+#[derive(Default)]
+pub struct SliceView {
+    slices: std::collections::BTreeMap<u32, SliceStatus>,
+}
+
+impl SliceView {
+    /// Fold one status delta in: only the keys this line actually carried are overwritten.
+    pub fn merge(&mut self, st: &SliceStatus) {
+        let e = self.slices.entry(st.num).or_insert_with(|| SliceStatus {
+            num: st.num,
+            ..Default::default()
+        });
+        if st.in_use.is_some() {
+            e.in_use = st.in_use;
+        }
+        if st.active.is_some() {
+            e.active = st.active;
+        }
+        if st.tx_slice.is_some() {
+            e.tx_slice = st.tx_slice;
+        }
+        if st.dax_channel.is_some() {
+            e.dax_channel = st.dax_channel;
+        }
+        if st.client_handle.is_some() {
+            e.client_handle = st.client_handle;
+        }
+    }
+
+    /// Which slice DAX audio should be bound to right now, or `None` while the radio has not said
+    /// enough. `cat_slice` is the slice the CAT link drives (`flex_slice_for_cat_addr`).
+    ///
+    /// The CAT slice is preferred whenever the radio has mentioned it and has not said it is gone;
+    /// a slice proven to belong to another client is never bound, in either path.
+    pub fn bind_target(&self, our_handle: Option<u32>, cat_slice: Option<u32>) -> Option<u32> {
+        if let Some(n) = cat_slice {
+            let st = self.slices.get(&n)?;
+            return (st.in_use != Some(false) && !slice_is_foreign(st, our_handle)).then_some(n);
+        }
+        self.slices
+            .values()
+            .find(|st| {
+                st.in_use == Some(true)
+                    && st.active == Some(true)
+                    && !slice_is_foreign(st, our_handle)
+            })
+            .map(|st| st.num)
+    }
+}
+
 // ---- DAX TX sender ----
 
 /// Encodes the modem's 12 kHz mono TX audio into DAX VITA-49 packets for the radio.
@@ -345,7 +420,16 @@ impl FlexDax {
     /// Connect to the Flex at `ip`, create a DAX RX stream, and stream its audio into an internal
     /// ring. Returns once the UDP socket is bound; the threads run until the value is dropped.
     pub fn start(engine: Arc<Mutex<Engine>>, ip: String) -> std::io::Result<FlexDax> {
-        let _ = &engine; // reserved for future per-slice selection; kept for a matching signature
+        // WHICH SLICE ARE WE OPERATING? The CAT address answers it (audit #1014/#1026 — the
+        // `engine` argument used to be discarded right here with a "reserved for future per-slice
+        // selection" note, while the audio silently followed the radio's `active` flag instead).
+        // Read once, like the Flex IP: a later CAT-address edit takes effect on the next radio
+        // re-select, which is when the worker restarts anyway.
+        let cat_slice = engine
+            .lock()
+            .ok()
+            .map(|e| e.settings().rig_addr.clone())
+            .and_then(|addr| crate::rigmodels::flex_slice_for_cat_addr(&addr));
         let udp = UdpSocket::bind("0.0.0.0:0")?;
         udp.set_read_timeout(Some(Duration::from_millis(400)))?;
         let udp_port = udp.local_addr()?.port();
@@ -444,8 +528,12 @@ impl FlexDax {
                 let mut created: Option<u32> = None;
                 let mut bound_slice: Option<u32> = None;
                 // What the operator's slice DAX routing was before we touched it (see
-                // [`SliceDaxTracker`]).
+                // [`SliceDaxTracker`]) …
                 let mut slices = SliceDaxTracker::default();
+                // … and the merged per-slice picture the bind decision is made from (see
+                // [`SliceView`] — SmartSDR sends partial deltas, so a single line is never the
+                // whole state).
+                let mut view = SliceView::default();
                 let mut last_ka = Instant::now();
                 while !stop.load(Ordering::Relaxed) {
                     match flex.recv(Duration::from_millis(300)) {
@@ -468,23 +556,26 @@ impl FlexDax {
                                     }
                                 }
                             }
-                            // Bind the ACTIVE RX slice's audio to our DAX channel (never assume
-                            // slice 0; re-bind if the operator switches the active slice).
+                            // Bind the slice NEXUS IS OPERATING — the one its CAT link drives —
+                            // to our DAX channel, and re-bind when that changes (audit
+                            // #1014/#1025/#1026; the whole rule is on [`SliceView`]).
                             if let Some(sl) = parse_slice_status(&body) {
                                 slices.observe(sl.num, sl.dax_channel);
-                                if sl.in_use == Some(true)
-                                    && sl.active == Some(true)
-                                    && bound_slice != Some(sl.num)
-                                {
-                                    // Let the slice we were on go FIRST: two slices both claiming
-                                    // channel 1 is the "DAX starvation" gotcha in this module's
-                                    // header, and the abandoned claims used to accumulate.
-                                    if let Some(old) = bound_slice {
-                                        restore_slice_dax(&mut flex, old, slices.restore(old));
+                                view.merge(&sl);
+                                let want = view.bind_target(flex.handle(), cat_slice);
+                                if let Some(n) = want {
+                                    if bound_slice != Some(n) {
+                                        // Let the slice we were on go FIRST: two slices both
+                                        // claiming channel 1 is the "DAX starvation" gotcha in
+                                        // this module's header, and the abandoned claims used to
+                                        // accumulate.
+                                        if let Some(old) = bound_slice {
+                                            restore_slice_dax(&mut flex, old, slices.restore(old));
+                                        }
+                                        slices.claim(n);
+                                        let _ = flex.send(&slice_dax_command(n, DAX_CHANNEL));
+                                        bound_slice = Some(n);
                                     }
-                                    slices.claim(sl.num);
-                                    let _ = flex.send(&slice_dax_command(sl.num, DAX_CHANNEL));
-                                    bound_slice = Some(sl.num);
                                 }
                             }
                         }
@@ -927,6 +1018,88 @@ mod tests {
             !dax_stream_is_ours(Some(ours), Some(OURS), &status(0x0400_0009, THEIRS)),
             "a foreign status must not repoint the audio filter"
         );
+    }
+
+    /// One slice status line off the wire.
+    fn slice(body: &str) -> SliceStatus {
+        parse_slice_status(body).expect("a slice status body")
+    }
+
+    /// DAX FOLLOWS THE SLICE NEXUS IS OPERATING, NOT WHOEVER HAS FOCUS (audit #1014/#1026).
+    ///
+    /// CAT is pinned to the slice its address names (5002 = A), while the audio bound itself to
+    /// whatever the radio broadcast as `active=1` — so with slice B active when native audio
+    /// started, the decoders listened to B while the dial, the waterfall and the log all said A,
+    /// and nothing anywhere compared them.
+    #[test]
+    fn dax_binds_the_slice_the_cat_link_drives() {
+        const OURS: u32 = 0x2ABC;
+        let mut v = SliceView::default();
+        // The `sub slice all` dump: A and B both in use, B has the operator's focus.
+        v.merge(&slice("slice 0 in_use=1 RF_frequency=14.074 active=0 client_handle=0x2ABC"));
+        v.merge(&slice("slice 1 in_use=1 RF_frequency=7.074 active=1 client_handle=0x2ABC"));
+
+        assert_eq!(
+            v.bind_target(Some(OURS), Some(0)),
+            Some(0),
+            "CAT on port 5002 drives slice A — the audio must come from A"
+        );
+        assert_eq!(
+            v.bind_target(Some(OURS), Some(1)),
+            Some(1),
+            "…and from B when the CAT address is B's port"
+        );
+        assert_eq!(
+            v.bind_target(Some(OURS), None),
+            Some(1),
+            "with no slice-bearing CAT port, the active slice is the honest fallback"
+        );
+    }
+
+    /// A PARTIAL DELTA MUST STILL MOVE THE BIND (audit #1025).
+    ///
+    /// SmartSDR status lines carry only the keys that changed, and the bind test demanded
+    /// `in_use=1` AND `active=1` in ONE line — which a focus change (`slice 1 active=1`) can never
+    /// satisfy, so the re-bind the code promised could not fire at all.
+    #[test]
+    fn a_focus_change_that_carries_one_key_still_re_binds() {
+        const OURS: u32 = 0x2ABC;
+        let mut v = SliceView::default();
+        v.merge(&slice("slice 0 in_use=1 active=1 client_handle=0x2ABC"));
+        v.merge(&slice("slice 1 in_use=1 active=0 client_handle=0x2ABC"));
+        assert_eq!(v.bind_target(Some(OURS), None), Some(0), "precondition");
+
+        // The operator moves focus at the front panel. One key, no `in_use`.
+        v.merge(&slice("slice 0 active=0"));
+        v.merge(&slice("slice 1 active=1"));
+        assert_eq!(
+            v.bind_target(Some(OURS), None),
+            Some(1),
+            "the merged view remembers in_use from the earlier dump"
+        );
+
+        // …and a slice the radio says has gone away is not a bind target any more.
+        v.merge(&slice("slice 1 in_use=0"));
+        assert_eq!(v.bind_target(Some(OURS), None), None);
+        assert_eq!(v.bind_target(Some(OURS), Some(1)), None);
+    }
+
+    /// ANOTHER CLIENT'S SLICE IS NEVER BOUND (audit #1014). `slice set N dax=1` is a write to the
+    /// operator's radio; on a multi-client Flex the active slice can be a Maestro's or a second
+    /// Nexus window's.
+    #[test]
+    fn a_slice_proven_to_belong_to_another_client_is_never_bound() {
+        const OURS: u32 = 0x2ABC;
+        let mut v = SliceView::default();
+        v.merge(&slice("slice 2 in_use=1 active=1 client_handle=0x9999"));
+        assert_eq!(v.bind_target(Some(OURS), None), None);
+        assert_eq!(v.bind_target(Some(OURS), Some(2)), None);
+        // But silence is not proof of foreignness: a radio that never sends client_handle, or a
+        // session whose greeting has not arrived yet, must still get audio on a single-client desk.
+        let mut v = SliceView::default();
+        v.merge(&slice("slice 0 in_use=1 active=1"));
+        assert_eq!(v.bind_target(Some(OURS), None), Some(0));
+        assert_eq!(v.bind_target(None, Some(0)), Some(0));
     }
 
     /// The operator's slice routing is borrowed, not taken (audit #1027/#1054).

@@ -229,6 +229,16 @@ fn engine_flex_controls(engine: &Arc<Mutex<Engine>>) -> (f64, Option<i32>) {
         .unwrap_or((SPAN_HZ, None))
 }
 
+/// Does this slice meter belong to the slice Nexus is operating?
+///
+/// Rejects only what it can PROVE is another slice's: both numbers known and different. A meter
+/// whose slice the radio did not state, or a CAT link whose port names no slice
+/// ([`crate::rigmodels::flex_slice_for_cat_addr`]), still reads — a single-slice Flex, the common
+/// desk, must not lose its S-meter to a stricter rule than the defect needs.
+fn meter_is_ours(def: &MeterDef, our_slice: Option<u16>) -> bool {
+    !matches!((def.num, our_slice), (Some(theirs), Some(ours)) if theirs != ours)
+}
+
 /// Decode a batch of meter `(id, raw)` pairs against the registry and push the ones Nexus displays
 /// (S-meter / SWR / ALC / forward power) into the engine. Matches by source+name (ids are
 /// per-session), converts by unit. NOTE: the dBm→S9 and dBFS→ALC mappings are calibrated against the
@@ -244,6 +254,7 @@ fn route_meters(
     meters: &Arc<Mutex<HashMap<u16, MeterDef>>>,
     pairs: &[(u16, i16)],
     dial_hz: u64,
+    our_slice: Option<u16>,
 ) {
     let (mut smeter, mut swr, mut alc, mut po_w) = (None, None, None, None);
     {
@@ -254,7 +265,16 @@ fn route_meters(
             };
             let v = convert_meter_raw(&def.unit, raw);
             match (def.source.as_str(), def.name.as_str()) {
-                ("SLC", "LEVEL") => smeter = Some(smeter_dbm_to_rel_s9(v, dial_hz)),
+                // ⚠️ OUR SLICE'S S-METER, NOT WHICHEVER ARRIVED LAST (audit #1016/#1028).
+                // `sub meter all` registers every slice's meters and this arm matched on
+                // source+name alone, overwriting `smeter` for each SLC/LEVEL pair in the packet —
+                // so on a multi-slice Flex the needle could be another slice's signal, scaled
+                // against OUR dial. The wire carries the slice in `<i>.num=`; it was parsed away.
+                // `meter_is_ours` deliberately accepts a meter whose slice the radio did not
+                // state, so a single-slice radio keeps its S-meter.
+                ("SLC", "LEVEL") if meter_is_ours(def, our_slice) => {
+                    smeter = Some(smeter_dbm_to_rel_s9(v, dial_hz))
+                }
                 (s, "FWDPWR") if s.starts_with("TX") => po_w = Some(dbm_to_watts(v)),
                 (s, "SWR") if s.starts_with("TX") => swr = Some(v),
                 ("TX", "ALC") => alc = Some(10f32.powf(v / 20.0).clamp(0.0, 1.0)),
@@ -311,6 +331,15 @@ impl FlexSpectrum {
         ip: String,
         dial_hz: u64,
     ) -> std::io::Result<FlexSpectrum> {
+        // Which slice's meters are OURS: the one the CAT link drives (audit #1016/#1028 — see
+        // `meter_is_ours`). Read once here, like the Flex IP; the worker restarts on a radio
+        // re-select, which is when the CAT address can change.
+        let our_slice = engine
+            .lock()
+            .ok()
+            .map(|e| e.settings().rig_addr.clone())
+            .and_then(|addr| crate::rigmodels::flex_slice_for_cat_addr(&addr))
+            .map(|n| n as u16);
         // Bind the UDP FFT socket FIRST so we can tell SmartSDR which port to stream to.
         let udp = UdpSocket::bind("0.0.0.0:0")?;
         udp.set_read_timeout(Some(Duration::from_millis(400)))?;
@@ -502,6 +531,7 @@ impl FlexSpectrum {
                                 &meters,
                                 &parse_meter_values(pkt.payload, pkt.has_trailer),
                                 (*center.lock().unwrap() * 1_000_000.0) as u64,
+                                our_slice,
                             );
                         }
                         _ => {}
@@ -680,6 +710,7 @@ mod tests {
                 source: "SLC".into(),
                 name: "LEVEL".into(),
                 unit: "dBm".into(),
+                num: Some(0),
             },
         );
         // −53 dBm, ÷128-scaled on the wire; on 20 m (S9 = −73 dBm) that is S9+20.
@@ -696,7 +727,7 @@ mod tests {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let bus = MeterFeed::default();
         let (meters, pairs) = slc_level_batch();
-        route_meters(&engine, &bus, &meters, &pairs, 14_074_000);
+        route_meters(&engine, &bus, &meters, &pairs, 14_074_000, Some(0));
         assert_eq!(
             bus.smeter_db(),
             Some(20),
@@ -709,6 +740,46 @@ mod tests {
         );
     }
 
+    /// THE NEEDLE MUST BE OUR SLICE'S SIGNAL (audit #1016/#1028).
+    ///
+    /// `sub meter all` registers every slice's meters, and the S-meter arm matched on source+name
+    /// alone — so with two slices open the LAST SLC/LEVEL pair in each packet won, whichever slice
+    /// it came from, scaled against our dial. Here slice 1 is loud (S9+40) and slice 0, the one
+    /// CAT drives, is weak (S9+20): the cockpit must read 20.
+    #[test]
+    fn the_smeter_reads_our_slice_and_not_the_loud_one_next_door() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let bus = MeterFeed::default();
+        let meters = Arc::new(Mutex::new(HashMap::new()));
+        for (id, slice) in [(7u16, 0u16), (9, 1)] {
+            meters.lock().unwrap().insert(
+                id,
+                MeterDef {
+                    index: id,
+                    source: "SLC".into(),
+                    name: "LEVEL".into(),
+                    unit: "dBm".into(),
+                    num: Some(slice),
+                },
+            );
+        }
+        // Our slice first, the neighbour's LAST — the order that made last-wins visible.
+        let pairs = vec![(7u16, -53i16 * 128), (9, -33i16 * 128)];
+        route_meters(&engine, &bus, &meters, &pairs, 14_074_000, Some(0));
+        assert_eq!(
+            bus.smeter_db(),
+            Some(20),
+            "slice 1's stronger signal must not land on our needle"
+        );
+
+        // A radio that does not state the meter's slice still gets an S-meter (the single-slice
+        // desk must not lose its needle to a stricter rule than the defect needs).
+        let bus = MeterFeed::default();
+        meters.lock().unwrap().get_mut(&7).expect("def").num = None;
+        route_meters(&engine, &bus, &meters, &pairs[..1], 14_074_000, Some(0));
+        assert_eq!(bus.smeter_db(), Some(20));
+    }
+
     #[test]
     fn teardown_withdraws_the_smeter_from_both_mirrors() {
         // The teardown half of the two-mirror rule: when the native meter stream goes away
@@ -717,7 +788,7 @@ mod tests {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let bus = MeterFeed::default();
         let (meters, pairs) = slc_level_batch();
-        route_meters(&engine, &bus, &meters, &pairs, 14_074_000);
+        route_meters(&engine, &bus, &meters, &pairs, 14_074_000, Some(0));
         assert_eq!(bus.smeter_db(), Some(20), "precondition: a live reading");
         withdraw_meters(&engine, &bus);
         assert_eq!(bus.smeter_db(), None, "bus cleared on teardown");

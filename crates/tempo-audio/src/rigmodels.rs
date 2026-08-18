@@ -547,10 +547,56 @@ pub fn native_spectrum_kind(model: u32, rig_conn: &str) -> Option<SpectrumKind> 
     }
 }
 
+/// Which SmartSDR **slice** a Flex CAT address drives — i.e. the slice Nexus is actually operating.
+///
+/// SmartSDR CAT serves slice A on its default TCP port **5002**, and the other slices on **60001**
+/// (B), **60002** (C), **60003** (D) — the mapping the catalog comment on model 2036 records, and
+/// the one `applyDetectedFlex` writes when it fills the field in (`127.0.0.1:5002`).
+///
+/// ⚠️ WHY THE CAT PORT AND NOT THE `active=1` FLAG (audit #1014/#1025/#1026). Native DAX bound its
+/// audio to whatever slice the radio broadcast as active — a per-client focus flag on a
+/// multi-client radio — while CAT stayed pinned to whichever slice the operator's address names.
+/// Nothing reconciled them, so the decoders could be listening to slice B while the dial, the
+/// waterfall and every logged frequency came from slice A, with no indication anywhere. The CAT
+/// port is the one thing that says which slice Nexus is *operating*, so it is what the audio
+/// follows.
+///
+/// `None` for a serial CAT link, an empty address, or a port outside that set (a custom SmartSDR
+/// CAT port, or CAT over a virtual COM pair) — the caller then falls back to the active slice and
+/// says so.
+///
+/// NEEDS-BENCH: whether the operator's SmartSDR CAT port is itself configured to follow the active
+/// slice (SmartSDR CAT can be set up either way) — that is a PC-side configuration this tree
+/// cannot read. RECIPE: with two slices open, move focus in SmartSDR and watch whether the dial
+/// Nexus reads through CAT changes with it; if it does, this mapping needs a "follows focus" case.
+pub fn flex_slice_for_cat_addr(rig_addr: &str) -> Option<u32> {
+    let port: u16 = rig_addr.trim().rsplit_once(':')?.1.trim().parse().ok()?;
+    match port {
+        5002 => Some(0),
+        60001 => Some(1),
+        60002 => Some(2),
+        60003 => Some(3),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// The CAT port names the slice Nexus operates (audit #1014/#1026).
+    #[test]
+    fn a_smartsdr_cat_port_maps_to_its_slice() {
+        assert_eq!(flex_slice_for_cat_addr("127.0.0.1:5002"), Some(0)); // A
+        assert_eq!(flex_slice_for_cat_addr("192.168.1.50:60001"), Some(1)); // B
+        assert_eq!(flex_slice_for_cat_addr("127.0.0.1:60002"), Some(2)); // C
+        assert_eq!(flex_slice_for_cat_addr("127.0.0.1:60003"), Some(3)); // D
+        // Not a slice port / not an address at all → no claim (the caller falls back).
+        assert_eq!(flex_slice_for_cat_addr("127.0.0.1:4992"), None);
+        assert_eq!(flex_slice_for_cat_addr("COM7"), None);
+        assert_eq!(flex_slice_for_cat_addr(""), None);
+    }
 
     /// `portless_rig_models` is a materialised copy of a rule that lives as a predicate, handed
     /// across the Tauri boundary because the UI cannot call the predicate per keystroke. Two
