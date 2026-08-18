@@ -7407,7 +7407,10 @@ impl Transport {
         Self {
             ptt_method: c.ptt_method.clone(),
             rig_model: c.rig_model,
-            serial_port: c.serial_port.clone(),
+            // The upgrade heal for a stored mac /dev/tty.* twin (hangs CAT on carrier
+            // detect) — applied at the transport seam so EVERY consumer of the stored name
+            // (rigctld -r, the native CI-V open, serial PTT) gets the node that opens.
+            serial_port: crate::ports::heal_stored_port(c.serial_port.clone()),
             // Not part of the per-radio startup seed (it's a GLOBAL keying-line setting):
             // the live per-tick `from_settings` rebuild supplies the real value, and empty
             // here just falls back to `serial_port` for the brief pre-first-tick window.
@@ -7444,8 +7447,11 @@ impl Transport {
         Self {
             ptt_method: s.ptt_method.clone(),
             rig_model: s.rig_model,
-            serial_port: s.serial_port.clone(),
-            ptt_serial_port: s.ptt_serial_port.clone(),
+            // Same tty.*→cu.* heal as `from_cfg`, and on BOTH port fields here (a dedicated
+            // keying port opens the same way). Deterministic per tick, so the applied-vs-want
+            // transport comparison stays stable while the twin is present.
+            serial_port: crate::ports::heal_stored_port(s.serial_port.clone()),
+            ptt_serial_port: crate::ports::heal_stored_port(s.ptt_serial_port.clone()),
             control_lines: crate::rigctld_proc::ControlLines {
                 rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
                 dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),

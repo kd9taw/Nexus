@@ -9687,7 +9687,10 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             )
             .map(|gate| {
                 (
-                    s.serial_port.trim().to_string(),
+                    // The mac tty.*→cu.* heal, exactly as the open path applies it: the
+                    // ladder opens this node directly, and a stored tty.* would hang the
+                    // sweep on carrier detect instead of diagnosing anything.
+                    tempo_audio::ports::heal_stored_port(s.serial_port.trim().to_string()),
                     s.baud,
                     s.rig_model,
                     gate,
@@ -15580,6 +15583,41 @@ pub fn run() {
         settings.cloudlog_key.clear();
         if let Err(e) = settings.save(&settings_path()) {
             eprintln!("tempo: couldn't re-save settings after Cloudlog key migration: {e}");
+        }
+    }
+
+    // One-time heal (macOS): the 1.5.0–1.6.1 pickers offered the /dev/tty.* twin of every
+    // serial port as an equal row, and a rig configured on one HANGS CAT on carrier detect —
+    // the later fix collapsed the twins in the PICKER only, so upgraded configs still hold
+    // the tty node. Rewrite any stored tty.* whose /dev/cu.* twin is live (a lone tty.* is
+    // kept — it is the only node there is) so the Settings screen and every consumer name
+    // the port that actually opens. Runs every launch, rewrites at most once per stale field;
+    // a rig UNPLUGGED at launch is still healed at open time (Transport::from_settings).
+    #[cfg(all(feature = "radio", target_os = "macos"))]
+    {
+        let mut fields: Vec<&mut String> =
+            vec![&mut settings.serial_port, &mut settings.ptt_serial_port];
+        for r in &mut settings.radios {
+            fields.push(&mut r.serial_port);
+            fields.push(&mut r.ptt_serial_port);
+        }
+        let mut changed = false;
+        for f in fields {
+            if let Some(cu) = tempo_audio::ports::heal_tty_twin_with(f, |p| {
+                std::path::Path::new(p).exists()
+            }) {
+                eprintln!(
+                    "tempo: stored serial port {f} is a /dev/tty.* node (offered by a \
+                     1.5.0–1.6.1 picker) — rewriting it to its callout twin {cu}"
+                );
+                *f = cu;
+                changed = true;
+            }
+        }
+        if changed {
+            if let Err(e) = settings.save(&settings_path()) {
+                eprintln!("tempo: couldn't re-save settings after the tty.*→cu.* port heal: {e}");
+            }
         }
     }
 

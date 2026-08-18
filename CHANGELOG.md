@@ -53,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-kernel. Messages also stop claiming a "bundled" rigctld — nothing is bundled on
   macOS or in the AppImage.
 
+- **A Mac serial port saved as /dev/tty.\* now heals itself to its /dev/cu.\* twin.**
+  Earlier Mac builds (1.5.0–1.6.1) listed every serial port twice and let you pick the
+  /dev/tty.\* row — a node that hangs CAT on carrier detect instead of failing. The
+  later picker fix only stopped NEW picks; a port already saved kept hanging after the
+  upgrade. Nexus now substitutes the cu.\* twin wherever the stored name is consumed —
+  the CAT daemon, native CI-V, PTT keying and Test CAT's baud ladder — and rewrites the
+  saved setting once at launch when the twin is present, so the Settings screen shows
+  the port that actually opens. A lone tty.\* with no cu.\* twin is left exactly as
+  stored: it is the only node there is.
+
 - **WSPR and FST4W beaconing works the way WSJT-X's does.** Four fixes from one
   report (#101): the TX watchdog no longer halts a beacon a few intervals into a
   session — beaconing is unattended repeated transmission by design, and WSJT-X
