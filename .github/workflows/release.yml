@@ -355,6 +355,11 @@ jobs:
           rm -f "$RUNNER_TEMP/AuthKey.p8"
 
       - name: Verify the artifacts
+        env:
+          # Only consulted to decide whether the updater bundle is REQUIRED below —
+          # a build that had the signing key must ship it; a fork without secrets
+          # legitimately cannot.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           bundle=src-tauri/target/aarch64-apple-darwin/release/bundle
@@ -377,6 +382,15 @@ jobs:
           if [ -n "$tarball" ] && [ -f "$tarball.sig" ]; then
             cp "$tarball" "out/Nexus_${ver}_aarch64.app.tar.gz"
             cp "$tarball.sig" "out/Nexus_${ver}_aarch64.app.tar.gz.sig"
+          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            # The key was present, so a missing tarball/.sig is a bundler regression,
+            # not a fork build — and it must fail HERE, with the same hard bar as the
+            # DMG above. Left as a note, it publishes a latest.json with no
+            # darwin-aarch64 entry: every mac client's hourly check then finds
+            # nothing, forever, and useSelfUpdate swallows that by design, so no one
+            # ever reports it (mac QA audit, 2026-08-17). Gated on the key, not the
+            # event, so a workflow_dispatch dry-run catches it before a tag does.
+            echo "signing key present but no signed updater bundle was produced"; exit 1
           else
             echo "note: no signed updater bundle (missing signing secrets?)"
           fi
@@ -393,6 +407,11 @@ jobs:
     needs: macos
     runs-on: macos-14
     steps:
+      # Checkout BEFORE download-artifact: the updater-signature check below reads the
+      # minisign pubkey out of src-tauri/tauri.conf.json, and checkout's default clean
+      # would delete an already-downloaded dist/ as untracked files.
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -412,6 +431,27 @@ jobs:
           cp -R "$app" "$RUNNER_TEMP/Nexus.app"
           hdiutil detach "$mnt"
 
+      - name: Gate on the SIGNED entitlements + Info.plist (the dead-mic class)
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/Nexus.app"
+          # The microphone entitlement must be in the SIGNATURE of the shipped app, not
+          # merely in the repo's Entitlements.plist: it reaches the bundle through two
+          # config hops (bundle.macOS.entitlements -> Entitlements.plist), and losing
+          # either hop — a config typo, a tauri-cli behaviour change (reinstalled fresh
+          # at ^2 every release), a renamed plist — re-ships the 1.5.x–1.6.1 silent-mic
+          # DMGs with every other gate green. A headless runner can never exercise
+          # capture, so reading the signature is the strongest check available here.
+          codesign -d --entitlements - --xml "$app" > "$RUNNER_TEMP/entitlements.xml"
+          grep -q 'com.apple.security.device.audio-input' "$RUNNER_TEMP/entitlements.xml" \
+            || { echo "mic entitlement missing from the signed app"; cat "$RUNNER_TEMP/entitlements.xml"; exit 1; }
+          # And the usage string, in the same breath: without NSMicrophoneUsageDescription
+          # macOS refuses the prompt outright even WITH the entitlement. PlistBuddy exits
+          # non-zero when the key is absent, which fails the step under -e.
+          desc=$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$app/Contents/Info.plist")
+          [ -n "$desc" ] || { echo "NSMicrophoneUsageDescription is empty"; exit 1; }
+          echo "signed entitlements + mic usage string verified"
+
       - name: Launch the app and require it to stay alive
         run: |
           set -euo pipefail
@@ -423,6 +463,47 @@ jobs:
           kill -0 "$pid" || { echo "app exited during startup — dead-on-arrival artifact"; exit 1; }
           echo "alive after 45 s (pid $pid) — startup smoke passed"
           kill "$pid" || true
+
+      - name: Exercise the updater artifact (app.tar.gz + minisign signature)
+        run: |
+          set -euo pipefail
+          # WHAT THIS PROVES: the tarball a mac client downloads on its hourly check
+          # unpacks (tar integrity), contains a .app whose code signature is intact and
+          # whose version matches the DMG's, and carries a minisign signature that
+          # verifies against the pubkey compiled into every shipped client
+          # (tauri.conf.json plugins.updater.pubkey) — i.e. the plugin's own signature
+          # check will accept exactly these bytes.
+          # WHAT THIS DOES NOT PROVE: Gatekeeper's verdict on the swapped-in app (the
+          # updater writes without quarantine, so Gatekeeper never assesses it), and the
+          # plugin's swap/restart logic itself — that runs only against a real installed
+          # app and lives on the Mac bench list.
+          tarball=$(find dist -name '*.app.tar.gz' -print -quit)
+          if [ -z "$tarball" ]; then
+            # Only reachable on a fork build without signing secrets: the macos verify
+            # step now hard-fails when the key was present and no bundle appeared.
+            echo "::warning::no app.tar.gz in the artifact — updater bundle NOT exercised (no signing secrets?)"
+            exit 0
+          fi
+          [ -s "$tarball.sig" ] || { echo "updater tarball has no .sig beside it"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/updater"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP/updater"
+          upapp=$(find "$RUNNER_TEMP/updater" -maxdepth 1 -name '*.app' -print -quit)
+          [ -n "$upapp" ] || { echo "no .app inside the updater tarball"; exit 1; }
+          codesign --verify --deep --strict "$upapp"
+          dmgver=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$RUNNER_TEMP/Nexus.app/Contents/Info.plist")
+          upver=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$upapp/Contents/Info.plist")
+          [ "$dmgver" = "$upver" ] || { echo "version mismatch: DMG=$dmgver updater=$upver"; exit 1; }
+          # The signature check, with the real verifier. brew is already a hard
+          # dependency of the macos BUILD job, so a brew outage blocks the pipeline
+          # either way; a flake here is a re-run, not a shipped regression.
+          brew install minisign
+          # Both are base64: the conf pubkey decodes to a minisign .pub file, the .sig
+          # to a minisign signature. (`--decode` — macOS base64 has no GNU -d.)
+          jq -r '.plugins.updater.pubkey' src-tauri/tauri.conf.json \
+            | base64 --decode > "$RUNNER_TEMP/updater.pub"
+          base64 --decode < "$tarball.sig" > "$RUNNER_TEMP/updater.minisig"
+          minisign -Vm "$tarball" -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/updater.minisig"
+          echo "updater bundle verified: unpacks, signed app v$upver matches the DMG, minisign signature valid"
 
   # ---------------------------------------------------------------------------------------
   # Raspberry Pi — one .deb per live Pi OS base, native on the hosted arm64 runner.

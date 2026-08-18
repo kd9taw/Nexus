@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than the rig, and a gentle AFC (never more than ±25 Hz) rides small drift.
   Receive-only for now — PSK31 transmit and QPSK31 are next on the keyboard-modes roadmap.
 
+- **Every Mac release is now checked harder before it ships.** The release pipeline
+  proves the signed app still carries the microphone entitlement and usage prompt (the
+  exact defect that silently shipped a dead mic in 1.5.0–1.6.1), and it unpacks the
+  self-update bundle, matches its version against the DMG and verifies its signature
+  with the same key every installed copy uses — a broken or missing update bundle now
+  fails the build instead of quietly publishing a release Macs could never update to.
+
 ### Fixed
 
 - **A crash or force-quit can no longer strand rigctld/rotctld on macOS and Linux.**
