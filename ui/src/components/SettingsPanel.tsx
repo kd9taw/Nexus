@@ -474,6 +474,27 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
 ]
 
+/** How the OmniRig connection option is offered, as a function of the platform.
+ *
+ * OmniRig is a Windows COM server, so off Windows the choice cannot work at all. It is still
+ * OFFERED — disabled, with the reason in its own label — rather than hidden: OmniRig is named
+ * in the rig docs and used by half the Windows logging ecosystem, and an operator who goes
+ * looking for it on a Mac must find the answer in the control rather than conclude the build
+ * is broken.
+ *
+ * Pure and takes the platform as an argument so BOTH directions are testable — jsdom is never
+ * Windows, so a component-only test could only ever see the disabled half. */
+export function omnirigChoiceFor(isWindows: boolean): { disabled: boolean; label: string } {
+  return isWindows
+    ? { disabled: false, label: 'OmniRig (the radio is set up in OmniRig)' }
+    : { disabled: true, label: 'OmniRig — Windows only' }
+}
+
+/** [`omnirigChoiceFor`] for the machine this is actually running on. */
+export function omnirigChoice(): { disabled: boolean; label: string } {
+  return omnirigChoiceFor(IS_WINDOWS)
+}
+
 /** Pick just the per-radio CAT/audio/PTT/rotator/native fields — the flat rig form and a radio
  * profile share these exact field names, so this serves BOTH directions: build the save patch
  * from the form, and load a radio's profile into the form (`{...form, ...radioPatch(profile)}`). */
@@ -488,6 +509,10 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     baud: s.baud ?? APP_DEFAULT_BAUD,
     rigConn: s.rigConn ?? 'serial',
     rigAddr: s.rigAddr ?? '',
+    // ⚠️ PER-RADIO, so it MUST be here — see the Flex note below. Which radio inside OmniRig
+    // this profile drives is a property of the profile, and dropping it on Save would move an
+    // operator's RIG 2 radio silently onto RIG 1.
+    omnirigSlot: s.omnirigSlot ?? 1,
     rigctldPort: s.rigctldPort ?? 4532,
     icomNativeCat: s.icomNativeCat ?? false,
     dataModesPlainSsb: s.dataModesPlainSsb ?? false,
@@ -2634,11 +2659,17 @@ export function SettingsPanel({
                         nothing saying which was which. Naming them costs one word each; the row
                         keeps its shape, so no pane sizing is involved. */}
                     <div className="radio-card-meta">
-                      {r.rigModelName && r.rigModelName !== 'None / VOX'
-                        ? r.rigModelName
-                        : 'No rig model set'}
+                      {r.rigConn === 'omnirig'
+                        ? 'Set up in OmniRig'
+                        : r.rigModelName && r.rigModelName !== 'None / VOX'
+                          ? r.rigModelName
+                          : 'No rig model set'}
                       {' · CAT '}
-                      {r.rigConn === 'network' ? r.rigAddr || 'no address' : r.serialPort || 'no COM port'}
+                      {r.rigConn === 'omnirig'
+                        ? `OmniRig RIG ${r.omnirigSlot === 2 ? 2 : 1}`
+                        : r.rigConn === 'network'
+                          ? r.rigAddr || 'no address'
+                          : r.serialPort || 'no COM port'}
                       {(r.flexRadioIp ?? '').trim() !== '' && (
                         <>
                           {' · Flex radio '}
@@ -3218,6 +3249,13 @@ export function SettingsPanel({
                 >
                   <option value="serial">Serial (USB / COM port)</option>
                   <option value="network">Network (host:port — SDR software, or a remote rig)</option>
+                  {/* Offered on every platform and DISABLED off Windows, rather than hidden:
+                      OmniRig is named in the docs and in half the Windows logging ecosystem, so
+                      a mac/Linux operator who goes looking for it must find the answer here
+                      instead of concluding the build is broken. */}
+                  <option value="omnirig" disabled={omnirigChoice().disabled}>
+                    {omnirigChoice().label}
+                  </option>
                 </select>
                 <span className="settings-hint">
                   Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for
@@ -3226,7 +3264,36 @@ export function SettingsPanel({
                   {' '}still picks which CAT dialect is spoken — for an SDR, choose the program
                   you launched, not the board inside the radio.
                 </span>
+                <span className="settings-hint">
+                  <strong>OmniRig</strong> hands rig control to VE3NEA's OmniRig server, the one
+                  most Windows logging and contest programs already use. Set the radio up{' '}
+                  <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there,
+                  so the Rig Model, Serial Port and Baud above are not used.{' '}
+                  {omnirigChoice().disabled
+                    ? 'It is greyed out here because OmniRig is a Windows program and this is not Windows.'
+                    : 'Install and run OmniRig first; Nexus will not start without it.'}
+                </span>
               </label>
+
+              {form.rigConn === 'omnirig' && (
+                <label className="settings-field">
+                  <span className="settings-label">OmniRig radio</span>
+                  <select
+                    className="settings-input"
+                    value={String(form.omnirigSlot || 1)}
+                    onChange={(e) => updateNum('omnirigSlot', Number(e.target.value))}
+                    aria-label="OmniRig rig slot"
+                  >
+                    <option value="1">RIG 1</option>
+                    <option value="2">RIG 2</option>
+                  </select>
+                  <span className="settings-hint">
+                    Which of OmniRig's two radios this Nexus radio drives. OmniRig's own window
+                    labels them RIG 1 and RIG 2 — pick the one whose rig type matches this
+                    radio. A two-radio station can put one on each.
+                  </span>
+                </label>
+              )}
 
               {form.rigConn === 'network' && (
                 <label className="settings-field">
@@ -3304,7 +3371,11 @@ export function SettingsPanel({
                 </label>
               )}
 
-              {form.rigConn !== 'network' && (
+              {/* Serial Port + Baud belong to whoever OPENS the port. With Network that is
+                  rigctld over TCP; with OmniRig it is OmniRig itself, which owns the rig type,
+                  the port and the baud — so asking for them here would be asking the operator
+                  to configure the same radio twice and get it wrong once. */}
+              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && (
                 <>
               <label className="settings-field">
                 <span className="settings-label">Serial Port</span>

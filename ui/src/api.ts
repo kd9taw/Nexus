@@ -1358,6 +1358,10 @@ export interface RadioProfilePatch {
   baud: number
   rigConn: string
   rigAddr: string
+  /** Which OmniRig slot this radio drives when rigConn === "omnirig" (1 = RIG 1, 2 = RIG 2).
+   * On the patch because the per-radio Edit flow saves through it — a per-radio field missing
+   * here is silently dropped on Save (the 2026-08-17 Flex-three data loss, exactly). */
+  omnirigSlot: number
   rigctldPort: number
   icomNativeCat: boolean
   dataModesPlainSsb: boolean

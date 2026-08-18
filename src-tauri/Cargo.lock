@@ -5024,6 +5024,7 @@ dependencies = [
  "tempo-core",
  "tempo-net",
  "tempo-sstv",
+ "windows 0.54.0",
  "windows-sys 0.59.0",
 ]
 

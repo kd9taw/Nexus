@@ -2419,11 +2419,14 @@ export interface Settings {
   catRtsKeysPtt: boolean
   /** Serial baud rate. */
   baud: number
-  /** Rig connection: "serial" (default) or "network" (rigctld → rigAddr over TCP, e.g. a
-   * FlexRadio via SmartSDR). */
+  /** Rig connection: "serial" (default), "network" (rigctld → rigAddr over TCP, e.g. a
+   * FlexRadio via SmartSDR), or "omnirig" (VE3NEA's Windows COM rig-control server drives the
+   * radio; Nexus serves the rigctld protocol over it — Windows only). */
   rigConn: string
   /** Network rig address host:port when rigConn === "network" (e.g. "192.168.1.50:4992"). */
   rigAddr: string
+  /** Which OmniRig slot to drive when rigConn === "omnirig": 1 = RIG 1 (default), 2 = RIG 2. */
+  omnirigSlot: number
   /** Let Nexus set the rig's mode (forces the DATA submode). Off by default —
    * Nexus obeys whatever mode the rig is already in (max compatibility). */
   /** TCP port that rigctld listens on / Tempo launches it with. */
@@ -2878,6 +2881,9 @@ export interface RadioProfile {
   baud: number
   rigConn: string
   rigAddr: string
+  /** Which OmniRig slot this radio drives when rigConn === "omnirig" (1 = RIG 1, 2 = RIG 2).
+   * PER-RADIO because it names WHICH radio inside OmniRig this profile is. */
+  omnirigSlot: number
   rigctldPort: number
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */

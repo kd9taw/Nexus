@@ -27304,6 +27304,7 @@ mod tests {
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),
+            omnirig_slot: p.omnirig_slot,
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
             data_modes_plain_ssb: p.data_modes_plain_ssb,

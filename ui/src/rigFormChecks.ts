@@ -48,6 +48,12 @@ export function checkRigForm(
   const out: RigCheck[] = []
   // A network rig has no serial port at all; none of this applies.
   if (form.rigConn === 'network') return out
+  // Nor does an OmniRig one, and for a stronger reason: OmniRig owns the rig type, the COM
+  // port and the baud, so every field these checks read belongs to another program. Blocking a
+  // save on "no serial port chosen" would make a correct OmniRig configuration unsaveable —
+  // and the CAT-keying check below would refuse `pttMethod: 'cat'` with no rig model, which is
+  // exactly the normal OmniRig setup.
+  if (form.rigConn === 'omnirig') return out
 
   const port = form.serialPort.trim()
   if (!port) {

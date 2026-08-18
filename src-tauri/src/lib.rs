@@ -15932,6 +15932,7 @@ pub fn run() {
         baud: settings.baud,
         rig_conn: settings.rig_conn.clone(),
         rig_addr: settings.rig_addr.clone(),
+        omnirig_slot: settings.omnirig_slot,
         rigctld_port: settings.rigctld_port,
         icom_native_cat: settings.icom_native_cat,
         broker_self_port: if settings.cat_broker {

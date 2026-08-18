@@ -253,6 +253,22 @@ pub fn rig_conn_is_network(rig_conn: &str, rig_addr: &str) -> bool {
     rig_conn == "network" && !rig_addr.is_empty()
 }
 
+/// Is this rig driven through **OmniRig** — VE3NEA's Windows COM rig-control
+/// server — instead of by a rigctld Nexus launches?
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for that question, for the same reason
+/// [`rig_conn_is_network`] is: `tempo_audio::service::Transport::is_omnirig`
+/// calls THIS, so the daemon-choice seam and every settings-side consumer
+/// cannot answer differently.
+///
+/// Unlike the network test this needs NO second field: OmniRig owns the rig
+/// type, the COM port and the baud, so there is nothing on the Nexus side that
+/// could be missing. Case-insensitive, because an imported/hand-edited config
+/// may carry "OmniRig".
+pub fn rig_conn_is_omnirig(rig_conn: &str) -> bool {
+    rig_conn.eq_ignore_ascii_case("omnirig")
+}
+
 /// Could Nexus's OWN CI-V daemon ever serve a radio wired like this — i.e. is
 /// "turn on Native CI-V" a cure that EXISTS for it?
 ///
@@ -265,7 +281,13 @@ pub fn rig_conn_is_network(rig_conn: &str, rig_addr: &str) -> bool {
 /// Not gated on the operator's `icom_native_cat` opt-in: that is the separate
 /// "is it switched on" question, and it is answered where it is used.
 pub fn native_civ_reachable(rig_model: u32, rig_conn: &str, rig_addr: &str) -> bool {
-    NATIVE_CIV_SAT_RIGS.contains(&rig_model) && !rig_conn_is_network(rig_conn, rig_addr)
+    NATIVE_CIV_SAT_RIGS.contains(&rig_model)
+        && !rig_conn_is_network(rig_conn, rig_addr)
+        // OmniRig is the third transport and it is a dead end for the CI-V daemon for the
+        // same reason `network` is: OmniRig holds the COM port, so Nexus can never open it
+        // to speak CI-V itself. Without this the satellite offer would pre-fill a Main/Sub
+        // mapping whose write has no path at all.
+        && !rig_conn_is_omnirig(rig_conn)
 }
 
 impl Settings {
@@ -756,6 +778,10 @@ pub struct Settings {
     /// IP `192.168.1.50:4992`). Ignored for serial.
     #[serde(default)]
     pub rig_addr: String,
+    /// OmniRig slot for the active radio (flat mirror of the profile field — see
+    /// [`RadioProfile::omnirig_slot`]). 1 = RIG 1, 2 = RIG 2; 0 reads as RIG 1.
+    #[serde(default)]
+    pub omnirig_slot: u8,
     /// Native Icom CI-V for the active radio (flat mirror of the profile field — see
     /// [`RadioProfile::icom_native_cat`]). Default off.
     #[serde(default)]
@@ -2145,6 +2171,15 @@ pub struct RadioProfile {
     pub baud: u32,
     pub rig_conn: String,
     pub rig_addr: String,
+    /// Which OmniRig slot this radio drives when `rig_conn == "omnirig"`: **1 = RIG 1**
+    /// (default), **2 = RIG 2**. OmniRig has exactly those two, each with its own rig type
+    /// and COM port, so a two-radio station can put one Nexus radio on each.
+    ///
+    /// PER-RADIO because it has to be — it names WHICH radio inside OmniRig this profile is.
+    /// 0 (a settings file written before the field existed) reads as RIG 1, the default; see
+    /// `tempo_audio::omnirig::RigSlot::from_setting`.
+    #[serde(default)]
+    pub omnirig_slot: u8,
     /// UNIQUE across enabled profiles (validated) — each radio's own rigctld TCP port.
     pub rigctld_port: u16,
     /// Native Icom CI-V: Nexus itself owns this radio's serial CI-V port (instead of
@@ -2235,6 +2270,10 @@ pub struct RadioProfilePatch {
     pub baud: u32,
     pub rig_conn: String,
     pub rig_addr: String,
+    /// See `RadioProfile::omnirig_slot` — RIG 1 / RIG 2. `#[serde(default)]` like
+    /// `ptt_serial_port`: a payload written before the field existed still deserializes.
+    #[serde(default)]
+    pub omnirig_slot: u8,
     pub rigctld_port: u16,
     pub icom_native_cat: bool,
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
@@ -2279,6 +2318,7 @@ impl RadioProfilePatch {
         p.baud = self.baud;
         p.rig_conn = self.rig_conn;
         p.rig_addr = self.rig_addr;
+        p.omnirig_slot = self.omnirig_slot;
         p.rigctld_port = self.rigctld_port;
         p.icom_native_cat = self.icom_native_cat;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
@@ -2360,6 +2400,7 @@ impl Default for RadioProfile {
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
+            omnirig_slot: 1,
             // 4534, not 4532: the CAT broker owns 4532 by default (#53) — a default that
             // collided with it would rely on load-time port repair everywhere, and open_cat
             // refuses a self-collision with dead CAT. 4533 is out too: it is the rotctld
@@ -2669,6 +2710,7 @@ impl Default for Settings {
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
+            omnirig_slot: 1,
             icom_native_cat: false,
             data_modes_plain_ssb: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
@@ -2953,6 +2995,7 @@ impl Settings {
             baud: self.baud,
             rig_conn: self.rig_conn.clone(),
             rig_addr: self.rig_addr.clone(),
+            omnirig_slot: self.omnirig_slot,
             rigctld_port: self.rigctld_port,
             icom_native_cat: self.icom_native_cat,
             data_modes_plain_ssb: self.data_modes_plain_ssb,
@@ -3287,6 +3330,7 @@ impl Settings {
         self.baud = p.baud;
         self.rig_conn = p.rig_conn;
         self.rig_addr = p.rig_addr;
+        self.omnirig_slot = p.omnirig_slot;
         self.rigctld_port = p.rigctld_port;
         self.icom_native_cat = p.icom_native_cat;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
@@ -3322,6 +3366,7 @@ impl Settings {
             baud,
             rig_conn,
             rig_addr,
+            omnirig_slot,
             rigctld_port,
             icom_native_cat,
             data_modes_plain_ssb,
@@ -3345,6 +3390,7 @@ impl Settings {
             self.baud,
             self.rig_conn.clone(),
             self.rig_addr.clone(),
+            self.omnirig_slot,
             self.rigctld_port,
             self.icom_native_cat,
             self.data_modes_plain_ssb,
@@ -3369,6 +3415,7 @@ impl Settings {
             p.baud = baud;
             p.rig_conn = rig_conn;
             p.rig_addr = rig_addr;
+            p.omnirig_slot = omnirig_slot;
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
@@ -3851,6 +3898,7 @@ mod tests {
             baud: 115_200,
             rig_conn: "network".into(),
             rig_addr: "192.0.2.10:4992".into(),
+            omnirig_slot: 2,
             rigctld_port: 4533,
             icom_native_cat: true,
             data_modes_plain_ssb: true,
@@ -3924,6 +3972,7 @@ mod tests {
             baud: 0,
             rig_conn: String::new(),
             rig_addr: String::new(),
+            omnirig_slot: 0,
             rigctld_port: 0,
             icom_native_cat: false,
             data_modes_plain_ssb: false,
@@ -3962,6 +4011,155 @@ mod tests {
              patch is silently dropped on Save. Add it to the patch + apply_to, or list it in \
              NOT_EDITABLE with a reason."
         );
+    }
+
+    /// THE FIELD-SPECIFIC HALF for OmniRig, written because yesterday's bug was exactly this
+    /// and the generic guards above are only as good as the day they were remembered: a
+    /// per-radio field the patch does not CARRY, or carries and `apply_to` does not ASSIGN,
+    /// is silently wiped when the operator edits a radio they are not currently operating.
+    ///
+    /// So both halves are pinned here by name. `rig_conn` matters as much as the slot: the
+    /// whole connection type is per-radio, and losing it on a save would put an OmniRig
+    /// station back on a serial port it does not own.
+    #[test]
+    fn an_omnirig_pick_survives_an_edit_of_a_non_active_radio() {
+        let mut profile = RadioProfile {
+            id: 1,
+            name: "IC-7300 via OmniRig".into(),
+            rig_conn: "omnirig".into(),
+            omnirig_slot: 2,
+            ..RadioProfile::default()
+        };
+        // The Settings per-radio Edit flow: read the profile out, change ONE unrelated thing,
+        // save it back through the patch. Everything else must come out the way it went in.
+        let mut patch = patch_of(&profile);
+        patch.ptt_serial_port = "COM9".into(); // the one edit
+        patch.apply_to(&mut profile);
+        assert_eq!(profile.ptt_serial_port, "COM9", "the edit landed");
+        assert_eq!(profile.rig_conn, "omnirig", "the connection type survived");
+        assert_eq!(profile.omnirig_slot, 2, "the RIG 2 pick survived");
+
+        // The other direction — a patch that MOVES the slot really moves it, so the guard is
+        // shown to fire as well as to hold.
+        let mut moved = profile.clone();
+        let mut p2 = patch_of(&profile);
+        p2.omnirig_slot = 1;
+        p2.apply_to(&mut moved);
+        assert_eq!(moved.omnirig_slot, 1, "a changed slot is written through");
+    }
+
+    /// A full settings file with an OmniRig radio survives save → load, camelCase key and
+    /// all, and the flat mirror describes the ACTIVE radio the way every existing consumer
+    /// (`Transport::from_settings`) reads it.
+    #[test]
+    fn an_omnirig_radio_round_trips_through_save_and_load() {
+        let dir = std::env::temp_dir().join("tempo_settings_omnirig");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("omnirig_{}.json", std::process::id()));
+        let mut s = Settings::default();
+        s.mycall = "KD9TAW".into();
+        s.radios = vec![
+            RadioProfile {
+                id: 0,
+                name: "FTDX10".into(),
+                rigctld_port: 4534,
+                ..RadioProfile::default()
+            },
+            RadioProfile {
+                id: 1,
+                name: "IC-7300 via OmniRig".into(),
+                rig_conn: "omnirig".into(),
+                omnirig_slot: 2,
+                rigctld_port: 4535,
+                ..RadioProfile::default()
+            },
+        ];
+        s.active_radio = 1;
+        // The mirror invariant: the flat rig fields describe the ACTIVE radio, and `save`
+        // syncs flat→active. Skipping this is how the first draft of this test "failed" —
+        // correctly: a save with a stale flat mirror really does overwrite the profile.
+        s.sync_flat_from_active();
+        s.save(&path).expect("saves");
+
+        // The stored key is camelCase, like every other per-radio field.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("\"omnirigSlot\""),
+            "camelCase wire key: {raw:.400}"
+        );
+
+        let back = Settings::load(&path);
+        let p = back.active_profile().expect("active profile");
+        assert_eq!(p.rig_conn, "omnirig");
+        assert_eq!(p.omnirig_slot, 2);
+        assert_eq!(
+            back.omnirig_slot, 2,
+            "the flat mirror describes the active radio"
+        );
+        assert_eq!(back.rig_conn, "omnirig");
+        // …and the OTHER radio is untouched, which is the multi-radio half of the same rule.
+        let other = back.radios.iter().find(|r| r.id == 0).unwrap();
+        assert_eq!(other.rig_conn, "serial");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The connection-kind rules, both directions, plus the one consequence that would
+    /// otherwise be found on the air: OmniRig holds the COM port, so Nexus's own CI-V daemon
+    /// can never reach that radio and the satellite offer must not pre-fill a mapping whose
+    /// write has no path.
+    #[test]
+    fn omnirig_is_its_own_connection_kind_and_closes_the_native_civ_door() {
+        assert!(rig_conn_is_omnirig("omnirig"));
+        assert!(rig_conn_is_omnirig("OmniRig"), "case-insensitive");
+        assert!(!rig_conn_is_omnirig("serial"));
+        assert!(!rig_conn_is_omnirig("network"));
+        assert!(
+            !rig_conn_is_omnirig(""),
+            "an absent field is serial, not OmniRig"
+        );
+        // Disjoint from the network rule in both directions.
+        assert!(!rig_conn_is_network("omnirig", "192.0.2.1:4532"));
+        assert!(!rig_conn_is_omnirig("network"));
+        // 3081 = IC-9700, a native-CI-V satellite rig. Positive control first.
+        assert!(
+            native_civ_reachable(3081, "serial", ""),
+            "control: a serial IC-9700 CAN reach the native daemon"
+        );
+        assert!(
+            !native_civ_reachable(3081, "omnirig", ""),
+            "…and an OmniRig one cannot — OmniRig owns the port"
+        );
+    }
+
+    /// Helper for the patch test above: the patch a Save would build from a profile.
+    fn patch_of(p: &RadioProfile) -> RadioProfilePatch {
+        RadioProfilePatch {
+            ptt_method: p.ptt_method.clone(),
+            rig_model: p.rig_model,
+            rig_model_name: p.rig_model_name.clone(),
+            serial_port: p.serial_port.clone(),
+            ptt_serial_port: p.ptt_serial_port.clone(),
+            baud: p.baud,
+            rig_conn: p.rig_conn.clone(),
+            rig_addr: p.rig_addr.clone(),
+            omnirig_slot: p.omnirig_slot,
+            rigctld_port: p.rigctld_port,
+            icom_native_cat: p.icom_native_cat,
+            data_modes_plain_ssb: p.data_modes_plain_ssb,
+            audio_in: p.audio_in.clone(),
+            audio_out: p.audio_out.clone(),
+            tx_level: p.tx_level,
+            rx_gain: p.rx_gain,
+            rotator_model: p.rotator_model,
+            rotator_port: p.rotator_port.clone(),
+            rotator_baud: p.rotator_baud,
+            rotator_host: p.rotator_host.clone(),
+            rotctld_port: p.rotctld_port,
+            native_scope: p.native_scope.clone(),
+            flex_radio_ip: p.flex_radio_ip.clone(),
+            flex_native_pan: p.flex_native_pan,
+            flex_native_audio: p.flex_native_audio,
+        }
     }
 
     /// A settings file written before the Flex three became per-radio keeps its address: the flat

@@ -448,6 +448,10 @@ principal third-party components, not a substitute for that gate:
 - **windows-sys** (Windows only: the Win32 job-object / process calls that make a crashed or
   killed Nexus take its child `rigctld` with it instead of orphaning the serial port) —
   MIT OR Apache-2.0.
+- **windows** (Windows only: COM and `IDispatch`, for driving VE3NEA's OmniRig rig-control
+  server as a CAT backend — `crates/tempo-audio/src/omnirig/com.rs`) — MIT OR Apache-2.0.
+  OmniRig itself is a separate program the operator installs; Nexus only calls its published
+  COM interface and ships none of it.
 
 `crates/tempo-net` (the WSJT-X-compatible UDP API and PSK Reporter spotting) is otherwise
 pure `std` Rust: **socket2** is its only third-party crate, and only because `std` exposes no

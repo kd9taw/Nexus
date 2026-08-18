@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OmniRig rig control (Windows).** The **Connection** dropdown in Settings ▸ Radio ▸ Rig
+  & CAT gains **OmniRig** — VE3NEA's rig-control server, the one much of the Windows
+  logging and contest world already runs. Pick it and your radio is configured once, in
+  OmniRig, and every program shares it instead of fighting over the COM port. Because
+  OmniRig owns the rig type, the port and the baud, Nexus stops asking for them: the only
+  thing it needs is **which** radio — `RIG 1` or `RIG 2`, matching OmniRig's own two tabs,
+  defaulting to RIG 1, and per radio, so a two-radio station can put one on each. Dial and
+  mode follow both ways, exactly as on a serial rig. **PTT:** leaving PTT Method on `CAT`
+  keys through OmniRig with nothing else to set up, and the other choices are unchanged
+  and deliberately independent of it — pick `RTS`/`DTR` with a PTT Serial Port and Nexus
+  asserts that hardware line itself, which is how many operators run. It is Windows only
+  (OmniRig is a Windows program), so on macOS and Linux the choice is shown greyed out
+  with that reason rather than hidden. If OmniRig isn't installed Nexus says so plainly,
+  and if it is running but the rig is off, on a busy port, or not answering, the CAT
+  status shows OmniRig's own words for it instead of a bare "no reply". See the
+  [rig setup guide](docs/rigs/index.md).
+
 - **QPSK31.** The PSK screen's mode picker now offers QPSK31 beside PSK31 — same speed,
   same feel, but with error correction: the four-phase signal carries a convolutional
   code, so the flutter or static crash that prints a wrong character in PSK31 is simply

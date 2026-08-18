@@ -53,6 +53,9 @@ pub mod flexdax;
 pub mod flexspectrum;
 pub mod frames;
 pub mod monitor;
+/// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local
+/// rigctld-protocol shim over COM, so `Rig` and every CAT verb are unchanged.
+pub mod omnirig;
 pub mod port_prober;
 pub mod ports;
 /// PSK31 RX decode thread (armed-decoder-on-the-RX-path, the `rttyrx` pattern).

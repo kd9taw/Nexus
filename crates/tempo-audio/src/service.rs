@@ -44,6 +44,10 @@ enum CatDaemon {
     // Only constructed with the `serial` feature (the native daemon owns a COM port).
     #[cfg_attr(not(feature = "serial"), allow(dead_code))]
     Native(crate::civ::broker::CivDaemon),
+    /// The OmniRig shim: the same rigctld protocol, served over COM instead of a serial port
+    /// (`crate::omnirig`). A third thing that can listen on the radio's rigctld port, exactly
+    /// like `Native` — everything downstream stays agnostic.
+    Omni(crate::omnirig::OmniDaemon),
 }
 
 impl CatDaemon {
@@ -51,13 +55,21 @@ impl CatDaemon {
         match self {
             CatDaemon::Spawned(p) => p.is_alive(),
             CatDaemon::Native(d) => d.is_alive(),
+            CatDaemon::Omni(d) => d.is_alive(),
         }
     }
     /// The native daemon, when that's what this is (scope drain / enable).
     fn native(&self) -> Option<&crate::civ::broker::CivDaemon> {
         match self {
             CatDaemon::Native(d) => Some(d),
-            CatDaemon::Spawned(_) => None,
+            CatDaemon::Spawned(_) | CatDaemon::Omni(_) => None,
+        }
+    }
+    /// The OmniRig shim, when that's what this is — for the status detail and TX intent.
+    fn omni(&self) -> Option<&crate::omnirig::OmniDaemon> {
+        match self {
+            CatDaemon::Omni(d) => Some(d),
+            CatDaemon::Native(_) | CatDaemon::Spawned(_) => None,
         }
     }
 }
@@ -80,7 +92,10 @@ fn safe_rigctld_port(port: u16) -> u16 {
 /// The CI-V address to natively drive `t` at — `Some` only when the operator opted this
 /// radio into `icom_native_cat` AND it's a scope-capable Icom on a serial connection.
 fn native_civ_addr(t: &Transport) -> Option<u8> {
-    if !t.icom_native_cat || t.is_network() || t.rig_model == 0 {
+    // OmniRig joins `is_network()` as a transport the CI-V daemon can never serve: OmniRig
+    // holds the COM port, so Nexus cannot open it to speak CI-V. Mirrored in tempo-app's
+    // `native_civ_reachable`, which is what tells the operator the cure does not exist here.
+    if !t.icom_native_cat || t.is_network() || t.is_omnirig() || t.rig_model == 0 {
         return None;
     }
     crate::rigmodels::icom_scope_model(t.rig_model).map(|m| m.default_civ_addr())
@@ -106,6 +121,13 @@ fn keys_on_the_cat_port(t: &Transport) -> bool {
     matches!(t.ptt_method.as_str(), "rts" | "dtr")
         && t.rig_model != 0
         && !t.is_network()
+        // OmniRig is excluded for the same reason a network rig is, and it is not a detail:
+        // this whole case exists because HAMLIB shares one fd between CAT and the keying
+        // line. With OmniRig there is no rigctld and Nexus never opens the CAT port at all —
+        // OmniRig does — so the keying line is always ours to assert directly, and routing it
+        // through a daemon that does not exist would be a rig that tunes and never keys.
+        // `open_serial_ptt` has the matching branch; the two must stay in step (see the ⚠️).
+        && !t.is_omnirig()
         && !t.serial_port.trim().is_empty()
         && t.ptt_port().eq_ignore_ascii_case(t.serial_port.trim())
 }
@@ -135,6 +157,14 @@ fn spawn_cat_daemon(
     // rigctld is the ONLY backend that can do both, so skip native entirely (the operator keeps
     // CAT and keying; they lose only the native panadapter, which is the correct trade and is
     // surfaced by the scope falling back rather than failing silently).
+    // OmniRig: no rigctld, no serial port of ours, no CI-V. Nexus starts its own shim on the
+    // radio's rigctld port and OmniRig drives the radio. Checked FIRST because it decides the
+    // whole backend, and because a "network"/serial fallthrough here would launch a Hamlib
+    // daemon at a port OmniRig has no idea about.
+    if t.is_omnirig() {
+        return crate::omnirig::OmniDaemon::start(t.omnirig_slot(), t.rigctld_port)
+            .map(|d| (CatDaemon::Omni(d), None));
+    }
     #[cfg_attr(not(feature = "serial"), allow(unused_mut))] // only mutated on the serial path
     let mut native_fallback: Option<String> = None;
     #[cfg(feature = "serial")]
@@ -734,6 +764,8 @@ pub struct RadioConfig {
     pub rig_conn: String,
     /// host:port for a network rig (when `rig_conn == "network"`).
     pub rig_addr: String,
+    /// Which OmniRig slot to drive when `rig_conn == "omnirig"` (1 = RIG 1, 2 = RIG 2).
+    pub omnirig_slot: u8,
     /// Local TCP port Tempo runs rigctld on (and connects to).
     pub rigctld_port: u16,
     /// Native Icom CI-V opt-in (Nexus owns the CI-V serial port + serves the rigctld
@@ -776,6 +808,7 @@ impl Default for RadioConfig {
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
+            omnirig_slot: 1,
             // Mirror Settings::default() (#53): the CAT broker is ON at 4532 and the daemon
             // sits one off it. This Default is the doc-example/test-harness config; a scene
             // whose applied transport diverged from the engine's real defaults would see
@@ -1175,6 +1208,7 @@ impl Transport {
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),
+            omnirig_slot: p.omnirig_slot,
             rigctld_port: safe_rigctld_port(p.rigctld_port),
             icom_native_cat: p.icom_native_cat,
             broker_self_port: None,
@@ -1194,7 +1228,7 @@ impl Transport {
 /// already on the port) and probe by reading the dial — but NEVER set freq/mode/PTT (a monitor must
 /// not disturb the radio the operator isn't focused on). Returns the Rig + daemon handle + cat_ok.
 fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
-    if t.rig_model == 0 {
+    if !t.cat_available() {
         return (Rig::vox(), None, None);
     }
     // A monitor ALWAYS spawns its OWN rigctld — it must NEVER coexist onto a daemon already on the
@@ -2829,9 +2863,16 @@ impl RadioLoop {
     /// site, because the per-tick publish (the scope-gate block) can lag a fresh key-up by a
     /// whole tick (~20 ms) — and a capture showed the broker's disconnect fail-safe racing
     /// that gap: it fired 5 ms after PTT-ON with tx_intent still false and unkeyed the tune.
-    /// Idempotent atomic store; a no-op on the Hamlib path (no native daemon).
+    /// Idempotent atomic store; a no-op on the Hamlib path (no daemon of ours to tell).
+    ///
+    /// The OmniRig shim carries the SAME fail-safe (it reuses `serve_connection`), so it needs
+    /// the same publish — and it needs it here rather than only per-tick for the same reason:
+    /// the fail-safe races the gap between a key-up and the next tick.
     fn publish_tx_intent_now(&self) {
         if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
+            d.set_tx_intent(true);
+        }
+        if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::omni) {
             d.set_tx_intent(true);
         }
     }
@@ -4044,6 +4085,17 @@ impl RadioLoop {
                     // immediately (no ~1 s window where the last civ row still wins).
                     self.spectrum_feed.clear_rf();
                 }
+            }
+            // The OmniRig shim's half of the same fail-safe publish. It has no scope stream to
+            // gate, so this is the whole of its per-tick work: tell the broker whether Nexus is
+            // on the air, so a reconnect of our own Rig cannot unkey an over in flight.
+            if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::omni) {
+                d.set_tx_intent(
+                    rig.keyed
+                        || self.tx_until_ms.is_some()
+                        || self.tuning_keyed
+                        || self.manual_ptt_applied,
+                );
             }
 
             // Live dial / mode retune — only while not keyed (rigs reject VFO
@@ -8232,6 +8284,10 @@ struct Transport {
     rig_conn: String,
     /// host:port for a network rig (when `rig_conn == "network"`).
     rig_addr: String,
+    /// Which OmniRig slot to drive when `rig_conn == "omnirig"` (1 = RIG 1, 2 = RIG 2).
+    /// Part of the transport because changing it re-points CAT at a different radio — the
+    /// shim has to be restarted, exactly like a serial-port change.
+    omnirig_slot: u8,
     rigctld_port: u16,
     /// Native Icom CI-V opt-in for this radio (see `RadioProfile::icom_native_cat`) —
     /// selects Nexus's own CI-V daemon instead of rigctld at the spawn sites.
@@ -8277,6 +8333,7 @@ impl Transport {
             baud: c.baud,
             rig_conn: c.rig_conn.clone(),
             rig_addr: c.rig_addr.clone(),
+            omnirig_slot: c.omnirig_slot,
             rigctld_port: safe_rigctld_port(c.rigctld_port),
             icom_native_cat: c.icom_native_cat,
             broker_self_port: c.broker_self_port,
@@ -8316,6 +8373,7 @@ impl Transport {
             icom_native_cat: s.icom_native_cat,
             rig_conn: s.rig_conn.clone(),
             rig_addr: s.rig_addr.clone(),
+            omnirig_slot: s.omnirig_slot,
             rigctld_port: safe_rigctld_port(s.rigctld_port),
             broker_self_port: if s.cat_broker {
                 Some(s.cat_broker_port)
@@ -8355,6 +8413,7 @@ impl Transport {
             || self.baud != o.baud
             || self.rig_conn != o.rig_conn
             || self.rig_addr != o.rig_addr
+            || self.omnirig_slot != o.omnirig_slot
             || self.rigctld_port != o.rigctld_port
             || self.icom_native_cat != o.icom_native_cat
             || self.broker_self_port != o.broker_self_port
@@ -8372,6 +8431,32 @@ impl Transport {
     /// field was told its layout was a dead end while its daemon was one checkbox away.
     fn is_network(&self) -> bool {
         tempo_app::settings::rig_conn_is_network(&self.rig_conn, &self.rig_addr)
+    }
+
+    /// Is CAT for this radio served by **OmniRig** — VE3NEA's Windows COM server — instead
+    /// of by a rigctld Nexus launches? The rule lives in tempo-app
+    /// ([`tempo_app::settings::rig_conn_is_omnirig`]) for the same reason [`Self::is_network`]
+    /// does: Settings has to answer the same question (the satellite refusal's
+    /// `native_civ_reachable`), and two copies of a transport rule is how the CI-V daemon's
+    /// gate and the app's advice parted company last time.
+    fn is_omnirig(&self) -> bool {
+        tempo_app::settings::rig_conn_is_omnirig(&self.rig_conn)
+    }
+
+    /// Which OmniRig slot this transport drives.
+    fn omnirig_slot(&self) -> crate::omnirig::RigSlot {
+        crate::omnirig::RigSlot::from_setting(self.omnirig_slot)
+    }
+
+    /// Is there a CAT control channel to open at all?
+    ///
+    /// A Hamlib rig needs a MODEL NUMBER — without one there is nothing to launch rigctld
+    /// with. An OmniRig radio does not: the rig type lives inside OmniRig, along with its COM
+    /// port and baud, so Nexus's own model field is meaningless there. Demanding one would
+    /// make the operator configure the same radio twice and get it wrong once — and the
+    /// symptom would be a rig with no CAT and nothing saying why.
+    fn cat_available(&self) -> bool {
+        self.rig_model != 0 || self.is_omnirig()
     }
 
     /// Does this transport need the LONG (2.5 s) CAT command deadline because the SERIAL
@@ -8701,7 +8786,7 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
         return PttMode::Cat;
     }
     match t.ptt_method.as_str() {
-        "cat" if t.rig_model != 0 => PttMode::Cat,
+        "cat" if t.cat_available() => PttMode::Cat,
         "rts" => PttMode::Serial {
             port: t.ptt_port().to_string(),
             line: SerialLine::Rts,
@@ -8720,8 +8805,9 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
 /// `None` (not applicable). Mirrors WSJT-X's Test CAT.
 fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
     match t.ptt_method.as_str() {
-        // CAT PTT: control + keying both over rigctld.
-        "cat" if t.rig_model != 0 => open_cat(t, PttMode::Cat, allow_coexist, None),
+        // CAT PTT: control + keying both over the CAT daemon (rigctld, the native CI-V
+        // daemon, or the OmniRig shim — `cat_available` is what says one can exist).
+        "cat" if t.cat_available() => open_cat(t, PttMode::Cat, allow_coexist, None),
         "cat" => (
             Rig::vox(),
             None,
@@ -8743,7 +8829,7 @@ fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
         // no `M`/`F` command at all because CAT was fused to the PTT method. (Matched
         // explicitly, not via the catch-all, so a typo'd/legacy ptt_method string
         // degrades safely to pure VOX below rather than silently grabbing the port.)
-        "vox" if t.rig_model != 0 => open_cat(t, PttMode::Vox, allow_coexist, None),
+        "vox" if t.cat_available() => open_cat(t, PttMode::Vox, allow_coexist, None),
         _ => (
             Rig::vox(),
             None,
@@ -8761,6 +8847,21 @@ fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
 /// keying with no CAT — the prior behavior.
 fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigOpen {
     let ptt_port = t.ptt_port().to_string();
+    // OmniRig owns the CAT link and its COM port; Nexus opens neither. So RTS/DTR keying is
+    // ALWAYS on a line of its own here — there is no shared-fd case to detect, and no rig
+    // model to require. This is the operator ruling made mechanical: keying on a serial line
+    // stays independent of COM while OmniRig drives CAT.
+    if t.is_omnirig() {
+        return open_cat(
+            t,
+            PttMode::Serial {
+                port: ptt_port,
+                line,
+            },
+            allow_coexist,
+            None,
+        );
+    }
     // Single-cable interface (Digirig Mobile): keying and CAT are the SAME port, so let rigctld
     // own it and do both. Hamlib shares the fd, so this is one open, not a fight for the port.
     if keys_on_the_cat_port(t) {
@@ -8787,7 +8888,7 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
         }
         return (rig, daemon, probe);
     }
-    let separate = t.rig_model != 0 && !ptt_port.eq_ignore_ascii_case(t.serial_port.trim());
+    let separate = t.cat_available() && !ptt_port.eq_ignore_ascii_case(t.serial_port.trim());
     if separate {
         open_cat(
             t,
@@ -8866,6 +8967,11 @@ fn open_cat(
     // rigctld handshake. Skipped entirely on a dual-radio SWITCH that reuses the port of the
     // daemon we just killed (`allow_coexist == false`), so we never reconnect through our own
     // dying daemon and keep commanding the OLD radio.
+    // ⚠️ OmniRig never coexists, for the same reason shared-port keying never does: a rigctld
+    // already on this port is not our shim, so attaching to it would drive whatever radio
+    // THAT daemon serves while the operator believes they are on OmniRig. We must own the
+    // listener. If the port is genuinely taken, the bind below fails and says so.
+    let allow_coexist = allow_coexist && !t.is_omnirig();
     let listening = if allow_coexist {
         crate::rigctld_server::probe_cat_port(&addr, Duration::from_millis(400))
     } else {
@@ -8934,27 +9040,72 @@ fn open_cat(
             let native_wanted = native_civ_addr(t).is_some() && ptt_line.is_none();
             probe.detail = with_backend(
                 probe.detail,
-                cat_backend_label(native_wanted, Some(matches!(proc, CatDaemon::Native(_)))),
+                match proc.omni() {
+                    Some(d) => omnirig_backend_label(d.slot()),
+                    None => {
+                        cat_backend_label(native_wanted, Some(matches!(proc, CatDaemon::Native(_))))
+                    }
+                },
             );
             if let Some(e) = native_fallback {
                 probe.detail = format!("{} Native CI-V start error: {e}.", probe.detail);
             }
-            // The link did not come up: hand the operator Hamlib's OWN diagnosis rather than
-            // only our outside-in one. See `with_daemon_error` — this is what was being
-            // captured and thrown away for every non-Icom.
+            // The link did not come up: hand the operator the DAEMON's own diagnosis rather
+            // than only our outside-in one. Hamlib's is scraped off its stderr ring
+            // (`with_daemon_error` — what was captured and thrown away for every non-Icom);
+            // OmniRig's is its own `StatusStr`, which names the fault far better than we can
+            // ("port busy", "not responding").
             if probe.ok == Some(false) {
-                if let CatDaemon::Spawned(p) = &proc {
-                    probe.detail = with_daemon_error(probe.detail, &p.said());
+                match &proc {
+                    CatDaemon::Spawned(p) => {
+                        probe.detail = with_daemon_error(probe.detail, &p.said());
+                    }
+                    CatDaemon::Omni(d) => {
+                        if let Err(e) = d.health() {
+                            probe.detail = format!("{} {e}", probe.detail);
+                        }
+                    }
+                    CatDaemon::Native(_) => {}
                 }
             }
             (rig, Some(proc), probe)
         }
+        Err(e) if t.is_omnirig() => (
+            Rig::vox(),
+            None,
+            CatProbe::status(Some(false), omnirig_start_failed(t, &e)),
+        ),
         Err(e) => (
             Rig::vox(),
             None,
             CatProbe::status(Some(false), rigctld_launch_failed(&e)),
         ),
     }
+}
+
+/// Backend attribution for an OmniRig radio — the operator must never have to guess which
+/// slot inside OmniRig a result came from, least of all on a two-radio station.
+fn omnirig_backend_label(slot: crate::omnirig::RigSlot) -> &'static str {
+    match slot {
+        crate::omnirig::RigSlot::Rig1 => "OmniRig RIG 1",
+        crate::omnirig::RigSlot::Rig2 => "OmniRig RIG 2",
+    }
+}
+
+/// Explain an OmniRig shim that would not START. The error already carries OmniRig's own
+/// sentence (`OmniError::Display` — not installed / Windows-only / a COM failure); what this
+/// adds is the ONE cause that error cannot see, because it is ours: the TCP port the shim has
+/// to bind was taken.
+fn omnirig_start_failed(t: &Transport, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::AddrInUse {
+        return format!(
+            "Nexus could not start its OmniRig link: something is already using TCP port {} \
+             on this PC. Give this radio a different rigctld TCP Port (Settings ▸ Radio ▸ \
+             Advanced), or close whatever holds that one.",
+            t.rigctld_port
+        );
+    }
+    format!("Nexus could not start its OmniRig link: {e}")
 }
 
 /// Explain a `rigctld` that would not START — as opposed to one that started and could not
@@ -9046,7 +9197,7 @@ fn probe_serial(port: &str, line: SerialLine) -> RigOpen {
 /// doesn't fight the running rigctld for the serial port.
 fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
     match t.ptt_method.as_str() {
-        "cat" if t.rig_model != 0 => probe_cat_or_explain(rig, t.rigctld_port),
+        "cat" if t.cat_available() => probe_cat_or_explain(rig, t.rigctld_port),
         "cat" => (
             Some(false),
             "CAT selected but no rig model is set — pick your rig in Settings.".to_string(),
@@ -9066,7 +9217,7 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
                     // Say what is NOT happening. Keying works and the pill goes green, but with
                     // no rig model there is no CAT at all — the band will not follow, and the
                     // operator otherwise has to infer that from a control that looks healthy.
-                    let detail = if t.rig_model == 0 {
+                    let detail = if !t.cat_available() {
                         format!("Serial PTT on {shown} — no CAT (no rig model set), so the radio will not follow the band.")
                     } else {
                         format!("Serial PTT on {shown}")
@@ -9081,7 +9232,7 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
         }
         // VOX with a CAT rig configured: keying is VOX, but CAT control is live, so the
         // Test-CAT button must probe the (real) control channel — not report "no CAT".
-        "vox" if t.rig_model != 0 => probe_cat_or_explain(rig, t.rigctld_port),
+        "vox" if t.cat_available() => probe_cat_or_explain(rig, t.rigctld_port),
         _ => (None, "VOX — no CAT.".to_string()),
     }
 }
@@ -11594,6 +11745,154 @@ mod tests {
 
         t.ptt_method = "vox".into();
         assert_eq!(ptt_mode_for(&t), PttMode::Vox);
+    }
+
+    /// OmniRig's keying rules, which are the operator's ruling made mechanical (2026-08-18):
+    /// **CAT keying goes through OmniRig by default, and serial RTS/DTR keying stays usable
+    /// and independent of COM.** Many operators key a hardware line while OmniRig drives CAT.
+    ///
+    /// Two things are pinned. (1) `ptt_method: "cat"` keys through the shim even with NO rig
+    /// model — OmniRig owns the rig type, so demanding one here would leave an OmniRig station
+    /// unable to key at all. (2) The single-cable "keying rides the CAT port" case is
+    /// UNREPRESENTABLE with OmniRig — that case exists because Hamlib shares one fd, and there
+    /// is no Hamlib here — so RTS/DTR always resolves to our own serial line. `ptt_mode_for`
+    /// and `open_rig` must agree on both, which is why this asserts on the shared decision.
+    #[test]
+    fn omnirig_keys_through_cat_by_default_and_leaves_serial_keying_alone() {
+        let mut t = cat_transport(4534, None);
+        t.rig_conn = "omnirig".into();
+        t.rig_model = 0; // the rig type lives in OmniRig, not here
+        assert!(t.is_omnirig());
+        assert!(!t.is_network(), "OmniRig is not the network transport");
+        assert!(t.cat_available(), "CAT exists without a Nexus rig model");
+
+        t.ptt_method = "cat".into();
+        assert_eq!(
+            ptt_mode_for(&t),
+            PttMode::Cat,
+            "CAT keying rides the OmniRig shim"
+        );
+        // Positive control: the SAME transport on serial with no model has no CAT to key.
+        let mut serial = t.clone();
+        serial.rig_conn = "serial".into();
+        assert!(!serial.cat_available());
+        assert_eq!(ptt_mode_for(&serial), PttMode::Vox);
+
+        // Serial keying on the very port an operator might also have typed as the CAT port:
+        // still OUR line, never a daemon's, because no daemon holds it.
+        t.ptt_method = "rts".into();
+        t.serial_port = "COM5".into();
+        t.ptt_serial_port = String::new();
+        assert!(
+            !keys_on_the_cat_port(&t),
+            "with OmniRig there is no shared-fd case to detect"
+        );
+        assert_eq!(
+            ptt_mode_for(&t),
+            PttMode::Serial {
+                port: "COM5".into(),
+                line: SerialLine::Rts,
+            }
+        );
+        // …and the control that this test is not just asserting a tautology: on SERIAL with a
+        // rig model, that same shape IS the shared-port case and keys through the daemon.
+        let mut shared = t.clone();
+        shared.rig_conn = "serial".into();
+        shared.rig_model = 1035;
+        assert!(keys_on_the_cat_port(&shared));
+        assert_eq!(ptt_mode_for(&shared), PttMode::Cat);
+
+        // A dedicated keying port is unchanged — keying there, CAT through OmniRig.
+        t.ptt_serial_port = "COM9".into();
+        assert_eq!(
+            ptt_mode_for(&t),
+            PttMode::Serial {
+                port: "COM9".into(),
+                line: SerialLine::Rts,
+            }
+        );
+        // VOX keeps CAT: the same independence, the other way round.
+        t.ptt_method = "vox".into();
+        assert_eq!(ptt_mode_for(&t), PttMode::Vox);
+        assert!(t.cat_available(), "VOX keying still leaves CAT live");
+    }
+
+    /// OmniRig closes the native-CI-V door, and the transport agrees with the app about it.
+    /// Without this an operator could tick "Native CI-V" on an OmniRig IC-9700 and Nexus would
+    /// try to open a COM port OmniRig is holding.
+    #[test]
+    fn an_omnirig_radio_never_reaches_the_native_civ_daemon() {
+        let mut t = cat_transport(4534, None);
+        t.rig_model = 3081; // IC-9700
+        t.icom_native_cat = true;
+        assert!(
+            native_civ_addr(&t).is_some(),
+            "control: a serial IC-9700 with the opt-in DOES reach the native daemon"
+        );
+        t.rig_conn = "omnirig".into();
+        assert!(
+            native_civ_addr(&t).is_none(),
+            "…and an OmniRig one does not"
+        );
+        // The app-side advice must say the same, or the satellite offer pre-fills a mapping
+        // whose write has no path.
+        assert!(!tempo_app::settings::native_civ_reachable(
+            3081, "omnirig", ""
+        ));
+    }
+
+    /// Changing the OmniRig slot is a TRANSPORT change: it re-points CAT at a different radio
+    /// inside OmniRig, so the shim has to be restarted. A `rig_differs` that missed it would
+    /// leave RIG 2 being driven by a shim still bound to RIG 1 — silently.
+    #[test]
+    fn moving_between_omnirig_slots_rebuilds_the_rig() {
+        let a = {
+            let mut t = cat_transport(4534, None);
+            t.rig_conn = "omnirig".into();
+            t.omnirig_slot = 1;
+            t
+        };
+        let mut b = a.clone();
+        assert!(!a.rig_differs(&b), "control: identical transports agree");
+        b.omnirig_slot = 2;
+        assert!(a.rig_differs(&b), "a slot change forces a rebuild");
+        assert_eq!(a.omnirig_slot(), crate::omnirig::RigSlot::Rig1);
+        assert_eq!(b.omnirig_slot(), crate::omnirig::RigSlot::Rig2);
+    }
+
+    /// The port-taken message. `OmniError` explains everything COM can go wrong with; the one
+    /// cause it cannot see is ours — the shim's own TCP bind — so that gets its own sentence,
+    /// naming the port and the setting that moves it.
+    #[test]
+    fn an_omnirig_port_clash_names_the_port_and_the_setting() {
+        let mut t = cat_transport(4599, None);
+        t.rig_conn = "omnirig".into();
+        let busy = std::io::Error::new(std::io::ErrorKind::AddrInUse, "address in use");
+        let msg = omnirig_start_failed(&t, &busy);
+        assert!(msg.contains("4599"), "names the port: {msg}");
+        assert!(msg.contains("rigctld TCP Port"), "names the setting: {msg}");
+        // Any other failure is reported verbatim rather than blamed on the port.
+        let other = std::io::Error::other("OmniRig is Windows-only");
+        let msg = omnirig_start_failed(&t, &other);
+        assert!(msg.contains("Windows-only"), "{msg}");
+        assert!(
+            !msg.contains("4599"),
+            "no port blame for a non-bind fault: {msg}"
+        );
+    }
+
+    /// A probe result must say WHICH OmniRig slot it came from — on a two-radio station
+    /// "OmniRig isn't answering" with no slot is half a diagnosis.
+    #[test]
+    fn the_backend_label_names_the_omnirig_slot() {
+        assert_eq!(
+            omnirig_backend_label(crate::omnirig::RigSlot::Rig1),
+            "OmniRig RIG 1"
+        );
+        assert_eq!(
+            omnirig_backend_label(crate::omnirig::RigSlot::Rig2),
+            "OmniRig RIG 2"
+        );
     }
 
     /// Digirig Mobile and every other single-cable interface: ONE port carries CAT and the RTS
@@ -15423,6 +15722,7 @@ mod tests {
             icom_native_cat: false,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
+            omnirig_slot: 1,
             rigctld_port,
             broker_self_port,
             audio_in: String::new(),
