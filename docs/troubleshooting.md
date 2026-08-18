@@ -47,7 +47,15 @@ devices and scans for FlexRadios on the LAN. If it finds nothing:
   Install it, then hit **Refresh** to re-scan. Without the driver the COM port
   never appears at all.
 - A FlexRadio must be reachable on the **same network** as the PC for LAN
-  discovery to see it.
+  discovery to see it. Discovery listens for the radio's own broadcast, which
+  does not cross a router — a Flex you reach over SmartLink or a port-forward
+  will not appear.
+- **On macOS: local-network permission.** Every LAN scan leaves the Mac, and
+  macOS 15 gates that behind **Local Network** privacy. Nexus does not yet ship
+  the usage string that asks for it, so you may never see a prompt — and a
+  denial looks exactly like an empty network: "No radios found", no error.
+  Check **System Settings ▸ Privacy & Security ▸ Local Network**, enable
+  **Nexus** if it is listed, and relaunch.
 
 ### Driver hint: USB bridge chip detected but the rig won't open
 
@@ -130,6 +138,17 @@ typically returns a *"the requested address is not valid in its context"*
 open. The rule generalizes to any network rig: the CAT address has to be a `host:port`
 your PC can actually open a TCP connection to, with `rigctld` (or SmartSDR CAT)
 listening there. SmartSDR CAT must be running for the Flex path to work.
+
+`127.0.0.1:5002` assumes SmartSDR CAT is on the **same machine as Nexus**. If it
+runs on another PC — the normal arrangement when Nexus is on a Mac — use that
+PC's LAN address (`192.168.1.20:5002`) and its DAX devices.
+
+**On macOS**, a CAT address out on the LAN is subject to the **Local Network**
+permission, and a denial produces the same "nothing answered" message as a wrong
+address. If the same address works from another machine, check
+**System Settings ▸ Privacy & Security ▸ Local Network** and relaunch. See the
+[FlexRadio guide](rigs/flexradio.md#macos) for the whole picture — including why
+the *native* panadapter/DAX toggles cannot work through SmartLink or NAT at all.
 
 ---
 
