@@ -56,6 +56,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FlexRadio, the ORDINARY setup: your Flex settings stay put, the radio's address is
+  kept, and a switched-on feature says what it needs.** Unlike the two entries below —
+  which are about the opt-in "early access" toggles nobody is required to turn on — this
+  one is the everyday, field-verified FlexRadio configuration: SmartSDR CAT, DAX audio,
+  the way the guide sets you up. The worst of it was silent: the Flex radio address and
+  the two native toggles were stored once for the whole station instead of per radio, so
+  two Flexes could never both be configured, and — the expensive part — going into
+  Settings to configure a *different* radio and pressing Save wiped the Flex settings of
+  the radio you were not even looking at, while Save reported success. They now travel
+  with the radio they belong to, and an existing address is carried over on first launch.
+  Alongside that: the setup wizard threw away the Flex address it had just discovered, so
+  a Flex set up through the wizard arrived in Settings with both native features offered
+  and no address for them to use; switching a native feature on *before* filling the
+  address in left it permanently dead — typing the address afterwards did nothing at all,
+  and neither did re-picking the radio, so only restarting Nexus (or toggling the feature
+  off, saving, on, saving) brought it back; and turning one on with no address set did
+  nothing and said nothing, which now reads as a plain message telling you which field to
+  fill in. Two more: the one-click "found a Flex" button applied a Windows-only SmartSDR
+  CAT address on macOS and Linux, where that program cannot be installed — it now applies
+  only what is true on your platform and tells you what to enter; and two radios pointed
+  at one network CAT address now warn, exactly as two radios on one COM port already did.
+  Settings' radio list also labels its addresses now (CAT, Flex radio, CAT helper port) —
+  a network Flex has three, and they were bare numbers.
+
+- **A radio moved out from under you is finally visible in the FT8 screen.** Change the
+  mode at the radio — in SmartSDR, from a Maestro, or with the front-panel knob — and
+  Nexus keeps its own idea of the mode, by design: the read-back is a display value and
+  never overrides what you commanded. Every screen that could show the disagreement did,
+  except the one that transmits unattended for hours. The Operate strip now shows a "rig:
+  …" chip when the radio disagrees, and flags a receive filter far too narrow for an FT8
+  window — a CW filter left in, or a slice narrowed at the radio, throws away most of the
+  band with nothing on screen to explain the quiet.
+
+- **A CAT level the radio refuses is no longer re-sent fifty times a second.** RF power,
+  mic gain and noise reduction each kept re-issuing a setting the radio had rejected, on
+  every 20-millisecond tick, for the rest of the session — a continuous stream of CAT
+  traffic on the one thread that also draws the waterfall, times the FT8 slot and holds
+  PTT. That is the "waterfall hangs for a moment, then it's fine, then it lags again"
+  report, at many times the rate of the case already fixed for the DSP controls. Nexus now
+  tries once, gives up, and says the radio would not take it; moving the slider tries
+  again, as does any CAT reconnection. The same discipline reached two more places: the
+  750 ms rig read-back now has a time budget, so a radio at the end of a slow or remote
+  link degrades how often it is read instead of stalling the loop that has to stay
+  responsive to Stop TX, and the S-meter re-check backs off on a radio that has no CAT
+  S-meter at all instead of costing three blocked reads every 30 seconds, forever. Every
+  CAT radio benefits, not only a Flex.
+
+- **The CAT helper is watched now, and split is put back the way it was found.** If
+  rigctld — the helper process Nexus talks to your radio through — died, nothing noticed:
+  CAT stayed dead until you re-saved Settings, and because the unkey command travels the
+  same path, a crash mid-transmission took away the ability to stop transmitting. Nexus
+  now spots it, restarts it, unkeys through the fresh connection and tells you it
+  happened. Separately, ending an over with Split Operation set to "Rig" wrote split OFF
+  and left VFO B where Nexus had put it — cancelling a split you had set yourself at the
+  radio (or that another program sharing the radio had set) and clobbering its transmit
+  frequency. Both are restored to what they were. Also: when the radio reports it is
+  already transmitting under another program's control while Nexus is armed, that is now
+  said out loud instead of passing unmentioned.
+
 - **FlexRadio native audio and panadapter (early access): Nexus now shares the radio
   properly, listens to the right slice, and comes back after a network blip.** These are
   the opt-in "Flex native DAX audio" and "Flex native panadapter" toggles in Settings —
