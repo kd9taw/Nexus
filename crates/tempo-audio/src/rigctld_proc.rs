@@ -395,6 +395,11 @@ pub fn ptt_type_token(line: crate::rig::SerialLine) -> &'static str {
 /// (explicitly on drop, or implicitly by the OS at process exit) kills rigctld
 /// and frees the serial/COM port. This is what prevents a stuck COM port after
 /// closing Tempo.
+///
+/// On macOS/Linux, where no Job Object exists, the same no-outliving guarantee is
+/// approximated by [`orphan_ledger`]: every spawn is recorded, the quit path TERMs
+/// what was never dropped ([`kill_leftover_daemons`]), and the next launch sweeps
+/// what a crash or force-quit left behind ([`init_orphan_ledger`]).
 pub struct RigctldProc {
     child: Child,
     /// What the daemon has printed on stderr, filled by the drain thread in [`spawn_rigctld`]:
@@ -622,6 +627,11 @@ impl RigctldProc {
 
 impl Drop for RigctldProc {
     fn drop(&mut self) {
+        // Deregister BEFORE reaping: once `wait` returns, the pid is free for the OS to
+        // recycle, and a ledger record naming a recyclable pid is exactly what the
+        // identity check exists to defuse — better never to write that state at all.
+        #[cfg(unix)]
+        orphan_ledger::forget(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
         #[cfg(windows)]
@@ -666,6 +676,352 @@ fn assign_kill_on_close_job(child: &Child) -> isize {
             return 0;
         }
         job as isize
+    }
+}
+
+/// Startup half of the Unix orphan guarantee: remember where the PID ledger lives and kill
+/// any rigctld/rotctld a PREVIOUS, now-dead Nexus left running (see [`orphan_ledger`]).
+/// Call once, before the first daemon spawn, so a stale daemon's serial/TCP ports are free
+/// again by the time this instance wants them. On Windows this is a no-op — the Job Object
+/// above already guarantees no daemon outlives the process, however it dies.
+pub fn init_orphan_ledger(dir: std::path::PathBuf) {
+    #[cfg(unix)]
+    orphan_ledger::init(dir);
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Quit-path half of the Unix orphan guarantee: TERM every daemon this process spawned and
+/// has not dropped (see [`orphan_ledger::kill_leftovers`]). For the wedged quit, where the
+/// radio thread is still blocked in a CAT read holding the [`RigctldProc`] when the process
+/// exits and `Drop` therefore never runs. No-op on Windows (Job Object) and when nothing is
+/// left (the ordinary case — `Drop` already deregistered everything).
+pub fn kill_leftover_daemons() {
+    #[cfg(unix)]
+    orphan_ledger::kill_leftovers();
+}
+
+/// The Unix ledger of spawned daemons — what stands in for the Windows Job Object.
+///
+/// **The gap this closes** (mac QA audit, 2026-08-17): on Windows the daemon dies with the
+/// process *however the process dies*, because the OS closes the kill-on-close job handle.
+/// On macOS/Linux the only teardown was [`RigctldProc`]'s `Drop`, which never runs when
+/// (a) the process dies on a signal — the Fortran-AV crash class presents as SIGSEGV here;
+/// (b) the operator force-quits; (c) the quit path times out with the radio thread still
+/// blocked in a CAT read holding the handle. The orphan then keeps the operator's serial
+/// port open and its TCP port bound, and the NEXT launch can land on it — the crossed-CAT
+/// shape `is_alive` warns about.
+///
+/// Two bounded mechanisms, deliberately NOT a supervisor:
+/// * **The PID ledger.** Every spawn writes `<ledger>/<daemon-pid>.pid` containing
+///   `"<our-pid> <binary-name>"`; `Drop` removes it. [`init`] sweeps the ledger at the next
+///   launch and kills any recorded daemon whose spawning Nexus is gone — covering the three
+///   no-`Drop` deaths above at the exact moment the collision would otherwise happen.
+/// * **The in-process registry.** [`kill_leftovers`] (the quit path, after the radio loop
+///   has been told to stop) TERMs anything not yet dropped — the wedged quit, handled
+///   before the process exits rather than left for the next launch.
+///
+/// PID reuse is the hazard of any kill-by-recorded-pid, and both directions are covered:
+/// * the registry holds only OUR direct children, none of them reaped when we signal
+///   (`Drop` deregisters before it reaps), so those PIDs cannot have been recycled;
+/// * the sweep kills a recorded PID only when `ps` says the process behind it is still the
+///   recorded *binary*; a recycled PID reads as something else and the record is dropped
+///   without a kill. A recycled PARENT pid makes the parent look alive, which merely keeps
+///   the record for a later launch — the conservative failure, never a kill on a guess.
+///
+/// When [`init`] was never called (unit tests, headless tools) nothing is written and the
+/// sweep never runs — behaviour is exactly pre-ledger.
+#[cfg(unix)]
+mod orphan_ledger {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+
+    /// Where the records live. Set once by [`init`]; `None` = ledger disabled.
+    static LEDGER_DIR: OnceLock<PathBuf> = OnceLock::new();
+    /// Daemons this process has spawned and not yet dropped: `(daemon pid, binary name)`.
+    static LIVE: Mutex<Vec<(u32, &'static str)>> = Mutex::new(Vec::new());
+
+    /// The record body: `"<parent-pid> <binary-name>"`. The daemon's own pid is the
+    /// FILENAME (`<pid>.pid`), so concurrent instances can never write the same record.
+    fn format_record(parent_pid: u32, bin: &str) -> String {
+        format!("{parent_pid} {bin}")
+    }
+
+    /// Parse a record body. Anything that is not exactly two fields with a numeric first
+    /// is `None` — a garbled record must never produce a pid to kill.
+    fn parse_record(s: &str) -> Option<(u32, String)> {
+        let mut it = s.split_whitespace();
+        let parent = it.next()?.parse().ok()?;
+        let bin = it.next()?.to_string();
+        if it.next().is_some() {
+            return None;
+        }
+        Some((parent, bin))
+    }
+
+    /// The daemon pid a ledger filename names, or `None` for any file that is not ours.
+    fn pid_of_filename(name: &str) -> Option<u32> {
+        name.strip_suffix(".pid")?.parse().ok()
+    }
+
+    /// What the sweep does with one record. Pure — the whole kill decision in one place.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Verdict {
+        /// The spawning Nexus is still running (a live sibling instance, or a recycled
+        /// parent pid): not ours to touch.
+        Keep,
+        /// The daemon is gone too (or its pid now belongs to some unrelated process):
+        /// nothing to kill, drop the stale record.
+        Drop,
+        /// Parent dead, and the pid still runs the recorded binary: a true orphan.
+        KillAndDrop,
+    }
+
+    /// `daemon_comm` is what `ps -o comm=` reports for the daemon's pid (`None` = no such
+    /// process). Compared by basename because macOS prints the full executable path where
+    /// Linux prints the bare name.
+    fn record_verdict(parent_alive: bool, daemon_comm: Option<&str>, bin: &str) -> Verdict {
+        if parent_alive {
+            return Verdict::Keep;
+        }
+        match daemon_comm {
+            Some(comm) if Path::new(comm).file_name().is_some_and(|f| f == bin) => {
+                Verdict::KillAndDrop
+            }
+            _ => Verdict::Drop,
+        }
+    }
+
+    /// One pass over the ledger. The probes and the kill are parameters so the decision
+    /// path is drivable from a test with no processes involved; [`init`] passes the real
+    /// ones. Files that are not records, and records that do not parse, are cleaned up or
+    /// skipped — the ledger must not accrete junk, and junk must never cause a kill.
+    fn sweep(
+        dir: &Path,
+        parent_alive: &dyn Fn(u32) -> bool,
+        daemon_comm: &dyn Fn(u32) -> Option<String>,
+        kill: &mut dyn FnMut(u32),
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(daemon_pid) = name.to_str().and_then(pid_of_filename) else {
+                continue; // not a ledger record — leave foreign files alone
+            };
+            let parsed = std::fs::read_to_string(entry.path())
+                .ok()
+                .and_then(|s| parse_record(s.trim()));
+            let Some((parent, bin)) = parsed else {
+                let _ = std::fs::remove_file(entry.path()); // garbled: unusable, remove
+                continue;
+            };
+            match record_verdict(
+                parent_alive(parent),
+                daemon_comm(daemon_pid).as_deref(),
+                &bin,
+            ) {
+                Verdict::Keep => {}
+                Verdict::Drop => {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+                Verdict::KillAndDrop => {
+                    kill(daemon_pid);
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
+    /// What `ps` calls `pid`, or `None` when no such process exists. `ps -p <pid> -o comm=`
+    /// answers liveness and identity in one portable call (macOS and Linux both have it in
+    /// the launchd/systemd default PATH); a zombie still lists, which for the PARENT check
+    /// is the conservative direction (its records wait for the next launch).
+    fn proc_comm(pid: u32) -> Option<String> {
+        let out = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!s.is_empty()).then_some(s)
+    }
+
+    /// Send `sig` (a `kill(1)` signal argument, e.g. `"-TERM"`) to `pid`. Best-effort.
+    fn send_signal(pid: u32, sig: &str) {
+        let _ = std::process::Command::new("kill")
+            .args([sig, &pid.to_string()])
+            .status();
+    }
+
+    /// Kill a confirmed orphan: TERM (rigctld exits promptly and closes the serial port
+    /// cleanly), then a bounded wait so OUR spawn moments later finds the ports actually
+    /// free, then one KILL if it lingered. Bounded because this runs on the startup path.
+    fn kill_stale(pid: u32) {
+        send_signal(pid, "-TERM");
+        for _ in 0..10 {
+            if proc_comm(pid).is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        send_signal(pid, "-KILL");
+    }
+
+    /// Remember the ledger dir and sweep what a previous dead instance left. See the
+    /// module doc; called via [`super::init_orphan_ledger`].
+    pub(super) fn init(dir: PathBuf) {
+        let _ = std::fs::create_dir_all(&dir);
+        sweep(
+            &dir,
+            &|pid| proc_comm(pid).is_some(),
+            &proc_comm,
+            &mut kill_stale,
+        );
+        let _ = LEDGER_DIR.set(dir);
+    }
+
+    /// A daemon was spawned: register it and write its ledger record.
+    pub(super) fn record(daemon_pid: u32, bin: &'static str) {
+        if let Ok(mut live) = LIVE.lock() {
+            live.push((daemon_pid, bin));
+        }
+        if let Some(dir) = LEDGER_DIR.get() {
+            let _ = std::fs::write(
+                dir.join(format!("{daemon_pid}.pid")),
+                format_record(std::process::id(), bin),
+            );
+        }
+    }
+
+    /// A daemon is being dropped (and killed by its `Drop`): deregister + remove the record.
+    pub(super) fn forget(daemon_pid: u32) {
+        if let Ok(mut live) = LIVE.lock() {
+            live.retain(|(pid, _)| *pid != daemon_pid);
+        }
+        if let Some(dir) = LEDGER_DIR.get() {
+            let _ = std::fs::remove_file(dir.join(format!("{daemon_pid}.pid")));
+        }
+    }
+
+    /// TERM everything still registered — the quit path's backstop for handles whose `Drop`
+    /// will never run. Safe against pid reuse (un-reaped children, see the module doc).
+    /// Fire-and-forget: the process is exiting and must not block here; the ledger records
+    /// deliberately STAY on disk, so if a TERM'd daemon somehow lingers, the next launch's
+    /// sweep gets a second, identity-checked look instead of nothing.
+    pub(super) fn kill_leftovers() {
+        let leftovers = LIVE
+            .lock()
+            .map(|mut live| std::mem::take(&mut *live))
+            .unwrap_or_default();
+        for (pid, _) in leftovers {
+            send_signal(pid, "-TERM");
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The kill decision, exhaustively: a kill may happen only for a dead parent AND a
+        /// pid that still runs the recorded binary. Everything else keeps or drops.
+        #[test]
+        fn a_kill_needs_a_dead_parent_and_a_matching_binary() {
+            // Parent alive (live sibling instance): never touched, even if the daemon looks right.
+            assert_eq!(
+                record_verdict(true, Some("rigctld"), "rigctld"),
+                Verdict::Keep
+            );
+            // True orphan — Linux (bare name) and macOS (full path) comm forms both match.
+            assert_eq!(
+                record_verdict(false, Some("rigctld"), "rigctld"),
+                Verdict::KillAndDrop
+            );
+            assert_eq!(
+                record_verdict(false, Some("/opt/homebrew/bin/rigctld"), "rigctld"),
+                Verdict::KillAndDrop
+            );
+            // Daemon pid recycled by an unrelated process: drop the record, kill NOTHING.
+            assert_eq!(
+                record_verdict(false, Some("firefox"), "rigctld"),
+                Verdict::Drop
+            );
+            // Daemon already gone: just tidy up.
+            assert_eq!(record_verdict(false, None, "rigctld"), Verdict::Drop);
+        }
+
+        /// The record format round-trips, and garble parses to nothing (a garbled record
+        /// must never yield a parent pid to test or a kill).
+        #[test]
+        fn records_round_trip_and_garble_parses_to_none() {
+            assert_eq!(
+                parse_record(&format_record(4242, "rotctld")),
+                Some((4242, "rotctld".to_string()))
+            );
+            assert_eq!(parse_record(""), None);
+            assert_eq!(parse_record("notanumber rigctld"), None);
+            assert_eq!(parse_record("123"), None);
+            assert_eq!(parse_record("123 rigctld extra"), None);
+            // Filenames: only `<pid>.pid` is a record.
+            assert_eq!(pid_of_filename("123.pid"), Some(123));
+            assert_eq!(pid_of_filename("123.tmp"), None);
+            assert_eq!(pid_of_filename("x.pid"), None);
+        }
+
+        /// The sweep against a real directory, with the probes faked: the orphan is killed
+        /// and its record removed; the live sibling's record survives untouched; the
+        /// recycled-pid record is removed without a kill; junk files are left alone.
+        #[test]
+        fn the_sweep_kills_only_the_true_orphan() {
+            let dir = std::env::temp_dir().join(format!(
+                "nexus-orphan-sweep-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&dir).expect("temp ledger dir");
+            // parent 1000 dead, pid 11 still rigctld  -> kill + drop
+            std::fs::write(dir.join("11.pid"), "1000 rigctld").unwrap();
+            // parent 2000 alive (sibling instance)    -> keep
+            std::fs::write(dir.join("22.pid"), "2000 rigctld").unwrap();
+            // parent 1000 dead, pid 33 now firefox    -> drop, no kill
+            std::fs::write(dir.join("33.pid"), "1000 rotctld").unwrap();
+            // garbled record                          -> drop, no kill
+            std::fs::write(dir.join("44.pid"), "what even is this").unwrap();
+            // not a ledger file                       -> untouched
+            std::fs::write(dir.join("README.txt"), "hands off").unwrap();
+
+            let mut killed: Vec<u32> = Vec::new();
+            sweep(
+                &dir,
+                &|parent| parent == 2000,
+                &|pid| match pid {
+                    11 => Some("/usr/bin/rigctld".to_string()),
+                    33 => Some("firefox".to_string()),
+                    _ => None,
+                },
+                &mut |pid| killed.push(pid),
+            );
+
+            assert_eq!(killed, vec![11], "exactly the one true orphan dies");
+            assert!(!dir.join("11.pid").exists(), "the orphan's record is gone");
+            assert!(
+                dir.join("22.pid").exists(),
+                "the live sibling's record survives"
+            );
+            assert!(
+                !dir.join("33.pid").exists(),
+                "the recycled pid's record is gone"
+            );
+            assert!(!dir.join("44.pid").exists(), "garble is cleaned up");
+            assert!(
+                dir.join("README.txt").exists(),
+                "foreign files are not ours to touch"
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 }
 
@@ -974,6 +1330,10 @@ pub fn spawn_rotctld(
     let child = cmd.spawn()?;
     #[cfg(windows)]
     let job = assign_kill_on_close_job(&child);
+    // Unix stand-in for the job object: record the spawn so a crash/force-quit/wedged
+    // quit cannot orphan the daemon past the next launch (see [`orphan_ledger`]).
+    #[cfg(unix)]
+    orphan_ledger::record(child.id(), "rotctld");
     Ok(RigctldProc {
         child,
         // A rotator daemon's stderr is not piped, so it never says anything here. The field
@@ -1284,6 +1644,10 @@ pub fn spawn_rigctld(
     // outlive Tempo and keep the COM port locked.
     #[cfg(windows)]
     let job = assign_kill_on_close_job(&child);
+    // Unix stand-in for the job object: record the spawn so a crash/force-quit/wedged
+    // quit cannot orphan the daemon past the next launch (see [`orphan_ledger`]).
+    #[cfg(unix)]
+    orphan_ledger::record(child.id(), "rigctld");
     Ok(RigctldProc {
         child,
         said,

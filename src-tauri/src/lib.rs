@@ -15568,6 +15568,12 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
         {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+        // The radio loop has unkeyed (or the wait expired with it wedged in a CAT read).
+        // Either way the process is about to exit: TERM any daemon whose handle was never
+        // dropped, so a wedged quit can't strand a rigctld holding the operator's serial
+        // port until the next launch's sweep. No-op on Windows (Job Object) and in the
+        // ordinary case where the loop's drops already ran.
+        tempo_audio::rigctld_proc::kill_leftover_daemons();
     }
     persist_conversations(app_handle.state::<SharedEngine>().inner());
     persist_field_day_log(app_handle.state::<SharedEngine>().inner());
@@ -16411,6 +16417,16 @@ pub fn run() {
     // UI commands lock.
     #[cfg(feature = "radio")]
     {
+        // BEFORE the radio thread spawns its own daemons: sweep any rigctld/rotctld a
+        // previous, now-dead Nexus left running (crash, force-quit, wedged quit — the
+        // deaths where no Drop runs; Windows is covered by the kill-on-close Job Object
+        // instead and this is a no-op there). The ledger dir is under the BASE profile's
+        // config dir, shared by every profile on purpose: any instance may sweep any dead
+        // instance's orphans, and the identity+parent checks inside keep a LIVE sibling
+        // instance's daemons untouched.
+        tempo_audio::rigctld_proc::init_orphan_ledger(
+            config_dir_for(None).join("daemon-pids"),
+        );
         let radio_engine = engine.clone();
         std::thread::spawn(move || {
             // The radio loop is the heartbeat — if it dies (error OR panic), TX/RX

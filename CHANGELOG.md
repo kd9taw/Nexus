@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A crash or force-quit can no longer strand rigctld/rotctld on macOS and Linux.**
+  Windows has always killed the CAT and rotator daemons with the app; on Mac and Linux
+  a crash, a Force Quit, or a hung shutdown could leave one running — holding your
+  serial port open and sometimes making the next launch's CAT land on the stale
+  daemon. Nexus now tracks every daemon it starts, stops any stragglers on quit, and
+  each launch first cleans up anything a dead instance left behind (a second running
+  Nexus and its daemons are recognized and left alone).
+
 - **Installing an update on macOS and Linux now actually restarts Nexus.** The banner
   said "Nexus will restart…" but on those platforms the updater only swapped the app
   on disk and left the old build running — the banner hung there forever and nothing
