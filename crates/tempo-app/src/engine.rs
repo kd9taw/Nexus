@@ -13442,7 +13442,13 @@ impl Engine {
                         &self.settings.radios,
                     )
                 })
-                .or_else(|| crate::settings::audio_device_conflicts(&self.settings.radios));
+                .or_else(|| crate::settings::audio_device_conflicts(&self.settings.radios))
+                // The network twin of the serial check (Flex audit wave-2 #20) — LAST in the
+                // chain because a shared COM port, a keyer clash and a shared codec are all
+                // certainly wrong, while a shared network endpoint is only usually wrong.
+                .or_else(|| {
+                    crate::settings::network_cat_address_conflicts(&self.settings.radios)
+                });
         s.radio.tx_even = self.tx_even();
         s.radio.tx_cycle_auto = self.tx_cycle_auto;
         s.radio.tr_period_secs = self.active_slot_secs();
@@ -27313,6 +27319,9 @@ mod tests {
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
+            flex_radio_ip: p.flex_radio_ip.clone(),
+            flex_native_pan: p.flex_native_pan,
+            flex_native_audio: p.flex_native_audio,
         };
 
         let mut e = Engine::new("KD9TAW", "EN52", 0);

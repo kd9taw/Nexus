@@ -1371,6 +1371,15 @@ export interface RadioProfilePatch {
   rotatorHost: string
   rotctldPort: number
   nativeScope: string
+  /** THIS radio's FlexRadio LAN IP (SmartSDR API, port 4992) for the native panadapter/DAX
+   * workers. Per-radio since 2026-08-18: it was flat-only, so the per-radio Edit flow — which
+   * saves through THIS patch — silently dropped it, and two Flexes could not both be configured
+   * (2026-08-17 Flex audit). */
+  flexRadioIp: string
+  /** This radio's native-panadapter opt-in (per-radio, as above). */
+  flexNativePan: boolean
+  /** This radio's native-DAX-audio opt-in (per-radio, as above). */
+  flexNativeAudio: boolean
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio

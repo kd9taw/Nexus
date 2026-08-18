@@ -2192,6 +2192,28 @@ pub struct RadioProfile {
     pub last_sideband: String,
     // --- native panadapter: "auto" | "none" | "flex" | "civ" ---
     pub native_scope: String,
+    // --- FlexRadio native lane (PER-RADIO since 2026-08-18) ---
+    /// THIS radio's FlexRadio LAN IP for the SmartSDR Ethernet API (port 4992) — the address the
+    /// native panadapter / DAX workers connect to. Distinct from `rig_addr`, which on the
+    /// SmartSDR-CAT model 2036 names the *PC* running SmartSDR CAT, not the radio.
+    ///
+    /// PER-RADIO because it has to be, and it was flat until the 2026-08-17 Flex audit found both
+    /// halves of the cost (wave-1 #30/#46): a flat address cannot describe two Flexes, so the
+    /// wrong radio's address was used after a switch, AND — the data-loss half — the Settings
+    /// per-radio Edit flow routes through [`RadioProfilePatch`], which carried none of these three,
+    /// so configuring radio 2 silently dropped the Flex config of radio 1. Exactly the
+    /// `ptt_serial_port` class documented on that field, one screen up.
+    #[serde(default)]
+    pub flex_radio_ip: String,
+    /// Opt-in to THIS radio's native SmartSDR panadapter (VITA-49 FFT). See
+    /// [`Settings::flex_native_pan`] for what the feature is and why it is opt-in; per-radio for
+    /// the same reason as `flex_radio_ip` — one Flex may run it while another rig does not.
+    #[serde(default)]
+    pub flex_native_pan: bool,
+    /// Opt-in to THIS radio's native FlexRadio DAX audio (BOTH directions — see
+    /// [`Settings::flex_native_audio`]). Per-radio, as above.
+    #[serde(default)]
+    pub flex_native_audio: bool,
 }
 
 /// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
@@ -2228,6 +2250,16 @@ pub struct RadioProfilePatch {
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
+    /// See `RadioProfile::flex_radio_ip` — the Flex API address of THIS radio. `#[serde(default)]`
+    /// like `ptt_serial_port`: a payload written before these were per-radio still deserializes.
+    #[serde(default)]
+    pub flex_radio_ip: String,
+    /// See `RadioProfile::flex_native_pan`.
+    #[serde(default)]
+    pub flex_native_pan: bool,
+    /// See `RadioProfile::flex_native_audio`.
+    #[serde(default)]
+    pub flex_native_audio: bool,
 }
 
 impl RadioProfilePatch {
@@ -2260,6 +2292,9 @@ impl RadioProfilePatch {
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
         p.native_scope = self.native_scope;
+        p.flex_radio_ip = self.flex_radio_ip;
+        p.flex_native_pan = self.flex_native_pan;
+        p.flex_native_audio = self.flex_native_audio;
     }
 }
 
@@ -2347,6 +2382,9 @@ impl Default for RadioProfile {
             last_band: String::new(),
             last_sideband: String::new(),
             native_scope: "auto".to_string(),
+            flex_radio_ip: String::new(),
+            flex_native_pan: false,
+            flex_native_audio: false,
         }
     }
 }
@@ -2403,6 +2441,62 @@ pub fn serial_port_conflicts(radios: &[RadioProfile]) -> Option<String> {
             ));
         }
         used.push((port.to_string(), p.name.clone()));
+    }
+    None
+}
+
+/// Two enabled radios pointed at ONE network CAT address — the network twin of
+/// [`serial_port_conflicts`], and the gap that function's own doc-comment left open ("network CAT
+/// … don't own a COM port", which is true of the COM port and says nothing about the endpoint).
+///
+/// Found by the 2026-08-17 Flex audit (wave-2 #20): `validate_radio_ports` de-duplicates the
+/// rigctld/rotctld/broker ports between profiles and never looks at `rig_addr`, so two enabled Flex
+/// profiles both left on SmartSDR CAT's default `127.0.0.1:5002` — the natural mistake when an
+/// operator duplicates a profile for a second slice and forgets the port — passed every check.
+/// Nexus then launches two rigctld daemons that both open one SmartSDR CAT slice port, and the two
+/// chains fight over dial and mode; the symptom reads as a flaky radio.
+///
+/// A WARNING, never a save-block, and deliberately softer than the serial one: a shared address is
+/// wrong for a Flex but legitimate for some rigctld setups (two profiles sharing one remote daemon
+/// on purpose, differing only in audio). Same surface as its two siblings — the snapshot's
+/// `radio_config_warning`, which self-clears once the addresses differ.
+///
+/// Host:port compared case-insensitively after trimming; the loopback spellings
+/// (`localhost`/`127.0.0.1`/`::1`) are normalised, because they are the same endpoint and this
+/// mistake is made ON loopback. Returns the first collision message, else `None`.
+pub fn network_cat_address_conflicts(radios: &[RadioProfile]) -> Option<String> {
+    /// `localhost:5002`, `127.0.0.1:5002` and `[::1]:5002` are one endpoint. Everything else is
+    /// compared as written — resolving names is I/O, and this is a pure pre-save check.
+    fn normalize(addr: &str) -> String {
+        let a = addr.trim().to_ascii_lowercase();
+        let (host, port) = match a.rsplit_once(':') {
+            Some((h, p)) => (h.trim_matches(['[', ']']), p),
+            None => return a,
+        };
+        let host = match host {
+            "localhost" | "127.0.0.1" | "::1" => "localhost",
+            other => other,
+        };
+        format!("{host}:{port}")
+    }
+    let mut used: Vec<(String, String)> = Vec::new(); // (normalized addr, radio name)
+    for p in radios.iter().filter(|p| {
+        p.enabled
+            && p.rig_model > 0
+            && p.rig_conn.eq_ignore_ascii_case("network")
+            && !p.rig_addr.trim().is_empty()
+    }) {
+        let addr = normalize(&p.rig_addr);
+        if let Some((_, other)) = used.iter().find(|(u, _)| *u == addr) {
+            return Some(format!(
+                "{other} and {} are both on network CAT address {} — two radio chains commanding \
+                 one endpoint fight over dial and mode. For a FlexRadio, each SmartSDR CAT slice \
+                 has its OWN port (A=5002, B=60001, C=60002, D=60003).",
+                p.name,
+                p.rig_addr.trim()
+            ));
+        }
+        used.push((addr, p.name.clone()));
     }
     None
 }
@@ -2876,6 +2970,12 @@ impl Settings {
             last_band: self.band.clone(),
             last_sideband: self.sideband.clone(),
             native_scope: "auto".to_string(),
+            // The Flex three come from the flat mirror like every other rig field — this IS the
+            // migration for a pre-multi-radio settings file (see `load`'s sibling for the file
+            // that already HAS profiles).
+            flex_radio_ip: self.flex_radio_ip.clone(),
+            flex_native_pan: self.flex_native_pan,
+            flex_native_audio: self.flex_native_audio,
         }
     }
 
@@ -3198,6 +3298,12 @@ impl Settings {
         self.rotator_port = p.rotator_port;
         self.rotator_baud = p.rotator_baud;
         self.rotator_host = p.rotator_host;
+        // The Flex three ride the SAME mirror as every other rig field, so every existing consumer
+        // (`reconcile_spectrum_source` reads `settings().flex_radio_ip`) keeps reading the ACTIVE
+        // radio unchanged while the stored truth is per-radio.
+        self.flex_radio_ip = p.flex_radio_ip;
+        self.flex_native_pan = p.flex_native_pan;
+        self.flex_native_audio = p.flex_native_audio;
     }
 
     /// Copy the flat mirror back INTO the active profile — so edits made through today's flat rig/
@@ -3227,6 +3333,9 @@ impl Settings {
             rotator_port,
             rotator_baud,
             rotator_host,
+            flex_radio_ip,
+            flex_native_pan,
+            flex_native_audio,
         ) = (
             self.ptt_method.clone(),
             self.rig_model,
@@ -3247,6 +3356,9 @@ impl Settings {
             self.rotator_port.clone(),
             self.rotator_baud,
             self.rotator_host.clone(),
+            self.flex_radio_ip.clone(),
+            self.flex_native_pan,
+            self.flex_native_audio,
         );
         if let Some(p) = self.radios.iter_mut().find(|p| p.id == active) {
             p.ptt_method = ptt_method;
@@ -3268,6 +3380,9 @@ impl Settings {
             p.rotator_port = rotator_port;
             p.rotator_baud = rotator_baud;
             p.rotator_host = rotator_host;
+            p.flex_radio_ip = flex_radio_ip;
+            p.flex_native_pan = flex_native_pan;
+            p.flex_native_audio = flex_native_audio;
         }
     }
 
@@ -3433,6 +3548,32 @@ impl Settings {
         }
         s.ensure_distinct_radio_ports(); // two live daemons (dual-radio) need distinct ports
         s.ensure_routing_targets(); // drop rules aimed at radios this config no longer has
+        // Migration: the FLEX THREE became per-radio on 2026-08-18 (Flex audit wave-1 #30/#46).
+        // A file written before that carries them ONLY on the flat `Settings`; its profiles have
+        // no such keys, so serde defaults them to ""/false — and the `sync_flat_from_active` on
+        // the next line would then copy those defaults OVER the operator's real address, losing it
+        // on the first launch of this build. Copy the flat value into the ACTIVE radio's profile
+        // first, which is exactly what it always described.
+        //
+        // MUST run after `ensure_radio_profiles` (the profile has to exist) and BEFORE
+        // `sync_flat_from_active` (which is the thing that would clobber it). Idempotent: after
+        // one save the profile carries the value and the flat mirror equals it, so a later load
+        // either finds nothing to copy or copies the identical value. Guarded on the profile being
+        // EMPTY/off so it can never resurrect a setting the operator deliberately cleared — a
+        // cleared field is written to both representations by `save`'s `sync_active_from_flat`.
+        let (flat_ip, flat_pan, flat_audio) = (
+            s.flex_radio_ip.clone(),
+            s.flex_native_pan,
+            s.flex_native_audio,
+        );
+        let active = s.active_radio;
+        if let Some(p) = s.radios.iter_mut().find(|p| p.id == active) {
+            if p.flex_radio_ip.trim().is_empty() && !flat_ip.trim().is_empty() {
+                p.flex_radio_ip = flat_ip;
+            }
+            p.flex_native_pan |= flat_pan;
+            p.flex_native_audio |= flat_audio;
+        }
         s.sync_flat_from_active();
         s
     }
@@ -3722,6 +3863,9 @@ mod tests {
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
+            flex_radio_ip: "192.0.2.50".into(),
+            flex_native_pan: true,
+            flex_native_audio: true,
         };
 
         let sent = serde_json::to_value(&patch).expect("patch serializes");
@@ -3744,6 +3888,177 @@ mod tests {
              must be copied onto the profile, or a per-radio edit silently saves nothing",
             dropped.len()
         );
+    }
+
+    /// THE OTHER HALF, and the one that was missing when it mattered (2026-08-17 Flex audit,
+    /// wave-1 #46/#30). The sibling above proves every field the patch CARRIES lands; it is
+    /// silent about a per-radio field the patch does not carry at all — and that is exactly how
+    /// `flexRadioIp` / `flexNativePan` / `flexNativeAudio` were lost: they were flat-only, the
+    /// Settings per-radio Edit flow routes every save through `update_radio_profile(patch)`, and
+    /// the patch enumerated 20 fields with none of the three. Save reported success and the
+    /// operator's Flex address was gone.
+    ///
+    /// Computed from serde, not from a list, for the same reason as the sibling. The exclusions
+    /// are the ones `RadioProfilePatch`'s own doc names — identity, band coverage and the
+    /// `last_*` tune memory the radio loop owns — and adding a field to `RadioProfile` that is
+    /// neither excluded nor in the patch fails here rather than in the field.
+    #[test]
+    fn every_per_radio_field_is_reachable_through_the_patch() {
+        const NOT_EDITABLE: [&str; 7] = [
+            "id",
+            "name",
+            "enabled",
+            "bands",
+            "lastDialMhz",
+            "lastBand",
+            "lastSideband",
+        ];
+        let profile = serde_json::to_value(RadioProfile::default()).expect("profile serializes");
+        let patch = serde_json::to_value(RadioProfilePatch {
+            ptt_method: String::new(),
+            rig_model: 0,
+            rig_model_name: String::new(),
+            serial_port: String::new(),
+            ptt_serial_port: String::new(),
+            baud: 0,
+            rig_conn: String::new(),
+            rig_addr: String::new(),
+            rigctld_port: 0,
+            icom_native_cat: false,
+            data_modes_plain_ssb: false,
+            audio_in: String::new(),
+            audio_out: String::new(),
+            tx_level: 0.0,
+            rx_gain: 0.0,
+            rotator_model: 0,
+            rotator_port: String::new(),
+            rotator_baud: 0,
+            rotator_host: String::new(),
+            rotctld_port: 0,
+            native_scope: String::new(),
+            flex_radio_ip: String::new(),
+            flex_native_pan: false,
+            flex_native_audio: false,
+        })
+        .expect("patch serializes");
+        let patch_keys: Vec<&str> = patch
+            .as_object()
+            .expect("patch is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let unreachable: Vec<&str> = profile
+            .as_object()
+            .expect("profile is an object")
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !NOT_EDITABLE.contains(k) && !patch_keys.contains(k))
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "RadioProfile field(s) {unreachable:?} cannot be edited on a NON-ACTIVE radio: the \
+             per-radio Edit flow saves through RadioProfilePatch, so a field missing from the \
+             patch is silently dropped on Save. Add it to the patch + apply_to, or list it in \
+             NOT_EDITABLE with a reason."
+        );
+    }
+
+    /// A settings file written before the Flex three became per-radio keeps its address: the flat
+    /// value migrates into the ACTIVE radio's profile on load, instead of being overwritten by
+    /// the profile's serde default on the way back out through `sync_flat_from_active`.
+    #[test]
+    fn a_pre_per_radio_flex_config_migrates_into_the_active_profile() {
+        let dir = std::env::temp_dir().join("tempo_settings_flexmigrate");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("flexmigrate_{}.json", std::process::id()));
+
+        // The legacy shape: TWO radio profiles (so `ensure_radio_profiles` is a no-op and only
+        // the migration can save this), neither carrying a Flex key, plus the flat trio the old
+        // build wrote. Hand-built JSON — a serialized `Settings` would carry the NEW keys and
+        // prove nothing.
+        let legacy = serde_json::json!({
+            "mycall": "KD9TAW",
+            "flexRadioIp": "192.0.2.77",
+            "flexNativePan": true,
+            "flexNativeAudio": true,
+            "activeRadio": 1,
+            "radios": [
+                { "id": 0, "name": "FTDX10", "rigModel": 1042 },
+                { "id": 1, "name": "FLEX-6400", "rigModel": 2036, "rigConn": "network" },
+            ],
+        });
+        std::fs::write(&path, serde_json::to_string(&legacy).unwrap()).unwrap();
+
+        let s = Settings::load(&path);
+        let active = s.active_profile().expect("active profile exists");
+        assert_eq!(active.flex_radio_ip, "192.0.2.77", "the address survived");
+        assert!(active.flex_native_pan, "the pan opt-in survived");
+        assert!(active.flex_native_audio, "the audio opt-in survived");
+        // …and the flat mirror still describes the active radio, so every existing consumer of
+        // `settings().flex_radio_ip` reads it unchanged.
+        assert_eq!(s.flex_radio_ip, "192.0.2.77");
+        // The OTHER radio is untouched: the flat value described the active one only.
+        let other = s.radios.iter().find(|p| p.id == 0).expect("radio 0");
+        assert_eq!(other.flex_radio_ip, "");
+        assert!(!other.flex_native_pan);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Two enabled radios on ONE network CAT address warn; the cases that are not a collision
+    /// stay silent. Both directions, because a guard shown to fire only one way is half a test.
+    #[test]
+    fn network_cat_address_conflicts_flags_two_radios_on_one_endpoint() {
+        let rig = |name: &str, addr: &str, conn: &str, model: u32, enabled: bool| RadioProfile {
+            name: name.into(),
+            rig_addr: addr.into(),
+            rig_conn: conn.into(),
+            rig_model: model,
+            enabled,
+            ..Default::default()
+        };
+        // The audited mistake: a duplicated Flex profile left on SmartSDR CAT's slice-A port.
+        let a = rig("FLEX slice A", "127.0.0.1:5002", "network", 2036, true);
+        let b = rig("FLEX slice B", "127.0.0.1:5002", "network", 2036, true);
+        let msg = network_cat_address_conflicts(&[a.clone(), b.clone()]).expect("conflict");
+        assert!(
+            msg.contains("FLEX slice A") && msg.contains("FLEX slice B"),
+            "names both radios: {msg}"
+        );
+        assert!(msg.contains("127.0.0.1:5002"), "names the address: {msg}");
+        // localhost and 127.0.0.1 are ONE endpoint — this mistake is made on loopback.
+        assert!(
+            network_cat_address_conflicts(&[
+                a.clone(),
+                rig("FLEX slice B", "localhost:5002", "network", 2036, true),
+            ])
+            .is_some(),
+            "loopback spellings are the same endpoint"
+        );
+        // Distinct slice ports — the correct multi-slice setup — are silent.
+        assert!(network_cat_address_conflicts(&[
+            a.clone(),
+            rig("FLEX slice B", "127.0.0.1:60001", "network", 2036, true),
+        ])
+        .is_none());
+        // A DISABLED sibling owns nothing.
+        assert!(network_cat_address_conflicts(&[
+            a.clone(),
+            rig("FLEX slice B", "127.0.0.1:5002", "network", 2036, false),
+        ])
+        .is_none());
+        // A serial radio is the serial check's business, not this one.
+        assert!(network_cat_address_conflicts(&[
+            rig("FTDX10", "127.0.0.1:5002", "serial", 1042, true),
+            rig("IC-9700", "127.0.0.1:5002", "serial", 23005, true),
+        ])
+        .is_none());
+        // No model / no address configured yet is not a collision.
+        assert!(network_cat_address_conflicts(&[
+            rig("unset", "", "network", 2036, true),
+            rig("unset 2", "", "network", 2036, true),
+        ])
+        .is_none());
     }
 
     #[test]

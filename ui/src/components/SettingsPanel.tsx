@@ -114,7 +114,7 @@ import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 // there is no Device Manager, so a "COM16" placeholder or a CP210x "Enhanced" label is a dead
 // end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
 // the modifier-chord labels needed it too.
-import { IS_MAC } from '../platform'
+import { IS_MAC, IS_WINDOWS } from '../platform'
 
 interface Props {
   /** Called after a successful save so the shell can refresh its snapshot. */
@@ -501,6 +501,16 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rotatorHost: s.rotatorHost ?? '',
     rotctldPort: s.rotctldPort ?? 4533,
     nativeScope: s.nativeScope ?? 'auto',
+    // ⚠️ THE FLEX THREE BELONG HERE, and their absence was silent data loss (2026-08-17 Flex
+    // audit). Every save of the rig form while EDITING a non-active radio routes through
+    // `persistRadioForm` → `updateRadioProfile(radioPatch(form))`, so a field this function does
+    // not return is dropped on Save while the panel reports success — the operator configures
+    // radio 2 and radio 1's Flex address is gone. Same class as `pttSerialPort`, and the backend
+    // now has a serde-computed guard (`every_per_radio_field_is_reachable_through_the_patch`)
+    // that fails when a per-radio field is added without a home in this patch.
+    flexRadioIp: s.flexRadioIp ?? '',
+    flexNativePan: s.flexNativePan ?? false,
+    flexNativeAudio: s.flexNativeAudio ?? false,
   }
 }
 
@@ -1502,6 +1512,15 @@ export function SettingsPanel({
 
   // One-click apply a discovered Flex: network conn via SmartSDR CAT's default
   // slice-A TCP port + the FLEX-6xxx dialect model (the WSJT-X-proven path).
+  //
+  // ⚠️ 127.0.0.1:5002 IS A WINDOWS FACT, NOT A FLEX FACT (2026-08-17 Flex audit, wave-1 #35/#58).
+  // It is the SmartSDR CAT *app's* default slice-A port, and FlexRadio ships SmartSDR CAT and the
+  // DAX drivers in the Windows suite ONLY. macOS has been a shipped platform since 1.5.0 and
+  // Linux longer, and on both this address is a program that cannot be installed: the operator
+  // got a config that fails Test CAT with an instant ECONNREFUSED and a toast naming software
+  // they cannot obtain. So the localhost proxy is applied only where it can exist; elsewhere the
+  // rig-model/conn/IP that ARE true are still applied, `rigAddr` is left for the operator, and
+  // the toast says what to put there.
   const applyDetectedFlex = (f: { model: string; nickname: string; ip: string }) => {
     markDirty()
     setForm((prev) =>
@@ -1509,7 +1528,7 @@ export function SettingsPanel({
         ? {
             ...prev,
             rigConn: 'network',
-            rigAddr: '127.0.0.1:5002',
+            ...(IS_WINDOWS ? { rigAddr: '127.0.0.1:5002' } : {}),
             rigModel: 2036,
             rigModelName: 'FlexRadio FLEX-6xxx (SmartSDR CAT)',
             // Keep the discovered radio IP — the native panadapter / DAX path connects to the rig
@@ -1520,7 +1539,9 @@ export function SettingsPanel({
         : prev,
     )
     pushToast(
-      `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.`,
+      IS_WINDOWS
+        ? `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.`
+        : `Found ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — model and radio IP applied. SmartSDR CAT is Windows-only, so set Network Address yourself: the address of a Windows PC on this network running SmartSDR CAT (slice A is its port 5002). Native panadapter/DAX below talk to the radio directly and need no such PC.`,
       'success',
     )
   }

@@ -2171,14 +2171,17 @@ struct RadioLoop {
     spectrum_src: Option<crate::flexspectrum::FlexSpectrum>,
     /// The (radio-model, network?) key the current `spectrum_src` was started for, so a switch to a
     /// different native-scope rig tears down + restarts it, and same-radio ticks are a no-op.
-    spectrum_src_key: Option<(u32, bool)>,
+    /// `(rig_model, is_network, flex_radio_ip)` — the ADDRESS is part of the key, see
+    /// `reconcile_spectrum_source`.
+    spectrum_src_key: Option<(u32, bool, String)>,
     /// Native FlexRadio DAX audio worker (Phase 2). `Some` only while `flex_native_audio` is on
     /// and a network Flex is active; its 12 kHz audio then replaces the soundcard as the RX source,
     /// and its `tx_tee` replaces the soundcard as the TX route (BOTH directions — see the
     /// `flexdax` module header). Opt-in + unverified-on-hardware, exactly like `spectrum_src`.
     dax_src: Option<crate::flexdax::FlexDax>,
-    /// The key the current `dax_src` was started for (same tear-down/no-op discipline as spectrum).
-    dax_src_key: Option<(u32, bool)>,
+    /// The key the current `dax_src` was started for (same tear-down/no-op discipline as spectrum,
+    /// address included).
+    dax_src_key: Option<(u32, bool, String)>,
     /// Whether the DAX TX-audio tee is currently installed in the backend — installed when `dax_src`
     /// starts, cleared when it stops, so TX audio routes over DAX exactly while native audio is on.
     dax_tee_set: bool,
@@ -2571,34 +2574,48 @@ impl RadioLoop {
         // scope-capable Flex, so non-Flex users keep the lock-free fast path (the `&&`
         // short-circuits before any lock). Folding it into the key makes toggling take effect
         // on the next tick (key flips Some↔None → the worker starts/stops).
-        let flex_enabled = matches!(kind, Some(SpectrumKind::FlexVita))
-            && engine_lock(engine).settings().flex_native_pan;
+        let is_flex = matches!(kind, Some(SpectrumKind::FlexVita));
+        // Read the Flex API IP with the toggles, in ONE lock, because it is part of the key now —
+        // see the key comment below. `is_flex` short-circuits first, so a non-Flex station still
+        // takes no lock at all on the fast path.
+        let (flex_enabled, dax_enabled, ip) = if is_flex {
+            let e = engine_lock(engine);
+            let s = e.settings();
+            (
+                s.flex_native_pan,
+                s.flex_native_audio,
+                s.flex_radio_ip.trim().to_string(),
+            )
+        } else {
+            (false, false, String::new())
+        };
+        // ⚠️ THE IP IS PART OF THE KEY (2026-08-17 Flex audit, wave-1 #53 / wave-2 #33). It was
+        // not, and the consequence was worse than the comment that stood here admitted: with the
+        // key built from `(rig_model, is_network)` alone, turning a toggle on with the address
+        // still blank advanced the key, and every later tick short-circuited — so typing the
+        // address in and saving did NOTHING, and neither did re-selecting the same radio (same
+        // model, same conn → same key). Real recovery was an app restart or toggling the feature
+        // off/save/on/save. The same blindness kept a Flex→Flex swap streaming from the OLD
+        // radio, because both profiles are (2036, network). Keying on the address makes an edit
+        // to it a transition, which is the only thing that restarts a worker.
         let key = match kind {
             None => None,
             Some(SpectrumKind::FlexVita) if !flex_enabled => None, // opt-in off → no worker
-            Some(_) => Some((rig_model, is_network)),
+            Some(_) => Some((rig_model, is_network, ip.clone())),
         };
         // Native DAX RX audio is its OWN opt-in (`flex_native_audio`), independent of the pan — a
-        // Flex user can want native audio without the native pan, or vice versa. Same short-circuit
-        // discipline: only read the toggle when a scope-capable Flex is active.
-        let dax_enabled = matches!(kind, Some(SpectrumKind::FlexVita))
-            && engine_lock(engine).settings().flex_native_audio;
+        // Flex user can want native audio without the native pan, or vice versa.
         let dax_key = if dax_enabled {
-            Some((rig_model, is_network))
+            Some((rig_model, is_network, ip.clone()))
         } else {
             None
         };
         if key == self.spectrum_src_key && dax_key == self.dax_src_key {
             return; // both unchanged — no-op (the common case, every tick)
         }
-        // Read the Flex API IP once for whichever worker (re)starts (a later IP edit takes effect on
-        // the next radio re-select). Lock only on this rare transition, never per tick.
-        let (ip, dial_hz) = {
+        let dial_hz = {
             let e = engine_lock(engine);
-            (
-                e.settings().flex_radio_ip.trim().to_string(),
-                (e.settings().dial_mhz * 1_000_000.0) as u64,
-            )
+            (e.settings().dial_mhz * 1_000_000.0) as u64
         };
         // Panadapter worker: tear down the old (its Drop stops threads + removes the pan) before
         // starting the new one.
@@ -2635,7 +2652,7 @@ impl RadioLoop {
             // to another radio. A start that fails again re-raises it three lines below.
             self.clear_audio_error_if_owned(engine, ErrOwner::Dax);
             if dax_enabled && !ip.is_empty() {
-                match crate::flexdax::FlexDax::start(engine.clone(), ip) {
+                match crate::flexdax::FlexDax::start(engine.clone(), ip.clone()) {
                     Ok(d) => {
                         self.dax_src = Some(d);
                         self.dax_started = Some(Instant::now());
@@ -2655,6 +2672,28 @@ impl RadioLoop {
                     }
                 }
             }
+        }
+        // ⚠️ AND SAY SO WHEN THERE IS NO ADDRESS (Flex audit wave-1 #52 / wave-2 #33). Both
+        // worker starts above are guarded on a non-empty IP with no `else`, so a toggle switched
+        // on before the address was filled in produced no worker, no error and no status: a
+        // switch that reads as ON and does nothing. The Settings page orders the toggles ABOVE
+        // the address field, so filling it in top to bottom lands here every time.
+        //
+        // LAST, deliberately: the DAX branch above clears an `ErrOwner::Dax` banner on its own
+        // transition, and this runs on that same tick — stated before it, the message would be
+        // wiped by the very transition that produced it. Cleared the same way every other Dax
+        // message is, on the next transition, which an address edit now IS (the key carries it).
+        if (flex_enabled || dax_enabled) && ip.is_empty() {
+            {
+                let mut eng = engine_lock(engine);
+                eng.set_audio_error(Some(
+                    "Flex native panadapter/audio is switched on but no Flex radio IP is set — \
+                     nothing will start. Put the radio's LAN address in Settings ▸ Radio ▸ \
+                     \"Flex radio IP\" (Find Radios fills it in), then Save."
+                        .to_string(),
+                ));
+            }
+            self.err_owner = ErrOwner::Dax;
         }
     }
 
@@ -9973,7 +10012,7 @@ mod tests {
         state.reconcile_spectrum_source(&engine, 2036, true);
         assert_eq!(
             state.spectrum_src_key,
-            Some((2036, true)),
+            Some((2036, true, String::new())),
             "opt-in on → key remembered"
         );
         assert!(
@@ -9984,6 +10023,75 @@ mod tests {
         // Switching back to the Yaesu clears the key (would tear down a running worker).
         state.reconcile_spectrum_source(&engine, 1042, false);
         assert!(state.spectrum_src_key.is_none());
+    }
+
+    /// FIXING THE ADDRESS MUST RESTART THE WORKER, AND AN EMPTY ONE MUST SAY SO
+    /// (2026-08-17 Flex audit, wave-1 #52/#53, wave-2 #33).
+    ///
+    /// The reconcile key was `(rig_model, is_network)`, which the toggle alone advanced — so the
+    /// natural top-to-bottom fill order (switch the feature on, THEN type the address, which is
+    /// the field below it) armed the key while the workers were still gated off by the empty IP,
+    /// and every later tick short-circuited on the unchanged key. Typing the address in did
+    /// nothing, re-selecting the same radio did nothing (same model, same conn), and the DAX
+    /// failure message's own advice — "check the Flex API address in Settings" — could not be
+    /// acted on. Nothing anywhere said a word.
+    ///
+    /// No network I/O in this test: the address is unroutable TEST-NET-1, and what is asserted is
+    /// the KEY and the BANNER, not a connection.
+    #[test]
+    fn a_flex_address_edit_restarts_the_worker_and_a_blank_one_is_stated() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut state = loop_state();
+        let banner =
+            |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.audio_error.clone();
+        let set_flex = |e: &Arc<Mutex<Engine>>, ip: &str, pan: bool| {
+            let mut eng = e.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.flex_radio_ip = ip.to_string();
+            s.flex_native_pan = pan;
+            eng.apply_settings(s);
+        };
+
+        // The operator switches the native panadapter on with the address still blank.
+        set_flex(&engine, "", true);
+        state.reconcile_spectrum_source(&engine, 2036, true);
+        assert!(
+            state.spectrum_src.is_none(),
+            "no address → no worker (and no network I/O)"
+        );
+        let said = banner(&engine).expect("a switched-on feature that cannot start must say so");
+        assert!(
+            said.contains("Flex radio IP"),
+            "the message names the field to fill in: {said}"
+        );
+
+        // …then types the address. THIS is the transition the key must see.
+        set_flex(&engine, "192.0.2.77", true);
+        state.reconcile_spectrum_source(&engine, 2036, true);
+        assert_eq!(
+            state.spectrum_src_key,
+            Some((2036, true, "192.0.2.77".to_string())),
+            "the address is part of the key, so editing it restarts the worker"
+        );
+
+        // A second Flex at a DIFFERENT address is a different radio, even though model and
+        // connection are identical — the Flex→Flex swap that kept streaming the old radio.
+        set_flex(&engine, "192.0.2.88", true);
+        state.reconcile_spectrum_source(&engine, 2036, true);
+        assert_eq!(
+            state.spectrum_src_key,
+            Some((2036, true, "192.0.2.88".to_string())),
+            "a Flex→Flex swap is a transition"
+        );
+
+        // Positive control on the no-op path: an unchanged address must NOT churn the worker.
+        state.spectrum_src_key = Some((2036, true, "192.0.2.88".to_string()));
+        state.reconcile_spectrum_source(&engine, 2036, true);
+        assert_eq!(
+            state.spectrum_src_key,
+            Some((2036, true, "192.0.2.88".to_string())),
+            "nothing changed → nothing restarts"
+        );
     }
 
     #[test]
@@ -14839,7 +14947,7 @@ mod tests {
             .unwrap()
             .set_audio_error(Some("Native Flex audio couldn't start (…)".to_string()));
         state.err_owner = ErrOwner::Dax;
-        state.dax_src_key = Some((0, true));
+        state.dax_src_key = Some((0, true, String::new()));
 
         // The operator does what fixes it — turns the toggle off, or moves to another radio — and
         // the DAX key goes to None. THAT is the resolution, and it must take the banner with it.
@@ -14857,7 +14965,7 @@ mod tests {
             .unwrap()
             .set_audio_error(Some("Audio device failed to open".to_string()));
         state.err_owner = ErrOwner::Device;
-        state.dax_src_key = Some((0, true));
+        state.dax_src_key = Some((0, true, String::new()));
         state.reconcile_spectrum_source(&engine, 0, false);
         assert!(
             banner(&engine).is_some(),

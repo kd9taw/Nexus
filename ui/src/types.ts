@@ -2905,6 +2905,12 @@ export interface RadioProfile {
   lastSideband: string
   /** Native panadapter: "auto" | "none" | "flex" | "civ". */
   nativeScope: string
+  /** This radio's FlexRadio LAN IP (SmartSDR API :4992) — per-radio since 2026-08-18. */
+  flexRadioIp?: string
+  /** This radio's native SmartSDR panadapter opt-in. */
+  flexNativePan?: boolean
+  /** This radio's native DAX audio opt-in (both directions). */
+  flexNativeAudio?: boolean
 }
 
 /** A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured
