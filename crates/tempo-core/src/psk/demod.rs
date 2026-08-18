@@ -380,7 +380,7 @@ impl crate::textmode::TextDemod for PskDemodulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::psk::varicode::testenc::encode_bits;
+    use crate::psk::varicode::encode_bits;
     use crate::textmode::TextDemod;
 
     /// TEST-ONLY BPSK31 modulator (TX is Phase 2; this never ships). Cosine-
@@ -720,6 +720,68 @@ mod tests {
         demod.reset();
         assert_eq!(demod.afc_offset_hz(), 0.0);
         assert!(!demod.signal_present());
+    }
+
+    // ----- TX→RX LOOPBACK (Keyboard Modes Phase 2) — the SHIPPING modulator
+    // through the SHIPPING demodulator. The `bpsk()` fixture above stays as the
+    // demod's independent reference waveform; these prove the transmit path
+    // produces something the receive path copies verbatim, which is the fixture
+    // proof the phase plan requires before PSK TX may key a rig. -----
+
+    /// A full one-shot over through the real modulator: silence, the standard
+    /// idle preamble, varicode text, the idle postamble + shaped key-down,
+    /// trailing silence — exactly what the radio loop plays.
+    fn tx_over(text: &str) -> Vec<f32> {
+        use crate::psk::modulator::{bpsk_samples, psk_over_bits, PskTxConfig};
+        let cfg = PskTxConfig::default();
+        let mut audio = vec![0.0f32; 1200];
+        audio.extend(bpsk_samples(&psk_over_bits(text), &cfg));
+        audio.extend(vec![0.0f32; 2400]);
+        audio
+    }
+
+    #[test]
+    fn tx_to_rx_loopback_decodes_verbatim() {
+        // Clean channel: what the modulator keys is what the demodulator prints,
+        // character for character — mixed case and punctuation included, since
+        // full-ASCII varicode is the whole point over Baudot.
+        let msg = "CQ CQ de KD9TAW KD9TAW pse k";
+        let cfg = PskConfig::default();
+        let text = text_of(&decode_all(&mut PskDemodulator::new(cfg), &tx_over(msg)));
+        assert!(text.contains(msg), "loopback copy: {text:?}");
+        let msg2 = "Name is Op, QTH: Madison [EN53] = 5w @ dipole; hw? k";
+        let text2 = text_of(&decode_all(&mut PskDemodulator::new(cfg), &tx_over(msg2)));
+        assert!(text2.contains(msg2), "loopback copy: {text2:?}");
+    }
+
+    #[test]
+    fn tx_to_rx_loopback_holds_minus_8_db() {
+        // The Phase 1 demod's stated operating point (−8 dB in 3 kHz), held by
+        // the REAL transmit waveform, not just the test fixture — so the shaped
+        // reversals the modulator ships are the ones the matched filter expects.
+        let cfg = PskConfig::default();
+        let mut audio = tx_over(MSG);
+        add_awgn(&mut audio, -8.0, 0x9E3779B97F4A7C15);
+        let text = text_of(&decode_all(&mut PskDemodulator::new(cfg), &audio));
+        let acc = accuracy(MSG, &text);
+        assert!(acc >= 0.8, "-8 dB loopback accuracy {acc} ({text:?})");
+    }
+
+    #[test]
+    fn tx_idle_frames_nothing_but_holds_the_squelch_open() {
+        // Latched with nothing typed the transmitter idles on continuous
+        // reversals: the far end must SEE a signal (squelch open, sync held)
+        // and PRINT nothing — idle framing text would be a modulator bug.
+        use crate::psk::modulator::{bpsk_samples, PskTxConfig};
+        let cfg = PskConfig::default();
+        let mut demod = PskDemodulator::new(cfg);
+        let idle = bpsk_samples(&vec![false; 320], &PskTxConfig::default());
+        let chars = decode_all(&mut demod, &idle);
+        assert!(chars.is_empty(), "TX idle printed {:?}", text_of(&chars));
+        assert!(
+            demod.signal_present(),
+            "10 s of TX idle did not open the far end's squelch"
+        );
     }
 
     #[test]

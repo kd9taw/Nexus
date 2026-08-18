@@ -10,11 +10,12 @@
 //! continuous zeros (phase reversals) — so idle frames nothing and prints
 //! nothing, by construction rather than by a squelch.
 //!
-//! This module ships the DECODE direction only (Phase 1 is receive-only): the
-//! canonical table plus a streaming [`VaricodeDecoder`] that turns sliced bits
-//! into characters. The encode direction lives in test code (the test-only
-//! modulator) until PSK TX lands in Phase 2, at which point it is promoted —
-//! the table below is already bidirectional data.
+//! This module ships BOTH directions of the character layer over the one
+//! canonical table: the streaming [`VaricodeDecoder`] that turns sliced bits
+//! into characters (Phase 1), and [`encode_bits`], the encode direction the
+//! Phase 2 transmit path keys (promoted from test-only code when PSK TX
+//! landed). One table, two directions — a decode/encode disagreement is
+//! unrepresentable.
 //!
 //! Bit order: each string is written in transmission order (first-sent bit
 //! first). A `1` is "no phase reversal", a `0` is "a reversal" — the
@@ -172,6 +173,26 @@ pub const VARICODE: [&str; 128] = [
 /// resets rather than letting the register grow without bound.
 const MAX_CODE_BITS: u32 = 10;
 
+/// Varicode-encode `text` into wire bits: each character's code followed by
+/// the `00` separator, in transmission order (`true` = no reversal). The
+/// ENCODE direction of the one table above — the modulator keys exactly this.
+/// Characters outside ASCII are dropped: the on-air alphabet is the table,
+/// exactly, and mangling a character into a different one would be worse than
+/// omitting it (the same rule the ITA2 filter applies).
+pub fn encode_bits(text: &str) -> Vec<bool> {
+    let mut out = Vec::new();
+    for ch in text.chars() {
+        let i = ch as usize;
+        if i > 127 {
+            continue;
+        }
+        out.extend(VARICODE[i].bytes().map(|b| b == b'1'));
+        out.push(false);
+        out.push(false);
+    }
+    out
+}
+
 /// Pack a code's bits into a lookup key: the bits read in transmission order,
 /// first bit most significant, prefixed by a sentinel `1` so codes of
 /// different lengths can never collide (`"1"` → 0b11, `"11"` → 0b111, …).
@@ -272,29 +293,6 @@ impl VaricodeDecoder {
 }
 
 #[cfg(test)]
-pub(crate) mod testenc {
-    //! TEST-ONLY encode direction (promoted to shipping code with Phase 2 TX).
-    use super::VARICODE;
-
-    /// Varicode-encode `text` into wire bits: each character's code followed by
-    /// the `00` separator. Characters outside ASCII are dropped (the on-air
-    /// alphabet is the table, exactly).
-    pub fn encode_bits(text: &str) -> Vec<bool> {
-        let mut out = Vec::new();
-        for ch in text.chars() {
-            let i = ch as usize;
-            if i > 127 {
-                continue;
-            }
-            out.extend(VARICODE[i].bytes().map(|b| b == b'1'));
-            out.push(false);
-            out.push(false);
-        }
-        out
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -332,7 +330,7 @@ mod tests {
         for i in 0..128u8 {
             let ch = i as char;
             let mut got = None;
-            for bit in testenc::encode_bits(&ch.to_string()) {
+            for bit in encode_bits(&ch.to_string()) {
                 if let Some(d) = dec.push(bit, 1.0) {
                     assert!(got.is_none(), "char {i}: decoded twice");
                     got = Some(d);
@@ -370,7 +368,7 @@ mod tests {
         dec.push(false, 1.0);
         dec.push(false, 1.0);
         let mut got = None;
-        for bit in testenc::encode_bits("e") {
+        for bit in encode_bits("e") {
             if let Some(d) = dec.push(bit, 1.0) {
                 got = Some(d);
             }
@@ -388,7 +386,7 @@ mod tests {
         let mut dec = VaricodeDecoder::new();
         let confs = [0.9, 0.25, 0.8, 0.7];
         let mut got = None;
-        for (bit, conf) in testenc::encode_bits("e").into_iter().zip(confs) {
+        for (bit, conf) in encode_bits("e").into_iter().zip(confs) {
             if let Some(d) = dec.push(bit, conf) {
                 got = Some(d);
             }
@@ -408,7 +406,7 @@ mod tests {
         }
         dec.reset();
         let mut got = None;
-        for bit in testenc::encode_bits("e") {
+        for bit in encode_bits("e") {
             if let Some(d) = dec.push(bit, 1.0) {
                 got = Some(d);
             }
