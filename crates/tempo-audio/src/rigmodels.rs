@@ -113,7 +113,20 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         // 23005 talks the radio's native API directly and is alpha-grade in
         // Hamlib (failed on a real 6400M with WSAEADDRNOTAVAIL) — keep it
         // selectable, but nothing auto-picks it anymore.
-        (2036, "FlexRadio FLEX-6xxx (SmartSDR CAT)"),
+        // ⚠️ THE NAME CARRIES BOTH SERIES ON PURPOSE (2026-08-17 Flex audit, completeness-critic
+        // gap #9 — "the FLEX-8000 series does not exist in this product"). The 8000s are
+        // FlexRadio's current flagship line, and the whole app said "6xxx" — so an 8400/8600
+        // owner reading the dropdown, or the Flex page, found a 6000-only product and no
+        // statement either way about their $7k radio. The CAT dialect is a property of the
+        // **SmartSDR CAT app**, not of the radio: FlexRadio's own SmartSDR CAT User Guide
+        // (rev 4.1.5) covers FLEX-6000, FLEX-8000 and Aurora in ONE command table, and its `ID`
+        // reply enumerates 910 = FLEX-8400/8400M and 911 = FLEX-8600/8600M beside the 6000s.
+        // Verified rather than assumed: driven against a SmartSDR-CAT emulator answering ID910,
+        // Hamlib model 2036 opens and serves freq, mode, set-mode, `send_morse` (`KY …;`) and
+        // PTT identically to ID908 — `flex6k_open` does not gate on the ID at all. So this is a
+        // LABEL, not a new model number, and adding a second entry would have been a lie about
+        // there being a second code path.
+        (2036, "FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)"),
         (23005, "FlexRadio SmartSDR native (experimental)"),
         // SDR console SOFTWARE — here the PROGRAM is the rig. A Hermes Lite 2, an ANAN, a
         // legacy Flex has no CAT port of its own: CAT is served by the program running on
@@ -908,6 +921,34 @@ mod tests {
         // And it does not emulate a TS-2000: Hamlib's powersdr/thetis backends send the
         // ZZ-prefixed extended set (`ZZMD%02d`, `ZZTX1;ZZTX`), not TS-2000 CAT.
         assert!(!name(2048).contains("TS-2000"), "got {:?}", name(2048));
+    }
+
+    /// AN 8400/8600 OWNER HAS TO BE ABLE TO FIND THEIR RADIO (2026-08-17 Flex audit,
+    /// completeness-critic gap #9). The 8000s are FlexRadio's current flagship line, and every
+    /// Flex string in the product said "6xxx" — so the dropdown read as a 6000-only product to
+    /// exactly the operator with the newest radio, and nothing said otherwise.
+    ///
+    /// The fix is the LABEL, and only the label, because there is only one code path: the CAT
+    /// dialect belongs to the SmartSDR CAT app (whose own user guide covers 6000, 8000 and
+    /// Aurora in one command table, with `ID` values 910/911 for the 8400/8600), and Hamlib
+    /// model 2036 was measured serving an ID910 exactly as it serves an ID908. This test exists
+    /// so a future tidy-up of the string cannot quietly take the 8000s back out.
+    #[test]
+    fn the_smartsdr_cat_entry_names_the_8000_series_too() {
+        let name = rig_model_name(2036).unwrap_or("");
+        assert!(name.contains("8"), "the 8000 series is invisible again: {name:?}");
+        assert!(name.contains("6"), "the 6000 series was dropped: {name:?}");
+        assert!(
+            name.contains("SmartSDR CAT"),
+            "the entry must still name the APP that serves the dialect: {name:?}"
+        );
+        // The one native-API entry is deliberately NOT widened: it is alpha-grade in Hamlib and
+        // failed on real 6000 hardware, so claiming a newer line for it would be worse than
+        // silence.
+        assert!(
+            rig_model_name(23005).unwrap_or("").contains("experimental"),
+            "the native model must keep its warning"
+        );
     }
 
     /// THE QA PASS (2026-08) ranked "I can't find my radio in the list" the #1 problem in the

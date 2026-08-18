@@ -1648,7 +1648,9 @@ export function SettingsPanel({
   }
 
   // One-click apply a discovered Flex: network conn via SmartSDR CAT's default
-  // slice-A TCP port + the FLEX-6xxx dialect model (the WSJT-X-proven path).
+  // slice-A TCP port + the SmartSDR CAT dialect model (the WSJT-X-proven path). One model
+  // serves BOTH product lines — SmartSDR CAT presents the same command set for a 6000 and an
+  // 8000 (2026-08-17 Flex audit, critic gap #9), so a discovered FLEX-8400 lands here too.
   //
   // ⚠️ 127.0.0.1:5002 IS A WINDOWS FACT, NOT A FLEX FACT (2026-08-17 Flex audit, wave-1 #35/#58).
   // It is the SmartSDR CAT *app's* default slice-A port, and FlexRadio ships SmartSDR CAT and the
@@ -1667,7 +1669,7 @@ export function SettingsPanel({
             rigConn: 'network',
             ...(IS_WINDOWS ? { rigAddr: '127.0.0.1:5002' } : {}),
             rigModel: 2036,
-            rigModelName: 'FlexRadio FLEX-6xxx (SmartSDR CAT)',
+            rigModelName: 'FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)',
             // Keep the discovered radio IP — the native panadapter / DAX path connects to the rig
             // directly over VITA-49 at this address (CAT still rides the localhost SmartSDR proxy
             // above). Discovery already knows it; dropping it left the native features unreachable.
@@ -3444,7 +3446,7 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app
                     on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so
-                    127.0.0.1:5002 with the FLEX-6xxx model works out of the box; audio
+                    127.0.0.1:5002 with the FLEX-6xxx / 8xxx model works out of the box; audio
                     rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001,
                     C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the
                     slice you run digital on. (Direct-to-radio :4992 needs Hamlib's

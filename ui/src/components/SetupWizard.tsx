@@ -499,7 +499,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     setRigConn('network')
     if (IS_WINDOWS) setRigAddr('127.0.0.1:5002')
     setRigModel(2036)
-    setRigModelName('FlexRadio FLEX-6xxx (SmartSDR CAT)')
+    setRigModelName('FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)')
     // ⚠️ KEEP THE DISCOVERED ADDRESS. This is the one moment discovery holds it, and the wizard
     // used to drop it on the floor — the exact regression the Settings sibling records as fixed,
     // still live here (2026-08-17 Flex audit, wave-1 #29). Without it, both native toggles are
