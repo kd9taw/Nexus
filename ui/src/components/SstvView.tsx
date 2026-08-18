@@ -1043,8 +1043,30 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // card is a workflow, not an accident. They do NOT survive a remount — template
   // save/recall is the planned v2, not a side effect.
   const [overlays, setOverlays] = useState<OverlayItem[]>([])
-  const overlaysRef = useRef<OverlayItem[]>([])
-  overlaysRef.current = overlays
+  // Seeded FROM the state, not with a second `[]`: the sync below is identity-based, so the
+  // two must start as the same array or the first render would leave them out of step.
+  const overlaysRef = useRef<OverlayItem[]>(overlays)
+  // ⚠️ SYNC ON A REAL STATE CHANGE, NEVER ON EVERY RENDER — a bare
+  // `overlaysRef.current = overlays` here silently broke dragging (operator report,
+  // 2026-08-18: "it continues to snap back to the centre after dragging").
+  //
+  // This ref is the ONE of the three here that is also written IMPERATIVELY: the pointer-move
+  // handler rewrites it per frame and only lands it in state on release, deliberately, so a
+  // drag costs no React render per frame. But this component re-renders on every `snap` poll,
+  // and an unconditional assignment during render then threw the in-flight drag away and put
+  // the item back where the last committed state had it — its birth position, i.e. the centre.
+  // Releasing committed that clobbered ref, so the snap-back was permanent, not visual.
+  //
+  // Comparing identity makes the sync respond to an actual state change instead of to the
+  // render count, so an unrelated re-render cannot outrun the drag. `idInImageRef` and
+  // `selectedOvRef` below keep the plain form on purpose: they are only ever written through
+  // setState, so re-assigning them every render is always a no-op. The keyboard nudge is safe
+  // for the same reason — it goes through `commitOverlays`, which writes state every press.
+  const overlaysSynced = useRef<OverlayItem[]>(overlays)
+  if (overlaysSynced.current !== overlays) {
+    overlaysRef.current = overlays
+    overlaysSynced.current = overlays
+  }
   const [selectedOv, setSelectedOv] = useState<string | null>(null)
   const selectedOvRef = useRef<string | null>(null)
   selectedOvRef.current = selectedOv

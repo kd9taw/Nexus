@@ -73,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dragging text on an SSTV picture makes it stay where you put it.** Text you dropped snapped
+  straight back to the middle. The drag itself was fine — the picture is redrawn from scratch
+  many times a second, and each redraw quietly restored the text to where it had last been
+  saved, which for a fresh caption is the centre. Letting go then saved that restored position,
+  so the snap-back stuck. Nudging with the arrow keys was never affected and still isn't.
+
 - **Rotators: the baud now comes from the model, so five of them work for the first time.**
   If you own a **SPID Rot2Prog or Rot1Prog**, an **Idiom Press Rotor-EZ**, a **Hy-Gain
   DCU-1/DCU-1X** or a **Green Heron RT-21**, your rotator has never answered Nexus — and
