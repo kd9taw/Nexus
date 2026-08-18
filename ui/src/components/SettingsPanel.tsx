@@ -2627,15 +2627,27 @@ export function SettingsPanel({
                         </button>
                       )}
                     </div>
+                    {/* ⚠️ THREE ADDRESSES, ALL UNLABELLED (2026-08-17 Flex audit, wave-1 #57). A
+                        network Flex has a CAT address (the PC running SmartSDR CAT), a radio
+                        address (the rig's own :4992, for the native panadapter/DAX) and the local
+                        CAT-helper port — and this row printed two of them as bare numbers with
+                        nothing saying which was which. Naming them costs one word each; the row
+                        keeps its shape, so no pane sizing is involved. */}
                     <div className="radio-card-meta">
                       {r.rigModelName && r.rigModelName !== 'None / VOX'
                         ? r.rigModelName
                         : 'No rig model set'}
-                      {' · '}
+                      {' · CAT '}
                       {r.rigConn === 'network' ? r.rigAddr || 'no address' : r.serialPort || 'no COM port'}
+                      {(r.flexRadioIp ?? '').trim() !== '' && (
+                        <>
+                          {' · Flex radio '}
+                          {r.flexRadioIp}
+                        </>
+                      )}
                       {' · audio '}
                       {r.audioIn ? (audioLabels.input[r.audioIn] ?? r.audioIn) : 'default'}
-                      {' · rigctld :'}
+                      {' · CAT helper port '}
                       {r.rigctldPort}
                     </div>
                     {multi && (
@@ -3725,7 +3737,7 @@ export function SettingsPanel({
 
               {(form.rigModel === 2036 || form.rigModel === 23005) && (
                 <label className="settings-field">
-                  <span className="settings-label">Flex radio IP (native panadapter)</span>
+                  <span className="settings-label">Flex radio IP (native panadapter + DAX)</span>
                   <input
                     className="settings-input"
                     type="text"

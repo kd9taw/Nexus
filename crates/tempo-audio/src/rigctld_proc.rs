@@ -628,7 +628,12 @@ impl RigctldProc {
     /// cannot otherwise be staged: a daemon that has ALREADY EXITED. The radio loop's
     /// liveness/respawn path (2026-08-17 Flex audit, wave-1 #44) turns on exactly that state,
     /// and every real constructor here spawns a live rigctld.
+    ///
+    /// Its only caller lives in `service`, which is `#[cfg(feature = "device")]` — so without
+    /// that feature this is genuinely dead, exactly like `CatDaemon::Native` one module over,
+    /// and it is silenced the same way rather than left to fail a plain `--all-targets` clippy.
     #[cfg(test)]
+    #[cfg_attr(not(feature = "device"), allow(dead_code))]
     pub(crate) fn from_child_for_test(child: Child) -> Self {
         RigctldProc {
             child,

@@ -7469,6 +7469,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text);
 }
 .ph-mode-mismatch,
+.cq-rigdiverge,
 .topbar-rig-mode {
   font-weight: 700;
   font-size: var(--fs-label);
@@ -7481,6 +7482,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .topbar-rig-mode {
   margin-left: var(--space-2);
+  white-space: nowrap;
+}
+/* Operate's copy of the same chip. `nowrap` only — the strip is a `fit="content"` control row,
+   so a chip must never introduce a height of its own; it rides the row's existing line box. */
+.cq-rigdiverge {
   white-space: nowrap;
 }
 .ph-split {

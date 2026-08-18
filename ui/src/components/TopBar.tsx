@@ -158,8 +158,13 @@ function modeFamily(mode: string): string {
 
 /** The rig's real mode when it disagrees with what Nexus believes, else null.
  * `rigMode` is Hamlib's `m`, which some backends answer from cache — good enough for a
- * display hint, never good enough to verify a set (see reference-section-follow). */
-function modeMismatch(
+ * display hint, never good enough to verify a set (see reference-section-follow).
+ *
+ * Exported because the Operate cockpit needs the SAME verdict and could not have it: App hides
+ * the whole frequency-readout group there (`hideFrequencyControl`), and this pill lives inside
+ * it, so a rig moved at the radio — the everyday SmartSDR case — was invisible in the one cockpit
+ * that transmits unattended (2026-08-17 Flex audit, wave-1 #54). One rule, one place. */
+export function modeMismatch(
   rigMode: string | null | undefined,
   believed: string,
   rigConfirmed: boolean | undefined,
