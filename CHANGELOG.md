@@ -56,6 +56,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Test CAT stopped speaking Icom to Xiegu owners.** When Test CAT walks the CI-V rates
+  to find the one your radio answers on, its verdict used to quote an Icom rig menu
+  (MENU ▸ SET ▸ Connectors ▸ CI-V), explain that your USB port was following a [REMOTE]
+  jack, and finish by telling you to install Icom's USB driver. None of that exists on a
+  G90, X6100, X6200, X5105 or X108G — those radios reached this diagnostic when it was
+  broadened to every CI-V rig, and the advice was not broadened with it. A Xiegu now gets
+  the one cure that is certain (set Baud here in Settings, and the found rate is named),
+  the right driver pointer, and no invented menu path. Icom verdicts are unchanged.
+
+- **Detect no longer badges both of an X6100/X6200's serial ports "use this one".** Those
+  radios present two USB serial ports and CAT answers on only one of them, but the
+  disambiguation was written for Icom's dual-port cable and matched both — so Detect
+  showed two identical-looking rows for one radio and half of them sent you to the port
+  that opens cleanly and then returns nothing forever. Exactly one row is now badged, and
+  Auto-test sweeps that port first instead of burning a full baud sweep on the dead twin.
+
 - **An FT8/FT4 decode that overran the 15-second period could replay a transmission into
   the wrong slot.** Field report, visually confirmed at the rig: with Tx 1st/even set, the
   station's own CQ keyed real RF a few seconds into an odd slot. On a machine that stalls
@@ -240,6 +256,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need `com.apple.security.device.audio-input` before macOS will even offer the microphone
   permission prompt; without it, RX audio capture can open and deliver silence. The
   entitlement ships in the bundle now.
+
+### Changed
+
+- **The Xiegu and FlexRadio setup pages say what the app actually does.** The Xiegu page
+  promised that Detect auto-matches an X6100/X6200 — it never could, because those radios
+  report their USB bridge chip and not a model name — and never mentioned the two serial
+  ports they present or the 19200 baud the family runs at. The FlexRadio page told you to
+  launch a second copy of Nexus for a second slice, which is not how multi-radio works
+  (add a second radio, tick "Run both radios at the same time", one window each), and
+  named a PowerSDR model string the dropdown does not contain. Both are rewritten from the
+  code, and the Flex page gains a section on the two *early access* native toggles: off by
+  default, never run against a real Flex, same-LAN only (they cannot work over SmartLink
+  or through NAT), and native DAX takes over the radio's transmit audio for every client
+  while it is on.
+
+- **macOS: the Local Network permission is now documented where it bites.** A FlexRadio,
+  or any network rig on the LAN, is reached through a permission macOS 15 gates and Nexus
+  does not yet have a usage string for — so there may be no prompt, and a denial is silent
+  rather than an error: "No radios found", or CAT reporting that nothing answered. The
+  install, troubleshooting and FlexRadio pages now describe that and point at System
+  Settings ▸ Privacy & Security ▸ Local Network.
 
 ## [1.6.1] — 2026-08-17
 
