@@ -354,6 +354,106 @@ export const baudForRig = (modelNum: number, currentBaud: number): number | null
   return only
 }
 
+/**
+ * ⭐ THE SAME RULE, FOR ROTATORS — and the reason a quarter of the picker could not work.
+ *
+ * The rotator side shipped ONE app-wide 9600 (`default_rotator_baud()`, and a tooltip that said
+ * "GS-232 default 9600" to every owner of every model), and `rotctld_args` forces it onto the
+ * daemon as `-s <baud>` whenever a port is set — which OVERRIDES the backend's own declared
+ * rate. Five of the thirteen real-hardware entries declare a single rate that is not 9600, so
+ * they were shipped unable to talk to their controller: SPID Rot2Prog 600, SPID Rot1Prog 1200,
+ * Idiom Press Rotor-EZ / Hy-Gain DCU-1 / Green Heron RT-21 4800. It reads to the operator as
+ * "Nexus doesn't work with my rotator" — the 2026-08-18 field report — because the wrong line
+ * rate looks exactly like dead hardware.
+ *
+ * The basis is the rig side's, unchanged: **only `serial_rate_min == serial_rate_max` is a
+ * fact; a range is not.** The rows below are DERIVED from the bundled Hamlib by
+ * `scripts/gen-hamlib-rotator-speeds.mjs` into `__fixtures__/hamlibRotatorSpeeds.json`, and
+ * `SettingsPanel.rotpicker.test.tsx` fails on any row that is not `min == max` there, on any
+ * rate that is not that value, and on any one-rate SERIAL rotator in the library with no row.
+ * A row cannot be added from a manual.
+ *
+ * It covers the WHOLE library rather than the curated list, because "Other Hamlib model #…"
+ * lets an operator type any number and a fixed-rate backend is fixed however it was chosen.
+ */
+export const ROT_FIXED_BAUD = new Map<number, number>([
+  // Idiom Press / Hy-Gain / Green Heron / DF9GR — the rotorez family, all 4800
+  [401, 4800], // Idiom Press Rotor-EZ
+  [402, 4800], // Idiom Press RotorCard
+  [403, 4800], // Hy-Gain DCU-1/DCU-1X
+  [404, 4800], // DF9GR ERC
+  [405, 4800], // Green Heron RT-21
+  [406, 4800], // Hy-Gain DCU2/DCU3/YRC-1
+  // SARtek
+  [501, 1200], // SARtek-1
+  // SPID — the two that are one-rate; MD-01/02 (903) declares 600..460800 and is left alone
+  [901, 600], // Rot2Prog
+  [902, 1200], // Rot1Prog
+  // M2
+  [1001, 9600], // RC2800
+  [1002, 9600], // RC2800_EARLY_AZ
+  [1003, 9600], // RC2800_EARLY_AZEL
+  // Telescope mounts pressed into rotator service
+  [1401, 9600], // Celestron NexStar
+  [1801, 9600], // Meade LX200/Autostar
+  // Prosistel
+  [1701, 9600], // D azimuth
+  [1702, 9600], // D elevation
+  [1703, 9600], // Combi-Track az+el
+  [1704, 9600], // D elevation CBOX az
+  // The rest of the one-rate serial backends
+  [2101, 9600], // SatEL
+  [2201, 9600], // Radant AZ-1/AZV-1
+  [2501, 9600], // FLIR PTU Serial
+  [2601, 57600], // Apex Shared Loop
+  [2801, 9600], // Sky-Watcher
+])
+
+/**
+ * The baud to apply when rotator `modelNum` is picked, or `null` to leave the setting alone —
+ * the rotator twin of [`baudForRig`], and the same rule: a listed rotator has exactly one rate,
+ * so it gets it; an unlisted one has no fact behind it, so it is not touched.
+ */
+export const baudForRotator = (modelNum: number, currentBaud: number): number | null => {
+  const only = ROT_FIXED_BAUD.get(modelNum)
+  if (only === undefined || only === currentBaud) return null
+  return only
+}
+
+/**
+ * The curated rotator list. Model numbers and the `(az)` / `(az/el)` suffixes are checked
+ * against the generated caps fixture by `SettingsPanel.rotpicker.test.tsx`, so neither can be
+ * typed from a manual either.
+ *
+ * ⚠️ REMOVED, and it must not come back: **EA4TX ARS (1101/1102) is Hamlib's PARALLEL-PORT
+ * backend** (`port: "parallel"` in the fixture — it declares no serial rate at all), and it was
+ * offered here with a serial-port box and a baud. It could not work as presented, and the brand
+ * label steered ARS-USB owners — whose box speaks GS-232 over USB — away from the entry that
+ * does work. They belong on **GS-232 (generic)**, which now says so.
+ */
+export const ROTATOR_MODELS: { model: number; label: string }[] = [
+  { model: 601, label: 'Yaesu GS-232A (az/el)' },
+  { model: 603, label: 'Yaesu GS-232B (az/el)' },
+  { model: 602, label: 'GS-232 (generic, az/el) — also EA4TX ARS-USB, LVB, ST2' },
+  { model: 605, label: 'Yaesu/Kenpro GS-23 (az/el)' },
+  { model: 606, label: 'Yaesu/Kenpro GS-232 (az/el)' },
+  { model: 607, label: 'AMSAT LVB Tracker (az/el)' },
+  { model: 901, label: 'SPID Rot2Prog (az/el)' },
+  { model: 902, label: 'SPID Rot1Prog (az)' },
+  { model: 903, label: 'SPID MD-01/02, ROT2 mode (az/el)' },
+  { model: 202, label: 'EasyComm II' },
+  { model: 204, label: 'EasyComm III' },
+  { model: 401, label: 'Idiom Press Rotor-EZ (az)' },
+  { model: 403, label: 'Hy-Gain DCU-1/DCU-1X (az)' },
+  { model: 406, label: 'Hy-Gain DCU2/DCU3/YRC-1 (az)' },
+  { model: 404, label: 'DF9GR ERC (az)' },
+  { model: 405, label: 'Green Heron RT-21' },
+  { model: 1001, label: 'M2 RC2800 (az/el)' },
+  { model: 1701, label: 'Prosistel D (az)' },
+  { model: 1703, label: 'Prosistel Combi-Track (az/el)' },
+  { model: 1, label: 'Dummy (testing — no hardware)' },
+]
+
 /** WSJT-X Split Operation choices (Settings ▸ Radio parity). */
 const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; label: string }[] = [
   { value: 'none', label: 'None' },
@@ -1279,6 +1379,18 @@ export function SettingsPanel({
       if (!prev) return prev
       const baud = baudForRig(modelNum, prev.baud)
       return { ...prev, rigModel: modelNum, rigModelName: findRigModelName(modelNum), ...(baud ? { baud } : {}) }
+    })
+  }
+
+  // The rotator twin, and it exists because the rotator picker did NOT have one: picking a
+  // model wrote `rotatorModel` and nothing else, so a SPID or a Green Heron kept the app-wide
+  // 9600 that its backend does not run at. Same rule, same shape — see `ROT_FIXED_BAUD`.
+  const selectRotator = (modelNum: number) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const baud = baudForRotator(modelNum, prev.rotatorBaud ?? 9600)
+      return { ...prev, rotatorModel: modelNum, ...(baud ? { rotatorBaud: baud } : {}) }
     })
   }
 
@@ -3483,112 +3595,6 @@ export function SettingsPanel({
               )}
 
               <div className="settings-field">
-                <span className="settings-label">Antenna rotator</span>
-                {(() => {
-                  const CURATED = [
-                    '0', '601', '603', '602', '901', '902', '202', '204', '401',
-                    '403', '405', '1001', '1102', '1701', '1',
-                  ]
-                  const modelStr = String(form.rotatorModel ?? 0)
-                  const isOther = rotOther || !CURATED.includes(modelStr)
-                  return (
-                    <>
-                      <select
-                        value={isOther ? 'other' : modelStr}
-                        onChange={(e) => {
-                          const v = e.target.value
-                          if (v === 'other') {
-                            setRotOther(true)
-                            setRotCustom(
-                              (form.rotatorModel ?? 0) > 0 ? String(form.rotatorModel) : '',
-                            )
-                          } else {
-                            setRotOther(false)
-                            updateNum('rotatorModel', Number(v))
-                          }
-                        }}
-                        aria-label="Rotator model"
-                      >
-                        <option value="0">None</option>
-                        <option value="601">Yaesu GS-232A</option>
-                        <option value="603">Yaesu GS-232B</option>
-                        <option value="602">GS-232 (generic)</option>
-                        <option value="901">SPID Rot2Prog</option>
-                        <option value="902">SPID Rot1Prog</option>
-                        <option value="202">EasyComm II</option>
-                        <option value="204">EasyComm III</option>
-                        <option value="401">Hy-Gain Rotor-EZ</option>
-                        <option value="403">Hy-Gain DCU</option>
-                        <option value="405">Green Heron RT-21</option>
-                        <option value="1001">M2 RC2800</option>
-                        <option value="1102">EA4TX ARS (az)</option>
-                        <option value="1701">Prosistel D (az)</option>
-                        <option value="1">Dummy (testing — no hardware)</option>
-                        <option value="other">Other Hamlib model #…</option>
-                      </select>
-                      {isOther && (
-                        <input
-                          className="settings-input"
-                          type="number"
-                          min="1"
-                          placeholder="Hamlib rotator model number (rotctl -l lists them)"
-                          value={rotCustom}
-                          onChange={(e) => {
-                            setRotCustom(e.target.value)
-                            const n = Number(e.target.value)
-                            // Only ever commit a REAL model; an incomplete
-                            // entry leaves the last valid value in the form.
-                            if (Number.isInteger(n) && n > 0) updateNum('rotatorModel', n)
-                          }}
-                          aria-label="Hamlib rotator model number"
-                        />
-                      )}
-                    </>
-                  )
-                })()}
-                {(form.rotatorModel ?? 0) > 1 && (
-                  <div className="settings-inline-pair">
-                    <input
-                      className="settings-input"
-                      type="text"
-                      value={form.rotatorPort ?? ''}
-                      placeholder={IS_MAC ? '/dev/cu.usbserial-1420' : 'COM7 / /dev/ttyUSB1'}
-                      onChange={(e) => update('rotatorPort', e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-label="Rotator serial port"
-                    />
-                    <input
-                      className="settings-input"
-                      type="number"
-                      value={form.rotatorBaud ?? 9600}
-                      onChange={(e) => {
-                        const n = Number(e.target.value)
-                        if (!Number.isNaN(n)) updateNum('rotatorBaud', n)
-                      }}
-                      aria-label="Rotator baud rate"
-                      title="Baud rate (GS-232 default 9600)"
-                    />
-                  </div>
-                )}
-                <span className="settings-hint">
-                  Pick your rotator and its serial port — Nexus runs the control daemon for you
-                  (same as the rig). Then use the Rotor pane in Connect, ↗ on Needed rows,
-                  or the compass anywhere.
-                </span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.rotatorHost}
-                  placeholder="Advanced: external rotctld host:port (overrides the above)"
-                  onChange={(e) => update('rotatorHost', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-label="External rotctld address (advanced)"
-                />
-              </div>
-
-              <div className="settings-field">
                 <span className="settings-label">Split operation</span>
                 <div className="theme-switcher" role="group" aria-label="Split operation">
                   {SPLIT_MODES.map((m) => (
@@ -4338,10 +4344,160 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-rotator">
             <legend>Rotator</legend>
             <p className="settings-note">
-              Pointing manners for the rotator picked under <strong>Rig Control</strong>. They
-              apply to satellite auto-track.
+              The rotator itself, and its pointing manners. The manners apply to satellite
+              auto-track.
             </p>
             <div className="settings-grid">
+              {/* THE MODEL AND ITS PORT LIVE HERE NOW. They were inside Rig &amp; CAT, which
+                  meant the one affordance the app has for a silent rotator — the cockpit's
+                  "Rotator not answering" chip, whose whole job is the model/port — deep-linked
+                  to a section that contained neither, and a Settings search for "rotator"
+                  landed on the pointing manners alone (rotor review 2026-08-18, findings
+                  26/32/42/50). The registry says where a setting lives; this is where the
+                  registry always said the rotator lived. */}
+              <div className="settings-field">
+                <span className="settings-label">Rotator model</span>
+                {(() => {
+                  const model = form.rotatorModel ?? 0
+                  const curated = new Set(['0', ...ROTATOR_MODELS.map((r) => String(r.model))])
+                  const modelStr = String(model)
+                  const isOther = rotOther || !curated.has(modelStr)
+                  return (
+                    <>
+                      <select
+                        value={isOther ? 'other' : modelStr}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (v === 'other') {
+                            setRotOther(true)
+                            setRotCustom(model > 0 ? String(model) : '')
+                          } else {
+                            setRotOther(false)
+                            selectRotator(Number(v))
+                          }
+                        }}
+                        aria-label="Rotator model"
+                      >
+                        <option value="0">None</option>
+                        {ROTATOR_MODELS.map((r) => (
+                          <option key={r.model} value={r.model}>
+                            {r.label}
+                          </option>
+                        ))}
+                        <option value="other">Other Hamlib model #…</option>
+                      </select>
+                      {isOther && (
+                        <input
+                          className="settings-input"
+                          type="number"
+                          min="1"
+                          placeholder="Hamlib rotator model number (rotctl -l lists them)"
+                          // Falls back to the CONFIGURED model rather than staying blank: the
+                          // box is local state seeded only when the operator picks "Other" by
+                          // hand, so re-opening Settings — or switching radios — used to render
+                          // an empty field over a perfectly good saved model number.
+                          value={rotCustom || (model > 0 ? String(model) : '')}
+                          onChange={(e) => {
+                            setRotCustom(e.target.value)
+                            const n = Number(e.target.value)
+                            // Only ever commit a REAL model; an incomplete
+                            // entry leaves the last valid value in the form.
+                            if (Number.isInteger(n) && n > 0) selectRotator(n)
+                          }}
+                          aria-label="Hamlib rotator model number"
+                        />
+                      )}
+                    </>
+                  )
+                })()}
+                <span className="settings-hint">
+                  Nexus runs the control daemon (rotctld) for you, the same way it does CAT.
+                  Then use the Rotor pane in Connect, ↗ on Needed rows, or the compass anywhere.
+                </span>
+              </div>
+
+              {(form.rotatorModel ?? 0) > 1 && (
+                <div className="settings-field">
+                  <span className="settings-label">Rotator port &amp; baud</span>
+                  <div className="settings-inline-pair">
+                    <input
+                      className="settings-input"
+                      type="text"
+                      value={form.rotatorPort ?? ''}
+                      placeholder={IS_MAC ? '/dev/cu.usbserial-1420' : 'COM7 / /dev/ttyUSB1'}
+                      onChange={(e) => update('rotatorPort', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="Rotator serial port"
+                    />
+                    <input
+                      className="settings-input"
+                      type="number"
+                      value={form.rotatorBaud ?? 9600}
+                      onChange={(e) => {
+                        const n = Number(e.target.value)
+                        if (!Number.isNaN(n)) updateNum('rotatorBaud', n)
+                      }}
+                      aria-label="Rotator baud rate"
+                      title="Serial baud rate for the rotator controller"
+                    />
+                  </div>
+                  {/* The old hint here said "GS-232 default 9600" to EVERY model, which is how
+                      a SPID owner (600 baud) was told the number that kills his rotator was
+                      right. It now names THIS model's own declared rate, and says so loudly
+                      when the saved value cannot work. */}
+                  {(() => {
+                    const only = ROT_FIXED_BAUD.get(form.rotatorModel ?? 0)
+                    const set = form.rotatorBaud ?? 9600
+                    if (only === undefined) {
+                      return (
+                        <span className="settings-hint">
+                          Match the rate your controller is set to — Hamlib does not offer one
+                          fixed rate for this model.
+                        </span>
+                      )
+                    }
+                    if (only === set) {
+                      return (
+                        <span className="settings-hint">
+                          This controller runs at {only.toLocaleString()} baud — the rate its
+                          Hamlib backend declares. Leave it here.
+                        </span>
+                      )
+                    }
+                    return (
+                      <span className="settings-hint settings-warn">
+                        <strong>
+                          This controller runs at {only.toLocaleString()} baud, not{' '}
+                          {set.toLocaleString()}
+                        </strong>{' '}
+                        — at the wrong rate it never answers and reads as broken hardware. Set{' '}
+                        {only.toLocaleString()}, or re-pick the model above to fill it in.
+                      </span>
+                    )
+                  })()}
+                </div>
+              )}
+
+              <div className="settings-field">
+                <span className="settings-label">External rotctld (advanced)</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.rotatorHost}
+                  placeholder="host:port — e.g. 127.0.0.1:4533"
+                  onChange={(e) => update('rotatorHost', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label="External rotctld address (advanced)"
+                />
+                <span className="settings-hint">
+                  Point Nexus at a rotctld you run yourself (or one on another machine). It
+                  OVERRIDES the model and port above and stops the integrated daemon. Needs the
+                  port — a bare host name is not an address.
+                </span>
+              </div>
+
               <div className="settings-field">
                 <span className="settings-label">Park position (° az / el)</span>
                 <div className="settings-inline-pair">

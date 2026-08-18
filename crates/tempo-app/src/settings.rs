@@ -1817,8 +1817,24 @@ fn default_sat_update_ms() -> u32 {
     1_000
 }
 
+/// The rate a rotator starts on before a model is picked — nothing more.
+///
+/// ⚠️ It was read as more than that, and that is the 2026-08-18 field report ("one rotator model
+/// does not work"). This one number was the ONLY rate any rotator ever got: the picker wrote
+/// `rotator_model` and never touched the baud, the UI tooltip told every owner of every model
+/// that 9600 was the GS-232 default, and `rotctld_args` forces `-s <baud>` onto the daemon
+/// whenever a port is set — which OVERRIDES the backend's own declared rate. Five of the
+/// thirteen real-hardware models the picker offered declare a single rate that is not 9600
+/// (SPID Rot2Prog 600, Rot1Prog 1200, Rotor-EZ / DCU-1 / RT-21 4800), so they shipped unable to
+/// talk to their controller at all.
+///
+/// The rate now comes from the model, through `ROT_FIXED_BAUD` / `baudForRotator` in the UI,
+/// derived from the bundled Hamlib's own caps by `scripts/gen-hamlib-rotator-speeds.mjs` — the
+/// same "only `min == max` is a fact" rule the rig picker took four rounds to learn. This value
+/// survives only as the pre-model starting point and as the fallback for a backend that
+/// declares a RANGE, where there is no fact to impose and the operator's own choice stands.
 fn default_rotator_baud() -> u32 {
-    9600 // the GS-232 family default
+    9600
 }
 
 fn default_save_wav() -> String {
