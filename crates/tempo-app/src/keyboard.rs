@@ -42,6 +42,11 @@ pub enum Charset {
     /// case to lose. Anything with no ITA2 mapping simply does not exist on the
     /// air, so it is dropped rather than mangled.
     Ita2,
+    /// Full-ASCII varicode (PSK31): every printable ASCII character plus CR/LF,
+    /// case preserved — the whole point over Baudot. Anything outside ASCII
+    /// (and any other control character) is dropped rather than mangled, the
+    /// same rule as ITA2's.
+    Varicode,
 }
 
 /// Everything the shared transmit-safety machinery needs to know about ONE
@@ -119,6 +124,29 @@ pub const RTTY: KeyboardMode = KeyboardMode {
     stream_max_chunk: 4,
 };
 
+/// PSK31 — the second keyboard mode, and the first proof Phase 0's machinery
+/// really was mode-generic. Varicode characters are VARIABLE length (1–10 code
+/// bits + the 2-bit separator, frequency-ordered so common text runs short);
+/// `frame_bits` is the budgeting average the look-ahead reasons in — 10 bits
+/// covers ordinary mixed-case text with margin (`e` is 4 bits on the wire, the
+/// worst character 12) — while the radio loop paces `busy_until` on the REAL
+/// rendered bit count, so the average only shapes the budget, never a deadline.
+/// One char ≈ 320 ms at 31.25 Bd; the ceiling and cap match RTTY's rationale
+/// (10 min is past any human over; 500 chars ≈ 2.7 min average air time, so a
+/// single over stays well under the 6-minute default watchdog even worst-case).
+/// `stream_max_chunk` is 2 — chars are ~2× RTTY's air time, so a smaller chunk
+/// holds the stuck-carrier window near RTTY's while still draining 100 chars/s
+/// against a 4 char/s modem.
+pub const PSK31: KeyboardMode = KeyboardMode {
+    name: "PSK31",
+    charset: Charset::Varicode,
+    max_latch_ms: 10 * 60 * 1000,
+    type_buf_cap: 500,
+    frame_bits: 10.0,
+    stream_ahead_chars: 2.0,
+    stream_max_chunk: 2,
+};
+
 /// Reduce operator text to what `mode` can actually put on the air — the ONE
 /// filter every keyboard-mode TX path runs, so what is queued (or typed into a
 /// latched stream) is exactly what keys, and no two paths can disagree about
@@ -129,6 +157,14 @@ pub fn kb_filter(mode: KeyboardMode, text: &str) -> String {
             .chars()
             .map(|c| c.to_ascii_uppercase())
             .filter(|&c| tempo_core::rtty::encodable(c))
+            .collect(),
+        // Full-ASCII varicode: case survives (the point over Baudot). CR/LF
+        // pass (both are in the table and Enter on a latched stream is a real
+        // new line on the air); every other control character and everything
+        // past ASCII is dropped, never mangled.
+        Charset::Varicode => text
+            .chars()
+            .filter(|&c| c.is_ascii() && (c == '\r' || c == '\n' || !c.is_ascii_control()))
             .collect(),
     }
 }
@@ -654,5 +690,17 @@ mod tests {
         assert_eq!(kb_filter(RTTY, "abc\u{263A}123"), "ABC123");
         // The filter follows the CHARSET, not the mode's name.
         assert_eq!(kb_filter(TESTMODE, "cq"), kb_filter(RTTY, "cq"));
+    }
+
+    #[test]
+    fn the_varicode_filter_keeps_case_and_ascii_punctuation() {
+        // Full ASCII survives verbatim — case, brackets, the brag-line
+        // characters Baudot cannot carry. This is PSK31's reason to exist.
+        let brag = "Name is Op, QTH: [EN53] = 5w @ dipole; hw? BTU de KD9TAW k";
+        assert_eq!(kb_filter(PSK31, brag), brag);
+        // Enter is a real new line on the air; other control chars and
+        // anything past ASCII are dropped, never mangled.
+        assert_eq!(kb_filter(PSK31, "a\r\nb"), "a\r\nb");
+        assert_eq!(kb_filter(PSK31, "a\u{263A}b\x07c"), "abc");
     }
 }

@@ -56,7 +56,7 @@ pub mod monitor;
 pub mod port_prober;
 pub mod ports;
 /// PSK31 RX decode thread (armed-decoder-on-the-RX-path, the `rttyrx` pattern).
-/// RX ONLY — no PSK TX path exists this phase.
+/// RX side of PSK31 (TX runs in the radio loop — `service.rs`).
 #[cfg(feature = "device")]
 pub mod pskrx;
 pub mod resample;

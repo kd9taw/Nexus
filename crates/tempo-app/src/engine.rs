@@ -2159,8 +2159,8 @@ pub struct Engine {
     /// over has fully keyed out — the edge the service tick turns into exactly one
     /// `on_tx_complete` (restarting the sequencer's reply timer).
     rtty_auto_over: bool,
-    // --- PSK31 RX (Keyboard Modes Phase 1 — RECEIVE ONLY; no PSK TX path exists,
-    // so nothing in this block can key the rig). ---
+    // --- PSK31 RX (Keyboard Modes Phase 1 — the RX block stays receive-only;
+    // the TX path lives in the psk_* TX block below, behind its own gates). ---
     /// PSK31 RX decoder armed (session-only runtime state, never persisted — the
     /// decoder must never come up armed at launch except via the view-entry
     /// auto-arm policy in [`Engine::psk_auto_arm`], which is itself RX-only).
@@ -2188,8 +2188,40 @@ pub struct Engine {
     psk_afc_reset: bool,
     /// Audio center (Hz) the PSK decoder is netted on. `None` = un-netted, which
     /// resolves to the 1 kHz PSK31 convention (the `PskConfig` default). A
-    /// waterfall click sets it via [`Engine::psk_net`]. RX only.
+    /// waterfall click sets it via [`Engine::psk_net`] — and TX transmits HERE
+    /// (the transceive convention; the radio loop reads it per chunk).
     psk_center: Option<f32>,
+    // --- PSK31 TX (Keyboard Modes Phase 2) — the RTTY TX block's shape,
+    // instantiated over the shared `crate::keyboard` machinery. Launch-safety:
+    // nothing here runs on startup or on arm; the queue fills ONLY via
+    // `psk_send_text` and the latch only via `set_psk_latched`, each behind
+    // `psk_tx_gate`. ---
+    /// FIFO of PSK31 messages to transmit (operator-initiated, varicode-
+    /// filtered). Filled ONLY by [`Engine::psk_send_text`]; the radio loop
+    /// keys one at a time via [`Engine::poll_psk_one`] (gated on tx_enabled +
+    /// privileges + the Keyboard section + not-tuning). Stop/halt clears it.
+    psk_queue: VecDeque<String>,
+    /// One-shot: abort PSK TX now (the radio loop flushes the audio ring and
+    /// unkeys on its next tick). Mirrors `rtty_abort`.
+    psk_abort: bool,
+    /// Continuous-TX latch (the cockpit's TX button) — [`crate::keyboard`]'s
+    /// three-field latch state, PSK31's instantiation. Set ONLY by
+    /// [`Engine::set_psk_latched`]; re-checked against every TX gate on EVERY
+    /// radio-loop tick in [`Engine::poll_psk_stream`], which drops it (not
+    /// merely the feed) when one goes down.
+    psk_latched: bool,
+    /// Un-keyed type-ahead for the latched stream (filled by
+    /// [`Engine::psk_type`], drained by [`Engine::poll_psk_stream`]).
+    psk_type_buf: VecDeque<char>,
+    /// When the current latched over keyed up (Unix ms) — the anchor for the
+    /// hard per-over ceiling ([`crate::keyboard::PSK31`]'s `max_latch_ms`).
+    psk_latch_start_ms: Option<u64>,
+    /// A PSK over is on the air (stamped by the radio loop from the audio
+    /// actually in flight; the cockpit's TX indicator). Mirrors `rtty_sending`.
+    psk_sending: bool,
+    /// The last TX failure to surface in the cockpit (PTT refused, the
+    /// ceiling's why-did-it-unkey note). Mirrors `rtty_keyer_error`.
+    psk_keyer_error: Option<String>,
     /// APRS (AFSK-1200 / AX.25) RX decoder arm state + HOW it was armed (session-only, never
     /// persisted). See [`AprsArm`] — the distinction gates the auto-ack, so it is TX-safety state.
     aprs_arm: AprsArm,
@@ -3027,10 +3059,10 @@ pub struct RttyRxState {
 }
 
 /// Compact PSK31 state for the `get_psk_state` poll: armed flag, AFC, signal
-/// presence, the netted audio center, and the decoded-text ring with
-/// per-character confidence (0–100, parallel to `text`'s chars — render low
-/// values faint). RX ONLY — PSK TX does not exist this phase, so unlike
-/// [`RttyRxState`] there is deliberately no TX surface here to wire a control to.
+/// presence, the netted audio center, the decoded-text ring with per-character
+/// confidence (0–100, parallel to `text`'s chars — render low values faint),
+/// plus the TX side (Keyboard Modes Phase 2): the live sending flag, the
+/// continuous-TX latch and any keyer failure to surface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PskRxState {
     pub armed: bool,
@@ -3038,10 +3070,20 @@ pub struct PskRxState {
     pub afc_hz: f32,
     /// The demodulator's quality squelch reads a signal right now.
     pub signal: bool,
-    /// Audio center (Hz) the decoder is netted on (waterfall cursor position).
+    /// Audio center (Hz) the decoder is netted on (waterfall cursor position)
+    /// — and where TX transmits (the transceive convention).
     pub center_hz: f32,
     pub text: String,
     pub conf: Vec<u8>,
+    /// An over is on the air (stamped by the loop) OR messages are still
+    /// queued behind it OR the latched stream is running — the cockpit's TX
+    /// indicator and the Esc/Stop macro's enable.
+    pub sending: bool,
+    /// Continuous TX is latched. Reported SEPARATELY from `sending` for
+    /// exactly [`RttyRxState::latched`]'s reason: the Stop control must be
+    /// live from the instant the latch goes up, before the first chunk keys.
+    pub latched: bool,
+    pub keyer_error: Option<String>,
 }
 
 /// One operation applied to the RTTY auto-sequencer via [`Engine::rtty_drive`].
@@ -3073,6 +3115,19 @@ fn rtty_filter(text: &str) -> String {
 /// ([`Engine::poll_rtty_stream`]) — the mode-generic [`crate::keyboard::KbTick`]
 /// under the name RTTY's call sites have always used.
 pub use crate::keyboard::KbTick as RttyStreamTick;
+
+/// PSK31's instantiation of the per-mode [`crate::keyboard::kb_filter`]:
+/// full-ASCII varicode, case preserved — the ONE filter every PSK TX path
+/// runs, so what is queued (or typed into a latched stream) is exactly what
+/// keys.
+fn psk_filter(text: &str) -> String {
+    crate::keyboard::kb_filter(crate::keyboard::PSK31, text)
+}
+
+/// The latched-stream tick [`Engine::poll_psk_stream`] returns — the same
+/// mode-generic [`crate::keyboard::KbTick`] under PSK's name (`Diddle` there
+/// means the PSK31 idle: continuous reversals, never silence under held PTT).
+pub use crate::keyboard::KbTick as PskStreamTick;
 
 /// The `rtty_state` seq-state string the UI switches on.
 fn seq_state_label(s: tempo_core::rtty::SeqState) -> &'static str {
@@ -3200,6 +3255,8 @@ pub enum TxOwner {
     Cw,
     /// An RTTY over is in flight or queued.
     Rtty,
+    /// A PSK31 over is in flight or queued (or the continuous-TX latch is up).
+    Psk,
     /// An SSTV image is in flight.
     Sstv,
 }
@@ -3214,6 +3271,7 @@ impl TxOwner {
             TxOwner::Voice => "A voice message is transmitting — stop it first",
             TxOwner::Cw => "CW is sending — stop it first",
             TxOwner::Rtty => "RTTY is transmitting — stop it first",
+            TxOwner::Psk => "PSK is transmitting — stop it first",
             TxOwner::Sstv => "An SSTV image is transmitting — stop it first",
         }
         .to_string()
@@ -3646,6 +3704,13 @@ impl Engine {
             psk_signal: false,
             psk_afc_reset: false,
             psk_center: None,
+            psk_queue: VecDeque::new(),
+            psk_abort: false,
+            psk_latched: false,
+            psk_type_buf: VecDeque::new(),
+            psk_latch_start_ms: None,
+            psk_sending: false,
+            psk_keyer_error: None,
             aprs_arm: AprsArm::Off,
             aprs_stations: std::collections::HashMap::new(),
             aprs_uplink_queue: VecDeque::new(),
@@ -4988,6 +5053,12 @@ impl Engine {
                 .find(|c| c.band == band)
                 .filter(|c| self.rtty_emission_ok(c.dial_mhz))
                 .map(|c| (c.dial_mhz, c.mode)),
+            // Keyboard (PSK31): the band's PSK watering hole, same rule.
+            OperatingMode::Keyboard => crate::bandplan::psk_band_plan()
+                .into_iter()
+                .find(|c| c.band == band)
+                .filter(|c| self.psk_emission_ok(c.dial_mhz))
+                .map(|c| (c.dial_mhz, c.mode)),
         }
     }
 
@@ -5129,6 +5200,11 @@ impl Engine {
                 .find(|c| c.band == band)
                 .filter(|c| self.rtty_emission_ok(c.dial_mhz))
                 .map(|c| (c.dial_mhz, c.mode)),
+            OperatingMode::Keyboard => crate::bandplan::psk_band_plan()
+                .into_iter()
+                .find(|c| c.band == band)
+                .filter(|c| self.psk_emission_ok(c.dial_mhz))
+                .map(|c| (c.dial_mhz, c.mode)),
         }
     }
 
@@ -5153,6 +5229,7 @@ impl Engine {
             Some("phone") => OperatingMode::Phone,
             Some("cw") => OperatingMode::Cw,
             Some("rtty") => OperatingMode::Rtty,
+            Some("keyboard") | Some("psk") => OperatingMode::Keyboard,
             Some(_) => OperatingMode::Digital,
             None => self.settings.operating_mode,
         };
@@ -5224,6 +5301,7 @@ impl Engine {
             "phone" => OperatingMode::Phone,
             "cw" => OperatingMode::Cw,
             "rtty" => OperatingMode::Rtty,
+            "keyboard" => OperatingMode::Keyboard,
             _ => OperatingMode::Digital,
         };
         // A mode change invalidates any planned over (commit_tx checks the generation).
@@ -5235,6 +5313,8 @@ impl Engine {
         // The per-tick predicate in `poll_rtty_stream` catches this too; this is
         // the explicit half, so the kill does not depend on a tick arriving.
         self.drop_rtty_latch();
+        // …and PSK's, for the identical reason.
+        self.drop_psk_latch();
         self.settings.operating_mode = om;
         // SAFETY re-clamp: entering a mode with a lower power ceiling (SSB → FT8) must bring the
         // rig DOWN to the cap now, not wait for the operator to touch the power slider. If a cap
@@ -5286,7 +5366,10 @@ impl Engine {
         // never auto-keys FT8 on launch — the safety invariant.)
         if matches!(
             om,
-            OperatingMode::Phone | OperatingMode::Cw | OperatingMode::Rtty
+            OperatingMode::Phone
+                | OperatingMode::Cw
+                | OperatingMode::Rtty
+                | OperatingMode::Keyboard
         ) {
             self.set_tx_enabled(true);
         }
@@ -5773,7 +5856,9 @@ impl Engine {
         match self.settings.operating_mode {
             OperatingMode::Cw => RouteMode::Cw,
             OperatingMode::Rtty => RouteMode::Rtty,
-            OperatingMode::Digital => RouteMode::Digital,
+            // Keyboard modes route as Digital: soundcard audio through a DATA
+            // submode (always PKTUSB terrestrially) — the same radio class.
+            OperatingMode::Digital | OperatingMode::Keyboard => RouteMode::Digital,
             // SSTV rides the Phone section, so it routes as SSB — see `RouteMode`'s note on why it
             // is not its own class.
             // The cockpit's explicit mode pick (no dial gate, same-band only) and the
@@ -8444,6 +8529,11 @@ impl Engine {
         self.rtty_queue.clear();
         self.rtty_abort = true;
         self.drop_rtty_latch();
+        // Cut any in-progress PSK the same way — queue, one-shot abort, and the
+        // continuous-TX latch (a halt that left it up would unkey and re-key).
+        self.psk_queue.clear();
+        self.psk_abort = true;
+        self.drop_psk_latch();
         self.aprs_tx_queue.clear(); // drop any queued APRS beacon so Stop TX cancels it
         self.voice_tx = None; // drop any queued voice-keyer audio too
                               // Cut any in-progress SSTV image the same way: drop the queued job and arm the
@@ -8508,7 +8598,10 @@ impl Engine {
         let restore = self.tx_enabled
             && matches!(
                 self.settings.operating_mode,
-                OperatingMode::Phone | OperatingMode::Cw | OperatingMode::Rtty
+                OperatingMode::Phone
+                    | OperatingMode::Cw
+                    | OperatingMode::Rtty
+                    | OperatingMode::Keyboard
             );
         let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
         self.halt_tx();
@@ -8720,6 +8813,11 @@ impl Engine {
             self.rtty_queue.clear();
             self.rtty_abort = true;
             self.drop_rtty_latch();
+            // Same for PSK: the TX-enable latch is one of the PSK cockpit's
+            // stop controls for exactly RTTY's reason.
+            self.psk_queue.clear();
+            self.psk_abort = true;
+            self.drop_psk_latch();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -11153,6 +11251,10 @@ impl Engine {
             // first chunk has been keyed and `rtty_sending` stamped — otherwise a
             // tune, a beacon or a voice message could grab the rig in that gap.
             Some(TxOwner::Rtty)
+        } else if self.psk_sending || !self.psk_queue.is_empty() || self.psk_streaming() {
+            // The same latch rule for PSK: streaming owns the transmitter from
+            // the instant TX is pressed, before the first chunk keys.
+            Some(TxOwner::Psk)
         } else if self.sstv_tx.is_some() || self.sstv_sending {
             Some(TxOwner::Sstv)
         } else {
@@ -11272,8 +11374,8 @@ impl Engine {
     }
 
     // --- PSK31 RX (armed decoder on the RX audio path; decode runs in the
-    // tempo-audio `pskrx` thread). RX ONLY — no PSK TX path exists this phase,
-    // so nothing in this block can key the rig, and there is no gate to weaken. ---
+    // tempo-audio `pskrx` thread). RX ONLY — nothing in this block can key the
+    // rig; the TX path is the psk_* TX block above, behind its own gates. ---
 
     /// Arm/disarm the PSK31 RX decoder by an EXPLICIT operator act. Session-only
     /// (never persisted, so the app never launches armed). Arming starts a fresh
@@ -11310,8 +11412,8 @@ impl Engine {
     /// explicitly stopped the decoder this session, and refuses for good when
     /// Settings ▸ Digital ▸ PSK ▸ "Start receiving when PSK opens" is off. The
     /// policy lives here rather than in the view so it survives a remount and is
-    /// testable without a webview. RX ONLY — there is no PSK TX path, so this
-    /// cannot key anything.
+    /// testable without a webview. RX ONLY — arming the decoder cannot key
+    /// anything (TX starts only from an explicit send behind `psk_tx_gate`).
     pub fn psk_auto_arm(&mut self) -> bool {
         if self.psk_armed || self.psk_auto_arm_declined || !self.settings.psk_rx_auto_arm {
             return false;
@@ -11364,6 +11466,11 @@ impl Engine {
                 .iter()
                 .map(|c| (c.confidence.clamp(0.0, 1.0) * 100.0).round() as u8)
                 .collect(),
+            // Sending = an over on the air (stamped by the loop) OR messages
+            // still queued OR the latched stream running (see RttyRxState).
+            sending: self.psk_sending || !self.psk_queue.is_empty() || self.psk_streaming(),
+            latched: self.psk_latched,
+            keyer_error: self.psk_keyer_error.clone(),
         }
     }
 
@@ -11402,6 +11509,286 @@ impl Engine {
     pub fn psk_net(&mut self, hz: f32) {
         self.psk_center = Some(hz.clamp(300.0, 3700.0));
         self.request_psk_afc_reset();
+    }
+
+    // ----- PSK31 transmit (Keyboard Modes Phase 2) — the RTTY TX block's shape,
+    // instantiated over the shared `crate::keyboard` machinery: the latch, its
+    // per-tick gate re-check, the two wall clocks and the type-ahead all arrive
+    // from `KeyboardLatch`, NOT re-derived here. Launch-safety: nothing in this
+    // block runs on startup or on arm; the queue fills ONLY via `psk_send_text`
+    // and the latch only via `set_psk_latched`, each behind `psk_tx_gate`.
+    // Soundcard only — there is no PSK equivalent of RTTY's FSK keyline, so
+    // there is no line-conflict gate (Phase 0 left that gate RTTY-specific on
+    // purpose). -----
+
+    /// HARD CEILING on one continuous latched PSK over (ms) — PSK31's entry in
+    /// [`crate::keyboard::PSK31`], kept under its own name for the same reason
+    /// as [`Self::RTTY_MAX_LATCH_MS`]: it is what the ceiling is called
+    /// wherever it is discussed, and the tests pin the ENGINE's answer.
+    pub const PSK_MAX_LATCH_MS: u64 = crate::keyboard::PSK31.max_latch_ms;
+
+    /// Cap on a single queued PSK over (characters). Varicode characters
+    /// average ~8 wire bits (≈250 ms at 31.25 Bd) and the worst is 12, so 500
+    /// chars ≈ 2–3 minutes of air time — a single message can never key past
+    /// the 6-minute default watchdog on its own (`poll_psk_one` checks the
+    /// watchdog BETWEEN messages, exactly like RTTY's).
+    const PSK_MAX_SEND_CHARS: usize = 500;
+
+    /// Queue PSK31 text to transmit — every TX gate validated UP FRONT so a
+    /// refused send says why (never a silent hold): TX armed, the emission
+    /// inside license privileges at the current dial, the Keyboard section
+    /// owning the rig, no tune carrier, no foreign transmission. Text is
+    /// filtered to the varicode alphabet (full ASCII, case preserved), so
+    /// exactly what's queued is what keys. While continuous TX is latched a
+    /// send TYPES INTO the live transmission (the MMTTY/RTTY macro semantic).
+    pub fn psk_send_text(&mut self, text: &str) -> Result<(), String> {
+        self.psk_tx_gate()?;
+        let filtered = psk_filter(text);
+        if filtered.trim().is_empty() {
+            return Err("Nothing to send — PSK31 carries the ASCII characters".to_string());
+        }
+        if self.psk_latched {
+            return self.psk_type(&filtered);
+        }
+        if filtered.chars().count() > Self::PSK_MAX_SEND_CHARS {
+            return Err(format!(
+                "Message too long — PSK sends are capped at {} characters per over",
+                Self::PSK_MAX_SEND_CHARS
+            ));
+        }
+        // An explicit operator send restarts the TX-watchdog clock.
+        self.reset_tx_watchdog();
+        self.psk_queue.push_back(filtered);
+        Ok(())
+    }
+
+    /// The up-front PSK TX gate: every reason a send would be refused, checked
+    /// before anything is queued so the operator learns WHY. Shared by the
+    /// manual send path and the continuous-TX latch.
+    fn psk_tx_gate(&self) -> Result<(), String> {
+        use crate::settings::OperatingMode;
+        if self.settings.operating_mode != OperatingMode::Keyboard {
+            return Err("Not in the PSK section — enter the PSK cockpit first".to_string());
+        }
+        if !self.tx_enabled {
+            return Err(
+                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
+            );
+        }
+        if !self.tx_allowed() {
+            return Err(
+                "TX locked — this frequency is outside your license privileges".to_string(),
+            );
+        }
+        // Ownership from the ONE arbiter — everything except PSK itself:
+        // sending while PSK transmits queues BEHIND the current over.
+        if let Some(owner) = self.tx_owner() {
+            if owner != TxOwner::Psk {
+                return Err(owner.busy_reason());
+            }
+        }
+        Ok(())
+    }
+
+    /// Stop PSK: drop everything queued and abort the over in progress — the
+    /// radio loop flushes the audio ring and unkeys PTT. The cockpit's Stop
+    /// button (`halt_tx` also does this).
+    pub fn psk_stop(&mut self) {
+        self.psk_queue.clear();
+        self.psk_abort = true;
+        // …and the PTT tail past psk_busy_until (see rtty_stop).
+        self.slot_tx_abort = true;
+        // …and continuous TX — the one PSK transmission with no precomputed
+        // end; without this the latch would key straight back up next tick.
+        self.drop_psk_latch();
+    }
+
+    /// Pop the next queued PSK MESSAGE for the radio loop to key, or `None`
+    /// while any TX gate is down (the queue is then HELD — nothing keys
+    /// unexpectedly). One message per call; the loop paces on the real
+    /// rendered duration. The wall-clock TX watchdog trips BEFORE handing a
+    /// message out, exactly as [`Self::poll_rtty_one`] does.
+    pub fn poll_psk_one(&mut self) -> Option<String> {
+        use crate::settings::OperatingMode;
+        if !self.tx_enabled
+            || !self.tx_allowed()
+            || self.tuning
+            || self.settings.operating_mode != OperatingMode::Keyboard
+            || self.psk_queue.is_empty()
+        {
+            return None;
+        }
+        let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
+        if limit_secs > 0 {
+            let now = now_unix_secs();
+            let start = *self.tx_watchdog_start.get_or_insert(now);
+            if now.saturating_sub(start) >= limit_secs {
+                self.tx_watchdog = true;
+                self.tx_enabled = false;
+                self.psk_queue.clear();
+                self.psk_abort = true;
+                self.slot_tx_abort = true;
+                return None;
+            }
+        }
+        self.psk_queue.pop_front()
+    }
+
+    /// Take + reset the one-shot PSK abort flag (the loop flushes queued audio
+    /// and unkeys).
+    pub fn take_psk_abort(&mut self) -> bool {
+        std::mem::take(&mut self.psk_abort)
+    }
+
+    /// Turn PSK continuous TX on/off — the cockpit's TX button. Same contract
+    /// as [`Self::set_rtty_latched`], minus the auto-sequencer exclusivity
+    /// (PSK has no sequencer): ON runs the full up-front gate and starts the
+    /// ceiling's clock; OFF lets what was typed drain, every gate still
+    /// re-checked per tick while it does. Not the emergency stop — Stop TX,
+    /// the Esc/Stop macro and the TX-enable latch cut instantly, and each of
+    /// them also drops this.
+    pub fn set_psk_latched(&mut self, on: bool) -> Result<(), String> {
+        if !on {
+            // Intent down; the typed buffer drains on the air, still under the
+            // ceiling (`psk_latch_start_ms` deliberately LEFT SET — see
+            // `KeyboardLatch::latch_off`).
+            self.psk_latch().latch_off();
+            return Ok(());
+        }
+        if self.psk_latched {
+            return Ok(()); // idempotent — re-latching must not restart the ceiling
+        }
+        self.psk_tx_gate()?;
+        let now = now_unix_millis();
+        self.psk_latch().latch_on(now);
+        // Keying up is an operator action, exactly like a send.
+        self.reset_tx_watchdog();
+        Ok(())
+    }
+
+    /// Whether continuous TX is latched (the cockpit's TX button state).
+    pub fn psk_latched(&self) -> bool {
+        self.psk_latched
+    }
+
+    /// The latched stream is running: latched, or the latch is down but what
+    /// was typed is still going out.
+    fn psk_streaming(&self) -> bool {
+        crate::keyboard::streaming(self.psk_latched, &self.psk_type_buf)
+    }
+
+    /// PSK31's instantiation of the shared keyboard-mode transmit machinery —
+    /// the borrowed view over PSK's three flat fields (the Phase 0 design:
+    /// the second mode adds its own three fields and this accessor, and there
+    /// is never a copy of a latch's state that can disagree with the latch).
+    fn psk_latch(&mut self) -> crate::keyboard::KeyboardLatch<'_> {
+        crate::keyboard::KeyboardLatch::new(
+            crate::keyboard::PSK31,
+            &mut self.psk_latched,
+            &mut self.psk_type_buf,
+            &mut self.psk_latch_start_ms,
+        )
+    }
+
+    /// Feed typed characters into the live transmission — varicode-filtered
+    /// exactly as a send is. Refused unless the latch is up (no path from a
+    /// keystroke to the transmitter that skips the TX button). A typed
+    /// character restarts the TX watchdog ([`Self::rtty_type`]'s rationale);
+    /// [`Self::PSK_MAX_LATCH_MS`] above it is what no keystroke can extend.
+    pub fn psk_type(&mut self, text: &str) -> Result<(), String> {
+        if !self.psk_latched {
+            return Err("Continuous TX is off — click TX first".to_string());
+        }
+        let filtered = psk_filter(text);
+        let typed = self.psk_latch().type_chars(&filtered);
+        if typed > 0 {
+            self.reset_tx_watchdog();
+        }
+        Ok(())
+    }
+
+    /// Drop the latch NOW: clear intent AND type-ahead, arm the aborts that
+    /// make the radio loop flush and unkey. Every kill path calls this;
+    /// the abort is conditional on a running stream for the same reason
+    /// [`Self::drop_rtty_latch`]'s is.
+    pub fn drop_psk_latch(&mut self) {
+        if self.psk_latch().drop_latch() {
+            self.psk_abort = true;
+            self.slot_tx_abort = true; // and the PTT tail (see psk_stop)
+        }
+    }
+
+    /// One radio-loop tick of the latched PSK stream — the ONLY path from the
+    /// latch to the transmitter. ⚠️ THE PER-TICK PREDICATE is
+    /// [`crate::keyboard::KeyboardLatch::tick`], shared gate-for-gate with
+    /// RTTY (its table lives on that method); what is PSK's here is only which
+    /// engine field answers each gate and what a drop means to this mode.
+    /// `Diddle` is the PSK31 idle — continuous reversals, never silence under
+    /// a held PTT (silence loses the far end's sync and reads as a dropout).
+    pub fn poll_psk_stream(&mut self, max_chars: usize) -> PskStreamTick {
+        use crate::keyboard::{KbDrop, KbGates};
+        use crate::settings::OperatingMode;
+        if !self.psk_streaming() {
+            return PskStreamTick::Idle;
+        }
+        let gates = KbGates {
+            tx_enabled: self.tx_enabled,
+            tx_allowed: self.tx_allowed(),
+            tuning: self.tuning,
+            in_section: self.settings.operating_mode == OperatingMode::Keyboard,
+            now_ms: now_unix_millis(),
+            now_secs: now_unix_secs(),
+            watchdog_limit_secs: self.settings.tx_watchdog_min as u64 * 60,
+            watchdog_start_secs: self.tx_watchdog_start,
+        };
+        let res = self.psk_latch().tick(gates, max_chars);
+        if let Some(start) = res.watchdog_start {
+            self.tx_watchdog_start = Some(start);
+        }
+        match res.drop {
+            None => res.tick,
+            Some(why) => {
+                if why == KbDrop::Watchdog {
+                    self.tx_watchdog = true;
+                    self.tx_enabled = false;
+                    self.psk_queue.clear();
+                }
+                self.drop_psk_latch();
+                if why == KbDrop::Ceiling {
+                    self.psk_keyer_error = Some(format!(
+                        "Continuous TX unkeyed at its {}-minute ceiling — click TX again to \
+                         carry on",
+                        Self::PSK_MAX_LATCH_MS / 60_000
+                    ));
+                }
+                res.tick
+            }
+        }
+    }
+
+    /// Stamp whether a PSK over is on the air (the radio loop's per-tick
+    /// truth; the cockpit's TX indicator).
+    pub fn set_psk_sending(&mut self, on: bool) {
+        self.psk_sending = on;
+    }
+
+    /// Surface (or clear) a PSK TX failure in the cockpit.
+    pub fn set_psk_keyer_error(&mut self, e: Option<String>) {
+        self.psk_keyer_error = e;
+    }
+
+    /// May the operator's class key the PSK31 EMISSION at `dial`? USB always
+    /// (the Keyboard section's convention), signal ~60 Hz wide at the tuned
+    /// audio offset above the dial — judge that one emission point through
+    /// the same model `tx_allowed` uses.
+    fn psk_emission_ok(&self, dial: f64) -> bool {
+        use crate::settings::OperatingMode;
+        let off = self.psk_center_hz() as f64 / 1_000_000.0;
+        crate::privileges::tx_allowed(
+            self.settings.license_class,
+            dial + off,
+            OperatingMode::Keyboard,
+        )
     }
 
     // ----- RTTY transmit — operator-initiated, mirroring the CW send path. -----
@@ -12650,6 +13037,9 @@ impl Engine {
             // RTTY: judge the real mark/space RF span per keying backend (AFSK tones
             // below the LSB dial; FSK shift below the RTTY-mode dial) — both edges.
             OperatingMode::Rtty => self.rtty_emission_ok(dial),
+            // Keyboard (PSK31): a ~60 Hz signal at the tuned audio offset
+            // above the always-USB dial.
+            OperatingMode::Keyboard => self.psk_emission_ok(dial),
         }
     }
 
@@ -12980,6 +13370,7 @@ impl Engine {
             crate::settings::OperatingMode::Phone => "phone",
             crate::settings::OperatingMode::Cw => "cw",
             crate::settings::OperatingMode::Rtty => "rtty",
+            crate::settings::OperatingMode::Keyboard => "keyboard",
         }
         .to_string();
         s.radio.cw_wpm = self.settings.cw_wpm;
@@ -16505,6 +16896,289 @@ mod tests {
         e.set_rtty_latched(false).unwrap();
         e.rtty_send_text("TEST").unwrap();
         assert_eq!(e.poll_rtty_one(), Some("TEST".to_string()));
+    }
+
+    // ----- PSK31 continuous TX (Keyboard Modes Phase 2) — the RTTY latch
+    // suite instantiated over the second mode. Same shapes on purpose: these
+    // are the latched-scene contracts every keyboard mode must hold, and the
+    // point of Phase 0 was that holding them costs instantiation, not a second
+    // derivation of transmit safety. -----
+
+    /// A latched PSK engine, keyed and ready to stream (the Keyboard section's
+    /// entry arms TX as a manual mode does; the default 20 m dial is inside
+    /// General data privileges at the PSK audio offset).
+    fn psk_latched_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("keyboard", false);
+        e.set_psk_latched(true).unwrap();
+        assert!(e.psk_latched());
+        // The first tick of a latch with nothing typed is the PSK idle
+        // (continuous reversals) — never silence under a held PTT.
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Diddle);
+        e
+    }
+
+    #[test]
+    fn psk_latch_never_comes_up_on_its_own() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(!e.psk_latched());
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        assert!(!e.take_psk_abort());
+        // Arming the RX decoder is RX-only — it cannot key.
+        e.set_psk_armed(true);
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        // Entering the section arms TX (a manual mode) but does NOT latch.
+        e.set_operating_mode("keyboard", false);
+        assert!(e.tx_enabled());
+        assert!(!e.psk_latched());
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        // Typing without the latch is refused outright.
+        assert!(e.psk_type("cq").is_err());
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+    }
+
+    #[test]
+    fn psk_latch_inherits_every_gate_a_send_passes() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Not in the Keyboard section → refused, same reason a send is.
+        assert!(e.set_psk_latched(true).is_err());
+        e.set_operating_mode("keyboard", false);
+        // TX disarmed → refused.
+        e.set_tx_enabled(false);
+        assert!(e.set_psk_latched(true).unwrap_err().contains("TX is off"));
+        e.set_tx_enabled(true);
+        // Tune carrier up → refused.
+        e.set_tune(true);
+        assert!(e.set_psk_latched(true).unwrap_err().contains("Tune"));
+        e.set_tune(false);
+        // Outside license privileges → refused (a Technician on 20 m PSK —
+        // the band-plan privilege sweep, at the latch).
+        e.set_license_class("technician");
+        e.set_frequency(14.070, "20m", "USB");
+        assert!(!e.tx_allowed());
+        assert!(e.set_psk_latched(true).unwrap_err().contains("license"));
+        assert!(!e.psk_latched());
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        // …and where a send would be allowed, so is the latch (10 m 28.120 is
+        // inside Technician data privileges).
+        e.set_frequency(28.120, "10m", "USB");
+        assert!(e.tx_allowed());
+        e.set_psk_latched(true).unwrap();
+        assert!(e.psk_latched());
+    }
+
+    #[test]
+    fn a_latched_psk_stream_idles_on_reversals_and_keys_what_is_typed() {
+        let mut e = psk_latched_engine();
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Diddle);
+        // Typed characters key in order, CASE PRESERVED (full-ASCII varicode —
+        // the point over Baudot); what varicode cannot carry is dropped.
+        e.psk_type("de w9xyz \u{263A}ok").unwrap();
+        let mut out = String::new();
+        loop {
+            match e.poll_psk_stream(3) {
+                PskStreamTick::Text(t) => out.push_str(&t),
+                PskStreamTick::Diddle => break,
+                PskStreamTick::Idle => panic!("the latch dropped while streaming"),
+                PskStreamTick::Ahead => panic!("asked for characters, told to wait"),
+            }
+        }
+        assert_eq!(out, "de w9xyz ok");
+        // The chunk budget is honoured (the loop's look-ahead bound).
+        e.psk_type("abcdefg").unwrap();
+        assert_eq!(e.poll_psk_stream(3), PskStreamTick::Text("abc".into()));
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Text("de".into()));
+        // And the buffer is bounded at the MODE's own cap.
+        e.psk_type(&"a".repeat(5000)).unwrap();
+        let mut n = 2; // "fg" still pending
+        while let PskStreamTick::Text(t) = e.poll_psk_stream(100) {
+            n += t.len();
+        }
+        assert_eq!(n, crate::keyboard::PSK31.type_buf_cap + 2);
+    }
+
+    /// EVERY KILL PATH, one assertion each — the RTTY suite's shape over the
+    /// PSK instantiation (no auto-sequencer arm: PSK has no sequencer).
+    #[test]
+    fn psk_latch_drops_on_every_kill_path() {
+        fn killed(kill: impl FnOnce(&mut Engine)) -> Engine {
+            let mut e = psk_latched_engine();
+            e.psk_type("still typing").unwrap();
+            kill(&mut e);
+            assert!(!e.psk_latched(), "the latch survived");
+            assert!(
+                e.take_psk_abort(),
+                "no abort armed — the loop would keep keying to the end of the ring"
+            );
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Idle,
+                "the stream kept feeding after the kill"
+            );
+            e
+        }
+
+        // 1. Stop (the cockpit's Stop button / Esc — psk_stop).
+        killed(|e| e.psk_stop());
+        // 2. halt_tx — the universal stop (header Stop TX, UDP HaltTx).
+        let e = killed(|e| e.halt_tx());
+        assert!(!e.tx_enabled(), "halt disarms TX — stopped stays stopped");
+        // 3. The TX-enable latch (one of the PSK cockpit's census stops).
+        killed(|e| e.set_tx_enabled(false));
+        // 4. Leaving the section.
+        killed(|e| e.set_operating_mode("phone", false));
+        // 5. A tune carrier taking the transmitter — the PER-TICK predicate.
+        killed(|e| {
+            e.set_tune(true);
+            assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        });
+        // 6. A QSY out of privileges — per-tick only (a spot click or memory
+        //    recall can move the dial under a latched transmitter).
+        killed(|e| {
+            e.set_license_class("technician");
+            e.set_frequency(14.070, "20m", "USB");
+            assert!(!e.tx_allowed());
+            assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        });
+        // 7. The loop's own gate (may_key) calls this directly.
+        killed(|e| e.drop_psk_latch());
+    }
+
+    /// The guard shown NOT firing (the positive-control complement): with
+    /// every gate up the latch holds tick after tick.
+    #[test]
+    fn the_psk_latch_predicate_holds_while_every_gate_is_up() {
+        let mut e = psk_latched_engine();
+        for _ in 0..50 {
+            assert_eq!(e.poll_psk_stream(2), PskStreamTick::Diddle);
+        }
+        assert!(e.psk_latched(), "the latch dropped with every gate up");
+        assert!(!e.take_psk_abort(), "an abort was armed with nothing wrong");
+    }
+
+    #[test]
+    fn a_latched_psk_over_is_bounded_by_the_wall_clock_watchdog() {
+        let mut e = psk_latched_engine();
+        let mut s = e.settings().clone();
+        s.tx_watchdog_min = 1;
+        e.apply_settings(s);
+        // Typing restarts the clock — a keystroke is evidence of attendance.
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        e.psk_type("still here").unwrap();
+        assert!(
+            e.tx_watchdog_start.is_none(),
+            "a typed character must restart the watchdog clock"
+        );
+        // Walking away does not: the trip disarms TX and drops the latch.
+        while let PskStreamTick::Text(_) = e.poll_psk_stream(100) {}
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        assert!(e.tx_watchdog, "the watchdog did not trip on a latched over");
+        assert!(!e.tx_enabled(), "a trip disarms TX");
+        assert!(!e.psk_latched(), "a trip must drop the latch");
+        assert!(e.take_psk_abort(), "a trip must unkey");
+    }
+
+    #[test]
+    fn a_latched_psk_over_is_bounded_by_its_own_ceiling_that_typing_cannot_extend() {
+        let mut e = psk_latched_engine();
+        let mut s = e.settings().clone();
+        s.tx_watchdog_min = 0; // the ceiling stands alone
+        e.apply_settings(s);
+        e.psk_latch_start_ms = Some(now_unix_millis().saturating_sub(Engine::PSK_MAX_LATCH_MS + 1));
+        e.psk_type("aaaa").unwrap();
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        assert!(!e.psk_latched(), "the hard ceiling did not unkey");
+        assert!(e.take_psk_abort());
+        assert!(
+            e.psk_state()
+                .keyer_error
+                .is_some_and(|m| m.contains("ceiling")),
+            "an unexplained unkey reads as a fault — say why"
+        );
+        // The ceiling bounds the whole keyed period, drain included.
+        e.set_tx_enabled(true);
+        e.set_psk_latched(true).unwrap();
+        e.psk_type("a long tail").unwrap();
+        e.set_psk_latched(false).unwrap(); // draining, intent already down
+        e.psk_latch_start_ms = Some(now_unix_millis().saturating_sub(Engine::PSK_MAX_LATCH_MS + 1));
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        assert!(e.take_psk_abort(), "the drain outran the ceiling unbounded");
+    }
+
+    #[test]
+    fn a_psk_macro_fired_while_latched_types_into_the_live_transmission() {
+        let mut e = psk_latched_engine();
+        e.psk_send_text("CQ de W9XYZ k").unwrap();
+        assert_eq!(
+            e.poll_psk_one(),
+            None,
+            "nothing was queued behind the latch"
+        );
+        assert_eq!(
+            e.poll_psk_stream(99),
+            PskStreamTick::Text("CQ de W9XYZ k".into())
+        );
+        // Unmappable-only text still refuses, exactly as a send refuses it.
+        assert!(e.psk_send_text("\u{263A}\u{2603}").is_err());
+        // Unlatched, sends go back to being whole queued overs.
+        e.set_psk_latched(false).unwrap();
+        e.psk_send_text("test 73").unwrap();
+        assert_eq!(e.poll_psk_one(), Some("test 73".to_string()));
+    }
+
+    #[test]
+    fn psk_sends_are_gated_and_stops_clear_the_queue() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Outside the section a send is refused with the reason.
+        assert!(e.psk_send_text("hi").unwrap_err().contains("PSK section"));
+        e.set_operating_mode("keyboard", false);
+        e.psk_send_text("cq cq de w9xyz").unwrap();
+        // Disarm holds nothing: it aborts and drops the queue.
+        e.set_tx_enabled(false);
+        assert!(e.take_psk_abort(), "disarm aborts the over in flight");
+        e.set_tx_enabled(true);
+        assert_eq!(e.poll_psk_one(), None, "disarm dropped the queue");
+        // Stop drops the queue + arms the one-shot abort.
+        e.psk_send_text("a message").unwrap();
+        e.psk_stop();
+        assert!(e.take_psk_abort());
+        assert!(!e.take_psk_abort(), "abort is one-shot");
+        assert_eq!(e.poll_psk_one(), None, "stop cleared the queue");
+        // halt_tx: aborts, disarms, stays stopped.
+        e.psk_send_text("cq de w9xyz").unwrap();
+        e.halt_tx();
+        assert!(e.take_psk_abort());
+        assert!(!e.tx_enabled());
+        e.set_tx_enabled(true);
+        assert_eq!(e.poll_psk_one(), None, "halt dropped the queued messages");
+        // A Technician on 20 m PSK is refused up front with the license reason.
+        e.set_license_class("technician");
+        e.set_frequency(14.070, "20m", "USB");
+        assert!(e.psk_send_text("cq").unwrap_err().contains("license"));
+    }
+
+    #[test]
+    fn psk_and_the_slot_sequencer_never_key_together() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // The Keyboard section owns the rig: the FT8/FT1 slot sequencer
+        // transmits NOTHING (poll_tx is gated off for non-Digital).
+        e.set_operating_mode("keyboard", false);
+        e.call_cq(None).unwrap();
+        for slot in 0..4 {
+            assert!(
+                e.poll_tx(slot).is_empty(),
+                "no FT8 keying while the Keyboard section owns the rig"
+            );
+        }
+        // And vice versa: the PSK queue is HELD while Digital owns the rig.
+        e.psk_send_text("cq test").unwrap();
+        e.set_operating_mode("digital", false);
+        assert_eq!(
+            e.poll_psk_one(),
+            None,
+            "no PSK keying while Digital owns the rig"
+        );
     }
 
     #[test]
@@ -31178,6 +31852,7 @@ mod tests {
                     OperatingMode::Cw => "cw",
                     OperatingMode::Rtty => "rtty",
                     OperatingMode::Digital => "digital",
+                    OperatingMode::Keyboard => "keyboard",
                 };
                 e.set_operating_mode(om_str, false);
                 e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));

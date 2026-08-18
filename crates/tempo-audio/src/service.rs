@@ -22,8 +22,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::{
-    engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine, RttyStreamTick,
-    SatCatBackend,
+    engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine, PskStreamTick,
+    RttyStreamTick, SatCatBackend,
 };
 use tempo_app::keyboard;
 use tempo_core::tempo_fast;
@@ -1003,9 +1003,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // dumped its queued audio and ptt(false) unkeyed the carrier — this is
             // symmetry with the CW/RTTY cuts below).
             state.sstv_feed = None;
-            // …and the continuous-TX generator, for the same symmetry: the flush and
+            // …and the continuous-TX generators, for the same symmetry: the flush and
             // unkey above are what actually take a latched over off the air.
             state.rtty_stream = None;
+            state.psk_stream = None;
             // Cut any in-progress CW too: stop a CAT `send_morse` and flush a
             // WinKeyer's hardware buffer NOW, deterministically, rather than
             // relying on Drop running before the process is killed (a half-sent
@@ -1517,6 +1518,8 @@ fn handoff_if_switched(
             let mut e = engine_lock(engine);
             let _ = e.take_cw_abort();
             let _ = e.take_rtty_abort();
+            // Same for PSK: the handoff unkey above IS the abort's action.
+            let _ = e.take_psk_abort();
             // Same for SSTV: this handoff already unkeyed (above), so consume the abort a
             // switch-time halt raised — else step()'s SSTV block issues a SECOND ptt(false)
             // to the outgoing rig (the "once per retry tick" double-command regression).
@@ -1729,6 +1732,26 @@ struct RttyStream {
     /// the over — on a slow-serial rig that is the loop stall, not a safety net.
     /// Re-asserted only if the unkey has actually run underneath us
     /// (`tx_until_ms == None`), which is the case that needs it.
+    keyed: bool,
+}
+
+/// The live continuous-TX ("latched") PSK31 stream — the generator state that
+/// survives across radio-loop ticks, PSK's instantiation of the [`RttyStream`]
+/// pattern (soundcard only: there is no PSK keyline backend).
+///
+/// `None` whenever nothing is latched. Dropped on every abort, so a stop can
+/// never leave a mid-phase carrier or a half-shaped reversal to be resumed
+/// into the NEXT transmission.
+struct PskTxStream {
+    /// Resumable BPSK generator — carrier phase, polarity and the pending
+    /// symbol's shaping carried across chunks (`tempo_core::psk::PskStream`).
+    gen: tempo_core::psk::PskStream,
+    /// The audio center this stream was built for. A re-net mid-over rebuilds
+    /// the generator (an audible re-key — correct: the operator moved it)
+    /// rather than splicing two carriers into one envelope.
+    center_hz: f32,
+    /// PTT asserted for this stream — once per stream, not per chunk (see
+    /// [`RttyStream::keyed`] for the CAT-round-trip rationale).
     keyed: bool,
 }
 
@@ -2021,6 +2044,12 @@ struct RadioLoop {
     /// The live continuous-TX stream, `None` when nothing is latched. See
     /// [`RttyStream`].
     rtty_stream: Option<RttyStream>,
+    /// Unix-ms until which the current PSK31 message/chunk is still keying —
+    /// the same pacing role as `rtty_busy_until`, for the Keyboard section.
+    psk_busy_until: f64,
+    /// The live continuous-TX PSK stream, `None` when nothing is latched. See
+    /// [`PskTxStream`].
+    psk_stream: Option<PskTxStream>,
     /// The SSTV image currently streaming to the rig (pre-encoded 12 kHz PCM + a feed
     /// cursor + timing), fed to the output ring in chunked look-ahead slices so a
     /// multi-minute image never dumps into the unbounded ring at once. `None` = no
@@ -2356,6 +2385,8 @@ impl RadioLoop {
             serial_keyer: None,
             rtty_busy_until: 0.0,
             rtty_stream: None,
+            psk_busy_until: 0.0,
+            psk_stream: None,
             #[cfg(feature = "serial")]
             rtty_keyer: None,
             sstv_feed: None,
@@ -2922,6 +2953,9 @@ impl RadioLoop {
         // drops the engine's latch across a handoff; this drops the generator with it, so a
         // resumed chunk can never splice the old radio's carrier onto the new one.
         self.rtty_stream = None;
+        // PSK's latched stream, for the identical reason.
+        self.psk_busy_until = 0.0;
+        self.psk_stream = None;
         self.slot_tx_until_ms = 0.0; // the other radio's over is not ours to protect
         self.last_fm = None;
         self.manual_ptt_applied = false;
@@ -5455,6 +5489,193 @@ impl RadioLoop {
                                 }));
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // PSK31 keying (Keyboard Modes Phase 2): the RTTY block's shape, soundcard-only
+        // (no PSK keyline backend exists). ONE MESSAGE at a time paced on the REAL
+        // rendered duration; the CONTINUOUS-TX latch is the second path, with no
+        // precomputed end — the engine re-checks every TX gate on every tick
+        // (`poll_psk_stream`), the loop adds `may_key`, each push reaches only the
+        // per-mode look-ahead forward (keyboard::PSK31), and the same abort/`tx_until_ms`
+        // machinery unkeys. Idle between keystrokes is CONTINUOUS REVERSALS — the PSK31
+        // idle that holds the far end's sync — never silence under a held PTT.
+        {
+            let psk_baud = tempo_core::psk::BAUD as f64;
+            let ready = now >= self.psk_busy_until && self.may_key();
+            let (abort, msg, stream_tick, center_hz) = {
+                let mut eng = engine_lock(engine);
+                // Keep the cockpit's sending indicator honest each tick (the
+                // latched stream keeps it true through the look-ahead, like RTTY).
+                eng.set_psk_sending(now < self.psk_busy_until);
+                // Continuous TX: the per-tick gate re-check + this tick's feed.
+                // `may_key` is the one gate the engine cannot see; for a latched
+                // TRANSMITTER holding is not an option, so it drops the latch.
+                let stream_tick = if self.may_key() {
+                    let char_ms = keyboard::PSK31.char_ms(psk_baud);
+                    let ahead_ms = (self.psk_busy_until - now).max(0.0);
+                    let deficit = keyboard::PSK31.stream_ahead_ms(psk_baud) - ahead_ms;
+                    let want = if deficit <= 0.0 {
+                        0
+                    } else {
+                        ((deficit / char_ms).ceil() as usize).min(keyboard::PSK31.stream_max_chunk)
+                    };
+                    eng.poll_psk_stream(want)
+                } else {
+                    eng.drop_psk_latch();
+                    PskStreamTick::Idle
+                };
+                let latch_owns =
+                    !matches!(stream_tick, PskStreamTick::Idle) || self.psk_stream.is_some();
+                (
+                    // AFTER poll_psk_stream, so an abort IT armed is consumed on
+                    // this same tick rather than one tick later still keyed.
+                    eng.take_psk_abort(),
+                    // The message queue is HELD while the latch streams (sends
+                    // route into the stream instead while latched).
+                    if ready && !latch_owns {
+                        eng.poll_psk_one()
+                    } else {
+                        None
+                    },
+                    stream_tick,
+                    eng.psk_center_hz(),
+                )
+            };
+            if abort {
+                // Stop mid-over: dump the queued audio and unkey immediately.
+                // Same shared-transmitter care as RTTY's abort: the cut fires
+                // only while a PSK over is actually keying (`psk_busy_until` is
+                // the in-flight evidence), so a disarm can't cut an FT8 slot
+                // over riding the same PTT/ring.
+                if now < self.psk_busy_until {
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                }
+                self.psk_busy_until = 0.0; // a fresh send after Stop keys immediately
+                                           // The latched generator dies with the over (a kept one would
+                                           // resume the NEXT transmission mid-phase).
+                self.psk_stream = None;
+                {
+                    let mut eng = engine_lock(engine);
+                    eng.set_psk_sending(false);
+                }
+            }
+            // --- Continuous TX: render and key this tick's chunk. ---
+            match &stream_tick {
+                PskStreamTick::Idle => {
+                    // A generator still open here means the stream ENDED CLEANLY
+                    // (latch off, everything typed rendered) — the abort branch
+                    // already took the aborted case. Close with the shaped
+                    // key-down (the pending symbol ramped to zero): ending a
+                    // carrier at full amplitude is a key click. `may_key` again
+                    // on the close, for RTTY's deferred-handoff reason.
+                    if let Some(mut st) = self.psk_stream.take().filter(|_| self.may_key()) {
+                        let buf = st.gen.chunk(&[], true);
+                        let chunk_ms = buf.len() as f64 / 12.0;
+                        if !buf.is_empty() {
+                            backend.play(&buf);
+                        }
+                        self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
+                        let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                }
+                // Keyed and fed far enough ahead: gates re-checked, nothing to render.
+                PskStreamTick::Ahead => {}
+                PskStreamTick::Text(_) | PskStreamTick::Diddle => {
+                    // Build (or rebuild on a re-net mid-over) the generator. A
+                    // rebuild restarts the key envelope — audible, and correct:
+                    // the operator moved the TX frequency.
+                    if self.psk_stream.as_ref().map(|s| s.center_hz) != Some(center_hz) {
+                        self.psk_stream = Some(PskTxStream {
+                            gen: tempo_core::psk::PskStream::new(tempo_core::psk::PskTxConfig {
+                                center_hz,
+                                ..tempo_core::psk::PskTxConfig::default()
+                            }),
+                            center_hz,
+                            keyed: false,
+                        });
+                    }
+                    // Assert the rig + PTT once per stream, not per chunk — but
+                    // always after an unkey has run underneath us.
+                    let need_key = self.tx_until_ms.is_none()
+                        || !self.psk_stream.as_ref().is_some_and(|s| s.keyed);
+                    let buf = {
+                        let st = self.psk_stream.as_mut().expect("just built");
+                        let bits = match &stream_tick {
+                            PskStreamTick::Text(t) => tempo_core::psk::encode_bits(t),
+                            // One character-time of idle reversals per Diddle
+                            // tick — what the look-ahead budget accounts one
+                            // char as, and the standard PSK31 idle on the air.
+                            _ => vec![false; keyboard::PSK31.frame_bits as usize],
+                        };
+                        st.gen.chunk(&bits, false)
+                    };
+                    // The deadline advances by the audio actually queued — the
+                    // exact rendered duration, so a wedged loop expires into an
+                    // unkey instead of sticking (the RTTY bound, PSK's numbers).
+                    let chunk_ms = buf.len() as f64 / 12.0;
+                    if chunk_ms > 0.0 {
+                        let mut ptt_err = false;
+                        if need_key {
+                            self.ensure_commanded(rig); // assert dial/mode before the key
+                            self.publish_tx_intent_now(); // before keying
+                            ptt_err = rig.ptt(true).is_err();
+                        }
+                        backend.play(&buf);
+                        self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
+                        let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        if let Some(st) = self.psk_stream.as_mut() {
+                            st.keyed = true;
+                        }
+                        if ptt_err {
+                            let mut eng = engine_lock(engine);
+                            eng.set_psk_keyer_error(Some(
+                                "PSK keyer: the rig didn't accept PTT. Check your PTT method + \
+                                 that Nexus's audio output is routed to the rig (like FT8)."
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+            if let Some(text) = msg {
+                // One-shot over: idle preamble + varicode text + idle postamble,
+                // rendered whole at the tuned offset and played through the SAME
+                // TX audio output the FT8 modem uses — one route, so the
+                // operator's tx_level / drive / ALC discipline applies unchanged.
+                let bits = tempo_core::psk::psk_over_bits(&text);
+                let buf = tempo_core::psk::bpsk_samples(
+                    &bits,
+                    &tempo_core::psk::PskTxConfig {
+                        center_hz,
+                        ..tempo_core::psk::PskTxConfig::default()
+                    },
+                );
+                if !buf.is_empty() {
+                    // Hold the next queued message until this one has fully keyed
+                    // out + one character of clear air (send-and-done, no idle).
+                    let total_ms = buf.len() as f64 / 12.0;
+                    self.psk_busy_until = now + total_ms + keyboard::PSK31.char_ms(psk_baud);
+                    self.ensure_commanded(rig); // read-only launch: assert before key
+                    self.publish_tx_intent_now(); // before keying
+                    let ptt_err = rig.ptt(true).is_err();
+                    backend.play(&buf);
+                    let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
+                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.set_psk_sending(true);
+                        eng.set_psk_keyer_error(ptt_err.then(|| {
+                            "PSK keyer: the rig didn't accept PTT. Check your PTT method + \
+                             that Nexus's audio output is routed to the rig (like FT8)."
+                                .to_string()
+                        }));
                     }
                 }
             }
@@ -12978,6 +13199,223 @@ mod tests {
             // Wedge the ENGINE too: the loop resumes into a section change it never
             // saw, which is the realistic version of this (the operator gave up and
             // navigated away while the app was stuck).
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                deadline + 1.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "a wedged loop left the transmitter keyed");
+        assert!(state.tx_until_ms.is_none());
+    }
+
+    // ----- Continuous PSK31 TX (Keyboard Modes Phase 2): the latched-scene
+    // suite instantiated over the second keyboard mode. Same scenes on
+    // purpose — these are the contracts every latched transmitter must hold
+    // at the layer that actually keys. -----
+
+    /// A radio loop with continuous PSK TX latched and keying. Ticks are
+    /// 20 ms, the real loop rate.
+    fn latched_psk_scene() -> (Arc<Mutex<Engine>>, RadioLoop, MockBackend, Rig, f64) {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("keyboard", false); // arms TX, as a manual mode does
+            e.set_psk_latched(true).unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 100.0;
+        for _ in 0..5 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            t += 20.0;
+        }
+        (engine, state, backend, rig, t)
+    }
+
+    #[test]
+    fn a_latched_psk_over_keys_one_carrier_that_idles_on_reversals() {
+        // THE FEATURE, at the layer that actually keys: latched with NOTHING
+        // typed, the loop holds the transmitter up on the PSK31 idle
+        // (continuous reversals) — not silence, not an unkey.
+        let (engine, mut state, mut backend, mut rig, mut t) = latched_psk_scene();
+        assert!(rig.keyed, "the latch never keyed the rig");
+        assert!(
+            !backend.played.is_empty(),
+            "nothing went to the transmitter"
+        );
+        let after_latch = backend.played.len();
+
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let char_ms = keyboard::PSK31.char_ms(tempo_core::psk::BAUD as f64);
+        for _ in 0..100 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            // ⚠️ THE STUCK-CARRIER BOUND, on EVERY tick — the per-mode
+            // look-ahead plus at most one over-sized chunk, plus the tail.
+            let ahead = state.tx_until_ms.unwrap_or(t) - t;
+            assert!(
+                ahead
+                    <= (keyboard::PSK31.stream_ahead_chars
+                        + keyboard::PSK31.stream_max_chunk as f64)
+                        * char_ms
+                        + crate::slot::TX_TAIL_MS,
+                "the unkey deadline was pushed {ahead:.0} ms ahead — a wedged loop would \
+                 hold PTT that long"
+            );
+            t += 20.0;
+        }
+        assert!(
+            rig.keyed,
+            "the carrier dropped while latched with nothing typed"
+        );
+        assert!(
+            backend.played.len() > after_latch,
+            "keyed but not fed — dead air under a held PTT reads as a dropout"
+        );
+        // The idle is real 12 kHz audio at the real rate: ~2 s of ticks must
+        // produce ≈2 s of audio (plus at most the look-ahead already banked).
+        let fed_ms = backend.played.len() as f64 / 12.0;
+        assert!(
+            (1600.0..3200.0).contains(&fed_ms),
+            "fed {fed_ms:.0} ms of audio across 2 s of ticks — the look-ahead is not pacing"
+        );
+    }
+
+    #[test]
+    fn every_stop_unkeys_a_latched_psk_over_within_one_tick() {
+        // ⭐ THE STOP LINE, at the transmitter — the PSK clone of RTTY's. Each
+        // stop is a control the cockpit actually renders; one tick is the
+        // whole budget: flush (the only thing that stops a VOX rig), unkey,
+        // stay stopped.
+        for (name, stop) in [
+            ("Stop (the dock's Esc-Stop macro / psk_stop)", 0),
+            ("halt_tx (header Stop TX, UDP HaltTx)", 1),
+            ("the TX-enable latch", 2),
+            ("leaving the PSK section", 3),
+        ] {
+            let (engine, mut state, mut backend, mut rig, t) = latched_psk_scene();
+            assert!(rig.keyed, "{name}: the scene did not key");
+            assert!(
+                state.psk_stream.is_some(),
+                "{name}: the scene is not streaming"
+            );
+            backend.flush_calls = 0;
+            let played_before = backend.played.len();
+            {
+                let mut e = engine.lock().unwrap();
+                match stop {
+                    0 => e.psk_stop(),
+                    1 => e.halt_tx(),
+                    2 => e.set_tx_enabled(false),
+                    _ => e.set_operating_mode("phone", false),
+                }
+            }
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            assert!(!rig.keyed, "{name}: still keyed a tick later");
+            assert!(
+                backend.flush_calls > 0,
+                "{name}: the queued audio was not flushed — on a VOX rig the audio IS what \
+                 holds the transmitter up"
+            );
+            assert!(state.tx_until_ms.is_none(), "{name}: the TX hold survived");
+            assert!(
+                state.psk_stream.is_none(),
+                "{name}: the latched generator survived the stop"
+            );
+            assert_eq!(
+                backend.played.len(),
+                played_before,
+                "{name}: the abort queued MORE audio instead of cutting"
+            );
+            // …and it STAYS stopped.
+            let played = backend.played.len();
+            let mut t2 = t + 20.0;
+            for _ in 0..10 {
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        t2,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+                t2 += 20.0;
+            }
+            assert!(!rig.keyed, "{name}: the latch keyed back up after the stop");
+            assert_eq!(
+                backend.played.len(),
+                played,
+                "{name}: audio kept being fed after the stop"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wedged_loop_unkeys_a_latched_psk_over_instead_of_holding_it() {
+        // The latch's own failure mode: the unkey deadline must expire into an
+        // unkey when the loop stops ticking — RTTY's scene, PSK's numbers.
+        let (engine, mut state, mut backend, mut rig, t) = latched_psk_scene();
+        assert!(rig.keyed);
+        let deadline = state
+            .tx_until_ms
+            .expect("a latched over holds PTT to a deadline");
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        assert!(
+            deadline - t < 2_000.0,
+            "the deadline must be near, not minutes out"
+        );
+        {
             let mut e = engine.lock().unwrap();
             e.set_operating_mode("phone", false);
         }

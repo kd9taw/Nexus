@@ -383,7 +383,9 @@ mod tests {
     use crate::psk::varicode::encode_bits;
     use crate::textmode::TextDemod;
 
-    /// TEST-ONLY BPSK31 modulator (TX is Phase 2; this never ships). Cosine-
+    /// TEST-ONLY reference BPSK31 renderer (the demod's independent fixture,
+    /// kept distinct from the SHIPPING `super::modulator` on purpose — the
+    /// loopback tests below prove the two agree end-to-end). Cosine-
     /// shaped reversals, the on-air waveform: the baseband polarity holds
     /// through a `1` symbol and swings through a half-sine to its negation
     /// across a `0` (reversal) boundary, and the carrier rides on top.

@@ -6,9 +6,10 @@
 //! characters (+ per-char phase-margin confidence), the AFC correction and the
 //! signal-presence flag back into the engine for the `get_psk_state` poll.
 //!
-//! RX ONLY: nothing here keys PTT or emits TX audio — no PSK transmit path
-//! exists this phase, anywhere. Disarmed = the buffer stays empty and this
-//! loop does nothing but a brief flag check, so everyone else pays nothing.
+//! RX ONLY: nothing here keys PTT or emits TX audio — PSK transmit lives in
+//! the radio loop (`service.rs`), behind its own gates. Disarmed = the buffer
+//! stays empty and this loop does nothing but a brief flag check, so everyone
+//! else pays nothing.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

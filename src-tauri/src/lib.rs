@@ -8888,9 +8888,9 @@ fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, Str
     Ok(rtty_state_dto(&eng))
 }
 
-/// Live PSK31 receive state for the cockpit poll. RX ONLY — no PSK transmit
-/// path exists this phase, so unlike `RttyStateDto` there is deliberately no
-/// TX surface here for a control to wire to.
+/// Live PSK31 state for the cockpit poll: the RX side (decoder + transcript)
+/// plus the TX side (Keyboard Modes Phase 2 — the sending flag, the
+/// continuous-TX latch and any keyer failure), mirroring `RttyStateDto`.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PskStateDto {
@@ -8899,13 +8899,21 @@ struct PskStateDto {
     afc_hz: f32,
     /// The demodulator's quality squelch reads a signal right now.
     signal: bool,
-    /// Audio center (Hz) the decoder is netted on (waterfall cursor position).
+    /// Audio center (Hz) the decoder is netted on (waterfall cursor position)
+    /// — and where TX transmits (the transceive convention).
     center_hz: f32,
     /// The decoded-text ring tail (caps at ~4000 chars; oldest drop off).
     text: String,
     /// Per-character confidence 0–100, parallel to `text`'s chars — render low
     /// values faint (the phase-margin soft metric).
     char_conf: Vec<u8>,
+    /// A PSK over is on the air, queued behind one, or the latched stream is
+    /// running — the cockpit's TX indicator and the Esc/Stop macro's enable.
+    sending: bool,
+    /// Continuous TX is latched (reported separately from `sending` so the
+    /// Stop control is live from the instant the latch goes up).
+    latched: bool,
+    keyer_error: Option<String>,
 }
 
 fn psk_state_dto(eng: &Engine) -> PskStateDto {
@@ -8917,7 +8925,54 @@ fn psk_state_dto(eng: &Engine) -> PskStateDto {
         center_hz: s.center_hz,
         text: s.text,
         char_conf: s.conf,
+        sending: s.sending,
+        latched: s.latched,
+        keyer_error: s.keyer_error,
     }
+}
+
+/// Queue PSK31 text to transmit — an explicit operator send, the ONLY way PSK
+/// TX starts. The engine validates every gate up front (TX armed, license
+/// privileges at the current dial, the Keyboard section owning the rig, no
+/// tune carrier, no other transmission) and returns WHY a send was refused;
+/// the radio loop keys the queued text as shaped BPSK audio at the netted
+/// offset. While continuous TX is latched a send types into the live stream.
+#[tauri::command(async)]
+fn psk_send(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_send_text(&text)?;
+    Ok(psk_state_dto(&eng))
+}
+
+/// Continuous TX on/off — the PSK cockpit's TX button, the same MMTTY-style
+/// latch RTTY carries: ON runs the SAME gate a send runs; OFF lets what was
+/// typed finish keying, then unkeys. NOT the emergency stop — Stop TX, the
+/// Esc/Stop macro and the TX-enable latch cut instantly and each also drops
+/// this. The engine re-checks every TX gate on every radio-loop tick while it
+/// is up and drops the latch the moment one goes down.
+#[tauri::command(async)]
+fn psk_set_latched(state: State<'_, SharedEngine>, on: bool) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_psk_latched(on)?;
+    Ok(psk_state_dto(&eng))
+}
+
+/// Feed typed characters into the live latched transmission (one insertion at
+/// a time from the compose field — PSK has no un-send). Refused unless
+/// continuous TX is latched.
+#[tauri::command(async)]
+fn psk_type(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_type(&text)?;
+    Ok(psk_state_dto(&eng))
+}
+
+/// Stop PSK now: abort the over in progress, drop everything queued, and unkey.
+#[tauri::command(async)]
+fn psk_stop(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_stop();
+    Ok(psk_state_dto(&eng))
 }
 
 /// Arm/disarm the PSK31 RX decoder by an EXPLICIT operator act (session-only —
@@ -8932,7 +8987,7 @@ fn psk_arm(state: State<'_, SharedEngine>, on: bool) -> Result<PskStateDto, Stri
 }
 
 /// Arm the decoder because the operator ENTERED the PSK view. Receive-only by
-/// construction (no PSK TX path exists): only upgrades from off, refuses once
+/// construction (arming the decoder keys nothing): only upgrades from off, refuses once
 /// the operator has explicitly stopped it this session, and refuses for good
 /// when the Settings opt-out is off. See `Engine::psk_auto_arm` for the policy.
 #[tauri::command(async)]
@@ -9975,13 +10030,16 @@ fn get_licensed_band_plan(
     use tempo_app::settings::OperatingMode;
     let eng = engine_lock(&state);
     let class = eng.settings().license_class;
-    // RTTY / SSTV: fixed standard watering-hole channels (like WSJT-X's per-mode
-    // dials), license-filtered per band — a Technician sees only the bands their
-    // class can key there (RTTY rides digital privileges, SSTV rides phone).
+    // RTTY / SSTV / PSK: fixed standard watering-hole channels (like WSJT-X's
+    // per-mode dials), license-filtered per band — a Technician sees only the
+    // bands their class can key there (RTTY and PSK ride data privileges, SSTV
+    // rides phone).
     let lower = mode.to_ascii_lowercase();
-    if lower == "rtty" || lower == "sstv" {
+    if lower == "rtty" || lower == "sstv" || lower == "psk" {
         let (plan, priv_mode) = if lower == "rtty" {
             (tempo_app::bandplan::rtty_band_plan(), OperatingMode::Digital)
+        } else if lower == "psk" {
+            (tempo_app::bandplan::psk_band_plan(), OperatingMode::Keyboard)
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
@@ -16751,6 +16809,10 @@ pub fn run() {
             psk_clear,
             psk_afc_reset,
             psk_net,
+            psk_send,
+            psk_set_latched,
+            psk_type,
+            psk_stop,
             sstv_arm,
             sstv_auto_arm,
             sstv_auto_disarm,

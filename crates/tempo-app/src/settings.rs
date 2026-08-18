@@ -25,6 +25,14 @@ pub enum OperatingMode {
     Phone,
     Cw,
     Rtty,
+    /// The keyboard modes as ONE flat section (PSK31 today; QPSK31 and the rest
+    /// select within the cockpit, never here). "keyboard" on the wire. All
+    /// keyboard modes share one section policy — data privileges, the digital
+    /// power cap, always-USB PKTUSB, soundcard-only — so every policy match in
+    /// the app gains exactly ONE reviewed arm for the whole family. Rtty stays
+    /// its own variant: its LSB convention and FSK backend are genuinely
+    /// different policy.
+    Keyboard,
 }
 
 /// Which VFO carries the uplink and which the downlink during a satellite pass.
@@ -3498,7 +3506,11 @@ impl Settings {
         let cap = match self.operating_mode {
             OperatingMode::Phone => self.max_power_phone,
             OperatingMode::Cw => self.max_power_cw,
-            OperatingMode::Digital | OperatingMode::Rtty => self.max_power_digital,
+            // The keyboard modes share the digital cap: PSK31 keys continuously
+            // at high duty exactly as RTTY does.
+            OperatingMode::Digital | OperatingMode::Rtty | OperatingMode::Keyboard => {
+                self.max_power_digital
+            }
         };
         cap.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0)
     }
@@ -3551,6 +3563,10 @@ impl Settings {
         // while Phone and CW follow the hard band convention (LSB below 10 MHz).
         let lsb = match self.operating_mode {
             OperatingMode::Digital => self.sideband.trim().eq_ignore_ascii_case("LSB"),
+            // Keyboard modes are ALWAYS USB-side: the PSK31 convention is USB on
+            // every band (80/40 m included — unlike RTTY's LSB and phone's
+            // below-10-MHz rule), so the band fallthrough would be wrong here.
+            OperatingMode::Keyboard => false,
             _ => self.dial_mhz < 10.0,
         };
         self.rig_mode_on_sideband(lsb)
@@ -3622,6 +3638,15 @@ impl Settings {
             // leaving the rig stuck in the previous section's SSB/CW mode.) Any non-LSB
             // sideband (incl. empty/garbled) maps to the USB-side PKTUSB that FT8 uses.
             OperatingMode::Digital => {
+                self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
+            }
+            // Keyboard modes (PSK31…): soundcard audio through a DATA submode,
+            // exactly like Digital — plain SSB on a normally-wired rig radiates
+            // ZERO RF, hence the same PKT/data forcing and the same mic-jack
+            // opt-out. `rig_mode` derives the side as always-USB (the PSK31
+            // convention); the side stays a parameter here for the one caller
+            // that can know better (a transponder's declared side).
+            OperatingMode::Keyboard => {
                 self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
             }
         }
