@@ -35,7 +35,11 @@ fn stand_in(dir: &std::path::Path, script: &str) {
     // a test binary has no bundle, so this is the path it takes.
     std::env::set_var(
         "PATH",
-        format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default()),
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
     );
 }
 

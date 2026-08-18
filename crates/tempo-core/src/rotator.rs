@@ -430,16 +430,28 @@ mod tests {
         // unchanged, and the half on the far side is turned over the top — the same patch of
         // sky, reached without the mast crossing under it.
         let rise = Some(100.0);
-        assert_eq!(point_for(100.0, 80.0, &cfg, rise), (100.0, 80.0), "the near half is not rewritten");
-        assert_eq!(point_for(280.0, 80.0, &cfg, rise), (100.0, 100.0), "the far half comes over the top");
-        assert_eq!(point_for(280.0, 0.0, &cfg, rise), (100.0, 180.0), "…all the way to the far horizon");
+        assert_eq!(
+            point_for(100.0, 80.0, &cfg, rise),
+            (100.0, 80.0),
+            "the near half is not rewritten"
+        );
+        assert_eq!(
+            point_for(280.0, 80.0, &cfg, rise),
+            (100.0, 100.0),
+            "the far half comes over the top"
+        );
+        assert_eq!(
+            point_for(280.0, 0.0, &cfg, rise),
+            (100.0, 180.0),
+            "…all the way to the far horizon"
+        );
         // 90° away is the boundary and stays on the near side: an ambiguous sample must not
         // flap between the two frames.
         assert_eq!(point_for(190.0, 45.0, &cfg, rise), (190.0, 45.0));
     }
 
     #[test]
-    fn allow_flip_can_actually_FIRE_and_only_on_a_high_pass() {
+    fn allow_flip_can_actually_fire_now_and_only_on_a_high_pass() {
         // ⭐ THE DEFECT, pinned. The flip used to be gated on `el > 90.0`, and a look angle
         // above the horizon cannot exceed 90 — `sat::look_at`'s elevation is an `asin`, bounded
         // to [-90, 90]. So the branch was dead in every pass the propagator can produce, while
@@ -481,7 +493,10 @@ mod tests {
         // over the top and the same track continues on the opposite bearing, 190°.
         let pass = [(10.0, 86.0), (10.0, 89.0), (190.0, 89.0), (190.0, 86.0)];
 
-        let plain: Vec<f64> = pass.iter().map(|&(az, el)| point_for(az, el, &cfg, None).0).collect();
+        let plain: Vec<f64> = pass
+            .iter()
+            .map(|&(az, el)| point_for(az, el, &cfg, None).0)
+            .collect();
         assert!(
             az_distance(plain[1], plain[2]) > 170.0,
             "the unflipped frame really does swing the mast round at the top: {plain:?}"
@@ -515,11 +530,33 @@ mod tests {
         let mut d = TrackDriver::for_pass(cfg, 89.0, 10.0);
         assert!(d.flipped());
         // Still on the rise bearing: commanded as-is.
-        assert_eq!(d.step(10.0, 20.0), RotStep::PointAzEl { az: 10.0, el: 20.0 });
-        d.record(RotStep::PointAzEl { az: 10.0, el: 20.0 }, RotOutcome::AzElOk, 10.0, 20.0);
+        assert_eq!(
+            d.step(10.0, 20.0),
+            RotStep::PointAzEl { az: 10.0, el: 20.0 }
+        );
+        d.record(
+            RotStep::PointAzEl { az: 10.0, el: 20.0 },
+            RotOutcome::AzElOk,
+            10.0,
+            20.0,
+        );
         // Past the zenith, on the far bearing: the mast does not follow, the elevation does.
-        assert_eq!(d.step(190.0, 20.0), RotStep::PointAzEl { az: 10.0, el: 160.0 });
-        d.record(RotStep::PointAzEl { az: 10.0, el: 160.0 }, RotOutcome::AzElOk, 190.0, 20.0);
+        assert_eq!(
+            d.step(190.0, 20.0),
+            RotStep::PointAzEl {
+                az: 10.0,
+                el: 160.0
+            }
+        );
+        d.record(
+            RotStep::PointAzEl {
+                az: 10.0,
+                el: 160.0,
+            },
+            RotOutcome::AzElOk,
+            190.0,
+            20.0,
+        );
         // …and the reported AIM is still the boresight look angle, so nothing the operator
         // reads moves because of the flip.
         assert_eq!(d.last_aim(), Some((190.0, 20.0)));
@@ -545,8 +582,13 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(w.observe(190.0, 150.0), None);
         }
-        let gap = w.observe(190.0, 150.0).expect("a jammed mast must be reported");
-        assert!((gap - 40.0).abs() < 1e-9, "and it says how far short: {gap}");
+        let gap = w
+            .observe(190.0, 150.0)
+            .expect("a jammed mast must be reported");
+        assert!(
+            (gap - 40.0).abs() < 1e-9,
+            "and it says how far short: {gap}"
+        );
         // Said once, not once a tick.
         assert_eq!(w.observe(190.0, 150.0), None);
         assert_eq!(w.observe(190.0, 150.0), None);
@@ -556,7 +598,10 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(w.observe(190.0, 165.0), None);
         }
-        assert!(w.observe(190.0, 165.0).is_some(), "a second jam is a second report");
+        assert!(
+            w.observe(190.0, 165.0).is_some(),
+            "a second jam is a second report"
+        );
     }
 
     #[test]

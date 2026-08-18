@@ -130,7 +130,10 @@ fn ask(addr: &str, line: &str, want_lines: usize, deadline_ms: u64) -> std::io::
             Ok(0) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
-                    format!("rotctld closed the connection without answering {:?}", line.trim()),
+                    format!(
+                        "rotctld closed the connection without answering {:?}",
+                        line.trim()
+                    ),
                 ));
             }
             Ok(n) => {
@@ -138,7 +141,8 @@ fn ask(addr: &str, line: &str, want_lines: usize, deadline_ms: u64) -> std::io::
                 let text = String::from_utf8_lossy(&out);
                 let complete = text.lines().filter(|l| !l.trim().is_empty()).count();
                 if text.ends_with('\n')
-                    && (complete >= want_lines || text.lines().any(|l| l.trim_start().starts_with("RPRT")))
+                    && (complete >= want_lines
+                        || text.lines().any(|l| l.trim_start().starts_with("RPRT")))
                 {
                     return Ok(text.to_string());
                 }
@@ -353,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn a_daemon_that_says_nothing_is_a_FAILURE() {
+    fn a_daemon_that_says_nothing_is_a_failure_not_an_ack() {
         // ⭐ THE SHIPPED BUG, staged. This returned Ok(()) — a slew that never happened,
         // reported as done, which in a pass also reset the miss counter so the rotator could
         // never be given up on. The short deadline keeps the test quick; the mechanism (a
@@ -361,7 +365,10 @@ mod tests {
         let (addr, _rx) = stage(Behave::Silent);
         let e = ask(&addr, "P 10.0 0\n", 1, 300).expect_err("silence is not an ack");
         assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
-        assert!(e.to_string().contains("baud"), "the error names the likeliest cause: {e}");
+        assert!(
+            e.to_string().contains("baud"),
+            "the error names the likeliest cause: {e}"
+        );
     }
 
     #[test]
@@ -408,24 +415,33 @@ mod tests {
         assert_eq!(rx.recv().expect("a line"), "S\n");
 
         let (addr, _rx) = stage(Behave::Say("RPRT -11\n"));
-        assert!(stop(&addr).is_err(), "a stop that did not stop must not report success");
+        assert!(
+            stop(&addr).is_err(),
+            "a stop that did not stop must not report success"
+        );
     }
 
     #[test]
     fn a_position_reply_gives_azimuth_and_elevation() {
         let (addr, rx) = stage(Behave::Say("123.4\n45.6\n"));
-        assert_eq!(read_position(&addr).expect("a position"), (123.4, Some(45.6)));
+        assert_eq!(
+            read_position(&addr).expect("a position"),
+            (123.4, Some(45.6))
+        );
         assert_eq!(rx.recv().expect("a line"), "p\n");
     }
 
     #[test]
-    fn a_rotator_that_cannot_REPORT_is_distinguishable_from_one_that_is_not_there() {
+    fn a_rotator_that_cannot_report_is_distinguishable_from_one_that_is_not_there() {
         // Model 403 (Hy-Gain DCU-1/DCU-1X) has no get_position in the bundled Hamlib: it
         // answers `p` with RPRT -11 and takes `P` perfectly. The reply reaches the caller as
         // an error that says so, instead of being indistinguishable from a dead daemon.
         let (addr, _rx) = stage(Behave::Say("RPRT -11\n"));
         let e = read_position(&addr).expect_err("RPRT is not a position");
-        assert!(e.to_string().contains("does not report its position"), "{e}");
+        assert!(
+            e.to_string().contains("does not report its position"),
+            "{e}"
+        );
         // …and the convenience wrapper still degrades to None for the 2 s polls.
         let (addr, _rx) = stage(Behave::Say("RPRT -11\n"));
         assert_eq!(read_azimuth(&addr), None);
