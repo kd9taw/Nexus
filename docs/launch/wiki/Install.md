@@ -136,6 +136,14 @@ On first launch macOS asks for **microphone access** — that is the rig's RX au
 path; Nexus decodes nothing without it. If you declined it, re-enable it under
 **System Settings ▸ Privacy & Security ▸ Microphone** and relaunch.
 
+**If your rig is on the network** (a FlexRadio, or `rigctld` on another machine),
+macOS 15 also gates that behind the **Local Network** permission — and Nexus does
+not yet ship the usage string that asks for it, so you may get no prompt at all.
+A denial is silent, not an error: Detect finds nothing on the LAN and CAT reports
+that nothing answered. Check **System Settings ▸ Privacy & Security ▸ Local
+Network**, enable **Nexus** if it is listed, and relaunch. A rig on `127.0.0.1`
+is unaffected.
+
 ---
 
 ## Upgrading
