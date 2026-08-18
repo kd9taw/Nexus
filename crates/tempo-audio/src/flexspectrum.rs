@@ -27,7 +27,8 @@ use std::collections::HashMap;
 use tempo_app::dto::Spectrum;
 use tempo_app::engine::{engine_lock, Engine, MeterFeed};
 use tempo_net::flexcat::{
-    parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, FlexRecv, MeterDef,
+    parse_create_stream_id, parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, FlexRecv,
+    MeterDef, PanStatus,
 };
 use tempo_net::flexvita::{
     convert_meter_raw, dbm_to_watts, parse_fft, parse_meter_values, parse_vita, FftReassembler,
@@ -153,6 +154,52 @@ pub fn set_pan_ref_command(pan_id: u32, ref_dbm: i32) -> String {
 /// Command to remove a pan on teardown.
 pub fn remove_pan_command(pan_id: u32) -> String {
     format!("display pan remove 0x{pan_id:08X}")
+}
+
+/// The pan object id a `display pan create` REPLY grants us — or `None` (refused, or no id in the
+/// body), meaning we own no panadapter and must steer or remove none.
+///
+/// ⚠️ THE REPLY IS THE ONLY THING THAT PROVES A PAN IS OURS. Same rule, same reason, as
+/// `flexdax::stream_from_create_reply`: `FlexCat::command`/`send` replies carry a code, and
+/// `R7|50000015|bad` parses as a perfectly good reply, so a refusal must not read as a grant.
+pub fn created_pan_id(code: u32, body: &str) -> Option<u32> {
+    if code != 0 {
+        return None;
+    }
+    parse_create_stream_id(body)
+}
+
+/// Is this `display pan …` status about OUR panadapter?
+///
+/// ⚠️ A FLEX IS A MULTI-CLIENT RADIO AND THIS CODE ASSUMED IT WAS ALONE (audit #1012/#1023).
+/// `sub pan all` is the literal all-clients subscription: SmartSDR's own GUI pan, a Maestro's, a
+/// second Nexus window's all arrive here. The worker took `pan_id` out of ANY `display pan …` body,
+/// last-writer-wins, and then drove that borrowed object — `display pan set … center=`, `bw=`,
+/// `max_dbm=` on every dial move, and `display pan remove` on teardown. On the default Flex desk
+/// (model 2036's CAT is served by the SmartSDR suite, so the GUI is nearly always running) the
+/// stolen pan is the operator's own SmartSDR window: retuned, rescaled, then deleted out from
+/// under them.
+///
+/// Two proofs of ownership, in order:
+/// 1. **The create reply.** Once `pan_id` is known it came from OUR `display pan create`, so only
+///    that object id is ours — every other pan on the radio is somebody's to be left alone.
+/// 2. **The owning client handle**, for the window before the reply lands (or if it is lost):
+///    a status is ours only when its `client_handle` is the handle the radio greeted US with.
+///
+/// FAIL CLOSED — with no reply and no handle match we adopt nothing, and the cost is a blank
+/// native waterfall on an opt-in, off-by-default, never-hardware-verified path. Removing another
+/// client's panadapter is not a cost that trades against it.
+///
+/// NEEDS-BENCH: whether SmartSDR actually stamps `client_handle` on `display pan` status bodies
+/// (the key is in the published API and this parser has always recognised it, but no capture from
+/// a live radio exists here). RECIPE: attach with SmartSDR GUI running, `sub pan all`, and read
+/// whether the GUI's pan status carries `client_handle=` — if it does not, path 2 never fires and
+/// the create reply is the sole source, which is the intended primary anyway.
+pub fn pan_status_is_ours(pan_id: Option<u32>, our_handle: Option<u32>, st: &PanStatus) -> bool {
+    match pan_id {
+        Some(ours) => st.pan_id == Some(ours),
+        None => our_handle.is_some() && st.client_handle == our_handle,
+    }
 }
 
 /// Normalize reassembled u16 FFT bins to the UI's 0..1 waterfall scale (the UI's AGC/LUT does
@@ -304,12 +351,17 @@ impl FlexSpectrum {
                 for cmd in register_commands(udp_port) {
                     let _ = flex.send(&cmd);
                 }
-                let _ = flex.send(&create_pan_command(
-                    *center.lock().unwrap(),
-                    init_span,
-                    X_PIXELS,
-                    FPS,
-                ));
+                // Keep the create's sequence number: its reply is what proves the pan we steer is
+                // one WE created (see `pan_status_is_ours`). `send` rather than `command` so the
+                // async status stream still comes through this loop.
+                let create_seq = flex
+                    .send(&create_pan_command(
+                        *center.lock().unwrap(),
+                        init_span,
+                        X_PIXELS,
+                        FPS,
+                    ))
+                    .ok();
                 let mut pan_id: Option<u32> = None;
                 let mut last_ka = Instant::now();
                 let mut last_center = *center.lock().unwrap();
@@ -319,13 +371,26 @@ impl FlexSpectrum {
                     // Drain async status → learn the pan id + VITA stream id (send() left the
                     // status stream for us; command() would have swallowed it).
                     match flex.recv(Duration::from_millis(300)) {
+                        // OUR create's reply: the authoritative id of the pan we own.
+                        FlexRecv::Msg(FlexMsg::Reply { seq, code, msg })
+                            if Some(seq) == create_seq =>
+                        {
+                            if let Some(pid) = created_pan_id(code, &msg) {
+                                pan_id = Some(pid);
+                            }
+                        }
                         FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
+                            // ⚠️ ONLY OUR OWN PAN — `sub pan all` also delivers SmartSDR's
+                            // (audit #1012/#1023; the rule and its bench recipe are on
+                            // `pan_status_is_ours`).
                             if let Some(st) = parse_pan_status(&body) {
-                                if let Some(pid) = st.pan_id {
-                                    pan_id = Some(pid);
-                                }
-                                if let Some(sid) = st.stream_id {
-                                    *stream_id.lock().unwrap() = Some(sid);
+                                if pan_status_is_ours(pan_id, flex.handle(), &st) {
+                                    if let Some(pid) = st.pan_id {
+                                        pan_id = Some(pid);
+                                    }
+                                    if let Some(sid) = st.stream_id {
+                                        *stream_id.lock().unwrap() = Some(sid);
+                                    }
                                 }
                             }
                             // Learn meter definitions (id → source/name/unit) as they arrive.
@@ -370,6 +435,9 @@ impl FlexSpectrum {
                         last_ka = Instant::now();
                     }
                 }
+                // Remove only what we created. `pan_id` can now only have come from our own
+                // create reply or from a status the radio stamped with OUR client handle, so this
+                // can no longer delete the operator's SmartSDR panadapter (audit #1012/#1023).
                 if let Some(pid) = pan_id {
                     let _ = flex.send(&remove_pan_command(pid));
                 }
@@ -526,6 +594,68 @@ mod tests {
             set_pan_ref_command(0x40000000, -40),
             "display pan set 0x40000000 max_dbm=-40 min_dbm=-140"
         );
+    }
+
+    /// A pan status as the radio sends it, with an owner.
+    fn pan_status(pan_id: u32, owner: u32) -> PanStatus {
+        parse_pan_status(&format!(
+            "display pan 0x{pan_id:08X} center=14.100 bandwidth=0.200 stream_id=0x42000000 \
+             client_handle=0x{owner:08X}"
+        ))
+        .expect("a pan status body")
+    }
+
+    /// NEXUS STEERS ONLY THE PANADAPTER IT CREATED (audit #1012/#1023).
+    ///
+    /// `sub pan all` delivers every pan on the radio, and the worker adopted the id out of any of
+    /// them, last-writer-wins — then retuned, rescaled and finally REMOVED that borrowed object.
+    /// On a Flex desk the other pan is usually SmartSDR's own GUI window.
+    #[test]
+    fn a_pan_belonging_to_another_client_is_never_adopted() {
+        const OURS: u32 = 0x2ABC;
+        const SMARTSDR: u32 = 0x1234;
+
+        // Before our create reply lands, the owning handle is the only proof available.
+        assert!(
+            !pan_status_is_ours(None, Some(OURS), &pan_status(0x4000_0001, SMARTSDR)),
+            "SmartSDR's own panadapter must never be adopted"
+        );
+        assert!(
+            pan_status_is_ours(None, Some(OURS), &pan_status(0x4000_0000, OURS)),
+            "a pan the radio says is ours is ours"
+        );
+        // Fail closed: no handle yet (the first ms of a session) → adopt nothing.
+        assert!(!pan_status_is_ours(
+            None,
+            None,
+            &pan_status(0x4000_0000, OURS)
+        ));
+
+        // Once the create reply has named our pan, only that object id is ours — a foreign status
+        // cannot overwrite it, which is what "last-writer-wins" did.
+        let ours = created_pan_id(0, "0x40000000").expect("the create reply grants the id");
+        assert_eq!(ours, 0x4000_0000);
+        assert!(pan_status_is_ours(
+            Some(ours),
+            Some(OURS),
+            &pan_status(ours, OURS)
+        ));
+        assert!(
+            !pan_status_is_ours(Some(ours), Some(OURS), &pan_status(0x4000_0001, SMARTSDR)),
+            "another pan's status must not repoint us at it"
+        );
+    }
+
+    /// A REFUSED create is not a grant — the same rule the DAX TX create already follows.
+    #[test]
+    fn a_pan_is_owned_only_from_a_successful_create() {
+        assert_eq!(created_pan_id(0, "0x40000000"), Some(0x4000_0000));
+        assert_eq!(
+            created_pan_id(0x5000_0015, "0x40000000"),
+            None,
+            "an error code with an id-shaped body is still a refusal"
+        );
+        assert_eq!(created_pan_id(0, ""), None);
     }
 
     #[test]

@@ -126,6 +126,11 @@ pub struct PanStatus {
     pub center_mhz: Option<f64>,
     pub bandwidth_mhz: Option<f64>,
     pub x_pixels: Option<u32>,
+    /// Owning client (hex) — a pan is ours iff this matches our client handle. `sub pan all`
+    /// delivers status for EVERY panadapter on the radio, SmartSDR's own GUI pan included, so
+    /// without this there is nothing to tell a pan we created from one we must never touch
+    /// (audit #1012/#1023). The key was recognised and discarded here.
+    pub client_handle: Option<u32>,
 }
 
 /// A `stream 0x<id> type=dax_rx dax_channel=<n> …` status object — how the radio tells us the VITA
@@ -285,11 +290,9 @@ pub fn parse_pan_status(body: &str) -> Option<PanStatus> {
             "center" => st.center_mhz = v.parse().ok(),
             "bandwidth" => st.bandwidth_mhz = v.parse().ok(),
             "x_pixels" | "xpixels" => st.x_pixels = v.parse().ok(),
-            "stream_id" | "client_handle" => {} // handled below via explicit keys if present
+            "stream_id" => st.stream_id = parse_hex_id(v),
+            "client_handle" => st.client_handle = parse_hex_id(v),
             _ => {}
-        }
-        if k == "stream_id" {
-            st.stream_id = parse_hex_id(v);
         }
     }
     Some(st)
@@ -581,11 +584,13 @@ mod tests {
     #[test]
     fn parses_a_pan_status_body() {
         let st = parse_pan_status(
-            "display pan 0x40000000 wnb=0 center=14.100 bandwidth=0.200 x_pixels=1200 stream_id=0x42000000",
+            "display pan 0x40000000 wnb=0 center=14.100 bandwidth=0.200 x_pixels=1200 stream_id=0x42000000 client_handle=0x2ABC",
         )
         .unwrap();
         assert_eq!(st.pan_id, Some(0x4000_0000));
         assert_eq!(st.stream_id, Some(0x4200_0000));
+        // The ownership discriminator: `sub pan all` also delivers SmartSDR's own pan (#1012).
+        assert_eq!(st.client_handle, Some(0x2ABC));
         assert_eq!(st.center_mhz, Some(14.1));
         assert_eq!(st.bandwidth_mhz, Some(0.2));
         assert_eq!(st.x_pixels, Some(1200));

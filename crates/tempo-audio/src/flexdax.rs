@@ -5,9 +5,10 @@
 //! soundcard device — which is invisible under Remote Desktop (the documented DAX-under-RDP
 //! problem). Mirrors [`crate::flexspectrum`], with three threads:
 //! - a **TCP control** thread ([`FlexCat`]) registers Nexus as a client, creates ONE `dax_rx`
-//!   stream on channel 1 + binds the active slice's audio to it, learns the stream's VITA id from
-//!   the async status, creates the `dax_tx` stream and routes the rig's transmit audio to it, keeps
-//!   the session alive, and puts every one of those back on teardown;
+//!   stream on channel 1 + binds the operating slice's audio to it, learns the stream's VITA id
+//!   from its own create REPLY (never from another client's status — see [`dax_stream_is_ours`]),
+//!   creates the `dax_tx` stream and routes the rig's transmit audio to it, keeps the session
+//!   alive, and puts every one of those back on teardown;
 //! - a **UDP audio** thread receives VITA-49 datagrams, filters to that stream id (mandatory — the
 //!   `0x03E3` class is shared with plain remote audio), decodes ([`parse_dax_audio`]) to mono
 //!   24 kHz, resamples to the 12 kHz modem rate, and appends to a ring the engine drains as its RX
@@ -117,19 +118,55 @@ pub fn transmit_set_dax_command(on: bool) -> String {
     format!("transmit set dax={}", u8::from(on))
 }
 
-/// The dax_tx stream id a `stream create` reply gives us — or `None`, meaning we have no stream and
-/// must NOT re-route the rig's transmit audio.
+/// The stream id a `stream create` reply gives us — or `None`, meaning we have no stream: nothing
+/// may be sent on it, the rig's transmit audio must NOT be re-routed to it, and (RX side) no UDP
+/// audio may be accepted for it.
 ///
 /// ⚠️ THE REPLY CODE IS PART OF THE ANSWER, and it was being discarded (`if let Ok((_, reply))`).
 /// `FlexCat::command` returns `Ok` for ANY matching reply, error frames included — `R7|50000015|bad`
 /// parses to a perfectly good `Reply` — so a REFUSED create was indistinguishable from a granted
 /// one, on a LAN, at zero latency. Fail closed: `code == 0` (the SmartSDR success convention) AND a
 /// parseable id, or nothing (audit #1002 / #1044).
-pub fn tx_stream_from_reply(code: u32, body: &str) -> Option<u32> {
+///
+/// Used by BOTH directions now: the dax_tx create has always been read this way, and the dax_rx id
+/// is no longer taken from an unfiltered broadcast (audit #1013/#1024/#1046 — see
+/// [`dax_stream_is_ours`]).
+pub fn stream_from_create_reply(code: u32, body: &str) -> Option<u32> {
     if code != 0 {
         return None;
     }
     parse_create_stream_id(body)
+}
+
+/// Is this `stream …` status OUR dax_rx stream?
+///
+/// ⚠️ THE CHANNEL NUMBER IS NOT AN OWNERSHIP TEST (audit #1013/#1024/#1046). The worker adopted
+/// any `stream … type=dax_rx dax_channel=1` status that arrived, unconditionally and
+/// last-writer-wins, on the reasoning that "we created exactly one stream on DAX_CHANNEL, so a
+/// status for that channel is ours". A Flex is multi-client: the DAX driver on the operator's PC,
+/// a second Nexus window, another program's DAX session can each hold channel 1, and the id we
+/// then adopt is used to FILTER incoming audio (foreign audio into our decoders) and, on teardown,
+/// to `stream remove` — deleting somebody else's stream. `client_handle` is on the wire and was
+/// parsed and thrown away; its own doc comment in `flexcat` says what it is for.
+///
+/// Ownership, in order:
+/// 1. **The create reply** (`stream_from_create_reply`) — authoritative, since we sent the create.
+///    Once known, a status is ours only if it is about that same id, so nothing can repoint us.
+/// 2. **The owning client handle** on our channel, for the window before the reply lands or if it
+///    is lost. Fail closed with neither: no id, no audio, rather than another client's stream.
+pub fn dax_stream_is_ours(
+    known: Option<u32>,
+    our_handle: Option<u32>,
+    st: &tempo_net::flexcat::DaxStreamStatus,
+) -> bool {
+    match known {
+        Some(ours) => st.stream_id == Some(ours),
+        None => {
+            st.dax_channel == Some(DAX_CHANNEL)
+                && our_handle.is_some()
+                && st.client_handle == our_handle
+        }
+    }
 }
 
 /// Remembers the slice DAX routing we FOUND, so teardown can put it back.
@@ -353,7 +390,12 @@ impl FlexDax {
                 for cmd in register_dax_commands(udp_port) {
                     let _ = flex.send(&cmd);
                 }
-                let _ = flex.send(&dax_rx_create_command(DAX_CHANNEL));
+                // Keep the create's sequence number: its reply is the authoritative source of OUR
+                // dax_rx stream id (audit #1013 — it used to be learned from whatever `stream …
+                // dax_channel=1` status happened to arrive, which is another client's stream as
+                // easily as ours). `send` rather than `command` so the status stream still reaches
+                // the loop below.
+                let rx_seq = flex.send(&dax_rx_create_command(DAX_CHANNEL)).ok();
                 // DAX TX: create the outbound stream (its create reply carries the stream id) and
                 // route the rig's transmit audio to it. Torn down on stop (TX back to the mic).
                 //
@@ -382,7 +424,7 @@ impl FlexDax {
                 if let Ok((code, reply)) =
                     flex.command(&dax_tx_create_command(), Duration::from_millis(600))
                 {
-                    if let Some(sid) = tx_stream_from_reply(code, &reply) {
+                    if let Some(sid) = stream_from_create_reply(code, &reply) {
                         *tx_stream_id.lock().unwrap() = Some(sid);
                         tx_created = Some(sid);
                     }
@@ -407,12 +449,19 @@ impl FlexDax {
                 let mut last_ka = Instant::now();
                 while !stop.load(Ordering::Relaxed) {
                     match flex.recv(Duration::from_millis(300)) {
+                        // OUR dax_rx create's reply: the authoritative stream id.
+                        FlexRecv::Msg(FlexMsg::Reply { seq, code, msg }) if Some(seq) == rx_seq => {
+                            if let Some(sid) = stream_from_create_reply(code, &msg) {
+                                *stream_id.lock().unwrap() = Some(sid);
+                                created = Some(sid);
+                            }
+                        }
                         FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
-                            // Learn OUR dax_rx stream id from the async status (the create reply
-                            // echoes it). We created exactly one stream on DAX_CHANNEL, so a status
-                            // for that channel is ours.
+                            // The async status confirms the id the reply granted — or, if that
+                            // reply was lost, supplies it, but ONLY for a stream the radio says is
+                            // ours (audit #1013/#1024/#1046; the rule is on `dax_stream_is_ours`).
                             if let Some(st) = parse_dax_stream_status(&body) {
-                                if st.dax_channel == Some(DAX_CHANNEL) {
+                                if dax_stream_is_ours(created, flex.handle(), &st) {
                                     if let Some(sid) = st.stream_id {
                                         *stream_id.lock().unwrap() = Some(sid);
                                         created = Some(sid);
@@ -467,6 +516,9 @@ impl FlexDax {
                 if let Some(slice) = bound_slice {
                     restore_slice_dax(&mut flex, slice, slices.restore(slice));
                 }
+                // Remove only the streams we created: both ids now come from our own create
+                // replies (or, for RX, a status the radio stamped with our client handle), so
+                // `stream remove` can no longer delete another DAX client's stream (audit #1013).
                 if let Some(sid) = tx_created {
                     let _ = flex.send(&dax_remove_command(sid));
                 }
@@ -810,19 +862,71 @@ mod tests {
     /// the difference, and it used to be thrown away — after which `transmit set dax=1` went out
     /// anyway and pointed the transmitter at a stream nothing would ever send on.
     #[test]
-    fn a_tx_stream_is_adopted_only_from_a_successful_create() {
+    fn a_stream_is_adopted_only_from_a_successful_create() {
         assert_eq!(
-            tx_stream_from_reply(0, "0x84000000"),
+            stream_from_create_reply(0, "0x84000000"),
             Some(0x8400_0000),
             "code 0 + an id = ours"
         );
         assert_eq!(
-            tx_stream_from_reply(0x5000_0015, "0x84000000"),
+            stream_from_create_reply(0x5000_0015, "0x84000000"),
             None,
             "an ERROR code with an id-shaped body is still a refusal"
         );
-        assert_eq!(tx_stream_from_reply(0x5000_0015, "bad"), None);
-        assert_eq!(tx_stream_from_reply(0, ""), None, "no id = no re-route");
+        assert_eq!(stream_from_create_reply(0x5000_0015, "bad"), None);
+        assert_eq!(stream_from_create_reply(0, ""), None, "no id = no re-route");
+    }
+
+    /// DAX AUDIO IS TAKEN FROM OUR OWN STREAM, NOT FROM WHOEVER HOLDS CHANNEL 1
+    /// (audit #1013/#1024/#1046).
+    ///
+    /// The only filter was `dax_channel == 1`, so the DAX driver's own stream — or a second Nexus
+    /// window's — was adopted last-writer-wins, and that borrowed id then decided which UDP audio
+    /// reached our decoders and which stream `stream remove` deleted on teardown.
+    #[test]
+    fn a_dax_stream_belonging_to_another_client_is_never_adopted() {
+        const OURS: u32 = 0x2ABC;
+        const THEIRS: u32 = 0x1234;
+        let status = |sid: u32, owner: u32| {
+            parse_dax_stream_status(&format!(
+                "stream 0x{sid:08X} type=dax_rx dax_channel=1 client_handle=0x{owner:08X} in_use=1"
+            ))
+            .expect("a dax_rx stream status")
+        };
+
+        // Before our create reply lands, the owning handle is the only proof.
+        assert!(
+            !dax_stream_is_ours(None, Some(OURS), &status(0x0400_0009, THEIRS)),
+            "another client's channel-1 stream must never be adopted"
+        );
+        assert!(dax_stream_is_ours(
+            None,
+            Some(OURS),
+            &status(0x0400_0000, OURS)
+        ));
+        // Fail closed while our own handle is still unknown.
+        assert!(!dax_stream_is_ours(
+            None,
+            None,
+            &status(0x0400_0000, OURS)
+        ));
+        // A channel we did not create is not ours whoever owns it.
+        let other_channel =
+            parse_dax_stream_status("stream 0x04000001 type=dax_rx dax_channel=2 client_handle=0x2ABC")
+                .expect("status");
+        assert!(!dax_stream_is_ours(None, Some(OURS), &other_channel));
+
+        // Once the create reply has named our stream, only that id is ours.
+        let ours = stream_from_create_reply(0, "0x04000000").expect("the create reply grants it");
+        assert!(dax_stream_is_ours(
+            Some(ours),
+            Some(OURS),
+            &status(ours, OURS)
+        ));
+        assert!(
+            !dax_stream_is_ours(Some(ours), Some(OURS), &status(0x0400_0009, THEIRS)),
+            "a foreign status must not repoint the audio filter"
+        );
     }
 
     /// The operator's slice routing is borrowed, not taken (audit #1027/#1054).
