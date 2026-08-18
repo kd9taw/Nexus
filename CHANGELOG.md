@@ -5,7 +5,31 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.7.0] — 2026-08-18
+## [Unreleased]
+
+### Fixed
+
+- **A logbook with accented or non-English text in it could load as EMPTY — and the next save
+  wrote that empty log to disk.** If your `log.adi` held a single byte that wasn't plain
+  English — a Greek name, a German umlaut, a French accent in NAME, QTH or COMMENT, which is
+  exactly what a Greek, German or French Windows writes — Nexus failed to read the file,
+  treated it as an empty logbook, skipped its own safety copy *because* it looked empty, and
+  the next save rewrote `log.adi` from zero records. Every QSO, gone, silently, with no
+  backup. Nexus now reads the log as raw bytes and never fails a load over an encoding: the
+  contacts all load, and the one-time safety copy is taken from the original bytes. Found
+  while investigating a Greek-Windows launch report. If this bit you, `log.adi.bak` beside
+  your log holds the original.
+
+### Added
+
+- **Periodic logbook backups, in a `backups/` folder beside your log.** Nexus now keeps dated
+  snapshots of `log.adi`: at most one a day, only when the log has actually changed, **plus**
+  an immediate copy any time a save is about to make the log *smaller* — the one shape of
+  failure that has ever cost QSOs here. The folder is bounded three ways so it cannot creep:
+  the ten most recent snapshots, a 64 MB ceiling over the whole folder, and the one-a-day
+  rule. Oldest go first. The original `log.adi.bak` anchor is separate and is never rotated or
+  deleted. Snapshots are taken when the log is **saved**, never when it is opened, so however
+  large your log gets, launching Nexus does no extra disk work for this.
 
 ### Added
 
