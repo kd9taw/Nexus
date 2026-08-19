@@ -67,11 +67,12 @@ import {
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-// Only the Spots & Alerts sections (Pounce + Alerts) and the two Contesting sections (Contest
-// Category + Field Day Setup) read the catalog today — each was migrated with the panels it
-// configures. The rest of this file is still hardcoded English and is deliberately outside the
-// i18n guard's scope; see its header.
-import { t } from '../i18n'
+// What reads the catalog today: the panel SHELL (its chrome, the tab rail, Save, and the
+// toasts/confirms its handlers raise), the whole Appearance tab (Workspace + Features +
+// Accessibility), the Spots & Alerts sections (Pounce + Alerts) and the two Contesting
+// sections (Contest Category + Field Day Setup). Every remaining tab's fieldsets are still
+// hardcoded English and are deliberately outside the i18n guard's scope; see its header.
+import { t, type MessageKey } from '../i18n'
 import { T } from '../i18n/T'
 import { FD_EVENT_NAMES } from '../fdEvent'
 import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
@@ -537,16 +538,23 @@ type SettingsTab =
   | 'contesting'
   | 'appearance'
 
-const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
-  { id: 'station', label: 'Station' },
-  { id: 'radio', label: 'Radio' },
+//
+// `label` is the ENGLISH source string and stays literal for the two parsers above. What the
+// rail RENDERS is `labelKey` when there is one — and three tabs deliberately have none:
+// **Phone, CW and Digital are mode names**, invariant technical tokens by the same rule that
+// keeps 14.074 MHz out of the catalog (this array's own header calls them "the three
+// operating modes the nav rail itself presents"), so they render from `label` unchanged in
+// every language.
+const SETTINGS_TABS: { id: SettingsTab; label: string; labelKey?: MessageKey }[] = [
+  { id: 'station', label: 'Station', labelKey: 'settings.tabs.station' },
+  { id: 'radio', label: 'Radio', labelKey: 'settings.tabs.radio' },
   { id: 'phone', label: 'Phone' },
   { id: 'cw', label: 'CW' },
   { id: 'digital', label: 'Digital' },
-  { id: 'spots', label: 'Spots & Alerts' },
-  { id: 'logging', label: 'Logging & Connectors' },
-  { id: 'contesting', label: 'Contesting' },
-  { id: 'appearance', label: 'Appearance' },
+  { id: 'spots', label: 'Spots & Alerts', labelKey: 'settings.tabs.spots' },
+  { id: 'logging', label: 'Logging & Connectors', labelKey: 'settings.tabs.logging' },
+  { id: 'contesting', label: 'Contesting', labelKey: 'settings.tabs.contesting' },
+  { id: 'appearance', label: 'Appearance', labelKey: 'settings.tabs.appearance' },
 ]
 
 /** How the OmniRig connection option is offered, as a function of the platform.
@@ -655,11 +663,9 @@ export function SettingsPanel({
     // additive and is not.
     if (
       !(await confirmDialog({
-        title: `Replace your current setup with ${f.name}?`,
-        body:
-          'Your radios, preferences, memory channels, watchlist and chase sets will be replaced. ' +
-          'Your contact log is not affected. This cannot be undone.',
-        confirmLabel: 'Restore',
+        title: t('settings.backup.restore.confirm.title', { file: f.name }),
+        body: t('settings.backup.restore.confirm.body'),
+        confirmLabel: t('settings.backup.restore.confirm.action'),
         danger: true,
       }))
     ) {
@@ -667,8 +673,8 @@ export function SettingsPanel({
     }
     await withErrorToast(async () => {
       await importSettingsBundle(await f.text())
-      pushToast('Settings restored — check your radio and Test CAT', 'success')
-    }, 'Restore failed')
+      pushToast(t('settings.backup.restore.done'), 'success')
+    }, t('settings.backup.restore.failed'))
   }
   const [form, setForm] = useState<Settings | null>(null)
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
@@ -828,14 +834,14 @@ export function SettingsPanel({
   // key without inserting anything). idle | testing | the result line.
   const [qrzTest, setQrzTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
   const runQrzTest = () => {
-    setQrzTest({ state: 'testing', msg: 'testing…' })
+    setQrzTest({ state: 'testing', msg: t('settings.connections.test.testing') })
     qrzTestConnection()
       .then((msg) => setQrzTest({ state: 'ok', msg }))
       .catch((e) => setQrzTest({ state: 'fail', msg: String(e) }))
   }
   const [n3fjpTest, setN3fjpTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
   const runN3fjpTest = () => {
-    setN3fjpTest({ state: 'testing', msg: 'testing…' })
+    setN3fjpTest({ state: 'testing', msg: t('settings.connections.test.testing') })
     n3fjpTestConnection()
       .then((msg) => setN3fjpTest({ state: 'ok', msg }))
       .catch((e) => setN3fjpTest({ state: 'fail', msg: String(e) }))
@@ -1036,7 +1042,7 @@ export function SettingsPanel({
   // disk-thrash). The RX Level meter then responds within a poll, so the control
   // visibly "works" instead of appearing dead until a full Save.
   const applyRxGainLive = (value: number) => {
-    void setRxGain(value).catch(() => pushToast('Could not apply RX gain', 'error'))
+    void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
   // Apply TX drive (Pwr) to the LIVE radio, the SAME value as the cockpit "Pwr" slider —
@@ -1050,7 +1056,7 @@ export function SettingsPanel({
     const now = Date.now()
     if (!force && now - txLevelThrottleRef.current < 60) return
     txLevelThrottleRef.current = now
-    void setTxLevel(value).catch(() => pushToast('Could not set TX power', 'error'))
+    void setTxLevel(value).catch(() => pushToast(t('settings.audio.txPower.failed'), 'error'))
   }
 
   // Keep the Tx Power slider in step with the cockpit "Pwr" control — both are the SAME value
@@ -1147,6 +1153,13 @@ export function SettingsPanel({
   // The Guided copilot recommends the next F-key by ROLE (CQ → answer → report → 73):
   // customization changes the TEXT each key sends, never the key's job — so the
   // recommended-key highlight and the auto call fill (!) keep working for everyone.
+  // ⚠️ NOT MIGRATED, on purpose — these two tables and the two prompts below them are the CW
+  // macro editor's own, and they move as one piece with the CW tab (its editor JSX is not in
+  // this batch). Two of the four could not move alone anyway: the role table is read by index
+  // at the editor's rows, and `CW_MACRO_DEFAULTS` is SEED DATA — its labels are written into
+  // `settings.json` as the operator's own macro set the moment "Customize" is pressed, so a
+  // translated label would be a translated persisted value. The macro TEXT is macro tokens
+  // ({MYCALL}, {RST}) and is invariant in every language.
   const CW_MACRO_ROLES: Record<string, string> = {
     F1: 'CQ',
     F2: 'Answer a station',
@@ -1277,7 +1290,7 @@ export function SettingsPanel({
     // Mirror into the form for display only — the backend owns the value.
     setForm((prev) => (prev ? { ...prev, satVfoMap: m } : prev))
     void confirmSatUplink(m).catch(() =>
-      pushToast('Could not confirm the VFO mapping', 'error'),
+      pushToast(t('settings.satellites.vfoMap.failed'), 'error'),
     )
   }
 
@@ -1322,9 +1335,9 @@ export function SettingsPanel({
     if (
       (form?.workingFrequencies?.length ?? 0) > 0 &&
       !(await confirmDialog({
-        title: 'Clear all working-frequency overrides?',
-        body: 'The stock WSJT-X frequency table is restored.',
-        confirmLabel: 'Clear overrides',
+        title: t('settings.workingFreq.reset.confirm.title'),
+        body: t('settings.workingFreq.reset.confirm.body'),
+        confirmLabel: t('settings.workingFreq.reset.confirm.action'),
         danger: true,
       }))
     ) {
@@ -1395,7 +1408,7 @@ export function SettingsPanel({
     // Adding does not switch the station onto the new radio -- see Engine::add_radio. Select it
     // for EDITING instead, so the operator lands on the profile they just made and can configure
     // it, while the rig they are actually operating keeps running.
-    void withErrorToast(() => addRadio(), 'Could not add a radio').then(async (s) => {
+    void withErrorToast(() => addRadio(), t('settings.radios.add.failed')).then(async (s) => {
       if (!s) return
       reloadRadios()
       const fresh = await getSettings()
@@ -1409,15 +1422,17 @@ export function SettingsPanel({
     const r = form?.radios?.find((p) => p.id === id)
     if (
       !(await confirmDialog({
-        title: `Remove ${r?.name ?? 'this radio'}?`,
-        body: "This deletes its CAT/audio config, its rigctld port and its band coverage. Your contact log is not affected. This can't be undone.",
-        confirmLabel: 'Remove radio',
+        title: t('settings.radios.remove.confirm.title', {
+          name: r?.name ?? t('settings.radios.thisRadio'),
+        }),
+        body: t('settings.radios.remove.confirm.body'),
+        confirmLabel: t('settings.radios.remove.confirm.action'),
         danger: true,
       }))
     ) {
       return
     }
-    void withErrorToast(() => removeRadio(id), 'Could not remove the radio').then((s) => {
+    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then((s) => {
       if (!s) return
       // If the deleted radio was the one the rig form is editing, retarget the form: a
       // dangling editingRadioId routes every later Save through update_radio_profile(<gone
@@ -1428,7 +1443,7 @@ export function SettingsPanel({
     })
   }
   const handleRenameRadio = (id: number, name: string) => {
-    void withErrorToast(() => renameRadio(id, name), 'Could not rename the radio').then((s) => s && reloadRadios())
+    void withErrorToast(() => renameRadio(id, name), t('settings.radios.rename.failed')).then((s) => s && reloadRadios())
   }
   const handleToggleRadioBand = (id: number, band: string) => {
     const radio = form?.radios?.find((r) => r.id === id)
@@ -1436,7 +1451,7 @@ export function SettingsPanel({
     const bands = radio.bands.includes(band)
       ? radio.bands.filter((b) => b !== band)
       : [...radio.bands, band]
-    void withErrorToast(() => setRadioBands(id, bands), 'Could not set band coverage').then(
+    void withErrorToast(() => setRadioBands(id, bands), t('settings.radios.bands.failed')).then(
       (s) => s && reloadRadios(),
     )
   }
@@ -1445,7 +1460,7 @@ export function SettingsPanel({
   // is pointed at a non-active radio, where Save goes through update_radio_profile and drops the
   // form entirely).
   const mutateRules = (next: RoutingRule[]) => {
-    void withErrorToast(() => setRoutingRules(next), 'Could not save the routing rules').then(
+    void withErrorToast(() => setRoutingRules(next), t('settings.routing.rules.failed')).then(
       (s) => s && reloadRadios(),
     )
   }
@@ -1477,7 +1492,7 @@ export function SettingsPanel({
     mutateRules(rules)
   }
   const handleSetDefaultRadio = (id: number | null) => {
-    void withErrorToast(() => setDefaultRadio(id), 'Could not set the default radio').then(
+    void withErrorToast(() => setDefaultRadio(id), t('settings.radios.default.failed')).then(
       (s) => s && reloadRadios(),
     )
   }
@@ -1498,9 +1513,9 @@ export function SettingsPanel({
     if (
       dirtyRef.current &&
       !(await confirmDialog({
-        title: 'Discard unsaved changes to the radio you were editing?',
-        body: 'The edits you have not saved for that radio are lost.',
-        confirmLabel: 'Discard and switch',
+        title: t('settings.radios.edit.confirm.title'),
+        body: t('settings.radios.edit.confirm.body'),
+        confirmLabel: t('settings.radios.edit.confirm.action'),
         danger: true,
       }))
     ) {
@@ -1519,15 +1534,15 @@ export function SettingsPanel({
     if (
       dirtyRef.current &&
       !(await confirmDialog({
-        title: 'Discard unsaved changes and switch the operating radio?',
-        body: 'The carrier is dropped before the swap. Unsaved edits to the radio you were editing are lost.',
-        confirmLabel: 'Discard and switch',
+        title: t('settings.radios.makeActive.confirm.title'),
+        body: t('settings.radios.makeActive.confirm.body'),
+        confirmLabel: t('settings.radios.makeActive.confirm.action'),
         danger: true,
       }))
     ) {
       return
     }
-    void withErrorToast(() => setActiveRadio(id), 'Could not switch radios').then((s) => {
+    void withErrorToast(() => setActiveRadio(id), t('settings.radios.switch.failed')).then((s) => {
       if (!s) return
       void getSettings().then((full) => {
         setForm(full)
@@ -1557,9 +1572,15 @@ export function SettingsPanel({
     // could never see a Flex): USB enumeration + LAN discovery in parallel;
     // either probe may fail without killing the other's results.
     const [rigs, flexes] = await Promise.all([
-      withErrorToast(() => detectRigs(), 'USB radio detection failed'),
+      withErrorToast(() => detectRigs(), t('settings.detect.usb.failed')),
       discoverFlex().catch((e) => {
-        pushToast(`Flex LAN scan: ${e instanceof Error ? e.message : e}`, 'info', 6000)
+        pushToast(
+          t('settings.detect.flex.scanFailed', {
+            error: String(e instanceof Error ? e.message : e),
+          }),
+          'info',
+          6000,
+        )
         return []
       }),
     ])
@@ -1568,7 +1589,7 @@ export function SettingsPanel({
     if (rigs) {
       setDetected(rigs)
       if (rigs.length === 0 && flexes.length === 0)
-        pushToast('No radios found — USB: plug in + power on; Flex: must be on this network.', 'info')
+        pushToast(t('settings.detect.none'), 'info')
     }
   }
 
@@ -1605,18 +1626,30 @@ export function SettingsPanel({
       // device is — a cable — and the sweep would be looking for a radio that this port may not
       // even have a CAT link to yet. Tell the operator the one thing still missing.
       pushToast(
-        `Applied ${r.interfaceName} on ${r.portName} — now pick your Rig Model, then Save`,
+        t('settings.detect.applied.interface', {
+          device: r.interfaceName,
+          port: r.portName,
+        }),
         'success',
       )
     } else if (r.suggestedModel == null) {
       // Unidentified rig (bridge chip only, no model) — instead of making the operator pick a model
       // and Test CAT by hand, chain straight into the port Auto-test, which sweeps COMMON_CAT_MODELS
       // + bauds to find the one that actually answers. Pass the freshly-applied form (state is async).
-      pushToast(`Applied ${r.product || 'radio'} on ${r.portName} — identifying via Auto-test…`, 'info')
+      pushToast(
+        t('settings.detect.applied.identifying', {
+          device: r.product || t('settings.detect.unknownRadio'),
+          port: r.portName,
+        }),
+        'info',
+      )
       void handleAutoTestPorts(applied)
     } else {
       pushToast(
-        `Applied ${r.suggestedModelName ?? (r.product || 'radio')} on ${r.portName} — review + Save settings`,
+        t('settings.detect.applied.review', {
+          device: r.suggestedModelName ?? (r.product || t('settings.detect.unknownRadio')),
+          port: r.portName,
+        }),
         'success',
       )
     }
@@ -1652,10 +1685,13 @@ export function SettingsPanel({
           }
         : prev,
     )
+    // The radio is named by its MODEL plus, when it has one, the nickname its owner gave it —
+    // both tokens, assembled here so the two sentences below each carry ONE `{{radio}}` slot.
+    const named = `${f.model}${f.nickname ? ` "${f.nickname}"` : ''}`
     pushToast(
       IS_WINDOWS
-        ? `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.`
-        : `Found ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — model and radio IP applied. SmartSDR CAT is Windows-only, so set Network Address yourself: the address of a Windows PC on this network running SmartSDR CAT (slice A is its port 5002). Native panadapter/DAX below talk to the radio directly and need no such PC.`,
+        ? t('settings.detect.flex.applied', { radio: named, ip: f.ip })
+        : t('settings.detect.flex.found', { radio: named, ip: f.ip }),
       'success',
     )
   }
@@ -1711,7 +1747,7 @@ export function SettingsPanel({
   const handleTestCat = async () => {
     if (!form) return
     if (!form.mycall.trim()) {
-      setError('Callsign is required.')
+      setError(t('settings.cat.callsignRequired'))
       return
     }
     setCatTesting(true)
@@ -1725,17 +1761,16 @@ export function SettingsPanel({
         // here would save this radio's config and then hand back a green tick earned by the
         // OTHER radio. A false green is worse than no test: it's what hid the CAT-flip bug
         // through a whole review. Say what was actually done instead.
-        const name = form.radios?.find((r) => r.id === editingRadioId)?.name ?? `radio ${editingRadioId}`
-        setCatResult({
-          ok: true,
-          detail: `Saved to ${name}. CAT can only be tested on the radio you're operating — make ${name} active to test it.`,
-        })
+        const name =
+          form.radios?.find((r) => r.id === editingRadioId)?.name ??
+          t('settings.radios.unnamed', { id: editingRadioId })
+        setCatResult({ ok: true, detail: t('settings.cat.savedNotTested', { name }) })
       } else {
         const result = await testCat()
         setCatResult(result)
       }
     } catch {
-      setCatResult({ ok: false, detail: 'Could not run the CAT test.' })
+      setCatResult({ ok: false, detail: t('settings.cat.test.failed') })
     } finally {
       setCatTesting(false)
     }
@@ -1775,7 +1810,7 @@ export function SettingsPanel({
         setCatResult({ ok: false, detail: r.detail })
       }
     } catch {
-      setCatResult({ ok: false, detail: 'Could not run the port auto-test.' })
+      setCatResult({ ok: false, detail: t('settings.cat.autoTest.failed') })
     } finally {
       setCatTesting(false)
     }
@@ -1789,7 +1824,7 @@ export function SettingsPanel({
     // form must not become a named configuration.
     const saved = await getSettings()
     setProfiles(saveProfile(newProfileName, saved))
-    pushToast(`Profile "${newProfileName.trim()}" saved`, 'success')
+    pushToast(t('settings.profiles.saved', { name: newProfileName.trim() }), 'success')
     setNewProfileName('')
   }
   const handleLoadProfile = async () => {
@@ -1807,7 +1842,7 @@ export function SettingsPanel({
     setEditingRadioId(merged.activeRadio)
     await setSettings(merged)
     onSaved?.()
-    pushToast(`Loaded profile "${p.name}"`, 'success')
+    pushToast(t('settings.profiles.loaded', { name: p.name }), 'success')
   }
   const handleDeleteProfile = () => {
     if (!selectedProfile) return
@@ -1820,10 +1855,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setLotwPassword(lotwPw)
       return true
-    }, 'Could not save the LoTW password')
+    }, t('settings.connections.lotw.password.saveFailed'))
     if (ok) {
       setLotwPw('')
-      pushToast('LoTW password saved to the system keychain', 'success')
+      pushToast(t('settings.connections.lotw.password.saved'), 'success')
     }
   }
 
@@ -1831,10 +1866,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearLotwPassword()
       return true
-    }, 'Could not clear the LoTW password')
+    }, t('settings.connections.lotw.password.clearFailed'))
     if (ok) {
       setLotwPw('')
-      pushToast('LoTW password cleared from the keychain', 'success')
+      pushToast(t('settings.connections.lotw.password.cleared'), 'success')
     }
   }
 
@@ -1851,13 +1886,24 @@ export function SettingsPanel({
         mycall: form.mycall.trim().toUpperCase(),
       })
       return downloadLotwReport()
-    }, 'LoTW sync failed')
+    }, t('settings.connections.lotw.sync.failed'))
     setLotwSyncing(false)
     if (r) {
-      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
-      const promoted = r.promoted ? ` · ${r.promoted} upload${r.promoted === 1 ? '' : 's'} now on file` : ''
+      // ONE sentence with its two optional clauses interpolated whole — each clause is its own
+      // catalog entry, so neither is a fragment a translator has to reassemble.
+      const orphans = r.orphans.length
+        ? t('settings.connections.sync.unmatched', { count: r.orphans.length })
+        : ''
+      const promoted = r.promoted
+        ? t('settings.connections.lotw.sync.promoted', { count: r.promoted })
+        : ''
       pushToast(
-        `LoTW: ${r.newlyConfirmed} newly confirmed, ${r.newlyCredited} credited${promoted}${orphans}`,
+        t('settings.connections.lotw.sync.done', {
+          confirmed: r.newlyConfirmed,
+          credited: r.newlyCredited,
+          promoted,
+          unmatched: orphans,
+        }),
         r.orphans.length ? 'info' : 'success',
       )
       onSaved?.()
@@ -1869,11 +1915,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setEqslPassword(eqslPw)
       return true
-    }, 'Could not save the eQSL password')
+    }, t('settings.connections.eqsl.password.saveFailed'))
     if (ok) {
       setEqslPw('')
       updateBool('eqslUpload', true)
-      pushToast('eQSL password saved — auto-upload to eQSL is ON', 'success')
+      pushToast(t('settings.connections.eqsl.password.saved'), 'success')
     }
   }
 
@@ -1881,11 +1927,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearEqslPassword()
       return true
-    }, 'Could not clear the eQSL password')
+    }, t('settings.connections.eqsl.password.clearFailed'))
     if (ok) {
       setEqslPw('')
       updateBool('eqslUpload', false)
-      pushToast('eQSL password cleared — auto-upload to eQSL is off', 'success')
+      pushToast(t('settings.connections.eqsl.password.cleared'), 'success')
     }
   }
 
@@ -1901,14 +1947,19 @@ export function SettingsPanel({
         mycall: form.mycall.trim().toUpperCase(),
       })
       return downloadEqslReport()
-    }, 'eQSL sync failed')
+    }, t('settings.connections.eqsl.sync.failed'))
     setEqslSyncing(false)
     if (r) {
-      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      const orphans = r.orphans.length
+        ? t('settings.connections.sync.unmatched', { count: r.orphans.length })
+        : ''
       // eQSL is non-award-grade, so report newlyConfirmedAny (newlyConfirmed is
       // award-only and always 0 for eQSL).
       pushToast(
-        `eQSL: ${r.newlyConfirmedAny} newly confirmed (not DXCC/WAS credit)${orphans}`,
+        t('settings.connections.eqsl.sync.done', {
+          confirmed: r.newlyConfirmedAny,
+          unmatched: orphans,
+        }),
         r.orphans.length ? 'info' : 'success',
       )
       onSaved?.()
@@ -1920,10 +1971,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setQrzPassword(qrzPw)
       return true
-    }, 'Could not save the QRZ password')
+    }, t('settings.connections.qrz.password.saveFailed'))
     if (ok) {
       setQrzPw('')
-      pushToast('QRZ password saved to the system keychain', 'success')
+      pushToast(t('settings.connections.qrz.password.saved'), 'success')
     }
   }
 
@@ -1931,10 +1982,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearQrzPassword()
       return true
-    }, 'Could not clear the QRZ password')
+    }, t('settings.connections.qrz.password.clearFailed'))
     if (ok) {
       setQrzPw('')
-      pushToast('QRZ password cleared from the keychain', 'success')
+      pushToast(t('settings.connections.qrz.password.cleared'), 'success')
     }
   }
 
@@ -1943,10 +1994,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setHamqthPassword(hamqthPw)
       return true
-    }, 'Could not save the HamQTH password')
+    }, t('settings.connections.hamqth.password.saveFailed'))
     if (ok) {
       setHamqthPw('')
-      pushToast('HamQTH password saved to the system keychain', 'success')
+      pushToast(t('settings.connections.hamqth.password.saved'), 'success')
     }
   }
 
@@ -1954,10 +2005,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearHamqthPassword()
       return true
-    }, 'Could not clear the HamQTH password')
+    }, t('settings.connections.hamqth.password.clearFailed'))
     if (ok) {
       setHamqthPw('')
-      pushToast('HamQTH password cleared from the keychain', 'success')
+      pushToast(t('settings.connections.hamqth.password.cleared'), 'success')
     }
   }
 
@@ -1966,11 +2017,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setQrzLogbookKey(qrzKey)
       return true
-    }, 'Could not save the QRZ Logbook key')
+    }, t('settings.connections.qrz.key.saveFailed'))
     if (ok) {
       setQrzKey('')
       updateBool('qrzLogbookUpload', true)
-      pushToast('QRZ Logbook key saved — auto-upload to QRZ is ON', 'success')
+      pushToast(t('settings.connections.qrz.key.saved'), 'success')
     }
   }
 
@@ -1978,11 +2029,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearQrzLogbookKey()
       return true
-    }, 'Could not clear the QRZ Logbook key')
+    }, t('settings.connections.qrz.key.clearFailed'))
     if (ok) {
       setQrzKey('')
       updateBool('qrzLogbookUpload', false)
-      pushToast('QRZ Logbook key cleared — auto-upload to QRZ is off', 'success')
+      pushToast(t('settings.connections.qrz.key.cleared'), 'success')
     }
   }
 
@@ -1990,14 +2041,21 @@ export function SettingsPanel({
     setQrzSyncing(true)
     // Two-way pull: FETCH the online QRZ logbook and merge it in (new QSOs +
     // confirmations). Uses the saved Logbook API key, so no form save is needed.
-    const r = await withErrorToast(syncQrz, 'QRZ sync failed')
+    const r = await withErrorToast(syncQrz, t('settings.connections.qrz.sync.failed'))
     setQrzSyncing(false)
     if (r) {
       const added = r.added ?? 0
-      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      const orphans = r.orphans.length
+        ? t('settings.connections.sync.unmatched', { count: r.orphans.length })
+        : ''
       // QRZ-native confirmations are non-award-grade, so report newlyConfirmedAny.
+      // `count` is the added QSOs — it picks the plural form as well as filling the slot.
       pushToast(
-        `QRZ: ${added} new QSO${added === 1 ? '' : 's'}, ${r.newlyConfirmedAny} newly confirmed${orphans}`,
+        t('settings.connections.qrz.sync.done', {
+          count: added,
+          confirmed: r.newlyConfirmedAny,
+          unmatched: orphans,
+        }),
         'success',
       )
       onSaved?.()
@@ -2009,11 +2067,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setClublogPassword(clublogPw)
       return true
-    }, 'Could not save the ClubLog password')
+    }, t('settings.connections.clublog.password.saveFailed'))
     if (ok) {
       setClublogPw('')
       updateBool('clublogUpload', true)
-      pushToast('ClubLog app-password saved — auto-upload to ClubLog is ON', 'success')
+      pushToast(t('settings.connections.clublog.password.saved'), 'success')
     }
   }
 
@@ -2021,11 +2079,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearClublogPassword()
       return true
-    }, 'Could not clear the ClubLog password')
+    }, t('settings.connections.clublog.password.clearFailed'))
     if (ok) {
       setClublogPw('')
       updateBool('clublogUpload', false)
-      pushToast('ClubLog password cleared — auto-upload to ClubLog is off', 'success')
+      pushToast(t('settings.connections.clublog.password.cleared'), 'success')
     }
   }
 
@@ -2034,11 +2092,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setHrdlogCode(hrdlogCode)
       return true
-    }, 'Could not save the HRDLog.net upload code')
+    }, t('settings.connections.hrdlog.code.saveFailed'))
     if (ok) {
       setHrdlogCodeField('')
       updateBool('hrdlogUpload', true)
-      pushToast('HRDLog.net code saved — auto-upload to HRDLog.net is ON', 'success')
+      pushToast(t('settings.connections.hrdlog.code.saved'), 'success')
     }
   }
 
@@ -2046,11 +2104,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearHrdlogCode()
       return true
-    }, 'Could not clear the HRDLog.net upload code')
+    }, t('settings.connections.hrdlog.code.clearFailed'))
     if (ok) {
       setHrdlogCodeField('')
       updateBool('hrdlogUpload', false)
-      pushToast('HRDLog.net code cleared — auto-upload to HRDLog.net is off', 'success')
+      pushToast(t('settings.connections.hrdlog.code.cleared'), 'success')
     }
   }
 
@@ -2059,10 +2117,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setRepeaterbookToken(rbToken)
       return true
-    }, 'Could not save the RepeaterBook token')
+    }, t('settings.connections.repeaterbook.token.saveFailed'))
     if (ok) {
       setRbTokenField('')
-      pushToast('RepeaterBook token saved — the Program section now uses RepeaterBook', 'success')
+      pushToast(t('settings.connections.repeaterbook.token.saved'), 'success')
     }
   }
 
@@ -2070,10 +2128,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setRepeaterbookToken('')
       return true
-    }, 'Could not clear the RepeaterBook token')
+    }, t('settings.connections.repeaterbook.token.clearFailed'))
     if (ok) {
       setRbTokenField('')
-      pushToast('RepeaterBook token cleared — the Program section falls back to hearham.com', 'success')
+      pushToast(t('settings.connections.repeaterbook.token.cleared'), 'success')
     }
   }
 
@@ -2082,10 +2140,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setCloudlogKey(cloudlogKey)
       return true
-    }, 'Could not save the Cloudlog API key')
+    }, t('settings.connections.cloudlog.key.saveFailed'))
     if (ok) {
       setCloudlogKeyField('')
-      pushToast('Cloudlog API key saved to the keychain', 'success')
+      pushToast(t('settings.connections.cloudlog.key.saved'), 'success')
     }
   }
 
@@ -2093,10 +2151,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearCloudlogKey()
       return true
-    }, 'Could not clear the Cloudlog API key')
+    }, t('settings.connections.cloudlog.key.clearFailed'))
     if (ok) {
       setCloudlogKeyField('')
-      pushToast('Cloudlog API key cleared from the keychain', 'success')
+      pushToast(t('settings.connections.cloudlog.key.cleared'), 'success')
     }
   }
 
@@ -2107,7 +2165,7 @@ export function SettingsPanel({
       // Don't dead-end on another tab: route the operator to where the fix is instead of a
       // silently-greyed Save button with a context-free "required" error.
       setTab('station')
-      setError('Enter your callsign on the Station tab before saving.')
+      setError(t('settings.save.callsignFirst'))
       return
     }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
@@ -2120,7 +2178,7 @@ export function SettingsPanel({
     if (blocks(rigProblems)) {
       setTab('radio')
       setError(
-        rigProblems.find((c) => c.level === 'error')?.message ?? 'Check the radio settings.',
+        rigProblems.find((c) => c.level === 'error')?.message ?? t('settings.save.checkRadio'),
       )
       return
     }
@@ -2139,7 +2197,7 @@ export function SettingsPanel({
       // Surface the backend's actual message (Tauri rejects with the Err string) — e.g. the
       // dual-radio port-collision rejection tells the operator exactly which ports clash.
       const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
-      setError(msg || 'Could not save settings.')
+      setError(msg || t('settings.save.failed'))
     }
   }
 
@@ -2147,9 +2205,9 @@ export function SettingsPanel({
     return (
       <section className="panel settings-panel">
         <div className="panel-header">
-          <h2>Settings</h2>
+          <h2>{t('settings.panel.title')}</h2>
         </div>
-        <p className="empty">Loading settings…</p>
+        <p className="empty">{t('settings.panel.loading')}</p>
       </section>
     )
   }
@@ -2157,13 +2215,16 @@ export function SettingsPanel({
   // One feature row. Core features are always on and can't be switched, so they
   // show a static "always on" badge instead of a toggle — a locked switch next to
   // the real, toggleable settings just reads as broken.
+  //
+  // ⚠️ `f.label` and `f.oneLine` are the REGISTRY's words (`features/registry.ts`), rendered
+  // and interpolated as values. They move with that registry, not with this panel.
   const featureRow = (f: FeatureDef) => {
     if (f.core) {
       return (
         <div className="settings-field" key={f.id}>
           <div className="settings-toggle">
             <span className="settings-label">{f.label}</span>
-            <span className="feature-always-on">always on</span>
+            <span className="feature-always-on">{t('settings.features.alwaysOn')}</span>
           </div>
           <span className="settings-hint">{f.oneLine}</span>
         </div>
@@ -2181,14 +2242,21 @@ export function SettingsPanel({
             aria-checked={on}
             className={`toggle${on ? ' on' : ''}`}
             onClick={() => features.toggle(f.id)}
-            aria-label={`${on ? 'Disable' : 'Enable'} ${f.label}`}
+            aria-label={
+              on
+                ? t('settings.features.toggle.aria.disable', { feature: f.label })
+                : t('settings.features.toggle.aria.enable', { feature: f.label })
+            }
           >
             <span className="toggle-knob" />
           </button>
         </label>
         <span className="settings-hint">
           {f.oneLine}
-          {depOff && ` Turning on also enables ${featureById(depOff as FeatureId)?.label ?? depOff}.`}
+          {depOff &&
+            ` ${t('settings.features.dependsOn', {
+              feature: featureById(depOff as FeatureId)?.label ?? depOff,
+            })}`}
         </span>
       </div>
     )
@@ -2256,7 +2324,7 @@ export function SettingsPanel({
   const audioLabel = (name: string, kind: 'input' | 'output') =>
     audio[kind].includes(name)
       ? (audioLabels[kind][name] ?? name)
-      : `${name} — saved, not in the list`
+      : t('settings.audio.device.notInList', { device: name })
 
   // Frequencies tab: last-wins override lookup for the stock table, plus
   // duplicate band+mode keys (flagged in the editor — the last row wins).
@@ -2278,46 +2346,49 @@ export function SettingsPanel({
     <SettingsOpenTarget.Provider value={openTarget}>
     <section className="panel settings-panel">
       <div className="panel-header">
-        <h2>Settings</h2>
-        <span className="settings-sub">operator, rig &amp; network</span>
+        <h2>{t('settings.panel.title')}</h2>
+        <span className="settings-sub">{t('settings.panel.subtitle')}</span>
         {/* Search sits in the HEADER, above the rail, because it is the way in that does not
             require guessing which tab something is under — which is the whole failure it exists
             to answer. Picking a result reuses the same deep-link machinery a pointer elsewhere
             in the app uses: it opens the tab, scrolls the section in and expands it if it is a
             collapsed disclosure. */}
         <SettingsSearch onPick={(sectionId) => {
-          const t = resolveTarget(sectionId)
-          if (!t) return
-          setTab(t.tab)
-          setOpenTarget(t.section ?? null)
+          // `target`, not `t` — `t` is the catalog lookup, and shadowing it here would make
+          // the next translated string added inside this callback silently uncallable.
+          const target = resolveTarget(sectionId)
+          if (!target) return
+          setTab(target.tab)
+          setOpenTarget(target.section ?? null)
         }} />
-        <span className="settings-build" title="This install's build stamp — confirm a fresh install actually took">
-          build {__BUILD_ID__}
+        <span className="settings-build" title={t('settings.panel.build.title')}>
+          {t('settings.panel.build', { id: __BUILD_ID__ })}
         </span>
         <button
           type="button"
           className="settings-update-btn"
           onClick={() => void checkForUpdateManual()}
-          title="Check for a newer Nexus release"
+          title={t('settings.panel.update.title')}
         >
-          Check for updates
+          {t('settings.panel.update.label')}
         </button>
       </div>
 
       <form className="settings-form" onSubmit={handleSubmit}>
-        <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        <div className="settings-tabs" role="tablist" aria-label={t('settings.panel.tabs.aria')}>
           {/* Contesting is always visible now (0.17.0 decision) — capability, not config, gates
-              tabs; the Field Day master switch lives inside the Contesting tab. */}
-          {SETTINGS_TABS.map((t) => (
+              tabs; the Field Day master switch lives inside the Contesting tab.
+              The loop variable is `tb`, not `t`: `t` is the catalog lookup this file calls. */}
+          {SETTINGS_TABS.map((tb) => (
             <button
-              key={t.id}
+              key={tb.id}
               type="button"
               role="tab"
-              aria-selected={tab === t.id}
-              className={`settings-tab${tab === t.id ? ' active' : ''}`}
-              onClick={() => setTab(t.id)}
+              aria-selected={tab === tb.id}
+              className={`settings-tab${tab === tb.id ? ' active' : ''}`}
+              onClick={() => setTab(tb.id)}
             >
-              {t.label}
+              {tb.labelKey ? t(tb.labelKey) : tb.label}
             </button>
           ))}
         </div>
@@ -2325,30 +2396,31 @@ export function SettingsPanel({
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-workspace">
-            <legend>Workspace</legend>
+            <legend>{t('settings.workspace.legend')}</legend>
             <div className="settings-grid">
               {/* Theme lives HERE now, not the top bar (operator, 2026-08-10): Light/Dark
                   is a set-once preference, and the bar keeps only the Field quick toggle. */}
               {theme && onThemeChange && (
                 <div className="settings-field">
-                  <span className="settings-label">Theme</span>
+                  <span className="settings-label">{t('settings.workspace.theme.label')}</span>
                   <ThemeSwitcher theme={theme} onChange={onThemeChange} />
-                  <span className="settings-hint">
-                    Light reads best outdoors in daylight; the top bar&rsquo;s Field chip
-                    boosts contrast and size in whichever theme you use.
-                  </span>
+                  <span className="settings-hint">{t('settings.workspace.theme.hint')}</span>
                 </div>
               )}
               <div className="settings-field">
-                <span className="settings-label">UI scale</span>
-                <div className="theme-switcher" role="group" aria-label="UI scale mode">
+                <span className="settings-label">{t('settings.workspace.scale.label')}</span>
+                <div
+                  className="theme-switcher"
+                  role="group"
+                  aria-label={t('settings.workspace.scale.mode.aria')}
+                >
                   <button
                     type="button"
                     className={`theme-chip${scaleMode === 'auto' ? ' active' : ''}`}
                     aria-pressed={scaleMode === 'auto'}
                     onClick={() => onScaleModeChange('auto')}
                   >
-                    Auto (fit)
+                    {t('settings.workspace.scale.auto')}
                   </button>
                   <button
                     type="button"
@@ -2356,13 +2428,19 @@ export function SettingsPanel({
                     aria-pressed={scaleMode !== 'auto'}
                     onClick={() => onScaleModeChange(scale)}
                   >
-                    Manual
+                    {t('settings.workspace.scale.manual')}
                   </button>
                 </div>
                 {scaleMode === 'auto' ? (
                   <>
-                    <span className="settings-hint">Max scale (auto won&apos;t exceed)</span>
-                    <div className="theme-switcher" role="group" aria-label="Maximum UI scale">
+                    <span className="settings-hint">
+                      {t('settings.workspace.scale.cap.label')}
+                    </span>
+                    <div
+                      className="theme-switcher"
+                      role="group"
+                      aria-label={t('settings.workspace.scale.cap.aria')}
+                    >
                       {SCALE_STEPS.filter((s) => s >= 100).map((s) => {
                         // Disable chips this window can't reach: Auto never upscales
                         // past the fit, so every chip > autoCeil yields the SAME scale
@@ -2378,7 +2456,10 @@ export function SettingsPanel({
                             disabled={unreachable}
                             title={
                               unreachable
-                                ? `This window only fits up to ${autoCeil}% — a larger window or monitor unlocks ${s}%.`
+                                ? t('settings.workspace.scale.cap.unreachable', {
+                                    fits: autoCeil,
+                                    wanted: s,
+                                  })
                                 : undefined
                             }
                             onClick={() => onScaleCapChange(s)}
@@ -2388,18 +2469,30 @@ export function SettingsPanel({
                         )
                       })}
                     </div>
+                    {/* Three WHOLE messages, not one opening plus a tail: the second sentence
+                        is a different answer in each case, and a sentence assembled from two
+                        keys cannot be reordered by a translator who needs to. */}
                     <span className="settings-hint">
-                      Fits the whole interface to the window so nothing is cut off (currently {scale}%).
                       {autoCeil < 100
-                        ? ` This window maxes out at ${autoCeil}% — raising the cap can't help until you enlarge the window, or switch to Manual to force a bigger scale.`
+                        ? t('settings.workspace.scale.auto.hint.tooSmall', {
+                            scale,
+                            fits: autoCeil,
+                          })
                         : autoCeil < MAX_STEP
-                          ? ` This window fits up to ${autoCeil}%; bigger caps need a larger window or monitor. The waterfall stays sharp.`
-                          : ' The waterfall stays sharp. Raise the max for big monitors.'}
+                          ? t('settings.workspace.scale.auto.hint.limited', {
+                              scale,
+                              fits: autoCeil,
+                            })
+                          : t('settings.workspace.scale.auto.hint.full', { scale })}
                     </span>
                   </>
                 ) : (
                   <>
-                    <div className="theme-switcher" role="group" aria-label="UI scale">
+                    <div
+                      className="theme-switcher"
+                      role="group"
+                      aria-label={t('settings.workspace.scale.aria')}
+                    >
                       {SCALE_STEPS.map((s) => (
                         <button
                           key={s}
@@ -2413,22 +2506,26 @@ export function SettingsPanel({
                       ))}
                     </div>
                     <span className="settings-hint">
-                      Fixed scale. Switch to Auto to fit the interface to the window automatically.
+                      {t('settings.workspace.scale.manual.hint')}
                     </span>
                   </>
                 )}
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Density</span>
-                <div className="theme-switcher" role="group" aria-label="Information density">
+                <span className="settings-label">{t('settings.workspace.density.label')}</span>
+                <div
+                  className="theme-switcher"
+                  role="group"
+                  aria-label={t('settings.workspace.density.aria')}
+                >
                   <button
                     type="button"
                     className={`theme-chip${density !== 'dense' ? ' active' : ''}`}
                     aria-pressed={density !== 'dense'}
                     onClick={() => onDensityChange('standard')}
                   >
-                    Comfortable
+                    {t('settings.workspace.density.standard')}
                   </button>
                   <button
                     type="button"
@@ -2436,20 +2533,18 @@ export function SettingsPanel({
                     aria-pressed={density === 'dense'}
                     onClick={() => onDensityChange('dense')}
                   >
-                    Compact
+                    {t('settings.workspace.density.dense')}
                   </button>
                 </div>
-                <span className="settings-hint">
-                  How tightly rows and controls pack. Compact fits more on screen.
-                </span>
+                <span className="settings-hint">{t('settings.workspace.density.hint')}</span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Pane sizes</span>
+                <span className="settings-label">{t('settings.workspace.panes.label')}</span>
                 <button type="button" className="settings-refresh" onClick={onResetLayout}>
-                  Reset pane sizes
+                  {t('settings.workspace.panes.reset')}
                 </button>
-                <span className="settings-hint">Restore the default left/right pane widths.</span>
+                <span className="settings-hint">{t('settings.workspace.panes.hint')}</span>
               </div>
             </div>
           </fieldset>
@@ -2458,10 +2553,14 @@ export function SettingsPanel({
           {/* ---- Features (modular toggles + goal profiles) ---- */}
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-features">
-            <legend>Features</legend>
+            <legend>{t('settings.features.legend')}</legend>
             <div className="settings-field">
-              <span className="settings-label">Profile</span>
-              <div className="theme-switcher settings-profiles" role="group" aria-label="Feature profile">
+              <span className="settings-label">{t('settings.features.profile.label')}</span>
+              <div
+                className="theme-switcher settings-profiles"
+                role="group"
+                aria-label={t('settings.features.profile.aria')}
+              >
                 {PROFILE_LIST.map((p) => (
                   <button
                     key={p.id}
@@ -2475,9 +2574,12 @@ export function SettingsPanel({
                         if (
                           features.profile !== 'custom' ||
                           (await confirmDialog({
-                            title: `Switch to “${p.label}”?`,
-                            body: 'This replaces your custom feature set.',
-                            confirmLabel: 'Switch',
+                            // `p.label` is the profiles registry's word, interpolated as a value.
+                            title: t('settings.features.profile.confirm.title', {
+                              profile: p.label,
+                            }),
+                            body: t('settings.features.profile.confirm.body'),
+                            confirmLabel: t('settings.features.profile.confirm.action'),
                             danger: true,
                           }))
                         ) {
@@ -2490,20 +2592,24 @@ export function SettingsPanel({
                   </button>
                 ))}
                 {features.profile === 'custom' && (
-                  <span className="theme-chip active" aria-disabled="true" title="Custom — a blended feature set (manual toggles or multiple goals)">
-                    Custom
+                  <span
+                    className="theme-chip active"
+                    aria-disabled="true"
+                    title={t('settings.features.profile.custom.title')}
+                  >
+                    {t('settings.features.profile.custom.label')}
                   </span>
                 )}
               </div>
               <span className="settings-hint">
                 {features.profile === 'custom'
-                  ? 'Custom — a blended feature set. Pick a single goal above to reset to its defaults.'
-                  : 'Pick a goal to set sensible defaults — every feature stays toggleable below. Switching profiles re-applies its set.'}
+                  ? t('settings.features.profile.hint.custom')
+                  : t('settings.features.profile.hint.preset')}
                 {onRerunWizard && (
                   <>
                     {' '}
                     <button type="button" className="settings-linkbtn" onClick={onRerunWizard}>
-                      Re-run setup…
+                      {t('settings.features.rerunWizard')}
                     </button>
                   </>
                 )}
@@ -2512,7 +2618,7 @@ export function SettingsPanel({
 
             {/* Core spine first, as a locked group (spec §4.4). */}
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Core — always on</span>
+              <span className="settings-featgroup-title">{t('settings.features.core.title')}</span>
               <div className="settings-grid">{FEATURES.filter((f) => f.core).map(featureRow)}</div>
             </div>
 
@@ -2526,12 +2632,18 @@ export function SettingsPanel({
               if (inCat.length === 0 && !isContesting) return null
               return (
                 <div className="settings-featgroup" key={cat}>
+                  {/* ⚠️ The category heading is the REGISTRY's own vocabulary (`FeatureCategory`
+                      in `features/registry.ts`) — both the group key and the word on screen. It
+                      moves when that registry does, with every feature label beside it. */}
                   <span className="settings-featgroup-title">{cat}</span>
                   <div className="settings-grid">
                     {isContesting && (
                       <div className="settings-field">
                         <label className="settings-toggle">
-                          <span className="settings-label">Field Day mode</span>
+                          {/* One master switch offered in two places — the label and its two
+                              accessible names are shared with Settings ▸ Contesting, so both
+                              read the same entries. Only the hint differs. */}
+                          <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
                           <button
                             type="button"
                             role="switch"
@@ -2545,16 +2657,17 @@ export function SettingsPanel({
                               // Field Day until both are set.
                               if (next && (!form.fdClass.trim() || !form.fdSection.trim())) setTab('contesting')
                             }}
-                            aria-label={`${form.fdActive ? 'Disable' : 'Enable'} Field Day mode`}
+                            aria-label={
+                              form.fdActive
+                                ? t('settings.fieldDay.mode.aria.disable')
+                                : t('settings.fieldDay.mode.aria.enable')
+                            }
                           >
                             <span className="toggle-knob" />
                           </button>
                         </label>
                         <span className="settings-hint">
-                          Turn on for Field Day weekend — reveals the Field Day workspace, the
-                          Class/Section exchange across all modes, and the setup tab. Off the rest of
-                          the year (nothing shows). Stays on across restarts until you turn it off;
-                          Save settings to apply.
+                          {t('settings.features.fieldDay.hint')}
                         </span>
                       </div>
                     )}
@@ -6880,35 +6993,36 @@ export function SettingsPanel({
               what an operator opens Appearance for. Reunited with UI scale and density. */}
           {tab === 'appearance' && (
           <>
+          {/* MIGRATED to the string catalog (i18n/hardcoded-strings.test.ts) with the rest of
+              the Appearance tab. The <select> VALUES are persisted tokens and stay here. */}
           <fieldset className="settings-section" id="settings-accessibility">
-            <legend>Accessibility &amp; eyes-free</legend>
-            <p className="settings-note">
-              Speech and sound cues for operating by ear (screen-reader users, or anyone who wants
-              audible feedback). The keyboard and screen-reader labels throughout Nexus are always
-              on — these settings only control what comes out of the speakers.
-            </p>
+            <legend>{t('settings.accessibility.legend')}</legend>
+            <p className="settings-note">{t('settings.accessibility.note')}</p>
             <div className="settings-grid">
               <div className="settings-field">
                 <label className="settings-inline-label">
-                  <span className="settings-label">Announce decodes (screen reader)</span>
+                  <span className="settings-label">
+                    {t('settings.accessibility.announce.label')}
+                  </span>
                   <select
                     className="settings-input"
                     value={form.announceVerbosity ?? 'needed'}
                     onChange={(e) => update('announceVerbosity', e.target.value)}
                   >
-                    <option value="off">Off</option>
-                    <option value="needed">Needed only (calling you / new / watched)</option>
-                    <option value="all">All (adds a per-cycle CQ summary)</option>
+                    <option value="off">{t('settings.accessibility.announce.off')}</option>
+                    <option value="needed">{t('settings.accessibility.announce.needed')}</option>
+                    <option value="all">{t('settings.accessibility.announce.all')}</option>
                   </select>
                 </label>
                 <span className="settings-hint">
-                  What a screen reader speaks as decodes arrive. Silent without a reader running.
-                  "Needed" mirrors your alerts; "All" adds a spoken batch summary each cycle.
+                  {t('settings.accessibility.announce.hint')}
                 </span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">TX / RX earcon</span>
+                  <span className="settings-label">
+                    {t('settings.accessibility.txRxEarcon.label')}
+                  </span>
                   <button
                     type="button"
                     role="switch"
@@ -6919,11 +7033,15 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">A rising tone when you key up, falling when you unkey — know your TX state by ear.</span>
+                <span className="settings-hint">
+                  {t('settings.accessibility.txRxEarcon.hint')}
+                </span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Decode-batch tick</span>
+                  <span className="settings-label">
+                    {t('settings.accessibility.decodeTick.label')}
+                  </span>
                   <button
                     type="button"
                     role="switch"
@@ -6934,7 +7052,9 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.</span>
+                <span className="settings-hint">
+                  {t('settings.accessibility.decodeTick.hint')}
+                </span>
               </div>
             </div>
           </fieldset>
@@ -8881,7 +9001,7 @@ export function SettingsPanel({
             ))}
           {error && <span className="settings-error" role="alert">{error}</span>}
           {status === 'saved' && !error && (
-            <span className="settings-ok" role="status">Saved</span>
+            <span className="settings-ok" role="status">{t('settings.panel.saved')}</span>
           )}
           <button
             type="submit"
@@ -8890,7 +9010,7 @@ export function SettingsPanel({
             // message (handleSubmit), rather than a greyed button that gives no reason or fix.
             disabled={status === 'saving'}
           >
-            {status === 'saving' ? 'Saving…' : 'Save'}
+            {status === 'saving' ? t('settings.panel.saving') : t('settings.panel.save')}
           </button>
         </div>
       </form>

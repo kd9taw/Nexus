@@ -3610,6 +3610,276 @@ export const EN = {
   'settings.radio.check.catNoModel':
     'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
 
+  // ── Settings ▸ the panel shell (chrome, tab rail, Save) ─────────────────────────────
+  // The frame every Settings tab renders inside. `{{id}}` is the build stamp — an identifier,
+  // never a formatted number — and "Nexus", "Test CAT" and "Save" name things the operator
+  // reads on screen, so they stay exactly as they are inside these sentences.
+  'settings.panel.title': 'Settings',
+  'settings.panel.subtitle': 'operator, rig & network',
+  'settings.panel.loading': 'Loading settings…',
+  'settings.panel.build': 'build {{id}}',
+  'settings.panel.build.title':
+    "This install's build stamp — confirm a fresh install actually took",
+  'settings.panel.update.label': 'Check for updates',
+  'settings.panel.update.title': 'Check for a newer Nexus release',
+  'settings.panel.tabs.aria': 'Settings sections',
+  'settings.panel.save': 'Save',
+  'settings.panel.saving': 'Saving…',
+  'settings.panel.saved': 'Saved',
+
+  // The tab rail. ⚠️ Phone, CW and Digital are MODE NAMES — invariant tokens — so they are
+  // deliberately ABSENT here and render from the panel's own literal list in every language;
+  // `SETTINGS_TABS` in `components/SettingsPanel.tsx` says so at the array.
+  'settings.tabs.station': 'Station',
+  'settings.tabs.radio': 'Radio',
+  'settings.tabs.spots': 'Spots & Alerts',
+  'settings.tabs.logging': 'Logging & Connectors',
+  'settings.tabs.contesting': 'Contesting',
+  'settings.tabs.appearance': 'Appearance',
+
+  // What Save says when the form is refused. The rig checks' own wording lives above, in
+  // `settings.radio.check.*` — this is only the panel's fallback when one carries no message.
+  'settings.save.callsignFirst': 'Enter your callsign on the Station tab before saving.',
+  'settings.save.checkRadio': 'Check the radio settings.',
+  'settings.save.failed': 'Could not save settings.',
+
+  // ── Settings ▸ the panel's own toasts, confirms and live applies ────────────────────
+  // Raised by the panel's handlers rather than by any one section, so they are grouped here
+  // by the act. ⚠️ Every interpolated value is a TOKEN and stays one: `{{file}}` a file name,
+  // `{{device}}` / `{{port}}` the OS's own device and port names, `{{ip}}` an address,
+  // `{{name}}` a radio or profile name the operator typed, `{{id}}` a radio number. LoTW,
+  // eQSL, QRZ, HamQTH, ClubLog, HRDLog.net, RepeaterBook, hearham.com, Cloudlog, SmartSDR,
+  // DAX, CAT and CI-V are the names of the services and protocols themselves.
+  'settings.backup.restore.confirm.title': 'Replace your current setup with {{file}}?',
+  'settings.backup.restore.confirm.body':
+    'Your radios, preferences, memory channels, watchlist and chase sets will be replaced. Your contact log is not affected. This cannot be undone.',
+  'settings.backup.restore.confirm.action': 'Restore',
+  'settings.backup.restore.done': 'Settings restored — check your radio and Test CAT',
+  'settings.backup.restore.failed': 'Restore failed',
+
+  'settings.audio.rxGain.failed': 'Could not apply RX gain',
+  'settings.audio.txPower.failed': 'Could not set TX power',
+  // What one sound-card option READS when the saved device is not among the ones we offer.
+  // The device NAME is the OS's, and it is never translated — only the note after it is.
+  'settings.audio.device.notInList': '{{device}} — saved, not in the list',
+
+  'settings.satellites.vfoMap.failed': 'Could not confirm the VFO mapping',
+
+  'settings.workingFreq.reset.confirm.title': 'Clear all working-frequency overrides?',
+  'settings.workingFreq.reset.confirm.body': 'The stock WSJT-X frequency table is restored.',
+  'settings.workingFreq.reset.confirm.action': 'Clear overrides',
+
+  // The radio roster. `settings.radios.thisRadio` and `.unnamed` are the stand-ins a radio
+  // with no name of its own is called by; they fill the `{{name}}` slot, so the sentence
+  // around them stays one whole sentence.
+  'settings.radios.thisRadio': 'this radio',
+  'settings.radios.unnamed': 'radio {{id}}',
+  'settings.radios.add.failed': 'Could not add a radio',
+  'settings.radios.remove.confirm.title': 'Remove {{name}}?',
+  'settings.radios.remove.confirm.body':
+    "This deletes its CAT/audio config, its rigctld port and its band coverage. Your contact log is not affected. This can't be undone.",
+  'settings.radios.remove.confirm.action': 'Remove radio',
+  'settings.radios.remove.failed': 'Could not remove the radio',
+  'settings.radios.rename.failed': 'Could not rename the radio',
+  'settings.radios.bands.failed': 'Could not set band coverage',
+  'settings.radios.default.failed': 'Could not set the default radio',
+  'settings.radios.switch.failed': 'Could not switch radios',
+  // Two confirms, one wording for the button. Kept as separate entries because they guard
+  // two different acts — editing another radio's config, and moving the station onto it.
+  'settings.radios.edit.confirm.title':
+    'Discard unsaved changes to the radio you were editing?',
+  'settings.radios.edit.confirm.body': 'The edits you have not saved for that radio are lost.',
+  'settings.radios.edit.confirm.action': 'Discard and switch',
+  'settings.radios.makeActive.confirm.title':
+    'Discard unsaved changes and switch the operating radio?',
+  'settings.radios.makeActive.confirm.body':
+    'The carrier is dropped before the swap. Unsaved edits to the radio you were editing are lost.',
+  'settings.radios.makeActive.confirm.action': 'Discard and switch',
+  'settings.routing.rules.failed': 'Could not save the routing rules',
+
+  // Radio detection. `settings.detect.unknownRadio` is the word an unidentified device is
+  // called by in the three "Applied …" reports — it fills `{{device}}`, never a fragment.
+  'settings.detect.usb.failed': 'USB radio detection failed',
+  'settings.detect.flex.scanFailed': 'Flex LAN scan: {{error}}',
+  'settings.detect.none':
+    'No radios found — USB: plug in + power on; Flex: must be on this network.',
+  'settings.detect.unknownRadio': 'radio',
+  'settings.detect.applied.interface':
+    'Applied {{device}} on {{port}} — now pick your Rig Model, then Save',
+  'settings.detect.applied.identifying':
+    'Applied {{device}} on {{port}} — identifying via Auto-test…',
+  'settings.detect.applied.review': 'Applied {{device}} on {{port}} — review + Save settings',
+  // ⚠️ The port numbers (5002, 60001) are what the operator types into SmartSDR CAT and into
+  // Network Address. They are dial settings, not prose, and stay exactly as written.
+  'settings.detect.flex.applied':
+    'Applied {{radio}} at {{ip}} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.',
+  'settings.detect.flex.found':
+    'Found {{radio}} at {{ip}} — model and radio IP applied. SmartSDR CAT is Windows-only, so set Network Address yourself: the address of a Windows PC on this network running SmartSDR CAT (slice A is its port 5002). Native panadapter/DAX below talk to the radio directly and need no such PC.',
+
+  'settings.cat.callsignRequired': 'Callsign is required.',
+  'settings.cat.savedNotTested':
+    "Saved to {{name}}. CAT can only be tested on the radio you're operating — make {{name}} active to test it.",
+  'settings.cat.test.failed': 'Could not run the CAT test.',
+  'settings.cat.autoTest.failed': 'Could not run the port auto-test.',
+
+  'settings.profiles.saved': 'Profile "{{name}}" saved',
+  'settings.profiles.loaded': 'Loaded profile "{{name}}"',
+
+  // The credential stores and the two-way syncs. The sync reports are ONE sentence each with
+  // the optional clauses interpolated whole, never glued from fragments; `{{count}}` picks the
+  // plural form and `Intl.PluralRules` owns which form that is.
+  'settings.connections.test.testing': 'testing…',
+  'settings.connections.sync.unmatched': ' · {{count}} unmatched',
+  'settings.connections.lotw.password.saveFailed': 'Could not save the LoTW password',
+  'settings.connections.lotw.password.saved': 'LoTW password saved to the system keychain',
+  'settings.connections.lotw.password.clearFailed': 'Could not clear the LoTW password',
+  'settings.connections.lotw.password.cleared': 'LoTW password cleared from the keychain',
+  'settings.connections.lotw.sync.failed': 'LoTW sync failed',
+  'settings.connections.lotw.sync.done':
+    'LoTW: {{confirmed}} newly confirmed, {{credited}} credited{{promoted}}{{unmatched}}',
+  'settings.connections.lotw.sync.promoted': {
+    one: ' · {{count}} upload now on file',
+    other: ' · {{count}} uploads now on file',
+  },
+  'settings.connections.eqsl.password.saveFailed': 'Could not save the eQSL password',
+  'settings.connections.eqsl.password.saved': 'eQSL password saved — auto-upload to eQSL is ON',
+  'settings.connections.eqsl.password.clearFailed': 'Could not clear the eQSL password',
+  'settings.connections.eqsl.password.cleared':
+    'eQSL password cleared — auto-upload to eQSL is off',
+  'settings.connections.eqsl.sync.failed': 'eQSL sync failed',
+  // ⚠️ DXCC and WAS are award programme names — a translator leaves both exactly as they are.
+  'settings.connections.eqsl.sync.done':
+    'eQSL: {{confirmed}} newly confirmed (not DXCC/WAS credit){{unmatched}}',
+  'settings.connections.qrz.password.saveFailed': 'Could not save the QRZ password',
+  'settings.connections.qrz.password.saved': 'QRZ password saved to the system keychain',
+  'settings.connections.qrz.password.clearFailed': 'Could not clear the QRZ password',
+  'settings.connections.qrz.password.cleared': 'QRZ password cleared from the keychain',
+  'settings.connections.qrz.key.saveFailed': 'Could not save the QRZ Logbook key',
+  'settings.connections.qrz.key.saved': 'QRZ Logbook key saved — auto-upload to QRZ is ON',
+  'settings.connections.qrz.key.clearFailed': 'Could not clear the QRZ Logbook key',
+  'settings.connections.qrz.key.cleared': 'QRZ Logbook key cleared — auto-upload to QRZ is off',
+  'settings.connections.qrz.sync.failed': 'QRZ sync failed',
+  // ⚠️ QSO is the hobby's own word for a contact — it does not inflect into another language.
+  'settings.connections.qrz.sync.done': {
+    one: 'QRZ: {{count}} new QSO, {{confirmed}} newly confirmed{{unmatched}}',
+    other: 'QRZ: {{count}} new QSOs, {{confirmed}} newly confirmed{{unmatched}}',
+  },
+  'settings.connections.hamqth.password.saveFailed': 'Could not save the HamQTH password',
+  'settings.connections.hamqth.password.saved': 'HamQTH password saved to the system keychain',
+  'settings.connections.hamqth.password.clearFailed': 'Could not clear the HamQTH password',
+  'settings.connections.hamqth.password.cleared': 'HamQTH password cleared from the keychain',
+  'settings.connections.clublog.password.saveFailed': 'Could not save the ClubLog password',
+  'settings.connections.clublog.password.saved':
+    'ClubLog app-password saved — auto-upload to ClubLog is ON',
+  'settings.connections.clublog.password.clearFailed': 'Could not clear the ClubLog password',
+  'settings.connections.clublog.password.cleared':
+    'ClubLog password cleared — auto-upload to ClubLog is off',
+  'settings.connections.hrdlog.code.saveFailed': 'Could not save the HRDLog.net upload code',
+  'settings.connections.hrdlog.code.saved':
+    'HRDLog.net code saved — auto-upload to HRDLog.net is ON',
+  'settings.connections.hrdlog.code.clearFailed': 'Could not clear the HRDLog.net upload code',
+  'settings.connections.hrdlog.code.cleared':
+    'HRDLog.net code cleared — auto-upload to HRDLog.net is off',
+  'settings.connections.repeaterbook.token.saveFailed': 'Could not save the RepeaterBook token',
+  'settings.connections.repeaterbook.token.saved':
+    'RepeaterBook token saved — the Program section now uses RepeaterBook',
+  'settings.connections.repeaterbook.token.clearFailed':
+    'Could not clear the RepeaterBook token',
+  'settings.connections.repeaterbook.token.cleared':
+    'RepeaterBook token cleared — the Program section falls back to hearham.com',
+  'settings.connections.cloudlog.key.saveFailed': 'Could not save the Cloudlog API key',
+  'settings.connections.cloudlog.key.saved': 'Cloudlog API key saved to the keychain',
+  'settings.connections.cloudlog.key.clearFailed': 'Could not clear the Cloudlog API key',
+  'settings.connections.cloudlog.key.cleared': 'Cloudlog API key cleared from the keychain',
+
+  // ── Settings ▸ Appearance ▸ Workspace ───────────────────────────────────────────────
+  // ⚠️ Every scale here is a PERCENT of a technical quantity, so it is interpolated as an
+  // invariant number and the `%` stays glued to it. The chips themselves (`100%`, `175%`)
+  // are numbers alone and never enter this file.
+  'settings.workspace.legend': 'Workspace',
+  'settings.workspace.theme.label': 'Theme',
+  'settings.workspace.theme.hint':
+    'Light reads best outdoors in daylight; the top bar’s Field chip boosts contrast and size in whichever theme you use.',
+  'settings.workspace.scale.label': 'UI scale',
+  'settings.workspace.scale.mode.aria': 'UI scale mode',
+  'settings.workspace.scale.auto': 'Auto (fit)',
+  'settings.workspace.scale.manual': 'Manual',
+  'settings.workspace.scale.aria': 'UI scale',
+  // `&apos;` in the JSX was a plain ASCII apostrophe; `&rsquo;` above was a typographic one.
+  // They are different characters and the rendered text must not change, so both are kept.
+  'settings.workspace.scale.cap.label': "Max scale (auto won't exceed)",
+  'settings.workspace.scale.cap.aria': 'Maximum UI scale',
+  'settings.workspace.scale.cap.unreachable':
+    'This window only fits up to {{fits}}% — a larger window or monitor unlocks {{wanted}}%.',
+  // Three WHOLE messages rather than a shared opening plus a tail: the second sentence is a
+  // different answer in each case, and a translator needs to read the one they are writing.
+  'settings.workspace.scale.auto.hint.tooSmall':
+    "Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). This window maxes out at {{fits}}% — raising the cap can't help until you enlarge the window, or switch to Manual to force a bigger scale.",
+  'settings.workspace.scale.auto.hint.limited':
+    'Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). This window fits up to {{fits}}%; bigger caps need a larger window or monitor. The waterfall stays sharp.',
+  'settings.workspace.scale.auto.hint.full':
+    'Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). The waterfall stays sharp. Raise the max for big monitors.',
+  'settings.workspace.scale.manual.hint':
+    'Fixed scale. Switch to Auto to fit the interface to the window automatically.',
+  'settings.workspace.density.label': 'Density',
+  'settings.workspace.density.aria': 'Information density',
+  'settings.workspace.density.standard': 'Comfortable',
+  'settings.workspace.density.dense': 'Compact',
+  'settings.workspace.density.hint':
+    'How tightly rows and controls pack. Compact fits more on screen.',
+  'settings.workspace.panes.label': 'Pane sizes',
+  'settings.workspace.panes.reset': 'Reset pane sizes',
+  'settings.workspace.panes.hint': 'Restore the default left/right pane widths.',
+
+  // ── Settings ▸ Appearance ▸ Features ────────────────────────────────────────────────
+  // ⚠️ Each feature's NAME and one-line description, and the category headings they are
+  // grouped under, come from `features/registry.ts` and are interpolated or rendered as
+  // values — they are not in this file, and they move with that registry. What is here is
+  // the section's own chrome. The Field Day master's label and its two accessible names are
+  // shared with Settings ▸ Contesting above (`settings.fieldDay.mode.*`): one toggle, one
+  // wording, two places it is offered — only the hint differs, so only the hint is here.
+  'settings.features.legend': 'Features',
+  'settings.features.alwaysOn': 'always on',
+  'settings.features.toggle.aria.enable': 'Enable {{feature}}',
+  'settings.features.toggle.aria.disable': 'Disable {{feature}}',
+  'settings.features.dependsOn': 'Turning on also enables {{feature}}.',
+  'settings.features.profile.label': 'Profile',
+  'settings.features.profile.aria': 'Feature profile',
+  'settings.features.profile.confirm.title': 'Switch to “{{profile}}”?',
+  'settings.features.profile.confirm.body': 'This replaces your custom feature set.',
+  'settings.features.profile.confirm.action': 'Switch',
+  'settings.features.profile.custom.label': 'Custom',
+  'settings.features.profile.custom.title':
+    'Custom — a blended feature set (manual toggles or multiple goals)',
+  'settings.features.profile.hint.custom':
+    'Custom — a blended feature set. Pick a single goal above to reset to its defaults.',
+  'settings.features.profile.hint.preset':
+    'Pick a goal to set sensible defaults — every feature stays toggleable below. Switching profiles re-applies its set.',
+  'settings.features.rerunWizard': 'Re-run setup…',
+  'settings.features.core.title': 'Core — always on',
+  'settings.features.fieldDay.hint':
+    'Turn on for Field Day weekend — reveals the Field Day workspace, the Class/Section exchange across all modes, and the setup tab. Off the rest of the year (nothing shows). Stays on across restarts until you turn it off; Save settings to apply.',
+
+  // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
+  // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the
+  // panel; only these labels are read. CQ is a Q-code and TX / RX are the radio's own two
+  // states — a translator leaves all three exactly as they are.
+  'settings.accessibility.legend': 'Accessibility & eyes-free',
+  'settings.accessibility.note':
+    'Speech and sound cues for operating by ear (screen-reader users, or anyone who wants audible feedback). The keyboard and screen-reader labels throughout Nexus are always on — these settings only control what comes out of the speakers.',
+  'settings.accessibility.announce.label': 'Announce decodes (screen reader)',
+  'settings.accessibility.announce.off': 'Off',
+  'settings.accessibility.announce.needed': 'Needed only (calling you / new / watched)',
+  'settings.accessibility.announce.all': 'All (adds a per-cycle CQ summary)',
+  'settings.accessibility.announce.hint':
+    'What a screen reader speaks as decodes arrive. Silent without a reader running. "Needed" mirrors your alerts; "All" adds a spoken batch summary each cycle.',
+  'settings.accessibility.txRxEarcon.label': 'TX / RX earcon',
+  'settings.accessibility.txRxEarcon.hint':
+    'A rising tone when you key up, falling when you unkey — know your TX state by ear.',
+  'settings.accessibility.decodeTick.label': 'Decode-batch tick',
+  'settings.accessibility.decodeTick.hint':
+    "A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.",
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning
