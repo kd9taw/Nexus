@@ -4015,6 +4015,184 @@ export const EN = {
   'settings.callsignState.hint':
     'A callsign→state index (from the FCC license file) so a New State lights up on cluster / CW / SSB spots that carry no grid. Refreshed weekly from hamradiotools.io; a live decode grid refines it for rovers.',
 
+  // ── Settings ▸ Logging & Connectors ▸ Confirmations ────────────────────────────────
+  // The QSL services, one featgroup each. Everything below is a LABEL or a HINT: no key,
+  // password, token or upload code is read, written or interpolated by any entry here, and the
+  // Set/Forget buttons these words sit on call the same handlers they always did.
+  //
+  // ⚠️ WHAT STAYED IN THE PANEL, and it is nearly all names. The featgroup titles (`LoTW`,
+  // `eQSL`, `QRZ`, `HamQTH`, `ClubLog`, `HRDLog`, `RepeaterBook`, `Cloudlog / Wavelog`) are the
+  // services' own names and nothing else, so they never came here — a translated service name
+  // names no service. The token-shaped placeholders (`rbuapp_…`, the example Cloudlog URL, the
+  // profile id `1`) are invariant values in `CONFIRMATION_EXAMPLES`.
+  //
+  // ⚠️ WHAT IS VERBATIM INSIDE THESE SENTENCES, for the same reason the DXKeeper hints keep
+  // `Base Port`: each one NAMES SOMETHING THE OPERATOR MUST FIND SOMEWHERE ELSE, spelled the way
+  // that other place spells it. `TQSL` and its `Station Location`, its `-l` argument and the
+  // `"use the location in the ADIF file"` setting; `STATION_CALLSIGN` / `MY_GRIDSQUARE`, which
+  // are ADIF field names; ClubLog's `Application Password` and `App Passwords` page;
+  // RepeaterBook's `API Apps` page; HRDLog's `Options`; Cloudlog's `Account ▸ API Keys` and
+  // `Station Locations`; the host names (`eQSL.cc`, `QRZ.com`, `HamQTH.com`, `HRDLog.net`,
+  // `hearham.com`, `clublog.org/requestapikey.php`); `DXCC`, `WAS` and `ARRL`, which name award
+  // programmes and the authority that grants them; and `Upload to LoTW (N)`, whose `(N)` is the
+  // Logbook's own key. `{{when}}` arrives ALREADY FORMATTED from the panel — the same rule the
+  // LoTW-users `{{count}}` follows.
+  'settings.confirmations.legend': 'Confirmations',
+
+  // The Set/Forget pair sits under seven credentials with the same two words and, four times
+  // over, the same tooltip. One entry each: it is one control, said once.
+  'settings.confirmations.credential.set.action': 'Set',
+  'settings.confirmations.credential.forget.action': 'Forget',
+  'settings.confirmations.credential.forget.title':
+    'Remove the stored password from the system keychain',
+
+  'settings.confirmations.lotw.username.label': 'LoTW username',
+  'settings.confirmations.lotw.username.placeholder': 'your LoTW account login',
+  'settings.confirmations.lotw.username.hint':
+    'Often your callsign, but not always — use your LoTW account login. Save settings to apply.',
+  'settings.confirmations.lotw.password.label': 'LoTW password',
+  'settings.confirmations.lotw.password.placeholder': 'LoTW website password',
+  // Names the Set button beside it: reword that and this sentence moves with it.
+  'settings.confirmations.lotw.password.hint':
+    'Your LoTW <b>website</b> password (not your TQSL certificate password). Stored in the OS keychain, never on disk; not shown again after you click Set.',
+  'settings.confirmations.lotw.sync.label': 'LoTW confirmations',
+  'settings.confirmations.lotw.sync.action': 'Download confirmations',
+  'settings.confirmations.lotw.sync.busy': 'Downloading…',
+  'settings.confirmations.lotw.sync.hint':
+    'This only pulls confirmations <b>down</b>. To send your contacts <em>to</em> LoTW, use <b>Upload to LoTW (N)</b> in the Logbook. Pulls new confirmations into your log and marks which of your uploads LoTW now holds on file (so they read “waiting on the other op,” not “never uploaded”). The first pull covers your whole history (can be slow); later ones are incremental.',
+  'settings.confirmations.lotw.stationLocation.label': 'LoTW Station Location',
+  'settings.confirmations.lotw.stationLocation.placeholder': 'exact TQSL Station Location name',
+  'settings.confirmations.lotw.stationLocation.hint':
+    'For <b>uploading</b> to LoTW (the "Upload to LoTW" button in the Logbook). Signing is done by your installed <b>TQSL</b> against this named Station Location — set it up in TQSL first; the name must match exactly. No certificate or password is stored by Nexus.',
+  'settings.confirmations.lotw.adifLocation.label': 'Sign from ADIF location (travelers)',
+  'settings.confirmations.lotw.adifLocation.aria': 'Sign LoTW uploads from the ADIF location',
+  'settings.confirmations.lotw.adifLocation.hint':
+    'Turn on if you set TQSL to <em>"use the location in the ADIF file"</em> and don\'t create named Station Locations (handy if you travel). Nexus then stamps your call + grid (STATION_CALLSIGN / MY_GRIDSQUARE) into the upload and omits the <code>-l</code> argument, so TQSL signs from those and the Station Location above isn\'t required. <b>The whole batch is signed from your current grid above</b>, so if you operate from more than one location, upload <em>before</em> you move — otherwise earlier contacts are signed with the new grid.',
+  'settings.confirmations.lotw.tqslPath.label': 'TQSL path (optional)',
+  'settings.confirmations.lotw.tqslPath.placeholder': 'auto-detect (leave blank)',
+  'settings.confirmations.lotw.tqslPath.hint':
+    'Only if TQSL is installed somewhere non-standard; otherwise leave blank to auto-detect.',
+  'settings.confirmations.lotw.autoUpload.label': 'Upload to LoTW automatically',
+  'settings.confirmations.lotw.autoUpload.hint':
+    "Every few hours, Nexus hands your un-uploaded contacts to TQSL in one batch and TQSL signs and sends them — the same thing the Logbook's <b>Upload to LoTW</b> button does, on a timer. Needs TQSL installed and the Station Location above. If a batch is refused, this stops and waits for you rather than retrying; save any LoTW setting to start it again.",
+  // A whole sentence, not a clause: it says why the switch above is dead, and it is only ever
+  // shown while it is. Same for the run stamp — one sentence per state, never a glued ending.
+  'settings.confirmations.lotw.autoUpload.blocked':
+    'Unavailable while “Sign from ADIF location” is on: an unattended batch would sign older contacts with wherever you are NOW.',
+  'settings.confirmations.lotw.autoUpload.lastRun': 'Last run: {{when}}.',
+
+  'settings.confirmations.eqsl.username.label': 'eQSL username',
+  'settings.confirmations.eqsl.username.placeholder': 'your eQSL.cc account login',
+  'settings.confirmations.eqsl.username.hint':
+    'Your eQSL.cc login (often your callsign). Save settings to apply.',
+  'settings.confirmations.eqsl.password.label': 'eQSL password',
+  'settings.confirmations.eqsl.password.placeholder': 'eQSL.cc account password',
+  'settings.confirmations.eqsl.password.hint':
+    'Stored in the OS keychain, never on disk; not shown again after you click Set.',
+  'settings.confirmations.eqsl.sync.label': 'eQSL confirmations',
+  'settings.confirmations.eqsl.sync.action': 'Sync eQSL now',
+  'settings.confirmations.eqsl.sync.busy': 'Syncing…',
+  'settings.confirmations.eqsl.sync.hint':
+    "Download eQSL confirmations into your log. These count as confirmations but <b>not</b> for DXCC/WAS (ARRL doesn't accept eQSL) — a separate tier.",
+  'settings.confirmations.eqsl.upload.label': 'Auto-upload QSOs to eQSL',
+  'settings.confirmations.eqsl.upload.hint':
+    'Upload each logged QSO to eQSL.cc as you log it (needs the eQSL username + password above).',
+
+  'settings.confirmations.qrz.username.label': 'QRZ username',
+  'settings.confirmations.qrz.username.placeholder': 'your QRZ.com account login',
+  'settings.confirmations.qrz.username.hint':
+    "Used to look up a callsign's name + grid when logging. Save settings to apply.",
+  'settings.confirmations.qrz.password.label': 'QRZ password',
+  'settings.confirmations.qrz.password.placeholder': 'QRZ.com account password',
+  'settings.confirmations.qrz.password.hint':
+    'Your QRZ.com login password — <b>this is what powers callbook lookups</b> (name, QTH, grid), and it is separate from the Logbook API key below (that key only uploads QSOs). Stored in the OS keychain, never on disk. Grid & state need a QRZ XML subscription; free accounts return only name/address/country.',
+  'settings.confirmations.qrz.apiKey.label': 'QRZ Logbook API key',
+  'settings.confirmations.qrz.apiKey.placeholder': 'from your QRZ logbook settings page',
+  'settings.confirmations.qrz.apiKey.forget.title':
+    'Remove the stored Logbook key from the system keychain',
+  'settings.confirmations.qrz.apiKey.hint':
+    "A <b>separate</b> key (not the login password) from your QRZ logbook's settings page — used to upload logged QSOs.",
+  'settings.confirmations.qrz.upload.label': 'Auto-upload QSOs to QRZ',
+  'settings.confirmations.qrz.upload.hint':
+    'Push each logged QSO to your QRZ logbook (needs the Logbook API key above).',
+  'settings.confirmations.qrz.autoSync.label': 'Pull confirmations automatically',
+  'settings.confirmations.qrz.autoSync.hint':
+    'As people confirm on QRZ, the confirmations flow in on their own — no need to press Sync. After the first run only what CHANGED is fetched. QRZ confirmations show as confirmed but never count toward DXCC or WAS, which need LoTW or a card.',
+  'settings.confirmations.qrz.autoSync.lastPull': 'Last pull: {{when}}.',
+  'settings.confirmations.qrz.sync.label': 'Two-way sync',
+  'settings.confirmations.qrz.sync.title':
+    'FETCH your online QRZ logbook and merge it in — pulls QSOs you logged elsewhere plus their confirmations',
+  'settings.confirmations.qrz.sync.action': 'Sync from QRZ now',
+  'settings.confirmations.qrz.sync.busy': 'Syncing…',
+  'settings.confirmations.qrz.sync.hint':
+    'Pull your QRZ logbook <b>down</b> — adds QSOs you logged elsewhere (e.g. a phone app in the field) and marks QRZ-confirmed contacts. QRZ confirmations count as confirmations but <b>not</b> for DXCC/WAS. Safe to run repeatedly (deduped). Needs the Logbook API key above.',
+
+  'settings.confirmations.hamqth.username.label': 'HamQTH username',
+  'settings.confirmations.hamqth.username.placeholder': 'your HamQTH.com account login',
+  'settings.confirmations.hamqth.username.hint':
+    "A <b>free</b> callbook used as a fallback when QRZ isn't configured or has no match — a HamQTH account returns name, grid & US state at no charge. Save settings to apply.",
+  'settings.confirmations.hamqth.password.label': 'HamQTH password',
+  'settings.confirmations.hamqth.password.placeholder': 'HamQTH.com account password',
+  'settings.confirmations.hamqth.password.hint': 'Stored in the OS keychain, never on disk.',
+
+  'settings.confirmations.clublog.email.label': 'ClubLog email',
+  'settings.confirmations.clublog.email.placeholder':
+    'your ClubLog account email (not a callsign)',
+  'settings.confirmations.clublog.email.hint':
+    'Your ClubLog login email. Save settings to apply.',
+  'settings.confirmations.clublog.callsign.label': 'ClubLog callsign',
+  'settings.confirmations.clublog.callsign.placeholder': 'defaults to your callsign',
+  'settings.confirmations.clublog.callsign.hint':
+    'The ClubLog logbook to upload into (empty = your callsign).',
+  'settings.confirmations.clublog.password.label': 'ClubLog app-password',
+  'settings.confirmations.clublog.password.placeholder': 'a ClubLog Application Password',
+  'settings.confirmations.clublog.password.forget.title':
+    'Remove the stored ClubLog password from the system keychain',
+  'settings.confirmations.clublog.password.hint':
+    'Use a ClubLog <b>Application Password</b> (Settings → App Passwords), not your main password. Stored in the OS keychain.',
+  'settings.confirmations.clublog.apiKey.label': 'ClubLog API key (application-level)',
+  'settings.confirmations.clublog.apiKey.placeholder':
+    'blank = use the key bundled with this build (if any)',
+  'settings.confirmations.clublog.apiKey.hint':
+    "This is the <b>application</b> credential, not yours — official installer builds bundle one, and you only need email + app-password above. Building from source? Request a free key at clublog.org/requestapikey.php and paste it here (open-source can't ship one — ClubLog auto-revokes published keys).",
+  'settings.confirmations.clublog.upload.label': 'Auto-upload QSOs to ClubLog',
+  'settings.confirmations.clublog.upload.hint':
+    'Push each logged QSO to ClubLog in real time (needs the email + app-password above; official builds bundle the API key).',
+
+  'settings.confirmations.hrdlog.code.label': 'HRDLog.net upload code',
+  'settings.confirmations.hrdlog.code.placeholder': 'your hrdlog.net upload code',
+  'settings.confirmations.hrdlog.code.forget.title':
+    'Remove the stored HRDLog.net code from the system keychain',
+  'settings.confirmations.hrdlog.code.hint':
+    'The upload code from your HRDLog.net account (Options → your code). Uploads log under your station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate from the HRD Logbook UDP push under Logging.',
+  'settings.confirmations.hrdlog.upload.label': 'Auto-upload QSOs to HRDLog.net',
+  'settings.confirmations.hrdlog.upload.hint':
+    'Push each logged QSO to HRDLog.net (needs the upload code above). HRDLog.net is a live-logging and awards site — it is <b>not</b> an ARRL confirmation source, so an upload here never earns DXCC/WAS credit.',
+
+  'settings.confirmations.repeaterbook.token.label': 'RepeaterBook API token',
+  'settings.confirmations.repeaterbook.token.forget.title':
+    'Remove the stored RepeaterBook token from the system keychain',
+  'settings.confirmations.repeaterbook.token.hint':
+    "Optional. Without a token the <b>Program</b> section uses the open hearham.com directory. Add a personal token (from your RepeaterBook account's <b>API Apps</b> page) to pull from RepeaterBook.com under your own account instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is pending RepeaterBook's approval; if RepeaterBook is unreachable, Program falls back to hearham.com.",
+
+  'settings.confirmations.cloudlog.note':
+    'Auto-forward each logged QSO to your self-hosted <b>Cloudlog</b> or <b>Wavelog</b> logbook (HTTP). The API key is a per-instance token for your own server — enter it, your station-profile id, and turn on the toggle.',
+  'settings.confirmations.cloudlog.url.label': 'Base URL',
+  'settings.confirmations.cloudlog.url.hint':
+    'Your Cloudlog/Wavelog site root. Leave blank to disable.',
+  'settings.confirmations.cloudlog.stationId.label': 'Station profile id',
+  'settings.confirmations.cloudlog.stationId.hint':
+    'The station-location profile to log against (Cloudlog ▸ Station Locations).',
+  'settings.confirmations.cloudlog.apiKey.label': 'API key',
+  'settings.confirmations.cloudlog.apiKey.placeholder': 'your instance API key',
+  'settings.confirmations.cloudlog.apiKey.forget.title':
+    'Remove the stored Cloudlog key from the system keychain',
+  'settings.confirmations.cloudlog.apiKey.hint':
+    'Cloudlog ▸ Account ▸ API Keys — a key with read/write. Stored in the OS keychain, never on disk.',
+  'settings.confirmations.cloudlog.upload.label': 'Auto-forward QSOs',
+  'settings.confirmations.cloudlog.upload.hint':
+    "Push every logged QSO to the instance above as it's logged.",
+
   // ── Settings ▸ Appearance ▸ Workspace ───────────────────────────────────────────────
   // ⚠️ Every scale here is a PERCENT of a technical quantity, so it is interpolated as an
   // invariant number and the `%` stays glued to it. The chips themselves (`100%`, `175%`)

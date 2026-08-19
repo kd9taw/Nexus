@@ -651,6 +651,17 @@ const LOGGER_EXAMPLES = {
   clusterNode: 've7cc.net:23',
 } as const
 
+/**
+ * The Confirmations placeholders that are TOKENS rather than prose — same rule as
+ * `LOGGER_EXAMPLES`, one category up: a "localised" `rbuapp_` prefix matches no token
+ * RepeaterBook issues, and a translated example hostname resolves nowhere. The station-profile
+ * placeholder is the bare number `1` and stays inline, as every number alone does.
+ */
+const CONFIRMATION_EXAMPLES = {
+  rbToken: 'rbuapp_…',
+  cloudlogUrl: 'https://log.example.com',
+} as const
+
 export function SettingsPanel({
   onSaved,
   target,
@@ -8060,34 +8071,40 @@ export function SettingsPanel({
             </div>
           </fieldset>
           <fieldset className="settings-section" id="settings-confirmations">
-            <legend>Confirmations</legend>
+            <legend>{t('settings.confirmations.legend')}</legend>
             <div className="settings-featgroup">
+              {/* ⚠️ Every featgroup title in this fieldset is a service's own name and nothing
+                  else — invariant, like a callsign, and it stays here. */}
               <span className="settings-featgroup-title">LoTW</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">LoTW username</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.username.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.lotwUsername}
-                    placeholder="your LoTW account login"
+                    placeholder={t('settings.confirmations.lotw.username.placeholder')}
                     onChange={(e) => update('lotwUsername', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Often your callsign, but not always — use your LoTW account login. Save settings to apply.
+                    {t('settings.confirmations.lotw.username.hint')}
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">LoTW password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={lotwPw}
-                      placeholder="LoTW website password"
+                      placeholder={t('settings.confirmations.lotw.password.placeholder')}
                       onChange={(e) => setLotwPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8098,25 +8115,26 @@ export function SettingsPanel({
                       onClick={onSaveLotwPassword}
                       disabled={!lotwPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetLotwPassword}
-                      title="Remove the stored password from the system keychain"
+                      title={t('settings.confirmations.credential.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Your LoTW <strong>website</strong> password (not your TQSL certificate password). Stored in
-                    the OS keychain, never on disk; not shown again after you click Set.
+                    <T k="settings.confirmations.lotw.password.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <div className="settings-field">
-                  <span className="settings-label">LoTW confirmations</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.sync.label')}
+                  </span>
                   <div className="settings-input-row">
                     <button
                       type="button"
@@ -8124,38 +8142,44 @@ export function SettingsPanel({
                       onClick={onSyncLotw}
                       disabled={lotwSyncing || !form.lotwUsername.trim()}
                     >
-                      {lotwSyncing ? 'Downloading…' : 'Download confirmations'}
+                      {lotwSyncing
+                        ? t('settings.confirmations.lotw.sync.busy')
+                        : t('settings.confirmations.lotw.sync.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    This only pulls confirmations <strong>down</strong>. To send your contacts{' '}
-                    <em>to</em> LoTW, use <strong>Upload to LoTW (N)</strong> in the Logbook.{' '}
-                    Pulls new confirmations into your log and marks which of your uploads LoTW now holds on file
-                    (so they read “waiting on the other op,” not “never uploaded”). The first pull covers your whole
-                    history (can be slow); later ones are incremental.
+                    <T
+                      k="settings.confirmations.lotw.sync.hint"
+                      tags={{ b: <strong />, em: <em /> }}
+                    />
                   </span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">LoTW Station Location</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.stationLocation.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.lotwStationLocation}
-                    placeholder="exact TQSL Station Location name"
+                    placeholder={t('settings.confirmations.lotw.stationLocation.placeholder')}
                     onChange={(e) => update('lotwStationLocation', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    For <strong>uploading</strong> to LoTW (the "Upload to LoTW" button in the Logbook). Signing is
-                    done by your installed <strong>TQSL</strong> against this named Station Location — set it up in
-                    TQSL first; the name must match exactly. No certificate or password is stored by Nexus.
+                    <T
+                      k="settings.confirmations.lotw.stationLocation.hint"
+                      tags={{ b: <strong /> }}
+                    />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Sign from ADIF location (travelers)</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.adifLocation.label')}
+                  </span>
                   <span className="settings-input-row">
                     <input
                       type="checkbox"
@@ -8167,33 +8191,32 @@ export function SettingsPanel({
                         // and silently refused. The backend gate is the one that holds.
                         if (e.target.checked) updateBool('lotwAutoUpload', false)
                       }}
-                      aria-label="Sign LoTW uploads from the ADIF location"
+                      aria-label={t('settings.confirmations.lotw.adifLocation.aria')}
                     />
                     <span className="settings-hint">
-                      Turn on if you set TQSL to <em>"use the location in the ADIF file"</em> and don't create
-                      named Station Locations (handy if you travel). Nexus then stamps your call + grid
-                      (STATION_CALLSIGN / MY_GRIDSQUARE) into the upload and omits the <code>-l</code> argument,
-                      so TQSL signs from those and the Station Location above isn't required.{' '}
-                      <strong>The whole batch is signed from your current grid above</strong>, so if you operate
-                      from more than one location, upload <em>before</em> you move — otherwise earlier contacts
-                      are signed with the new grid.
+                      <T
+                        k="settings.confirmations.lotw.adifLocation.hint"
+                        tags={{ b: <strong />, em: <em />, code: <code /> }}
+                      />
                     </span>
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">TQSL path (optional)</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.tqslPath.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.tqslPath}
-                    placeholder="auto-detect (leave blank)"
+                    placeholder={t('settings.confirmations.lotw.tqslPath.placeholder')}
                     onChange={(e) => update('tqslPath', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Only if TQSL is installed somewhere non-standard; otherwise leave blank to auto-detect.
+                    {t('settings.confirmations.lotw.tqslPath.hint')}
                   </span>
                 </label>
 
@@ -8204,7 +8227,9 @@ export function SettingsPanel({
                     a dead control that does not say why reads as a bug. */}
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Upload to LoTW automatically</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.lotw.autoUpload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8217,23 +8242,21 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Every few hours, Nexus hands your un-uploaded contacts to TQSL in one batch and
-                    TQSL signs and sends them — the same thing the Logbook's{' '}
-                    <strong>Upload to LoTW</strong> button does, on a timer. Needs TQSL installed and
-                    the Station Location above. If a batch is refused, this stops and waits for you
-                    rather than retrying; save any LoTW setting to start it again.
+                    <T k="settings.confirmations.lotw.autoUpload.hint" tags={{ b: <strong /> }} />
                     {form.lotwUseAdifLocation && (
                       <>
                         {' '}
-                        <strong>
-                          Unavailable while “Sign from ADIF location” is on: an unattended batch
-                          would sign older contacts with wherever you are NOW.
-                        </strong>
+                        <strong>{t('settings.confirmations.lotw.autoUpload.blocked')}</strong>
                       </>
                     )}
                     {!!form.lotwLastAutoUploadUnix && form.lotwLastAutoUploadUnix > 0 && (
                       <>
-                        {' '}Last run: {new Date(form.lotwLastAutoUploadUnix * 1000).toLocaleString()}.
+                        {' '}
+                        {/* The stamp is a LOCAL wall-clock time the panel formats itself, exactly
+                            as the LoTW-users count does — `t()` has no locale formatter. */}
+                        {t('settings.confirmations.lotw.autoUpload.lastRun', {
+                          when: new Date(form.lotwLastAutoUploadUnix * 1000).toLocaleString(),
+                        })}
                       </>
                     )}
                   </span>
@@ -8244,29 +8267,33 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">eQSL</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">eQSL username</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.eqsl.username.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.eqslUsername}
-                    placeholder="your eQSL.cc account login"
+                    placeholder={t('settings.confirmations.eqsl.username.placeholder')}
                     onChange={(e) => update('eqslUsername', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Your eQSL.cc login (often your callsign). Save settings to apply.
+                    {t('settings.confirmations.eqsl.username.hint')}
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">eQSL password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.eqsl.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={eqslPw}
-                      placeholder="eQSL.cc account password"
+                      placeholder={t('settings.confirmations.eqsl.password.placeholder')}
                       onChange={(e) => setEqslPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8277,24 +8304,26 @@ export function SettingsPanel({
                       onClick={onSaveEqslPassword}
                       disabled={!eqslPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetEqslPassword}
-                      title="Remove the stored password from the system keychain"
+                      title={t('settings.confirmations.credential.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Stored in the OS keychain, never on disk; not shown again after you click Set.
+                    {t('settings.confirmations.eqsl.password.hint')}
                   </span>
                 </label>
 
                 <div className="settings-field">
-                  <span className="settings-label">eQSL confirmations</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.eqsl.sync.label')}
+                  </span>
                   <div className="settings-input-row">
                     <button
                       type="button"
@@ -8302,18 +8331,21 @@ export function SettingsPanel({
                       onClick={onSyncEqsl}
                       disabled={eqslSyncing || !form.eqslUsername.trim()}
                     >
-                      {eqslSyncing ? 'Syncing…' : 'Sync eQSL now'}
+                      {eqslSyncing
+                        ? t('settings.confirmations.eqsl.sync.busy')
+                        : t('settings.confirmations.eqsl.sync.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Download eQSL confirmations into your log. These count as confirmations but{' '}
-                    <strong>not</strong> for DXCC/WAS (ARRL doesn't accept eQSL) — a separate tier.
+                    <T k="settings.confirmations.eqsl.sync.hint" tags={{ b: <strong /> }} />
                   </span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-upload QSOs to eQSL</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.eqsl.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8325,7 +8357,7 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Upload each logged QSO to eQSL.cc as you log it (needs the eQSL username + password above).
+                    {t('settings.confirmations.eqsl.upload.hint')}
                   </span>
                 </div>
               </div>
@@ -8334,29 +8366,33 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">QRZ</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">QRZ username</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.username.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.qrzUsername}
-                    placeholder="your QRZ.com account login"
+                    placeholder={t('settings.confirmations.qrz.username.placeholder')}
                     onChange={(e) => update('qrzUsername', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Used to look up a callsign's name + grid when logging. Save settings to apply.
+                    {t('settings.confirmations.qrz.username.hint')}
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">QRZ password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={qrzPw}
-                      placeholder="QRZ.com account password"
+                      placeholder={t('settings.confirmations.qrz.password.placeholder')}
                       onChange={(e) => setQrzPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8367,33 +8403,32 @@ export function SettingsPanel({
                       onClick={onSaveQrzPassword}
                       disabled={!qrzPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetQrzPassword}
-                      title="Remove the stored password from the system keychain"
+                      title={t('settings.confirmations.credential.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Your QRZ.com login password — <strong>this is what powers callbook lookups</strong>{' '}
-                    (name, QTH, grid), and it is separate from the Logbook API key below (that key only
-                    uploads QSOs). Stored in the OS keychain, never on disk. Grid &amp; state need a QRZ
-                    XML subscription; free accounts return only name/address/country.
+                    <T k="settings.confirmations.qrz.password.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">QRZ Logbook API key</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.apiKey.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={qrzKey}
-                      placeholder="from your QRZ logbook settings page"
+                      placeholder={t('settings.confirmations.qrz.apiKey.placeholder')}
                       onChange={(e) => setQrzKey(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8404,26 +8439,27 @@ export function SettingsPanel({
                       onClick={onSaveQrzLogbookKey}
                       disabled={!qrzKey}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetQrzLogbookKey}
-                      title="Remove the stored Logbook key from the system keychain"
+                      title={t('settings.confirmations.qrz.apiKey.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    A <strong>separate</strong> key (not the login password) from your QRZ logbook's settings
-                    page — used to upload logged QSOs.
+                    <T k="settings.confirmations.qrz.apiKey.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-upload QSOs to QRZ</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.qrz.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8435,13 +8471,15 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Push each logged QSO to your QRZ logbook (needs the Logbook API key above).
+                    {t('settings.confirmations.qrz.upload.hint')}
                   </span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Pull confirmations automatically</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.qrz.autoSync.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8453,35 +8491,38 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    As people confirm on QRZ, the confirmations flow in on their own — no need to
-                    press Sync. After the first run only what CHANGED is fetched. QRZ confirmations
-                    show as confirmed but never count toward DXCC or WAS, which need LoTW or a card.
+                    {t('settings.confirmations.qrz.autoSync.hint')}
                     {form.qrzLastSyncUnix > 0 && (
                       <>
-                        {' '}Last pull: {new Date(form.qrzLastSyncUnix * 1000).toLocaleString()}.
+                        {' '}
+                        {/* Local wall-clock time, formatted by the panel — see the LoTW stamp. */}
+                        {t('settings.confirmations.qrz.autoSync.lastPull', {
+                          when: new Date(form.qrzLastSyncUnix * 1000).toLocaleString(),
+                        })}
                       </>
                     )}
                   </span>
                 </div>
 
                 <div className="settings-field">
-                  <span className="settings-label">Two-way sync</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.sync.label')}
+                  </span>
                   <div className="settings-input-row">
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onSyncQrz}
                       disabled={qrzSyncing}
-                      title="FETCH your online QRZ logbook and merge it in — pulls QSOs you logged elsewhere plus their confirmations"
+                      title={t('settings.confirmations.qrz.sync.title')}
                     >
-                      {qrzSyncing ? 'Syncing…' : 'Sync from QRZ now'}
+                      {qrzSyncing
+                        ? t('settings.confirmations.qrz.sync.busy')
+                        : t('settings.confirmations.qrz.sync.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Pull your QRZ logbook <strong>down</strong> — adds QSOs you logged elsewhere (e.g. a
-                    phone app in the field) and marks QRZ-confirmed contacts. QRZ confirmations count as
-                    confirmations but <strong>not</strong> for DXCC/WAS. Safe to run repeatedly (deduped).
-                    Needs the Logbook API key above.
+                    <T k="settings.confirmations.qrz.sync.hint" tags={{ b: <strong /> }} />
                   </span>
                 </div>
               </div>
@@ -8490,31 +8531,33 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">HamQTH</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">HamQTH username</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.hamqth.username.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.hamqthUsername}
-                    placeholder="your HamQTH.com account login"
+                    placeholder={t('settings.confirmations.hamqth.username.placeholder')}
                     onChange={(e) => update('hamqthUsername', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    A <strong>free</strong> callbook used as a fallback when QRZ isn't configured or has
-                    no match — a HamQTH account returns name, grid &amp; US state at no charge. Save
-                    settings to apply.
+                    <T k="settings.confirmations.hamqth.username.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">HamQTH password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.hamqth.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={hamqthPw}
-                      placeholder="HamQTH.com account password"
+                      placeholder={t('settings.confirmations.hamqth.password.placeholder')}
                       onChange={(e) => setHamqthPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8525,19 +8568,19 @@ export function SettingsPanel({
                       onClick={onSaveHamqthPassword}
                       disabled={!hamqthPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetHamqthPassword}
-                      title="Remove the stored password from the system keychain"
+                      title={t('settings.confirmations.credential.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Stored in the OS keychain, never on disk.
+                    {t('settings.confirmations.hamqth.password.hint')}
                   </span>
                 </label>
               </div>
@@ -8546,41 +8589,51 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">ClubLog</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">ClubLog email</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.clublog.email.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.clublogEmail}
-                    placeholder="your ClubLog account email (not a callsign)"
+                    placeholder={t('settings.confirmations.clublog.email.placeholder')}
                     onChange={(e) => update('clublogEmail', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">Your ClubLog login email. Save settings to apply.</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.clublog.email.hint')}
+                  </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">ClubLog callsign</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.clublog.callsign.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.clublogCallsign}
-                    placeholder="defaults to your callsign"
+                    placeholder={t('settings.confirmations.clublog.callsign.placeholder')}
                     onChange={(e) => update('clublogCallsign', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">The ClubLog logbook to upload into (empty = your callsign).</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.clublog.callsign.hint')}
+                  </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">ClubLog app-password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.clublog.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={clublogPw}
-                      placeholder="a ClubLog Application Password"
+                      placeholder={t('settings.confirmations.clublog.password.placeholder')}
                       onChange={(e) => setClublogPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8591,45 +8644,45 @@ export function SettingsPanel({
                       onClick={onSaveClublogPassword}
                       disabled={!clublogPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetClublogPassword}
-                      title="Remove the stored ClubLog password from the system keychain"
+                      title={t('settings.confirmations.clublog.password.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Use a ClubLog <strong>Application Password</strong> (Settings → App Passwords), not your main
-                    password. Stored in the OS keychain.
+                    <T k="settings.confirmations.clublog.password.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">ClubLog API key (application-level)</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.clublog.apiKey.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.clublogApiKey}
-                    placeholder="blank = use the key bundled with this build (if any)"
+                    placeholder={t('settings.confirmations.clublog.apiKey.placeholder')}
                     onChange={(e) => update('clublogApiKey', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    This is the <strong>application</strong> credential, not yours — official installer builds
-                    bundle one, and you only need email + app-password above. Building from source? Request a
-                    free key at clublog.org/requestapikey.php and paste it here (open-source can't ship one —
-                    ClubLog auto-revokes published keys).
+                    <T k="settings.confirmations.clublog.apiKey.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-upload QSOs to ClubLog</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.clublog.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8641,7 +8694,7 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Push each logged QSO to ClubLog in real time (needs the email + app-password above; official builds bundle the API key).
+                    {t('settings.confirmations.clublog.upload.hint')}
                   </span>
                 </div>
               </div>
@@ -8650,13 +8703,15 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">HRDLog</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">HRDLog.net upload code</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.hrdlog.code.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={hrdlogCode}
-                      placeholder="your hrdlog.net upload code"
+                      placeholder={t('settings.confirmations.hrdlog.code.placeholder')}
                       onChange={(e) => setHrdlogCodeField(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8667,27 +8722,27 @@ export function SettingsPanel({
                       onClick={onSaveHrdlogCode}
                       disabled={!hrdlogCode}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetHrdlogCode}
-                      title="Remove the stored HRDLog.net code from the system keychain"
+                      title={t('settings.confirmations.hrdlog.code.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    The upload code from your HRDLog.net account (Options → your code). Uploads log under your
-                    station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate
-                    from the HRD Logbook UDP push under Logging.
+                    {t('settings.confirmations.hrdlog.code.hint')}
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-upload QSOs to HRDLog.net</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.hrdlog.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8699,9 +8754,7 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Push each logged QSO to HRDLog.net (needs the upload code above). HRDLog.net is a live-logging
-                    and awards site — it is <strong>not</strong> an ARRL confirmation source, so an upload here
-                    never earns DXCC/WAS credit.
+                    <T k="settings.confirmations.hrdlog.upload.hint" tags={{ b: <strong /> }} />
                   </span>
                 </div>
               </div>
@@ -8710,13 +8763,15 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">RepeaterBook</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">RepeaterBook API token</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.repeaterbook.token.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={rbToken}
-                      placeholder="rbuapp_…"
+                      placeholder={CONFIRMATION_EXAMPLES.rbToken}
                       onChange={(e) => setRbTokenField(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8727,24 +8782,22 @@ export function SettingsPanel({
                       onClick={onSaveRbToken}
                       disabled={!rbToken}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetRbToken}
-                      title="Remove the stored RepeaterBook token from the system keychain"
+                      title={t('settings.confirmations.repeaterbook.token.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Optional. Without a token the <strong>Program</strong> section uses the open hearham.com
-                    directory. Add a personal token (from your RepeaterBook account's{' '}
-                    <strong>API Apps</strong> page) to pull from RepeaterBook.com under your own account
-                    instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is
-                    pending RepeaterBook's approval; if RepeaterBook is unreachable, Program falls back to
-                    hearham.com.
+                    <T
+                      k="settings.confirmations.repeaterbook.token.hint"
+                      tags={{ b: <strong /> }}
+                    />
                   </span>
                 </label>
               </div>
@@ -8752,27 +8805,31 @@ export function SettingsPanel({
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">Cloudlog / Wavelog</span>
               <p className="settings-note">
-                Auto-forward each logged QSO to your self-hosted <strong>Cloudlog</strong> or{' '}
-                <strong>Wavelog</strong> logbook (HTTP). The API key is a per-instance token for your
-                own server — enter it, your station-profile id, and turn on the toggle.
+                <T k="settings.confirmations.cloudlog.note" tags={{ b: <strong /> }} />
               </p>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">Base URL</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.cloudlog.url.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.cloudlogUrl ?? ''}
-                    placeholder="https://log.example.com"
+                    placeholder={CONFIRMATION_EXAMPLES.cloudlogUrl}
                     onChange={(e) => update('cloudlogUrl', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">Your Cloudlog/Wavelog site root. Leave blank to disable.</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.cloudlog.url.hint')}
+                  </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Station profile id</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.cloudlog.stationId.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
@@ -8782,17 +8839,21 @@ export function SettingsPanel({
                     onChange={(e) => update('cloudlogStationId', e.target.value)}
                     autoComplete="off"
                   />
-                  <span className="settings-hint">The station-location profile to log against (Cloudlog ▸ Station Locations).</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.cloudlog.stationId.hint')}
+                  </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">API key</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.cloudlog.apiKey.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={cloudlogKey}
-                      placeholder="your instance API key"
+                      placeholder={t('settings.confirmations.cloudlog.apiKey.placeholder')}
                       onChange={(e) => setCloudlogKeyField(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8803,26 +8864,27 @@ export function SettingsPanel({
                       onClick={onSaveCloudlogKey}
                       disabled={!cloudlogKey}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetCloudlogKey}
-                      title="Remove the stored Cloudlog key from the system keychain"
+                      title={t('settings.confirmations.cloudlog.apiKey.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Cloudlog ▸ Account ▸ API Keys — a key with read/write. Stored in the OS keychain,
-                    never on disk.
+                    {t('settings.confirmations.cloudlog.apiKey.hint')}
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-forward QSOs</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.cloudlog.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8833,7 +8895,9 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">Push every logged QSO to the instance above as it's logged.</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.cloudlog.upload.hint')}
+                  </span>
                 </div>
               </div>
             </div>
