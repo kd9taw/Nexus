@@ -1368,6 +1368,573 @@ export const EN = {
   'stats.dxSplit.domestic': 'Domestic',
   'stats.unplaced': '{{unplaced}} of {{total}} QSOs couldn’t be placed by callsign',
 
+  // ── The map, the globes and the propagation panes ───────────────────────────────────
+  // ⚠️ THE UNITS RULE IS THE WHOLE STORY ON THESE SURFACES, because almost everything they
+  // put on screen is a MEASUREMENT. Absent from this file and staying in the code: grid
+  // squares, callsigns, DXCC entity and region names, band names, mode names, bearings and
+  // octants, distances in km, MUF/dial frequencies in MHz, signal reports in dB, knots,
+  // percentages, SFI/Kp/A/Bz/X-ray index NAMES and values, R/S/G scale letters, satellite
+  // names, CQ zone numbers, POTA/SOTA references, the P.533 recommendation number and every
+  // layer/projection id. A decimal comma in any of them is an operating fault, not a
+  // wording choice. Unit symbols (MHz, km, dB, min) ride INSIDE the sentence that carries
+  // their number, so the number and its unit can never be separated by a translation.
+  //
+  // ⚠️ ALSO ABSENT, AND DELIBERATELY: the prose the BACKEND writes. Workability words
+  // (Excellent/Good/Fair/Marginal), the band advisor's `reason`, each insight's `plain` and
+  // `technical` sentences, `windowHint`, `howToCall`, the opening `confidence` word and
+  // `note`, the space-weather alert `kind`/`message`, and the modelled-window headline
+  // (`best`) all arrive over the wire already worded. They are phase-3, exactly as the
+  // Journey block above says of `get_journey`. Where one of them lands inside a sentence
+  // written here it is an interpolated value, never a fragment to translate.
+  //
+  // The state WORD in `dualStateLabel` (Open / Marginal / Closed) is also NOT here: it is
+  // the backend's `BandModeled` enum passed through, and `components/connect/paneFormat.ts`
+  // compares against it (`!== 'Closed'`). Translating it would break that comparison from a
+  // file this batch does not own. Its sub-note IS ours, and is below.
+
+  // The 2-D Beam Map (components/MapView.tsx). Shared with the 3-D globe where the two
+  // surfaces are deliberately identical — the legends and the ★-filter hint.
+  'map.empty.title': 'Set your grid to see the map',
+  'map.empty.detail':
+    'The Beam Map centers on your Maidenhead grid — set it in Settings, then every heading and range ring is measured from your QTH.',
+
+  'map.projection.aria': 'Projection',
+  'map.projection.globe.label': 'Globe',
+  'map.projection.globe.title': '3-D globe — drag to spin, wheel to zoom',
+  'map.projection.beam.label': 'Beam',
+  'map.projection.beam.title': 'Beam map — true headings + range rings from your QTH',
+  'map.projection.world.label': 'World',
+  'map.projection.world.title': 'Flat world map with shaded relief',
+
+  'map.zoom.aria': 'Zoom',
+  'map.zoom.in': 'Zoom in',
+  'map.zoom.out': 'Zoom out',
+
+  'map.colorBy.aria': 'Color spots by',
+  'map.colorBy.need.label': 'Need',
+  'map.colorBy.need.title': 'Color spots by what you still need',
+  'map.colorBy.snr.label': 'Signal',
+  'map.colorBy.snr.title': 'Color spots by signal strength',
+
+  // Provenance of the snapshot behind the map. The loading state is an ellipsis, which is
+  // not prose and stays in the component.
+  'map.prov.live': 'LIVE',
+  'map.prov.partial': 'PARTIAL',
+  'map.prov.cached': 'CACHED',
+  'map.prov.none': 'NO LIVE DATA',
+
+  'map.reset.label': 'Reset',
+  'map.reset.title': 'Reset view + layers',
+
+  // `SP` / `LP` are the ham abbreviations for the two great-circle paths and stay in the
+  // component as named constants, exactly as the Q-codes on the logbook row do.
+  'map.path.aria': 'Path',
+  'map.path.short.title': 'Short path',
+  'map.path.long.title': 'Long path',
+  // A bearing and a distance — the unit rides with its number so the two can never be
+  // separated by a translation.
+  'map.path.figure': '{{brg}}° · {{km}} km',
+
+  'map.emptyHint':
+    'No located stations yet — decoded stations with a grid appear here, centered on {{grid}}, colored by what you still need.',
+  // Not a plural entry: the shipped English says "all 1 satellites" when exactly one bird is
+  // hidden, and this phase changes no visible text. A locale writes its own agreement.
+  'map.sats.allHidden':
+    'None of your ★ birds are in the current elements — the ★ filter is hiding all {{count}} satellites (Layers ▸ Satellites ▸ All).',
+  'map.sats.filter.aria': 'Filter satellites to ★ birds',
+  'map.sats.filter.on.title':
+    'Showing your ★ birds (Passes pane + globe follow) — click to show all satellites',
+  'map.sats.filter.off.title':
+    'Showing all satellites — click to show only your ★ birds (Passes pane + globe follow)',
+  // The chip reads ★ when the filter is on and this word when it is off.
+  'map.sats.filter.all': 'All',
+
+  'map.pca.chip':
+    '☢ Proton event · S{{scale}} · polar caps absorbing ~{{db}} dB @30 MHz (day) — high-lat paths degraded',
+
+  // The flare chip and its tail. Each phase is its OWN statement appended to the chip — see
+  // the `logbook.import.dupes` note — because where "recovering" belongs in the sentence is
+  // a decision for each language. `{{cls}}` is the GOES class (M2.1) and `{{r}}` the R-scale.
+  'map.flare.chip': '☀️ {{cls}} flare · R{{r}} · HF ≤{{haf}} MHz absorbed on dayside',
+  'map.flare.phase.rising': ' · rising',
+  'map.flare.phase.recovering': ' · recovering',
+  'map.flare.phase.recoveringIn': ' · recovering (~{{mins}} min)',
+  'map.flare.phase.fade': ' · fade (~{{mins}} min)',
+  'map.flare.phase.preview': ' · PREVIEW',
+  'map.flare.preview.title':
+    'Simulate an X2 flare on the map for 60 s — visual preview only (no alerts). The layer otherwise draws nothing until a real M-class flare.',
+  'map.flare.preview.stop': '■ stop',
+  'map.flare.preview.start': '☀ preview',
+
+  // The layer panel. The layer IDS are code; only these names are read.
+  'map.layers.head': 'Layers',
+  'map.layer.opacity.aria': '{{layer}} opacity',
+  'map.layer.daynight.label': 'Day / night (greyline)',
+  'map.layer.relief.label': 'Relief (World view)',
+  'map.layer.muf.label': 'Ionosonde MUF',
+  'map.layer.aurora.label': 'Aurora oval',
+  'map.layer.flare.label': 'Flare blackout (D-RAP)',
+  'map.layer.pca.label': 'Proton polar cap (PCA)',
+  'map.layer.coast.label': 'Coastlines',
+  'map.layer.states.label': 'US states',
+  'map.layer.grid.label': 'Grid (20°×10°)',
+  'map.layer.gridLabels.label': 'Grid labels (AA…RR)',
+  'map.layer.cqzones.label': 'CQ zones',
+  'map.layer.coverage.label': 'My coverage (worked)',
+  'map.layer.sats.label': 'Satellites (amateur)',
+  'map.layer.aprs.label': 'APRS stations',
+  'map.layer.rings.label': 'Range rings',
+  'map.layer.heat.label': 'Band heat (openings)',
+  'map.layer.openings.label': 'Opening sectors (mode)',
+  'map.layer.liveSpots.label': 'Live spots (cluster/RBN)',
+  'map.layer.stations.label': 'My decodes',
+  'map.layer.paths.label': 'Selected path',
+  'map.layer.dxped.label': 'DXpeditions',
+
+  // The two legends, rendered by BOTH the 2-D map and the 3-D globe from one component —
+  // the surfaces must explain their dots identically, so they share these keys. The band
+  // names on the MUF ramp's ticks are tokens and stay in the component.
+  'map.legend.newDxcc': 'new DXCC',
+  'map.legend.newBand': 'new band',
+  'map.legend.zoneMode': 'zone/mode',
+  'map.legend.confirm': 'confirm',
+  'map.legend.worked': 'worked',
+  'map.legend.opening': 'opening',
+  'map.legend.heat.label': 'heat = band activity',
+  'map.legend.heat.title': 'Colored auras = live spot density per band; pulsing = a detected opening',
+  'map.legend.muf.title': 'Ionosonde MUF → band',
+
+  'map.coverage.dim.aria': 'Coverage dimension',
+  'map.coverage.dim.title': 'What to color: your worked grid squares (VUCC) or CQ zones (WAZ)',
+  'map.coverage.dim.grids': 'Grids',
+  'map.coverage.dim.zones': 'CQ zones',
+
+  // Hover tooltips. The station line is pure measurement and is not here at all. Each of
+  // these carries its own leading separator where it is an appended clause.
+  'map.hover.workHint': ' — double-click to work',
+  'map.hover.liveConfirmed': ' · live-confirmed',
+  'map.hover.dxped': '{{call}} · {{entity}}{{az}} · {{need}} on {{band}} · {{likelihood}}',
+  'map.hover.muf':
+    'Ionosonde · measured MUF {{muf}} MHz here (KC2G) — a data point, not a station',
+  // `{{what}}` (the symbol's own label), `{{moving}}` (speed/course) and `{{note}}` (the
+  // packet's free text) are assembled from data by the call site.
+  'map.hover.aprs': '{{call}}{{what}} · {{how}} {{when}}{{via}}{{moving}}{{note}}',
+  'map.hover.aprs.how.rf': 'heard on RF',
+  'map.hover.aprs.how.inet': 'reported by APRS-IS',
+  'map.hover.aprs.how.both': 'heard on RF + APRS-IS',
+  'map.hover.aprs.ageSecs': '{{secs}}s ago',
+  'map.hover.aprs.ageMins': '{{mins}}m ago',
+  'map.hover.aprs.via': ' · via {{path}}',
+  'map.hover.aprs.direct': ' · direct',
+
+  // The map's right-edge insight rail (components/prop/MapInsightRail.tsx). `MUF` is the
+  // acronym and stays in the component; the three trend arias are whole strings rather than
+  // a stem plus a direction word.
+  'map.insights.collapsed.title': 'Show propagation insights',
+  'map.insights.pill': 'Conditions',
+  'map.insights.aria': 'Propagation insights',
+  'map.insights.title': 'Conditions',
+  'map.insights.collapse.title': 'Collapse',
+  'map.insights.muf.title':
+    'Maximum Usable Frequency — the modelled DX ceiling right now; bands below it are open',
+  'map.insights.muf.value': '{{muf}} MHz',
+  'map.insights.muf.aria.rising': 'MUF rising',
+  'map.insights.muf.aria.falling': 'MUF falling',
+  'map.insights.muf.aria.steady': 'MUF steady',
+  'map.insights.bands.head': 'Band conditions',
+  'map.insights.outlook.head': 'Outlook',
+  'map.insights.heatmap.head': 'Modelled band × hour',
+
+  // The 3-D Connect globe (components/Globe3D.tsx). Its own layer vocabulary — shorter than
+  // the 2-D map's and NOT the same list, so the two must not share keys.
+  'globe.unsupported':
+    "This machine's graphics can't run the 3-D globe. Switch back to the 2-D map (🌐 button) — it works everywhere.",
+  'globe.spin.stop.title': 'Stop the globe spinning',
+  'globe.spin.start.title': 'Spin the globe',
+  'globe.spin.pause': '⏸ Spin',
+  'globe.spin.play': '▶ Spin',
+  'globe.layers.head': 'Layers',
+  'globe.layer.spots': 'Spots',
+  'globe.layer.decodes': 'My decodes',
+  'globe.layer.arcs': 'Heard-me arcs',
+  'globe.layer.dxped': 'DXpeditions',
+  'globe.layer.heat': 'Band heat',
+  'globe.layer.openings': 'Opening sectors',
+  'globe.layer.flare': 'Flare blackout',
+  'globe.layer.aurora': 'Aurora',
+  // The MUF layer's whole name is the acronym — a token, and a constant in the component.
+  'globe.layer.pca': 'Polar cap (PCA)',
+  'globe.layer.greyline': 'Greyline',
+  'globe.layer.sats': 'Satellites',
+  'globe.layer.pass': 'Tracked pass',
+  'globe.layer.rings': 'Range rings',
+  'globe.layer.cqzones': 'CQ zones',
+  'globe.layer.coverage': 'My coverage',
+  'globe.layer.states': 'US states',
+  'globe.layer.grid': 'Graticule',
+  'globe.layer.lights': 'City lights',
+  'globe.sats.filter.aria': 'Filter satellites to ★ birds',
+  'globe.sats.filter.on.title':
+    'Showing your ★ birds (Passes pane + 2-D map follow) — click to show all satellites',
+  'globe.sats.filter.off.title':
+    'Showing all satellites — click to show only your ★ birds (Passes pane + 2-D map follow)',
+  'globe.sats.filter.all': 'All',
+  // The tracked pass in words — the text equivalent of a WebGL scene a screen reader
+  // cannot see. `El`/`Az`/`LOS` are the standard satellite abbreviations.
+  'globe.pass.aria': 'Tracked pass: {{name}}',
+  'globe.pass.elAz': 'El {{el}}° · Az {{az}}°',
+  'globe.pass.range': '{{km}} km',
+  'globe.pass.losIn': 'LOS in {{mmss}}',
+
+  // The Logbook's world-of-contacts globe (components/QsoGlobe.tsx) — `logbook.globe.*`
+  // because it is a band of the Logbook view, not a map surface of its own.
+  'logbook.globe.spin.stop.title': 'Stop the slow rotation',
+  'logbook.globe.spin.start.title': 'Start the slow rotation',
+  'logbook.globe.spin.pause': '⏸ Spin',
+  'logbook.globe.spin.play': '▶ Spin',
+  'logbook.globe.band.title':
+    "Grid squares are a per-band achievement (VUCC) — view one band's squares on their own",
+  // The <option> VALUE 'all' is a token and stays in the code; only this label is read.
+  'logbook.globe.band.all': 'All bands',
+  'logbook.globe.count.all': {
+    one: '{{count}} grid square worked',
+    other: '{{count}} grid squares worked',
+  },
+  'logbook.globe.count.band': {
+    one: '{{count}} grid square on {{band}}',
+    other: '{{count}} grid squares on {{band}}',
+  },
+
+  // ── Propagation presentation (propViz.ts and the prop panes) ────────────────────────
+  // `propViz.ts` is a pure formatting module: every string it returns is read straight
+  // into a tooltip, so its words are looked up when the string is built, never at import.
+  'prop.rarity.rare.label': 'RARE',
+  'prop.rarity.rare.title': 'Rare grid — almost no land (small island or coastal sliver)',
+  'prop.rarity.ultra.label': 'ULTRA',
+  'prop.rarity.ultra.title':
+    'Ultra-rare grid — open water: only rovers, maritime mobiles, or DXpeditions can activate it',
+
+  // Plain-language HF impact for each space-weather index. The NUMBER stays visible beside
+  // it in the component (project rule: never hide the physics), so these say only what it
+  // means for the bands.
+  'prop.impact.sfi.high': 'high flux — upper bands lively',
+  'prop.impact.sfi.moderate': 'moderate flux — 20–15 m workable',
+  'prop.impact.sfi.low': 'low flux — high bands sluggish',
+  'prop.impact.kp.storm': 'geomag storm — polar paths degraded',
+  'prop.impact.kp.unsettled': 'unsettled — high-lat paths soft',
+  'prop.impact.kp.quiet': 'quiet field — stable paths',
+  'prop.impact.bz.hardSouth': 'field hard south — storm likely, polar paths fading',
+  'prop.impact.bz.south': 'field south — high-lat paths softening soon',
+  'prop.impact.bz.neutral': 'field neutral/north — stable',
+  'prop.impact.a.storm': 'stormy day — HF rough, polar paths out',
+  'prop.impact.a.active': 'active day — paths up and down',
+  'prop.impact.a.unsettled': 'unsettled day — minor fading spells',
+  'prop.impact.a.quiet': 'quiet day — conditions steady',
+  'prop.impact.xray.flare': 'flare — low-band shortwave fade',
+  'prop.impact.xray.cClass': 'C-class — minor low-band absorption',
+  'prop.impact.xray.none': 'no significant flares',
+
+  // Live band timing. `{{when}}` is a duration the call site formats from digits and the
+  // h/m unit letters; `{{at}}` is a UTC time (1500Z) — both invariant.
+  'prop.bandTiming.openNowHours': 'open now · ~{{hours}}h left',
+  'prop.bandTiming.openNowMins': 'open now · ~{{mins}}m left',
+  'prop.bandTiming.opensIn': 'opens in ~{{when}} ({{at}})',
+
+  // The sub-note under the dual state word — the fix that stops a quiet band reading dead.
+  'prop.state.sub.active': 'active',
+  'prop.state.sub.someActivity': 'some activity',
+  'prop.state.sub.noneHeard': 'none heard',
+
+  // The shared spot tooltip (2-D map AND 3-D globe read identically, by design). Each
+  // optional clause is its own statement carrying its own separator.
+  'prop.spotTooltip': '{{call}} · {{band}}{{mode}}{{freq}} · {{age}} ago',
+  'prop.spotTooltip.heardMe': ' · heard YOU',
+  'prop.spotTooltip.approx': ' · ~location',
+
+  // The satellite tooltip. `{{star}}` is ★/☆, `{{alt}}` the live altitude clause.
+  'prop.satTooltip': '{{name}} {{star}}{{alt}} · {{when}}{{click}} · dbl-click: favorite',
+  'prop.satTooltip.alt': ' · alt {{km}} km',
+  'prop.satTooltip.noPass': 'no pass over you in 24 h',
+  'prop.satTooltip.inPass': 'IN PASS now · max {{maxEl}}°',
+  'prop.satTooltip.nextPass': 'next pass {{at}} (in {{mins}} min) · max {{maxEl}}°',
+  'prop.satTooltip.clickForPasses': ' — click for passes',
+
+  // One gesture, one wording, on every pane that offers it — the band-focus tooltip.
+  'prop.focusBand.title': 'Focus {{band}} on the map',
+
+  // The band advisor.
+  'prop.bands.aria': 'Band activity',
+  'prop.bands.head.you': 'Bands — best for you',
+  'prop.bands.head.world': 'Bands — worldwide activity',
+  'prop.bands.view.aria': 'Band ranking view',
+  'prop.bands.view.you.label': 'For you',
+  'prop.bands.view.you.title': 'Bands ranked by what YOU can reach now (own-call + near-region)',
+  'prop.bands.view.world.label': 'Worldwide',
+  'prop.bands.view.world.title':
+    'Bands ranked by GLOBAL activity — busy, but not necessarily workable from your QTH',
+  'prop.bands.clearFocus.title': 'Clear the band focus',
+  'prop.bands.focused': 'focused: {{band}} ✕',
+  'prop.bands.caption.you':
+    'Ranked by what you can actually reach now — your own-call paths + stations near you.',
+  'prop.bands.caption.world':
+    'Busiest bands worldwide — loud somewhere, not necessarily workable from your QTH.',
+  'prop.bands.modelled.title': 'Modelled: {{reason}}',
+  'prop.bands.people.title': 'stations that hear you / you hear',
+
+  // The hamqsl-style condition strip. `{{sub}}` is the dual-state sub-note with its
+  // separator; `{{reason}}` is the backend's own sentence.
+  'prop.bandConditions.aria': 'Band conditions',
+  'prop.bandConditions.cell.title': '{{band}}: {{state}}{{sub}} — {{reason}}',
+
+  // Best band to each region.
+  'prop.bestBand.stations.title': 'anchored stations (⇄ = both directions)',
+
+  // Continent × band activity matrix.
+  'prop.activityMatrix.corner.aria': 'band',
+  'prop.activityMatrix.cell.title': {
+    one: '{{region}} {{band}}: {{count}} stn ({{hearMe}} hear you, {{iHear}} you hear)',
+    other: '{{region}} {{band}}: {{count}} stns ({{hearMe}} hear you, {{iHear}} you hear)',
+  },
+  'prop.activityMatrix.cell.empty': '{{region}} {{band}}: —',
+
+  // NCDXF/IARU beacon monitor — `{{qth}}` is the beacon's own city.
+  'prop.beacons.title': '{{qth}} · {{freq}} MHz',
+
+  // Getting-out compass rose.
+  'prop.getout.aria': 'Compass rose of where your signal is reaching',
+  'prop.getout.spoke': {
+    one: '{{octant}}: {{count}} station, out to {{km}} km',
+    other: '{{octant}}: {{count}} stations, out to {{km}} km',
+  },
+
+  // The predictive insight feed — both sentences in each row come from the backend.
+  'prop.insightFeed.aria': 'Predictive insights',
+
+  // Band × UTC-hour likelihood heatmap. The per-cell tooltip is band, hour and percent —
+  // pure measurement, so it is not here.
+  'prop.heatmap.aria': 'Band by UTC-hour contact-likelihood heatmap',
+  'prop.heatmap.band.title': '{{band}} — {{workability}} · {{pct}}% of the day usable (modelled)',
+  'prop.heatmap.legend': 'less likely → more likely',
+
+  // Live measured ionosonde MUF.
+  'prop.measuredMuf.none': 'No live ionosonde MUF right now.',
+  'prop.measuredMuf.value': '{{muf}} MHz',
+  'prop.measuredMuf.fof2': 'foF2 {{value}}',
+
+  // SWPC R/S/G scales. The letters R, S and G are the scale names and stay in the code.
+  'prop.scales.none': 'No live space-weather scales right now.',
+  'prop.scales.r.title': 'Radio blackout — HF absorption on sunlit paths',
+  'prop.scales.s.title': 'Solar radiation storm — polar HF',
+  'prop.scales.g.title': 'Geomagnetic storm — high-lat paths + aurora',
+  'prop.scales.tomorrow': 'G{{level}}↗ tmrw',
+  'prop.scales.tomorrow.title': "Tomorrow's forecast geomagnetic level",
+
+  // Space-weather gauges. The index NAMES (SFI, Kp, A, X-ray, Bz) are technical tokens and
+  // stay in the component; these are the Simple-mode plain-English glosses.
+  'prop.spaceWx.aria': 'Space weather',
+  'prop.spaceWx.gloss.sfi':
+    'Solar Flux Index — how energized the ionosphere is. Higher opens the upper HF bands (20–10 m). ~70 is low; 150+ is great.',
+  'prop.spaceWx.gloss.kp':
+    'Geomagnetic activity, 0–9. Low is calm and good for DX; 5+ is a storm that fades the high bands and polar paths.',
+  'prop.spaceWx.gloss.a':
+    'A-index — a daily summary of geomagnetic disturbance. Lower is quieter and better for DX.',
+  'prop.spaceWx.gloss.xray':
+    'Solar X-ray flare level (A/B/C/M/X). An M- or X-class flare can briefly black out the low bands.',
+
+  // The greyline pane. The two next-terminator lines are whole sentences, not a stem plus
+  // "Sunrise"/"Sunset" — that word is the subject, and a translator must be free to move it.
+  'prop.greyline.noGrid': 'Set your grid in Settings to see your greyline windows.',
+  'prop.greyline.next.rise': '<b>Sunrise</b> greyline in <b>{{when}}</b> ({{at}})',
+  'prop.greyline.next.set': '<b>Sunset</b> greyline in <b>{{when}}</b> ({{at}})',
+  'prop.greyline.favors': '◐ greyline favors {{bands}}',
+  'prop.greyline.onGrey': 'On the greyline now (point your beam): {{entities}}',
+  'prop.greyline.none': 'No greyline DX paths lit right now.',
+
+  // The loud 6 m/VHF opening strip.
+  'prop.opening.focus.title': 'Focus {{band}} on the map — where IS this opening?',
+  'prop.opening.bandOpen': '{{band}} OPEN',
+  'prop.opening.new': 'NEW',
+  'prop.opening.detail':
+    'point {{octant}} · ~{{km}} km · {{stations}} stations{{reciprocal}} · {{confidence}}{{opened}}',
+  'prop.opening.reciprocal': ' ({{count}} 2-way)',
+  'prop.opening.opened': ' · opened {{ago}}',
+  'prop.opening.ago.justNow': 'just now',
+  'prop.opening.ago.mins': '{{mins}}m ago',
+  'prop.opening.ago.hours': '{{hours}}h ago',
+
+  // The openings log — the historical record. Column names are prose; every value under
+  // them is a token.
+  'prop.openingsLog.filter.aria': 'Filter openings by band',
+  'prop.openingsLog.filter.all': 'All',
+  'prop.openingsLog.count': { one: '{{count}} opening', other: '{{count}} openings' },
+  'prop.openingsLog.empty': 'No {{filter}} openings recorded yet.',
+  'prop.openingsLog.sort.title': 'Sort by {{column}}',
+  'prop.openingsLog.column.band': 'Band',
+  'prop.openingsLog.column.mode': 'Mode',
+  'prop.openingsLog.column.when': 'When',
+  'prop.openingsLog.column.duration': 'Dur',
+  'prop.openingsLog.column.dx': 'DX',
+  'prop.openingsLog.column.stations': 'Stns',
+  'prop.openingsLog.duration.partial.title': 'Already open at app start — duration under-counts',
+  'prop.openingsLog.dx.title': 'Longest path seen during the opening',
+  'prop.openingsLog.dx': '~{{km}} km {{octant}}',
+  'prop.openingsLog.stations.title': 'Most stations heard in one window',
+  'prop.openingsLog.stations': '{{count}} stns',
+
+  // The opening TOASTS (openingAlert.ts). Every one is a whole sentence: the tier decides
+  // which fires, and a fragment shared between two tiers could not carry their different
+  // urgency into another language.
+  'prop.openingAlert.sporadicE':
+    '⚡ {{band}} SPORADIC-E — rare & brief, point {{octant}} NOW · DX ~{{km}} km · {{stations}} stns',
+  'prop.openingAlert.aurora':
+    '🌌 {{band}} AURORA — beam NORTH (not at the station); signals sound raspy/buzzy, CW & SSB work best',
+  'prop.openingAlert.f2':
+    '⚡ {{band}} F2 opening — real DX, point {{octant}} · ~{{km}} km · {{stations}} stns',
+  'prop.openingAlert.tropo':
+    '📡 {{band}} tropo opening — DX to ~{{km}} km, point {{octant}} · {{stations}} stns',
+  'prop.openingAlert.generic': '⚡ {{band}} open — point {{octant}} · {{stations}} stns',
+  'prop.openingAlert.thin':
+    '📻 {{band}} possible {{mode}} — thin evidence: {{stations}} stns to ~{{km}} km {{octant}}; may not be audible by ear',
+
+  // ── Chasing (the chase panes and the ranked chase feed) ─────────────────────────────
+  'chase.row.show.title': 'Show {{call}} on the map',
+  'chase.row.point.title': 'Point the antenna at {{call}}',
+  'chase.row.work.title': 'Rig jumps to this band/mode/frequency; the cockpit opens',
+  'chase.row.work.label': '▶ Work',
+  'chase.age.secs': '{{secs}}s ago',
+  'chase.age.mins': '{{mins}}m ago',
+  // The row's action line. `{{workability}}` and `{{window}}` are the backend's words.
+  'chase.open.now': '{{band}} is open ({{workability}}) — call now',
+  'chase.open.marginal': '{{band}} marginal',
+  'chase.open.closed': '{{band}} closed now · best {{window}}',
+  'chase.open.best': ' · best {{window}}',
+
+  'chase.feed.dxped.label': 'DXP',
+  'chase.feed.dxped.title': 'DXpedition',
+  'chase.feed.endsSoon.label': 'last days',
+  'chase.feed.endsSoon.title': 'This operation ends within 3 days',
+  'chase.feed.gem.rare.title': 'Rare grid — almost no land',
+  'chase.feed.gem.ultra.title': 'Ultra-rare grid — open water',
+  'chase.feed.empty':
+    'Nothing chase-worthy right now — targets appear as needed stations are heard or expeditions come on the air.',
+  'chase.feed.summary': '{{count}} to chase ({{openness}}). Top: {{top}}{{entity}} — {{why}}.',
+  'chase.feed.workableNow': '{{count}} workable now',
+  'chase.feed.noneOpen': 'none open this minute',
+  // "Why chase this now" — one whole line per case, plus two appended clauses.
+  'chase.why.spotted': 'on the air now (spotted) — {{band}}',
+  'chase.why.modelledOpen': '{{band}} path modelled open — {{likelihood}}',
+  'chase.why.likelihood': '{{band}} {{likelihood}}',
+  'chase.why.best': ' · best {{best}}',
+  'chase.why.lastDays': '{{why}} · last days!',
+  'chase.why.openNow': '{{band}} open now — call it',
+  'chase.why.closedBest': '{{band}} closed now · best {{window}}',
+  'chase.why.heardOn': 'heard on {{band}}',
+
+  // ── DXpeditions (the board, the calendar, the chase flag and the wake-me alarm) ──────
+  'dxped.loading.title': 'Reading the expedition feeds…',
+  'dxped.loading.detail': "Fetching the announced-operations calendar and who's active now.",
+  'dxped.hero.onAir': {
+    one: '{{count}} DXpedition on the air now · {{announced}} announced',
+    other: '{{count}} DXpeditions on the air now · {{announced}} announced',
+  },
+  'dxped.hero.noneOnAir': 'No expeditions on the air right now — {{announced}} announced and coming',
+  'dxped.hero.none': 'No expeditions announced right now',
+  'dxped.prov.title': 'Data provenance',
+  'dxped.prov.live': 'LIVE',
+  'dxped.prov.partial': 'PARTIAL',
+  'dxped.prov.cached': 'CACHED {{mins}}m',
+  'dxped.prov.none': 'NO LIVE DATA',
+  'dxped.popOut.title': 'Open DXpeditions in its own window (for a second monitor)',
+  'dxped.popOut.label': '⧉ Pop out',
+  'dxped.workNow.aria': 'Workable now',
+  'dxped.workNow.head': 'Work now — needed × on the air',
+  'dxped.workNow.none':
+    'Nothing you need is workable right now. New ones appear here the moment a needed expedition is on a band with a real path to you.',
+  'dxped.showOnMap.title': 'Open Connect with this expedition selected on the map',
+  'dxped.showOnMap.label': '◎ show on map',
+  'dxped.calendar.empty': 'The forward calendar is empty — announced operations land here.',
+
+  // One card. `P.533` is the ITU recommendation's number and stays in the component.
+  'dxped.engine.modelled': 'modelled',
+  'dxped.card.live.title': 'Live PSK Reporter spots confirm this band toward the DX region',
+  'dxped.card.live.label': 'live spots',
+  'dxped.card.geo': '{{octant}}{{az}} · {{km}} km',
+  'dxped.card.bestShot': 'Best shot: {{band}} {{workability}} {{window}}',
+  'dxped.card.details.title': 'The full 24h × band reliability grid for this path',
+  'dxped.card.details.show': '▸ details',
+  'dxped.card.details.hide': '▾ details',
+  'dxped.card.work.title': 'Jump the rig to {{band}} and open the right cockpit',
+  'dxped.card.work.label': '▶ Work {{band}}',
+
+  // The ★ chase toggle — the card and the calendar row are the same control, so one key.
+  'dxped.chase.toggle.on.title':
+    'Chasing — you get an alert when your window opens and they are spotted. Click to stop.',
+  'dxped.chase.toggle.off.title':
+    'Chase this expedition — alert me when my modelled window opens and live spots confirm them',
+  'dxped.chase.open.loud': '🎯 {{call}} window open NOW — {{band}}, spotted on the air',
+  'dxped.chase.open.quiet': '{{call}}: modelled window open ({{best}}) — not yet spotted',
+  'dxped.chase.work': 'Work',
+
+  // The wake-me alarm. Two whole statements for the window rather than a stem plus a time.
+  'dxped.alarm.toggle.on.title':
+    'Alarm armed — a loud in-app wake-up fires {{lead}} min before your modelled window opens. Click to disarm.',
+  'dxped.alarm.toggle.off.title':
+    'Wake me — arm a loud in-app alarm for when your modelled window to this expedition opens',
+  'dxped.alarm.lead.title': 'How long before the window opens to wake you',
+  'dxped.alarm.lead.aria': 'Alarm lead time',
+  'dxped.alarm.lead.option': '{{mins}} min',
+  'dxped.alarm.toast': '⏰ {{call}} — your modelled window {{opens}} · {{best}}',
+  'dxped.alarm.openNow': 'is OPEN now',
+  'dxped.alarm.opensAt': 'opens {{at}} (~{{mins}} min)',
+  // Stops the repeating BEEP, not a transmission — this is not a stop-line control.
+  'dxped.alarm.stop': 'Stop alarm',
+
+  // The forward calendar. Weekday and month abbreviations are date formatting, not catalog
+  // prose, and stay in the components with the rest of the date handling.
+  'dxped.calendar.aria': 'DXpedition calendar',
+  'dxped.calendar.head': 'DXpedition calendar — when to plan your chase',
+  'dxped.calendar.view.aria': 'Calendar view',
+  'dxped.calendar.view.month': 'Calendar',
+  'dxped.calendar.view.list': 'Details',
+  'dxped.calendar.onAir': 'on the air',
+  'dxped.calendar.week.title': 'Your modelled best shot for each of the next 7 days — plan the chase',
+  'dxped.calendar.day.title': '{{day}}: {{best}}',
+  'dxped.calendar.day.noPath': 'no modelled path',
+  'dxped.calendar.day.offAir': '{{day}}: not on the air',
+  'dxped.calendar.openFailed': 'Could not open the page for {{call}}',
+
+  // Where a calendar entry sends the operator. `QRZ` is the site's name and stays in the
+  // module; the tooltip always names the real destination.
+  'dxped.link.website': 'Website',
+  'dxped.link.site.title': "Open the expedition's website — {{url}}",
+  'dxped.link.qrz.title': 'No website announced — open their QRZ page instead ({{url}})',
+
+  // "What should I chase, and when" — the digest above the calendar.
+  'dxped.digest.aria': 'What to chase',
+  'dxped.digest.head': 'What to chase',
+  'dxped.digest.onAir': 'ON THE AIR',
+  'dxped.digest.onAirNow': 'on the air now',
+  'dxped.digest.startsTomorrow': 'starts tomorrow',
+  'dxped.digest.startsInDays': 'starts in {{days}} days',
+  'dxped.digest.bestDays': 'best {{days}}',
+
+  // The month grid. The bar's own detail line is call, entity, dates, bands and modes —
+  // all tokens — so only these two appended clauses and the overflow control are here.
+  'dxped.month.aria': 'DXpedition month grid',
+  'dxped.month.today': 'TODAY',
+  'dxped.month.bar.chasing': ' · chasing',
+  'dxped.month.bar.opens': ' · opens {{url}}',
+  'dxped.month.more.title': {
+    one: '{{count}} more operation on this day — show the whole week',
+    other: '{{count}} more operations on this day — show the whole week',
+  },
+  'dxped.month.showFewer': 'show fewer',
+
+  // ── Share cards (rendered locally, never uploaded) ──────────────────────────────────
+  'share.copied': 'Share card copied — paste it anywhere',
+  'share.saved': 'Share card saved → {{path}}',
+  'share.saveFailed': 'Could not save the share card: {{detail}}',
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning

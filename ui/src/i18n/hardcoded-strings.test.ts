@@ -94,6 +94,47 @@ const MIGRATED = [
   'features/needVisuals.ts',
   'statusMeta.ts',
   'useJourneyUnlocks.ts',
+  // Batch 4 (2026-08-18) — the maps, the globes and the propagation panes. The WIDEST
+  // batch (33 files) and the densest MEASUREMENT surface in the tree: grids, bearings,
+  // distances, SFI/Kp/A/Bz indices, MUF in MHz, R/S/G scale letters and every band and
+  // mode name on these screens is an invariant token and stays in the code (MUF_LABEL,
+  // INDEX, PATH_SP/PATH_LP, ENGINE_P533, QRZ_LABEL and the RSG letters). It also draws the
+  // line this phase does NOT cross: the prose these surfaces receive from the BACKEND —
+  // workability words, band reasons, insight sentences, window headlines — is interpolated
+  // as a value, never translated, and moves in phase 3.
+  'components/MapView.tsx',
+  'components/MapLegend.tsx',
+  'components/Globe3D.tsx',
+  'components/QsoGlobe.tsx',
+  'propViz.ts',
+  'openingAlert.ts',
+  'components/DxpeditionsView.tsx',
+  'features/dxpedChase.ts',
+  'features/dxpedAlarm.ts',
+  'features/chaseFeed.ts',
+  'features/shareCard.ts',
+  'components/prop/ActivityMatrix.tsx',
+  'components/prop/BandAdvisor.tsx',
+  'components/prop/BandConditionStrip.tsx',
+  'components/prop/BeaconMonitor.tsx',
+  'components/prop/BestBandTable.tsx',
+  'components/prop/ChaseFeedPane.tsx',
+  'components/prop/ChasePane.tsx',
+  'components/prop/DxpedCalendar.tsx',
+  'components/prop/DxpedDigest.tsx',
+  'components/prop/DxpedMonth.tsx',
+  'components/prop/dxpedLink.ts',
+  'components/prop/GetoutCompass.tsx',
+  'components/prop/GreylineWindow.tsx',
+  'components/prop/InsightFeed.tsx',
+  'components/prop/LikelihoodHeatmap.tsx',
+  'components/prop/MapInsightRail.tsx',
+  'components/prop/MeasuredMuf.tsx',
+  'components/prop/OpeningStrip.tsx',
+  'components/prop/OpeningsLogPane.tsx',
+  'components/prop/ScalesAnnunciator.tsx',
+  'components/prop/SpaceWxGauges.tsx',
+  'components/prop/WorkNowCard.tsx',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */

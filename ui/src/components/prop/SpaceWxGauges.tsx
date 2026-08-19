@@ -6,6 +6,7 @@
 import type { SpaceWxView } from '../../types'
 import { sfiImpact, kpImpact, aImpact, xrayImpact, bzImpact, type Impact } from '../../propViz'
 import { Tooltip, TooltipProvider } from '../ui/Tooltip'
+import { t, type MessageKey } from '../../i18n'
 
 const SEV_VAR: Record<Impact['sev'], string> = {
   quiet: 'var(--band-open)',
@@ -13,12 +14,25 @@ const SEV_VAR: Record<Impact['sev'], string> = {
   warn: 'var(--alert-warning)',
 }
 
-/** Plain-English glosses for the space-weather acronyms (Simple mode only). */
-const GLOSS: Record<string, string> = {
-  SFI: 'Solar Flux Index — how energized the ionosphere is. Higher opens the upper HF bands (20–10 m). ~70 is low; 150+ is great.',
-  Kp: 'Geomagnetic activity, 0–9. Low is calm and good for DX; 5+ is a storm that fades the high bands and polar paths.',
-  A: 'A-index — a daily summary of geomagnetic disturbance. Lower is quieter and better for DX.',
-  'X-ray': 'Solar X-ray flare level (A/B/C/M/X). An M- or X-class flare can briefly black out the low bands.',
+/** The index NAMES. Technical tokens — SFI is SFI on every ham's screen in every language,
+ * exactly like a band or a mode name — so they live here, not in the catalog. What each one
+ * MEANS is prose and is a catalog entry (`prop.spaceWx.gloss.*`), attached per gauge below.
+ * Bz deliberately has no gloss: the shipped Simple-mode table never carried one. */
+const INDEX = {
+  sfi: 'SFI',
+  kp: 'Kp',
+  a: 'A',
+  xray: 'X-ray',
+  bz: 'Bz',
+} as const
+
+/** Plain-English glosses for the space-weather acronyms (Simple mode only). Looked up when
+ * a gauge renders, not at import — this is module state. */
+const GLOSS: Record<string, { glossKey: MessageKey }> = {
+  [INDEX.sfi]: { glossKey: 'prop.spaceWx.gloss.sfi' },
+  [INDEX.kp]: { glossKey: 'prop.spaceWx.gloss.kp' },
+  [INDEX.a]: { glossKey: 'prop.spaceWx.gloss.a' },
+  [INDEX.xray]: { glossKey: 'prop.spaceWx.gloss.xray' },
 }
 
 function Gauge({
@@ -32,7 +46,8 @@ function Gauge({
   impact: Impact
   gloss?: boolean
 }) {
-  const def = gloss ? GLOSS[label] : undefined
+  const entry = gloss ? GLOSS[label] : undefined
+  const def = entry ? t(entry.glossKey) : undefined
   const key = def ? (
     <Tooltip content={def} side="top">
       <span className="swx-k gloss" tabIndex={0}>
@@ -60,19 +75,34 @@ function Gauge({
 
 export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean }) {
   const body = (
-    <section className="swx-strip panel" aria-label="Space weather">
-      <Gauge label="SFI" value={wx.sfi.toFixed(0)} impact={sfiImpact(wx.sfi)} gloss={gloss} />
-      <Gauge label="Kp" value={wx.kp.toFixed(0)} impact={kpImpact(wx.kp)} gloss={gloss} />
-      <Gauge label="A" value={wx.aIndex.toFixed(0)} impact={aImpact(wx.aIndex)} gloss={gloss} />
+    <section className="swx-strip panel" aria-label={t('prop.spaceWx.aria')}>
       <Gauge
-        label="X-ray"
+        label={INDEX.sfi}
+        value={wx.sfi.toFixed(0)}
+        impact={sfiImpact(wx.sfi)}
+        gloss={gloss}
+      />
+      <Gauge
+        label={INDEX.kp}
+        value={wx.kp.toFixed(0)}
+        impact={kpImpact(wx.kp)}
+        gloss={gloss}
+      />
+      <Gauge
+        label={INDEX.a}
+        value={wx.aIndex.toFixed(0)}
+        impact={aImpact(wx.aIndex)}
+        gloss={gloss}
+      />
+      <Gauge
+        label={INDEX.xray}
         value={wx.xrayClass.replace('-class', '')}
         impact={xrayImpact(wx.xrayClass)}
         gloss={gloss}
       />
       {wx.solarWind && (
         <Gauge
-          label="Bz"
+          label={INDEX.bz}
           value={`${wx.solarWind.bzNt.toFixed(1)}`}
           impact={bzImpact(wx.solarWind.bzNt)}
           gloss={gloss}

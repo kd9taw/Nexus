@@ -9,6 +9,7 @@
 import { useState } from 'react'
 import type { BandReport } from '../../types'
 import { tierVar, modeledVar, dualStateLabel } from '../../propViz'
+import { t } from '../../i18n'
 
 export function BandAdvisor({
   bands,
@@ -32,20 +33,20 @@ export function BandAdvisor({
   const rows = showWorld ? worldwideBands! : bands
 
   return (
-    <section className="band-advisor panel" aria-label="Band activity">
+    <section className="band-advisor panel" aria-label={t('prop.bands.aria')}>
       <h2 className="ba-head">
-        <span>{showWorld ? 'Bands — worldwide activity' : 'Bands — best for you'}</span>
+        <span>{showWorld ? t('prop.bands.head.world') : t('prop.bands.head.you')}</span>
         {hasWorld && (
-          <span className="ba-view" role="tablist" aria-label="Band ranking view">
+          <span className="ba-view" role="tablist" aria-label={t('prop.bands.view.aria')}>
             <button
               type="button"
               role="tab"
               aria-selected={!showWorld}
               className={`ba-view-btn${!showWorld ? ' active' : ''}`}
               onClick={() => setView('you')}
-              title="Bands ranked by what YOU can reach now (own-call + near-region)"
+              title={t('prop.bands.view.you.title')}
             >
-              For you
+              {t('prop.bands.view.you.label')}
             </button>
             <button
               type="button"
@@ -53,9 +54,9 @@ export function BandAdvisor({
               aria-selected={showWorld}
               className={`ba-view-btn${showWorld ? ' active' : ''}`}
               onClick={() => setView('world')}
-              title="Bands ranked by GLOBAL activity — busy, but not necessarily workable from your QTH"
+              title={t('prop.bands.view.world.title')}
             >
-              Worldwide
+              {t('prop.bands.view.world.label')}
             </button>
           </span>
         )}
@@ -64,16 +65,14 @@ export function BandAdvisor({
             type="button"
             className="ba-clear"
             onClick={() => onBandClick(activeBand)}
-            title="Clear the band focus"
+            title={t('prop.bands.clearFocus.title')}
           >
-            focused: {activeBand} ✕
+            {t('prop.bands.focused', { band: activeBand })}
           </button>
         )}
       </h2>
       <p className="ba-caption">
-        {showWorld
-          ? 'Busiest bands worldwide — loud somewhere, not necessarily workable from your QTH.'
-          : 'Ranked by what you can actually reach now — your own-call paths + stations near you.'}
+        {showWorld ? t('prop.bands.caption.world') : t('prop.bands.caption.you')}
       </p>
       <div className="ba-rows">
         {rows.map((b) => {
@@ -90,9 +89,9 @@ export function BandAdvisor({
               role={onBandClick ? 'button' : undefined}
               title={
                 onBandClick
-                  ? `Focus ${b.band} on the map`
+                  ? t('prop.focusBand.title', { band: b.band })
                   : b.modeledReason
-                    ? `Modelled: ${b.modeledReason}`
+                    ? t('prop.bands.modelled.title', { reason: b.modeledReason })
                     : undefined
               }
             >
@@ -112,7 +111,7 @@ export function BandAdvisor({
               <span className="ba-dir">
                 {b.bestRegion ? `${b.bestRegion.octant} · ${b.bestRegion.region}` : '—'}
               </span>
-              <span className="ba-people" title="stations that hear you / you hear">
+              <span className="ba-people" title={t('prop.bands.people.title')}>
                 {b.nHearMe}↓ {b.nIHear}↑
               </span>
               <span className="ba-reason">{b.reason}</span>

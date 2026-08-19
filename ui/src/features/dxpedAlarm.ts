@@ -18,6 +18,7 @@
 import { doubleBeep } from '../alerts'
 import { pushToast } from '../toast'
 import type { DxpedWindow } from '../types'
+import { t } from '../i18n'
 
 const ALARMS_KEY = 'nexus.dxped.alarms'
 const FIRED_KEY = 'nexus.dxped.alarms.fired'
@@ -239,13 +240,21 @@ export function checkDxpedAlarms(
     startAlarmLoop()
     const opens =
       nowSecs >= fireStart
-        ? 'is OPEN now'
-        : `opens ${HHMM(fireStart)} (~${Math.max(1, Math.round((fireStart - nowSecs) / 60))} min)`
+        ? t('dxped.alarm.openNow')
+        : t('dxped.alarm.opensAt', {
+            at: HHMM(fireStart),
+            mins: Math.max(1, Math.round((fireStart - nowSecs) / 60)),
+          })
     pushToast(
-      `⏰ ${call} — your modelled window ${opens} · ${w.best || w.outlook[0]?.band || ''}`,
+      t('dxped.alarm.toast', {
+        call,
+        opens,
+        best: w.best || w.outlook[0]?.band || '',
+      }),
       'success',
       0, // persistent — stays until the operator dismisses it
-      { prominent: true, action: () => stopAlarmLoop(), actionLabel: 'Stop alarm' },
+      // Stops the repeating BEEP, not a transmission — not a stop-line control.
+      { prominent: true, action: () => stopAlarmLoop(), actionLabel: t('dxped.alarm.stop') },
     )
   }
 }

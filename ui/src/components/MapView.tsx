@@ -3,6 +3,12 @@
 // headings are true radials; range rings are real great-circle distance. Colors
 // route through the shared tokens (status/need) and the colormap LUT, so color
 // means one thing app-wide.
+//
+// ⚠️ ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Everything this surface
+// MEASURES is an invariant technical token and stays here: grids, callsigns, bands,
+// modes, bearings, km, MHz, dB, knots, satellite names, CQ zone numbers, the layer and
+// projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
+// under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { workedGridSet } from '../coverage'
 import type { AprsStation } from '../api'
@@ -85,6 +91,7 @@ import {
 } from '../mapGeo'
 import { needMeta, satTooltip, spotTooltip } from '../propViz'
 import { modeClassOf } from '../features/needs'
+import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
 // Geochron-style shaded-relief basemap (Natural Earth I 50m, public domain),
 // downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
@@ -266,43 +273,69 @@ type LayerKey =
   | 'paths'
   | 'dxped'
 interface Layer {
-  label: string
   visible: boolean
   opacity: number
 }
+/** Each layer's NAME, looked up when the panel renders rather than at import — the
+ * record below is module state, and resolving it here would freeze whichever locale
+ * happened to be active when this module first loaded. The layer ids are code. */
+const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
+  daynight: { labelKey: 'map.layer.daynight.label' },
+  relief: { labelKey: 'map.layer.relief.label' },
+  muf: { labelKey: 'map.layer.muf.label' },
+  aurora: { labelKey: 'map.layer.aurora.label' },
+  flare: { labelKey: 'map.layer.flare.label' },
+  pca: { labelKey: 'map.layer.pca.label' },
+  coast: { labelKey: 'map.layer.coast.label' },
+  states: { labelKey: 'map.layer.states.label' },
+  grid: { labelKey: 'map.layer.grid.label' },
+  gridLabels: { labelKey: 'map.layer.gridLabels.label' },
+  cqzones: { labelKey: 'map.layer.cqzones.label' },
+  coverage: { labelKey: 'map.layer.coverage.label' },
+  sats: { labelKey: 'map.layer.sats.label' },
+  aprs: { labelKey: 'map.layer.aprs.label' },
+  rings: { labelKey: 'map.layer.rings.label' },
+  heat: { labelKey: 'map.layer.heat.label' },
+  openings: { labelKey: 'map.layer.openings.label' },
+  liveSpots: { labelKey: 'map.layer.liveSpots.label' },
+  stations: { labelKey: 'map.layer.stations.label' },
+  paths: { labelKey: 'map.layer.paths.label' },
+  dxped: { labelKey: 'map.layer.dxped.label' },
+}
+const layerLabel = (k: LayerKey): string => t(LAYER_LABEL[k].labelKey)
 const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
-  daynight: { label: 'Day / night (greyline)', visible: true, opacity: 1 },
-  relief: { label: 'Relief (World view)', visible: true, opacity: 1 },
-  muf: { label: 'Ionosonde MUF', visible: true, opacity: 0.9 },
-  aurora: { label: 'Aurora oval', visible: false, opacity: 0.85 },
+  daynight: { visible: true, opacity: 1 },
+  relief: { visible: true, opacity: 1 },
+  muf: { visible: true, opacity: 0.9 },
+  aurora: { visible: false, opacity: 0.85 },
   // Visible by default and FREE until a real event: the layer only draws during
   // an M/X flare (R1+, the same onset as the flare insight + toast) — so the
   // default costs nothing until the sun actually does something.
-  flare: { label: 'Flare blackout (D-RAP)', visible: true, opacity: 0.8 },
+  flare: { visible: true, opacity: 0.8 },
   // Same free-until-real-event pattern: PCA points only exist during a proton
   // event (S1+), so the default-on layer draws nothing on a quiet sun.
-  pca: { label: 'Proton polar cap (PCA)', visible: true, opacity: 0.8 },
-  coast: { label: 'Coastlines', visible: true, opacity: 0.85 },
-  states: { label: 'US states', visible: true, opacity: 0.55 },
-  grid: { label: 'Grid (20°×10°)', visible: true, opacity: 0.5 },
-  gridLabels: { label: 'Grid labels (AA…RR)', visible: false, opacity: 0.7 },
-  cqzones: { label: 'CQ zones', visible: false, opacity: 0.6 },
-  coverage: { label: 'My coverage (worked)', visible: false, opacity: 0.45 },
-  sats: { label: 'Satellites (amateur)', visible: false, opacity: 0.9 },
+  pca: { visible: true, opacity: 0.8 },
+  coast: { visible: true, opacity: 0.85 },
+  states: { visible: true, opacity: 0.55 },
+  grid: { visible: true, opacity: 0.5 },
+  gridLabels: { visible: false, opacity: 0.7 },
+  cqzones: { visible: false, opacity: 0.6 },
+  coverage: { visible: false, opacity: 0.45 },
+  sats: { visible: false, opacity: 0.9 },
   // Off by default on Connect — APRS has its own section, and this layer is fed
   // by that section rather than polled here.
-  aprs: { label: 'APRS stations', visible: false, opacity: 0.95 },
-  rings: { label: 'Range rings', visible: true, opacity: 0.55 },
-  heat: { label: 'Band heat (openings)', visible: true, opacity: 0.55 },
+  aprs: { visible: false, opacity: 0.95 },
+  rings: { visible: true, opacity: 0.55 },
+  heat: { visible: true, opacity: 0.55 },
   // Free until a real event: sectors draw only while a band is actually open,
   // so the default-on layer costs nothing on a quiet band.
-  openings: { label: 'Opening sectors (mode)', visible: true, opacity: 0.8 },
-  liveSpots: { label: 'Live spots (cluster/RBN)', visible: true, opacity: 0.9 },
-  stations: { label: 'My decodes', visible: true, opacity: 1 },
-  paths: { label: 'Selected path', visible: true, opacity: 1 },
+  openings: { visible: true, opacity: 0.8 },
+  liveSpots: { visible: true, opacity: 0.9 },
+  stations: { visible: true, opacity: 1 },
+  paths: { visible: true, opacity: 1 },
   // Off by default: Connect is the PROPAGATION view (DXpeditions have their own area).
   // The layer toggle stays for anyone who wants DX-target markers on the map.
-  dxped: { label: 'DXpeditions', visible: false, opacity: 1 },
+  dxped: { visible: false, opacity: 1 },
 }
 // The satellite-detail mini-globe (embedded mode) shows JUST the bird on a clean
 // planet: the basemap (day/night + coastline + graticule) plus the sat layer, and
@@ -328,6 +361,13 @@ const APRS_EMBED_LAYERS: Record<LayerKey, Layer> = (() => {
   return out
 })()
 const RINGS_KM = [1000, 3000, 5000, 10000]
+
+/** `SP` / `LP` — the ham abbreviations for the short and long great-circle path. Technical
+ * tokens, not prose: they are the same two letters on the air in every language, exactly
+ * like the Q-codes on a logbook row. The BUTTON TITLES beside them are prose and are in the
+ * catalog. */
+const PATH_SP = 'SP'
+const PATH_LP = 'LP'
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
 // wireframe. Deliberately theme-agnostic and dark (like HamClock/Geochron), so it
@@ -2104,11 +2144,7 @@ export function MapView({
   if (!me) {
     return (
       <div className="map-view">
-        <StateBlock
-          kind="empty"
-          title="Set your grid to see the map"
-          detail="The Beam Map centers on your Maidenhead grid — set it in Settings, then every heading and range ring is measured from your QTH."
-        />
+        <StateBlock kind="empty" title={t('map.empty.title')} detail={t('map.empty.detail')} />
       </div>
     )
   }
@@ -2194,7 +2230,7 @@ export function MapView({
     }
     return null
   }
-  const workHint = onWorkSpot ? ' — double-click to work' : ''
+  const workHint = onWorkSpot ? t('map.hover.workHint') : ''
   /** Tooltip line for any map hit — who/where/what, plus the work gesture hint. */
   const hitText = (hit: MapHit): string => {
     if (hit.kind === 'station') {
@@ -2208,17 +2244,31 @@ export function MapView({
       // Same shape as the station tooltip above: entity, then the heading. Without
       // it, hovering two pins on one map gave a bearing for one and not the other.
       const az = backendAzimuth(c.bearingDeg, c.distanceKm)
-      return `${c.call} · ${c.entity}${az ? ` · ${azimuthLabel(az)}` : ''} · ${c.need} on ${c.band} · ${c.likelihood}${c.liveConfirmed ? ' · live-confirmed' : ''}${workHint}`
+      const line = t('map.hover.dxped', {
+        call: c.call,
+        entity: c.entity,
+        az: az ? ` · ${azimuthLabel(az)}` : '',
+        need: c.need,
+        band: c.band,
+        likelihood: c.likelihood,
+      })
+      return `${line}${c.liveConfirmed ? t('map.hover.liveConfirmed') : ''}${workHint}`
     }
     if (hit.kind === 'muf') {
-      return `Ionosonde · measured MUF ${hit.muf.toFixed(1)} MHz here (KC2G) — a data point, not a station`
+      return t('map.hover.muf', { muf: hit.muf.toFixed(1) })
     }
     if (hit.kind === 'aprs') {
       const a = aprs?.find((x) => x.call === hit.name)
       if (!a) return hit.name
       const age = Math.max(0, Math.round(Date.now() / 1000 - a.lastHeardUnix))
-      const when = age < 60 ? `${age}s ago` : `${Math.round(age / 60)}m ago`
-      const via = a.path.length > 0 ? ` · via ${a.path.join(',')}` : ' · direct'
+      const when =
+        age < 60
+          ? t('map.hover.aprs.ageSecs', { secs: age })
+          : t('map.hover.aprs.ageMins', { mins: Math.round(age / 60) })
+      const via =
+        a.path.length > 0
+          ? t('map.hover.aprs.via', { path: a.path.join(',') })
+          : t('map.hover.aprs.direct')
       const moving =
         a.speedKnots != null && a.speedKnots > 1
           ? ` · ${Math.round(a.speedKnots)} kn${a.courseDeg != null ? ` @ ${Math.round(a.courseDeg)}°` : ''}`
@@ -2227,13 +2277,21 @@ export function MapView({
       // different claims, and the tooltip should not blur them.
       const how =
         a.sourceKind === 'inet'
-          ? 'reported by APRS-IS'
+          ? t('map.hover.aprs.how.inet')
           : a.sourceKind === 'both'
-            ? 'heard on RF + APRS-IS'
-            : 'heard on RF'
+            ? t('map.hover.aprs.how.both')
+            : t('map.hover.aprs.how.rf')
       const sym = resolveSymbol(a.symbolTable, a.symbolCode)
       const what = sym.known ? ` · ${sym.label}${sym.overlay ? ` (${sym.overlay})` : ''}` : ''
-      return `${a.call}${what} · ${how} ${when}${via}${moving}${a.text ? ` — ${a.text}` : ''}`
+      return t('map.hover.aprs', {
+        call: a.call,
+        what,
+        how,
+        when,
+        via,
+        moving,
+        note: a.text ? ` — ${a.text}` : '',
+      })
     }
     if (hit.kind === 'sat') {
       return satTooltip(hit.name, hit.chased, sats, Date.now() / 1000, !!onSelectSat)
@@ -2406,44 +2464,44 @@ export function MapView({
     <div className="map-view">
       {!embedded && (
       <div className="map-toolbar">
-        <div className="map-proj" role="group" aria-label="Projection">
-          <button className={kind === 'globe' ? 'active' : ''} onClick={() => setKind('globe')} title="3-D globe — drag to spin, wheel to zoom">
-            Globe
+        <div className="map-proj" role="group" aria-label={t('map.projection.aria')}>
+          <button className={kind === 'globe' ? 'active' : ''} onClick={() => setKind('globe')} title={t('map.projection.globe.title')}>
+            {t('map.projection.globe.label')}
           </button>
-          <button className={kind === 'aeqd' ? 'active' : ''} onClick={() => setKind('aeqd')} title="Beam map — true headings + range rings from your QTH">
-            Beam
+          <button className={kind === 'aeqd' ? 'active' : ''} onClick={() => setKind('aeqd')} title={t('map.projection.beam.title')}>
+            {t('map.projection.beam.label')}
           </button>
-          <button className={kind === 'world' ? 'active' : ''} onClick={() => setKind('world')} title="Flat world map with shaded relief">
-            World
+          <button className={kind === 'world' ? 'active' : ''} onClick={() => setKind('world')} title={t('map.projection.world.title')}>
+            {t('map.projection.world.label')}
           </button>
         </div>
-        <div className="map-proj" role="group" aria-label="Zoom">
-          <button onClick={() => setView((v) => ({ ...v, zoom: Math.min(10, v.zoom * 1.3) }))} title="Zoom in" aria-label="Zoom in">
+        <div className="map-proj" role="group" aria-label={t('map.zoom.aria')}>
+          <button onClick={() => setView((v) => ({ ...v, zoom: Math.min(10, v.zoom * 1.3) }))} title={t('map.zoom.in')} aria-label={t('map.zoom.in')}>
             +
           </button>
-          <button onClick={() => setView((v) => ({ ...v, zoom: Math.max(0.5, v.zoom / 1.3) }))} title="Zoom out" aria-label="Zoom out">
+          <button onClick={() => setView((v) => ({ ...v, zoom: Math.max(0.5, v.zoom / 1.3) }))} title={t('map.zoom.out')} aria-label={t('map.zoom.out')}>
             −
           </button>
         </div>
-        <div className="map-proj" role="group" aria-label="Color spots by">
-          <button className={colorBy === 'need' ? 'active' : ''} onClick={() => setColorBy('need')} title="Color spots by what you still need">
-            Need
+        <div className="map-proj" role="group" aria-label={t('map.colorBy.aria')}>
+          <button className={colorBy === 'need' ? 'active' : ''} onClick={() => setColorBy('need')} title={t('map.colorBy.need.title')}>
+            {t('map.colorBy.need.label')}
           </button>
-          <button className={colorBy === 'snr' ? 'active' : ''} onClick={() => setColorBy('snr')} title="Color spots by signal strength">
-            Signal
+          <button className={colorBy === 'snr' ? 'active' : ''} onClick={() => setColorBy('snr')} title={t('map.colorBy.snr.title')}>
+            {t('map.colorBy.snr.label')}
           </button>
         </div>
         <span className="map-center">◎ {myGrid}</span>
         <span className={`map-prov prov-${prov}`}>
           {prov === 'live'
-            ? 'LIVE'
+            ? t('map.prov.live')
             : prov === 'partial'
-              ? 'PARTIAL'
+              ? t('map.prov.partial')
               : prov === 'cached'
-                ? 'CACHED'
+                ? t('map.prov.cached')
                 : prov === 'loading'
                   ? '…'
-                  : 'NO LIVE DATA'}
+                  : t('map.prov.none')}
         </span>
         <button
           className="map-reset"
@@ -2451,9 +2509,9 @@ export function MapView({
             setLayers(DEFAULT_LAYERS)
             setView(DEFAULT_VIEW)
           }}
-          title="Reset view + layers"
+          title={t('map.reset.title')}
         >
-          <RotateCcw size={13} /> Reset
+          <RotateCcw size={13} /> {t('map.reset.label')}
         </button>
       </div>
       )}
@@ -2511,29 +2569,27 @@ export function MapView({
             <div className="map-path">
               <span className="map-path-call">{selStation.call}</span>
               <span className="map-path-fig">
-                {(pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).brg}° ·{' '}
-                {(pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).km.toLocaleString()} km
+                {t('map.path.figure', {
+                  brg: (pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).brg,
+                  km: (pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).km.toLocaleString(),
+                })}
               </span>
-              <div className="map-proj map-path-toggle" role="group" aria-label="Path">
-                <button className={pathMode === 'sp' ? 'active' : ''} onClick={() => setPathMode('sp')} title="Short path">
-                  SP
+              <div className="map-proj map-path-toggle" role="group" aria-label={t('map.path.aria')}>
+                <button className={pathMode === 'sp' ? 'active' : ''} onClick={() => setPathMode('sp')} title={t('map.path.short.title')}>
+                  {PATH_SP}
                 </button>
-                <button className={pathMode === 'lp' ? 'active' : ''} onClick={() => setPathMode('lp')} title="Long path">
-                  LP
+                <button className={pathMode === 'lp' ? 'active' : ''} onClick={() => setPathMode('lp')} title={t('map.path.long.title')}>
+                  {PATH_LP}
                 </button>
               </div>
             </div>
           )}
           {!embedded && placed.length === 0 && (
-            <div className="map-empty-hint">
-              No located stations yet — decoded stations with a grid appear here, centered on {myGrid},
-              colored by what you still need.
-            </div>
+            <div className="map-empty-hint">{t('map.emptyHint', { grid: myGrid })}</div>
           )}
           {satAllHidden > 0 && (
             <div className="map-empty-hint sats">
-              None of your ★ birds are in the current elements — the ★ filter is
-              hiding all {satAllHidden} satellites (Layers ▸ Satellites ▸ All).
+              {t('map.sats.allHidden', { count: satAllHidden })}
             </div>
           )}
           {!embedded && <MapLegend />}
@@ -2548,8 +2604,7 @@ export function MapView({
           )}
           {layers.pca.visible && pca && pca.points.length > 0 && (
             <div className="flare-chip pca-chip" role="status">
-              ☢ Proton event · S{sScaleOf(pca.j10)} · polar caps absorbing ~
-              {pca.a30Day.toFixed(1)} dB @30 MHz (day) — high-lat paths degraded
+              {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
             </div>
           )}
           {prop && (
@@ -2566,7 +2621,7 @@ export function MapView({
             was removed 2026-07-26, so only the embedded/standalone distinction remains. */}
         {!embedded && (
         <aside className="map-layers">
-          <h3>Layers</h3>
+          <h3>{t('map.layers.head')}</h3>
           {(Object.keys(layers) as LayerKey[]).map((k) => (
             <div className="map-layer" key={k}>
               <label>
@@ -2575,7 +2630,7 @@ export function MapView({
                   checked={layers[k].visible}
                   onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
                 />
-                {layers[k].label}
+                {layerLabel(k)}
               </label>
               {k === 'flare' && (
                 // The layer is event-driven (nothing draws below an M1 flare), so
@@ -2585,9 +2640,9 @@ export function MapView({
                   type="button"
                   className={`flare-preview${flarePreview ? ' active' : ''}`}
                   onClick={() => setFlarePreview((p) => !p)}
-                  title="Simulate an X2 flare on the map for 60 s — visual preview only (no alerts). The layer otherwise draws nothing until a real M-class flare."
+                  title={t('map.flare.preview.title')}
                 >
-                  {flarePreview ? '■ stop' : '☀ preview'}
+                  {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
                 </button>
               )}
               {k === 'sats' && layers.sats.visible && (
@@ -2599,16 +2654,12 @@ export function MapView({
                 <button
                   type="button"
                   className={`sat-fav-toggle${satFav ? ' on' : ''}`}
-                  aria-label="Filter satellites to ★ birds"
+                  aria-label={t('map.sats.filter.aria')}
                   aria-pressed={satFav}
-                  title={
-                    satFav
-                      ? 'Showing your ★ birds (Passes pane + globe follow) — click to show all satellites'
-                      : 'Showing all satellites — click to show only your ★ birds (Passes pane + globe follow)'
-                  }
+                  title={satFav ? t('map.sats.filter.on.title') : t('map.sats.filter.off.title')}
                   onClick={() => setSatFavOnly(!satFav)}
                 >
-                  {satFav ? '★' : 'All'}
+                  {satFav ? '★' : t('map.sats.filter.all')}
                 </button>
               )}
               {k === 'coverage' && (
@@ -2616,11 +2667,12 @@ export function MapView({
                   className="map-coverage-dim"
                   value={coverageDim}
                   onChange={(e) => setCoverageDim(e.target.value as 'grids' | 'zones')}
-                  title="What to color: your worked grid squares (VUCC) or CQ zones (WAZ)"
-                  aria-label="Coverage dimension"
+                  title={t('map.coverage.dim.title')}
+                  aria-label={t('map.coverage.dim.aria')}
                 >
-                  <option value="grids">Grids</option>
-                  <option value="zones">CQ zones</option>
+                  {/* The <option> VALUES are persisted tokens; only these labels are read. */}
+                  <option value="grids">{t('map.coverage.dim.grids')}</option>
+                  <option value="zones">{t('map.coverage.dim.zones')}</option>
                 </select>
               )}
               <input
@@ -2630,7 +2682,7 @@ export function MapView({
                 step={0.05}
                 value={layers[k].opacity}
                 onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], opacity: Number(e.target.value) } }))}
-                aria-label={`${layers[k].label} opacity`}
+                aria-label={t('map.layer.opacity.aria', { layer: layerLabel(k) })}
               />
             </div>
           ))}
@@ -2669,13 +2721,27 @@ function FlareChip({
   preview?: boolean
 }) {
   const rec = flareRecoveryMin(xrayLong)
-  const recTxt = rec ? ` (~${Math.round(rec)} min)` : ''
+  // Each phase is its OWN appended statement, never a stem plus a tail — see the
+  // `map.flare.phase.*` note in the catalog.
+  const mins = rec ? Math.round(rec) : 0
   const phase =
-    trend === 'rising' ? ' · rising' : trend === 'falling' ? ` · recovering${recTxt}` : recTxt ? ` · fade${recTxt}` : ''
+    trend === 'rising'
+      ? t('map.flare.phase.rising')
+      : trend === 'falling'
+        ? rec
+          ? t('map.flare.phase.recoveringIn', { mins })
+          : t('map.flare.phase.recovering')
+        : rec
+          ? t('map.flare.phase.fade', { mins })
+          : ''
   return (
     <div className="flare-chip" role="status">
-      ☀️ {flareClass(xrayLong)} flare · R{flareRScale(xrayLong)} · HF ≤{Math.round(hafMhz)} MHz
-      absorbed on dayside{preview ? ' · PREVIEW' : phase}
+      {t('map.flare.chip', {
+        cls: flareClass(xrayLong),
+        r: flareRScale(xrayLong),
+        haf: Math.round(hafMhz),
+      })}
+      {preview ? t('map.flare.phase.preview') : phase}
     </div>
   )
 }
