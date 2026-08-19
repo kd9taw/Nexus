@@ -350,3 +350,36 @@ describe('SetupWizard walkthrough offer', () => {
     expect(onOpenGuide).not.toHaveBeenCalled()
   })
 })
+
+// THE WIZARD USED TO DROP THE ADDRESS IT HAD JUST DISCOVERED (2026-08-17 Flex audit, wave-1
+// #29/#52). Picking a discovered Flex set conn/model/name and threw `f.ip` away — the exact
+// regression the Settings twin records as fixed, still live in this sibling. Downstream, both
+// native toggles are OFFERED in Settings for a 2036 network rig, and with no address neither can
+// ever start a worker: the operator switches one on, saves, and nothing happens or is said.
+describe('SetupWizard FlexRadio discovery', () => {
+  const FLEX = { model: 'FLEX-6400', nickname: 'Shack', ip: '192.0.2.77' }
+  const discoverFlex = api.discoverFlex as ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    cleanup()
+    discoverFlex.mockResolvedValue([FLEX])
+  })
+
+  it('keeps the discovered radio address in the draft it applies', async () => {
+    const { onApply } = renderWizard()
+    clickNext() // 0 station → 1 rig, which runs detection
+    const row = await screen.findByRole('button', { name: /FLEX-6400/ })
+    fireEvent.click(row)
+
+    clickNext() // 1 rig → 2 log
+    clickNext() // 2 log → 3 goals
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
+
+    expect(onApply).toHaveBeenCalledTimes(1)
+    const draft = onApply.mock.calls[0][4] as Record<string, unknown>
+    expect(draft.flexRadioIp).toBe('192.0.2.77')
+    // …and the rest of the one-click apply still lands, so this is an addition, not a swap.
+    expect(draft.rigModel).toBe(2036)
+    expect(draft.rigConn).toBe('network')
+  })
+})

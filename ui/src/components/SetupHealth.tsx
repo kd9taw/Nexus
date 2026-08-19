@@ -65,7 +65,12 @@ export function SetupHealth({
   const rigOk = catResult ? catResult.ok : radio?.catOk
   const rigDetail = catResult ? catResult.detail : radio?.catDetail
   const rxDb = radio ? Math.round(rxLevelDb(radio.rxLevel)) : null
-  const rxLive = rxDb != null && rxDb > -60 && !radio?.audioError
+  // rxLevelDb is the WSJT-X-style 0..90 scale and returns 0 for silence — the old `> -60`
+  // was a dBFS threshold that EVERY value on this scale passed, so the dot could never say
+  // "No RX audio" while a radio existed (mac QA audit merged[46]; in every shipped mac DMG,
+  // where a denied mic delivers exactly that permanent 0). Real capture always carries a
+  // nonzero noise floor (the meter's own zones call <15 dB merely "too quiet"), so 0 = dead.
+  const rxLive = rxDb != null && rxDb > 0 && !radio?.audioError
   const cls = (ok?: boolean | null) => (ok === true ? 'ok' : ok === false ? 'bad' : 'unknown')
   const tuning = !!radio?.tuning
   const watts = radio?.txPower ?? null

@@ -19,7 +19,7 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period } from '../api'
+import { atuTune, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period } from '../api'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
@@ -43,6 +43,7 @@ import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import { FrequencyControl } from './FrequencyControl'
 import { TuningStrip } from './TuningStrip'
+import { IS_MAC, FN_KEY_HINT } from '../platform'
 
 interface Props {
   /** Configured companion UDP listen address (Settings) — shown instead of a
@@ -861,7 +862,8 @@ export function OperateCockpit({
             type="button"
             className="cockpit-decode-btn"
             onClick={handleRedecode}
-            title="Re-decode the last period (F6)"
+            // The F6 the button advertises is a media key on default Mac keyboards.
+            title={`Re-decode the last period (F6)${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
           >
             Decode
           </button>
@@ -1008,6 +1010,13 @@ export function OperateCockpit({
           beacon={isBeacon(tier)}
           onSetTxEnabled={onSetTxEnabled}
           onSetTune={onSetTune}
+          onAtuTune={() =>
+            // A control that keys the transmitter must never fail silently: the backend
+            // returns every refusal (TX off, busy, lockout) WITH ITS REASON — show it.
+            void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
           onHaltTx={onHaltTx}
           onSetHoldTxFreq={onSetHoldTxFreq}
           onSetMode={onSetMode}

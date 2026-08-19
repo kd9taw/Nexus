@@ -64,7 +64,7 @@ import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
-import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
@@ -81,6 +81,7 @@ import { AwardsJourney } from './components/AwardsJourney'
 import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
+import { PskCockpit } from './components/PskCockpit'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
@@ -319,7 +320,7 @@ export default function App() {
   // click still QSYs. `followFreq` is true only for the three explicit mode tabs (Phone / CW /
   // Digital-Operate) — entering one drops the rig to that mode's home freq; the other digital
   // cockpits (chat/qso/…) set the mode only and keep their own band picker's frequency.
-  const lastOpModeRef = useRef<'digital' | 'phone' | 'cw' | 'rtty'>('digital')
+  const lastOpModeRef = useRef<'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'>('digital')
   // Guard refs for the rig-mode effect below. `opModeSeeded` is set once, by whichever comes
   // first: the persisted-operating-mode seed (that effect lives further down, where `settings`
   // is in scope) or a genuine view change — an operator's click outranks any seed, because the
@@ -359,10 +360,11 @@ export default function App() {
     //   from USB to D-U with no operator action and no way to tell why (#80).
     //   Listing the views that OWN a rig mode makes that class of bug unrepresentable: a new
     //   workspace view now asserts NOTHING until someone deliberately adds it here.
-    const RIG_MODE_BY_VIEW: Partial<Record<string, 'cw' | 'phone' | 'rtty' | 'digital'>> = {
+    const RIG_MODE_BY_VIEW: Partial<Record<string, 'cw' | 'phone' | 'rtty' | 'keyboard' | 'digital'>> = {
       cw: 'cw',
       phone: 'phone',
       rtty: 'rtty',
+      psk: 'keyboard', // the Keyboard Modes cockpit (PSK31) — one flat section
       operate: 'digital', // the FT8/FT4 cockpit
       chat: 'digital', // Tempo is a digital mode
     }
@@ -377,7 +379,8 @@ export default function App() {
     const changed = mode !== lastOpModeRef.current
     lastOpModeRef.current = mode
     const followFreq =
-      changed && (view === 'operate' || view === 'cw' || view === 'phone' || view === 'rtty')
+      changed &&
+      (view === 'operate' || view === 'cw' || view === 'phone' || view === 'rtty' || view === 'psk')
     void setOperatingMode(mode, followFreq)
       .then((s) => s && setSnap(s))
       .catch(() => {})
@@ -408,6 +411,7 @@ export default function App() {
   const phonePanels = usePanelLayout(PHONE_PANELS)
   const cwPanels = usePanelLayout(CW_PANELS)
   const rttyPanels = usePanelLayout(RTTY_PANELS)
+  const pskPanels = usePanelLayout(PSK_PANELS)
 
   // One-shot on launch: check the release feed for a newer version (throttled to once/day + cached,
   // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
@@ -1521,11 +1525,12 @@ export default function App() {
     [cwEnabled, phoneEnabled],
   )
 
-  // Global quick-recall hotkeys: Ctrl+1..9 recall the 1st..9th ★ favorite from ANY
+  // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
+  // Ctrl+digit is Mission Control's) recall the 1st..9th ★ favorite from ANY
   // section (the same action as clicking its MEM-strip chip — recallMemory tunes +
   // switches to the right cockpit). Rides a ref so the listener binds once and always
   // sees the latest recallMemory + enabled flag; favorites are read fresh at press time.
-  // Ctrl+Digit is clear of the cockpits' Alt+Digit (FT8 Tx) and F-key macros.
+  // Ctrl/⌘+Digit is clear of the cockpits' Alt+Digit (FT8 Tx) and F-key macros.
   const recallHotkeyRef = useRef({ recall: recallMemory, enabled: features.isOn('memories') })
   recallHotkeyRef.current = { recall: recallMemory, enabled: features.isOn('memories') }
   useEffect(() => {
@@ -1785,14 +1790,21 @@ export default function App() {
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then((s) => {
-      if (s) {
-        setSnap(s)
-        pushToast('Logged QSO', 'success', 2500)
-        noteLoggedForDxClear()
-        refreshNeeds() // drop the just-worked station from the roster/needs immediately
-        // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
-        // (every log path, auto-log included); outcomes toast via uploadTick.
+    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then((r) => {
+      if (r) {
+        setSnap(r.snapshot)
+        // The engine's verdict, not the call returning (#100): every false is a deliberate
+        // logbook-integrity refusal (already logged, no active QSO, no report exchanged),
+        // and a green "Logged QSO" over one claimed a write that never happened.
+        if (r.logged) {
+          pushToast('Logged QSO', 'success', 2500)
+          noteLoggedForDxClear()
+          refreshNeeds() // drop the just-worked station from the roster/needs immediately
+          // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
+          // (every log path, auto-log included); outcomes toast via uploadTick.
+        } else {
+          pushToast('Nothing to log — the QSO already closed or no report was exchanged', 'info', 4000)
+        }
       }
     })
   }, [noteLoggedForDxClear, refreshNeeds])
@@ -1867,6 +1879,14 @@ export default function App() {
         // Navigate; the [view] rig-mode effect asserts the RTTY policy (FSK
         // backend → rig RTTY mode, AFSK → LSB) and re-homes to the band's RTTY
         // watering hole on a genuine mode change — the same path as CW/Phone.
+        setView(m)
+        return
+      }
+      if (m === 'psk') {
+        // Navigate; the [view] rig-mode effect asserts the Keyboard policy
+        // (always-USB PKTUSB) and re-homes to the band's PSK31 watering hole on
+        // a genuine mode change — the same path as CW/Phone/RTTY. The cockpit
+        // still auto-arms its RX decoder on entry.
         setView(m)
         return
       }
@@ -2378,11 +2398,12 @@ export default function App() {
       workspace = null
       break
     case 'rtty':
+    case 'psk':
     case 'sstv':
     case 'aprs':
-      // Same keep-alive pattern as Operate: RTTY's decoded stream, SSTV's
-      // always-armed VIS receiver, and APRS's decode list must survive
-      // navigation, so all three live in persistent hosts below. Nothing in the slot.
+      // Same keep-alive pattern as Operate: RTTY's + PSK's decoded streams,
+      // SSTV's always-armed VIS receiver, and APRS's decode list must survive
+      // navigation, so all four live in persistent hosts below. Nothing in the slot.
       workspace = null
       break
     case 'connect':
@@ -2582,6 +2603,7 @@ export default function App() {
           effectiveView === 'operate' ||
           effectiveView === 'chat' ||
           effectiveView === 'rtty' ||
+          effectiveView === 'psk' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
           // Satellites: the bird's own surfaces ARE the frequency authority here
@@ -2594,10 +2616,11 @@ export default function App() {
         hideDigitalChrome={
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
-          // RTTY/SSTV/APRS are free-running modes with their OWN band selectors — the
+          // RTTY/PSK/SSTV/APRS are free-running modes with their OWN band selectors — the
           // top control is fed the DIGITAL (FT8) plan, and the tier tiles / slot
           // clock / DT readout are slot-sync furniture that means nothing here.
           effectiveView === 'rtty' ||
+          effectiveView === 'psk' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
           effectiveView === 'sats'
@@ -2752,6 +2775,20 @@ export default function App() {
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
+              />
+            </div>
+          )}
+          {isViewEnabled('psk') && (
+            <div className="psk-host" hidden={effectiveView !== 'psk'}>
+              <PskCockpit
+                snap={snap}
+                onSnap={setSnap}
+                active={effectiveView === 'psk'}
+                onSetFrequency={handleSetFrequency}
+                onSetTxEnabled={handleSetTxEnabled}
+                theme={theme}
+                wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+                panels={pskPanels}
               />
             </div>
           )}

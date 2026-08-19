@@ -395,6 +395,11 @@ pub fn ptt_type_token(line: crate::rig::SerialLine) -> &'static str {
 /// (explicitly on drop, or implicitly by the OS at process exit) kills rigctld
 /// and frees the serial/COM port. This is what prevents a stuck COM port after
 /// closing Tempo.
+///
+/// On macOS/Linux, where no Job Object exists, the same no-outliving guarantee is
+/// approximated by [`orphan_ledger`]: every spawn is recorded, the quit path TERMs
+/// what was never dropped ([`kill_leftover_daemons`]), and the next launch sweeps
+/// what a crash or force-quit left behind ([`init_orphan_ledger`]).
 pub struct RigctldProc {
     child: Child,
     /// What the daemon has printed on stderr, filled by the drain thread in [`spawn_rigctld`]:
@@ -618,10 +623,34 @@ impl RigctldProc {
     pub fn is_alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
+
+    /// Wrap an arbitrary child as a daemon handle — TEST SEAM ONLY, for the one thing that
+    /// cannot otherwise be staged: a daemon that has ALREADY EXITED. The radio loop's
+    /// liveness/respawn path (2026-08-17 Flex audit, wave-1 #44) turns on exactly that state,
+    /// and every real constructor here spawns a live rigctld.
+    ///
+    /// Its only caller lives in `service`, which is `#[cfg(feature = "device")]` — so without
+    /// that feature this is genuinely dead, exactly like `CatDaemon::Native` one module over,
+    /// and it is silenced the same way rather than left to fail a plain `--all-targets` clippy.
+    #[cfg(test)]
+    #[cfg_attr(not(feature = "device"), allow(dead_code))]
+    pub(crate) fn from_child_for_test(child: Child) -> Self {
+        RigctldProc {
+            child,
+            said: Arc::new(Mutex::new(Said::default())),
+            #[cfg(windows)]
+            job: 0,
+        }
+    }
 }
 
 impl Drop for RigctldProc {
     fn drop(&mut self) {
+        // Deregister BEFORE reaping: once `wait` returns, the pid is free for the OS to
+        // recycle, and a ledger record naming a recyclable pid is exactly what the
+        // identity check exists to defuse — better never to write that state at all.
+        #[cfg(unix)]
+        orphan_ledger::forget(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
         #[cfg(windows)]
@@ -666,6 +695,352 @@ fn assign_kill_on_close_job(child: &Child) -> isize {
             return 0;
         }
         job as isize
+    }
+}
+
+/// Startup half of the Unix orphan guarantee: remember where the PID ledger lives and kill
+/// any rigctld/rotctld a PREVIOUS, now-dead Nexus left running (see [`orphan_ledger`]).
+/// Call once, before the first daemon spawn, so a stale daemon's serial/TCP ports are free
+/// again by the time this instance wants them. On Windows this is a no-op — the Job Object
+/// above already guarantees no daemon outlives the process, however it dies.
+pub fn init_orphan_ledger(dir: std::path::PathBuf) {
+    #[cfg(unix)]
+    orphan_ledger::init(dir);
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Quit-path half of the Unix orphan guarantee: TERM every daemon this process spawned and
+/// has not dropped (see [`orphan_ledger::kill_leftovers`]). For the wedged quit, where the
+/// radio thread is still blocked in a CAT read holding the [`RigctldProc`] when the process
+/// exits and `Drop` therefore never runs. No-op on Windows (Job Object) and when nothing is
+/// left (the ordinary case — `Drop` already deregistered everything).
+pub fn kill_leftover_daemons() {
+    #[cfg(unix)]
+    orphan_ledger::kill_leftovers();
+}
+
+/// The Unix ledger of spawned daemons — what stands in for the Windows Job Object.
+///
+/// **The gap this closes** (mac QA audit, 2026-08-17): on Windows the daemon dies with the
+/// process *however the process dies*, because the OS closes the kill-on-close job handle.
+/// On macOS/Linux the only teardown was [`RigctldProc`]'s `Drop`, which never runs when
+/// (a) the process dies on a signal — the Fortran-AV crash class presents as SIGSEGV here;
+/// (b) the operator force-quits; (c) the quit path times out with the radio thread still
+/// blocked in a CAT read holding the handle. The orphan then keeps the operator's serial
+/// port open and its TCP port bound, and the NEXT launch can land on it — the crossed-CAT
+/// shape `is_alive` warns about.
+///
+/// Two bounded mechanisms, deliberately NOT a supervisor:
+/// * **The PID ledger.** Every spawn writes `<ledger>/<daemon-pid>.pid` containing
+///   `"<our-pid> <binary-name>"`; `Drop` removes it. [`init`] sweeps the ledger at the next
+///   launch and kills any recorded daemon whose spawning Nexus is gone — covering the three
+///   no-`Drop` deaths above at the exact moment the collision would otherwise happen.
+/// * **The in-process registry.** [`kill_leftovers`] (the quit path, after the radio loop
+///   has been told to stop) TERMs anything not yet dropped — the wedged quit, handled
+///   before the process exits rather than left for the next launch.
+///
+/// PID reuse is the hazard of any kill-by-recorded-pid, and both directions are covered:
+/// * the registry holds only OUR direct children, none of them reaped when we signal
+///   (`Drop` deregisters before it reaps), so those PIDs cannot have been recycled;
+/// * the sweep kills a recorded PID only when `ps` says the process behind it is still the
+///   recorded *binary*; a recycled PID reads as something else and the record is dropped
+///   without a kill. A recycled PARENT pid makes the parent look alive, which merely keeps
+///   the record for a later launch — the conservative failure, never a kill on a guess.
+///
+/// When [`init`] was never called (unit tests, headless tools) nothing is written and the
+/// sweep never runs — behaviour is exactly pre-ledger.
+#[cfg(unix)]
+mod orphan_ledger {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+
+    /// Where the records live. Set once by [`init`]; `None` = ledger disabled.
+    static LEDGER_DIR: OnceLock<PathBuf> = OnceLock::new();
+    /// Daemons this process has spawned and not yet dropped: `(daemon pid, binary name)`.
+    static LIVE: Mutex<Vec<(u32, &'static str)>> = Mutex::new(Vec::new());
+
+    /// The record body: `"<parent-pid> <binary-name>"`. The daemon's own pid is the
+    /// FILENAME (`<pid>.pid`), so concurrent instances can never write the same record.
+    fn format_record(parent_pid: u32, bin: &str) -> String {
+        format!("{parent_pid} {bin}")
+    }
+
+    /// Parse a record body. Anything that is not exactly two fields with a numeric first
+    /// is `None` — a garbled record must never produce a pid to kill.
+    fn parse_record(s: &str) -> Option<(u32, String)> {
+        let mut it = s.split_whitespace();
+        let parent = it.next()?.parse().ok()?;
+        let bin = it.next()?.to_string();
+        if it.next().is_some() {
+            return None;
+        }
+        Some((parent, bin))
+    }
+
+    /// The daemon pid a ledger filename names, or `None` for any file that is not ours.
+    fn pid_of_filename(name: &str) -> Option<u32> {
+        name.strip_suffix(".pid")?.parse().ok()
+    }
+
+    /// What the sweep does with one record. Pure — the whole kill decision in one place.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Verdict {
+        /// The spawning Nexus is still running (a live sibling instance, or a recycled
+        /// parent pid): not ours to touch.
+        Keep,
+        /// The daemon is gone too (or its pid now belongs to some unrelated process):
+        /// nothing to kill, drop the stale record.
+        Drop,
+        /// Parent dead, and the pid still runs the recorded binary: a true orphan.
+        KillAndDrop,
+    }
+
+    /// `daemon_comm` is what `ps -o comm=` reports for the daemon's pid (`None` = no such
+    /// process). Compared by basename because macOS prints the full executable path where
+    /// Linux prints the bare name.
+    fn record_verdict(parent_alive: bool, daemon_comm: Option<&str>, bin: &str) -> Verdict {
+        if parent_alive {
+            return Verdict::Keep;
+        }
+        match daemon_comm {
+            Some(comm) if Path::new(comm).file_name().is_some_and(|f| f == bin) => {
+                Verdict::KillAndDrop
+            }
+            _ => Verdict::Drop,
+        }
+    }
+
+    /// One pass over the ledger. The probes and the kill are parameters so the decision
+    /// path is drivable from a test with no processes involved; [`init`] passes the real
+    /// ones. Files that are not records, and records that do not parse, are cleaned up or
+    /// skipped — the ledger must not accrete junk, and junk must never cause a kill.
+    fn sweep(
+        dir: &Path,
+        parent_alive: &dyn Fn(u32) -> bool,
+        daemon_comm: &dyn Fn(u32) -> Option<String>,
+        kill: &mut dyn FnMut(u32),
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(daemon_pid) = name.to_str().and_then(pid_of_filename) else {
+                continue; // not a ledger record — leave foreign files alone
+            };
+            let parsed = std::fs::read_to_string(entry.path())
+                .ok()
+                .and_then(|s| parse_record(s.trim()));
+            let Some((parent, bin)) = parsed else {
+                let _ = std::fs::remove_file(entry.path()); // garbled: unusable, remove
+                continue;
+            };
+            match record_verdict(
+                parent_alive(parent),
+                daemon_comm(daemon_pid).as_deref(),
+                &bin,
+            ) {
+                Verdict::Keep => {}
+                Verdict::Drop => {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+                Verdict::KillAndDrop => {
+                    kill(daemon_pid);
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
+    /// What `ps` calls `pid`, or `None` when no such process exists. `ps -p <pid> -o comm=`
+    /// answers liveness and identity in one portable call (macOS and Linux both have it in
+    /// the launchd/systemd default PATH); a zombie still lists, which for the PARENT check
+    /// is the conservative direction (its records wait for the next launch).
+    fn proc_comm(pid: u32) -> Option<String> {
+        let out = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!s.is_empty()).then_some(s)
+    }
+
+    /// Send `sig` (a `kill(1)` signal argument, e.g. `"-TERM"`) to `pid`. Best-effort.
+    fn send_signal(pid: u32, sig: &str) {
+        let _ = std::process::Command::new("kill")
+            .args([sig, &pid.to_string()])
+            .status();
+    }
+
+    /// Kill a confirmed orphan: TERM (rigctld exits promptly and closes the serial port
+    /// cleanly), then a bounded wait so OUR spawn moments later finds the ports actually
+    /// free, then one KILL if it lingered. Bounded because this runs on the startup path.
+    fn kill_stale(pid: u32) {
+        send_signal(pid, "-TERM");
+        for _ in 0..10 {
+            if proc_comm(pid).is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        send_signal(pid, "-KILL");
+    }
+
+    /// Remember the ledger dir and sweep what a previous dead instance left. See the
+    /// module doc; called via [`super::init_orphan_ledger`].
+    pub(super) fn init(dir: PathBuf) {
+        let _ = std::fs::create_dir_all(&dir);
+        sweep(
+            &dir,
+            &|pid| proc_comm(pid).is_some(),
+            &proc_comm,
+            &mut kill_stale,
+        );
+        let _ = LEDGER_DIR.set(dir);
+    }
+
+    /// A daemon was spawned: register it and write its ledger record.
+    pub(super) fn record(daemon_pid: u32, bin: &'static str) {
+        if let Ok(mut live) = LIVE.lock() {
+            live.push((daemon_pid, bin));
+        }
+        if let Some(dir) = LEDGER_DIR.get() {
+            let _ = std::fs::write(
+                dir.join(format!("{daemon_pid}.pid")),
+                format_record(std::process::id(), bin),
+            );
+        }
+    }
+
+    /// A daemon is being dropped (and killed by its `Drop`): deregister + remove the record.
+    pub(super) fn forget(daemon_pid: u32) {
+        if let Ok(mut live) = LIVE.lock() {
+            live.retain(|(pid, _)| *pid != daemon_pid);
+        }
+        if let Some(dir) = LEDGER_DIR.get() {
+            let _ = std::fs::remove_file(dir.join(format!("{daemon_pid}.pid")));
+        }
+    }
+
+    /// TERM everything still registered — the quit path's backstop for handles whose `Drop`
+    /// will never run. Safe against pid reuse (un-reaped children, see the module doc).
+    /// Fire-and-forget: the process is exiting and must not block here; the ledger records
+    /// deliberately STAY on disk, so if a TERM'd daemon somehow lingers, the next launch's
+    /// sweep gets a second, identity-checked look instead of nothing.
+    pub(super) fn kill_leftovers() {
+        let leftovers = LIVE
+            .lock()
+            .map(|mut live| std::mem::take(&mut *live))
+            .unwrap_or_default();
+        for (pid, _) in leftovers {
+            send_signal(pid, "-TERM");
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The kill decision, exhaustively: a kill may happen only for a dead parent AND a
+        /// pid that still runs the recorded binary. Everything else keeps or drops.
+        #[test]
+        fn a_kill_needs_a_dead_parent_and_a_matching_binary() {
+            // Parent alive (live sibling instance): never touched, even if the daemon looks right.
+            assert_eq!(
+                record_verdict(true, Some("rigctld"), "rigctld"),
+                Verdict::Keep
+            );
+            // True orphan — Linux (bare name) and macOS (full path) comm forms both match.
+            assert_eq!(
+                record_verdict(false, Some("rigctld"), "rigctld"),
+                Verdict::KillAndDrop
+            );
+            assert_eq!(
+                record_verdict(false, Some("/opt/homebrew/bin/rigctld"), "rigctld"),
+                Verdict::KillAndDrop
+            );
+            // Daemon pid recycled by an unrelated process: drop the record, kill NOTHING.
+            assert_eq!(
+                record_verdict(false, Some("firefox"), "rigctld"),
+                Verdict::Drop
+            );
+            // Daemon already gone: just tidy up.
+            assert_eq!(record_verdict(false, None, "rigctld"), Verdict::Drop);
+        }
+
+        /// The record format round-trips, and garble parses to nothing (a garbled record
+        /// must never yield a parent pid to test or a kill).
+        #[test]
+        fn records_round_trip_and_garble_parses_to_none() {
+            assert_eq!(
+                parse_record(&format_record(4242, "rotctld")),
+                Some((4242, "rotctld".to_string()))
+            );
+            assert_eq!(parse_record(""), None);
+            assert_eq!(parse_record("notanumber rigctld"), None);
+            assert_eq!(parse_record("123"), None);
+            assert_eq!(parse_record("123 rigctld extra"), None);
+            // Filenames: only `<pid>.pid` is a record.
+            assert_eq!(pid_of_filename("123.pid"), Some(123));
+            assert_eq!(pid_of_filename("123.tmp"), None);
+            assert_eq!(pid_of_filename("x.pid"), None);
+        }
+
+        /// The sweep against a real directory, with the probes faked: the orphan is killed
+        /// and its record removed; the live sibling's record survives untouched; the
+        /// recycled-pid record is removed without a kill; junk files are left alone.
+        #[test]
+        fn the_sweep_kills_only_the_true_orphan() {
+            let dir = std::env::temp_dir().join(format!(
+                "nexus-orphan-sweep-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&dir).expect("temp ledger dir");
+            // parent 1000 dead, pid 11 still rigctld  -> kill + drop
+            std::fs::write(dir.join("11.pid"), "1000 rigctld").unwrap();
+            // parent 2000 alive (sibling instance)    -> keep
+            std::fs::write(dir.join("22.pid"), "2000 rigctld").unwrap();
+            // parent 1000 dead, pid 33 now firefox    -> drop, no kill
+            std::fs::write(dir.join("33.pid"), "1000 rotctld").unwrap();
+            // garbled record                          -> drop, no kill
+            std::fs::write(dir.join("44.pid"), "what even is this").unwrap();
+            // not a ledger file                       -> untouched
+            std::fs::write(dir.join("README.txt"), "hands off").unwrap();
+
+            let mut killed: Vec<u32> = Vec::new();
+            sweep(
+                &dir,
+                &|parent| parent == 2000,
+                &|pid| match pid {
+                    11 => Some("/usr/bin/rigctld".to_string()),
+                    33 => Some("firefox".to_string()),
+                    _ => None,
+                },
+                &mut |pid| killed.push(pid),
+            );
+
+            assert_eq!(killed, vec![11], "exactly the one true orphan dies");
+            assert!(!dir.join("11.pid").exists(), "the orphan's record is gone");
+            assert!(
+                dir.join("22.pid").exists(),
+                "the live sibling's record survives"
+            );
+            assert!(
+                !dir.join("33.pid").exists(),
+                "the recycled pid's record is gone"
+            );
+            assert!(!dir.join("44.pid").exists(), "garble is cleaned up");
+            assert!(
+                dir.join("README.txt").exists(),
+                "foreign files are not ours to touch"
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 }
 
@@ -865,10 +1240,58 @@ fn resolve_rigctld() -> std::ffi::OsString {
     }
 }
 
+/// Explain a Hamlib tool that could not be SPAWNED — the per-platform install cure, for
+/// whichever of the three binaries Nexus launches: `rigctld` (the CAT daemon), `rigctl`
+/// (the baud ladder's one-shot prober) or `rotctld` (the rotator daemon).
+///
+/// ONE composer on purpose. The first sweep of this defect fixed only `rigctld`
+/// (`service::rigctld_launch_failed`, whose doc carries the whole story), and the two
+/// sibling binaries kept shipping the pre-fix shape — a raw `No such file or directory
+/// (os error 2)` naming no cause and no cure (mac QA audit, 2026-08-17). All three install
+/// as ONE package on every platform Nexus targets, so the cure is identical and only the
+/// name differs; a per-binary copy is how the next sibling misses the next sweep.
+///
+/// `NotFound` is the one diagnosable kind and gets the install sentence; every other error
+/// keeps the generic wording (installing would not help), and the raw error is kept in all
+/// arms — it is what support asks for. Note the tail does NOT say "bundled": nothing is
+/// bundled on macOS or in the AppImage, and claiming so sends the operator hunting for a
+/// file that was never shipped.
+pub fn hamlib_missing_for(mac: bool, tool: &str, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        if mac {
+            return format!(
+                "Hamlib's {tool} isn't installed. In Terminal: brew install hamlib, then \
+                 restart Nexus (Homebrew itself is at brew.sh). WSJT-X or a logger working \
+                 proves only the Hamlib LIBRARY is there — Nexus needs the {tool} program. ({e})"
+            );
+        }
+        return format!(
+            "Hamlib's {tool} isn't installed. On Debian/Ubuntu: sudo apt install \
+             libhamlib-utils (the Nexus .deb pulls it in; the AppImage can't, so it has to be \
+             installed once by hand). WSJT-X working proves only the Hamlib LIBRARY is there — \
+             Nexus needs the {tool} program. ({e})"
+        );
+    }
+    format!("Could not launch {tool} (Hamlib): {e}")
+}
+
+/// [`hamlib_missing_for`] on the platform this binary was compiled for.
+pub fn hamlib_missing(tool: &str, e: &std::io::Error) -> String {
+    hamlib_missing_for(cfg!(target_os = "macos"), tool, e)
+}
+
 /// Build the `rotctld` argument vector — same shape as [`rigctld_args`] minus
 /// the network-rig special case (rotators are serial devices to Hamlib).
+///
+/// `-vvv` for the same reason its rig twin carries it, and the rotator needed it more: Hamlib
+/// runs at `RIG_DEBUG_NONE` with no `-v`, so the stderr pipe drains an empty stream. rotctld
+/// does print its FATAL `rot_open` failure without any flag ("serial_open: serial port COM99
+/// does not exist / IO error", measured on the bundled 4.7.1) — but the commonest rotator fault
+/// is not a failed open, it is a port that opened and a controller that never answered, which
+/// is the `RIG_DEBUG_WARN` level `-vvv` buys. That is exactly the wrong-baud case this batch is
+/// about, and it is the one Hamlib can name and we cannot.
 pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<String> {
-    let mut args = vec!["-m".to_string(), model.to_string()];
+    let mut args = vec!["-vvv".to_string(), "-m".to_string(), model.to_string()];
     if !port.is_empty() {
         args.push("-r".to_string());
         args.push(port.to_string());
@@ -925,23 +1348,74 @@ pub fn spawn_rotctld(
     let args = rotctld_args(model, port, baud, tcp_port);
     let mut cmd = Command::new(resolve_rotctld());
     cmd.args(&args);
+    // ⭐ CAPTURE THE ROTATOR DAEMON'S STDERR, which used to be thrown away. rotctld EXITS when
+    // it cannot open the port (measured on the bundled 4.7.1: `-r COM99` → "serial_open: serial
+    // port COM99 does not exist / IO error", then gone — unlike rigctld, which stays up because
+    // "the rig may be powered off"). Nexus logged "rotctld launched" for that, and the operator
+    // was left with a rotator that never answered and nothing anywhere naming a cause. Hamlib
+    // knew: wrong model, bad port, port busy, refused baud — all of it goes here.
+    cmd.stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
+    let said = drain_stderr(&mut child, "rotctld");
     #[cfg(windows)]
     let job = assign_kill_on_close_job(&child);
+    // Unix stand-in for the job object: record the spawn so a crash/force-quit/wedged
+    // quit cannot orphan the daemon past the next launch (see [`orphan_ledger`]).
+    #[cfg(unix)]
+    orphan_ledger::record(child.id(), "rotctld");
     Ok(RigctldProc {
         child,
-        // A rotator daemon's stderr is not piped, so it never says anything here. The field
-        // exists because the handle is shared with rigctld, not because rotctld is silent.
-        said: Arc::new(Mutex::new(Said::default())),
+        said,
         #[cfg(windows)]
         job,
     })
+}
+
+/// Drain a daemon's piped stderr on a detached thread into the ring [`RigctldProc::said`] reads,
+/// and into the CI-V diagnostic. The thread ends when the daemon exits.
+///
+/// ONE drain for both daemons, on purpose. It was written inline for `rigctld` and `rotctld`
+/// got none at all, which is how a rotator daemon that exits 27 ms after launch was reported as
+/// "launched" for two releases — the same shape as the `hamlib_missing_for` sweep that fixed
+/// only rigctld and left its two sibling binaries behind (mac QA audit, 2026-08-17).
+///
+/// `note` is a cheap relaxed load when logging is off, so this idles for free.
+fn drain_stderr(child: &mut Child, tag: &'static str) -> Arc<Mutex<Said>> {
+    let said = Arc::new(Mutex::new(Said::default()));
+    if let Some(stderr) = child.stderr.take() {
+        let sink = Arc::clone(&said);
+        std::thread::Builder::new()
+            .name(format!("{tag}-stderr"))
+            .spawn(move || {
+                let mut reader = std::io::BufReader::new(stderr);
+                let mut raw = Vec::new();
+                loop {
+                    raw.clear();
+                    // `read_until`, not `lines()`: a line Hamlib fills with the RIG's own bytes
+                    // is not UTF-8, and `lines().map_while(Result::ok)` ended the whole drain
+                    // there. See [`said_line`] — that line is the wrong-baud diagnosis.
+                    match reader.read_until(b'\n', &mut raw) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let Some(line) = said_line(&raw) else {
+                        continue;
+                    };
+                    crate::civ::diag::note(&format!("{tag}: {line}"));
+                    if let Ok(mut q) = sink.lock() {
+                        q.push(line);
+                    }
+                }
+            })
+            .ok();
+    }
+    said
 }
 
 /// Every `ptt_type` token Hamlib can report, split by whether it names a serial control line.
@@ -1206,44 +1680,19 @@ pub fn spawn_rigctld(
         args.join(" ")
     ));
     // Drain the daemon's stderr on a detached thread → the ring buffer AND the diagnostic.
-    // `note` is a cheap relaxed load when logging is off, so this idles for free; the thread
-    // ends when the daemon exits.
     //
     // The ring is the half that reaches EVERY operator: the CI-V log needs arming, and its
     // toggle is rendered only for an Icom on the native path, so for a Yaesu owner `note` has
     // always been a no-op ([`RigctldProc::said`]).
-    let said = Arc::new(Mutex::new(Said::default()));
-    if let Some(stderr) = child.stderr.take() {
-        let sink = Arc::clone(&said);
-        std::thread::Builder::new()
-            .name("rigctld-stderr".into())
-            .spawn(move || {
-                let mut reader = std::io::BufReader::new(stderr);
-                let mut raw = Vec::new();
-                loop {
-                    raw.clear();
-                    // `read_until`, not `lines()`: a line Hamlib fills with the RIG's own bytes
-                    // is not UTF-8, and `lines().map_while(Result::ok)` ended the whole drain
-                    // there. See [`said_line`] — that line is the wrong-baud diagnosis.
-                    match reader.read_until(b'\n', &mut raw) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-                    let Some(line) = said_line(&raw) else {
-                        continue;
-                    };
-                    crate::civ::diag::note(&format!("rigctld: {line}"));
-                    if let Ok(mut q) = sink.lock() {
-                        q.push(line);
-                    }
-                }
-            })
-            .ok();
-    }
+    let said = drain_stderr(&mut child, "rigctld");
     // On Windows, bind the daemon to a kill-on-close Job Object so it can't
     // outlive Tempo and keep the COM port locked.
     #[cfg(windows)]
     let job = assign_kill_on_close_job(&child);
+    // Unix stand-in for the job object: record the spawn so a crash/force-quit/wedged
+    // quit cannot orphan the daemon past the next launch (see [`orphan_ledger`]).
+    #[cfg(unix)]
+    orphan_ledger::record(child.id(), "rigctld");
     Ok(RigctldProc {
         child,
         said,
@@ -1578,6 +2027,10 @@ mod tests {
         assert_eq!(
             rotctld_args(601, "COM7", 9600, 4533),
             vec![
+                // -vvv for the same reason rigctld carries it: at RIG_DEBUG_NONE the daemon
+                // prints nothing and the stderr pipe drains an empty stream, which is how a
+                // rotator that opened its port and never answered explained itself to nobody.
+                "-vvv",
                 "-m",
                 "601",
                 "-r",
@@ -1593,8 +2046,50 @@ mod tests {
         // No port (Dummy rotator for testing) → no -r/-s.
         assert_eq!(
             rotctld_args(1, "", 9600, 4533),
-            vec!["-m", "1", "-T", "127.0.0.1", "-t", "4533"]
+            vec!["-vvv", "-m", "1", "-T", "127.0.0.1", "-t", "4533"]
         );
+    }
+
+    /// The shared missing-Hamlib composer, driven with the platform as data so both branches
+    /// run on any box (the `service::rigctld_launch_failed_for` discipline). What this pins
+    /// beyond that test: the TOOL NAME is threaded through — the first sweep fixed only
+    /// rigctld, and `rotctld`/`rigctl` kept shipping a raw "os error 2" with no cure (mac QA
+    /// audit, 2026-08-17) — and the tail never claims a "bundled" copy, which does not exist
+    /// on macOS or in the AppImage.
+    #[test]
+    fn every_hamlib_tool_gets_the_platform_cure_not_a_raw_os_error() {
+        use std::io::{Error, ErrorKind};
+        let not_found = || {
+            Error::new(
+                ErrorKind::NotFound,
+                "No such file or directory (os error 2)",
+            )
+        };
+        for tool in ["rigctld", "rigctl", "rotctld"] {
+            let mac = hamlib_missing_for(true, tool, &not_found());
+            assert!(mac.contains(tool), "must name the tool that failed: {mac}");
+            assert!(mac.contains("brew install hamlib"), "{mac}");
+            assert!(!mac.contains("apt install"), "never apt on a Mac: {mac}");
+            assert!(mac.contains("os error 2"), "the raw error stays: {mac}");
+            let linux = hamlib_missing_for(false, tool, &not_found());
+            assert!(linux.contains(tool), "{linux}");
+            assert!(linux.contains("libhamlib-utils"), "{linux}");
+            assert!(!linux.contains("brew"), "{linux}");
+        }
+        // The public entry point picks the branch for the platform it compiled on.
+        assert_eq!(
+            hamlib_missing("rotctld", &not_found()),
+            hamlib_missing_for(cfg!(target_os = "macos"), "rotctld", &not_found())
+        );
+        // Not a missing binary → no install advice (installing would not help), no
+        // "bundled" claim (nothing is bundled on two of the three platforms).
+        let other = hamlib_missing_for(true, "rotctld", &Error::other("boom"));
+        assert!(
+            other.contains("rotctld") && other.contains("boom"),
+            "{other}"
+        );
+        assert!(!other.contains("install"), "{other}");
+        assert!(!other.contains("bundled"), "{other}");
     }
 
     #[test]

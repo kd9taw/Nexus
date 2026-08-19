@@ -287,12 +287,51 @@ fn match_rig_model_in(
 /// CI-V; `None` = no signal either way (single-port rigs, generic bridges). Matches are
 /// deliberately conservative — a wrong `Some` here would steer the operator AWAY from
 /// the working port.
+///
+/// ⚠️ **The Icom pair is not the only pair, and the other one is INVERTED.** A bare
+/// `ENHANCED` test used to answer `Some(true)` for both of a Xiegu X6100/X6200's interfaces
+/// (see [`wch_dual_serial_side`]), so Detect badged BOTH rows "CI-V port — use this one" and
+/// the operator picked by coin flip — half the time the port that opens cleanly and returns
+/// zero bytes forever. The WCH shape is therefore tested FIRST, and the CP2105's `ENHANCED`
+/// now has to arrive in its own spelling (`Enhanced COM Port`) so a product name that merely
+/// contains the word cannot claim the CI-V side.
 pub fn civ_port_side(product: &str) -> Option<bool> {
     let p = product.to_ascii_uppercase();
-    if p.contains("CI-V") || p.contains("ENHANCED") || p.contains("SERIAL PORT A") {
+    if let Some(side) = wch_dual_serial_side(&p) {
+        return Some(side);
+    }
+    if p.contains("CI-V") || p.contains("ENHANCED COM") || p.contains("SERIAL PORT A") {
         return Some(true);
     }
     if p.contains("STANDARD COM") || p.contains("SERIAL PORT B") {
+        return Some(false);
+    }
+    None
+}
+
+/// The WCH dual-interface bridges (CH342 and family), which the Xiegu X6100/X6200 carry as
+/// their built-in USB. Takes the ALREADY-UPPERCASED product string.
+///
+/// Two facts make this its own rule rather than a widening of the Icom one:
+/// - **"Enhanced" is the product name, not a marker.** Both interfaces enumerate as
+///   `USB-Enhanced-SERIAL-A CH342` / `USB-Enhanced-SERIAL-B CH342`, so the word says nothing
+///   about which one carries CAT.
+/// - **The A/B convention is the opposite of Icom's.** On an IC-7610/9700 "Serial Port A" is
+///   CI-V; on these radios **CAT answers on -B**, as this codebase records in two independent
+///   places (`src-tauri/src/lib.rs`'s serial-picker label doc and `ui/src/api.ts`'s
+///   `SerialPortInfo.label`) — and the picker hint the operator already sees says the same.
+///
+/// `None` for anything that is not that shape, including a WCH bridge whose name carries no
+/// interface suffix: one unlabelled port is a single port, and guessing a side there would be
+/// exactly the wrong `Some` the caller's contract forbids.
+fn wch_dual_serial_side(upper: &str) -> Option<bool> {
+    if !upper.contains("ENHANCED") {
+        return None;
+    }
+    if upper.contains("SERIAL-B") {
+        return Some(true);
+    }
+    if upper.contains("SERIAL-A") {
         return Some(false);
     }
     None
@@ -432,10 +471,10 @@ pub struct DetectedRig {
     /// names itself and no rig token matches, while a native-USB radio names its model. When
     /// present the operator still picks the RIG — the cable does not imply one.
     pub interface: Option<KnownInterface>,
-    /// For dual-UART rigs (IC-7610/9700): which of the pair this is — `Some(true)` = the
-    /// CI-V/CAT side, `Some(false)` = the second port that never answers CI-V (see
-    /// [`civ_port_side`]). Lets the UI break the tie between two rows that otherwise both
-    /// say "Icom IC-7610".
+    /// For dual-interface rigs (the IC-7610/9700's CP2105, the X6100/X6200's CH342): which of
+    /// the pair this is — `Some(true)` = the CI-V/CAT side, `Some(false)` = the second port
+    /// that never answers CI-V (see [`civ_port_side`]). Lets the UI break the tie between two
+    /// rows that otherwise both say "Icom IC-7610", or two bare `COMx` rows for one Xiegu.
     pub civ_side: Option<bool>,
 }
 
@@ -1178,6 +1217,64 @@ mod tests {
         assert_eq!(civ_port_side("IC-705"), None);
         assert_eq!(civ_port_side("CP2102 USB to UART Bridge Controller"), None);
         assert_eq!(civ_port_side(""), None);
+    }
+
+    /// ⭐ FAILING-FIRST. A dual-interface radio must produce exactly ONE "use this one" row.
+    /// The `ENHANCED` catch-all was written for the CP2105, where "Enhanced COM Port" names
+    /// one of the pair — but on the WCH CH342 the X6100/X6200 use, "Enhanced" is part of the
+    /// PRODUCT NAME and appears on BOTH interfaces, so both rows came back `Some(true)` and
+    /// the operator was told to use either. Half of that advice is the dead port.
+    ///
+    /// The Icom pairs are the POSITIVE CONTROL: this is the logic they were built for, and
+    /// they must still resolve one CI-V side and one dead twin.
+    #[test]
+    fn each_dual_interface_pair_names_exactly_one_civ_port() {
+        for (a_side, b_side) in [
+            // WCH CH342 — the Xiegu X6100/X6200 built-in USB. The suffix convention is
+            // INVERTED against Icom's: CAT answers on -B.
+            ("USB-Enhanced-SERIAL-A CH342", "USB-Enhanced-SERIAL-B CH342"),
+            // Icom's own driver naming (A = CI-V).
+            ("IC-7610 Serial Port B", "IC-7610 Serial Port A (CI-V)"),
+            // Stock Silicon Labs CP2105 naming (Enhanced = CI-V).
+            (
+                "CP2105 Dual USB to UART Bridge: Standard COM Port",
+                "CP2105 Dual USB to UART Bridge: Enhanced COM Port",
+            ),
+        ] {
+            let sides = [civ_port_side(a_side), civ_port_side(b_side)];
+            assert_eq!(
+                sides.iter().filter(|s| **s == Some(true)).count(),
+                1,
+                "exactly one of {a_side:?} / {b_side:?} may be badged the CI-V port: {sides:?}"
+            );
+            assert_eq!(
+                sides.iter().filter(|s| **s == Some(false)).count(),
+                1,
+                "and exactly one is the dead twin: {sides:?}"
+            );
+        }
+    }
+
+    /// The CH342 pair is still ONE radio: both rows must stay `civ_side`-tagged so
+    /// [`assign_generic_codecs`] hands the pair a SINGLE audio grant (returning `None` for
+    /// the dead side would split the X6100's built-in codec across two phantom rigs), and
+    /// the SERIAL-B row is the one badged "use this one".
+    #[test]
+    fn a_ch342_pair_is_one_radio_with_one_codec_and_one_recommended_port() {
+        let ports = vec![
+            port("COM6", 0x1A86, "USB-Enhanced-SERIAL-A CH342", "wch.cn"),
+            port("COM7", 0x1A86, "USB-Enhanced-SERIAL-B CH342", "wch.cn"),
+        ];
+        let audio = vec![wdev("USB AUDIO CODEC")];
+        let rigs = detect_rigs(&ports, &audio, &audio, HostOs::Windows);
+        assert_eq!(rigs.len(), 2);
+        assert_eq!(rigs[0].civ_side, Some(false), "SERIAL-A is the dead twin");
+        assert_eq!(rigs[1].civ_side, Some(true), "CAT answers on SERIAL-B");
+        assert_eq!(
+            rigs[0].suggested_audio, rigs[1].suggested_audio,
+            "one radio, one codec grant"
+        );
+        assert!(rigs[0].suggested_audio.is_some());
     }
 
     #[test]

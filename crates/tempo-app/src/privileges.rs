@@ -174,8 +174,9 @@ fn segments(class: LicenseClass) -> Vec<Seg> {
 fn allows(seg: &Seg, mode: OperatingMode) -> bool {
     match mode {
         OperatingMode::Cw => seg.cw,
-        // RTTY is a data emission (§97.305 puts RTTY and data in the same segments).
-        OperatingMode::Digital | OperatingMode::Rtty => seg.data,
+        // RTTY and the keyboard modes (PSK31…) are data emissions (§97.305 puts
+        // RTTY and data in the same segments).
+        OperatingMode::Digital | OperatingMode::Rtty | OperatingMode::Keyboard => seg.data,
         OperatingMode::Phone => seg.phone,
     }
 }

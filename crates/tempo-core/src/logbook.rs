@@ -1012,11 +1012,31 @@ impl Logbook {
 
     /// The whole logbook as ADIF text (header + records).
     pub fn adif(&self) -> String {
+        self.adif_in_range(None, None)
+    }
+
+    /// The logbook as ADIF, restricted to QSOs whose start time falls in
+    /// `[from_unix, to_unix]` (inclusive; either bound absent = unbounded, both
+    /// absent = the whole log, byte-identical to [`Self::adif`]). The date-range
+    /// export (#98): an operator uploading "just this weekend's activation" was
+    /// hand-editing the full file.
+    pub fn adif_in_range(&self, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
         let mut s = adif_header();
-        for r in &self.records {
+        for r in self.records_in_range(from_unix, to_unix) {
             s.push_str(&adif_record(r));
         }
         s
+    }
+
+    /// Records whose start time falls in `[from, to]` (inclusive; absent = unbounded).
+    fn records_in_range(
+        &self,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> impl Iterator<Item = &QsoRecord> {
+        self.records.iter().filter(move |r| {
+            from.is_none_or(|f| r.when_unix >= f) && to.is_none_or(|t| r.when_unix <= t)
+        })
     }
 
     /// Every distinct operator in the log, uppercased and sorted (#25).
@@ -1068,9 +1088,14 @@ impl Logbook {
 
     /// The whole logbook as RFC-4180 CSV (for spreadsheet / quick export).
     pub fn csv(&self) -> String {
+        self.csv_in_range(None, None)
+    }
+
+    /// CSV restricted to `[from_unix, to_unix]` — same contract as [`Self::adif_in_range`].
+    pub fn csv_in_range(&self, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
         let mut s =
             String::from("Call,Grid,Band,Freq_MHz,Mode,RST_Sent,RST_Rcvd,Name,QTH,Comment,DateTimeUTC,Confirmed\n");
-        for r in &self.records {
+        for r in self.records_in_range(from_unix, to_unix) {
             let (y, mo, d, h, mi, se) = datetime_utc(r.when_unix);
             let dt = format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}Z");
             let cells = [
@@ -1900,6 +1925,24 @@ pub fn datetime_utc(unix: u64) -> (i32, u32, u32, u32, u32, u32) {
     (year, m, d, h, mi, s)
 }
 
+/// Inclusive Unix bounds of one UTC calendar day, from `"YYYY-MM-DD"` (the wire format of an
+/// HTML date input) — `(00:00:00, 23:59:59)` of that day. `None` for anything unparseable,
+/// and the CALLER must treat that as an error, never as "no bound": a malformed bound that
+/// silently exported the whole log would ship a file the operator believes is filtered (#98).
+pub fn day_bounds_utc(date: &str) -> Option<(u64, u64)> {
+    let mut it = date.split('-');
+    let y: i32 = it.next()?.parse().ok()?;
+    let m: u32 = it.next()?.parse().ok()?;
+    let d: u32 = it.next()?.parse().ok()?;
+    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some((
+        unix_from_ymdhms(y, m, d, 0, 0, 0),
+        unix_from_ymdhms(y, m, d, 23, 59, 59),
+    ))
+}
+
 /// Inverse of [`datetime_utc`] — (y,m,d,h,mi,s) UTC → Unix seconds.
 fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
     let y = y as i64 - if m <= 2 { 1 } else { 0 };
@@ -2005,6 +2048,71 @@ mod tests {
             station_callsign: None,
             extra: Vec::new(),
         }
+    }
+
+    // #98 — the date-range export. Three QSOs on three UTC days: the range keeps exactly the
+    // in-range ones (bounds inclusive, whole-day), and NO range is byte-identical to the
+    // unbounded export — the pre-#98 behavior, which callers with no dates must still get.
+    #[test]
+    fn export_range_keeps_exactly_the_in_range_days_and_no_range_is_the_whole_log() {
+        let mut lb = Logbook::new();
+        // 2026-08-10, -11, -12, each mid-day UTC.
+        let (d10, _) = day_bounds_utc("2026-08-10").unwrap();
+        let (d11, _) = day_bounds_utc("2026-08-11").unwrap();
+        let (d12, _) = day_bounds_utc("2026-08-12").unwrap();
+        lb.add(rec("W1AAA", "20m", d10 + 43_200));
+        lb.add(rec("W2BBB", "20m", d11 + 43_200));
+        lb.add(rec("W3CCC", "20m", d12 + 43_200));
+
+        // Middle day only: exactly the one QSO, not its neighbours.
+        let (from, to) = day_bounds_utc("2026-08-11").unwrap();
+        let one = lb.adif_in_range(Some(from), Some(to));
+        assert!(one.contains("W2BBB"), "the in-range QSO is kept");
+        assert!(
+            !one.contains("W1AAA") && !one.contains("W3CCC"),
+            "out-of-range days are excluded"
+        );
+
+        // From-only and to-only bound one side each.
+        let tail = lb.adif_in_range(Some(day_bounds_utc("2026-08-11").unwrap().0), None);
+        assert!(!tail.contains("W1AAA") && tail.contains("W2BBB") && tail.contains("W3CCC"));
+        let head = lb.adif_in_range(None, Some(day_bounds_utc("2026-08-11").unwrap().1));
+        assert!(head.contains("W1AAA") && head.contains("W2BBB") && !head.contains("W3CCC"));
+
+        // No range at all = the whole log, byte-identical to the unbounded export.
+        assert_eq!(lb.adif_in_range(None, None), lb.adif());
+        assert_eq!(lb.csv_in_range(None, None), lb.csv());
+
+        // CSV takes the same filter (one header line + one row).
+        let csv = lb.csv_in_range(Some(from), Some(to));
+        assert_eq!(csv.trim_end().lines().count(), 2);
+        assert!(csv.contains("W2BBB"));
+    }
+
+    // #98 — a malformed bound must parse to None (the command turns that into an ERROR;
+    // silently exporting the whole log under a filter the operator believes applied is
+    // the failure this guards).
+    #[test]
+    fn day_bounds_rejects_malformed_dates() {
+        assert!(day_bounds_utc("2026-08-11").is_some());
+        for bad in [
+            "",
+            "2026",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-08-32",
+            "2026-08-11-05",
+            "next-tuesday",
+        ] {
+            assert!(day_bounds_utc(bad).is_none(), "{bad:?} must not parse");
+        }
+        // The bounds cover the whole UTC day, inclusive.
+        let (lo, hi) = day_bounds_utc("2023-11-14").unwrap();
+        assert_eq!(hi - lo, 86_399);
+        assert!(
+            lo <= 1_700_000_000 && 1_700_000_000 <= hi,
+            "22:13:20 UTC falls inside its day"
+        );
     }
 
     #[test]

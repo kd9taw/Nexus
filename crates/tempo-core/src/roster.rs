@@ -57,19 +57,39 @@ impl Roster {
 
     /// Update the roster from a decode heard at `slot`.
     pub fn observe(&mut self, d: &Decode, slot: u64) {
-        let m = Msg::parse(&d.message);
-        let Some(sender) = m.sender() else { return };
-        let grid = match &m {
-            // A non-empty grid only — an i3=4 compound CQ/call carries none (empty), and
-            // a roster grid of Some("") would be a phantom empty grid.
-            Msg::Cq { grid, .. } | Msg::Grid { grid, .. } if !grid.is_empty() => Some(grid.clone()),
-            _ => None,
+        // #55/#101d: a WSPR spot is "CALL GRID DBM" — a different grammar entirely.
+        // Through the FT8 parser the trailing dBm (typ. 23–47, inside the −50..=49
+        // report range) reads as a signal report and the GRID lands in the sender
+        // slot, so "TI4JWC EK70 30" filed a roster station called "EK70". The
+        // recent-decodes feed has carried this special-case since #55; this ingest
+        // was still guessing. WSPR rows parse by the WSPR field order, and a
+        // beacon addresses nobody.
+        let (sender, grid, calling) = if d.mode == Some(ModeKind::Wspr) {
+            let mut t = d.message.split_whitespace();
+            let Some(call) = t.next() else { return };
+            (
+                call.to_string(),
+                t.next().filter(|g| !g.is_empty()).map(str::to_string),
+                None,
+            )
+        } else {
+            let m = Msg::parse(&d.message);
+            let Some(sender) = m.sender() else { return };
+            let grid = match &m {
+                // A non-empty grid only — an i3=4 compound CQ/call carries none (empty), and
+                // a roster grid of Some("") would be a phantom empty grid.
+                Msg::Cq { grid, .. } | Msg::Grid { grid, .. } if !grid.is_empty() => {
+                    Some(grid.clone())
+                }
+                _ => None,
+            };
+            (sender.to_string(), grid, m.addressee().map(str::to_string))
         };
         let entry = self
             .stations
-            .entry(sender.to_string())
+            .entry(sender.clone())
             .or_insert_with(|| HeardStation {
-                call: sender.to_string(),
+                call: sender,
                 grid: None,
                 snr: d.snr,
                 last_heard_slot: slot,
@@ -83,7 +103,7 @@ impl Roster {
         entry.heard_count += 1;
         // Last frame wins, INCLUDING back to None: a station that finished its QSO and is
         // calling CQ again must stop showing the call it was working.
-        entry.calling = m.addressee().map(str::to_string);
+        entry.calling = calling;
         entry.mode = d.mode; // last-heard protocol wins (FT8→FT1 re-tags as Tempo)
         entry.freq_hz = Some(d.freq.round() as i32); // last heard HERE on the waterfall
         if grid.is_some() {

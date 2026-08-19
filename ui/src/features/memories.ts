@@ -602,16 +602,20 @@ export function planRecall(m: Memory): RecallPlan {
   return { view: 'phone', freqMhz: m.rxMhz, mode: m.mode, settingsPatch: patch }
 }
 
-/** Quick-recall hotkey policy: Ctrl+1..9 → the Nth ★ favorite (1-indexed, in bank
- * order — the same order the cockpit MEM strip shows). Returns null when the chord
- * isn't a recall chord (needs Ctrl alone — no Alt/Meta/Shift, which are other rigs'
- * shortcuts) or there's no favorite at that slot. Pure so the policy is unit-tested;
- * the DOM guard (ignore while typing in a field) stays at the listener. */
+/** Quick-recall hotkey policy: Ctrl+1..9 OR Cmd+1..9 → the Nth ★ favorite (1-indexed,
+ * in bank order — the same order the cockpit MEM strip shows). Exactly ONE of Ctrl/Meta,
+ * never both, and no Alt/Shift (other rigs' shortcuts). Cmd is accepted because on macOS
+ * it is the native app-slot chord — and Ctrl+digit there is Mission Control's
+ * Spaces-switching chord, consumed by the OS before the webview ever sees it, so Ctrl-only
+ * meant NO working recall chord on a Mac with multiple Spaces (mac QA audit 2026-08-17).
+ * Returns null when the chord isn't a recall chord or there's no favorite at that slot.
+ * Pure so the policy is unit-tested; the DOM guard (ignore while typing in a field) stays
+ * at the listener. */
 export function hotkeyRecallTarget(
   e: { ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean; code: string },
   bank: MemoriesBank,
 ): Memory | null {
-  if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return null
+  if (e.ctrlKey === e.metaKey || e.altKey || e.shiftKey) return null
   const digit = /^Digit([1-9])$/.exec(e.code)
   if (!digit) return null
   const favorites = bank.memories.filter((m) => m.favorite)

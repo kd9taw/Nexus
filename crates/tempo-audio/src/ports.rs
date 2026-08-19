@@ -31,6 +31,8 @@ pub fn available_ports() -> Vec<String> {
                 names.push(v);
             }
         }
+        #[cfg(target_os = "macos")]
+        let names = collapse_tty_twin_names(names);
         names
     })
     .unwrap_or_else(|_| {
@@ -106,6 +108,77 @@ fn linux_virtual_ports(dev: &std::path::Path) -> Vec<String> {
 #[cfg(not(feature = "serial"))]
 pub fn available_ports() -> Vec<String> {
     Vec::new()
+}
+
+/// Name-level twin collapse for the plain string list ([`available_ports`]).
+///
+/// Same rule as [`collapse_tty_twins`]: a `/dev/tty.X` whose `/dev/cu.X` twin is present is
+/// dropped; a lone `tty.*` is kept (it is then the only node there is). The #92 collapse was
+/// applied only to [`available_usb_ports`], which feeds detection and the auto-test sweep —
+/// but the Settings rig picker reads THIS list, so it still offered the tty twin, and a
+/// picked `tty.*` HANGS on carrier detect instead of failing (Mac field report, 2026-08-17).
+///
+/// Pure string logic, compiled everywhere so the test runs on every platform; only the
+/// macOS enumeration calls it.
+#[cfg_attr(not(all(feature = "serial", target_os = "macos")), allow(dead_code))]
+fn collapse_tty_twin_names(names: Vec<String>) -> Vec<String> {
+    let callouts: std::collections::HashSet<&str> = names
+        .iter()
+        .filter_map(|n| n.strip_prefix("/dev/cu."))
+        .collect();
+    let drop: Vec<String> = names
+        .iter()
+        .filter(|n| {
+            n.strip_prefix("/dev/tty.")
+                .is_some_and(|rest| callouts.contains(rest))
+        })
+        .cloned()
+        .collect();
+    names.into_iter().filter(|n| !drop.contains(n)).collect()
+}
+
+/// The stored-port heal, pure core: the cu twin to USE INSTEAD when `port` is a macOS
+/// `/dev/tty.*` name whose `/dev/cu.*` twin `exists`; `None` = use the port as stored.
+///
+/// The twin collapses above are ENUMERATION-ONLY — they filter what the picker and detection
+/// OFFER — but during 1.5.0–1.6.1 the picker offered the tty twin as an equal row, so real
+/// Mac configs still HOLD one, and every consumer of the stored value (rigctld's `-r`, the
+/// native CI-V open, the baud ladder, serial PTT) passed it verbatim: CAT kept hanging on
+/// carrier detect after the upgrade that fixed the picker (mac QA audit, 2026-08-17). Same
+/// rule as [`collapse_tty_twins`], applied at the consuming end: a lone `tty.*` with no cu
+/// twin is kept — it is then the only node there is, and "healing" it to a node that does
+/// not exist would turn a working port into a vanished one.
+///
+/// The existence check is a parameter so this is pure string logic, compiled and tested on
+/// every platform (the [`collapse_tty_twin_names`] discipline); only the macOS wrapper below
+/// consults the filesystem.
+pub fn heal_tty_twin_with(port: &str, cu_twin_exists: impl Fn(&str) -> bool) -> Option<String> {
+    let rest = port.strip_prefix("/dev/tty.")?;
+    let cu = format!("/dev/cu.{rest}");
+    cu_twin_exists(&cu).then_some(cu)
+}
+
+/// The open-time heal for a STORED serial-port name: on macOS, substitute the `/dev/cu.*`
+/// twin for a saved `/dev/tty.*` when the twin is present ([`heal_tty_twin_with`]); identity
+/// everywhere else and for every other name. Called where the stored value is about to be
+/// consumed (`service::Transport`, the Test-CAT ladder) — the startup settings migration
+/// rewrites the file, but a rig that was unplugged at launch is only ever healed here.
+///
+/// Logs the substitution once per session (the open path re-runs every settings tick).
+pub fn heal_stored_port(port: String) -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(cu) = heal_tty_twin_with(&port, |p| std::path::Path::new(p).exists()) {
+        static NOTED: std::sync::Once = std::sync::Once::new();
+        NOTED.call_once(|| {
+            eprintln!(
+                "nexus: configured serial port {port} is a /dev/tty.* node (a 1.5.0–1.6.1 mac \
+                 picker offered it) — using its callout twin {cu} instead; tty.* hangs CAT on \
+                 carrier detect"
+            );
+        });
+        return cu;
+    }
+    port
 }
 
 /// A USB serial port plus the descriptor fields zero-config setup reads to identify
@@ -440,6 +513,71 @@ mod tests {
         // A missing/unreadable /dev must yield an empty list, never a panic — this runs every
         // time the Settings tab opens.
         assert!(linux_virtual_ports(std::path::Path::new("/nonexistent-xyz")).is_empty());
+    }
+
+    /// The rig picker's string list gets the same twin collapse as detection — the #92 fix
+    /// filtered [`available_usb_ports`] only, so the picker kept offering `/dev/tty.*` rows
+    /// that hang a CAT probe on carrier detect. Non-mac names pass through untouched.
+    #[test]
+    fn the_pickers_name_list_collapses_tty_twins_too() {
+        let got = collapse_tty_twin_names(vec![
+            "/dev/cu.usbserial-A".into(),
+            "/dev/tty.usbserial-A".into(),
+            "/dev/tty.lonelyport".into(),
+            "COM5".into(),
+            "/dev/ttyUSB0".into(),
+        ]);
+        assert_eq!(
+            got,
+            vec![
+                "/dev/cu.usbserial-A".to_string(),
+                "/dev/tty.lonelyport".into(),
+                "COM5".into(),
+                "/dev/ttyUSB0".into(),
+            ],
+            "the cu twin survives, its tty twin goes, everything else is untouched"
+        );
+    }
+
+    /// ⭐ FAILING-FIRST for the stored-port heal (mac QA audit, 2026-08-17). The twin collapse
+    /// above is ENUMERATION-ONLY — it filters what the picker and detection OFFER — so a
+    /// `/dev/tty.*` saved by a 1.5.0–1.6.1 install (whose picker offered the twin as an equal
+    /// row) still reaches rigctld/native-CI-V/PTT verbatim after an upgrade and hangs CAT on
+    /// carrier detect. The heal is the same rule at the CONSUMING end: substitute the cu twin
+    /// when it is present, keep a lone tty.* (it is then the only node there is).
+    #[test]
+    fn a_stored_tty_twin_heals_to_cu_and_a_lone_tty_is_kept() {
+        // The cu twin is live → substitute.
+        assert_eq!(
+            heal_tty_twin_with("/dev/tty.usbserial-1420", |p| p == "/dev/cu.usbserial-1420"),
+            Some("/dev/cu.usbserial-1420".to_string())
+        );
+        // No cu twin → the tty node is the only node there is; use it as-is.
+        assert_eq!(
+            heal_tty_twin_with("/dev/tty.usbserial-1420", |_| false),
+            None
+        );
+        // Everything that is not a /dev/tty.* name passes through untouched — and the
+        // existence check must not even be consulted (it stats the filesystem).
+        for name in ["/dev/cu.usbserial-1420", "COM5", "/dev/ttyUSB0", ""] {
+            assert_eq!(
+                heal_tty_twin_with(name, |_| panic!("no disk check for {name}")),
+                None
+            );
+        }
+    }
+
+    /// The public wrapper is IDENTITY for every name the heal does not apply to, on every
+    /// platform — a Linux `/dev/ttyUSB0` or a Windows `COM5` must never be rewritten, and a
+    /// mac tty.* whose twin is absent stays as-is (off macOS the whole heal is compiled out).
+    #[test]
+    fn heal_stored_port_never_touches_a_port_it_cannot_improve() {
+        for name in ["COM5", "/dev/ttyUSB0", "/dev/cu.usbserial-1420", ""] {
+            assert_eq!(heal_stored_port(name.to_string()), name);
+        }
+        // A twin that does not exist (on any platform) is left alone.
+        let lone = "/dev/tty.nexus-test-no-such-twin";
+        assert_eq!(heal_stored_port(lone.to_string()), lone);
     }
 
     #[test]

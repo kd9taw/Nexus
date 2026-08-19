@@ -270,7 +270,16 @@ export function GettingStartedGuide({ onClose }: Props) {
                     </div>
                   </div>
 
-                  <WizardShot caption="Setup wizard ▸ step 2 · Hamlib ships inside the installer">
+                  <WizardShot
+                    // "Ships inside the installer" is true on Windows only (the .deb declares it;
+                    // a Mac gets it from Homebrew) — a Mac field report followed this caption to a
+                    // dead end, so the claim is platform-aware now.
+                    caption={`Setup wizard ▸ step 2 · ${
+                      navigator.userAgent.includes('Mac')
+                        ? 'CAT needs Homebrew Hamlib — in Terminal: brew install hamlib'
+                        : 'Hamlib ships inside the installer'
+                    }`}
+                  >
                     <WizardDots cur={2} />
                     <p className="wizard-title">How does the radio connect?</p>
                     <p className="wizard-sub">
@@ -569,6 +578,10 @@ export function GettingStartedGuide({ onClose }: Props) {
                 your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand
                 step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working — Nexus
                 speaks the full WSJT-X UDP protocol and they see it as a WSJT-X.
+                {/* Default Mac keyboards eat bare F-keys as media keys — same OS constraint
+                    WSJT-X's own mac docs call out; say it where the F-keys are advertised. */}
+                {navigator.userAgent.includes('Mac') &&
+                  ' On a Mac, hold Fn for the F-keys — or turn on "Use F1, F2, etc. keys as standard function keys" in System Settings ▸ Keyboard, as with WSJT-X.'}
               </p>
             </aside>
           </div>

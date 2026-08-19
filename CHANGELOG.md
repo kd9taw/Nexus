@@ -26,6 +26,530 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unusual-but-correct station is still yours to configure. The port list itself is unchanged —
   every port you could pick before, you can still pick.
 
+## [1.7.0] — 2026-08-18
+
+### Added
+
+- **OmniRig rig control (Windows).** The **Connection** dropdown in Settings ▸ Radio ▸ Rig
+  & CAT gains **OmniRig** — VE3NEA's rig-control server, the one much of the Windows
+  logging and contest world already runs. Pick it and your radio is configured once, in
+  OmniRig, and every program shares it instead of fighting over the COM port. Because
+  OmniRig owns the rig type, the port and the baud, Nexus stops asking for them: the only
+  thing it needs is **which** radio — `RIG 1` or `RIG 2`, matching OmniRig's own two tabs,
+  defaulting to RIG 1, and per radio, so a two-radio station can put one on each. Dial and
+  mode follow both ways, exactly as on a serial rig. **PTT:** leaving PTT Method on `CAT`
+  keys through OmniRig with nothing else to set up, and the other choices are unchanged
+  and deliberately independent of it — pick `RTS`/`DTR` with a PTT Serial Port and Nexus
+  asserts that hardware line itself, which is how many operators run. It is Windows only
+  (OmniRig is a Windows program), so on macOS and Linux the choice is shown greyed out
+  with that reason rather than hidden. If OmniRig isn't installed Nexus says so plainly,
+  and if it is running but the rig is off, on a busy port, or not answering, the CAT
+  status shows OmniRig's own words for it instead of a bare "no reply". See the
+  [rig setup guide](docs/rigs/index.md).
+
+- **QPSK31.** The PSK screen's mode picker now offers QPSK31 beside PSK31 — same speed,
+  same feel, but with error correction: the four-phase signal carries a convolutional
+  code, so the flutter or static crash that prints a wrong character in PSK31 is simply
+  corrected. Receive and transmit both work — pick QPSK31, click a trace, and the same
+  macros, continuous TX and stop controls apply. One thing to know on the air: QPSK31
+  cares which sideband the other station transmits on. Nexus runs the standard (USB)
+  polarity; if a station warbles but prints garbage, click the Rev toggle beside the mode
+  picker. Mode and polarity switch only between overs — never mid-transmission.
+
+- **PSK31 transmit.** The PSK screen now works both ways: type a line and press Enter for
+  a one-shot over, fire the F1–F4 macros (CQ / Answer / Exchange / 73), or click TX for
+  continuous transmit — stay keyed, idle on the classic PSK31 reversals, and what you type
+  goes out as you type it, mixed case and all. TX keys at the same spot you netted the
+  decoder (click the trace, answer on frequency), the rig is put in its data mode
+  automatically (USB-side on every band, the PSK31 convention), and a band picker offers
+  the standard watering holes — 14.070, 3.580, 7.070 and friends — showing only the bands
+  your license can key. Stop TX, the Esc/Stop button and Esc all cut a transmission
+  instantly, leaving the section or QSYing out of your privileges unkeys within a tick,
+  and a hard 10-minute ceiling bounds a continuous over no matter what. One deliberate
+  courtesy: Nexus transmits at a modest drive and the dock reminds you to keep the rig's
+  ALC near zero — an overdriven PSK31 signal splatters into the neighbors (IMD).
+
+- **Export a date range from the logbook.** Compact from/to date pickers now sit beside
+  Export ADIF — set either or both and the ADIF/CSV export carries only the QSOs in that
+  UTC date range, which is what a POTA activation or one weekend's contest needs. Leave
+  them empty and the export is the whole log, exactly as before. The per-operator export
+  is deliberately untouched: it is the submission path, and a leftover date silently
+  truncating an uploaded log would be the worse surprise. (#98)
+
+- **PSK31 receive.** A new PSK screen on the Digital rail decodes the classic narrow-band
+  keyboard mode — open it, tune a watering hole (14.070 is the busy one), click a warble
+  trace on the waterfall and the text prints, with faint characters marking doubtful copy.
+  The receiver starts by itself when the screen opens (turn that off in Settings ▸ Digital
+  ▸ PSK; stopping it by hand is remembered for the session), the click nets the decoder
+  rather than the rig, and a gentle AFC (never more than ±25 Hz) rides small drift.
+  Transmit ships in this release too (see the PSK31 transmit entry above), and so does
+  QPSK31 (its own entry above).
+
+- **Every Mac release is now checked harder before it ships.** The release pipeline
+  proves the signed app still carries the microphone entitlement and usage prompt (the
+  exact defect that silently shipped a dead mic in 1.5.0–1.6.1), and it unpacks the
+  self-update bundle, matches its version against the DMG and verifies its signature
+  with the same key every installed copy uses — a broken or missing update bundle now
+  fails the build instead of quietly publishing a release Macs could never update to.
+
+### Fixed
+
+- **FLEX-8400 and FLEX-8600 owners can find their radio in the list.** The rig picker, the
+  detected-radio row and the Flex page all said "FLEX-6xxx", so the current flagship line
+  appeared to be unsupported. It always worked — SmartSDR CAT presents the same commands for a
+  6000 and an 8000, and Nexus drives both through one profile — but nothing said so. The entry
+  is now "FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)".
+
+- **Nexus now notices when the radio is keyed and no RF is coming out.** Every check Nexus had
+  was on the *unkey* side: it made sure the transmitter came down. Nothing ever asked whether
+  anything went out in the first place. A transmit inhibit, an antenna port that only receives,
+  an amplifier interlock, a transmit profile pointed at an audio source that is not running —
+  each of them looks like a completely normal over: PTT is accepted, the meters move or don't,
+  the QSO is logged, PSK Reporter is told, and the first evidence is nobody coming back to you.
+  If your radio reports forward power over CAT, Nexus now watches that reading during an FT8,
+  RTTY, PSK or SSTV over, and after a couple of seconds of zero watts it says so in the radio
+  status line. It is a **message and nothing else** — it never stops or blocks a transmission.
+  It stays quiet on radios that do not report forward power (most do not), during a tune-up,
+  through the first moments of key-down, on phone and CW overs (silence between words and
+  between elements is normal), and it never repeats inside one over or fires once the radio has
+  been seen making power.
+
+- **Phone tells a FlexRadio operator when native DAX has taken their microphone.** Switching
+  on **Flex native DAX audio** — the early-access toggle you would turn on for FT8 — tells the
+  radio to take transmit audio from DAX. That is a *radio-wide* setting, not a Nexus one: while
+  it is on, your Flex's microphone is disconnected on every slice, in every program, SmartSDR's
+  own MOX included. Turn it on for digital, pick up the mic later for an SSB contact, and you
+  transmit silence with nothing anywhere saying why. The Phone screen now shows a **mic off
+  (DAX)** marker beside the frequency whenever native DAX audio is actually running, and says
+  what to do about it: turn Flex native DAX audio off in **Settings ▸ Radio ▸ Rig & CAT** and
+  the mic comes straight back. It appears only while the native audio really is live — not
+  merely because the toggle is on with no radio address, or after the audio path has already
+  fallen back to your sound card. The Flex setup guide gained a matching
+  [Phone (SSB) section](docs/rigs/flexradio.md).
+
+- **CW on 160, 80 and 40 m now actually puts an SDR radio into CW.** Below 10 MHz Nexus asks
+  the radio for **CW-L**, which is the right thing to ask for and what most radios call it.
+  Four rig profiles do not offer it under that name — **FlexRadio SmartSDR CAT**, **SmartSDR
+  native**, **PowerSDR** and **Thetis** — and they refused the request outright. Nexus then
+  gave up and left the radio in whatever mode it happened to be in *while the keyer went right
+  on sending*, so a CW macro could go out of a radio still sitting in USB or a data mode, on
+  the three lowest CW bands, with nothing on screen naming the cause. Nexus now notices the
+  refusal and sets plain **CW** instead. It is the same signal on the same frequency —
+  CW-reverse only changes which side of the carrier you listen on — so nothing about your
+  transmission changes. The Flex setup guide gained a [CW section](docs/rigs/flexradio.md)
+  covering the keyer choices on that radio.
+- **Dragging text on an SSTV picture makes it stay where you put it.** Text you dropped snapped
+  straight back to the middle. The drag itself was fine — the picture is redrawn from scratch
+  many times a second, and each redraw quietly restored the text to where it had last been
+  saved, which for a fresh caption is the centre. Letting go then saved that restored position,
+  so the snap-back stuck. Nudging with the arrow keys was never affected and still isn't.
+
+- **Rotators: the baud now comes from the model, so five of them work for the first time.**
+  If you own a **SPID Rot2Prog or Rot1Prog**, an **Idiom Press Rotor-EZ**, a **Hy-Gain
+  DCU-1/DCU-1X** or a **Green Heron RT-21**, your rotator has never answered Nexus — and
+  this is why. Nexus gave *every* rotator model the same 9,600 baud and told you in the
+  tooltip that was right, then forced it on the control daemon over the top of the rate
+  Hamlib knows your controller actually uses: 600 for the Rot2Prog, 1,200 for the
+  Rot1Prog, 4,800 for the Rotor-EZ, the DCU-1 and the RT-21. At the wrong line rate a
+  controller simply ignores you, which looks exactly like a dead cable or broken hardware.
+  Picking your model now fills in the rate its own backend declares, read out of the
+  Hamlib that ships in the installer rather than typed from a manual; where a model
+  genuinely accepts a range (the GS-232 family, EasyComm, SPID MD-01/02) your own setting
+  is left alone, as it should be. **If your rotator has never worked, re-pick your model
+  in Settings ▸ Radio ▸ Rotator** — and if the saved number cannot work, the hint under
+  the box now says so in words, with the number to use.
+
+- **A rotator command that got no answer was reported as success.** Nexus treated silence
+  from the rotator daemon as "done", so the compass slew, the ↗ point-at-call and a whole
+  satellite pass could report that the antenna had moved while it sat still — and the
+  "the rotator stopped answering, point it yourself" warning could never fire, because
+  every unanswered command was counted as a good one. Silence, a timeout and a hang-up are
+  all failures now, and the daemon's own refusal reaches you with its reason. The wait
+  before giving up is matched to what Hamlib itself allows your model, instead of being
+  shorter than it for almost every rotator in the list.
+
+- **A rotator daemon that died at launch was logged as "launched".** The commonest rotator
+  failure — a port that is not there, a port another program already has, a model number
+  the bundled Hamlib does not carry — kills the daemon within milliseconds, and Nexus
+  reported success and then went quiet forever; re-saving Settings did not bring it back.
+  It is noticed now, at launch and afterwards, restarted, and reported with **Hamlib's own
+  words for what went wrong** in the Connections log, where before there was nothing to
+  read at all.
+
+- **A Green Heron RT-21 refused the last tenth of a degree of the compass.** Bearings from
+  359.95° up were sent as `360.0`, which that controller's Hamlib backend rejects outright
+  (it declares a 359.9° ceiling). They are sent as 0.0° now — the same bearing, and one
+  every rotator accepts.
+
+- **"Allow flip" did nothing.** The setting promises to take a high satellite pass by
+  running elevation past 90° instead of swinging the mast 180° at the top of the pass, and
+  the condition it was gated on could never be true — so the mast raced round on every
+  high pass with the box ticked. It works now: above 85° peak elevation, a mount whose
+  owner has said it can go over the top keeps the antenna on the bearing the bird rose on
+  and runs elevation up through 90° and out the far side.
+
+- **A failed park at the end of a satellite pass drove the antenna FLAT.** If the park
+  command was refused, the fallback commanded elevation zero — laying a dish or a long
+  boom into the wind, which is the thing a park position exists to avoid — and said
+  nothing about it. The fallback is now azimuth-only for rotators that genuinely have no
+  elevation axis, and for everything else a park that did not complete is reported and the
+  antenna is left where the pass ended.
+
+- **A stuck or jammed mast was invisible during a pass.** Nexus never asked the rotator
+  where it actually was, so a controller that accepted every command and then stopped
+  moving — a jam, a hit stop, a slipped belt, a box left in local — tracked "perfectly" for
+  the whole pass. The position is read back now, and a mast that is neither on target nor
+  moving is called out in the Connections log. A rotator that stopped answering mid-pass
+  is logged there too, instead of only appearing on screen for whoever was watching.
+
+- **A rotator that cannot report its position no longer loses its controls.** Some models
+  genuinely have no read-back — the Hy-Gain DCU-1 is one — and the Connect rotor pane used
+  to delete itself entirely when the readout failed, taking the compass rose, the typed
+  bearing and the **STOP** button with it. It stays, with "—" where the needle would be.
+
+- **Rotator settings live in the Rotator section.** The model, port and baud were filed
+  under Rig & CAT, so the "Rotator not answering" chip — the one affordance the app has for
+  this failure — opened a section containing neither, and searching Settings for "rotator"
+  found only the pointing manners. Clicking the chip now lands on the model and the port.
+
+- **The rotator list: a wrong entry out, six models in.** "EA4TX ARS (az)" was Hamlib's
+  **parallel-port** backend offered with a serial port and a baud box — it could not work
+  as presented, and the brand name steered ARS-USB owners away from the GS-232 generic
+  entry that does (which now says so). Added, all of them models operators actually own:
+  SPID MD-01/02, Prosistel Combi-Track az+el, Hy-Gain DCU2/DCU3/YRC-1, DF9GR ERC, AMSAT
+  LVB Tracker, and the Kenpro GS-23/GS-232. Entries now say **(az)** or **(az/el)** where
+  the backend declares it, so an az/el owner is not steered onto the azimuth-only variant
+  of their own manufacturer. And a saved model that is not in the list shows its number
+  instead of an empty box.
+
+- **FlexRadio, the ORDINARY setup: your Flex settings stay put, the radio's address is
+  kept, and a switched-on feature says what it needs.** Unlike the two entries below —
+  which are about the opt-in "early access" toggles nobody is required to turn on — this
+  one is the everyday, field-verified FlexRadio configuration: SmartSDR CAT, DAX audio,
+  the way the guide sets you up. The worst of it was silent: the Flex radio address and
+  the two native toggles were stored once for the whole station instead of per radio, so
+  two Flexes could never both be configured, and — the expensive part — going into
+  Settings to configure a *different* radio and pressing Save wiped the Flex settings of
+  the radio you were not even looking at, while Save reported success. They now travel
+  with the radio they belong to, and an existing address is carried over on first launch.
+  Alongside that: the setup wizard threw away the Flex address it had just discovered, so
+  a Flex set up through the wizard arrived in Settings with both native features offered
+  and no address for them to use; switching a native feature on *before* filling the
+  address in left it permanently dead — typing the address afterwards did nothing at all,
+  and neither did re-picking the radio, so only restarting Nexus (or toggling the feature
+  off, saving, on, saving) brought it back; and turning one on with no address set did
+  nothing and said nothing, which now reads as a plain message telling you which field to
+  fill in. Two more: the one-click "found a Flex" button applied a Windows-only SmartSDR
+  CAT address on macOS and Linux, where that program cannot be installed — it now applies
+  only what is true on your platform and tells you what to enter; and two radios pointed
+  at one network CAT address now warn, exactly as two radios on one COM port already did.
+  Settings' radio list also labels its addresses now (CAT, Flex radio, CAT helper port) —
+  a network Flex has three, and they were bare numbers.
+
+- **A radio moved out from under you is finally visible in the FT8 screen.** Change the
+  mode at the radio — in SmartSDR, from a Maestro, or with the front-panel knob — and
+  Nexus keeps its own idea of the mode, by design: the read-back is a display value and
+  never overrides what you commanded. Every screen that could show the disagreement did,
+  except the one that transmits unattended for hours. The Operate strip now shows a "rig:
+  …" chip when the radio disagrees, and flags a receive filter far too narrow for an FT8
+  window — a CW filter left in, or a slice narrowed at the radio, throws away most of the
+  band with nothing on screen to explain the quiet.
+
+- **A CAT level the radio refuses is no longer re-sent fifty times a second.** RF power,
+  mic gain and noise reduction each kept re-issuing a setting the radio had rejected, on
+  every 20-millisecond tick, for the rest of the session — a continuous stream of CAT
+  traffic on the one thread that also draws the waterfall, times the FT8 slot and holds
+  PTT. That is the "waterfall hangs for a moment, then it's fine, then it lags again"
+  report, at many times the rate of the case already fixed for the DSP controls. Nexus now
+  tries once, gives up, and says the radio would not take it; moving the slider tries
+  again, as does any CAT reconnection. The same discipline reached two more places: the
+  750 ms rig read-back now has a time budget, so a radio at the end of a slow or remote
+  link degrades how often it is read instead of stalling the loop that has to stay
+  responsive to Stop TX, and the S-meter re-check backs off on a radio that has no CAT
+  S-meter at all instead of costing three blocked reads every 30 seconds, forever. Every
+  CAT radio benefits, not only a Flex.
+
+- **The CAT helper is watched now, and split is put back the way it was found.** If
+  rigctld — the helper process Nexus talks to your radio through — died, nothing noticed:
+  CAT stayed dead until you re-saved Settings, and because the unkey command travels the
+  same path, a crash mid-transmission took away the ability to stop transmitting. Nexus
+  now spots it, restarts it, unkeys through the fresh connection and tells you it
+  happened. Separately, ending an over with Split Operation set to "Rig" wrote split OFF
+  and left VFO B where Nexus had put it — cancelling a split you had set yourself at the
+  radio (or that another program sharing the radio had set) and clobbering its transmit
+  frequency. Both are restored to what they were. Also: when the radio reports it is
+  already transmitting under another program's control while Nexus is armed, that is now
+  said out loud instead of passing unmentioned.
+
+- **FlexRadio native audio and panadapter (early access): Nexus now shares the radio
+  properly, listens to the right slice, and comes back after a network blip.** These are
+  the opt-in "Flex native DAX audio" and "Flex native panadapter" toggles in Settings —
+  both off by default and still unverified on real hardware, so nothing here changes
+  anything for an operator who has not turned them on. The theme is that the code assumed
+  it was the only client on the radio, and a Flex almost never is: SmartSDR's own window is
+  usually running, and a Maestro, N1MM or a second Nexus window can be too. What that cost:
+  the native panadapter would latch onto *any* panadapter on the radio — including
+  SmartSDR's own — then retune it, rescale it and delete it on the way out; native audio
+  would adopt whatever DAX stream held channel 1, even another program's, and remove it on
+  teardown. Nexus now creates and steers only its own, and removes nothing it did not
+  create. Which slice you hear was the other half: audio followed whichever slice had focus
+  while the dial, the waterfall and the log all came from the slice your CAT connection
+  drives, so on a two-slice radio you could be decoding one slice and logging another with
+  nothing saying so. Audio now follows the slice your CAT port names, re-binds when you
+  switch at the front panel (it never could before), and the S-meter shows your slice's
+  signal instead of whichever slice reported last. Also fixed: a dropped audio packet used
+  to be spliced over silently, shifting the timing of every decode after it — the gap is
+  now filled with its own length of silence and named in the log; ordinary network
+  reordering could leave the native waterfall completely blank; a lost connection or a
+  radio reboot ended native audio and the native panadapter for the rest of the session —
+  both now re-dial with a backoff; native audio that died mid-session left you deaf with no
+  warning, and now falls back to the sound card and says so, as it already did for audio
+  that never started; and the RX Gain slider, which did nothing at all on native audio, now
+  boosts a quiet slice exactly as it does on the sound card.
+
+- **FlexRadio native audio (early access): the transmit half is fixed, and it no longer
+  freezes the app when the radio is unreachable.** This is the opt-in "Flex native DAX
+  audio" toggle in Settings — off by default, and still unverified on real hardware, so
+  nothing here changes anything for an operator who has not turned it on. With it on, both
+  directions ride the network, transmit included (the toggle's old "RX-only" wording was
+  simply wrong and has been rewritten). What was wrong with that transmit path: the Pwr
+  slider did nothing — the radio got full-scale audio wherever Pwr sat, Pwr at 0 included,
+  which is the drive-discipline problem the control exists to prevent; the same over was
+  sent twice, over DAX *and* out the configured sound device, so operators using the
+  one-click "Pair DAX audio" setup fed the radio two copies and anyone with speakers
+  selected heard every over in the room; a 12-second over was flung at the radio in a few
+  milliseconds instead of streamed in real time; and if the radio refused or was slow to
+  answer the request that sets the transmit stream up, Nexus switched the rig's audio to
+  DAX anyway and never switched it back — leaving the microphone dead even after Nexus
+  had quit. All four are fixed: one route carries an over, at the drive you set, paced in
+  real time, and the mic is always put back. Nexus also puts your slice's own DAX channel
+  back the way it found it now, instead of leaving it moved to channel 1 for good. Stop TX
+  cuts a native over the same way it cuts any other. Finally, a Flex address that does not
+  answer — a stale home LAN IP used from away, a VPN down — no longer freezes the app for
+  up to two minutes when the feature is switched off, and a Flex that reboots or drops the
+  connection no longer pins a CPU core.
+- **Test CAT stopped speaking Icom to Xiegu owners.** When Test CAT walks the CI-V rates
+  to find the one your radio answers on, its verdict used to quote an Icom rig menu
+  (MENU ▸ SET ▸ Connectors ▸ CI-V), explain that your USB port was following a [REMOTE]
+  jack, and finish by telling you to install Icom's USB driver. None of that exists on a
+  G90, X6100, X6200, X5105 or X108G — those radios reached this diagnostic when it was
+  broadened to every CI-V rig, and the advice was not broadened with it. A Xiegu now gets
+  the one cure that is certain (set Baud here in Settings, and the found rate is named),
+  the right driver pointer, and no invented menu path. Icom verdicts are unchanged.
+
+- **Detect no longer badges both of an X6100/X6200's serial ports "use this one".** Those
+  radios present two USB serial ports and CAT answers on only one of them, but the
+  disambiguation was written for Icom's dual-port cable and matched both — so Detect
+  showed two identical-looking rows for one radio and half of them sent you to the port
+  that opens cleanly and then returns nothing forever. Exactly one row is now badged, and
+  Auto-test sweeps that port first instead of burning a full baud sweep on the dead twin.
+
+- **An FT8/FT4 decode that overran the 15-second period could replay a transmission into
+  the wrong slot.** Field report, visually confirmed at the rig: with Tx 1st/even set, the
+  station's own CQ keyed real RF a few seconds into an odd slot. On a machine that stalls
+  long enough for a period's decode to outlive the period itself, the late result re-ran
+  the transmit decision with its original slot number — which still passed the even/odd
+  check, because that check trusts the slot it is handed. A decode result whose slot is no
+  longer the one on the clock now folds its decodes and reports its period but can never
+  key. Latent since 0.13 on every platform; it takes a badly stalled machine (a long AV
+  scan, heavy swapping) to trigger.
+
+- **The Setup-health RX-audio light can finally say "No RX audio".** Its threshold was
+  written for the wrong dB scale, so with a radio configured the light was green even on a
+  stone-dead input — the one state it existed to catch. A silent capture now shows
+  "No RX audio" and points at the audio device settings.
+
+- **A capture that delivers only pure silence now says so — with the Mac's likely cause
+  named.** On macOS, denying the microphone permission doesn't error and doesn't stop the
+  audio stream; it just delivers exact digital silence forever, which every health check
+  read as "capture alive". After 15 seconds of that, a banner now explains it — and on a
+  Mac adds: if the RX meter never moves, check System Settings ▸ Privacy & Security ▸
+  Microphone. It clears itself the moment real audio arrives.
+
+- **"System default" audio input now notices its device vanishing on macOS.** With the
+  out-of-box device selection, unplugging the rig's USB audio (or a sleep/wake reshuffle)
+  silently stopped the audio with no banner and no recovery — only explicitly named
+  devices got disconnect detection. The default now resolves to the same device through
+  the path that watches for disconnects, so the usual "Sound card stopped — reopening"
+  self-heal covers it too.
+
+- **Pounce desktop notifications actually appear now — on the Mac for the first time.**
+  The rare-DX alert used a browser notification API that Apple's webview simply does not
+  have, and no platform ever asked the OS for permission, so the notification half of
+  Pounce was silently dead everywhere. Alerts now go through the operating system's own
+  notification center; macOS asks you once, at your first alert (never at launch), and if
+  you decline, the alert sound and the in-app banner carry on exactly as before.
+
+- **The waterfall's "move both markers" click works on the Mac.** Ctrl+click there is the
+  system right-click gesture — it silently moved only the TX marker — and ⌘-click (the
+  chord a mac WSJT-X operator's muscle memory sends) did nothing. Both now set RX and TX
+  together, the on-screen hint reads ⌘ on a Mac, and Ctrl+click keeps working everywhere
+  else exactly as before.
+
+- **Memory quick-recall answers to ⌘1–9 on the Mac.** The recall chord was Ctrl-only —
+  which macOS itself uses to switch desktops, so the press never even reached the app —
+  and Cmd was explicitly rejected. Either modifier now recalls a favorite on every
+  platform, and the chip tooltips advertise the platform's own chord.
+
+- **F-key advice for Mac keyboards.** The CW and RTTY macro buttons, the voice keyer, the
+  Operate Decode button and the WSJT-X switchers' guide advertise F-keys that a default
+  Mac keyboard treats as media keys; on a Mac their hints now say to hold Fn (or enable
+  standard function keys in System Settings). Nothing is rebound — the keys themselves
+  are unchanged.
+
+- **Every "open in your browser" link in the app now actually opens it.** The CAT-driver
+  download link, the repeater directory credits, the contest-calendar rules links and APRS
+  station pages were silently dead on every platform — the webview swallowed the click and
+  nothing happened. They now route through the same mechanism the QRZ links always used,
+  and ⌘-clicking a link works on the Mac too.
+
+- **Field Day exports save a real file on macOS.** All four export buttons (Cabrillo,
+  ADIF, summary, dupe sheet) went through a browser download path that macOS discards
+  outright; they now write straight into your Downloads folder like the Logbook exports,
+  and the confirmation names the saved path.
+
+- **The Journey share card no longer claims success while doing nothing on macOS.**
+  Copy-to-clipboard now uses the pattern Safari's engine accepts, and when the clipboard
+  refuses, the card is saved as a PNG in Downloads with the message naming the file — a
+  success message only ever reports a copy or a write that really happened.
+
+- **A crash or force-quit can no longer strand rigctld/rotctld on macOS and Linux.**
+  Windows has always killed the CAT and rotator daemons with the app; on Mac and Linux
+  a crash, a Force Quit, or a hung shutdown could leave one running — holding your
+  serial port open and sometimes making the next launch's CAT land on the stale
+  daemon. Nexus now tracks every daemon it starts, stops any stragglers on quit, and
+  each launch first cleans up anything a dead instance left behind (a second running
+  Nexus and its daemons are recognized and left alone).
+
+- **Installing an update on macOS and Linux now actually restarts Nexus.** The banner
+  said "Nexus will restart…" but on those platforms the updater only swapped the app
+  on disk and left the old build running — the banner hung there forever and nothing
+  restarted (Windows was fine; its installer restarts by itself). The restart now
+  happens, and it goes through the normal shutdown: transmitter unkeyed, logs and
+  window position saved, never a hard kill.
+
+- **⌘Q now quits Nexus properly on the Mac.** The menu quit (and its ⌘Q shortcut)
+  bypassed the entire shutdown path: no wait for the transmitter to unkey, no
+  conversation or Field Day flush, and no window-geometry save — a Mac operator who
+  always quit with ⌘Q reopened at the default window box every launch, with the last
+  15 seconds of chat at risk. Every quit route now runs the same cleanup closing the
+  window does.
+
+- **The docs caught up with macOS shipping.** The FAQ, README, install guide, manual
+  and wiki no longer say "macOS does not ship" — the Mac build (signed, notarized
+  Apple Silicon DMG, self-updating) has been out since 1.5.0. The install guide gains
+  real macOS sections: drag-to-Applications install, upgrade, uninstall, where your
+  data lives (`~/.config/tempo` — same place as Linux, on purpose), a `shasum`
+  checksum example, and the one Mac-only gotcha: on first launch macOS asks for
+  microphone access, and declining it silently kills all decoding — Troubleshooting's
+  "No decodes" checklist now starts with **System Settings ▸ Privacy & Security ▸
+  Microphone**. The old "put rigctld on PATH" advice for Mac is gone everywhere; the
+  actual mechanism is `brew install hamlib` (Nexus searches the Homebrew/MacPorts
+  prefixes itself — a Finder-launched app never sees your shell PATH).
+
+- **CAT trouble on a Mac is now diagnosed in Mac terms — and a missing Hamlib is never
+  blamed on your cable.** Three verdicts stopped guessing: Test CAT's baud ladder no
+  longer buries the correct "Hamlib's tools aren't installed — brew install hamlib"
+  diagnosis under a "close other CAT software" port guess (it was the probe tool itself
+  that failed to start, and no port was ever touched); Auto-test says the same instead
+  of "check the cable and that the rig is on" when its throwaway daemon can't spawn at
+  all; and a rotator's rotctld failing to launch names the per-platform install cure
+  instead of a raw "No such file or directory (os error 2)". The CI-V no-answer
+  walkthroughs and the Settings port hints also stop talking Windows at Mac operators:
+  /dev/cu.* examples and "the port list" instead of COM16 and "Windows Device Manager",
+  the dual-port Icom tie-break in cu.* name order instead of a driver label that only
+  exists on Windows, and no more advice to install a USB driver macOS already ships
+  in-kernel. Messages also stop claiming a "bundled" rigctld — nothing is bundled on
+  macOS or in the AppImage.
+
+- **A Mac serial port saved as /dev/tty.\* now heals itself to its /dev/cu.\* twin.**
+  Earlier Mac builds (1.5.0–1.6.1) listed every serial port twice and let you pick the
+  /dev/tty.\* row — a node that hangs CAT on carrier detect instead of failing. The
+  later picker fix only stopped NEW picks; a port already saved kept hanging after the
+  upgrade. Nexus now substitutes the cu.\* twin wherever the stored name is consumed —
+  the CAT daemon, native CI-V, PTT keying and Test CAT's baud ladder — and rewrites the
+  saved setting once at launch when the twin is present, so the Settings screen shows
+  the port that actually opens. A lone tty.\* with no cu.\* twin is left exactly as
+  stored: it is the only node there is.
+
+- **WSPR and FST4W beaconing works the way WSJT-X's does.** Four fixes from one
+  report (#101): the TX watchdog no longer halts a beacon a few intervals into a
+  session — beaconing is unattended repeated transmission by design, and WSJT-X
+  exempts exactly these modes (each transmission is still hard-bounded by the period
+  clock, and your TX switch remains the stop); a Round-Robin rotation of one station
+  no longer transmits every interval — one slot is no rotation, so the transmit-%
+  schedule applies and Settings says so; your own beacon transmissions now appear in
+  ALL.TXT as Tx lines like every other mode's; and a WSPR spot ("CALL GRID DBM") now
+  files in the operating roster under its callsign with its grid, instead of the grid
+  showing up as a phantom station.
+- **N3FJP general logging now carries your reports, the operator's name, and power.**
+  The ACLog push was sending only the contest fields, so RST sent/received, name and
+  TX power logged in Nexus never reached the ACLog side. The Field Day push is
+  unchanged byte for byte — a contest exchange carries none of these. (#106)
+- **Changing bands mid-period no longer lets the old band's last seconds decode into
+  the new one.** Audio captured before a QSY was still decoded at the period boundary
+  after it, so stations from the band you just left repopulated the roster the band
+  change had rightly cleared. That period's decode is now dropped — the next full
+  period on the new band decodes normally. Receive-side only. (#103)
+- **The Log QSO button no longer claims success for a QSO it refused to log.** The engine
+  deliberately refuses a manual log when there is nothing to write — the contact already
+  logged, no active QSO, no report exchanged yet — but the green "Logged QSO" toast showed
+  anyway, so a double-click after auto-log looked like a second entry that later seemed to
+  vanish. A refusal now says so honestly: nothing was logged, and why. (#100)
+- **The docked Band activity strip tunes on scroll, like the pop-out band map.** The strip
+  is the same frequency scale the band map is, in the Phone and CW cockpits both, but a
+  wheel over it did nothing while the map, the readout digits and the waterfall all tuned.
+  It now rides the same wheel — your tuning step, your wheel sensitivity, and the same
+  stop-at-the-band-edge behavior as every other dial. (#96)
+- **macOS now says how to get Hamlib instead of quoting a Debian command.** A Mac operator
+  whose IC-7300/IC-9700 wouldn't connect was told `sudo apt install libhamlib-utils` — a
+  cure for the wrong operating system. On a Mac the message now says `brew install hamlib`,
+  the FAQ covers macOS, and the in-app guide no longer claims Hamlib ships inside the
+  installer on platforms where it doesn't. (WSJT-X and the Mac loggers link the Hamlib
+  *library*; Nexus drives CAT through the `rigctld` *program*, a separate package — those
+  apps working is not evidence rigctld is installed.)
+- **The rig port picker on macOS no longer lists the tty twin of every port.** The #92
+  collapse (1.6.0) filtered rig *detection* but not the Settings picker, so `/dev/tty.*`
+  rows still sat beside their `/dev/cu.*` twins — and a picked `tty.*` hangs on carrier
+  detect instead of failing. The picker now gets the same collapse; a lone `tty.*` with no
+  `cu.*` twin is still kept.
+- **Removing a radio: the button is always there now, and a refusal says why.** Nexus
+  refuses to remove the active radio, but expressed that by not rendering the Remove button
+  at all — from the operator's chair, "the radio won't delete." It now renders disabled
+  with the rule spelled out: make another radio active first. A
+  refused removal is a visible error instead of a silent success, and deleting the radio
+  the rig form was editing no longer leaves later Saves silently writing to a profile that
+  is gone.
+- **The ATU button reaches the FT modes.** Phone, CW and SSTV have carried the rig's
+  built-in-tuner button since it was added; the FT cockpit's TX cluster was missing it.
+  Same rules as everywhere: it appears only when the rig reports a tuner, sits beside
+  Tune, and every refusal is shown with its reason.
+- **The signed macOS bundle carries the microphone entitlement.** Hardened-runtime apps
+  need `com.apple.security.device.audio-input` before macOS will even offer the microphone
+  permission prompt; without it, RX audio capture can open and deliver silence. The
+  entitlement ships in the bundle now.
+
+### Changed
+
+- **The Xiegu and FlexRadio setup pages say what the app actually does.** The Xiegu page
+  promised that Detect auto-matches an X6100/X6200 — it never could, because those radios
+  report their USB bridge chip and not a model name — and never mentioned the two serial
+  ports they present or the 19200 baud the family runs at. The FlexRadio page told you to
+  launch a second copy of Nexus for a second slice, which is not how multi-radio works
+  (add a second radio, tick "Run both radios at the same time", one window each), and
+  named a PowerSDR model string the dropdown does not contain. Both are rewritten from the
+  code, and the Flex page gains a section on the two *early access* native toggles: off by
+  default, never run against a real Flex, same-LAN only (they cannot work over SmartLink
+  or through NAT), and native DAX takes over the radio's transmit audio for every client
+  while it is on.
+
+- **macOS: the Local Network permission is now documented where it bites.** A FlexRadio,
+  or any network rig on the LAN, is reached through a permission macOS 15 gates and Nexus
+  does not yet have a usage string for — so there may be no prompt, and a denial is silent
+  rather than an error: "No radios found", or CAT reporting that nothing answered. The
+  install, troubleshooting and FlexRadio pages now describe that and point at System
+  Settings ▸ Privacy & Security ▸ Local Network.
+
 ## [1.6.1] — 2026-08-17
 
 ### Fixed

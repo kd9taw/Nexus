@@ -1,8 +1,8 @@
 # Quick Start — your first FT8 QSO in 15 minutes
 
 This is the short path from a downloaded installer to a logged contact. The install
-step below is written for Windows; Linux and Raspberry Pi take the same path from
-step 2, and [Install & Verify](install.md) covers all three. It assumes a radio with
+step below is written for Windows; macOS, Linux and Raspberry Pi take the same path
+from step 2, and [Install & Verify](install.md) covers them all. It assumes a radio with
 a USB (or network) connection and a working antenna. Everything here is also covered
 in more depth in the [user guide](guide/) — this page is the fast lane.
 
@@ -19,18 +19,23 @@ full of live decodes, and one FT8 QSO in your log.
 ## 1. Install and get past SmartScreen (about 3 minutes)
 
 Download the file for your platform — `Nexus_<version>_x64-setup.exe` on Windows,
+`Nexus_<version>_aarch64.dmg` on a Mac with Apple Silicon,
 `Nexus_<version>_amd64.AppImage` or `Nexus_<version>_pc_amd64.deb` on Linux,
 `Nexus_<version>_pi_arm64_bookworm.deb` / `..._trixie.deb` on a 64-bit Raspberry Pi —
 from the
 [SourceForge download page](https://sourceforge.net/projects/nexus-ham-radio/files/)
 (the source lives there too).
-It is a per-user install and needs no administrator rights; WebView2 and Hamlib are
-bundled, so there is nothing else to install. Full detail, including SHA-256
+It is a per-user install and needs no administrator rights. On Windows, WebView2 and
+Hamlib are bundled, so there is nothing else to install; on macOS, CAT additionally
+needs Hamlib from Homebrew — `brew install hamlib` in Terminal, then restart Nexus.
+Full detail, including SHA-256
 verification and where your data lives, is in [Install & Verify](install.md).
 
-Run the installer. Because the binaries are cross-compiled and **unsigned**,
-Windows SmartScreen shows a blue *"Windows protected your PC"* dialog. This is
-expected. Click **More info**, then **Run anyway**.
+Run the installer. Because the Windows and Linux binaries are cross-compiled and
+**unsigned**, Windows SmartScreen shows a blue *"Windows protected your PC"* dialog.
+This is expected. Click **More info**, then **Run anyway**. The macOS DMG is signed
+and notarized, so there is no Gatekeeper hoop — open it and drag **Nexus** to
+**Applications** (run it from Applications, not from the disk image).
 
 <!-- TODO: capture screenshot — Windows SmartScreen "Windows protected your PC" dialog with More info expanded, showing the Run anyway button -->
 

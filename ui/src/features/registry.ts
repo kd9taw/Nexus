@@ -15,6 +15,7 @@ export type View =
   | 'cw'
   | 'phone'
   | 'rtty'
+  | 'psk'
   | 'sstv'
   | 'aprs'
   | 'connect'
@@ -139,6 +140,22 @@ export const FEATURES: FeatureDef[] = [
     // Global (no workspace): entering the skeleton asserts nothing on the rig; the
     // FSK/AFSK rig-mode policy lands with the TX wiring.
     oneLine: 'RTTY operating — 45.45 baud Baudot: streaming decode, F-key macros, FSK/AFSK keying.',
+  },
+  {
+    id: 'psk',
+    label: 'PSK',
+    kind: 'section',
+    category: 'Operate',
+    core: false, // toggleable in Settings ▸ Features (on by default, like every non-staged section)
+    dependsOn: [],
+    // Mode, not a goal — same doctrine as CW/Phone/RTTY: a goal profile never auto-enables it.
+    intents: [],
+    view: 'psk',
+    // Global (no workspace — RX-only this phase): entering asserts nothing on the
+    // rig; the receiver auto-arms (with the SSTV/APRS decline memory) and the
+    // waterfall click tunes the DECODER. Transmit arrives with Keyboard Modes
+    // Phase 2.
+    oneLine: 'PSK31 — narrow-band keyboard mode: click a trace, read the ragchew (receive).',
   },
   {
     id: 'sstv',

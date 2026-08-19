@@ -650,11 +650,15 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
     // including frames with nothing between them and a clip edge, where a floor IS the
     // clip mechanism. So the allowlist is not "these files" but "these owners, each of
     // which has a scroller standing behind the floor":
-    //   · the two REGION-LESS shells (RTTY / SSTV): their own `overflow-y: auto` deficit
-    //     valve (cockpit-shells.test.ts), and their frames are bare shell children.
+    //   · the three REGION-LESS shells (RTTY / PSK / SSTV): their own `overflow-y: auto`
+    //     deficit valve (cockpit-shells.test.ts), and their frames are bare shell children.
     //   · the region's BOUNDED flow: the column valve above (.cockpit-col scrolls).
     // Anything else — a shell that clips, a column, a tier variant, `:root` — is refused.
-    const ALLOWED_KNOB = new Set(['.layout.single.rtty-cockpit', '.layout.single.sstv-view'])
+    const ALLOWED_KNOB = new Set([
+      '.layout.single.rtty-cockpit',
+      '.layout.single.psk-cockpit',
+      '.layout.single.sstv-view',
+    ])
     const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']"])
     const offenders = [
       ...STYLES_RULES.filter(

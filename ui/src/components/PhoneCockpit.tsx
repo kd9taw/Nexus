@@ -399,6 +399,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const rigFamily = /^W?FM/.test(rigMode) ? 'FM' : rigMode
   const modeMismatch = catOk && rigMode !== '' && rigFamily !== commandedMode ? rigMode : null
 
+  // ⚠️ THE MIC IS DEAD AND ONLY THIS SCREEN CAN SAY SO (2026-08-17 Flex audit, critic gap #6).
+  // Native Flex DAX audio sends `transmit set dax=1`, which is a RADIO-WIDE setting: while it
+  // stands, the Flex's modulator takes its audio from DAX and ignores the physical microphone —
+  // on every slice, in every program, SmartSDR's own MOX included. So the operator who switched
+  // native audio on for FT8 and then picks up the mic to work someone on SSB transmits silence,
+  // and until now nothing anywhere told them. The digital screens don't care (they feed the
+  // modulator over DAX, which is the point); Phone is where the harm lands, so Phone is where it
+  // is said. Same chip vocabulary as the mode-mismatch pill beside it — no new pane, no
+  // structural size of its own (cockpit-panes.css owns those).
+  const micOffForDax = snap.radio.flexDaxTx === true
+
   // Manual split (casual DX "work up N"): the desired TX dial lives in the snapshot; a plain
   // retune clears it (backend). Offset is kHz off the RX dial; default +5, the common pileup.
   const [splitOffsetKhz, setSplitOffsetKhz] = useState(5)
@@ -666,6 +677,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           typeByCall={typeByCall}
           onWorkSpot={onWorkSpot}
           onPopOut={() => void openPanelWindow('bandmapPhone')}
+          // Wheel-tune from the strip (#96): same step + sensitivity + gate as the scope above.
+          sideband={snap.radio.sideband || 'USB'}
+          tuneEnabled={snap.radio.catOk === true && !snap.radio.txBusyReason && !snap.radio.transmitting}
+          stepHz={tuneStep}
+          wheelSensitivity={wheelSensitivity}
+          onSnap={onSnap}
         />
       </CockpitPaneFrame>
     ) : null
@@ -971,6 +988,14 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         }
         onStopTx={() => void haltTx()}
       >
+        {micOffForDax && (
+          <span
+            className="ph-mode-mismatch"
+            title="Flex native DAX audio is on, so the radio takes transmit audio from DAX and your microphone is disconnected — on every slice and in every program, SmartSDR included. Turn OFF Flex native DAX audio in Settings ▸ Radio ▸ Rig & CAT to use the mic."
+          >
+            mic off (DAX)
+          </span>
+        )}
         {modeMismatch && (
           <span
             className="ph-mode-mismatch"

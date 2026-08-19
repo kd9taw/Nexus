@@ -1,0 +1,38 @@
+//! PSK31 — varicode character layer + BPSK demodulator (receive side).
+//!
+//! [`varicode`] is the pure character codec (the G3PLX table: self-framing
+//! variable-length codes separated by `00`, idle = continuous zeros). [`demod`]
+//! is the receive DSP, written from scratch for Nexus: NCO mix at the tuned
+//! audio frequency → ×24 decimation to 500 Hz (16 samples/symbol at 31.25 Bd)
+//! → one-symbol raised-cosine matched filter → 16-phase symbol sync →
+//! differential slicer → varicode decode, with a slew-limited AFC clamped to
+//! ±25 Hz and a signal-quality squelch that gates the printed output only.
+//!
+//! Every decoded character carries a soft confidence (0..1) from the slicer's
+//! phase-error margin, and the demodulator sits behind the mode-neutral
+//! [`crate::textmode::TextDemod`] seam — the same ensemble RTTY decodes into,
+//! so the transcript/print stage never learns a modulation.
+//!
+//! [`modulator`] is the transmit half (Keyboard Modes Phase 2): cosine-shaped
+//! reversals at the tuned offset, idle = continuous reversals, resumable
+//! chunked rendering for continuous TX — proven against [`demod`] by the
+//! TX→RX loopback tests there.
+//!
+//! [`qpsk`] is the QPSK31 layer (Keyboard Modes Phase 3): the K=5 rate-1/2
+//! convolutional code, the four-phase differential wire mapping (an interop
+//! contract — its sources are recorded in that module's header), the soft
+//! Viterbi decoder the demodulator forks into at the slicer when
+//! [`PskModeKind::Qpsk31`] is selected, and the QPSK transmit stream over the
+//! same shaped-boundary generator.
+
+pub mod demod;
+pub mod modulator;
+pub mod qpsk;
+pub mod varicode;
+
+pub use demod::{
+    PskConfig, PskDemod, PskDemodulator, PskModeKind, AFC_CLAMP_HZ, BAUD, SAMPLE_RATE,
+};
+pub use modulator::{bpsk_samples, psk_over_bits, PskStream, PskTxConfig, TX_DRIVE};
+pub use qpsk::{qpsk_over_bits, qpsk_samples, QpskStream};
+pub use varicode::{encode_bits, VaricodeDecoder, VARICODE};

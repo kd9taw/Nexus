@@ -529,9 +529,11 @@ export const PANES: PaneDef[] = [
     title: 'Rotor',
     category: 'b3',
     basic: () =>
-      'Rotator control appears here once a rotctld host is set in Settings (and the daemon answers).',
-    // Self-contained control surface — polls read_rotator while mounted and
-    // hides itself (→ this Basic hint) when nothing answers.
+      'Rotator control appears here once you pick a rotator model and port in Settings ▸ Radio ▸ Rotator.',
+    // Self-contained control surface — polls read_rotator while mounted and hides itself
+    // (→ this Basic hint) only when NO rotator is configured. A configured rotator that cannot
+    // report its position keeps the pane and its STOP button; the hint used to name the
+    // ADVANCED external-rotctld field, which is not where a rotator is set up.
     expert: () => <RotorPane />,
   },
   {

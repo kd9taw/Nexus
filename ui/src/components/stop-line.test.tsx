@@ -88,16 +88,18 @@ import { render, screen, cleanup, act } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { RttyCockpit } from './RttyCockpit'
+import { PskCockpit } from './PskCockpit'
 import { SstvView } from './SstvView'
 import {
   ALL_PANEL_VOCABULARIES,
   PHONE_PANEL_IDS,
   CW_PANEL_IDS,
   RTTY_PANEL_IDS,
+  PSK_PANEL_IDS,
   SSTV_PANEL_IDS,
 } from '../features/panelState'
 import type { PanelLayoutApi } from '../features/panelState'
-import type { AppSnapshot, RttyState, SstvState } from '../types'
+import type { AppSnapshot, PskState, RttyState, SstvState } from '../types'
 
 const decodeState = {
   text: 'CQ CQ DE KD9TAW',
@@ -134,6 +136,18 @@ const rttyState = {
   peerExchange: [],
   heardCq: null,
 } as unknown as RttyState
+
+const pskState = {
+  armed: true,
+  afcHz: 0,
+  signal: false,
+  centerHz: 1000,
+  text: 'CQ CQ de KD9TAW',
+  charConf: [],
+  sending: false,
+  latched: false,
+  keyerError: null,
+} as unknown as PskState
 
 const sstvState = {
   armed: false,
@@ -226,6 +240,16 @@ vi.mock('../api', () => ({
   rttyAutoCq: vi.fn(async () => rttyState),
   rttyAutoAnswer: vi.fn(async () => rttyState),
   rttyAutoAbort: vi.fn(async () => rttyState),
+  getPskState: vi.fn(async () => pskState),
+  pskArm: vi.fn(async () => pskState),
+  pskAutoArm: vi.fn(async () => pskState),
+  pskClear: vi.fn(async () => pskState),
+  pskAfcReset: vi.fn(async () => pskState),
+  pskNet: vi.fn(async () => pskState),
+  pskSend: vi.fn(async () => pskState),
+  pskSetLatched: vi.fn(async () => pskState),
+  pskType: vi.fn(async () => pskState),
+  pskStop: vi.fn(async () => pskState),
   getSstvState: vi.fn(async () => sstvState),
   sstvArm: vi.fn(async () => sstvState),
   sstvAutoArm: vi.fn(async () => sstvState),
@@ -403,6 +427,25 @@ const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
   render: (panels) => render(<RttyCockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
 }
 
+const psk: Case<(typeof PSK_PANEL_IDS)[number]> = {
+  cockpit: 'PSK',
+  view: 'psk',
+  ids: PSK_PANEL_IDS,
+  // RTTY's dock shape, PSK's instantiation (Keyboard Modes Phase 2). The dock's
+  // abort is labelled by its content spans with no whitespace, hence \s*. The
+  // continuous-TX ("TX") button is a SENDER, not a stop — same ruling as
+  // RTTY's, same reason — and must never be added here.
+  stopControls: [
+    ['Stop TX', /^stop tx$/i],
+    ['Stop (PSK abort)', /^esc\s*stop$/i],
+    TX_LATCH,
+  ],
+  // onSetTxEnabled exactly as App passes it (the .psk-host block). Without it
+  // CockpitHeader renders a display-only pill and the latch is not on screen
+  // to sweep — the documented blindness this file's header records.
+  render: (panels) => render(<PskCockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
+}
+
 const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
   cockpit: 'SSTV',
   view: 'sstv',
@@ -413,7 +456,7 @@ const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const CASES: Array<Case<any>> = [phone, cw, rtty, sstv]
+const CASES: Array<Case<any>> = [phone, cw, rtty, psk, sstv]
 
 async function settle() {
   await act(async () => {

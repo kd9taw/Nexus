@@ -10,6 +10,7 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { MemoryStrip } from './MemoryStrip'
+import { IS_MAC, FN_KEY_HINT } from '../platform'
 import type { Memory } from '../features/memories'
 import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
 import { PanelsMenu } from './PanelsMenu'
@@ -1013,6 +1014,12 @@ export function CwCockpit({
             typeByCall={typeByCall}
             onWorkSpot={onWorkSpot}
             onPopOut={() => void openPanelWindow('bandmapCw')}
+            // Wheel-tune from the strip (#96): same step + sensitivity + gate as the scope above.
+            sideband={snap.radio.sideband || 'USB'}
+            tuneEnabled={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting}
+            stepHz={tuneStep}
+            wheelSensitivity={wheelSensitivity}
+            onSnap={onSnap}
           />
         </CockpitPaneFrame>
       )}
@@ -1136,7 +1143,11 @@ export function CwCockpit({
         }
         onStopTx={abort}
       >
-        <label className="cw-wpm" title="Keyer speed — PgUp/PgDn to nudge (Shift = ±4)">
+        <label
+          className="cw-wpm"
+          // Compact Mac keyboards have no PgUp/PgDn keys — Fn+↑/↓ is what sends them.
+          title={`Keyer speed — PgUp/PgDn to nudge (Shift = ±4)${IS_MAC ? ' · on a Mac: Fn+↑/Fn+↓' : ''}`}
+        >
           <span>Speed</span>
           <input
             type="range"
@@ -1443,13 +1454,15 @@ export function CwCockpit({
         {shown('txmeters') && <TxMeters radio={snap.radio} />}
 
         <div className="cw-macros" role="group" aria-label="CW macros">
+          {/* The buttons ADVERTISE their F-keys, and default Mac keyboards eat bare F-keys
+              as media keys — the tooltip carries the cure there (mac QA audit). */}
           {macros.map((m) => (
             <button
               key={m.key}
               type="button"
               className="cw-macro"
               onClick={() => send(m.text)}
-              title={previews[m.key] || m.text}
+              title={`${previews[m.key] || m.text}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
             >
               <span className="cw-macro-key">{m.key}</span>
               <span className="cw-macro-label">{m.label || m.key}</span>

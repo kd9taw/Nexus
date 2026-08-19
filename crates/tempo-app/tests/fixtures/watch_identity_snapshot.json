@@ -46,6 +46,7 @@
     "decodeDepth": 3,
     "dialMhz": 14.08,
     "filterWidthHz": null,
+    "flexDaxTx": false,
     "holdTxFreq": false,
     "hrdLinkUp": null,
     "hrdQueued": 0,

@@ -1,5 +1,13 @@
 import { useState, type ReactNode } from 'react'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
+import { modeMismatch } from './TopBar'
+
+/** Below this the rig's RX filter is too narrow for an FT8/FT4 window and decodes are being
+ * thrown away wholesale — a CW or RTTY filter left in, or a SmartSDR slice narrowed at the
+ * radio. Deliberately NOT set at the SSB 2.4 kHz mark: a 2.4 kHz filter is the ordinary,
+ * perfectly good case and flagging it would nag every station on every band. 1 kHz is where the
+ * loss stops being a matter of taste. */
+const NARROW_FILTER_HZ = 1000
 
 interface Props {
   qso: QsoStatus | null
@@ -20,6 +28,11 @@ interface Props {
   radio?: RadioStatus
   onSetTxEnabled?: (on: boolean) => void
   onSetTune?: (on: boolean) => void
+  /** Run the RADIO's own built-in ATU (Phone/CW/SSTV have carried this since #19; the FT
+   * cockpit missed it — operator report 2026-08-17). Button renders only when the rig
+   * reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no ATU is
+   * worse than no button (CockpitHeader's rule, kept identical here). */
+  onAtuTune?: () => void
   onHaltTx?: () => void
   onSetHoldTxFreq?: (on: boolean) => void
   /** The active tier decodes but cannot transmit. NO SHIPPED TIER IS RX-ONLY TODAY —
@@ -86,6 +99,7 @@ export function OperateQsoStrip({
   radio,
   onSetTxEnabled,
   onSetTune,
+  onAtuTune,
   onHaltTx,
   onSetHoldTxFreq,
   rxOnly,
@@ -119,6 +133,19 @@ export function OperateQsoStrip({
   // No QSO to run on a beacon, and nothing to send on a receive-only tier.
   const noQso = noTx || isBeacon
   const noQsoWhy = isBeacon ? beaconWhy : noTxWhy
+
+  // ⚠️ THE RADIO MOVED AND NOTHING SAID SO. The mode read-back is display-only by contract
+  // (`observe_rig_mode` never overwrites the commanded sideband) and the steady-state mode push
+  // only fires when the APP's own target changes — so a mode or filter changed at the radio, in
+  // SmartSDR or on the front panel, simply stands, and in Operate it was invisible: App hides the
+  // TopBar readout group here, and the mismatch pill lives inside it. Every other cockpit that
+  // could show it does. 2026-08-17 Flex audit, wave-1 #54 (and wave-2 #64 for the filter half,
+  // which is shown NOWHERE in this cockpit today).
+  //
+  // Same verdict function as the TopBar — imported, not re-derived, so the two can never drift.
+  const rigDiverged = radio ? modeMismatch(radio.rigMode, radio.sideband, radio.rigConfirmed) : null
+  const filterHz = radio?.filterWidthHz ?? null
+  const narrowFilter = filterHz != null && filterHz > 0 && filterHz < NARROW_FILTER_HZ
 
   const [free, setFree] = useState('')
   const sendFree = () => {
@@ -190,6 +217,23 @@ export function OperateQsoStrip({
           >
             Tune
           </button>
+          {onAtuTune && radio.atu != null && (
+            <button
+              type="button"
+              className="op-btn atu"
+              onClick={onAtuTune}
+              disabled={noTx}
+              title={
+                noTx
+                  ? noTxWhy
+                  : radio.atu
+                  ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
+                  : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is currently bypassed."
+              }
+            >
+              ATU
+            </button>
+          )}
           <button
             type="button"
             className="op-btn stop"
@@ -212,6 +256,25 @@ export function OperateQsoStrip({
       {radio && (
         <span className="cq-statecap">
           {radio.transmitting ? '▲ TRANSMITTING' : radio.txEnabled ? '▼ Receiving' : '■ TX off'}
+        </span>
+      )}
+      {/* The rig has been moved out from under us — stated in the strip that is already always
+          visible, styled as the Phone/TopBar mismatch chip (one visual vocabulary, no new pane,
+          no structural size of its own: see cockpit-panes.css's contract). */}
+      {rigDiverged && (
+        <span
+          className="cq-rigdiverge"
+          title={`Your rig is on ${rigDiverged}, but Nexus has ${radio?.sideband}. Something moved it at the radio (SmartSDR, another program, or the mode knob). Transmit and logging use ${radio?.sideband} — set the radio to match, or re-pick the band here.`}
+        >
+          rig: {rigDiverged}
+        </span>
+      )}
+      {narrowFilter && (
+        <span
+          className="cq-rigdiverge"
+          title={`The radio's receive filter is ${filterHz} Hz — far narrower than an FT8/FT4 window. Signals outside it are not reaching the decoder at all. Widen the filter at the radio (2.4-3 kHz is normal).`}
+        >
+          filter {filterHz} Hz
         </span>
       )}
       {running && (

@@ -129,6 +129,17 @@ the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE
   ship with a failing-first repro test.
 - CHANGELOG: Keep-a-Changelog, operator-facing prose. New work goes under `## [Unreleased]`;
   `scripts/release-prep <version>` renames it and aligns all version manifests at release time.
+- **Versioning — the HEADLINE RULE (operator ruling, 2026-08-17).** A **minor** bump requires a
+  *headline*: one user-visible capability an operator would name if asked what's new (a new mode,
+  a new platform, a new cockpit). **Everything else is a patch** — including multi-fix batches,
+  however large. The rule exists because the literal semver reading (any feature ⇒ minor) turned
+  the minor number into a batch counter: 1.0.0 → 1.6.0 in twelve days, with 1.5.0 and 1.6.0
+  shipping fifteen hours apart, which left the number unable to signal that a release mattered.
+  Next release under the rule is **1.7.0** (PSK31 + QPSK31, the macOS platform work).
+- **Tester builds never consume a public version number.** They take a prerelease suffix
+  (`1.7.0-test1`), never the next free patch. A tester build sharing a number with a later public
+  release strands its holder forever: the updater only offers a *strictly newer* version, so
+  same-number-different-content is never offered, and the tester believes they are current.
 - CSS/UI: theme via CSS variables (`--state-*`, `--snr-*`); check a variable exists in *both*
   themes before using it.
 

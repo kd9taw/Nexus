@@ -16,6 +16,7 @@ pub mod alltxt;
 pub mod bandplan;
 pub mod dto;
 pub mod engine;
+pub mod keyboard;
 pub mod privileges;
 pub mod station;
 pub mod update;
@@ -239,6 +240,7 @@ impl AppState {
             active_peer: None,
             radio: RadioStatus {
                 rig_confirmed: false,
+                flex_dax_tx: false,
                 dial_mhz: 14.074, // FT8 20m (default mode)
                 band: "20m".to_string(),
                 sideband: "USB".to_string(),

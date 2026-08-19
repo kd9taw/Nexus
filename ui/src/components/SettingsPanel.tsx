@@ -111,6 +111,12 @@ import { PROFILE_LIST } from '../features/profiles'
 import { checkForUpdateManual } from '../features/updateCheck'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 
+// Serial-port examples and walkthroughs are platform prose: a Mac's ports are /dev/cu.* and
+// there is no Device Manager, so a "COM16" placeholder or a CP210x "Enhanced" label is a dead
+// end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
+// the modifier-chord labels needed it too.
+import { IS_MAC, IS_WINDOWS } from '../platform'
+
 interface Props {
   /** Called after a successful save so the shell can refresh its snapshot. */
   onSaved?: () => void
@@ -349,6 +355,106 @@ export const baudForRig = (modelNum: number, currentBaud: number): number | null
   return only
 }
 
+/**
+ * ⭐ THE SAME RULE, FOR ROTATORS — and the reason a quarter of the picker could not work.
+ *
+ * The rotator side shipped ONE app-wide 9600 (`default_rotator_baud()`, and a tooltip that said
+ * "GS-232 default 9600" to every owner of every model), and `rotctld_args` forces it onto the
+ * daemon as `-s <baud>` whenever a port is set — which OVERRIDES the backend's own declared
+ * rate. Five of the thirteen real-hardware entries declare a single rate that is not 9600, so
+ * they were shipped unable to talk to their controller: SPID Rot2Prog 600, SPID Rot1Prog 1200,
+ * Idiom Press Rotor-EZ / Hy-Gain DCU-1 / Green Heron RT-21 4800. It reads to the operator as
+ * "Nexus doesn't work with my rotator" — the 2026-08-18 field report — because the wrong line
+ * rate looks exactly like dead hardware.
+ *
+ * The basis is the rig side's, unchanged: **only `serial_rate_min == serial_rate_max` is a
+ * fact; a range is not.** The rows below are DERIVED from the bundled Hamlib by
+ * `scripts/gen-hamlib-rotator-speeds.mjs` into `__fixtures__/hamlibRotatorSpeeds.json`, and
+ * `SettingsPanel.rotpicker.test.tsx` fails on any row that is not `min == max` there, on any
+ * rate that is not that value, and on any one-rate SERIAL rotator in the library with no row.
+ * A row cannot be added from a manual.
+ *
+ * It covers the WHOLE library rather than the curated list, because "Other Hamlib model #…"
+ * lets an operator type any number and a fixed-rate backend is fixed however it was chosen.
+ */
+export const ROT_FIXED_BAUD = new Map<number, number>([
+  // Idiom Press / Hy-Gain / Green Heron / DF9GR — the rotorez family, all 4800
+  [401, 4800], // Idiom Press Rotor-EZ
+  [402, 4800], // Idiom Press RotorCard
+  [403, 4800], // Hy-Gain DCU-1/DCU-1X
+  [404, 4800], // DF9GR ERC
+  [405, 4800], // Green Heron RT-21
+  [406, 4800], // Hy-Gain DCU2/DCU3/YRC-1
+  // SARtek
+  [501, 1200], // SARtek-1
+  // SPID — the two that are one-rate; MD-01/02 (903) declares 600..460800 and is left alone
+  [901, 600], // Rot2Prog
+  [902, 1200], // Rot1Prog
+  // M2
+  [1001, 9600], // RC2800
+  [1002, 9600], // RC2800_EARLY_AZ
+  [1003, 9600], // RC2800_EARLY_AZEL
+  // Telescope mounts pressed into rotator service
+  [1401, 9600], // Celestron NexStar
+  [1801, 9600], // Meade LX200/Autostar
+  // Prosistel
+  [1701, 9600], // D azimuth
+  [1702, 9600], // D elevation
+  [1703, 9600], // Combi-Track az+el
+  [1704, 9600], // D elevation CBOX az
+  // The rest of the one-rate serial backends
+  [2101, 9600], // SatEL
+  [2201, 9600], // Radant AZ-1/AZV-1
+  [2501, 9600], // FLIR PTU Serial
+  [2601, 57600], // Apex Shared Loop
+  [2801, 9600], // Sky-Watcher
+])
+
+/**
+ * The baud to apply when rotator `modelNum` is picked, or `null` to leave the setting alone —
+ * the rotator twin of [`baudForRig`], and the same rule: a listed rotator has exactly one rate,
+ * so it gets it; an unlisted one has no fact behind it, so it is not touched.
+ */
+export const baudForRotator = (modelNum: number, currentBaud: number): number | null => {
+  const only = ROT_FIXED_BAUD.get(modelNum)
+  if (only === undefined || only === currentBaud) return null
+  return only
+}
+
+/**
+ * The curated rotator list. Model numbers and the `(az)` / `(az/el)` suffixes are checked
+ * against the generated caps fixture by `SettingsPanel.rotpicker.test.tsx`, so neither can be
+ * typed from a manual either.
+ *
+ * ⚠️ REMOVED, and it must not come back: **EA4TX ARS (1101/1102) is Hamlib's PARALLEL-PORT
+ * backend** (`port: "parallel"` in the fixture — it declares no serial rate at all), and it was
+ * offered here with a serial-port box and a baud. It could not work as presented, and the brand
+ * label steered ARS-USB owners — whose box speaks GS-232 over USB — away from the entry that
+ * does work. They belong on **GS-232 (generic)**, which now says so.
+ */
+export const ROTATOR_MODELS: { model: number; label: string }[] = [
+  { model: 601, label: 'Yaesu GS-232A (az/el)' },
+  { model: 603, label: 'Yaesu GS-232B (az/el)' },
+  { model: 602, label: 'GS-232 (generic, az/el) — also EA4TX ARS-USB, LVB, ST2' },
+  { model: 605, label: 'Yaesu/Kenpro GS-23 (az/el)' },
+  { model: 606, label: 'Yaesu/Kenpro GS-232 (az/el)' },
+  { model: 607, label: 'AMSAT LVB Tracker (az/el)' },
+  { model: 901, label: 'SPID Rot2Prog (az/el)' },
+  { model: 902, label: 'SPID Rot1Prog (az)' },
+  { model: 903, label: 'SPID MD-01/02, ROT2 mode (az/el)' },
+  { model: 202, label: 'EasyComm II' },
+  { model: 204, label: 'EasyComm III' },
+  { model: 401, label: 'Idiom Press Rotor-EZ (az)' },
+  { model: 403, label: 'Hy-Gain DCU-1/DCU-1X (az)' },
+  { model: 406, label: 'Hy-Gain DCU2/DCU3/YRC-1 (az)' },
+  { model: 404, label: 'DF9GR ERC (az)' },
+  { model: 405, label: 'Green Heron RT-21' },
+  { model: 1001, label: 'M2 RC2800 (az/el)' },
+  { model: 1701, label: 'Prosistel D (az)' },
+  { model: 1703, label: 'Prosistel Combi-Track (az/el)' },
+  { model: 1, label: 'Dummy (testing — no hardware)' },
+]
+
 /** WSJT-X Split Operation choices (Settings ▸ Radio parity). */
 const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; label: string }[] = [
   { value: 'none', label: 'None' },
@@ -469,6 +575,27 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
 ]
 
+/** How the OmniRig connection option is offered, as a function of the platform.
+ *
+ * OmniRig is a Windows COM server, so off Windows the choice cannot work at all. It is still
+ * OFFERED — disabled, with the reason in its own label — rather than hidden: OmniRig is named
+ * in the rig docs and used by half the Windows logging ecosystem, and an operator who goes
+ * looking for it on a Mac must find the answer in the control rather than conclude the build
+ * is broken.
+ *
+ * Pure and takes the platform as an argument so BOTH directions are testable — jsdom is never
+ * Windows, so a component-only test could only ever see the disabled half. */
+export function omnirigChoiceFor(isWindows: boolean): { disabled: boolean; label: string } {
+  return isWindows
+    ? { disabled: false, label: 'OmniRig (the radio is set up in OmniRig)' }
+    : { disabled: true, label: 'OmniRig — Windows only' }
+}
+
+/** [`omnirigChoiceFor`] for the machine this is actually running on. */
+export function omnirigChoice(): { disabled: boolean; label: string } {
+  return omnirigChoiceFor(IS_WINDOWS)
+}
+
 /** Pick just the per-radio CAT/audio/PTT/rotator/native fields — the flat rig form and a radio
  * profile share these exact field names, so this serves BOTH directions: build the save patch
  * from the form, and load a radio's profile into the form (`{...form, ...radioPatch(profile)}`). */
@@ -483,6 +610,10 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     baud: s.baud ?? APP_DEFAULT_BAUD,
     rigConn: s.rigConn ?? 'serial',
     rigAddr: s.rigAddr ?? '',
+    // ⚠️ PER-RADIO, so it MUST be here — see the Flex note below. Which radio inside OmniRig
+    // this profile drives is a property of the profile, and dropping it on Save would move an
+    // operator's RIG 2 radio silently onto RIG 1.
+    omnirigSlot: s.omnirigSlot ?? 1,
     rigctldPort: s.rigctldPort ?? 4532,
     icomNativeCat: s.icomNativeCat ?? false,
     dataModesPlainSsb: s.dataModesPlainSsb ?? false,
@@ -496,6 +627,16 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rotatorHost: s.rotatorHost ?? '',
     rotctldPort: s.rotctldPort ?? 4533,
     nativeScope: s.nativeScope ?? 'auto',
+    // ⚠️ THE FLEX THREE BELONG HERE, and their absence was silent data loss (2026-08-17 Flex
+    // audit). Every save of the rig form while EDITING a non-active radio routes through
+    // `persistRadioForm` → `updateRadioProfile(radioPatch(form))`, so a field this function does
+    // not return is dropped on Save while the panel reports success — the operator configures
+    // radio 2 and radio 1's Flex address is gone. Same class as `pttSerialPort`, and the backend
+    // now has a serde-computed guard (`every_per_radio_field_is_reachable_through_the_patch`)
+    // that fails when a per-radio field is added without a home in this patch.
+    flexRadioIp: s.flexRadioIp ?? '',
+    flexNativePan: s.flexNativePan ?? false,
+    flexNativeAudio: s.flexNativeAudio ?? false,
   }
 }
 
@@ -1253,6 +1394,18 @@ export function SettingsPanel({
     })
   }
 
+  // The rotator twin, and it exists because the rotator picker did NOT have one: picking a
+  // model wrote `rotatorModel` and nothing else, so a SPID or a Green Heron kept the app-wide
+  // 9600 that its backend does not run at. Same rule, same shape — see `ROT_FIXED_BAUD`.
+  const selectRotator = (modelNum: number) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const baud = baudForRotator(modelNum, prev.rotatorBaud ?? 9600)
+      return { ...prev, rotatorModel: modelNum, ...(baud ? { rotatorBaud: baud } : {}) }
+    })
+  }
+
   // --- Dual-radio roster (P2). These are LIVE verbs: they persist immediately and return a fresh
   // snapshot. We then re-pull the full settings and merge ONLY the radios[]/active/peg fields back
   // into the form, so the roster reflects the change without discarding unsaved flat-form edits.
@@ -1301,7 +1454,15 @@ export function SettingsPanel({
     ) {
       return
     }
-    void withErrorToast(() => removeRadio(id), 'Could not remove the radio').then((s) => s && reloadRadios())
+    void withErrorToast(() => removeRadio(id), 'Could not remove the radio').then((s) => {
+      if (!s) return
+      // If the deleted radio was the one the rig form is editing, retarget the form: a
+      // dangling editingRadioId routes every later Save through update_radio_profile(<gone
+      // id>), which no-ops on a missing id — so station-wide edits (callsign, credentials)
+      // silently stop persisting with no error.
+      setEditingRadioId((cur) => (cur === id ? activeRadioId : cur))
+      reloadRadios()
+    })
   }
   const handleRenameRadio = (id: number, name: string) => {
     void withErrorToast(() => renameRadio(id, name), 'Could not rename the radio').then((s) => s && reloadRadios())
@@ -1499,7 +1660,18 @@ export function SettingsPanel({
   }
 
   // One-click apply a discovered Flex: network conn via SmartSDR CAT's default
-  // slice-A TCP port + the FLEX-6xxx dialect model (the WSJT-X-proven path).
+  // slice-A TCP port + the SmartSDR CAT dialect model (the WSJT-X-proven path). One model
+  // serves BOTH product lines — SmartSDR CAT presents the same command set for a 6000 and an
+  // 8000 (2026-08-17 Flex audit, critic gap #9), so a discovered FLEX-8400 lands here too.
+  //
+  // ⚠️ 127.0.0.1:5002 IS A WINDOWS FACT, NOT A FLEX FACT (2026-08-17 Flex audit, wave-1 #35/#58).
+  // It is the SmartSDR CAT *app's* default slice-A port, and FlexRadio ships SmartSDR CAT and the
+  // DAX drivers in the Windows suite ONLY. macOS has been a shipped platform since 1.5.0 and
+  // Linux longer, and on both this address is a program that cannot be installed: the operator
+  // got a config that fails Test CAT with an instant ECONNREFUSED and a toast naming software
+  // they cannot obtain. So the localhost proxy is applied only where it can exist; elsewhere the
+  // rig-model/conn/IP that ARE true are still applied, `rigAddr` is left for the operator, and
+  // the toast says what to put there.
   const applyDetectedFlex = (f: { model: string; nickname: string; ip: string }) => {
     markDirty()
     setForm((prev) =>
@@ -1507,9 +1679,9 @@ export function SettingsPanel({
         ? {
             ...prev,
             rigConn: 'network',
-            rigAddr: '127.0.0.1:5002',
+            ...(IS_WINDOWS ? { rigAddr: '127.0.0.1:5002' } : {}),
             rigModel: 2036,
-            rigModelName: 'FlexRadio FLEX-6xxx (SmartSDR CAT)',
+            rigModelName: 'FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)',
             // Keep the discovered radio IP — the native panadapter / DAX path connects to the rig
             // directly over VITA-49 at this address (CAT still rides the localhost SmartSDR proxy
             // above). Discovery already knows it; dropping it left the native features unreachable.
@@ -1518,7 +1690,9 @@ export function SettingsPanel({
         : prev,
     )
     pushToast(
-      `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.`,
+      IS_WINDOWS
+        ? `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.`
+        : `Found ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — model and radio IP applied. SmartSDR CAT is Windows-only, so set Network Address yourself: the address of a Windows PC on this network running SmartSDR CAT (slice A is its port 5002). Native panadapter/DAX below talk to the radio directly and need no such PC.`,
       'success',
     )
   }
@@ -2591,26 +2765,52 @@ export function SettingsPanel({
                           Make active
                         </button>
                       )}
-                      {multi && !isActive && (
+                      {multi && (
+                        // Rendered DISABLED on the active card, never absent: a missing button
+                        // reads as a bug ("the 9700 won't delete" — Mac field report,
+                        // 2026-08-17), a disabled one with a title teaches the rule.
                         <button
                           type="button"
                           className="settings-refresh danger"
                           onClick={() => handleRemoveRadio(r.id)}
-                          title="Remove this radio from the roster"
+                          disabled={isActive}
+                          title={
+                            isActive
+                              ? 'This is your operating radio — make another radio active first, then remove this one.'
+                              : 'Remove this radio from the roster'
+                          }
                         >
                           Remove
                         </button>
                       )}
                     </div>
+                    {/* ⚠️ THREE ADDRESSES, ALL UNLABELLED (2026-08-17 Flex audit, wave-1 #57). A
+                        network Flex has a CAT address (the PC running SmartSDR CAT), a radio
+                        address (the rig's own :4992, for the native panadapter/DAX) and the local
+                        CAT-helper port — and this row printed two of them as bare numbers with
+                        nothing saying which was which. Naming them costs one word each; the row
+                        keeps its shape, so no pane sizing is involved. */}
                     <div className="radio-card-meta">
-                      {r.rigModelName && r.rigModelName !== 'None / VOX'
-                        ? r.rigModelName
-                        : 'No rig model set'}
-                      {' · '}
-                      {r.rigConn === 'network' ? r.rigAddr || 'no address' : r.serialPort || 'no COM port'}
+                      {r.rigConn === 'omnirig'
+                        ? 'Set up in OmniRig'
+                        : r.rigModelName && r.rigModelName !== 'None / VOX'
+                          ? r.rigModelName
+                          : 'No rig model set'}
+                      {' · CAT '}
+                      {r.rigConn === 'omnirig'
+                        ? `OmniRig RIG ${r.omnirigSlot === 2 ? 2 : 1}`
+                        : r.rigConn === 'network'
+                          ? r.rigAddr || 'no address'
+                          : r.serialPort || 'no COM port'}
+                      {(r.flexRadioIp ?? '').trim() !== '' && (
+                        <>
+                          {' · Flex radio '}
+                          {r.flexRadioIp}
+                        </>
+                      )}
                       {' · audio '}
                       {r.audioIn ? (audioLabels.input[r.audioIn] ?? r.audioIn) : 'default'}
-                      {' · rigctld :'}
+                      {' · CAT helper port '}
                       {r.rigctldPort}
                     </div>
                     {multi && (
@@ -2956,7 +3156,11 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.pttSerialPort}
-                    placeholder="e.g. COM16 — blank = use the CAT port"
+                    placeholder={
+                      IS_MAC
+                        ? 'e.g. /dev/cu.usbserial-1420 — blank = use the CAT port'
+                        : 'e.g. COM16 — blank = use the CAT port'
+                    }
                     onChange={(e) => update('pttSerialPort', e.target.value)}
                   />
                   <span className="settings-hint">
@@ -3177,6 +3381,13 @@ export function SettingsPanel({
                 >
                   <option value="serial">Serial (USB / COM port)</option>
                   <option value="network">Network (host:port — SDR software, or a remote rig)</option>
+                  {/* Offered on every platform and DISABLED off Windows, rather than hidden:
+                      OmniRig is named in the docs and in half the Windows logging ecosystem, so
+                      a mac/Linux operator who goes looking for it must find the answer here
+                      instead of concluding the build is broken. */}
+                  <option value="omnirig" disabled={omnirigChoice().disabled}>
+                    {omnirigChoice().label}
+                  </option>
                 </select>
                 <span className="settings-hint">
                   Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for
@@ -3185,7 +3396,36 @@ export function SettingsPanel({
                   {' '}still picks which CAT dialect is spoken — for an SDR, choose the program
                   you launched, not the board inside the radio.
                 </span>
+                <span className="settings-hint">
+                  <strong>OmniRig</strong> hands rig control to VE3NEA's OmniRig server, the one
+                  most Windows logging and contest programs already use. Set the radio up{' '}
+                  <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there,
+                  so the Rig Model, Serial Port and Baud above are not used.{' '}
+                  {omnirigChoice().disabled
+                    ? 'It is greyed out here because OmniRig is a Windows program and this is not Windows.'
+                    : 'Install and run OmniRig first; Nexus will not start without it.'}
+                </span>
               </label>
+
+              {form.rigConn === 'omnirig' && (
+                <label className="settings-field">
+                  <span className="settings-label">OmniRig radio</span>
+                  <select
+                    className="settings-input"
+                    value={String(form.omnirigSlot || 1)}
+                    onChange={(e) => updateNum('omnirigSlot', Number(e.target.value))}
+                    aria-label="OmniRig rig slot"
+                  >
+                    <option value="1">RIG 1</option>
+                    <option value="2">RIG 2</option>
+                  </select>
+                  <span className="settings-hint">
+                    Which of OmniRig's two radios this Nexus radio drives. OmniRig's own window
+                    labels them RIG 1 and RIG 2 — pick the one whose rig type matches this
+                    radio. A two-radio station can put one on each.
+                  </span>
+                </label>
+              )}
 
               {form.rigConn === 'network' && (
                 <label className="settings-field">
@@ -3224,7 +3464,7 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app
                     on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so
-                    127.0.0.1:5002 with the FLEX-6xxx model works out of the box; audio
+                    127.0.0.1:5002 with the FLEX-6xxx / 8xxx model works out of the box; audio
                     rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001,
                     C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the
                     slice you run digital on. (Direct-to-radio :4992 needs Hamlib's
@@ -3263,7 +3503,11 @@ export function SettingsPanel({
                 </label>
               )}
 
-              {form.rigConn !== 'network' && (
+              {/* Serial Port + Baud belong to whoever OPENS the port. With Network that is
+                  rigctld over TCP; with OmniRig it is OmniRig itself, which owns the rig type,
+                  the port and the baud — so asking for them here would be asking the operator
+                  to configure the same radio twice and get it wrong once. */}
+              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && (
                 <>
               <label className="settings-field">
                 <span className="settings-label">Serial Port</span>
@@ -3275,7 +3519,11 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.serialPort}
-                    placeholder="Select or type, e.g. COM16"
+                    placeholder={
+                      IS_MAC
+                        ? 'Select or type, e.g. /dev/cu.usbserial-1420'
+                        : 'Select or type, e.g. COM16'
+                    }
                     onChange={(e) => update('serialPort', e.target.value)}
                   />
                   {/* Shared by the CAT + PTT port inputs. The label text shows the USB product
@@ -3308,23 +3556,37 @@ export function SettingsPanel({
                   </button>
                 </div>
                 <span className="settings-hint">
-                  COM / tty device for rig control — or Auto-test to find it.
+                  {/* Never say "tty device": on a Mac the tty.* node is exactly the twin the
+                      picker hides because it hangs CAT on carrier detect — cu.* is the one. */}
+                  {IS_MAC
+                    ? 'Serial device (/dev/cu.…) for rig control — or Auto-test to find it.'
+                    : 'COM / serial device for rig control — or Auto-test to find it.'}
                   {[3088, 3087, 3091, 3089, 3076].includes(form.rigModel) && (
                     <>
                       {' '}
                       <strong>Xiegu:</strong> the radio makes two serial ports — CAT is on the{' '}
-                      <strong>SERIAL-B</strong> one (often the higher COM number).
+                      <strong>SERIAL-B</strong> one
+                      {IS_MAC ? '.' : ' (often the higher COM number).'}
                     </>
                   )}
-                  {[3078, 3081].includes(form.rigModel) && (
-                    <>
-                      {' '}
-                      <strong>Icom:</strong> this radio makes two COM ports and only one speaks
-                      CI-V — in Device Manager it is the CP210x port marked{' '}
-                      <strong>Enhanced</strong> (Icom's driver: “Serial Port A (CI-V)”). The
-                      “Standard” / “Serial Port B” one never answers.
-                    </>
-                  )}
+                  {[3078, 3081].includes(form.rigModel) &&
+                    (IS_MAC ? (
+                      <>
+                        {' '}
+                        <strong>Icom:</strong> this radio makes two /dev/cu.* ports and only one
+                        speaks CI-V — with the Silicon Labs VCP driver it is usually the first of
+                        the pair (plain <strong>cu.SLAB_USBtoUART</strong>; the dead twin gets a
+                        numeric suffix). The other one never answers.
+                      </>
+                    ) : (
+                      <>
+                        {' '}
+                        <strong>Icom:</strong> this radio makes two COM ports and only one speaks
+                        CI-V — in Device Manager it is the CP210x port marked{' '}
+                        <strong>Enhanced</strong> (Icom's driver: “Serial Port A (CI-V)”). The
+                        “Standard” / “Serial Port B” one never answers.
+                      </>
+                    ))}
                 </span>
               </label>
 
@@ -3351,112 +3613,6 @@ export function SettingsPanel({
               </label>
                 </>
               )}
-
-              <div className="settings-field">
-                <span className="settings-label">Antenna rotator</span>
-                {(() => {
-                  const CURATED = [
-                    '0', '601', '603', '602', '901', '902', '202', '204', '401',
-                    '403', '405', '1001', '1102', '1701', '1',
-                  ]
-                  const modelStr = String(form.rotatorModel ?? 0)
-                  const isOther = rotOther || !CURATED.includes(modelStr)
-                  return (
-                    <>
-                      <select
-                        value={isOther ? 'other' : modelStr}
-                        onChange={(e) => {
-                          const v = e.target.value
-                          if (v === 'other') {
-                            setRotOther(true)
-                            setRotCustom(
-                              (form.rotatorModel ?? 0) > 0 ? String(form.rotatorModel) : '',
-                            )
-                          } else {
-                            setRotOther(false)
-                            updateNum('rotatorModel', Number(v))
-                          }
-                        }}
-                        aria-label="Rotator model"
-                      >
-                        <option value="0">None</option>
-                        <option value="601">Yaesu GS-232A</option>
-                        <option value="603">Yaesu GS-232B</option>
-                        <option value="602">GS-232 (generic)</option>
-                        <option value="901">SPID Rot2Prog</option>
-                        <option value="902">SPID Rot1Prog</option>
-                        <option value="202">EasyComm II</option>
-                        <option value="204">EasyComm III</option>
-                        <option value="401">Hy-Gain Rotor-EZ</option>
-                        <option value="403">Hy-Gain DCU</option>
-                        <option value="405">Green Heron RT-21</option>
-                        <option value="1001">M2 RC2800</option>
-                        <option value="1102">EA4TX ARS (az)</option>
-                        <option value="1701">Prosistel D (az)</option>
-                        <option value="1">Dummy (testing — no hardware)</option>
-                        <option value="other">Other Hamlib model #…</option>
-                      </select>
-                      {isOther && (
-                        <input
-                          className="settings-input"
-                          type="number"
-                          min="1"
-                          placeholder="Hamlib rotator model number (rotctl -l lists them)"
-                          value={rotCustom}
-                          onChange={(e) => {
-                            setRotCustom(e.target.value)
-                            const n = Number(e.target.value)
-                            // Only ever commit a REAL model; an incomplete
-                            // entry leaves the last valid value in the form.
-                            if (Number.isInteger(n) && n > 0) updateNum('rotatorModel', n)
-                          }}
-                          aria-label="Hamlib rotator model number"
-                        />
-                      )}
-                    </>
-                  )
-                })()}
-                {(form.rotatorModel ?? 0) > 1 && (
-                  <div className="settings-inline-pair">
-                    <input
-                      className="settings-input"
-                      type="text"
-                      value={form.rotatorPort ?? ''}
-                      placeholder="COM7 / /dev/ttyUSB1"
-                      onChange={(e) => update('rotatorPort', e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-label="Rotator serial port"
-                    />
-                    <input
-                      className="settings-input"
-                      type="number"
-                      value={form.rotatorBaud ?? 9600}
-                      onChange={(e) => {
-                        const n = Number(e.target.value)
-                        if (!Number.isNaN(n)) updateNum('rotatorBaud', n)
-                      }}
-                      aria-label="Rotator baud rate"
-                      title="Baud rate (GS-232 default 9600)"
-                    />
-                  </div>
-                )}
-                <span className="settings-hint">
-                  Pick your rotator and its COM port — Nexus runs the control daemon for you
-                  (same as the rig). Then use the Rotor pane in Connect, ↗ on Needed rows,
-                  or the compass anywhere.
-                </span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.rotatorHost}
-                  placeholder="Advanced: external rotctld host:port (overrides the above)"
-                  onChange={(e) => update('rotatorHost', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-label="External rotctld address (advanced)"
-                />
-              </div>
 
               <div className="settings-field">
                 <span className="settings-label">Split operation</span>
@@ -3621,11 +3777,15 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      Take this FlexRadio's RX audio straight off the network (VITA-49 DAX) instead of
-                      the "DAX Audio RX" sound device — which is <strong>invisible under Remote
-                      Desktop</strong>. Decoders then read the rig's audio directly.{' '}
-                      <strong>Unverified on hardware</strong>, RX-only, opt-in: needs the Flex IP set
-                      and SmartSDR reachable. If decodes stop, turn it back off. Save to apply.
+                      Carry this FlexRadio's audio straight over the network (VITA-49 DAX) instead of
+                      the "DAX Audio RX" / "DAX TX" sound devices — which are <strong>invisible under
+                      Remote Desktop</strong>. <strong>Both directions:</strong> the decoders read the
+                      rig's receive audio directly, and transmit audio goes out over DAX too, which
+                      disconnects the rig's microphone while this is on. Turning it off, switching
+                      radio or quitting Nexus puts the mic back.{' '}
+                      <strong>Unverified on hardware</strong>, opt-in: needs the Flex IP set and
+                      SmartSDR reachable. If decodes or transmit stop, turn it back off. Save to
+                      apply.
                     </span>
                   </label>
                 )}
@@ -3674,7 +3834,7 @@ export function SettingsPanel({
 
               {(form.rigModel === 2036 || form.rigModel === 23005) && (
                 <label className="settings-field">
-                  <span className="settings-label">Flex radio IP (native panadapter)</span>
+                  <span className="settings-label">Flex radio IP (native panadapter + DAX)</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -4204,10 +4364,160 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-rotator">
             <legend>Rotator</legend>
             <p className="settings-note">
-              Pointing manners for the rotator picked under <strong>Rig Control</strong>. They
-              apply to satellite auto-track.
+              The rotator itself, and its pointing manners. The manners apply to satellite
+              auto-track.
             </p>
             <div className="settings-grid">
+              {/* THE MODEL AND ITS PORT LIVE HERE NOW. They were inside Rig &amp; CAT, which
+                  meant the one affordance the app has for a silent rotator — the cockpit's
+                  "Rotator not answering" chip, whose whole job is the model/port — deep-linked
+                  to a section that contained neither, and a Settings search for "rotator"
+                  landed on the pointing manners alone (rotor review 2026-08-18, findings
+                  26/32/42/50). The registry says where a setting lives; this is where the
+                  registry always said the rotator lived. */}
+              <div className="settings-field">
+                <span className="settings-label">Rotator model</span>
+                {(() => {
+                  const model = form.rotatorModel ?? 0
+                  const curated = new Set(['0', ...ROTATOR_MODELS.map((r) => String(r.model))])
+                  const modelStr = String(model)
+                  const isOther = rotOther || !curated.has(modelStr)
+                  return (
+                    <>
+                      <select
+                        value={isOther ? 'other' : modelStr}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (v === 'other') {
+                            setRotOther(true)
+                            setRotCustom(model > 0 ? String(model) : '')
+                          } else {
+                            setRotOther(false)
+                            selectRotator(Number(v))
+                          }
+                        }}
+                        aria-label="Rotator model"
+                      >
+                        <option value="0">None</option>
+                        {ROTATOR_MODELS.map((r) => (
+                          <option key={r.model} value={r.model}>
+                            {r.label}
+                          </option>
+                        ))}
+                        <option value="other">Other Hamlib model #…</option>
+                      </select>
+                      {isOther && (
+                        <input
+                          className="settings-input"
+                          type="number"
+                          min="1"
+                          placeholder="Hamlib rotator model number (rotctl -l lists them)"
+                          // Falls back to the CONFIGURED model rather than staying blank: the
+                          // box is local state seeded only when the operator picks "Other" by
+                          // hand, so re-opening Settings — or switching radios — used to render
+                          // an empty field over a perfectly good saved model number.
+                          value={rotCustom || (model > 0 ? String(model) : '')}
+                          onChange={(e) => {
+                            setRotCustom(e.target.value)
+                            const n = Number(e.target.value)
+                            // Only ever commit a REAL model; an incomplete
+                            // entry leaves the last valid value in the form.
+                            if (Number.isInteger(n) && n > 0) selectRotator(n)
+                          }}
+                          aria-label="Hamlib rotator model number"
+                        />
+                      )}
+                    </>
+                  )
+                })()}
+                <span className="settings-hint">
+                  Nexus runs the control daemon (rotctld) for you, the same way it does CAT.
+                  Then use the Rotor pane in Connect, ↗ on Needed rows, or the compass anywhere.
+                </span>
+              </div>
+
+              {(form.rotatorModel ?? 0) > 1 && (
+                <div className="settings-field">
+                  <span className="settings-label">Rotator port &amp; baud</span>
+                  <div className="settings-inline-pair">
+                    <input
+                      className="settings-input"
+                      type="text"
+                      value={form.rotatorPort ?? ''}
+                      placeholder={IS_MAC ? '/dev/cu.usbserial-1420' : 'COM7 / /dev/ttyUSB1'}
+                      onChange={(e) => update('rotatorPort', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="Rotator serial port"
+                    />
+                    <input
+                      className="settings-input"
+                      type="number"
+                      value={form.rotatorBaud ?? 9600}
+                      onChange={(e) => {
+                        const n = Number(e.target.value)
+                        if (!Number.isNaN(n)) updateNum('rotatorBaud', n)
+                      }}
+                      aria-label="Rotator baud rate"
+                      title="Serial baud rate for the rotator controller"
+                    />
+                  </div>
+                  {/* The old hint here said "GS-232 default 9600" to EVERY model, which is how
+                      a SPID owner (600 baud) was told the number that kills his rotator was
+                      right. It now names THIS model's own declared rate, and says so loudly
+                      when the saved value cannot work. */}
+                  {(() => {
+                    const only = ROT_FIXED_BAUD.get(form.rotatorModel ?? 0)
+                    const set = form.rotatorBaud ?? 9600
+                    if (only === undefined) {
+                      return (
+                        <span className="settings-hint">
+                          Match the rate your controller is set to — Hamlib does not offer one
+                          fixed rate for this model.
+                        </span>
+                      )
+                    }
+                    if (only === set) {
+                      return (
+                        <span className="settings-hint">
+                          This controller runs at {only.toLocaleString()} baud — the rate its
+                          Hamlib backend declares. Leave it here.
+                        </span>
+                      )
+                    }
+                    return (
+                      <span className="settings-hint settings-warn">
+                        <strong>
+                          This controller runs at {only.toLocaleString()} baud, not{' '}
+                          {set.toLocaleString()}
+                        </strong>{' '}
+                        — at the wrong rate it never answers and reads as broken hardware. Set{' '}
+                        {only.toLocaleString()}, or re-pick the model above to fill it in.
+                      </span>
+                    )
+                  })()}
+                </div>
+              )}
+
+              <div className="settings-field">
+                <span className="settings-label">External rotctld (advanced)</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.rotatorHost}
+                  placeholder="host:port — e.g. 127.0.0.1:4533"
+                  onChange={(e) => update('rotatorHost', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label="External rotctld address (advanced)"
+                />
+                <span className="settings-hint">
+                  Point Nexus at a rotctld you run yourself (or one on another machine). It
+                  OVERRIDES the model and port above and stops the integrated daemon. Needs the
+                  port — a bare host name is not an address.
+                </span>
+              </div>
+
               <div className="settings-field">
                 <span className="settings-label">Park position (° az / el)</span>
                 <div className="settings-inline-pair">
@@ -5334,7 +5644,13 @@ export function SettingsPanel({
           {/* ---- Beacons (WSPR / FST4W). A SEPARATE surface from the QSO modes:
                there is no exchange, only a schedule. Off by default — beaconing
                keys the radio unattended, so it is always an explicit choice. ---- */}
-          {tab === 'digital' && (
+          {tab === 'digital' && (() => {
+          // Round Robin is active only with a real rotation: a slot picked AND ≥2
+          // stations in it. slots=1 is degenerate (the rotation would claim every
+          // interval), so the engine falls back to the transmit-% schedule (#101b).
+          const rrActive = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) >= 2
+          const rrDegenerate = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) < 2
+          return (
           <fieldset className="settings-section" id="settings-beacons-wspr-fst4w">
             <legend>Beacons — WSPR &amp; FST4W</legend>
             <div className="settings-grid">
@@ -5345,14 +5661,26 @@ export function SettingsPanel({
                   type="number"
                   min={0}
                   max={100}
+                  disabled={rrActive}
+                  title={rrActive ? 'Round Robin is scheduling — this percentage is not used. Set the slot to 0 to schedule by percentage.' : undefined}
                   value={String(form.beaconTxPercent ?? 0)}
                   onChange={(e) => updateNum('beaconTxPercent', Number(e.target.value))}
                 />
                 <span className="settings-hint">
-                  Fraction of intervals to transmit on. 0 = listen only. A beacon that
-                  transmits every interval hears nothing, so a minority is the convention
-                  &mdash; 20&ndash;30% is typical. Below 40% Nexus also avoids
-                  back-to-back transmissions while still hitting the rate you asked for.
+                  {rrActive ? (
+                    <>
+                      <strong>Ignored while Round Robin is active</strong> &mdash; the
+                      rotation decides which intervals transmit. Set the slot to 0 to
+                      schedule by percentage again.
+                    </>
+                  ) : (
+                    <>
+                      Fraction of intervals to transmit on. 0 = listen only. A beacon that
+                      transmits every interval hears nothing, so a minority is the convention
+                      &mdash; 20&ndash;30% is typical. Below 40% Nexus also avoids
+                      back-to-back transmissions while still hitting the rate you asked for.
+                    </>
+                  )}
                 </span>
               </label>
               <label className="settings-field">
@@ -5387,7 +5715,7 @@ export function SettingsPanel({
                   0 = use the transmit-% schedule. Otherwise your slot in a coordinated
                   rotation: stations agreeing on the same slot count and each taking a
                   different slot never transmit at the same time, because the assignment
-                  is fixed by UTC.
+                  is fixed by UTC. A rotation needs at least 2 slots.
                 </span>
               </label>
               <label className="settings-field">
@@ -5401,7 +5729,15 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('beaconRrSlots', Number(e.target.value))}
                 />
                 <span className="settings-hint">
-                  How many stations are in the rotation. Ignored when the slot is 0.
+                  {rrDegenerate ? (
+                    <>
+                      <strong>A one-station rotation is no rotation</strong> &mdash; Round
+                      Robin needs at least 2 slots, so it is off and the transmit-%
+                      schedule applies.
+                    </>
+                  ) : (
+                    <>How many stations are in the rotation. Ignored when the slot is 0.</>
+                  )}
                 </span>
               </label>
             </div>
@@ -5412,7 +5748,8 @@ export function SettingsPanel({
               transmit you have not enabled.
             </span>
           </fieldset>
-          )}
+          )
+          })()}
 
           {/* ---- FST4 / FST4W: one period setting, shared. Same decoder, same
                slot clock; the tier picks QSO vs beacon. ---- */}
@@ -5981,6 +6318,38 @@ export function SettingsPanel({
                   on-air sense stays correct — applies to TX and the RX decoder.
                 </span>
               </div>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- PSK — receive-only this phase (Keyboard Modes Phase 1). ONE deliberate
+               setting: the auto-arm opt-out. PSK31 must work with ZERO configuration —
+               open the screen, click a trace, read the text — so everything else
+               (netted frequency, AFC, squelch) is cockpit/decoder state, not schema. ---- */}
+          {tab === 'digital' && (
+          <fieldset className="settings-section" id="settings-psk">
+            <legend>PSK</legend>
+            <div className="settings-field">
+              <label className="settings-toggle">
+                <span className="settings-label">Start receiving when PSK opens</span>
+                <button
+                  type="button"
+                  role="switch"
+                  // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
+                  aria-checked={form.pskRxAutoArm !== false}
+                  className={`toggle${form.pskRxAutoArm !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('pskRxAutoArm', form.pskRxAutoArm === false)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              <span className="settings-hint">
+                The PSK screen starts the decoder as soon as you open it — click a trace on
+                the waterfall and the text prints, no setup. Turn this off to arm the
+                receiver by hand (the Arm RX button in the decoded-text pane). Stopping the
+                receiver yourself is already remembered for the rest of the session. PSK31
+                is receive-only for now; transmit is on the keyboard-modes roadmap.
+              </span>
             </div>
           </fieldset>
           )}

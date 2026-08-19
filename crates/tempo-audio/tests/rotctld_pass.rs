@@ -7,6 +7,14 @@
 //! whether the sequence of commands a real pass produces is one a real daemon
 //! accepts, and in whether what comes back is interpreted correctly.
 //!
+//! ⚠️ That claim about mock servers was FALSE until 2026-08-18 and is worth the note, because
+//! believing it is how the worst rotator defect survived review: `tempo_audio::rotator` had two
+//! string-formatting tests and nothing that interpreted a reply at all, so nobody staged a
+//! daemon that accepts the connection and then says NOTHING — the case `point`/`point_azel`
+//! reported as SUCCESS. The mock servers exist now (`rotator.rs`'s own `#[cfg(test)]` module:
+//! reply, refusal, silence, hang-up, garbage, split reply), and the case this file cannot
+//! stage is exactly the one they do — a real `rotctld -m 1` always answers.
+//!
 //! So these run the actual pass: real orbital elements, a real observer, real
 //! look angles from the propagator, through the same `TrackDriver` the
 //! production loop uses, onto a real daemon. The only thing simulated is the

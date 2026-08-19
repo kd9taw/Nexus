@@ -177,6 +177,31 @@ pub fn rtty_band_plan() -> Vec<BandChannel> {
     ]
 }
 
+/// The **standard PSK31 watering holes** — the classic G3PLX-era calling
+/// frequencies where PSK31 actually happens, so a band pick in the Keyboard
+/// Modes cockpit lands in the action like the RTTY plan does. Dials are USB on
+/// EVERY band (the PSK31 convention — unlike RTTY's LSB): activity sits ~1 kHz
+/// up in the audio passband, so the emission is ≈ dial + 1 kHz. Several of
+/// these frequencies are already cited in this file's other plans' notes
+/// (160 m "PSK31 1.838", 80 m "3.580 itself is PSK31's home", 30 m "PSK
+/// 10.141", 10 m "PSK 28.120") — the entries below are those same conventions
+/// made pickable.
+pub fn psk_band_plan() -> Vec<BandChannel> {
+    vec![
+        ch("160m", "HF", 1.838, "USB", "160 m · PSK31", "the 160 m digimode hole — shared with RTTY and JT65 1.838; listen first"),
+        ch("80m", "HF", 3.580, "USB", "80 m · PSK31", "THE 80 m PSK31 home (this file's RTTY plan keeps clear of it at 3.590)"),
+        ch("40m", "HF", 7.070, "USB", "40 m · PSK31 (US)", "the classic US/R2 40 m PSK31 watering hole 7.070–7.072"),
+        ch("40m-dx", "HF", 7.040, "USB", "40 m · PSK31 (EU/DX)", "IARU R1 digimode window 7.040–7.047 — WSPR sits at 7.0386, stay high; same US/EU split as the RTTY plan's 7.080/7.045"),
+        ch("30m", "HF", 10.141, "USB", "30 m · PSK31", "the 10.140–10.142 PSK cluster (the native plan's note cites PSK 10.141); secondary band — tread lightly"),
+        ch("20m", "HF", 14.070, "USB", "20 m · PSK31", "THE worldwide PSK31 watering hole, 14.070–14.072 — just below the FT8 cluster at 14.074"),
+        ch("17m", "HF", 18.097, "USB", "17 m · PSK31", "the historical 17 m PSK31 spot moved BELOW FT8: 18.100's FT8 audio cluster now owns 18.100–18.103, so activity sits ~18.097–18.099 — listen first"),
+        ch("15m", "HF", 21.070, "USB", "15 m · PSK31", "the classic 15 m PSK31 hole 21.070–21.072, below FT8 21.074"),
+        ch("12m", "HF", 24.920, "USB", "12 m · PSK31", "the 24.920 digimode spot (IARU digimodes 24.915–24.929), clear of FT8 24.915 — shared with the RTTY window"),
+        ch("10m", "HF", 28.120, "USB", "10 m · PSK31", "the classic 10 m PSK31 watering hole — Technician-accessible (10 m data 28.0–28.3)"),
+        ch("6m", "VHF", 50.290, "USB", "6 m · PSK31", "the conventional 6 m PSK31 spot, just below WSPR 50.293; activity follows sporadic-E openings — Tech-OK"),
+    ]
+}
+
 /// The **standard SSTV calling frequencies** — where images actually appear,
 /// including the ISS downlink (the biggest SSTV driver: ARISS events transmit
 /// PD120 on 145.800 FM). Phone-segment dials, phone sideband conventions.
@@ -651,12 +676,13 @@ mod tests {
     /// and `Tier::ALL` is asserted complete against that match below. That is a
     /// real guarantee.
     ///
-    /// `rtty_band_plan` and `sstv_band_plan` are appended BY NAME because no
-    /// tier reaches them — RTTY and SSTV are sections, not tiers. So a plan
-    /// added for some future section IS guarded only if somebody adds it here,
-    /// exactly as the whole list used to be. Said plainly rather than left to
-    /// be assumed: the previous version of this comment claimed one census
-    /// guarded everything, and it guarded whatever the list happened to hold.
+    /// `rtty_band_plan`, `sstv_band_plan` and `psk_band_plan` are appended BY
+    /// NAME because no tier reaches them — RTTY, SSTV and the Keyboard Modes
+    /// are sections, not tiers. So a plan added for some future section IS
+    /// guarded only if somebody adds it here, exactly as the whole list used
+    /// to be. Said plainly rather than left to be assumed: the previous
+    /// version of this comment claimed one census guarded everything, and it
+    /// guarded whatever the list happened to hold.
     fn every_shipped_channel() -> Vec<BandChannel> {
         let mut plans: Vec<Vec<BandChannel>> = crate::dto::Tier::ALL
             .iter()
@@ -664,6 +690,7 @@ mod tests {
             .collect();
         plans.push(rtty_band_plan());
         plans.push(sstv_band_plan());
+        plans.push(psk_band_plan());
         plans.into_iter().flatten().collect()
     }
 
@@ -784,6 +811,107 @@ mod tests {
             ["1.25cm", "13cm", "23cm", "33cm", "3cm", "6cm", "70cm", "9cm"],
             "the centimetre channels Nexus ships"
         );
+    }
+
+    /// The Keyboard Modes (PSK31) plan against the privilege model — the
+    /// Part 97 half of Phase 2. Judged on the EMISSION (dial + ~1 kHz audio,
+    /// the PSK31 convention), through the same `tx_allowed` the transmit gate
+    /// runs, with `OperatingMode::Keyboard` — the flat section policy variant.
+    #[test]
+    fn psk_plan_pins_the_watering_holes_and_the_privilege_sweep_catches_them() {
+        use crate::privileges::tx_allowed;
+        use crate::settings::{LicenseClass, OperatingMode};
+        let psk = psk_band_plan();
+        // The identity anchors: the frequencies this file's other plans already
+        // cite in prose, now pickable.
+        let dial = |band: &str| {
+            psk.iter()
+                .find(|c| c.band == band)
+                .map(|c| c.dial_mhz)
+                .unwrap_or_else(|| panic!("{band} needs a PSK31 channel"))
+        };
+        assert_eq!(dial("20m"), 14.070, "THE PSK31 watering hole");
+        assert_eq!(
+            dial("80m"),
+            3.580,
+            "PSK31's 80 m home (cited at band_plan's 80 m note)"
+        );
+        assert_eq!(dial("160m"), 1.838);
+        assert_eq!(dial("40m"), 7.070);
+        assert_eq!(
+            dial("40m-dx"),
+            7.040,
+            "the US/EU split, the RTTY plan's pattern"
+        );
+        assert_eq!(
+            dial("30m"),
+            10.141,
+            "the native plan's own '(PSK 10.141)' citation"
+        );
+        assert_eq!(dial("15m"), 21.070);
+        assert_eq!(dial("10m"), 28.120, "cited at band_plan's 10 m note");
+        // USB on EVERY band — the PSK31 convention, and the opposite of RTTY's.
+        assert!(
+            psk.iter().all(|c| c.mode == "USB"),
+            "PSK31 channels are USB"
+        );
+        // The emission (dial + 1 kHz) must be GENERAL-legal on every channel —
+        // the same claim the module header makes for the native plan.
+        let off = 0.001;
+        for c in &psk {
+            assert!(
+                tx_allowed(
+                    LicenseClass::General,
+                    c.dial_mhz + off,
+                    OperatingMode::Keyboard
+                ),
+                "{}: a General cannot key the PSK31 emission at {}",
+                c.band,
+                c.dial_mhz
+            );
+        }
+        // THE SWEEP THE PLAN WARNS ABOUT, exercised: a Technician on 20 m PSK
+        // is refused (no 20 m data privilege), and on the two channels inside
+        // Technician data privileges (10 m / 6 m) they key legitimately.
+        assert!(
+            !tx_allowed(
+                LicenseClass::Technician,
+                dial("20m") + off,
+                OperatingMode::Keyboard
+            ),
+            "a Technician must not key 20 m PSK31"
+        );
+        assert!(
+            !tx_allowed(
+                LicenseClass::Technician,
+                dial("40m") + off,
+                OperatingMode::Keyboard
+            ),
+            "a Technician must not key 40 m PSK31"
+        );
+        assert!(
+            tx_allowed(
+                LicenseClass::Technician,
+                dial("10m") + off,
+                OperatingMode::Keyboard
+            ),
+            "10 m 28.120 is inside Technician data privileges"
+        );
+        assert!(
+            tx_allowed(
+                LicenseClass::Technician,
+                dial("6m") + off,
+                OperatingMode::Keyboard
+            ),
+            "6 m is band-wide data at every class"
+        );
+        // Keyboard is judged as a DATA emission, not phone: in the 20 m phone
+        // segment (no data authorization) even an Extra is refused.
+        assert!(!tx_allowed(
+            LicenseClass::Extra,
+            14.300,
+            OperatingMode::Keyboard
+        ));
     }
 
     #[test]

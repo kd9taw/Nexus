@@ -17,6 +17,7 @@ import {
 import { baudForRig, radioPatch } from './SettingsPanel'
 import { SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
+import { IS_WINDOWS } from '../platform'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { STARTER_PACKS, importPack } from '../features/packs'
 import { memoriesStore } from '../features/memories'
@@ -31,6 +32,11 @@ export interface WizardDraft {
   rigAddr?: string
   rigModel?: number
   rigModelName?: string
+  /** A discovered FlexRadio's LAN IP (SmartSDR API :4992) — the address the native panadapter
+   * and native DAX audio connect to. Was DISCARDED here while the Settings twin kept it, so a
+   * wizard-onboarded Flex reached Settings with both native toggles offered and no address for
+   * them to use: turning either on was a silent no-op (2026-08-17 Flex audit, wave-1 #29/#52). */
+  flexRadioIp?: string
   serialPort?: string
   baud?: number
   pttMethod?: string
@@ -131,6 +137,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   // --- Step 2: rig & audio (loaded lazily when the step opens) ---
   const [rigConn, setRigConn] = useState(() => settings?.rigConn ?? 'serial')
   const [rigAddr, setRigAddr] = useState(() => settings?.rigAddr ?? '')
+  const [flexRadioIp, setFlexRadioIp] = useState(() => settings?.flexRadioIp ?? '')
   const [rigModel, setRigModel] = useState<number | undefined>(undefined)
   const [rigModelName, setRigModelName] = useState<string | undefined>(undefined)
   const [serialPort, setSerialPort] = useState(() => settings?.serialPort ?? '')
@@ -390,6 +397,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     if (grid !== (settings?.mygrid ?? '') && (grid === '' || gridOk(grid))) d.mygrid = grid
     if (rigConn !== (settings?.rigConn ?? 'serial')) d.rigConn = rigConn
     if (rigAddr.trim() !== (settings?.rigAddr ?? '')) d.rigAddr = rigAddr.trim()
+    if (flexRadioIp.trim() !== (settings?.flexRadioIp ?? '')) d.flexRadioIp = flexRadioIp.trim()
     if (rigModel != null) {
       d.rigModel = rigModel
       d.rigModelName = rigModelName ?? ''
@@ -485,12 +493,22 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     // (model 2036 @ SmartSDR CAT's default slice-A TCP port 5002), never the
     // radio's own :4992 — Hamlib's direct native backend is alpha and failed
     // on a real 6400M. Discovery proves the radio is reachable.
+    //
+    // …but that address is a WINDOWS-only program, so it is applied only there — see the long
+    // note on the Settings twin (`SettingsPanel.applyDetectedFlex`), which this mirrors.
     setRigConn('network')
-    setRigAddr('127.0.0.1:5002')
+    if (IS_WINDOWS) setRigAddr('127.0.0.1:5002')
     setRigModel(2036)
-    setRigModelName('FlexRadio FLEX-6xxx (SmartSDR CAT)')
+    setRigModelName('FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)')
+    // ⚠️ KEEP THE DISCOVERED ADDRESS. This is the one moment discovery holds it, and the wizard
+    // used to drop it on the floor — the exact regression the Settings sibling records as fixed,
+    // still live here (2026-08-17 Flex audit, wave-1 #29). Without it, both native toggles are
+    // offered in Settings for a wizard-onboarded Flex and neither can ever start a worker.
+    if (f.ip) setFlexRadioIp(f.ip)
     setFlexNote(
-      `${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001). Test CAT below.`,
+      IS_WINDOWS
+        ? `${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001), radio address saved for the native panadapter/DAX. Test CAT below.`
+        : `${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — model and radio address saved. SmartSDR CAT is Windows-only: put the address of a Windows PC running it (slice A = its port 5002) in Network Address below, then Test CAT.`,
     )
   }
   const runCatTest = () => {

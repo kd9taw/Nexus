@@ -551,7 +551,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onSetTxCycleAuto={(auto: boolean) => apply(setTxCycleAuto(auto))}
           onResend={() => apply(qsoResend())}
           onFreetext={(text: string) => apply(qsoFreetext(text))}
-          onLog={() => apply(logCurrentQso())}
+          onLog={() => apply(logCurrentQso().then((r) => r.snapshot))}
           onOverrideTx={(call: string, grid: string | null, text: string) =>
             apply(overrideNextTx(call, grid, text))
           }

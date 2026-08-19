@@ -5,12 +5,12 @@
 **One app from antenna to award. Eleven modes, real rig control, APRS, propagation, DX chasing, and a logbook that computes your awards offline.**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Raspberry%20Pi-0078D6)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Raspberry%20Pi-0078D6)
 [![Release](https://img.shields.io/github/v/release/kd9taw/Nexus?label=release)](https://github.com/kd9taw/Nexus/releases/latest)
 [![Downloads](https://img.shields.io/sourceforge/dt/nexus-ham-radio?label=downloads)](https://sourceforge.net/projects/nexus-ham-radio/files/)
 ![Status](https://img.shields.io/badge/status-1.0-brightgreen)
 
-[![Download](https://img.shields.io/badge/⬇_Download-Windows_·_Linux_·_Pi-0078D6?style=for-the-badge&logo=windows)](https://github.com/kd9taw/Nexus/releases/latest)
+[![Download](https://img.shields.io/badge/⬇_Download-Windows_·_macOS_·_Linux_·_Pi-0078D6?style=for-the-badge&logo=windows)](https://github.com/kd9taw/Nexus/releases/latest)
 [![Operator manual](https://img.shields.io/badge/📖_Operator_manual-docs-8957e5?style=for-the-badge)](docs/manual/)
 
 <sub>Offline installer, bundles WebView2 **and Hamlib**, per-user install, no admin rights. ·
@@ -269,7 +269,7 @@ logs, and never shown back to the UI beyond "configured."
 ## Quick start
 
 1. **[Download](https://github.com/kd9taw/Nexus/releases/latest)** the file for your platform.
-   Every release carries all five, built from the same tree:
+   Every release carries all six, built from the same tree:
 
    | File | Platform |
    |---|---|
@@ -324,7 +324,7 @@ still says what a thing does *not* do, and so does every entry in the changelog.
   decode-rate-vs-SNR is the open gate and the single most useful contribution you can make.
 - **CW and Phone cockpits** are casual and ragchew grade by design: macros, voice keyer, panadapter,
   live decoder, WinKeyer support, full logging. No contest exchanges.
-- **Windows, Linux and Raspberry Pi** builds ship together every release.
+- **Windows, macOS, Linux and Raspberry Pi** builds ship together every release.
 - Not implemented yet: **contest modes** (NA VHF, RTTY RU, WW Digi), the **Fox role** (running a
   DXpedition end), **transmit-side iGating** (deliberately never, since it means a radio keying up
   unattended), and programming DMR / D-STAR / Fusion repeaters (they are listed with badges so you

@@ -25,6 +25,14 @@ pub enum OperatingMode {
     Phone,
     Cw,
     Rtty,
+    /// The keyboard modes as ONE flat section (PSK31 today; QPSK31 and the rest
+    /// select within the cockpit, never here). "keyboard" on the wire. All
+    /// keyboard modes share one section policy — data privileges, the digital
+    /// power cap, always-USB PKTUSB, soundcard-only — so every policy match in
+    /// the app gains exactly ONE reviewed arm for the whole family. Rtty stays
+    /// its own variant: its LSB convention and FSK backend are genuinely
+    /// different policy.
+    Keyboard,
 }
 
 /// Which VFO carries the uplink and which the downlink during a satellite pass.
@@ -245,6 +253,22 @@ pub fn rig_conn_is_network(rig_conn: &str, rig_addr: &str) -> bool {
     rig_conn == "network" && !rig_addr.is_empty()
 }
 
+/// Is this rig driven through **OmniRig** — VE3NEA's Windows COM rig-control
+/// server — instead of by a rigctld Nexus launches?
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for that question, for the same reason
+/// [`rig_conn_is_network`] is: `tempo_audio::service::Transport::is_omnirig`
+/// calls THIS, so the daemon-choice seam and every settings-side consumer
+/// cannot answer differently.
+///
+/// Unlike the network test this needs NO second field: OmniRig owns the rig
+/// type, the COM port and the baud, so there is nothing on the Nexus side that
+/// could be missing. Case-insensitive, because an imported/hand-edited config
+/// may carry "OmniRig".
+pub fn rig_conn_is_omnirig(rig_conn: &str) -> bool {
+    rig_conn.eq_ignore_ascii_case("omnirig")
+}
+
 /// Could Nexus's OWN CI-V daemon ever serve a radio wired like this — i.e. is
 /// "turn on Native CI-V" a cure that EXISTS for it?
 ///
@@ -257,7 +281,13 @@ pub fn rig_conn_is_network(rig_conn: &str, rig_addr: &str) -> bool {
 /// Not gated on the operator's `icom_native_cat` opt-in: that is the separate
 /// "is it switched on" question, and it is answered where it is used.
 pub fn native_civ_reachable(rig_model: u32, rig_conn: &str, rig_addr: &str) -> bool {
-    NATIVE_CIV_SAT_RIGS.contains(&rig_model) && !rig_conn_is_network(rig_conn, rig_addr)
+    NATIVE_CIV_SAT_RIGS.contains(&rig_model)
+        && !rig_conn_is_network(rig_conn, rig_addr)
+        // OmniRig is the third transport and it is a dead end for the CI-V daemon for the
+        // same reason `network` is: OmniRig holds the COM port, so Nexus can never open it
+        // to speak CI-V itself. Without this the satellite offer would pre-fill a Main/Sub
+        // mapping whose write has no path at all.
+        && !rig_conn_is_omnirig(rig_conn)
 }
 
 impl Settings {
@@ -748,6 +778,10 @@ pub struct Settings {
     /// IP `192.168.1.50:4992`). Ignored for serial.
     #[serde(default)]
     pub rig_addr: String,
+    /// OmniRig slot for the active radio (flat mirror of the profile field — see
+    /// [`RadioProfile::omnirig_slot`]). 1 = RIG 1, 2 = RIG 2; 0 reads as RIG 1.
+    #[serde(default)]
+    pub omnirig_slot: u8,
     /// Native Icom CI-V for the active radio (flat mirror of the profile field — see
     /// [`RadioProfile::icom_native_cat`]). Default off.
     #[serde(default)]
@@ -973,11 +1007,16 @@ pub struct Settings {
     /// Takes effect on the next tick for an active network Flex.
     #[serde(default)]
     pub flex_native_pan: bool,
-    /// Opt-in to native FlexRadio DAX RX audio (VITA-49 audio stream) instead of the WDM-KS "DAX
-    /// Audio RX" soundcard device — which breaks under Remote Desktop. OFF by default: the worker +
-    /// SmartSDR command syntax are UNVERIFIED on a real Flex, so a tester enables it here. When on,
-    /// the rig's RX audio comes straight off the network and feeds the decoders like soundcard
-    /// audio. Mirrors `flex_native_pan`. RX only — DAX TX stays on the existing path.
+    /// Opt-in to native FlexRadio DAX audio (VITA-49 audio streams) instead of the WDM-KS "DAX
+    /// Audio RX" / "DAX TX" soundcard devices — which break under Remote Desktop. OFF by default:
+    /// the worker + SmartSDR command syntax are UNVERIFIED on a real Flex, so a tester enables it
+    /// here. BOTH DIRECTIONS, not RX only (which is what this said while the opposite shipped):
+    /// receive audio comes straight off the network and feeds the decoders like soundcard audio,
+    /// and transmit audio is routed to the radio over DAX as well — which disconnects the rig's
+    /// microphone for as long as the toggle is on. That is deliberate (operator ruling 2026-07-26):
+    /// one toggle means native audio both ways, since a half-native path is a configuration that
+    /// mostly exists to be got wrong. Turning it off, switching radio or exiting Nexus puts the mic
+    /// back. Mirrors `flex_native_pan`.
     #[serde(default)]
     pub flex_native_audio: bool,
 
@@ -1458,6 +1497,17 @@ pub struct Settings {
     /// it can lower power past the operator's cap but never raise it past one.
     #[serde(default)]
     pub sstv_tx_power_pct: Option<u8>,
+    /// Whether opening the PSK view starts the receiver.
+    ///
+    /// The SSTV/APRS auto-arm doctrine, applied to PSK31 from day one (operator
+    /// ruling 2026-08-17): there is exactly one reason to be on a receive screen
+    /// with a receiver, so entering the view arms it — and this is the opt-out
+    /// for the operator monitoring on a shared rig. The gate lives in
+    /// [`crate::engine::Engine::psk_auto_arm`], not the view, so a remount
+    /// cannot lose it; stopping the receiver by hand is separately remembered
+    /// for the session (the decline memory), exactly as SSTV/APRS do.
+    #[serde(default = "default_true")]
+    pub psk_rx_auto_arm: bool,
 
     // --- alerts / comforts ---
     /// Alert (sound + visual) when your callsign is decoded (someone calling you).
@@ -1767,8 +1817,24 @@ fn default_sat_update_ms() -> u32 {
     1_000
 }
 
+/// The rate a rotator starts on before a model is picked — nothing more.
+///
+/// ⚠️ It was read as more than that, and that is the 2026-08-18 field report ("one rotator model
+/// does not work"). This one number was the ONLY rate any rotator ever got: the picker wrote
+/// `rotator_model` and never touched the baud, the UI tooltip told every owner of every model
+/// that 9600 was the GS-232 default, and `rotctld_args` forces `-s <baud>` onto the daemon
+/// whenever a port is set — which OVERRIDES the backend's own declared rate. Five of the
+/// thirteen real-hardware models the picker offered declare a single rate that is not 9600
+/// (SPID Rot2Prog 600, Rot1Prog 1200, Rotor-EZ / DCU-1 / RT-21 4800), so they shipped unable to
+/// talk to their controller at all.
+///
+/// The rate now comes from the model, through `ROT_FIXED_BAUD` / `baudForRotator` in the UI,
+/// derived from the bundled Hamlib's own caps by `scripts/gen-hamlib-rotator-speeds.mjs` — the
+/// same "only `min == max` is a fact" rule the rig picker took four rounds to learn. This value
+/// survives only as the pre-model starting point and as the fallback for a backend that
+/// declares a RANGE, where there is no fact to impose and the operator's own choice stands.
 fn default_rotator_baud() -> u32 {
-    9600 // the GS-232 family default
+    9600
 }
 
 fn default_save_wav() -> String {
@@ -2121,6 +2187,15 @@ pub struct RadioProfile {
     pub baud: u32,
     pub rig_conn: String,
     pub rig_addr: String,
+    /// Which OmniRig slot this radio drives when `rig_conn == "omnirig"`: **1 = RIG 1**
+    /// (default), **2 = RIG 2**. OmniRig has exactly those two, each with its own rig type
+    /// and COM port, so a two-radio station can put one Nexus radio on each.
+    ///
+    /// PER-RADIO because it has to be — it names WHICH radio inside OmniRig this profile is.
+    /// 0 (a settings file written before the field existed) reads as RIG 1, the default; see
+    /// `tempo_audio::omnirig::RigSlot::from_setting`.
+    #[serde(default)]
+    pub omnirig_slot: u8,
     /// UNIQUE across enabled profiles (validated) — each radio's own rigctld TCP port.
     pub rigctld_port: u16,
     /// Native Icom CI-V: Nexus itself owns this radio's serial CI-V port (instead of
@@ -2168,6 +2243,28 @@ pub struct RadioProfile {
     pub last_sideband: String,
     // --- native panadapter: "auto" | "none" | "flex" | "civ" ---
     pub native_scope: String,
+    // --- FlexRadio native lane (PER-RADIO since 2026-08-18) ---
+    /// THIS radio's FlexRadio LAN IP for the SmartSDR Ethernet API (port 4992) — the address the
+    /// native panadapter / DAX workers connect to. Distinct from `rig_addr`, which on the
+    /// SmartSDR-CAT model 2036 names the *PC* running SmartSDR CAT, not the radio.
+    ///
+    /// PER-RADIO because it has to be, and it was flat until the 2026-08-17 Flex audit found both
+    /// halves of the cost (wave-1 #30/#46): a flat address cannot describe two Flexes, so the
+    /// wrong radio's address was used after a switch, AND — the data-loss half — the Settings
+    /// per-radio Edit flow routes through [`RadioProfilePatch`], which carried none of these three,
+    /// so configuring radio 2 silently dropped the Flex config of radio 1. Exactly the
+    /// `ptt_serial_port` class documented on that field, one screen up.
+    #[serde(default)]
+    pub flex_radio_ip: String,
+    /// Opt-in to THIS radio's native SmartSDR panadapter (VITA-49 FFT). See
+    /// [`Settings::flex_native_pan`] for what the feature is and why it is opt-in; per-radio for
+    /// the same reason as `flex_radio_ip` — one Flex may run it while another rig does not.
+    #[serde(default)]
+    pub flex_native_pan: bool,
+    /// Opt-in to THIS radio's native FlexRadio DAX audio (BOTH directions — see
+    /// [`Settings::flex_native_audio`]). Per-radio, as above.
+    #[serde(default)]
+    pub flex_native_audio: bool,
 }
 
 /// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
@@ -2189,6 +2286,10 @@ pub struct RadioProfilePatch {
     pub baud: u32,
     pub rig_conn: String,
     pub rig_addr: String,
+    /// See `RadioProfile::omnirig_slot` — RIG 1 / RIG 2. `#[serde(default)]` like
+    /// `ptt_serial_port`: a payload written before the field existed still deserializes.
+    #[serde(default)]
+    pub omnirig_slot: u8,
     pub rigctld_port: u16,
     pub icom_native_cat: bool,
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
@@ -2204,6 +2305,16 @@ pub struct RadioProfilePatch {
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
+    /// See `RadioProfile::flex_radio_ip` — the Flex API address of THIS radio. `#[serde(default)]`
+    /// like `ptt_serial_port`: a payload written before these were per-radio still deserializes.
+    #[serde(default)]
+    pub flex_radio_ip: String,
+    /// See `RadioProfile::flex_native_pan`.
+    #[serde(default)]
+    pub flex_native_pan: bool,
+    /// See `RadioProfile::flex_native_audio`.
+    #[serde(default)]
+    pub flex_native_audio: bool,
 }
 
 impl RadioProfilePatch {
@@ -2223,6 +2334,7 @@ impl RadioProfilePatch {
         p.baud = self.baud;
         p.rig_conn = self.rig_conn;
         p.rig_addr = self.rig_addr;
+        p.omnirig_slot = self.omnirig_slot;
         p.rigctld_port = self.rigctld_port;
         p.icom_native_cat = self.icom_native_cat;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
@@ -2236,6 +2348,9 @@ impl RadioProfilePatch {
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
         p.native_scope = self.native_scope;
+        p.flex_radio_ip = self.flex_radio_ip;
+        p.flex_native_pan = self.flex_native_pan;
+        p.flex_native_audio = self.flex_native_audio;
     }
 }
 
@@ -2301,6 +2416,7 @@ impl Default for RadioProfile {
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
+            omnirig_slot: 1,
             // 4534, not 4532: the CAT broker owns 4532 by default (#53) — a default that
             // collided with it would rely on load-time port repair everywhere, and open_cat
             // refuses a self-collision with dead CAT. 4533 is out too: it is the rotctld
@@ -2323,6 +2439,9 @@ impl Default for RadioProfile {
             last_band: String::new(),
             last_sideband: String::new(),
             native_scope: "auto".to_string(),
+            flex_radio_ip: String::new(),
+            flex_native_pan: false,
+            flex_native_audio: false,
         }
     }
 }
@@ -2379,6 +2498,62 @@ pub fn serial_port_conflicts(radios: &[RadioProfile]) -> Option<String> {
             ));
         }
         used.push((port.to_string(), p.name.clone()));
+    }
+    None
+}
+
+/// Two enabled radios pointed at ONE network CAT address — the network twin of
+/// [`serial_port_conflicts`], and the gap that function's own doc-comment left open ("network CAT
+/// … don't own a COM port", which is true of the COM port and says nothing about the endpoint).
+///
+/// Found by the 2026-08-17 Flex audit (wave-2 #20): `validate_radio_ports` de-duplicates the
+/// rigctld/rotctld/broker ports between profiles and never looks at `rig_addr`, so two enabled Flex
+/// profiles both left on SmartSDR CAT's default `127.0.0.1:5002` — the natural mistake when an
+/// operator duplicates a profile for a second slice and forgets the port — passed every check.
+/// Nexus then launches two rigctld daemons that both open one SmartSDR CAT slice port, and the two
+/// chains fight over dial and mode; the symptom reads as a flaky radio.
+///
+/// A WARNING, never a save-block, and deliberately softer than the serial one: a shared address is
+/// wrong for a Flex but legitimate for some rigctld setups (two profiles sharing one remote daemon
+/// on purpose, differing only in audio). Same surface as its two siblings — the snapshot's
+/// `radio_config_warning`, which self-clears once the addresses differ.
+///
+/// Host:port compared case-insensitively after trimming; the loopback spellings
+/// (`localhost`/`127.0.0.1`/`::1`) are normalised, because they are the same endpoint and this
+/// mistake is made ON loopback. Returns the first collision message, else `None`.
+pub fn network_cat_address_conflicts(radios: &[RadioProfile]) -> Option<String> {
+    /// `localhost:5002`, `127.0.0.1:5002` and `[::1]:5002` are one endpoint. Everything else is
+    /// compared as written — resolving names is I/O, and this is a pure pre-save check.
+    fn normalize(addr: &str) -> String {
+        let a = addr.trim().to_ascii_lowercase();
+        let (host, port) = match a.rsplit_once(':') {
+            Some((h, p)) => (h.trim_matches(['[', ']']), p),
+            None => return a,
+        };
+        let host = match host {
+            "localhost" | "127.0.0.1" | "::1" => "localhost",
+            other => other,
+        };
+        format!("{host}:{port}")
+    }
+    let mut used: Vec<(String, String)> = Vec::new(); // (normalized addr, radio name)
+    for p in radios.iter().filter(|p| {
+        p.enabled
+            && p.rig_model > 0
+            && p.rig_conn.eq_ignore_ascii_case("network")
+            && !p.rig_addr.trim().is_empty()
+    }) {
+        let addr = normalize(&p.rig_addr);
+        if let Some((_, other)) = used.iter().find(|(u, _)| *u == addr) {
+            return Some(format!(
+                "{other} and {} are both on network CAT address {} — two radio chains commanding \
+                 one endpoint fight over dial and mode. For a FlexRadio, each SmartSDR CAT slice \
+                 has its OWN port (A=5002, B=60001, C=60002, D=60003).",
+                p.name,
+                p.rig_addr.trim()
+            ));
+        }
+        used.push((addr, p.name.clone()));
     }
     None
 }
@@ -2551,6 +2726,7 @@ impl Default for Settings {
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
+            omnirig_slot: 1,
             icom_native_cat: false,
             data_modes_plain_ssb: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
@@ -2721,6 +2897,7 @@ impl Default for Settings {
             sstv_rx_auto_arm: true,
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
+            psk_rx_auto_arm: true,
             alert_my_call: true,
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
@@ -2834,6 +3011,7 @@ impl Settings {
             baud: self.baud,
             rig_conn: self.rig_conn.clone(),
             rig_addr: self.rig_addr.clone(),
+            omnirig_slot: self.omnirig_slot,
             rigctld_port: self.rigctld_port,
             icom_native_cat: self.icom_native_cat,
             data_modes_plain_ssb: self.data_modes_plain_ssb,
@@ -2851,6 +3029,12 @@ impl Settings {
             last_band: self.band.clone(),
             last_sideband: self.sideband.clone(),
             native_scope: "auto".to_string(),
+            // The Flex three come from the flat mirror like every other rig field — this IS the
+            // migration for a pre-multi-radio settings file (see `load`'s sibling for the file
+            // that already HAS profiles).
+            flex_radio_ip: self.flex_radio_ip.clone(),
+            flex_native_pan: self.flex_native_pan,
+            flex_native_audio: self.flex_native_audio,
         }
     }
 
@@ -3162,6 +3346,7 @@ impl Settings {
         self.baud = p.baud;
         self.rig_conn = p.rig_conn;
         self.rig_addr = p.rig_addr;
+        self.omnirig_slot = p.omnirig_slot;
         self.rigctld_port = p.rigctld_port;
         self.icom_native_cat = p.icom_native_cat;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
@@ -3173,6 +3358,12 @@ impl Settings {
         self.rotator_port = p.rotator_port;
         self.rotator_baud = p.rotator_baud;
         self.rotator_host = p.rotator_host;
+        // The Flex three ride the SAME mirror as every other rig field, so every existing consumer
+        // (`reconcile_spectrum_source` reads `settings().flex_radio_ip`) keeps reading the ACTIVE
+        // radio unchanged while the stored truth is per-radio.
+        self.flex_radio_ip = p.flex_radio_ip;
+        self.flex_native_pan = p.flex_native_pan;
+        self.flex_native_audio = p.flex_native_audio;
     }
 
     /// Copy the flat mirror back INTO the active profile — so edits made through today's flat rig/
@@ -3191,6 +3382,7 @@ impl Settings {
             baud,
             rig_conn,
             rig_addr,
+            omnirig_slot,
             rigctld_port,
             icom_native_cat,
             data_modes_plain_ssb,
@@ -3202,6 +3394,9 @@ impl Settings {
             rotator_port,
             rotator_baud,
             rotator_host,
+            flex_radio_ip,
+            flex_native_pan,
+            flex_native_audio,
         ) = (
             self.ptt_method.clone(),
             self.rig_model,
@@ -3211,6 +3406,7 @@ impl Settings {
             self.baud,
             self.rig_conn.clone(),
             self.rig_addr.clone(),
+            self.omnirig_slot,
             self.rigctld_port,
             self.icom_native_cat,
             self.data_modes_plain_ssb,
@@ -3222,6 +3418,9 @@ impl Settings {
             self.rotator_port.clone(),
             self.rotator_baud,
             self.rotator_host.clone(),
+            self.flex_radio_ip.clone(),
+            self.flex_native_pan,
+            self.flex_native_audio,
         );
         if let Some(p) = self.radios.iter_mut().find(|p| p.id == active) {
             p.ptt_method = ptt_method;
@@ -3232,6 +3431,7 @@ impl Settings {
             p.baud = baud;
             p.rig_conn = rig_conn;
             p.rig_addr = rig_addr;
+            p.omnirig_slot = omnirig_slot;
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
@@ -3243,6 +3443,9 @@ impl Settings {
             p.rotator_port = rotator_port;
             p.rotator_baud = rotator_baud;
             p.rotator_host = rotator_host;
+            p.flex_radio_ip = flex_radio_ip;
+            p.flex_native_pan = flex_native_pan;
+            p.flex_native_audio = flex_native_audio;
         }
     }
 
@@ -3408,6 +3611,33 @@ impl Settings {
         }
         s.ensure_distinct_radio_ports(); // two live daemons (dual-radio) need distinct ports
         s.ensure_routing_targets(); // drop rules aimed at radios this config no longer has
+
+        // Migration: the FLEX THREE became per-radio on 2026-08-18 (Flex audit wave-1 #30/#46).
+        // A file written before that carries them ONLY on the flat `Settings`; its profiles have
+        // no such keys, so serde defaults them to ""/false — and the `sync_flat_from_active` at
+        // the end of this function would then copy those defaults OVER the operator's real
+        // address, losing it on the first launch of this build. Copy the flat value into the
+        // ACTIVE radio's profile first, which is exactly what it always described.
+        //
+        // MUST run after `ensure_radio_profiles` (the profile has to exist) and BEFORE
+        // `sync_flat_from_active` (which is the thing that would clobber it). Idempotent: after
+        // one save the profile carries the value and the flat mirror equals it, so a later load
+        // either finds nothing to copy or copies the identical value. Guarded on the profile being
+        // EMPTY/off so it can never resurrect a setting the operator deliberately cleared — a
+        // cleared field is written to both representations by `save`'s `sync_active_from_flat`.
+        let (flat_ip, flat_pan, flat_audio) = (
+            s.flex_radio_ip.clone(),
+            s.flex_native_pan,
+            s.flex_native_audio,
+        );
+        let active = s.active_radio;
+        if let Some(p) = s.radios.iter_mut().find(|p| p.id == active) {
+            if p.flex_radio_ip.trim().is_empty() && !flat_ip.trim().is_empty() {
+                p.flex_radio_ip = flat_ip;
+            }
+            p.flex_native_pan |= flat_pan;
+            p.flex_native_audio |= flat_audio;
+        }
         s.sync_flat_from_active();
         s
     }
@@ -3486,7 +3716,11 @@ impl Settings {
         let cap = match self.operating_mode {
             OperatingMode::Phone => self.max_power_phone,
             OperatingMode::Cw => self.max_power_cw,
-            OperatingMode::Digital | OperatingMode::Rtty => self.max_power_digital,
+            // The keyboard modes share the digital cap: PSK31 keys continuously
+            // at high duty exactly as RTTY does.
+            OperatingMode::Digital | OperatingMode::Rtty | OperatingMode::Keyboard => {
+                self.max_power_digital
+            }
         };
         cap.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0)
     }
@@ -3539,6 +3773,10 @@ impl Settings {
         // while Phone and CW follow the hard band convention (LSB below 10 MHz).
         let lsb = match self.operating_mode {
             OperatingMode::Digital => self.sideband.trim().eq_ignore_ascii_case("LSB"),
+            // Keyboard modes are ALWAYS USB-side: the PSK31 convention is USB on
+            // every band (80/40 m included — unlike RTTY's LSB and phone's
+            // below-10-MHz rule), so the band fallthrough would be wrong here.
+            OperatingMode::Keyboard => false,
             _ => self.dial_mhz < 10.0,
         };
         self.rig_mode_on_sideband(lsb)
@@ -3612,6 +3850,15 @@ impl Settings {
             OperatingMode::Digital => {
                 self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
             }
+            // Keyboard modes (PSK31…): soundcard audio through a DATA submode,
+            // exactly like Digital — plain SSB on a normally-wired rig radiates
+            // ZERO RF, hence the same PKT/data forcing and the same mic-jack
+            // opt-out. `rig_mode` derives the side as always-USB (the PSK31
+            // convention); the side stays a parameter here for the one caller
+            // that can know better (a transponder's declared side).
+            OperatingMode::Keyboard => {
+                self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
+            }
         }
     }
 
@@ -3667,6 +3914,7 @@ mod tests {
             baud: 115_200,
             rig_conn: "network".into(),
             rig_addr: "192.0.2.10:4992".into(),
+            omnirig_slot: 2,
             rigctld_port: 4533,
             icom_native_cat: true,
             data_modes_plain_ssb: true,
@@ -3680,6 +3928,9 @@ mod tests {
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
+            flex_radio_ip: "192.0.2.50".into(),
+            flex_native_pan: true,
+            flex_native_audio: true,
         };
 
         let sent = serde_json::to_value(&patch).expect("patch serializes");
@@ -3702,6 +3953,327 @@ mod tests {
              must be copied onto the profile, or a per-radio edit silently saves nothing",
             dropped.len()
         );
+    }
+
+    /// THE OTHER HALF, and the one that was missing when it mattered (2026-08-17 Flex audit,
+    /// wave-1 #46/#30). The sibling above proves every field the patch CARRIES lands; it is
+    /// silent about a per-radio field the patch does not carry at all — and that is exactly how
+    /// `flexRadioIp` / `flexNativePan` / `flexNativeAudio` were lost: they were flat-only, the
+    /// Settings per-radio Edit flow routes every save through `update_radio_profile(patch)`, and
+    /// the patch enumerated 20 fields with none of the three. Save reported success and the
+    /// operator's Flex address was gone.
+    ///
+    /// Computed from serde, not from a list, for the same reason as the sibling. The exclusions
+    /// are the ones `RadioProfilePatch`'s own doc names — identity, band coverage and the
+    /// `last_*` tune memory the radio loop owns — and adding a field to `RadioProfile` that is
+    /// neither excluded nor in the patch fails here rather than in the field.
+    #[test]
+    fn every_per_radio_field_is_reachable_through_the_patch() {
+        const NOT_EDITABLE: [&str; 7] = [
+            "id",
+            "name",
+            "enabled",
+            "bands",
+            "lastDialMhz",
+            "lastBand",
+            "lastSideband",
+        ];
+        let profile = serde_json::to_value(RadioProfile::default()).expect("profile serializes");
+        let patch = serde_json::to_value(RadioProfilePatch {
+            ptt_method: String::new(),
+            rig_model: 0,
+            rig_model_name: String::new(),
+            serial_port: String::new(),
+            ptt_serial_port: String::new(),
+            baud: 0,
+            rig_conn: String::new(),
+            rig_addr: String::new(),
+            omnirig_slot: 0,
+            rigctld_port: 0,
+            icom_native_cat: false,
+            data_modes_plain_ssb: false,
+            audio_in: String::new(),
+            audio_out: String::new(),
+            tx_level: 0.0,
+            rx_gain: 0.0,
+            rotator_model: 0,
+            rotator_port: String::new(),
+            rotator_baud: 0,
+            rotator_host: String::new(),
+            rotctld_port: 0,
+            native_scope: String::new(),
+            flex_radio_ip: String::new(),
+            flex_native_pan: false,
+            flex_native_audio: false,
+        })
+        .expect("patch serializes");
+        let patch_keys: Vec<&str> = patch
+            .as_object()
+            .expect("patch is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let unreachable: Vec<&str> = profile
+            .as_object()
+            .expect("profile is an object")
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !NOT_EDITABLE.contains(k) && !patch_keys.contains(k))
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "RadioProfile field(s) {unreachable:?} cannot be edited on a NON-ACTIVE radio: the \
+             per-radio Edit flow saves through RadioProfilePatch, so a field missing from the \
+             patch is silently dropped on Save. Add it to the patch + apply_to, or list it in \
+             NOT_EDITABLE with a reason."
+        );
+    }
+
+    /// THE FIELD-SPECIFIC HALF for OmniRig, written because yesterday's bug was exactly this
+    /// and the generic guards above are only as good as the day they were remembered: a
+    /// per-radio field the patch does not CARRY, or carries and `apply_to` does not ASSIGN,
+    /// is silently wiped when the operator edits a radio they are not currently operating.
+    ///
+    /// So both halves are pinned here by name. `rig_conn` matters as much as the slot: the
+    /// whole connection type is per-radio, and losing it on a save would put an OmniRig
+    /// station back on a serial port it does not own.
+    #[test]
+    fn an_omnirig_pick_survives_an_edit_of_a_non_active_radio() {
+        let mut profile = RadioProfile {
+            id: 1,
+            name: "IC-7300 via OmniRig".into(),
+            rig_conn: "omnirig".into(),
+            omnirig_slot: 2,
+            ..RadioProfile::default()
+        };
+        // The Settings per-radio Edit flow: read the profile out, change ONE unrelated thing,
+        // save it back through the patch. Everything else must come out the way it went in.
+        let mut patch = patch_of(&profile);
+        patch.ptt_serial_port = "COM9".into(); // the one edit
+        patch.apply_to(&mut profile);
+        assert_eq!(profile.ptt_serial_port, "COM9", "the edit landed");
+        assert_eq!(profile.rig_conn, "omnirig", "the connection type survived");
+        assert_eq!(profile.omnirig_slot, 2, "the RIG 2 pick survived");
+
+        // The other direction — a patch that MOVES the slot really moves it, so the guard is
+        // shown to fire as well as to hold.
+        let mut moved = profile.clone();
+        let mut p2 = patch_of(&profile);
+        p2.omnirig_slot = 1;
+        p2.apply_to(&mut moved);
+        assert_eq!(moved.omnirig_slot, 1, "a changed slot is written through");
+    }
+
+    /// A full settings file with an OmniRig radio survives save → load, camelCase key and
+    /// all, and the flat mirror describes the ACTIVE radio the way every existing consumer
+    /// (`Transport::from_settings`) reads it.
+    #[test]
+    fn an_omnirig_radio_round_trips_through_save_and_load() {
+        let dir = std::env::temp_dir().join("tempo_settings_omnirig");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("omnirig_{}.json", std::process::id()));
+        let mut s = Settings::default();
+        s.mycall = "KD9TAW".into();
+        s.radios = vec![
+            RadioProfile {
+                id: 0,
+                name: "FTDX10".into(),
+                rigctld_port: 4534,
+                ..RadioProfile::default()
+            },
+            RadioProfile {
+                id: 1,
+                name: "IC-7300 via OmniRig".into(),
+                rig_conn: "omnirig".into(),
+                omnirig_slot: 2,
+                rigctld_port: 4535,
+                ..RadioProfile::default()
+            },
+        ];
+        s.active_radio = 1;
+        // The mirror invariant: the flat rig fields describe the ACTIVE radio, and `save`
+        // syncs flat→active. Skipping this is how the first draft of this test "failed" —
+        // correctly: a save with a stale flat mirror really does overwrite the profile.
+        s.sync_flat_from_active();
+        s.save(&path).expect("saves");
+
+        // The stored key is camelCase, like every other per-radio field.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("\"omnirigSlot\""),
+            "camelCase wire key: {raw:.400}"
+        );
+
+        let back = Settings::load(&path);
+        let p = back.active_profile().expect("active profile");
+        assert_eq!(p.rig_conn, "omnirig");
+        assert_eq!(p.omnirig_slot, 2);
+        assert_eq!(
+            back.omnirig_slot, 2,
+            "the flat mirror describes the active radio"
+        );
+        assert_eq!(back.rig_conn, "omnirig");
+        // …and the OTHER radio is untouched, which is the multi-radio half of the same rule.
+        let other = back.radios.iter().find(|r| r.id == 0).unwrap();
+        assert_eq!(other.rig_conn, "serial");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The connection-kind rules, both directions, plus the one consequence that would
+    /// otherwise be found on the air: OmniRig holds the COM port, so Nexus's own CI-V daemon
+    /// can never reach that radio and the satellite offer must not pre-fill a mapping whose
+    /// write has no path.
+    #[test]
+    fn omnirig_is_its_own_connection_kind_and_closes_the_native_civ_door() {
+        assert!(rig_conn_is_omnirig("omnirig"));
+        assert!(rig_conn_is_omnirig("OmniRig"), "case-insensitive");
+        assert!(!rig_conn_is_omnirig("serial"));
+        assert!(!rig_conn_is_omnirig("network"));
+        assert!(
+            !rig_conn_is_omnirig(""),
+            "an absent field is serial, not OmniRig"
+        );
+        // Disjoint from the network rule in both directions.
+        assert!(!rig_conn_is_network("omnirig", "192.0.2.1:4532"));
+        assert!(!rig_conn_is_omnirig("network"));
+        // 3081 = IC-9700, a native-CI-V satellite rig. Positive control first.
+        assert!(
+            native_civ_reachable(3081, "serial", ""),
+            "control: a serial IC-9700 CAN reach the native daemon"
+        );
+        assert!(
+            !native_civ_reachable(3081, "omnirig", ""),
+            "…and an OmniRig one cannot — OmniRig owns the port"
+        );
+    }
+
+    /// Helper for the patch test above: the patch a Save would build from a profile.
+    fn patch_of(p: &RadioProfile) -> RadioProfilePatch {
+        RadioProfilePatch {
+            ptt_method: p.ptt_method.clone(),
+            rig_model: p.rig_model,
+            rig_model_name: p.rig_model_name.clone(),
+            serial_port: p.serial_port.clone(),
+            ptt_serial_port: p.ptt_serial_port.clone(),
+            baud: p.baud,
+            rig_conn: p.rig_conn.clone(),
+            rig_addr: p.rig_addr.clone(),
+            omnirig_slot: p.omnirig_slot,
+            rigctld_port: p.rigctld_port,
+            icom_native_cat: p.icom_native_cat,
+            data_modes_plain_ssb: p.data_modes_plain_ssb,
+            audio_in: p.audio_in.clone(),
+            audio_out: p.audio_out.clone(),
+            tx_level: p.tx_level,
+            rx_gain: p.rx_gain,
+            rotator_model: p.rotator_model,
+            rotator_port: p.rotator_port.clone(),
+            rotator_baud: p.rotator_baud,
+            rotator_host: p.rotator_host.clone(),
+            rotctld_port: p.rotctld_port,
+            native_scope: p.native_scope.clone(),
+            flex_radio_ip: p.flex_radio_ip.clone(),
+            flex_native_pan: p.flex_native_pan,
+            flex_native_audio: p.flex_native_audio,
+        }
+    }
+
+    /// A settings file written before the Flex three became per-radio keeps its address: the flat
+    /// value migrates into the ACTIVE radio's profile on load, instead of being overwritten by
+    /// the profile's serde default on the way back out through `sync_flat_from_active`.
+    #[test]
+    fn a_pre_per_radio_flex_config_migrates_into_the_active_profile() {
+        let dir = std::env::temp_dir().join("tempo_settings_flexmigrate");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("flexmigrate_{}.json", std::process::id()));
+
+        // The legacy shape: TWO radio profiles (so `ensure_radio_profiles` is a no-op and only
+        // the migration can save this), neither carrying a Flex key, plus the flat trio the old
+        // build wrote. Hand-built JSON — a serialized `Settings` would carry the NEW keys and
+        // prove nothing.
+        let legacy = serde_json::json!({
+            "mycall": "KD9TAW",
+            "flexRadioIp": "192.0.2.77",
+            "flexNativePan": true,
+            "flexNativeAudio": true,
+            "activeRadio": 1,
+            "radios": [
+                { "id": 0, "name": "FTDX10", "rigModel": 1042 },
+                { "id": 1, "name": "FLEX-6400", "rigModel": 2036, "rigConn": "network" },
+            ],
+        });
+        std::fs::write(&path, serde_json::to_string(&legacy).unwrap()).unwrap();
+
+        let s = Settings::load(&path);
+        let active = s.active_profile().expect("active profile exists");
+        assert_eq!(active.flex_radio_ip, "192.0.2.77", "the address survived");
+        assert!(active.flex_native_pan, "the pan opt-in survived");
+        assert!(active.flex_native_audio, "the audio opt-in survived");
+        // …and the flat mirror still describes the active radio, so every existing consumer of
+        // `settings().flex_radio_ip` reads it unchanged.
+        assert_eq!(s.flex_radio_ip, "192.0.2.77");
+        // The OTHER radio is untouched: the flat value described the active one only.
+        let other = s.radios.iter().find(|p| p.id == 0).expect("radio 0");
+        assert_eq!(other.flex_radio_ip, "");
+        assert!(!other.flex_native_pan);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Two enabled radios on ONE network CAT address warn; the cases that are not a collision
+    /// stay silent. Both directions, because a guard shown to fire only one way is half a test.
+    #[test]
+    fn network_cat_address_conflicts_flags_two_radios_on_one_endpoint() {
+        let rig = |name: &str, addr: &str, conn: &str, model: u32, enabled: bool| RadioProfile {
+            name: name.into(),
+            rig_addr: addr.into(),
+            rig_conn: conn.into(),
+            rig_model: model,
+            enabled,
+            ..Default::default()
+        };
+        // The audited mistake: a duplicated Flex profile left on SmartSDR CAT's slice-A port.
+        let a = rig("FLEX slice A", "127.0.0.1:5002", "network", 2036, true);
+        let b = rig("FLEX slice B", "127.0.0.1:5002", "network", 2036, true);
+        let msg = network_cat_address_conflicts(&[a.clone(), b.clone()]).expect("conflict");
+        assert!(
+            msg.contains("FLEX slice A") && msg.contains("FLEX slice B"),
+            "names both radios: {msg}"
+        );
+        assert!(msg.contains("127.0.0.1:5002"), "names the address: {msg}");
+        // localhost and 127.0.0.1 are ONE endpoint — this mistake is made on loopback.
+        assert!(
+            network_cat_address_conflicts(&[
+                a.clone(),
+                rig("FLEX slice B", "localhost:5002", "network", 2036, true),
+            ])
+            .is_some(),
+            "loopback spellings are the same endpoint"
+        );
+        // Distinct slice ports — the correct multi-slice setup — are silent.
+        assert!(network_cat_address_conflicts(&[
+            a.clone(),
+            rig("FLEX slice B", "127.0.0.1:60001", "network", 2036, true),
+        ])
+        .is_none());
+        // A DISABLED sibling owns nothing.
+        assert!(network_cat_address_conflicts(&[
+            a.clone(),
+            rig("FLEX slice B", "127.0.0.1:5002", "network", 2036, false),
+        ])
+        .is_none());
+        // A serial radio is the serial check's business, not this one.
+        assert!(network_cat_address_conflicts(&[
+            rig("FTDX10", "127.0.0.1:5002", "serial", 1042, true),
+            rig("IC-9700", "127.0.0.1:5002", "serial", 23005, true),
+        ])
+        .is_none());
+        // No model / no address configured yet is not a collision.
+        assert!(network_cat_address_conflicts(&[
+            rig("unset", "", "network", 2036, true),
+            rig("unset 2", "", "network", 2036, true),
+        ])
+        .is_none());
     }
 
     #[test]
@@ -4819,6 +5391,30 @@ mod tests {
         assert!(!off.sstv_rx_auto_arm);
         assert_eq!(off.sstv_default_tx_mode, "martin1");
         assert_eq!(off.sstv_tx_power_pct, Some(40));
+    }
+
+    /// The PSK section's one field, on the exact wire key the UI hand-writes —
+    /// the same interior-acronym trap the SSTV test above documents
+    /// (`pskRXAutoArm` would compile clean on both sides and never match).
+    #[test]
+    fn psk_settings_default_and_wire_key() {
+        let s = Settings::default();
+        assert!(
+            s.psk_rx_auto_arm,
+            "opening the PSK view arms the receiver — the easy-defaults premise"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"pskRxAutoArm\":true"),
+            "missing wire key pskRxAutoArm in {json}"
+        );
+        // An upgrader's file predates the key: behaviour unchanged. And an
+        // explicit opt-out survives the round trip (a default that ignored the
+        // file would pass the first assertion alone).
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(old.psk_rx_auto_arm);
+        let off: Settings = serde_json::from_str(r#"{"pskRxAutoArm":false}"#).unwrap();
+        assert!(!off.psk_rx_auto_arm);
     }
 
     #[test]

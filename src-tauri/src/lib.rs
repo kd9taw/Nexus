@@ -1427,6 +1427,11 @@ fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
         .arg(radio_profile_key(radio_id))
         .spawn()
         .map_err(|e| e.to_string())?;
+    // The window on screen right now is the radio picker, not a box the operator sized —
+    // `quit_cleanup` must not persist it over the base profile's real geometry (see
+    // QUIT_SKIP_GEOMETRY). This exit path never captured geometry before the Cmd+Q fix
+    // hooked capture into the quit events, and window_state's docs call that correct.
+    QUIT_SKIP_GEOMETRY.store(true, std::sync::atomic::Ordering::SeqCst);
     app.exit(0);
     Ok(())
 }
@@ -6172,15 +6177,24 @@ fn send_rot_step(addr: &str, step: tempo_core::rotator::RotStep) -> tempo_core::
         RotStep::Hold => RotOutcome::AzOk, // never reaches the wire
         RotStep::PointAzEl { az, el } => match tempo_audio::rotator::point_azel(addr, az, el) {
             Ok(()) => RotOutcome::AzElOk,
-            // Elevation refused. If plain azimuth lands, this is an az-only
-            // rotator (or a transient the driver will re-probe for).
-            Err(_) => {
+            // Elevation REFUSED — the daemon answered and said no (`RPRT -1` from the
+            // frontend's min_el/max_el check on a mount with no elevation axis). If plain
+            // azimuth then lands, this is an az-only rotator, or a transient the driver
+            // re-probes for.
+            //
+            // ⚠️ Only on an answered refusal. Silence is not a refusal: retrying azimuth
+            // after a timeout doubles the wait on a tick that has a satellite to keep up
+            // with, and a rotator that answers nothing is not an az-only rotator — it is
+            // gone. Before the rotctld client told the truth about replies this could not
+            // be asked, because a timeout arrived here as `Ok(())`.
+            Err(e) if e.kind() == std::io::ErrorKind::Other => {
                 if tempo_audio::rotator::point(addr, az).is_ok() {
                     RotOutcome::AzOnly
                 } else {
                     RotOutcome::Failed
                 }
             }
+            Err(_) => RotOutcome::Failed,
         },
         RotStep::PointAz { az } => {
             if tempo_audio::rotator::point(addr, az).is_ok() {
@@ -6558,7 +6572,17 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
     use tempo_core::rotator::{RotOutcome, RotStep};
     // Deadband, calibration trim, the az-only fallback and its recovery
     // probe, and the miss counter all live in the driver.
-    let mut driver = tempo_core::rotator::TrackDriver::new(rot_cfg);
+    // The FRAME is a property of this pass, not of a tick: a mount the operator has told us can
+    // go over the top takes a near-zenith pass that way, about the bearing the bird rises on,
+    // and an ordinary pass the ordinary way. Deciding it here is what makes "Allow flip" do
+    // anything at all — it used to be asked of the instantaneous look angle, which cannot
+    // exceed 90°, so the setting was a no-op and the mast raced round on every high pass.
+    let mut driver =
+        tempo_core::rotator::TrackDriver::for_pass(rot_cfg, pass.max_el_deg, pass.aos_az_deg);
+    // Is the mast actually going where it is told? The pass never asked before — the deadband
+    // compares the new target against the last COMMAND, so it agrees with itself, and a rotator
+    // that accepted everything and then jammed was invisible for the whole pass.
+    let mut lag = tempo_core::rotator::LagWatch::default();
     let update_badge = |dto: SatTrackDto| {
         if let Ok(mut g) = SAT_TRACK.lock() {
             if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
@@ -6848,6 +6872,29 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         }
         let outcome = send_rot_step(addr, step);
         driver.record(step, outcome, sat_az, sat_el);
+        // ⭐ ASK THE MAST WHERE IT ACTUALLY IS. Accepting a command is not arriving: a jam, a
+        // slipped belt, a hit stop or a controller in local all take `P` and answer `RPRT 0`
+        // while the antenna stays put, and every surface in the app was drawing the commanded
+        // pair. The rule is "far AND not moving", never "far" — a legitimate slew to AOS is
+        // 180° of gap and takes a G-5500 half a minute (`LagWatch`). Once per episode, to the
+        // connection log, which is where support asks the operator to look.
+        if outcome != RotOutcome::Failed {
+            if let (Some((caz, _)), Ok((meas_az, _))) =
+                (driver.last_cmd(), tempo_audio::rotator::read_position(addr))
+            {
+                if let Some(gap) = lag.observe(caz, meas_az) {
+                    conn_log(
+                        "Rotator",
+                        "warn",
+                        format!(
+                            "the rotator is not moving: commanded {caz:.0}°, reading \
+                             {meas_az:.0}° — {gap:.0}° short and stopped, while tracking {name}. \
+                             Check for a jam, a stop, or the controller left in local."
+                        ),
+                    );
+                }
+            }
+        }
         if outcome != RotOutcome::Failed {
             // Report the BORESIGHT aim the driver recorded, never the
             // controller command: the latter carries the calibration trim,
@@ -6892,6 +6939,23 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                 if loss.ends_pass() {
                     ending = loss;
                     break;
+                }
+                if !rotor_lost {
+                    // Say it ONCE, on the edge. The state reaches the badge, the Satellites
+                    // rail and the cockpit chip, but none of those is a record: an operator who
+                    // was not watching the screen during the pass had no way to learn the mast
+                    // stopped answering, and the connection log is the first thing support
+                    // asks for.
+                    conn_log(
+                        "Rotator",
+                        "error",
+                        format!(
+                            "the rotator stopped answering during the {name} pass \
+                             ({} commands in a row) — the track let the mast go and \
+                             kept the dial. Point the antenna yourself.",
+                            tempo_core::rotator::MISS_LIMIT
+                        ),
+                    );
                 }
                 rotor_lost = true;
             }
@@ -6969,9 +7033,43 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // the rotor and must not have its pointing yanked to a park position.
         if !rotor_lost && SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
             if let Some((paz, pel)) = tempo_core::rotator::post_pass_target(&rot_cfg) {
-                let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg);
-                if tempo_audio::rotator::point_azel(addr, paz, pel).is_err() {
-                    let _ = tempo_audio::rotator::point(addr, paz);
+                // The park is an ABSOLUTE position the operator configured, so it is not part
+                // of this pass's flipped frame — only the trim and the wrap apply.
+                let (paz, pel) = tempo_core::rotator::point_for(paz, pel, &rot_cfg, None);
+                if let Err(e) = tempo_audio::rotator::point_azel(addr, paz, pel) {
+                    // ⭐ MAST SAFETY, and the old fallback had it backwards. It answered a
+                    // failed park by sending `point(addr, paz)` — which writes `P <az> 0`, i.e.
+                    // ELEVATION ZERO. A park exists to put the antenna somewhere wind-safe, and
+                    // `PostPass::Park`'s own doc says that is "usually el 90 or a mast rest";
+                    // driving a dish or a long boom flat into the wind instead is the hazard
+                    // the setting was chosen to avoid. Worse, it was silent: both calls
+                    // discarded their result, at the one moment in the pass when nobody is
+                    // watching.
+                    //
+                    // Azimuth alone is still right for a rotator that HAS no elevation axis —
+                    // there the park's elevation was never going anywhere and `P <az> 0` is the
+                    // only form it accepts. We know which this is: the driver learned it during
+                    // the pass. Anything else is a failed park, and the operator is told rather
+                    // than having the antenna put somewhere they did not ask for.
+                    if !driver.azel_ok() {
+                        if let Err(e) = tempo_audio::rotator::point(addr, paz) {
+                            conn_log(
+                                "Rotator",
+                                "error",
+                                format!("could not park the antenna at {paz:.0}° after the {name} pass: {e}"),
+                            );
+                        }
+                    } else {
+                        conn_log(
+                            "Rotator",
+                            "error",
+                            format!(
+                                "could not park the antenna at {paz:.0}° / {pel:.0}° after the \
+                                 {name} pass: {e}. It is still where the pass left it — check \
+                                 it before weather."
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -7600,10 +7698,32 @@ fn export_log(state: State<'_, SharedEngine>, format: String) -> Result<String, 
 
 /// Export the **general** logbook (all Chat/QSO contacts, any mode) as
 /// `format` ("adif" | "csv"). Independent of the Field Day contest log.
+///
+/// `from`/`to` (#98): optional `"YYYY-MM-DD"` UTC dates bounding the QSO start time
+/// inclusively — the raw value of an HTML date input. Absent or empty = unbounded on
+/// that side, so no dates at all is the whole log, byte-identical to before. A
+/// malformed date is an ERROR, never silently ignored: dropping a bound would ship a
+/// full log the operator believes is filtered.
 #[tauri::command(async)]
-fn export_general_log(state: State<'_, SharedEngine>, format: String) -> Result<String, String> {
+fn export_general_log(
+    state: State<'_, SharedEngine>,
+    format: String,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<String, String> {
+    let parse = |d: Option<String>| -> Result<Option<(u64, u64)>, String> {
+        match d.as_deref().map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(s) => tempo_core::logbook::day_bounds_utc(s)
+                .map(Some)
+                .ok_or_else(|| format!("bad export date {s:?} (expected YYYY-MM-DD)")),
+        }
+    };
+    // A day bound is (start, end) of that UTC day: `from` uses the day's start, `to` its end.
+    let from_unix = parse(from)?.map(|b| b.0);
+    let to_unix = parse(to)?.map(|b| b.1);
     let eng = engine_lock(&state);
-    Ok(eng.export_logbook(&format))
+    Ok(eng.export_logbook(&format, from_unix, to_unix))
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
@@ -7759,6 +7879,35 @@ fn save_text_to_downloads(
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(name);
     std::fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
+/// Binary sibling of [`save_text_to_downloads`] for the Journey share card's PNG: on macOS
+/// wry cancels every `<a download>` navigation when no download handler is wired (WKWebView
+/// `shouldPerformDownload` → Cancel), so the blob-anchor fallback silently produced no file
+/// while the UI toasted success. The webview sends the PNG as standard base64 (the same
+/// wire shape as the SSTV transmit's RGB) and gets back the FULL saved path for its toast.
+#[tauri::command]
+fn save_png_to_downloads(
+    app: tauri::AppHandle,
+    filename: String,
+    base64: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .ok_or("Invalid file name")?;
+    let bytes = b64_decode(&base64)?;
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|e| format!("Could not locate your Downloads folder: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     Ok(path.display().to_string())
 }
 
@@ -8150,8 +8299,9 @@ async fn probe_cat_ports(
         })
         .await
         .map_err(|e| e.to_string())?;
+        use tempo_audio::port_prober::ProbeOutcome;
         Ok(match hit {
-            Some(h) => {
+            ProbeOutcome::Hit(h) => {
                 let mhz = h.freq_hz as f64 / 1.0e6;
                 let detail = if h.model_seeded {
                     format!(
@@ -8176,7 +8326,7 @@ async fn probe_cat_ports(
                     model_seeded: h.model_seeded,
                 }
             }
-            None => CatProbeResult {
+            ProbeOutcome::NoAnswer => CatProbeResult {
                 found: false,
                 port_name: String::new(),
                 baud: 0,
@@ -8191,6 +8341,19 @@ async fn probe_cat_ports(
                     .to_string(),
                 model_seeded: false,
             },
+            // rigctld itself would not spawn: no port was ever probed, so "check the cable"
+            // would blame hardware for an uninstalled Hamlib. The detail is the per-platform
+            // install cure, composed beside its CAT-open twin in tempo-audio.
+            ProbeOutcome::NoRigctld(detail) => CatProbeResult {
+                found: false,
+                port_name: String::new(),
+                baud: 0,
+                model: 0,
+                model_name: String::new(),
+                freq_mhz: 0.0,
+                detail,
+                model_seeded: false,
+            },
         })
     }
     #[cfg(not(feature = "radio"))]
@@ -8202,11 +8365,36 @@ async fn probe_cat_ports(
 
 /// The spawned rotctld daemon (integrated rotator) + the params it was
 /// spawned with, so a settings change respawns only when something changed.
-static ROTCTLD: Mutex<Option<(tempo_audio::rigctld_proc::RigctldProc, (u32, String, u32))>> =
+type RotctldParams = (u32, String, u32, u16);
+static ROTCTLD: Mutex<Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>> =
     Mutex::new(None);
-/// The integrated daemon's local port (rotctld's upstream default; the rig's
-/// rigctld owns 4532, so there is no collision).
+/// Fallback local port for the integrated daemon — rotctld's own upstream default, used when a
+/// radio profile carries no allocated port (a settings file older than per-radio ports).
 const ROTCTLD_PORT: u16 = 4533;
+
+/// The TCP port the integrated rotctld runs on for the ACTIVE radio.
+///
+/// ⚠️ **This used to be the constant, and that made a validated setting a fiction.** Every radio
+/// profile allocates its own `rotctld_port` from 4533 up, `validate_radio_ports` refuses a
+/// duplicate and `ensure_distinct_radio_ports` repairs one — and then the daemon and every
+/// client hardcoded 4533 regardless, so the guarantee the validator gave was about a number
+/// nothing used. It is not merely tidiness: a radio with no rotator does not claim a rotctld
+/// port, so the NEXT radio's rigctld can be allocated 4533, and the operator can type 4533 into
+/// the rigctld TCP-port field by hand. Validation passed while two daemons wanted the same port,
+/// and the loser exited — silently, until this batch.
+///
+/// The field is honoured rather than deleted because the allocation is what keeps the singleton
+/// out of the rig daemons' way, and it costs one lookup: the port is read from the ACTIVE
+/// profile, not mirrored into the flat settings, so nothing can clobber the allocation on the
+/// way through a form that has never shown it.
+fn rotctld_port_for(st: &tempo_app::settings::Settings) -> u16 {
+    st.radios
+        .iter()
+        .find(|p| p.id == st.active_radio)
+        .map(|p| p.rotctld_port)
+        .filter(|p| *p != 0)
+        .unwrap_or(ROTCTLD_PORT)
+}
 
 /// The address every rotator command talks to: the ADVANCED external override
 /// when set, else the integrated daemon (when a model is configured), else
@@ -8216,52 +8404,127 @@ fn effective_rotator_addr(st: &tempo_app::settings::Settings) -> Option<String> 
     if !host.is_empty() {
         return Some(host.to_string());
     }
-    (st.rotator_model > 0).then(|| format!("127.0.0.1:{ROTCTLD_PORT}"))
+    let port = rotctld_port_for(st);
+    (st.rotator_model > 0).then(|| format!("127.0.0.1:{port}"))
 }
 
 /// Reconcile the integrated rotctld daemon with settings: spawn it when a
 /// model is configured (and no external override), respawn on param changes,
 /// kill it when unconfigured. Errors surface on the connection log — a dead
 /// rotctld must be visible, not silent.
+///
+/// ⭐ **"Launched" now means it is still there.** `spawn_rotctld` returning `Ok` only says the
+/// fork succeeded, and rotctld fails harder than rigctld does: it EXITS when it cannot open the
+/// port (measured on the bundled 4.7.1 — `-r COM99` prints `serial_open: … does not exist` /
+/// `IO error` and is gone ~27 ms later), where rigctld deliberately stays up because the rig may
+/// be powered off. So the commonest rotator failure logged "rotctld launched" as INFO and then
+/// nothing, forever, and re-saving Settings did not bring it back — the params matched, so this
+/// function took the "running with the right params" arm and never looked at the corpse. It
+/// looks now, in both places: after the spawn, and on every later sync.
 fn sync_rotctld(st: &tempo_app::settings::Settings) {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let params = (
         st.rotator_model,
         st.rotator_port.trim().to_string(),
         st.rotator_baud,
+        rotctld_port_for(st),
     );
     let Ok(mut g) = ROTCTLD.lock() else { return };
-    match (&mut *g, want) {
-        (Some((_, p)), true) if *p == params => {} // running with the right params
-        (slot, true) => {
+    // Liveness is a `&mut` question (`try_wait`), so it is asked BEFORE the match rather than in
+    // a pattern guard. A daemon that died takes the respawn path, which is SAFE here for the
+    // same reason the CAT daemon's rebuild is: while it is dead there is no rotator channel to
+    // race, no motion is in flight (the mast stopped when the daemon did), and a fresh one is
+    // the only route back. It cannot loop, either — this function runs on a settings save, a
+    // radio switch and at startup, never on a timer.
+    let running = g.as_mut().map(|(proc, p)| (*p == params, proc.is_alive()));
+    match (running, want) {
+        (Some((true, true)), true) => {} // running, with the right params
+        (was, true) => {
+            if let (Some((_, false)), Some((proc, _))) = (was, g.as_mut()) {
+                conn_log(
+                    "Rotator",
+                    "error",
+                    tempo_audio::service::with_daemon_error(
+                        "rotctld exited — the rotator is not under control. Restarting it."
+                            .to_string(),
+                        &proc.said(),
+                    ),
+                );
+            }
+            let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
             match tempo_audio::rigctld_proc::spawn_rotctld(
-                params.0,
-                &params.1,
-                params.2,
-                ROTCTLD_PORT,
+                params.0, &params.1, params.2, params.3,
             ) {
-                Ok(proc) => {
-                    conn_log(
-                        "Rotator",
-                        "info",
-                        format!(
-                            "rotctld launched (model {} on {} @ {}, :{ROTCTLD_PORT})",
-                            params.0,
-                            if params.1.is_empty() { "-" } else { &params.1 },
-                            params.2
-                        ),
-                    );
-                    *slot = Some((proc, params));
+                Ok(mut proc) => {
+                    let port = params.3;
+                    // Give it the moment it takes to fail. A rotctld that cannot open the port
+                    // is gone in tens of milliseconds; one that comes up is still here after a
+                    // quarter second and this costs a settings save that long, once.
+                    let deadline =
+                        std::time::Instant::now() + std::time::Duration::from_millis(250);
+                    while proc.is_alive() && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                    if proc.is_alive() {
+                        conn_log(
+                            "Rotator",
+                            "info",
+                            format!(
+                                "rotctld launched (model {} on {} @ {}, :{port})",
+                                params.0,
+                                if params.1.is_empty() { "-" } else { &params.1 },
+                                params.2
+                            ),
+                        );
+                        *slot = Some((proc, params));
+                    } else {
+                        // Hamlib's own words, chosen by the same ranker the CAT status pill
+                        // uses. They name the actual cause — wrong model, port that is not
+                        // there, port already open, a `-C` value it will not parse — and every
+                        // one of them was being discarded.
+                        conn_log(
+                            "Rotator",
+                            "error",
+                            tempo_audio::service::with_daemon_error(
+                                format!(
+                                    "rotctld could not start for model {} on {} @ {} — the \
+                                     rotator will not answer. Check the port and that the baud \
+                                     matches what this model needs.",
+                                    params.0,
+                                    if params.1.is_empty() { "(no port set)" } else { &params.1 },
+                                    params.2
+                                ),
+                                &proc.said(),
+                            ),
+                        );
+                    }
                 }
                 Err(e) => {
-                    conn_log("Rotator", "error", format!("rotctld launch failed: {e}"));
+                    // The shared per-platform composer, not a raw `{e}`: a Mac without
+                    // Homebrew Hamlib was getting "rotctld launch failed: No such file or
+                    // directory (os error 2)" — no cause, no cure — while the rig's rigctld
+                    // twin had long named "brew install hamlib" for the identical fault
+                    // (mac QA audit, 2026-08-17).
+                    conn_log(
+                        "Rotator",
+                        "error",
+                        tempo_audio::rigctld_proc::hamlib_missing("rotctld", &e),
+                    );
                 }
             }
         }
-        (slot @ Some(_), false) => {
-            conn_log("Rotator", "info", "rotctld stopped (rotator unconfigured)");
-            *slot = None;
+        (Some(_), false) => {
+            // Name the REAL reason. An external rotctld address is a configured rotator, not an
+            // unconfigured one, and being told "rotator unconfigured" the moment you type one is
+            // how an advanced field reads as broken.
+            let why = if st.rotator_model > 0 {
+                "rotctld stopped — an external rotctld address now overrides the integrated daemon"
+            } else {
+                "rotctld stopped (rotator unconfigured)"
+            };
+            conn_log("Rotator", "info", why);
+            *g = None;
         }
         (None, false) => {}
     }
@@ -8901,6 +9164,180 @@ fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, Str
     Ok(rtty_state_dto(&eng))
 }
 
+/// Live PSK31 state for the cockpit poll: the RX side (decoder + transcript)
+/// plus the TX side (Keyboard Modes Phase 2 — the sending flag, the
+/// continuous-TX latch and any keyer failure), mirroring `RttyStateDto`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PskStateDto {
+    armed: bool,
+    /// AFC correction from the netted center (Hz; slew-limited, clamped ±25).
+    afc_hz: f32,
+    /// The demodulator's quality squelch reads a signal right now.
+    signal: bool,
+    /// Audio center (Hz) the decoder is netted on (waterfall cursor position)
+    /// — and where TX transmits (the transceive convention).
+    center_hz: f32,
+    /// Selected sub-mode slug ("psk31" | "qpsk31") — cockpit state echoed
+    /// back so the selector renders the engine's truth.
+    mode: &'static str,
+    /// QPSK sideband-reverse (LSB) toggle state.
+    reverse: bool,
+    /// The decoded-text ring tail (caps at ~4000 chars; oldest drop off).
+    text: String,
+    /// Per-character confidence 0–100, parallel to `text`'s chars — render low
+    /// values faint (the phase-margin soft metric).
+    char_conf: Vec<u8>,
+    /// A PSK over is on the air, queued behind one, or the latched stream is
+    /// running — the cockpit's TX indicator and the Esc/Stop macro's enable.
+    sending: bool,
+    /// Continuous TX is latched (reported separately from `sending` so the
+    /// Stop control is live from the instant the latch goes up).
+    latched: bool,
+    keyer_error: Option<String>,
+}
+
+fn psk_state_dto(eng: &Engine) -> PskStateDto {
+    let s = eng.psk_state();
+    PskStateDto {
+        armed: s.armed,
+        afc_hz: s.afc_hz,
+        signal: s.signal,
+        center_hz: s.center_hz,
+        mode: match s.mode {
+            tempo_core::psk::PskModeKind::Bpsk31 => "psk31",
+            tempo_core::psk::PskModeKind::Qpsk31 => "qpsk31",
+        },
+        reverse: s.reverse,
+        text: s.text,
+        char_conf: s.conf,
+        sending: s.sending,
+        latched: s.latched,
+        keyer_error: s.keyer_error,
+    }
+}
+
+/// Queue PSK31 text to transmit — an explicit operator send, the ONLY way PSK
+/// TX starts. The engine validates every gate up front (TX armed, license
+/// privileges at the current dial, the Keyboard section owning the rig, no
+/// tune carrier, no other transmission) and returns WHY a send was refused;
+/// the radio loop keys the queued text as shaped BPSK audio at the netted
+/// offset. While continuous TX is latched a send types into the live stream.
+#[tauri::command(async)]
+fn psk_send(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_send_text(&text)?;
+    Ok(psk_state_dto(&eng))
+}
+
+/// Continuous TX on/off — the PSK cockpit's TX button, the same MMTTY-style
+/// latch RTTY carries: ON runs the SAME gate a send runs; OFF lets what was
+/// typed finish keying, then unkeys. NOT the emergency stop — Stop TX, the
+/// Esc/Stop macro and the TX-enable latch cut instantly and each also drops
+/// this. The engine re-checks every TX gate on every radio-loop tick while it
+/// is up and drops the latch the moment one goes down.
+#[tauri::command(async)]
+fn psk_set_latched(state: State<'_, SharedEngine>, on: bool) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_psk_latched(on)?;
+    Ok(psk_state_dto(&eng))
+}
+
+/// Feed typed characters into the live latched transmission (one insertion at
+/// a time from the compose field — PSK has no un-send). Refused unless
+/// continuous TX is latched.
+#[tauri::command(async)]
+fn psk_type(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_type(&text)?;
+    Ok(psk_state_dto(&eng))
+}
+
+/// Stop PSK now: abort the over in progress, drop everything queued, and unkey.
+#[tauri::command(async)]
+fn psk_stop(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_stop();
+    Ok(psk_state_dto(&eng))
+}
+
+/// Arm/disarm the PSK31 RX decoder by an EXPLICIT operator act (session-only —
+/// never persisted, so the app never launches armed). Stopping it here is
+/// remembered for the session — `psk_auto_arm` will not restart it behind the
+/// operator. Returns the fresh state.
+#[tauri::command(async)]
+fn psk_arm(state: State<'_, SharedEngine>, on: bool) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_psk_armed(on);
+    Ok(psk_state_dto(&eng))
+}
+
+/// Arm the decoder because the operator ENTERED the PSK view. Receive-only by
+/// construction (arming the decoder keys nothing): only upgrades from off, refuses once
+/// the operator has explicitly stopped it this session, and refuses for good
+/// when the Settings opt-out is off. See `Engine::psk_auto_arm` for the policy.
+#[tauri::command(async)]
+fn psk_auto_arm(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_auto_arm();
+    Ok(psk_state_dto(&eng))
+}
+
+/// The live PSK state (poll while the PSK cockpit is visible).
+#[tauri::command(async)]
+fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let eng = engine_lock(&state);
+    Ok(psk_state_dto(&eng))
+}
+
+/// Clear the decoded-PSK transcript (display only; the decoder keeps running).
+#[tauri::command(async)]
+fn psk_clear(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_clear();
+    Ok(psk_state_dto(&eng))
+}
+
+/// Drop + rebuild the PSK demodulator (the cockpit's Re-acquire — a fresh
+/// slew-limited AFC pull from the netted center). RX only.
+#[tauri::command(async)]
+fn psk_afc_reset(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.request_psk_afc_reset();
+    Ok(psk_state_dto(&eng))
+}
+
+/// Net the PSK decoder onto a new audio center (Hz) from a waterfall click —
+/// the single-signal click-to-tune (the CW/RTTY precedent). RX-only decoder
+/// state, so it needs no TX/privilege gate and is safe during a transmission.
+#[tauri::command(async)]
+fn psk_net(state: State<'_, SharedEngine>, hz: f32) -> Result<PskStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.psk_net(hz);
+    Ok(psk_state_dto(&eng))
+}
+
+/// Select the PSK sub-mode ("psk31" | "qpsk31") and the QPSK sideband-reverse
+/// polarity — the cockpit's selector and Reverse toggle (Keyboard Modes
+/// Phase 3). The engine refuses a switch while any PSK transmission is
+/// active (a mid-over switch would garble the far end's copy) and returns
+/// why; a change re-acquires the RX demodulator on the new mode.
+#[tauri::command(async)]
+fn psk_set_mode(
+    state: State<'_, SharedEngine>,
+    mode: String,
+    reverse: bool,
+) -> Result<PskStateDto, String> {
+    let kind = match mode.as_str() {
+        "psk31" => tempo_core::psk::PskModeKind::Bpsk31,
+        "qpsk31" => tempo_core::psk::PskModeKind::Qpsk31,
+        other => return Err(format!("unknown PSK mode {other:?}")),
+    };
+    let mut eng = engine_lock(&state);
+    eng.set_psk_mode(kind, reverse)?;
+    Ok(psk_state_dto(&eng))
+}
+
 /// Turn the RTTY auto-sequencer on/off. On builds the sequencer from the operator's
 /// identity + active exchange (Field Day class/section vs casual RST/name/QTH); off
 /// aborts any live session and stops TX. NEVER transmits — a session only ever
@@ -9179,8 +9616,8 @@ fn sstv_stop(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
 }
 
 /// Standard-alphabet base64 DECODE (RFC 4648, with or without padding) — the inverse of
-/// [`b64_encode`], for the raw RGB the webview sends on an SSTV transmit. Rejects any
-/// non-alphabet byte. One decode-only call site, so no new dependency.
+/// [`b64_encode`], for the raw RGB the webview sends on an SSTV transmit and the share-card
+/// PNG save. Rejects any non-alphabet byte. Two small call sites don't justify a dependency.
 fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
     fn val(c: u8) -> Option<u32> {
         match c {
@@ -9365,11 +9802,23 @@ fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     Ok(eng.snapshot())
 }
 
-/// Remove a radio from the roster (no-op on the active or last radio). Returns the snapshot.
+/// Remove a radio from the roster. Returns the snapshot.
+///
+/// A refusal (active or last radio) is an `Err`, not a silent no-op: the bare
+/// `eng.remove_radio(id);` this used to be made a refused delete indistinguishable from
+/// success at the IPC boundary, so the UI's error toast could never fire (Mac field
+/// report, 2026-08-17 — "the 9700 won't delete"). The UI hides Remove on the active
+/// card, but auto band-routing can change the active radio behind an open panel.
 #[tauri::command(async)]
 fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.remove_radio(id);
+    if !eng.remove_radio(id) {
+        return Err(
+            "Can't remove this radio: it's your operating radio (make another one active \
+             first) or the only radio on the roster."
+                .into(),
+        );
+    }
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: remove_radio save failed: {e}");
     }
@@ -9634,7 +10083,10 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             )
             .map(|gate| {
                 (
-                    s.serial_port.trim().to_string(),
+                    // The mac tty.*→cu.* heal, exactly as the open path applies it: the
+                    // ladder opens this node directly, and a stored tty.* would hang the
+                    // sweep on carrier detect instead of diagnosing anything.
+                    tempo_audio::ports::heal_stored_port(s.serial_port.trim().to_string()),
                     s.baud,
                     s.rig_model,
                     gate,
@@ -9679,6 +10131,10 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                                 addr,
                                 native,
                                 bl::dual_com_ports(rig_model),
+                                // Platform as data (the rigctld_launch_failed_for
+                                // discipline): the no-answer walkthroughs talk Device
+                                // Manager on Windows and /dev/cu.* on a Mac.
+                                cfg!(target_os = "macos"),
                             ),
                             LadderKind::Hamlib { caps } => bl::compose_hamlib_ladder_message(
                                 &bl::run_hamlib(&port, baud, rig_model, gate, &caps),
@@ -9881,13 +10337,16 @@ fn get_licensed_band_plan(
     use tempo_app::settings::OperatingMode;
     let eng = engine_lock(&state);
     let class = eng.settings().license_class;
-    // RTTY / SSTV: fixed standard watering-hole channels (like WSJT-X's per-mode
-    // dials), license-filtered per band — a Technician sees only the bands their
-    // class can key there (RTTY rides digital privileges, SSTV rides phone).
+    // RTTY / SSTV / PSK: fixed standard watering-hole channels (like WSJT-X's
+    // per-mode dials), license-filtered per band — a Technician sees only the
+    // bands their class can key there (RTTY and PSK ride data privileges, SSTV
+    // rides phone).
     let lower = mode.to_ascii_lowercase();
-    if lower == "rtty" || lower == "sstv" {
+    if lower == "rtty" || lower == "sstv" || lower == "psk" {
         let (plan, priv_mode) = if lower == "rtty" {
             (tempo_app::bandplan::rtty_band_plan(), OperatingMode::Digital)
+        } else if lower == "psk" {
+            (tempo_app::bandplan::psk_band_plan(), OperatingMode::Keyboard)
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
@@ -10953,12 +11412,28 @@ fn qso_freetext(state: State<'_, SharedEngine>, text: String) -> Result<AppSnaps
     Ok(eng.snapshot())
 }
 
+/// Outcome of the operator "Log QSO" button (#100): whether a contact was actually
+/// logged (or held for the prompt-to-log popup), plus the fresh snapshot either way.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogQsoOutcome {
+    /// False when the engine refused — already logged, no active QSO/DX, or no report
+    /// exchanged yet. Every refusal is a deliberate logbook-integrity guard, and the UI
+    /// must not claim "Logged QSO" over one: the bool was being discarded here, so the
+    /// toast said success for a write that never happened.
+    logged: bool,
+    snapshot: AppSnapshot,
+}
+
 /// Operator "Log QSO": log the active QSO's contact now (inline cockpit button).
 #[tauri::command(async)]
-fn log_current_qso(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn log_current_qso(state: State<'_, SharedEngine>) -> Result<LogQsoOutcome, String> {
     let mut eng = engine_lock(&state);
-    eng.log_current_qso();
-    Ok(eng.snapshot())
+    let logged = eng.log_current_qso();
+    Ok(LogQsoOutcome {
+        logged,
+        snapshot: eng.snapshot(),
+    })
 }
 
 /// Confirm-and-log a QSO held by the prompt-to-log popup. `record` is the
@@ -13962,6 +14437,13 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
         freq_mhz: dto.freq_mhz,
         when_unix: dto.when_unix,
         operator: mycall,
+        // General-logging extras (#106): a plain (non-contest) QSO carries reports,
+        // a name and power, and the push was dropping all of them on the ACLog side.
+        rst_sent: dto.rst_sent.clone(),
+        rst_rcvd: dto.rst_rcvd.clone(),
+        name: dto.name.clone(),
+        // f64 Display trims a whole-watt value to "100", not "100.0".
+        power: dto.tx_power.map(|w| w.to_string()),
     };
     tempo_net::n3fjp::push_qso(&host, port, &push)
 }
@@ -15211,6 +15693,28 @@ fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>
     ))
 }
 
+/// Finish a self-update: restart Nexus through the ORDINARY quit path.
+///
+/// Exists because tauri-plugin-updater's `install()` restarts nothing on macOS or the Linux
+/// AppImage — its unix arms swap the bundle/AppImage on disk and return `Ok` with the OLD
+/// build still running, so the "Nexus will restart…" banner hung forever while the operator
+/// kept using the replaced binary (mac QA audit, 2026-08-17). Only Windows restarts by
+/// itself there: the NSIS branch execs the installer and exits the process mid-`install()`,
+/// which is why the frontend's call to this command is unreachable on Windows and harmless
+/// to leave unconditional.
+///
+/// `request_restart()`, not `restart()`: it delivers `RunEvent::ExitRequested` then
+/// `RunEvent::Exit`, so `quit_cleanup` runs before the swap-in — the TX-unkey wait, the
+/// journal flushes and the geometry capture, exactly as on a window close. Install is
+/// refused while the radio is busy (`update_install_block`), but TX could have been armed
+/// in the seconds the install itself took; routing the restart through the same
+/// safe-shutdown means a keyed rig is unkeyed, never hard-killed. (`restart()` on the main
+/// thread would skip those events entirely — its own docs say so.)
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.request_restart();
+}
+
 /// Our own update endpoint (schema 1): a `version.json` with a direct `"latest"` field. Primary,
 /// GitHub-first, and under our control — so update accuracy no longer depends on SourceForge's
 /// per-release "Default Download" flip.
@@ -15389,6 +15893,144 @@ fn open_dxped_page(app: tauri::AppHandle, call: String, url: Option<String>) -> 
         .map_err(|e| e.to_string())
 }
 
+/// Fire an OS notification (Pounce's "new one" alert). Routed through Rust — the
+/// notification plugin — because the web Notification API does not exist in WKWebView, so
+/// macOS had NO notification path at all; and nothing anywhere called
+/// `Notification.requestPermission()`, so even WebView2's implementation could never reach
+/// `granted`. Called from Rust like the opener commands, so no ACL capability entry.
+///
+/// Permission is resolved HERE, lazily on the first alert — never at launch. On desktop the
+/// plugin's permission calls are pass-through `Granted` and the real ask is the OS's own:
+/// macOS prompts the operator at the first delivery attempt, and a "Don't Allow" simply
+/// mutes the OS half from then on. That is acceptable by Pounce's own doctrine — the earcon
+/// is the PRIMARY channel and the in-app banner fires unconditionally (see usePounce.ts),
+/// so a suppressed notification never takes the alert down with it.
+#[tauri::command]
+fn os_notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri::plugin::PermissionState;
+    use tauri_plugin_notification::NotificationExt;
+    let n = app.notification();
+    if !matches!(n.permission_state(), Ok(PermissionState::Granted)) {
+        match n.request_permission() {
+            Ok(PermissionState::Granted) => {}
+            Ok(_) => return Err("notification permission denied".to_string()),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    n.builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
+/// Open an arbitrary external http(s) link in the operator's default browser — the backing
+/// for the UI's `target="_blank"` anchor interceptor (`ui/src/externalLinks.ts`). Raw
+/// `<a target="_blank">` anchors are DEAD in the Tauri webview: the opener plugin's injected
+/// click handler preventDefaults the click and then its `plugin:opener|open_url` invoke is
+/// denied by the capability ACL (we grant none — project convention is to open URLs from
+/// Rust commands, like [`open_qrz_page`], rather than widen the webview's ACL). The scheme
+/// is validated HERE, same principle as [`dxped_page_url`]: this is the trust boundary that
+/// hands a UI-supplied string (some of it third-party feed data) to the operator's browser.
+#[tauri::command]
+fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://"))
+        || url.contains(char::is_whitespace)
+    {
+        return Err("not an http(s) URL".to_string());
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// The quit cleanup ran — however many exit events arrive, it runs ONCE.
+///
+/// Why a guard instead of relying on idempotence: on Windows/Linux a window-close quit
+/// delivers `ExitRequested` and then `Exit`, and the cleanup's TX-unkey wait polls up to 3 s
+/// when the radio thread is wedged in a CAT read — running it twice would double the
+/// worst-case hang between the operator's quit and the process actually dying.
+static QUIT_CLEANUP_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `choose_radio`'s relaunch is exiting: skip the window-geometry snapshot.
+///
+/// That exit happens while the window is still the launch-time radio picker — a box the
+/// operator sees for a moment and never sizes — and `window_state`'s whole reason to exist is
+/// bug #10, a saved box the operator DID size. Persisting the picker's box would overwrite the
+/// base profile's real geometry with the `tauri.conf.json` default. The picker path skipped
+/// capture before the Cmd+Q fix (nothing hooked `app.exit`), and this flag keeps that exact
+/// behaviour now that `quit_cleanup` captures on every other quit.
+static QUIT_SKIP_GEOMETRY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Everything a quit must flush, in one place — reached from BOTH `RunEvent::ExitRequested`
+/// and `RunEvent::Exit` (see the `.run` closure for why two events mean one cleanup).
+///
+/// The mac QA audit (2026-08-17) found Cmd+Q skipping ALL of this: on macOS the default
+/// menu's Quit fires `terminate:` → tao's `applicationWillTerminate` → `RunEvent::Exit`
+/// directly — `ExitRequested`, where this logic used to live inline, is emitted only on
+/// last-window-destroyed and `app.exit()`, so a Cmd+Q quit ran no TX unkey, no journal
+/// flush, and no geometry capture. `RunEvent::Exit` is delivered synchronously inside
+/// `applicationWillTerminate` (tao `AppState::exit` → `handle_nonuser_event`), so blocking
+/// here still happens before the process dies.
+///
+/// TX SAFETY: the unkey block below is the close path's, moved verbatim — this change
+/// extends its COVERAGE to the Cmd+Q and restart paths, it does not alter its behaviour.
+fn quit_cleanup(app_handle: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    if QUIT_CLEANUP_RAN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    // Window geometry FIRST, while the windows still exist. On the Cmd+Q path (the reason
+    // this is here) every window is alive; on a window-close quit they are already destroyed
+    // and both captures no-op — `CloseRequested` snapshotted them before the teardown.
+    if !QUIT_SKIP_GEOMETRY.load(Ordering::SeqCst) {
+        window_state::capture_now(app_handle);
+        for (label, w) in app_handle.webview_windows() {
+            if label != "main" {
+                // No-op for anything that is not a band-map window, and skips minimized
+                // windows itself — safe to sweep the whole map.
+                capture_bandmap_window(&w);
+            }
+        }
+    }
+    // Unkey the transmitter before the process dies: signal the radio
+    // loop to drop PTT and give it a brief window to flush the un-key
+    // command to the rig. A stuck carrier on quit is a TX-safety
+    // hazard, so this blocks the exit for up to ~3 s.
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::service::SHUTDOWN.store(true, Ordering::Relaxed);
+        // Wait until the loop has actually unkeyed (SHUTDOWN_DONE),
+        // not a fixed sleep: the loop only reaches the un-key after
+        // its current step() returns, and a step can be blocked in a
+        // CAT read for up to ~2.5 s. Poll so the common case returns
+        // in tens of ms while the worst case still flushes the
+        // un-key before we let the process exit.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3_000);
+        while !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // The radio loop has unkeyed (or the wait expired with it wedged in a CAT read).
+        // Either way the process is about to exit: TERM any daemon whose handle was never
+        // dropped, so a wedged quit can't strand a rigctld holding the operator's serial
+        // port until the next launch's sweep. No-op on Windows (Job Object) and in the
+        // ordinary case where the loop's drops already ran.
+        tempo_audio::rigctld_proc::kill_leftover_daemons();
+    }
+    persist_conversations(app_handle.state::<SharedEngine>().inner());
+    persist_field_day_log(app_handle.state::<SharedEngine>().inner());
+    // An opening still in progress at quit becomes a journaled episode —
+    // a 6m Es evening isn't lost because the app closed mid-opening.
+    if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
+        record_opening_episodes(tr.close_all(now_unix()));
+    }
+}
+
 /// Build and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15503,6 +16145,41 @@ pub fn run() {
         }
     }
 
+    // One-time heal (macOS): the 1.5.0–1.6.1 pickers offered the /dev/tty.* twin of every
+    // serial port as an equal row, and a rig configured on one HANGS CAT on carrier detect —
+    // the later fix collapsed the twins in the PICKER only, so upgraded configs still hold
+    // the tty node. Rewrite any stored tty.* whose /dev/cu.* twin is live (a lone tty.* is
+    // kept — it is the only node there is) so the Settings screen and every consumer name
+    // the port that actually opens. Runs every launch, rewrites at most once per stale field;
+    // a rig UNPLUGGED at launch is still healed at open time (Transport::from_settings).
+    #[cfg(all(feature = "radio", target_os = "macos"))]
+    {
+        let mut fields: Vec<&mut String> =
+            vec![&mut settings.serial_port, &mut settings.ptt_serial_port];
+        for r in &mut settings.radios {
+            fields.push(&mut r.serial_port);
+            fields.push(&mut r.ptt_serial_port);
+        }
+        let mut changed = false;
+        for f in fields {
+            if let Some(cu) = tempo_audio::ports::heal_tty_twin_with(f, |p| {
+                std::path::Path::new(p).exists()
+            }) {
+                eprintln!(
+                    "tempo: stored serial port {f} is a /dev/tty.* node (offered by a \
+                     1.5.0–1.6.1 picker) — rewriting it to its callout twin {cu}"
+                );
+                *f = cu;
+                changed = true;
+            }
+        }
+        if changed {
+            if let Err(e) = settings.save(&settings_path()) {
+                eprintln!("tempo: couldn't re-save settings after the tty.*→cu.* port heal: {e}");
+            }
+        }
+    }
+
     // The waterfall's publish seam, shared by the rx-dsp producer, the native scope workers and
     // the UI reader. Created here (not on the Engine) because no part of it is engine state —
     // that separation is the point: the row must not be reachable only through the engine mutex,
@@ -15531,6 +16208,7 @@ pub fn run() {
         baud: settings.baud,
         rig_conn: settings.rig_conn.clone(),
         rig_addr: settings.rig_addr.clone(),
+        omnirig_slot: settings.omnirig_slot,
         rigctld_port: settings.rigctld_port,
         icom_native_cat: settings.icom_native_cat,
         broker_self_port: if settings.cat_broker {
@@ -16187,6 +16865,16 @@ pub fn run() {
     // UI commands lock.
     #[cfg(feature = "radio")]
     {
+        // BEFORE the radio thread spawns its own daemons: sweep any rigctld/rotctld a
+        // previous, now-dead Nexus left running (crash, force-quit, wedged quit — the
+        // deaths where no Drop runs; Windows is covered by the kill-on-close Job Object
+        // instead and this is a no-op there). The ledger dir is under the BASE profile's
+        // config dir, shared by every profile on purpose: any instance may sweep any dead
+        // instance's orphans, and the identity+parent checks inside keep a LIVE sibling
+        // instance's daemons untouched.
+        tempo_audio::rigctld_proc::init_orphan_ledger(
+            config_dir_for(None).join("daemon-pids"),
+        );
         let radio_engine = engine.clone();
         std::thread::spawn(move || {
             // The radio loop is the heartbeat — if it dies (error OR panic), TX/RX
@@ -16310,6 +16998,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(engine)
         .manage(spectrum_feed)
@@ -16331,6 +17020,7 @@ pub fn run() {
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
             update_install_block,
+            restart_app,
             log_operators,
             export_settings_bundle,
             import_settings_bundle,
@@ -16354,6 +17044,7 @@ pub fn run() {
             export_log,
             export_general_log,
             save_text_to_downloads,
+            save_png_to_downloads,
             civ_diagnostic_log,
             all_txt_location,
             recordings_location,
@@ -16362,6 +17053,8 @@ pub fn run() {
             reveal_all_txt,
             open_qrz_page,
             open_dxped_page,
+            open_external_url,
+            os_notify,
             app_version,
             radio_launch_info,
             choose_radio,
@@ -16418,6 +17111,17 @@ pub fn run() {
             rtty_auto_cq,
             rtty_auto_answer,
             rtty_auto_abort,
+            psk_arm,
+            psk_auto_arm,
+            get_psk_state,
+            psk_clear,
+            psk_afc_reset,
+            psk_net,
+            psk_set_mode,
+            psk_send,
+            psk_set_latched,
+            psk_type,
+            psk_stop,
             sstv_arm,
             sstv_auto_arm,
             sstv_auto_disarm,
@@ -16730,11 +17434,12 @@ pub fn run() {
                     }
                 }
             }
-            // RTTY + SSTV RX decode threads — RX ONLY (arming is per-session
+            // RTTY + PSK + SSTV RX decode threads — RX ONLY (arming is per-session
             // runtime state; nothing here can key PTT or emit TX audio).
             #[cfg(feature = "radio")]
             {
                 tempo_audio::rttyrx::spawn_rtty_rx(app.state::<SharedEngine>().inner().clone());
+                tempo_audio::pskrx::spawn_psk_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::aprsrx::spawn_aprs_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::sstvrx::spawn_sstv_rx(
                     app.state::<SharedEngine>().inner().clone(),
@@ -16768,39 +17473,24 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building the Nexus application")
         .run(|app_handle, event| {
-            // Flush Tempo conversation history on app exit so a quit within the 15 s
-            // periodic-save window doesn't lose recent chat or resurrect an archived
-            // thread. ExitRequested fires on the app-level quit (Alt+F4 / menu quit).
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                // Unkey the transmitter before the process dies: signal the radio
-                // loop to drop PTT and give it a brief window to flush the un-key
-                // command to the rig. A stuck carrier on quit is a TX-safety
-                // hazard, so this blocks the exit for up to ~250 ms.
-                #[cfg(feature = "radio")]
-                {
-                    use std::sync::atomic::Ordering;
-                    tempo_audio::service::SHUTDOWN.store(true, Ordering::Relaxed);
-                    // Wait until the loop has actually unkeyed (SHUTDOWN_DONE),
-                    // not a fixed sleep: the loop only reaches the un-key after
-                    // its current step() returns, and a step can be blocked in a
-                    // CAT read for up to ~2.5 s. Poll so the common case returns
-                    // in tens of ms while the worst case still flushes the
-                    // un-key before we let the process exit.
-                    let deadline =
-                        std::time::Instant::now() + std::time::Duration::from_millis(3_000);
-                    while !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
-                        && std::time::Instant::now() < deadline
-                    {
-                        std::thread::sleep(std::time::Duration::from_millis(20));
-                    }
+            // Flush conversation history, Field Day log, opening episodes and window
+            // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
+            //
+            // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
+            // deliver different events and neither is a superset of the other:
+            //  - window close (all platforms) and `app.exit()`/`request_restart()`:
+            //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
+            //    exactly as it always did, and the second arm no-ops on the guard;
+            //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
+            //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
+            //    is never emitted on that path, which is how Cmd+Q used to skip the
+            //    whole cleanup. `Exit` arrives synchronously inside the terminate
+            //    callback, so the unkey wait still completes before the process dies.
+            match event {
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    quit_cleanup(app_handle);
                 }
-                persist_conversations(app_handle.state::<SharedEngine>().inner());
-                persist_field_day_log(app_handle.state::<SharedEngine>().inner());
-                // An opening still in progress at quit becomes a journaled episode —
-                // a 6m Es evening isn't lost because the app closed mid-opening.
-                if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
-                    record_opening_episodes(tr.close_all(now_unix()));
-                }
+                _ => {}
             }
         });
 }

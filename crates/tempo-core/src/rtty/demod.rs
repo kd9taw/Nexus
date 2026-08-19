@@ -78,21 +78,16 @@ impl Default for RttyConfig {
     }
 }
 
-/// One decoded character with its ATC soft metric: 0..1, the minimum slicer
-/// margin over the character's sampled bits (start + 5 data + stop). Low
-/// values mean "render me faint / don't trust me in the sequencer".
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DecodedChar {
-    pub ch: char,
-    pub confidence: f32,
-}
-
-/// Streaming demodulator seam: feed mono f32 audio at [`SAMPLE_RATE`], get
-/// decoded characters. The future decoder ensemble runs N implementations of
-/// this trait from one audio tap into one merge stage.
-pub trait RttyDemod {
-    fn feed(&mut self, samples: &[f32]) -> Vec<DecodedChar>;
-}
+/// The decode seam, which is NOT RTTY's own: feed mono f32 audio at
+/// [`SAMPLE_RATE`], get characters with a soft confidence. Both types live in
+/// [`crate::textmode`] so PSK31 and the keyboard modes after it decode into the
+/// same ensemble instead of each minting a character type of its own; RTTY's
+/// confidence is the minimum ATC slicer margin over the character's sampled bits
+/// (start + 5 data + stop).
+///
+/// Re-exported under RTTY's original names so every call site reads the same as
+/// it did when this was the only keyboard mode.
+pub use crate::textmode::{DecodedChar, TextDemod as RttyDemod};
 
 /// |z| — num-complex is built no_std here (via microfft), so `norm()` is
 /// unavailable.

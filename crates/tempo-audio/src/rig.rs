@@ -897,6 +897,39 @@ impl Rig {
     pub fn set_split_freq(&mut self, hz: u64) -> std::io::Result<()> {
         self.cat(&split_freq_line(hz))
     }
+    /// Read the rig's CURRENT split state via rigctld `s` (get_split_vfo) — is split on, and
+    /// which VFO transmits. The reply is two lines: `0|1` then the TX VFO name.
+    ///
+    /// ⚠️ THIS EXISTS SO SPLIT CAN BE RESTORED RATHER THAN FORCED OFF. `Rig` had no split getter
+    /// at all, so the loop's teardown wrote an absolute `S 0 VFOA` — which on a multi-client
+    /// radio (a Flex with SmartSDR beside us, or any rig where the operator set split at the
+    /// front panel) silently cancelled a split Nexus never turned on. 2026-08-17 Flex audit,
+    /// wave-2 #22.
+    ///
+    /// CAT-only; `None` on VOX/serial, a link hiccup, or a reply we cannot parse — and a `None`
+    /// means the caller must keep today's behaviour rather than guess at a state it never read.
+    pub fn read_split(&mut self) -> Option<(bool, String)> {
+        self.control.as_ref()?;
+        let reply = self.command("s\n").ok()?;
+        let mut lines = reply.lines().map(str::trim).filter(|l| !l.is_empty());
+        let on = lines.next()?.parse::<u8>().ok()? != 0;
+        // A rig that answers the flag but not the VFO name is still worth believing about the
+        // flag; VFO B is the near-universal TX VFO and what `apply_tx_dial_shift` itself uses.
+        let vfo = lines.next().unwrap_or("VFOB").to_string();
+        Some((on, vfo))
+    }
+    /// Read the split (TX) frequency in Hz via rigctld `i` (get_split_freq) — the other half of
+    /// what a restore needs: `set_split_freq` overwrites the TX VFO's frequency with no snapshot,
+    /// so even restoring split=ON would leave the operator's TX frequency clobbered.
+    /// CAT-only; `None` on VOX/serial or a non-numeric reply.
+    pub fn read_split_freq(&mut self) -> Option<u64> {
+        self.control.as_ref()?;
+        let reply = self.command("i\n").ok()?;
+        reply
+            .lines()
+            .find_map(|l| l.trim().parse::<u64>().ok())
+            .filter(|hz| *hz > 0)
+    }
     /// Set the split (TX) VFO's mode + passband — the transmit-side twin of
     /// [`Self::set_mode`], which only ever reaches the RX VFO. A BLANK mode is a
     /// no-op for the same reason it is there: the caller is choosing to obey the

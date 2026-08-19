@@ -47,7 +47,15 @@ devices and scans for FlexRadios on the LAN. If it finds nothing:
   Install it, then hit **Refresh** to re-scan. Without the driver the COM port
   never appears at all.
 - A FlexRadio must be reachable on the **same network** as the PC for LAN
-  discovery to see it.
+  discovery to see it. Discovery listens for the radio's own broadcast, which
+  does not cross a router — a Flex you reach over SmartLink or a port-forward
+  will not appear.
+- **On macOS: local-network permission.** Every LAN scan leaves the Mac, and
+  macOS 15 gates that behind **Local Network** privacy. Nexus does not yet ship
+  the usage string that asks for it, so you may never see a prompt — and a
+  denial looks exactly like an empty network: "No radios found", no error.
+  Check **System Settings ▸ Privacy & Security ▸ Local Network**, enable
+  **Nexus** if it is listed, and relaunch.
 
 ### Driver hint: USB bridge chip detected but the rig won't open
 
@@ -65,11 +73,16 @@ Native-USB rigs (IC-705, IC-7300, and similar that report a model name in the US
 descriptor) need no driver and match their Hamlib model automatically. After
 installing any driver, click **Refresh** in Settings.
 
+On **macOS and Linux** the common bridge chips (CP210x, FTDI) are driven in-kernel —
+there is no driver to install; the port appears as `/dev/cu.*` (macOS) or
+`/dev/ttyUSB*` (Linux) as soon as the cable is plugged in.
+
 ### Test CAT fails or times out
 
-**Test CAT** saves your settings, starts (or restarts) the bundled `rigctld`,
-waits ~1.3 s, and reads the dial frequency. A real frequency back (e.g.
-`14.074 MHz`) means CAT is healthy. A failure is almost always one of:
+**Test CAT** saves your settings, starts (or restarts) the CAT daemon `rigctld`
+(bundled on Windows; Homebrew's on macOS — `brew install hamlib` once if the error
+names Hamlib), waits ~1.3 s, and reads the dial frequency. A real frequency back
+(e.g. `14.074 MHz`) means CAT is healthy. A failure is almost always one of:
 
 1. **Wrong model** — confirm the Hamlib model. If your rig connected through a
    generic bridge cable, Detect leaves the model blank on purpose; pick it from
@@ -126,6 +139,17 @@ open. The rule generalizes to any network rig: the CAT address has to be a `host
 your PC can actually open a TCP connection to, with `rigctld` (or SmartSDR CAT)
 listening there. SmartSDR CAT must be running for the Flex path to work.
 
+`127.0.0.1:5002` assumes SmartSDR CAT is on the **same machine as Nexus**. If it
+runs on another PC — the normal arrangement when Nexus is on a Mac — use that
+PC's LAN address (`192.168.1.20:5002`) and its DAX devices.
+
+**On macOS**, a CAT address out on the LAN is subject to the **Local Network**
+permission, and a denial produces the same "nothing answered" message as a wrong
+address. If the same address works from another machine, check
+**System Settings ▸ Privacy & Security ▸ Local Network** and relaunch. See the
+[FlexRadio guide](rigs/flexradio.md#macos) for the whole picture — including why
+the *native* panadapter/DAX toggles cannot work through SmartLink or NAT at all.
+
 ---
 
 ## Audio
@@ -178,16 +202,21 @@ that.
 
 If you can hear signals by ear but Nexus decodes nothing, check in order:
 
-1. **Input device** — Settings ▸ Radio ▸ Audio ▸ Input (RX) must point at the rig's
+1. **On macOS: microphone permission.** The rig's RX audio arrives through the
+   microphone input, and if the launch-time permission prompt was declined, macOS
+   keeps delivering **silence** — no error, a flat waterfall, and every level
+   reads zero. Open **System Settings ▸ Privacy & Security ▸ Microphone**, enable
+   **Nexus**, and relaunch the app.
+2. **Input device** — Settings ▸ Radio ▸ Audio ▸ Input (RX) must point at the rig's
    receive audio. **Refresh** after plugging in.
-2. **Level** — watch the level meter in the top bar. Aim for the green zone. Too
+3. **Level** — watch the level meter in the top bar. Aim for the green zone. Too
    low and there's nothing to decode; red is clipping and distorts everything.
-3. **Passband** — the decoder listens 200–2900 Hz by default. If you narrowed
+4. **Passband** — the decoder listens 200–2900 Hz by default. If you narrowed
    F Low / F High, signals outside that window are silently skipped; restore the
    defaults if unsure.
-4. **Decode depth** — default is **Deep** (most sensitive). If you dropped it to
+5. **Decode depth** — default is **Deep** (most sensitive). If you dropped it to
    Fast to save CPU, try Normal or Deep.
-5. **Clock sync** (below) — a slot that's off by more than about a second produces
+6. **Clock sync** (below) — a slot that's off by more than about a second produces
    no decodes at all.
 
 <!-- TODO: capture screenshot — the top-bar level meter sitting in the green zone during receive -->
@@ -199,11 +228,72 @@ top-bar clock-offset indicator should read close to zero.
 
 - **Windows:** Settings ▸ Time & Language ▸ Date & time ▸ **Sync now**, or run
   `w32tm /resync` from an elevated prompt.
+- **macOS:** System Settings ▸ General ▸ Date & Time ▸ **Set time and date
+  automatically**, or run `sudo sntp -sS time.apple.com` in Terminal.
 - **Off-grid, no internet:** use a GPS or a local NTP source.
 
 Nexus measures the NTP offset and steers its own TX/RX slot grid to compensate,
 but it can only correct a *measured* offset — an OS clock that isn't disciplined
 by NTP at all will eventually drift past the correction range.
+
+---
+
+## Rotator
+
+### The compass reads "ROTOR —" and the antenna never moves
+
+Almost always one of three things, in this order.
+
+**1. The baud does not match the model.** This is the big one, and it looks
+exactly like broken hardware: the port opens, the daemon comes up, and the
+controller ignores every byte because it is listening at a different rate. There
+is no universal rotator baud — the SPID Rot2Prog runs at **600**, the Rot1Prog at
+**1200**, and the Idiom Press Rotor-EZ, Hy-Gain DCU-1 and Green Heron RT-21 at
+**4800**, while only the GS-232 family, the M2 RC2800 and the Prosistels use
+9600. Go to **Settings ▸ Radio ▸ Rotator** and **re-pick your model**: Nexus
+fills in the rate its Hamlib backend declares, and the hint under the baud box
+says in words when the saved number cannot work. (Before 1.7.0 every model was
+given 9600, which is why an owner of any of those five had a rotator that never
+answered.)
+
+**2. The port is wrong, or something else has it.** Same COM port rules as CAT —
+and if the port does not exist, the rotator daemon does not linger, it exits
+immediately.
+
+**3. The daemon is not running.** See below.
+
+### Reading the daemon's own error
+
+**Settings ▸ Radio ▸ Connections log**, filtered to **Rotator**, is where the
+answer is. Nexus captures `rotctld`'s stderr and prints Hamlib's own words:
+
+- `rotctld launched (model 901 on COM7 @ 600, :4533)` — it is up. Any failure
+  after this is on the wire, not the daemon.
+- `rotctld could not start … serial_open: serial port COM7 does not exist` — the
+  port name is wrong, or the adapter is unplugged.
+- `… serial port COM7 is already open` — another program (a logger, another copy
+  of Nexus, PstRotator) holds it. Close that first; a serial port has one owner.
+- `Hamlib's rotctld isn't installed` — macOS/Linux only, and it is not bundled
+  there. `brew install hamlib` / `sudo apt install libhamlib-utils`.
+- `the rotator stopped answering during the … pass` — the daemon is fine and the
+  controller went quiet mid-pass. Power, cable, or the controller left in local.
+
+### It turns, but the app says nothing about where it is
+
+Some rotators genuinely cannot report their position: Hamlib's Hy-Gain DCU-1
+backend has no read-back at all. The Rotor pane shows `—°T` and keeps the rose,
+the typed bearing and STOP — pointing works, the compass just has nothing to
+draw. That is the rotator, not a fault.
+
+### "Rotator not answering" but it is right there
+
+Click the chip — it opens **Settings ▸ Radio ▸ Rotator** on the model and port.
+Check the model number first (`rotctl -l` lists every one your Hamlib knows), the
+port second, the baud third. If you run your own `rotctld`, remember the external
+address field **overrides** the model and port entirely, and it needs the port:
+`192.168.1.50` on its own is not an address.
+
+Full setup guide: [Antenna rotator setup](rigs/rotators.md).
 
 ---
 
@@ -256,8 +346,9 @@ them before assuming something's broken:
   (night-vision). They apply instantly, no restart.
 - **UI scale** has four steps — 90% / 100% / 110% / 125% (default 125% for
   high-DPI screens). If the interface feels too big or too small, adjust it here.
-- Theme and scale are stored per-machine (in the WebView2 store under
-  `%LOCALAPPDATA%\com.kd9taw.tempo`), so they don't travel with a copied
+- Theme and scale are stored per-machine (in the webview's own store —
+  WebView2 under `%LOCALAPPDATA%\com.kd9taw.tempo` on Windows, WKWebView on
+  macOS, WebKitGTK on Linux), so they don't travel with a copied
   `settings.json` and reset if that store is cleared.
 
 ---

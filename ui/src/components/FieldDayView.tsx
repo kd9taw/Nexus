@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
-import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow } from '../api'
+import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads } from '../api'
+import { pushToast } from '../toast'
 import { fdNextEvent, fdHeaderSubtitle, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
@@ -51,24 +52,6 @@ interface LogRowMeta {
 
 type ExportFormat = 'cabrillo' | 'adif' | 'summary' | 'dupesheet'
 const EXT: Record<ExportFormat, string> = { cabrillo: 'cbr', adif: 'adi', summary: 'txt', dupesheet: 'txt' }
-const MIME: Record<ExportFormat, string> = {
-  cabrillo: 'text/plain',
-  adif: 'text/plain',
-  summary: 'text/plain',
-  dupesheet: 'text/plain',
-}
-
-function downloadText(filename: string, text: string, mime: string): void {
-  const blob = new Blob([text], { type: mime })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
-}
 
 /**
  * Annotate each log entry with multiplier / dupe state. Sections are marked the
@@ -117,7 +100,7 @@ function qsoTimeUtc(q: FieldDayQso): string {
 // ---------------------------------------------------------------------------
 // Client-side summary + dupe-sheet exports (spec §6). Both derive from the same
 // log + annotate()/modeCounts() the board already uses — no backend command —
-// and download through downloadText() like the Cabrillo/ADIF paths.
+// and save through saveTextToDownloads() like the Cabrillo/ADIF paths.
 // ---------------------------------------------------------------------------
 
 // Canonical band order (HF → VHF) so the summary lists bands top-down like a rig.
@@ -676,7 +659,12 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
       }
       const stamp = new Date().toISOString().slice(0, 10)
       const base = format === 'cabrillo' || format === 'adif' ? 'fd-log' : `fd-${format}`
-      downloadText(`${base}-${stamp}.${EXT[format]}`, text, MIME[format])
+      // Real Rust write to Downloads, same as the Logbook exports — a `<a download>` blob is
+      // silently CANCELLED by wry on macOS (no download handler is wired), so all four FD
+      // export buttons produced no file there while looking successful. The toast fires only
+      // after the write actually happened, and names the path it landed at.
+      const path = await saveTextToDownloads(`${base}-${stamp}.${EXT[format]}`, text)
+      pushToast(`Exported → ${path}`, 'success')
     } catch (err) {
       setExportError(typeof err === 'string' ? err : err instanceof Error ? err.message : String(err))
     } finally {

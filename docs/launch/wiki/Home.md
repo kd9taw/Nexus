@@ -3,7 +3,7 @@
 **Nexus** is a free, open-source amateur radio operations center. Digital, phone,
 CW, APRS, satellites, propagation, logging and awards in one modern app, built for
 everyone from a new Technician making a first FT8 contact to a DXCC Honor Roll
-chaser. Windows, Linux and Raspberry Pi. GPL-3.0, built in Rust.
+chaser. Windows, macOS (Apple Silicon), Linux and Raspberry Pi. GPL-3.0, built in Rust.
 
 [**⬇ Download the latest release**](https://github.com/kd9taw/Nexus/releases/latest)
 &nbsp;·&nbsp; [Source](https://github.com/kd9taw/Nexus)

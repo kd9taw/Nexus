@@ -147,12 +147,6 @@ With two or more radios, three more controls appear:
   *Enhanced*.
 - **Baud** (Serial only) — "match your rig's CAT setting (most modern rigs:
   38,400 or 115,200). Native Icom CI-V scope needs 115,200 here *and* on the rig."
-- **Antenna rotator** — pick your rotator model and its COM port and baud, and
-  "Nexus runs the control daemon for you (same as the rig)." Then use the Rotor
-  pane in [Connect](connect.md), the ↗ on [Needed](needed-dx.md) rows, or the
-  compass anywhere. **Dummy (testing — no hardware)** lets you try it without a
-  rotator; **Other Hamlib model #…** takes any model number. A separate advanced
-  field takes an external `rotctld` host:port that overrides all of the above.
 - **Split operation** — None / Rig / Fake It. "Keeps your transmitted audio
   between 1500–2000 Hz by shifting the TX dial in 500 Hz steps, so audio
   harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B
@@ -264,9 +258,27 @@ and the source. A failed refresh adds a plain-language "Last refresh" line.
 
 ### Rotator
 
-Pointing manners for the rotator picked under **Rig & CAT**. They apply to
-satellite auto-track.
+The rotator itself, and its pointing manners. The manners apply to satellite
+auto-track.
 
+- **Rotator model** — pick yours and "Nexus runs the control daemon (rotctld)
+  for you, the same way it does CAT." Then use the Rotor pane in
+  [Connect](connect.md), the ↗ on [Needed](needed-dx.md) rows, or the compass
+  anywhere. **Dummy (testing — no hardware)** lets you try the whole path with no
+  rotator attached; **Other Hamlib model #…** takes any model number `rotctl -l`
+  knows. Entries say **(az)** or **(az/el)** where the backend declares it, so
+  you can tell an azimuth-only model from a full az/el one before you buy into it.
+- **Rotator port & baud** — the serial port the controller is on, and its line
+  rate. **The baud is per MODEL**, and picking your model fills in the right one:
+  SPID Rot2Prog runs at 600, Rot1Prog at 1200, and the Idiom Press Rotor-EZ,
+  Hy-Gain DCU-1 and Green Heron RT-21 at 4800 — only the GS-232 family, the M2
+  RC2800 and the Prosistels are the 9600 that used to be handed to everyone. At
+  the wrong rate a rotator never answers and reads exactly like broken hardware,
+  so the hint under the field names your model's rate and says plainly when the
+  saved value cannot work.
+- **External rotctld (advanced)** — a `host:port` for a rotctld you run yourself,
+  or one on another machine. It OVERRIDES the model and port above and stops the
+  integrated daemon. It needs the port: a bare host name is not an address.
 - **Park position (° az / el)** — "The stow position — wind-safe, or wherever
   your mast rests. Used only when After a pass is set to Park."
 - **Ready position (° az / el)** — "Where the antenna waits for the next pass."
@@ -594,6 +606,20 @@ Comma-separated chip lists for the quick text you fire from each surface:
   audio tone. Turn this on when deliberately running the opposite sideband (e.g.
   AFSK in USB/DATA-U) so the on-air sense stays correct." Applies to TX and the
   RX decoder.
+
+### PSK
+
+PSK31 receive needs no setup: open the PSK screen, tune a watering hole
+(14.070 is the classic), click a warble trace on the waterfall and the text
+prints. The click nets the *decoder* — it never moves the rig — and a
+slew-limited AFC (never more than ±25 Hz) rides small drift for you. PSK31 is
+receive-only in this release; transmit is on the keyboard-modes roadmap.
+
+- **Start receiving when PSK opens** — on by default: entering the screen arms
+  the decoder, so a signal on the band prints without touching anything. Turn
+  it off to arm by hand (the Arm RX button in the decoded-text pane) — for
+  instance on a shared rig you monitor from. Stopping the receiver yourself is
+  remembered for the rest of the session either way.
 
 ### SSTV
 

@@ -86,6 +86,23 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
+# Windows-only: COM + IDispatch for the OmniRig CAT backend (`src/omnirig/com.rs`) —
+# CoInitializeEx/CoCreateInstance/CLSIDFromProgID and late-bound property calls on
+# OmniRig's `OmniRig.OmniRigX` object. `windows-sys` above cannot serve this: it is the
+# raw-FFI crate and carries no COM interface types (no `IDispatch`, no `VARIANT` with a
+# Drop), so hand-rolling the vtables is the only alternative and it is the wrong trade for
+# a transmit-adjacent path. Microsoft, Apache-2.0 OR MIT — GPL-3.0-only compatible
+# (verified from the crate's own metadata + its bundled licence files). Version pinned to
+# the one ALREADY in Cargo.lock: cpal depends on `windows` 0.54, so this adds no new crate
+# to the tree — exactly the argument the `alsa` entry above makes. Minimum feature set:
+# Com for the COM API and IDispatch, Ole for DISPID_PROPERTYPUT, Variant for the VT tags,
+# Foundation for the two HRESULTs that mean "OmniRig is not installed".
+windows = { version = "0.54", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+] }
 
 [dev-dependencies]
 # TEST-ONLY, and only for `tests/rotctld_pass.rs`: that suite flies a REAL
